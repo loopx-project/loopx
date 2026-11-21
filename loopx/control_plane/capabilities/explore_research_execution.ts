@@ -4,7 +4,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {normalizeResearchCompositionPolicy} from "./explore_configuration.ts";
 export {normalizeResearchCompositionPolicy} from "./explore_configuration.ts";
-import {normalizeResearchObservation, researchCompositionGaps, researchIdentifier, researchDigest,
+import {normalizeResearchObservation, researchCompositionGaps, researchDigest,
   validateResearchAttribution} from "./explore_research.ts";
 import {evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
   resumeConditionHasKnownPendingTarget} from "../todos/resume_condition.ts";

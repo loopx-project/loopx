@@ -168,7 +168,7 @@ def _darwin_owned_group_has_exited(
     bounded_reap: bool = False,
 ) -> bool:
     # Darwin can report EPERM rather than ESRCH for a now-empty process group.
-    # A reaped leader alone does not prove its descendants have exited.
+
     if sys.platform != "darwin" or process.poll() is None or timeout <= 0:
         return False
     try:

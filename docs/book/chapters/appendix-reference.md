@@ -23,7 +23,7 @@ loopx --registry "$REGISTRY" --runtime-root "$RUNTIME" --format json \
 
 ## 从症状找到负责入口 {#diagnostic-routing}
 
-先找第一处缺少证据的关系，而不是清空整个 Goal。下表是查阅方法，不是新的自动修复状态机。
+先找第一处缺少证据的关系。下表是查阅方法。
 
 | 症状 | 先取得的事实 | 规则与操作入口 | 完成或停止条件 |
 | --- | --- | --- | --- |
@@ -57,7 +57,7 @@ Todo 是有身份的工作；frontier 是按当前约束得到的候选；Turn /
 
 ## 要求三：明确当前执行者与作用范围 {#requirement-three-one-accountable-actor}
 
-Agent identity 表达 lane，不证明 Host。Vision 表达适用的 per-Agent 路线。Claim 是归属；lease 在适用 writer/mode 下参与执行证明；Gate 表达具名决定范围；Host 提供实际执行与唤醒条件。这些机制不合成一个全系统唯一行动者，也不自动提供 OS sandbox。详见[工作图](work-graph-and-authority.md)。
+Vision 表达适用的 per-Agent 路线。Claim 是归属；lease 在适用 writer/mode 下参与执行证明；Gate 表达具名决定范围；Host 提供实际执行与唤醒条件。这些机制不合成一个全系统唯一行动者，也不自动提供 OS sandbox。详见[工作图](work-graph-and-authority.md)。
 
 ## 要求四：消耗有上限且可外部观察 {#requirement-four-bounded-externally-observable-spend}
 
@@ -114,7 +114,7 @@ loopx update apply
 loopx doctor
 ```
 
-先确认安装 owner、目标版本与计划，再授权 apply。普通用户不把 `--ref main` 当成发布版升级默认。成功升级 CLI 不证明所有 Host、Provider 和已有 Goal 状态均已迁移；按实际使用面检查 skills、状态、Host readback 和 enabled Extension readiness。
+先确认安装 owner、目标版本与计划，再授权 apply。普通用户不把 `--ref main` 当成发布版升级默认。按实际使用面检查 skills、状态、Host readback 和 enabled Extension readiness。
 
 需要备份时，先预览再执行：
 

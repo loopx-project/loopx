@@ -50,10 +50,11 @@ EXTENSION_PROJECTION_PUBLISH_RECEIPT_SCHEMA_VERSION = (
 
 _ANCHOR_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MARKUP_RE = re.compile(r"<[^>]*>|javascript:", re.IGNORECASE)
-_LOCAL_PATH_RE = re.compile(
-    r"(?:^|[\s(])(?:~[/\\]|/+(?:Users|home|tmp|private|var|etc|opt)/|"
-    r"[A-Za-z]:[\\/])"
-)
+# Absolute, home-relative, drive/UNC, file:// and path:-prefixed local references
+# are decided once by the shared owner. This module keeps one separate policy:
+# a reference to a private *relative* directory (`.codex`, `.git`, `.local`) is
+# not an absolute-root shape, and presenting a project-local private directory is
+# still forbidden here.
 _PRIVATE_RELATIVE_PATH_RE = re.compile(
     r"(?:^|[\s:=('/\\])\.(?:codex|git|local)(?:[/\\]|$)",
     re.IGNORECASE,
@@ -165,7 +166,7 @@ def _plain_text(
         raise ValueError(f"{context} must contain at most {max_length} characters")
     if "\x00" in text or _MARKUP_RE.search(text):
         raise ValueError(f"{context} must be plain text without markup")
-    if _LOCAL_PATH_RE.search(text) or _PRIVATE_RELATIVE_PATH_RE.search(text):
+    if find_public_safe_local_path(text) or _PRIVATE_RELATIVE_PATH_RE.search(text):
         raise ValueError(f"{context} must not contain a local path")
     if SECRET_LIKE_SURFACE_PATTERN.search(text) or _CREDENTIAL_RE.search(text):
         raise ValueError(f"{context} must not contain credential material")

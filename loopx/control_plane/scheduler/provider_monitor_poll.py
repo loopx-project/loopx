@@ -1,4 +1,4 @@
-"""Provider routing and projection delivery, not a second Monitor planner."""
+"""Provider routing and projection delivery."""
 from __future__ import annotations
 
 from pathlib import Path

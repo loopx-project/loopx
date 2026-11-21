@@ -72,7 +72,7 @@ registry -> status -> quota -> interaction contract -> todo/evidence -> refresh/
 
 ## 运行责任与扩展交付
 
-Extension 是安装、启停、升级和分发边界，不是运行时的第五个 owner。运行时仍按四种责任
+Extension 是安装、启停、升级和分发边界。运行时仍按四种责任
 分工：
 
 | 角色 | Owns | Must not own |
@@ -137,7 +137,7 @@ State 只保存可重放的 compact facts；外部 sink 只消费 public-safe pr
 
 ## Governed External Execution：把外部副作用变成可恢复事务
 
-外部 capability 最危险的时刻，不是 API 明确返回失败，而是调用方不知道它到底有没有成功：
+外部 capability 最危险的时刻：
 
 ```text
 provider 已经创建任务
@@ -148,8 +148,7 @@ provider 已经创建任务
 ```
 
 `capability invoke` 可以直接执行 read-only operation，因为它不会产生需要结算的物质效果。
-`external_write` 则必须进入 governed external execution。它不是给 provider 套一层普通 retry，
-而是把一次外部写入拆成两段可重放事务：
+`external_write` 则必须进入 governed external execution。
 
 ```text
 Goal-bound capability + exact provider revision
@@ -176,7 +175,7 @@ Goal-bound capability + exact provider revision
 
 ### Goal capability 与 material Turn 分别回答什么
 
-Goal enablement 与 Turn admission 不是二选一，而是两层不同粒度的授权：
+Goal enablement 与 Turn admission 是两层不同粒度的授权：
 
 | 层 | 回答的问题 | 不代表什么 |
 | --- | --- | --- |
@@ -272,18 +271,18 @@ Independent evidence refresh
   -> only then promote “resumable multimodal context works” from hypothesis to evidence
 ```
 
-这里“同一 Session”不意味着复用同一 Turn。Session 拥有远端对话连续性；每个 material attempt
+Session 拥有远端对话连续性；每个 material attempt
 仍有自己的 Turn/effect identity、receipt 和 quota settlement。Read-only observe 则负责验证后置
 条件，不为了凑治理形式额外扣一次 quota。
 
-这条链路的威力在于，最终结论不是“Agent 说它测过”，而是四种独立证据可以互相校验：
+这条链路的威力在于：
 
 - governed journal 证明哪一个 exact request 被允许并执行；
 - Session readback 证明用户可见事件确实出现；
 - trace/runtime evidence 证明请求经过哪个实际运行版本；
 - typed domain receipt 证明被测能力对应哪个结构化配置或 metadata 决策。
 
-任何一层冲突都应保持 `Unknown` 或让 Todo 继续 open，而不是用一个成功 marker 覆盖其余证据。
+任何一层冲突都应保持 `Unknown` 或让 Todo 继续 open。
 
 ### API 组合而不是万能 Executor
 
@@ -326,7 +325,7 @@ bounded request、binding、authority、receipt 和 settlement。领域逻辑因
 | Receipt/readback/trace 冲突 | 选一个看起来成功的证据 | 保持 Todo open，刷新证据或 self-repair adapter |
 | 相同 Turn 携带不同 request digest | 把它当普通 retry | fail closed，创建新的合法 Todo/Turn identity |
 
-因此，governed execution 的核心不是“所有调用都经过 LoopX”这一句口号，而是让每个 material
+因此，governed execution 的核心是让每个 material
 external effect 都能回答：它属于哪个 Goal/Todo/Turn、provider 是否真的提交、LoopX 是否已写回、
 quota 是否只结算一次，以及崩溃后下一步究竟是 retry provider 还是只 reconcile ledger。
 
@@ -355,7 +354,6 @@ loopx --format json configure-goal --goal-id <goal-id>
 2. 阅读 exact delta 和 boundary；
 3. 再显式 `--execute`；
 4. 关闭 feature 时保留历史 evidence，只关闭未来行为；
-5. feature gate 不等于 runtime permission。
 
 ## Explore Graph：探索证据层
 
@@ -564,7 +562,7 @@ Router state 由 runner 在 epoch boundary 持久化。Harness 仍然只生成�
 
 ## Single-Agent Auto ML：Graph、Harness 与 Domain Pack 怎样合起来
 
-Single-Agent Auto ML 不是缩小版 Auto Research。它只有一个长期 agent lane，却要同时处理：
+它只有一个长期 agent lane，却要同时处理：
 
 - 候选实现与代码 revision；
 - 训练/评估 provider 的异步 task；
@@ -664,7 +662,7 @@ repair/retry，不应 `refutes` 模型假设。Harness 下一轮消费这些边�
 
 ### Promotion、Reward Memory 与系统能力演进
 
-Graph finding 和 Harness ranking 都不是 promotion authority。Promotion 至少需要：
+Promotion 至少需要：
 
 ```text
 exact candidate/revision/window
@@ -753,8 +751,7 @@ loopx configure-goal \
 ## Reward Memory
 
 Reward memory 是 per-agent、default-off 的实验能力，目标是让经过验证的人类评价和工程经验
-在后续 run 中被作用域化复用。它不是 LoopX canonical state 的替代品，也不是把聊天记录长期
-注入模型。
+在后续 run 中被作用域化复用。
 
 | Memory class | 与 LoopX 当前状态的关系 | 允许产生的影响 |
 | --- | --- | --- |
@@ -787,7 +784,7 @@ connector: 外部事件、权限、source authority
 projection sink: 把 public-safe LoopX read model 显示到 Lark
 ```
 
-开启 inbox 不等于允许发送消息或自动写 goal。外部消息必须先经过身份、reply/mention relation、source authority 和 gate 检查，再转换为 bounded LoopX event/todo。
+外部消息必须先经过身份、reply/mention relation、source authority 和 gate 检查，再转换为 bounded LoopX event/todo。
 
 Sink 应保留 lineage：
 
@@ -840,7 +837,7 @@ loopx --format json explore worker-branch-plan \
 
 ## 核心代码领读：Explore 与 Auto ML 怎样复用 kernel
 
-扩展层最重要的判断不是“功能多不多”，而是它有没有重新发明 todo、quota、lease、scheduler 或 evidence。下面沿真实配置与执行边界读。
+扩展层最重要的判断是它有没有重新发明 todo、quota、lease、scheduler 或 evidence。下面沿真实配置与执行边界读。
 
 ### 1. Feature config 默认关闭，preview 与 execute 分离
 
@@ -1084,7 +1081,7 @@ leader authority。
 9. Material provider 是否以稳定 idempotency key replay，并把 start 与 reconcile 分开？
 10. Receipt digest 是否在 quota spend 前 durable writeback？
 11. Evidence 是否 compact、可追溯、符合 public/private boundary？
-12. Focused smoke 是否证明 shipped behavior，而不是临时字段？
+12. Focused smoke 是否证明 shipped behavior？
 
 ## 课程结束后的能力标准
 

@@ -1,5 +1,5 @@
 /** Admission from provider-verified addressing evidence. Capture alone never
- * grants a turn; this does not grant tools, delegation or protected operations. */
+ * grants a turn; */
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 

@@ -21,8 +21,7 @@ import {
 import { projectRepositoryDeliveryGate } from "./work_items/repository_delivery.ts";
 import { projectPendingCapabilityIntent } from "./work_items/pending_capability_intent.ts";
 
-import {exploreResultWritebackAffordance} from "./capabilities/explore_result_writeback.ts";
-import {exploreReusableContextPaths} from "./capabilities/explore_turn_context.ts";
+import {exploreResultWritebackAffordance, exploreReusableContextPaths} from "./capabilities/explore_context_delivery.ts";
 import {agentPreferenceReusableContextPaths} from "./capabilities/agent_preferences.ts";
 
 /** The registered owner selects reusable read-model subtrees. Unknown hooks

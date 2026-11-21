@@ -272,7 +272,7 @@ def _validate_handoff_capture_root(endpoint: Path, requested_root: Path) -> None
 
 
 def validate_handoff_socket(value: str, *, capture_root: Path | None = None) -> Path:
-    """A caller-owned local transport, not an authority or admission endpoint."""
+    """A caller-owned local transport."""
     path = Path(value)
     try:
         if (os.name != "posix" or not hasattr(socket, "AF_UNIX") or not path.is_absolute() or
@@ -396,7 +396,7 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
                                  selection_paths: list[list[str | int]] | None = None,
                                  reference_file: Path | None = None,
                                  reader_argv: list[str] | None = None) -> Path:
-    """Immutable reader IO metadata, not a new identity or authority store.
+    """Immutable reader IO metadata.
 
     A short filename locates the document; only its complete stored digests are
     checked. A collision or replaced document fails closed, never overwrites.
@@ -544,7 +544,7 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
 def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
                                 surface: str = "quota_packet",
                                 selection_command_args_template: str | None = None,
-                                captured_decision_path: str | None = None,
+                                captured_decision: dict[str, str] | None = None,
                                 replan_reader_argv: list[str] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the complete current source before optional stateless presentation.
 
@@ -559,7 +559,7 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
         **{key: source[key] for key in ("path", "sha256")},
         **({"selection_command_args_template": selection_command_args_template}
             if selection_command_args_template is not None else {}),
-        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}),
+        **({"captured_decision": captured_decision} if captured_decision is not None else {}),
         **({"replan_reader_argv": replan_reader_argv} if replan_reader_argv is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
@@ -580,8 +580,8 @@ def project_captured_context(
     The caller-owned rendezvous may supply a continuity observation. It must
     either confirm intact final input or explicitly select native lifecycle
     assumptions. Unsupported ordinary CLI clients never supply this request. Every
-    opt-in attempt saves the complete projected JSON for same-capture recovery;
-    neither malformed requests nor optimization failures rerun the guard.
+    opt-in attempt saves the complete projected JSON for same-capture recovery.
+
     A native caller may pass its already-published recovery reference, never a
     reference supplied in the external request.
     """

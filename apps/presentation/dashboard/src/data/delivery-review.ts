@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { hasConfiguredGoalChecks, type GoalAcceptanceChecks, goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, projectGoalAcceptanceCriteria, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
+import { hasConfiguredGoalChecks, type GoalAcceptanceChecks, goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, projectGoalAcceptanceCriteria } from "./goal-acceptance-observation.js";
 
 // Consumer validation only; freshness and coverage remain kernel decisions.
 const projectionEnvelopeSchema = z.object({

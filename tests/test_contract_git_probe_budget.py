@@ -181,7 +181,7 @@ def test_a_timed_out_probe_takes_the_helpers_it_started(
     subprocess.run(
         ["git", "-C", str(repo), "config", "core.fsmonitor", str(hook)], check=True
     )
-    monkeypatch.setattr(contract, "GIT_PROBE_TIMEOUT_SECONDS", 0.8)
+    monkeypatch.setattr(contract, "GIT_PROBE_TIMEOUT_SECONDS", 1.5)
 
     started = time.monotonic()
     with pytest.raises(contract.GitProbeUnavailable):

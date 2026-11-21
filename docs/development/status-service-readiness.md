@@ -25,9 +25,7 @@ fingerprint behavior. Advertising readiness but omitting its result fails closed
 
 This is a bounded existing-service prerequisite for
 [#3930](https://github.com/huangruiteng/loopx/issues/3930), not the unified daemon
-contract or complete M1 delivery. It does not establish service-profile identity,
-validate individual Goals, prove writable storage, qualify launchd lifecycle,
-or assert Chat/provider readiness. Profile identity, supervisor composition and
+contract or complete M1 delivery. Profile identity, supervisor composition and
 migration remain separate implementation work.
 
 To diagnose failure, repair the registry selected by the service and retry the

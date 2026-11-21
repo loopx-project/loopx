@@ -657,7 +657,7 @@ def assert_material_transition_followup() -> None:
         scheduler = handoff["scheduler_hint"]
         assert scheduler["action"] == "run_now", scheduler
         assert scheduler["cadence_class"] == "active_work", scheduler
-        assert scheduler["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
+        assert scheduler["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=3", scheduler
         contract = handoff["interaction_contract"]
         assert contract["agent_channel"]["must_attempt"] is True, contract
         assert contract["agent_channel"]["delivery_allowed"] is False, contract
@@ -823,6 +823,28 @@ def assert_target_key_cannot_hijack_selected_due_monitor() -> None:
         assert selected["result_hash"] == "old", selected
         assert other["result_hash"] == "old", other
         assert monitor_poll_records(registry_path) == [], run_index_records(registry_path)
+
+        explicit = run_cli(
+            registry_path,
+            "quota",
+            "monitor-poll",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--todo-id",
+            other["todo_id"],
+            "--target-key",
+            OTHER_TARGET_KEY,
+            "--result-hash",
+            "old",
+            "--execute",
+        )
+        assert explicit["todo_writeback"]["todo_id"] == other["todo_id"], explicit
+        assert find_todo(state_file, TODO_ID) == selected
+        assert find_todo(state_file, other["todo_id"])["consecutive_no_change"] == "2"
+        assert len(monitor_poll_records(registry_path)) == 1
+        assert not any(r["classification"] == "quota_slot_spent" for r in run_index_records(registry_path))
 
 
 def assert_compacted_auxiliary_due_monitor_can_write_back() -> None:
@@ -1119,7 +1141,7 @@ def assert_cli_monitor_poll_preserves_codex_app_scheduler_context() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-monitor-poll-codex-app-") as tmp:
         hints = cli_monitor_poll_scheduler_hints(write_fixture(Path(tmp))[0], "--codex-app")
         for scheduler_hint in hints:
-            assert scheduler_hint["codex_app"]["applicability"] == "applicable", scheduler_hint
+            assert scheduler_hint["app_automation"]["applicability"] == "applicable", scheduler_hint
             assert scheduler_hint["action"] != "repair_scheduler_execution_context", scheduler_hint
 
 
@@ -1132,8 +1154,8 @@ def assert_cli_monitor_poll_preserves_outer_controller_scheduler_context() -> No
             execution_context = scheduler_hint["execution_context"]
             execution_phase = scheduler_hint["execution_phase"]
             assert scheduler_hint["action"] != "repair_scheduler_execution_context", scheduler_hint
-            assert scheduler_hint["codex_app"]["applicability"] == "not_applicable", scheduler_hint
-            assert "stateful_backoff" not in scheduler_hint["codex_app"], scheduler_hint
+            assert scheduler_hint["app_automation"]["applicability"] == "not_applicable", scheduler_hint
+            assert "stateful_backoff" not in scheduler_hint["app_automation"], scheduler_hint
             assert (
                 execution_context["host_surface"],
                 execution_context["scheduler_owner"],
@@ -1161,8 +1183,8 @@ def assert_cli_monitor_poll_invalid_scheduler_context_fails_closed() -> None:
             execution_context = scheduler_hint["execution_context"]
             execution_phase = scheduler_hint["execution_phase"]
             assert scheduler_hint["action"] == "repair_scheduler_execution_context", scheduler_hint
-            assert scheduler_hint["codex_app"]["applicability"] == "blocked_invalid_context", scheduler_hint
-            assert "stateful_backoff" not in scheduler_hint["codex_app"], scheduler_hint
+            assert scheduler_hint["app_automation"]["applicability"] == "blocked_invalid_context", scheduler_hint
+            assert "stateful_backoff" not in scheduler_hint["app_automation"], scheduler_hint
             assert execution_context["valid"] is False, scheduler_hint
             assert execution_context["errors"] == [
                 "outer_controller requires execution_mode=isolated_headless"
@@ -1282,21 +1304,23 @@ def assert_cli_monitor_poll_uses_should_run_lookback() -> None:
     )
     original_collect_status = quota_command.collect_status
     original_record_monitor_poll = quota_command.record_quota_monitor_poll
-    try:
-        quota_command.collect_status = fake_collect_status
-        quota_command.record_quota_monitor_poll = fake_record_quota_monitor_poll
-        rc = quota_command.handle_quota_command(
-            args,
-            registry_path=REPO_ROOT / ".loopx" / "registry.json",
-            runtime_root_arg=None,
-            print_payload=fake_print_payload,
-            append_cli_rollout_event=lambda **_: {},
-        )
-    finally:
-        quota_command.collect_status = original_collect_status
-        quota_command.record_quota_monitor_poll = original_record_monitor_poll
+    with tempfile.TemporaryDirectory(prefix="loopx-monitor-poll-lookback-") as tmp:
+        registry_path, _ = write_fixture(Path(tmp))
+        try:
+            quota_command.collect_status = fake_collect_status
+            quota_command.record_quota_monitor_poll = fake_record_quota_monitor_poll
+            rc = quota_command.handle_quota_command(
+                args,
+                registry_path=registry_path,
+                runtime_root_arg=None,
+                print_payload=fake_print_payload,
+                append_cli_rollout_event=lambda **_: {},
+            )
+        finally:
+            quota_command.collect_status = original_collect_status
+            quota_command.record_quota_monitor_poll = original_record_monitor_poll
 
-    assert rc == 0, rc
+    assert rc == 0, (rc, seen.get("payload"))
     assert seen["limit"] == AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, seen
     assert seen["record_kwargs"]["available_capabilities"] == ["network"], seen
     scheduler_context = seen["record_kwargs"]["scheduler_execution_context"]

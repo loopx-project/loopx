@@ -15,11 +15,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from ...agent_registry import registered_agent_ids_from_registry
+from ...command_invocation import loopx_cli_argv
 from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
 from ..runtime.time import now_local_iso as now_local
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
 from .coordination_state_contract import (
@@ -98,6 +100,33 @@ class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
         )
 
 
+def ambiguous_todo_write(
+    error: EffectRuntimeResponseAmbiguous,
+    *,
+    registry_path: Path,
+    runtime_root: str,
+    goal_id: str,
+    todo_id: str,
+    operation_id: str,
+) -> LocalCoordinationAuthorityUnavailable:
+    """Return an exact, read-only lookup for an unverifiable write response."""
+    return LocalCoordinationAuthorityUnavailable(
+        f"{error}. A missing receipt does not prove the original writer has stopped",
+        code=error.diagnostic_code,
+        payload={
+            "goal_id": goal_id,
+            "todo_id": todo_id,
+            "operation_id": operation_id,
+            "recovery_command": [
+                *loopx_cli_argv(), "--format", "json",
+                "--registry", str(registry_path.expanduser().resolve()),
+                "--runtime-root", runtime_root, "todo", "receipt",
+                "--goal-id", goal_id, "--operation-id", operation_id,
+            ],
+        },
+    )
+
+
 def raise_canonical_write_failure(
     payload: Mapping[str, Any],
     *,
@@ -163,11 +192,17 @@ def claim_canonical_todo_if_promoted(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     manage_execution: bool = False,
+    expected_provider_revision: str | None = None,
+    expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any]:
     """Route a claim to the canonical TypeScript transaction owner."""
-    with authority_registry_source(registry_path) as registry_source:
+    reviewed = expected_provider_revision is not None or expected_registry_sha256 is not None
+    if reviewed and not (manage_execution and expected_provider_revision and expected_registry_sha256):
+        raise ValueError("A reviewed managed claim requires both canonical revision and registry digest")
+    with authority_registry_source(registry_path, routing_registry_witness=routing_registry_witness) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     # This is only a candidate location. The lease owner observes physical
     # isolation and the current canonical scopes before granting execution.
@@ -175,8 +210,11 @@ def claim_canonical_todo_if_promoted(
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
-            "schema_version": ("loopx_local_coordination_todo_claim_request_v2" if manage_execution
-                               else LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA),
+            "schema_version": (
+                "loopx_local_coordination_todo_claim_request_v3" if reviewed
+                else "loopx_local_coordination_todo_claim_request_v2" if manage_execution
+                else LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
+            ),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
             "todo_id": todo_id,
@@ -191,6 +229,11 @@ def claim_canonical_todo_if_promoted(
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
             **({"manage_execution": True} if manage_execution else {}),
+            **(
+                {"expected_provider_revision": expected_provider_revision,
+                 "expected_registry_sha256": expected_registry_sha256}
+                if reviewed else {}
+            ),
             **({"write_worktree": str(worktree)} if worktree is not None else {}),
             "lease_request": (
                 {

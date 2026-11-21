@@ -4,7 +4,7 @@
 
 ## 这一讲要建立的判断
 
-Harness 不是“一堆状态机”，而是 agent loop 的 effectful program 和 effect
+Harness 是 agent loop 的 effectful program 和 effect
 interpreter。agent loop 是被解释的循环，harness 才是解释外部 effect 的程序；
 状态机只是 harness 内部的决策表。
 
@@ -32,7 +32,7 @@ while true:
 model -> effect request -> harness interprets effect -> observation -> model
 ```
 
-模型输出的是动作请求，不是动作本身。真正的执行、权限、预算、调度、失败恢复、
+模型输出的是动作请求。真正的执行、权限、预算、调度、失败恢复、
 证据沉淀都发生在 harness 这一侧。
 
 ## 为什么 harness 是这个解释器
@@ -107,7 +107,7 @@ Agent proposes next bounded turn
 传递一个可调用对象。它的 `handler` 是数据：packet 里的 `next_effect` 编码下一组
 CLI 动作、scheduler ACK 和 failure hint，由 host 或下一轮 automation 执行。
 
-这个差异不是缺一个 middleware 层，而是控制面的合理形状：
+这个差异是控制面的合理形状：
 
 - 可以 short-circuit：`decision` / `effective_action` 直接表达
   `skip`、`wait`、`monitor_quiet_skip`、`repair_bridge`、`ask_owner`，不会假装原
@@ -139,7 +139,7 @@ ACK 和 writeback 都编码进同一个 request。模型仍然只提出 effect r
 如果未来厂商 API 原生支持 serial tool calls 或 interleaved reasoning，对 LoopX
 来说只是解释器内部的一种 execution mode：
 
-- 串行、并行、交错是 execution strategy，不是新的状态机；
+- 串行、并行、交错是 execution strategy
 - `effect_request -> interpretation -> observation -> next_effect` 仍然稳定；
 - `next_effect` 从一条 CLI 命令变成一段有序 effect program。
 
@@ -199,7 +199,7 @@ transaction 直接完成 decision、durable write 与 canonical receipt projecti
 
 这些路径的 authority boundary 不同：quota CLI 跨 agent/host，turn driver 拥有
 callback，task lease 则在自己的 native transaction 内完成原子 persistence。把它们
-塞进一个 shared executor 会隐藏 owner，而不是减少重复知识。当前共享层只统一可复用
+塞进一个 shared executor 会隐藏 owner。当前共享层只统一可复用
 primitive，不统一执行权。
 
 ## 四条不变量比类名更重要
@@ -213,11 +213,11 @@ Effect Program 的价值落在四条可复核不变量上：
 4. **可重放、至多一次**：已提交 prefix 可以恢复，但同一 identity 不重复结算。
 
 普通 successor completion 仍是 Todo bounded context 的 lifecycle action，可以在
-settlement 前建立下一条 runnable frontier；它不是 terminal closeout。只有 final
+settlement 前建立下一条 runnable frontier；只有 final
 `no_followup` 会改变 Goal 的终态，因此必须放到 matching spend 后。这样无需放宽
 `terminal_no_followup` 守卫，也不会出现“先终止、再给终态 effect 补 spend”的例外。
 
-测试不是从当前输出生成 golden，而是用独立语义 oracle 检查三类 adapter：
+测试是用独立语义 oracle 检查三类 adapter：
 
 - `test_effect_program_adapter_conformance.py` 统一验证 identity、receipt 顺序、failure、
   short-circuit 和 scheduler-outside-settlement，并用 step reorder、failure 丢失、

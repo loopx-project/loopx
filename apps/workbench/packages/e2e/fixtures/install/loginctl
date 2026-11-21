@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Do not query the test host's login session or lingering configuration.
+echo "$*" >> "$LOOCHAT_FAKE_STATE/loginctl.log"
+echo yes

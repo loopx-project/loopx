@@ -9,9 +9,11 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tarfile
 
 import pytest
 import yaml
+from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, validate_default_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "a" * 40
@@ -92,10 +94,11 @@ def publication(tmp_path):
                          ("runtime-inventory", ".json")):
         (runtime / f"{stem}-{REVISION}{suffix}").write_bytes(f"{stem}:immutable".encode())
     archive = runtime / f"loopx-runtime-{REVISION}.tar.gz"
-    manifest = json.dumps({"source_revision": REVISION, "channel": "main",
+    manifest = json.dumps({"source_revision": REVISION, "channel": "main", "default_contract": dict(PUBLIC_DEFAULT_CONTRACT),
         "size": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "urls": [
         f"https://github.com/example/loopx/releases/download/{SNAPSHOT}/loopx-runtime-{REVISION}.tar.gz"]})
     qualification = {"ok": True, "source_revision": REVISION, "channel": "main",
+        "default_contract": dict(PUBLIC_DEFAULT_CONTRACT),
         "bytes": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "clean_install": True, "upgrade": True, "doctor": True, "skills": True,
         "frontend_bundle_contract": True, "frontend_http": True,
@@ -126,13 +129,14 @@ def publish(root):
     functions = f"gh() {{ {shlex.quote(sys.executable)} github.py \"$@\"; }}\n"
     functions += f"python() {{ {shlex.quote(sys.executable)} \"$@\"; }}\n"
     return subprocess.run(["bash", "-c", functions + PUBLISH], cwd=root,
-        env={**os.environ, "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
+        env={**os.environ, "PYTHONPATH": str(ROOT), "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
         capture_output=True, text=True, encoding="utf-8", timeout=30, check=False)
 
 
 @pytest.mark.parametrize("failure", [
     "missing", "invalid_json", "failed", "incomplete", "wrong_revision", "wrong_channel",
     "wrong_size", "wrong_digest", "archive_changed", "manifest_changed", "frozen_manifest_changed", "truthy_status",
+    "missing_contract", "unknown_contract", "c1_default", "mismatched_contract", "missing_observed_contract",
 ])
 def test_unqualified_runtime_never_changes_remote_state(publication, failure):
     qualification = publication / "runtime" / f"qualification-{REVISION}.json"
@@ -143,6 +147,25 @@ def test_unqualified_runtime_never_changes_remote_state(publication, failure):
         qualification.write_text("{", encoding="utf-8")
     elif failure == "frozen_manifest_changed":
         (publication / "runtime" / f"loopx-runtime-{REVISION}.json").write_text("{}", encoding="utf-8")
+    elif failure in {"missing_contract", "unknown_contract", "c1_default"}:
+        path = publication / "runtime/loopx-runtime.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if failure == "missing_contract":
+            data.pop("default_contract")
+        else:
+            profile = {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+                       "interaction_schema_version": "loopx_interaction_contract_v0"} if failure == "c1_default" else {"surface": "future"}
+            data["default_contract"] = record["default_contract"] = profile
+        # All engineering checks, identities and frozen bytes still agree.
+        for name in ["loopx-runtime.json", f"loopx-runtime-{REVISION}.json"]:
+            (publication / "runtime" / name).write_text(json.dumps(data), encoding="utf-8")
+        qualification.write_text(json.dumps(record), encoding="utf-8")
+    elif failure in {"mismatched_contract", "missing_observed_contract"}:
+        if failure == "missing_observed_contract":
+            record.pop("default_contract")
+        else:
+            record["default_contract"] = {"surface": "complete_turn"}
+        qualification.write_text(json.dumps(record), encoding="utf-8")
     elif failure in {"archive_changed", "manifest_changed"}:
         if failure == "archive_changed":
             (publication / "runtime" / f"loopx-runtime-{REVISION}.tar.gz").write_bytes(b"unqualified bytes")
@@ -276,7 +299,8 @@ def test_failed_view_does_not_replace_an_existing_release(publication, tag):
 
 
 @pytest.mark.parametrize("channel", ["main", "stable"])
-def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkeypatch, channel):
+@pytest.mark.parametrize("supported", [True, False], ids=["supported-default", "unqualified-default"])
+def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, monkeypatch, channel, supported):
     from scripts import runtime_artifact as builder
 
     root = tmp_path / "source"
@@ -288,6 +312,7 @@ def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkey
             (path / "fixture.txt").write_text("public fixture", encoding="utf-8")
         else:
             path.write_text("public fixture", encoding="utf-8")
+    (root / "scripts/install-local.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "pyproject.toml").write_text('[project]\nversion = "1.2.3"\n', encoding="utf-8")
     bundle = root / "loopx/web/chat"
     bundle.mkdir(parents=True)
@@ -298,13 +323,48 @@ def test_builder_freezes_correct_archive_url_before_publication(tmp_path, monkey
     for args in (["init", "--quiet"], ["add", "--", *builder.PATHS], ["commit", "--quiet", "-m", "Synthetic runtime"]):
         subprocess.run(["git", *args], cwd=root, env=env, check=True, capture_output=True, timeout=15)
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True, encoding="utf-8").strip()
+    (root / "loopx/fixture.txt").write_text("uncommitted runtime", encoding="utf-8")
     # Frontend qualification is independent; archive and descriptor creation
     # still execute through the real committed-source builder below.
     monkeypatch.setattr(builder, "validate_bundle", lambda *_a, **_kw: {
         "source_revision": revision, "source_files": {}, "files": {"index.html": "fixture"}})
+
+    def observe(source: Path) -> dict:
+        assert source != root
+        assert (source / "loopx/fixture.txt").read_text(encoding="utf-8") == "public fixture"
+        if supported:
+            return dict(PUBLIC_DEFAULT_CONTRACT)
+        return {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+                "interaction_schema_version": "loopx_interaction_contract_v0"}
+
+    monkeypatch.setattr(builder, "observe_default_contract", observe)
     output = tmp_path / "runtime"
+    if not supported:
+        output.mkdir()
+        previous = output / "loopx-runtime.json"
+        previous.write_bytes(b"previous descriptor")
+        with pytest.raises(ValueError, match="unqualified for public adoption"):
+            builder.build(root, output, repository="example/loopx", channel=channel)
+        assert list(output.iterdir()) == [previous]
+        assert previous.read_bytes() == b"previous descriptor"
+        return
+
     descriptor = builder.build(root, output, repository="example/loopx", channel=channel)
     tag = f"runtime-main-{revision}" if channel == "main" else "v1.2.3"
     assert descriptor["urls"] == [f"https://github.com/example/loopx/releases/download/{tag}/loopx-runtime-{revision}.tar.gz"]
     assert json.loads((output / "loopx-runtime.json").read_text(encoding="utf-8")) == descriptor
-    assert (output / f"loopx-runtime-{revision}.tar.gz").stat().st_size == descriptor["size"]
+    runtime = output / f"loopx-runtime-{revision}.tar.gz"
+    assert runtime.stat().st_size == descriptor["size"]
+    assert descriptor["default_contract"] == PUBLIC_DEFAULT_CONTRACT
+    with tarfile.open(runtime, "r:gz") as archive:
+        identity = archive.extractfile("runtime-artifact.json")
+        assert identity is not None
+        assert json.load(identity)["default_contract"] == descriptor["default_contract"]
+
+
+def test_release_probe_observes_real_default_without_model_or_active_goal():
+    from scripts.qualify_runtime_artifact import observe_default_contract
+
+    # Check the actual CLI output against the supported release contract.
+    observed = observe_default_contract(ROOT)
+    assert validate_default_contract(observed) == PUBLIC_DEFAULT_CONTRACT

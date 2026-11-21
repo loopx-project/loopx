@@ -357,6 +357,7 @@ def test_builtin_catalog_lists_every_owner_in_namespace_order() -> None:
         "periodic_report",
         "pull_request_review",
         "steward_executor",
+        "steward_memory",
         "todo_replan_cadence",
     )
     assert [
@@ -450,6 +451,7 @@ unrelated = sorted(
         "loopx.capabilities.periodic_report.machine_defaults",
         "loopx.capabilities.pr_review_queue.machine_defaults",
         "loopx.capabilities.steward_executor.machine_defaults",
+        "loopx.capabilities.steward_memory.machine_defaults",
         "loopx.capabilities.todo_replan_cadence.machine_defaults",
     )
     if module in sys.modules

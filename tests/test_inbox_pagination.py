@@ -12,8 +12,9 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from loopx.control_plane.collaboration.inbox import acknowledge
-from loopx.control_plane.collaboration.peers import request
+from loopx.control_plane.collaboration.peers import read_inbox, request
 from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
+from loopx.control_plane.goals.activation import GoalActivationState, build_goal_activation
 
 
 @pytest.fixture
@@ -110,10 +111,12 @@ def test_cli_recovers_later_context_without_concluding_deferred_requests(inbox):
         "--decision", "adopt", "--reason", "Check the corrected reserve.")
     cli(root, registry, "report", "--request-id", chosen,
         "--reply-text", "Reserve check passed; capacity remains unverified.")
-    returned = cli(root, registry, agent="sender")["peer_returns"]["items"]
+    returned = cli(root, registry, "read", agent="sender")["peer_returns"]["items"]
     assert [(row["request_id"], row["text"]) for row in returned] == [
         (chosen, "Reserve check passed; capacity remains unverified.")]
-    cli(root, registry, "acknowledge-return", "--request-id", chosen, agent="sender")
+    read_inbox(root, registry, "delivery", "sender", turn_instance_id="turn-page")
+    cli(root, registry, "acknowledge-return", "--request-id", chosen,
+        "--turn-instance-id", "turn-page", "--disposition", "accepted", agent="sender")
     assert "peer_returns" not in cli(root, registry, agent="sender")
     assert ids(cli(root, registry)) == expected[:20]
     assert chosen not in ids(cli(root, registry, "read", "--cursor", first["next_cursor"]))
@@ -258,7 +261,11 @@ def test_mcp_continuation_survives_restart_and_rechecks_registration(inbox):
             assert result.isError
             assert read_ids(root) == set(expected[:40])
             config["goals"][0]["coordination"]["registered_agents"].append("receiver")
-            config["goals"][0]["status"] = "stopped"
+            config["goals"][0]["activation"] = build_goal_activation(
+                state=GoalActivationState.STOPPED,
+                updated_at="2026-11-01T00:00:00Z",
+                reason="Owner stopped the fixture Goal.",
+            )
             registry.write_text(json.dumps(config))
             result = await session.call_tool("read_context", {"cursor": second["next_cursor"]})
             assert not result.isError

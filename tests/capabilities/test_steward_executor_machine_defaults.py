@@ -15,7 +15,9 @@ from loopx.capabilities.machine_configuration.store import (
     configure_machine_configuration,
     machine_configuration_store_path,
 )
+from loopx.capabilities.steward_executor.allocation import restored_executor_model
 from loopx.capabilities.steward_executor import (
+    MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION,
     STEWARD_EXECUTOR_NAMESPACE,
     STEWARD_EXECUTOR_SCHEMA,
     effective_steward_executor_defaults,
@@ -295,3 +297,95 @@ def test_a_malformed_sibling_does_not_rewrite_a_valid_steward_selection(
 
     assert effective["status"] == "ready"
     assert effective["executor_endpoint"] == "dsh"
+
+
+def test_restored_executor_model_ignores_partial_pre_v0_and_validates_v0() -> None:
+    valid_v0 = {
+        "schema_version": MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION,
+        "selection_policy": "preferred",
+        "allocation_reason": "product_default",
+        "executor_endpoint": "codex",
+        "executor_endpoint_source": "product_default",
+        "executor_endpoint_default_reason": "steward_channel_default",
+        "configured_endpoint": None,
+        "eligible_endpoints": [],
+        "configuration_revision": "",
+        "available": None,
+        "model": "gpt-6-astra",
+        "model_source": "vendor_default",
+        "reasoning_effort": "high",
+    }
+    assert restored_executor_model({"manager_executor_allocation": valid_v0}) == {
+        "model": "gpt-6-astra",
+        "reasoning_effort": "high",
+    }
+    with pytest.raises(ValueError, match="missing manager executor allocation fields"):
+        restored_executor_model(
+            {
+                "manager_executor_allocation": {
+                    "schema_version": MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION,
+                    "selection_policy": "preferred",
+                }
+            }
+        )
+
+    partial = {
+        "schema_version": 1,
+        "selection_policy": "preferred",
+    }
+    assert (
+        restored_executor_model(
+            {
+                "manager_executor_allocation": partial,
+                "loopx_tools": True,
+                "loopx_executor": {"model": "legacy-model"},
+            }
+        )
+        is None
+    )
+    assert restored_executor_model(
+        {
+            "manager_executor_allocation": None,
+            "loopx_tools": True,
+            "loopx_executor": {"model": "legacy-model"},
+        }
+    ) == {"model": "legacy-model"}
+    assert restored_executor_model({"loopx_tools": False, "loopx_executor": {"model": "x"}}) is None
+
+
+def test_flexible_endpoint_models_normalize_validate_and_project() -> None:
+    base = {
+        "schema_version": "steward_executor_machine_defaults_v1",
+        "selection_policy": "flexible",
+        "executor_endpoint": "codex",
+        "eligible_endpoints": ["codex", "antigravity"],
+        "executor_model": "gpt-6.2-sol",
+        "executor_reasoning_effort": "xhigh",
+    }
+    normalized = normalize_steward_executor_machine_defaults({
+        **base,
+        "endpoint_models": {
+            "antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+            "codex": {"model": None, "reasoning_effort": None},
+        },
+    })
+    assert normalized["endpoint_models"] == {
+        "antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+    }
+    effective = effective_steward_executor_defaults(_document({"steward_executor": normalized}))
+    assert effective["endpoint_models"] == {
+        "antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+    }
+    without = effective_steward_executor_defaults(_document({"steward_executor": {
+        **base,
+        "endpoint_models": {"antigravity": {"model": "", "reasoning_effort": None}},
+    }}))
+    assert "endpoint_models" not in without
+    for bad in [
+        {"endpoint_models": "bad"},
+        {"endpoint_models": {"dhs": {"model": "x"}}},
+        {"endpoint_models": {"antigravity": {"unknown": "x"}}},
+        {"endpoint_models": {"antigravity": {"reasoning_effort": "maximum"}}},
+    ]:
+        with pytest.raises((TypeError, ValueError)):
+            normalize_steward_executor_machine_defaults({**base, **bad})

@@ -109,6 +109,40 @@ def test_probe_process_failure_preserves_utf8_diagnostics(tmp_path):
         )
 
 
+def test_probe_process_isolates_release_root_from_invoking_checkout(
+    tmp_path, monkeypatch,
+):
+    import runpy
+    from pathlib import Path
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    source_root = tmp_path / "pinned-base"
+    inherited_root = tmp_path / "candidate-head"
+    observed = {}
+
+    def capture_run(command, *, cwd, env=None):
+        observed.update({"command": command, "cwd": cwd, "env": env})
+
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(inherited_root))
+    monkeypatch.setitem(smoke["_run_probe"].__globals__, "_run", capture_run)
+    smoke["_run_probe"](
+        source_root=source_root,
+        probe_runner=tmp_path / "probe-runner.py",
+        probe_test=tmp_path / "probe-test.py",
+        semantics_source=tmp_path / "semantics.py",
+        fixture_root=tmp_path / "fixture",
+        receipt_path=tmp_path / "receipt.json",
+        cwd=tmp_path,
+        enforce_budget=False,
+    )
+
+    assert observed["env"]["PYTHONPATH"] == str(source_root)
+    assert "LOOPX_RELEASE_ROOT" not in observed["env"]
+
+
 def _row(**overrides: object) -> dict[str, object]:
     row: dict[str, object] = {
         "row_id": "surface/status/small/json",
@@ -145,6 +179,85 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
         "fixture_contract_version": CLI_OUTPUT_FIXTURE_CONTRACT_VERSION,
         "rows": list(rows),
     }
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'changed', 'material', 'unknown', 'later', 'row', 'growth'])
+def test_complete_quota_migration_requires_original_controls_and_bounded_scope(tmp_path, damage):
+    import runpy
+    from pathlib import Path
+    from tests.control_plane import test_cli_output_budget as probe
+
+    runner = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                               'examples/control_plane/cli-output-probe-runner.py'))
+    project, runtime, registry, state = probe._write_fixture(tmp_path, probe.SCENARIOS[0])
+    probe.import_fixture_authority(registry, probe.GOAL_ID)
+    command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
+                                     state_file=state, output_format='json')['quota_should_run']
+    code, text = probe._invoke_cli(command)
+    assert code == 0, text
+    source = json.loads(text)
+    raw = {k: v for k, v in source.items() if k not in {'schema_version', 'contract_binding'}}
+    material = runner['_quota_goal_material'](source)
+    observe = runner['_quota_control_observation']
+    before, after = observe(raw, goal_state=material), observe(source, goal_state=material)
+    assert before['controls_sha256'] == after['controls_sha256']
+    assert set(before['field_sha256']) == {
+        'goal_id', 'agent_id', 'decision', 'should_run', 'effective_action', 'selected_todo',
+        'execution', 'boundary', 'required_reads', 'next_cli_actions', 'spend', 'work_lane_contract',
+        'execution_obligation', 'execution_profile', 'task_scope', 'replan_action_packet',
+        'notify', 'user_action_required', 'scheduler_action',
+    }
+    base = _row(row_id='surface/quota_should_run/small/json', surface_id='quota_should_run',
+        chars=1000, utf8_bytes=1000, compact_payload_chars=1000, lines=1,
+        semantic_json_keys=['interaction_contract'], markdown_anchor='# LoopX Quota Should Run',
+        projection_envelope_schema_versions=['loopx_projection_envelope_v0'], quota_controls=before)
+    candidate = {**copy.deepcopy(base), 'chars': 2500, 'utf8_bytes': 2500, 'compact_payload_chars': 2500,
+        'output_contract_version': 'loopx_turn_envelope_v1', 'markdown_anchor': '# LoopX Turn Envelope',
+        'quota_controls': after}
+    if damage == 'missing':
+        del candidate['quota_controls']['field_sha256']['boundary']
+    elif damage in {'changed', 'material'}:
+        key = 'spend' if damage == 'changed' else 'required_reads'
+        candidate['quota_controls']['field_sha256'][key] = 'f' * 64
+    elif damage == 'unknown':
+        candidate['quota_controls']['source_schema'] = 'future_contract'
+    elif damage == 'later':
+        base['quota_controls']['source_schema'] = 'loopx_turn_envelope_v1'
+    elif damage == 'row':
+        candidate['row_id'] = base['row_id'] = 'surface/status/small/json'
+    elif damage == 'growth':
+        candidate.update(chars=100_000, utf8_bytes=100_000, compact_payload_chars=100_000)
+    result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
+    assert result['ok'] is (damage is None), result
+
+
+def test_quota_goal_material_checks_exact_bytes_order_and_full_source(tmp_path):
+    import hashlib
+    import runpy
+    from pathlib import Path
+
+    reader = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                               'examples/control_plane/cli-output-probe-runner.py'))['_quota_goal_material']
+    path = tmp_path / 'goal.md'
+    path.write_text('Goal intent.\nStop before private publication.\n')
+    command = 'cat -- ' + str(path)
+    expected = {'command': command, 'ordering': 'before_work',
+                'revision': 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()}
+    pending = {'interaction_contract': {'agent_channel': {'required_reads': [
+        {'source': 'goal_state', 'command': command, 'ordering': 'before_work'}]}}}
+    assert reader(pending) == expected
+    row = {'source': 'goal_state', 'command': command, 'ordering': 'before_work',
+           'content': {'full_source': True, 'revision': expected['revision'], 'text': path.read_text()}}
+    inline = {'interaction_contract': {'agent_channel': {'work_context': {'sources': [row]}}}}
+    assert reader(inline) == expected
+    row['content']['text'] = 'Goal intent.'
+    with pytest.raises(AssertionError):
+        reader(inline)
+    row['content']['revision'] = 'sha256:' + hashlib.sha256(b'Goal intent.').hexdigest()
+    assert reader(inline) != expected
+    row['ordering'] = 'after_work'
+    with pytest.raises(AssertionError):
+        reader(inline)
 
 
 def test_base_ceiling_observation_is_bounded_and_contains_only_metrics():
@@ -207,15 +320,14 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
         row_id="surface/quota_should_run/crowded/json", surface_id="quota_should_run",
         scenario="crowded", chars=chars, lines=1,
     )
-    probes, git_commands, workloads = [], [], []
+    probes, materialized, workloads = [], [], []
     fixture_bytes = namespace["PROBE_TEST"].read_bytes()
 
-    def git_transport(command, **_):
-        git_commands.append(command)
-        if "add" in command:
-            base_test = Path(command[-2]) / namespace["PROBE_TEST"].relative_to(namespace["REPO_ROOT"])
-            base_test.parent.mkdir(parents=True)
-            base_test.write_text("# Synthetic historical fixture\n")
+    def materialize(base_ref, base_root):
+        materialized.append((base_ref, base_root))
+        base_test = base_root / namespace["PROBE_TEST"].relative_to(namespace["REPO_ROOT"])
+        base_test.parent.mkdir(parents=True)
+        base_test.write_text("# Synthetic historical fixture\n")
 
     def probe_transport(**kwargs):
         probes.append(kwargs["enforce_budget"])
@@ -230,7 +342,7 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
                 measurement={"chars": chars, "lines": 1},
             )
 
-    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_materialize_base_source", materialize)
     monkeypatch.setitem(namespace, "_run_probe", probe_transport)
     monkeypatch.setitem(namespace, "_is_ancestor", lambda *_: True)
     monkeypatch.setitem(namespace, "_pin_probe_base_ref", lambda ref, **_: ref)
@@ -241,7 +353,8 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
     assert workloads[0][0] == workloads[1][0]
     assert all(body == fixture_bytes for _, body, _ in workloads)
     assert workloads[0][2] != workloads[1][2]
-    assert "remove" in git_commands[-1]
+    assert materialized == [("synthetic-base", workloads[0][2])]
+    assert not workloads[0][2].exists()
     output = capsys.readouterr().out
     prefix = "cli-output-base-current-ceilings "
     assert output.startswith(prefix)
@@ -588,6 +701,7 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     git("init", "-b", "main")
     packet = repo / "packet.json"
     common_payload = {
+        "schema_version": "loopx_turn_envelope_v1", "contract_binding": {},
         "interaction_contract": {}, "scheduler_hint": {}, "selected_todo": {},
         "note": "x" * 4000,
     }
@@ -595,12 +709,18 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     probe_test = repo / "tests" / "probe.py"
     probe_test.parent.mkdir()
     probe_test.write_text("# Public synthetic probe\n", encoding="utf-8")
-    git("add", "packet.json", "tests/probe.py")
+    base_package = repo / "loopx" / "__init__.py"
+    base_package.parent.mkdir()
+    base_package.write_bytes(b"# Fixture package\n")
+    attributes = repo / ".gitattributes"
+    attributes.write_bytes(b"*.py text eol=lf\n")
+    git("add", ".gitattributes", "packet.json", "tests/probe.py", "loopx/__init__.py")
     git("commit", "-m", "common baseline")
     common = git("rev-parse", "HEAD")
     git("checkout", "-b", "candidate")
+    attributes.write_bytes(b"*.py text eol=crlf\n")
     packet.write_text(json.dumps({**common_payload, "note": "x" * (4000 + growth)}), encoding="utf-8")
-    git("add", "packet.json")
+    git("add", ".gitattributes", "packet.json")
     git("commit", "--allow-empty", "-m", "candidate")
     candidate = git("rev-parse", "HEAD")
     git("checkout", "main")
@@ -611,19 +731,28 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     upstream = git("rev-parse", "HEAD")
     git("update-ref", "refs/remotes/origin/main", upstream)
     git("checkout", "candidate")
+    (repo / "staged.txt").write_text("Uncommitted fixture change\n", encoding="utf-8")
+    git("add", "staged.txt")
+    original_index = git("ls-files", "--stage")
     probes = []
     pinned = []
-    run = namespace["_run"]
+    materialize = namespace["_materialize_base_source"]
 
-    def git_transport(command, **kwargs):
-        if "worktree" in command and "add" in command:
-            pinned.append(command[-1])
-            # Advance the ref again after selection but before checkout.
-            git("update-ref", "refs/remotes/origin/main", candidate)
-        run(command, **kwargs)
+    def observe_materialization(base_ref, base_root):
+        pinned.append(base_ref)
+        # Advance the ref again after selection but before materialization.
+        git("update-ref", "refs/remotes/origin/main", candidate)
+        materialize(base_ref, base_root)
 
     def probe_transport(**kwargs):
-        text = (kwargs["source_root"] / "packet.json").read_text(encoding="utf-8")
+        source_root = kwargs["source_root"]
+        if not kwargs["enforce_budget"]:
+            assert (source_root / "loopx" / "__init__.py").read_bytes() == b"# Fixture package\n"
+            assert not (source_root / "tests").exists()
+            assert not (source_root / "staged.txt").exists()
+            assert not (source_root / ".git").exists()
+            assert git("worktree", "list", "--porcelain").count("worktree ") == 1
+        text = (source_root / "packet.json").read_text(encoding="utf-8")
         measured = measure_cli_output(text, output_format="json")
         row = _row(
             row_id="surface/quota_should_run/crowded/json",
@@ -642,7 +771,7 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
 
     monkeypatch.setitem(namespace, "REPO_ROOT", repo)
     monkeypatch.setitem(namespace, "PROBE_TEST", probe_test)
-    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_materialize_base_source", observe_materialization)
     monkeypatch.setitem(namespace, "_run_probe", probe_transport)
     # An explicit historical commit remains authoritative even off this branch.
     args = ["probe", "--base-ref", upstream] if explicit_base else ["probe"]
@@ -658,6 +787,7 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     assert pinned == [upstream if explicit_base else common]
     assert git("worktree", "list", "--porcelain").count("worktree ") == 1
     assert git("rev-parse", "HEAD") == candidate
+    assert git("ls-files", "--stage") == original_index
     assert git("show", f"{common}:packet.json") == json.dumps(common_payload)
 
 
@@ -675,6 +805,30 @@ def test_probe_rejects_an_unresolvable_base(tmp_path, monkeypatch, base_ref):
     monkeypatch.setitem(pin.__globals__, "REPO_ROOT", tmp_path)
     with pytest.raises(RuntimeError, match="select an explicit --base-ref commit"):
         pin(base_ref, main_ref="origin/main")
+
+
+def test_probe_rejects_a_commit_without_its_own_cli_source(tmp_path, monkeypatch):
+    import os
+    import runpy
+    import subprocess
+    from pathlib import Path
+
+    materialize = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))["_materialize_base_source"]
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run([
+        "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false",
+        "commit", "--allow-empty", "-m", "Commit before the CLI existed",
+    ], cwd=repo, check=True, capture_output=True)
+    monkeypatch.setitem(materialize.__globals__, "REPO_ROOT", repo)
+    source_root = tmp_path / "base"
+    with pytest.raises(ValueError, match="has no LoopX Python source"):
+        materialize("HEAD", source_root)
+    assert not source_root.exists()
 
 
 @pytest.mark.parametrize("row_kind", ["surface", "variant"])
@@ -1659,7 +1813,7 @@ def test_inline_context_transition_is_bounded_one_time_and_fixture_scoped():
     assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
-def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
+def test_public_multi_subagent_probe_reaches_complete_source(tmp_path):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
@@ -1674,9 +1828,9 @@ def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
     with probe._stable_budget_fixture_root(tmp_path) as root:
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
     assert len(rows) == 1
-    assert rows[0]["action_signature_coverages"] == [
-        "turn_envelope_action_dimensions_v4"
-    ]
+    assert rows[0]["quota_controls"]["source_schema"] == "loopx_turn_envelope_v1"
+    assert len(rows[0]["quota_controls"]["field_sha256"]) == 19
+    assert rows[0]["action_signature_coverages"] == []
     assert any("agent_context" in path for path in rows[0]["json_shape_paths"])
 
 

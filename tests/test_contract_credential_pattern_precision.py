@@ -80,6 +80,70 @@ def test_literal_credential_hits_stay_errors(tmp_path: Path, line: str) -> None:
     assert payload["credential_reference_hits"] == []
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"<Widget {TOKEN_ASSIGN}{{token}} />",
+        f"<Widget {TOKEN_ASSIGN}{{joined.token}} />",
+        f"    {TOKEN_ASSIGN}{{token}}",
+        f"<Widget {TOKEN_ASSIGN}{{ credentials.current.token }} />",
+        f"state.requests.push({{ {AUTH_HEADER.lower()} req.headers.authorization }});",
+        f"state.requests.push({{ {AUTH_HEADER.lower()} req.headers.authorization, count: 1 }});",
+        f"print(f\"https://example.test/#{TOKEN_ASSIGN}{{link['token']}}\")",
+        f"route.startsWith('{TOKEN_ASSIGN}')",
+        f"route.indexOf('{TOKEN_ASSIGN}') === 0",
+        f"href.includes('{TOKEN_ASSIGN}')",
+        f'const header = "{AUTH_HEADER}";',
+        f"if (field === '{AUTH_HEADER.lower()}') {{}}",
+        f"// An empty `?{TOKEN_ASSIGN}` must not erase a working login.",
+        f"test('reads ?{TOKEN_ASSIGN} and scrubs', () => {{}})",
+        f"takeLinkToken('https://example.test/?{TOKEN_ASSIGN}')",
+        f'takeLinkToken("https://example.test/?{TOKEN_ASSIGN}")',
+    ],
+)
+def test_source_credential_references_are_not_literals(tmp_path: Path, line: str) -> None:
+    payload = _scan_line(tmp_path, line)
+
+    assert payload["hits"] == []
+    assert payload["credential_reference_hits"] == ["sample.md:1: credential"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f'<Widget {TOKEN_ASSIGN}"abc123def" />',
+        f"<Widget {TOKEN_ASSIGN}{{'sk-live-abc123def'}} />",
+        f"<Widget {TOKEN_ASSIGN}{{'abc123def'}} />",
+        f"<Widget {TOKEN_ASSIGN}{{token + 'abc123def'}} />",
+        f"https://example.test/?{TOKEN_ASSIGN}abc123",
+        f"takeLinkToken('https://example.test/?{TOKEN_ASSIGN}abc123')",
+        f"takeLinkToken('https://example.test/?{TOKEN_ASSIGN}%20abc123')",
+        f"{TOKEN_ASSIGN} abc123",
+        f"takeLinkToken('https://example.test/?{TOKEN_ASSIGN} abc123')",
+        f"takeLinkToken('https://example.test/?{TOKEN_ASSIGN}{{config.token}}')",
+        f'<Widget {TOKEN_ASSIGN}"{{token}}" />',
+        f"{AUTH_HEADER} abcdefghijk.lmnopqrst",
+        f"{AUTH_HEADER} req.headers.authorization",
+        f"'{{ {AUTH_HEADER.lower()} req.headers.authorization }}'",
+        f"{{ {AUTH_HEADER.lower()} '{BEARER} {REAL_BEARER_VALUE}' }}",
+        f"{{ {AUTH_HEADER.lower()} 'req.headers.authorization' }}",
+        f"{{ {AUTH_HEADER.lower()} req.headers.authorization + 'abc123def' }}",
+        f"{TOKEN_ASSIGN}{{link['token']}}abc123def",
+        f"{TOKEN_ASSIGN}{{token}}abc123def",
+        # A field spelling and a plausible enum value do not establish its type.
+        f"{{ user{AUTH_HEADER} 'high' }}",
+        f"{{ user{AUTH_HEADER} 'abc123def' }}",
+    ],
+)
+def test_source_shaped_literals_and_ambiguous_values_stay_blocked(
+    tmp_path: Path, line: str,
+) -> None:
+    payload = _scan_line(tmp_path, line)
+
+    assert payload["hits"] == ["sample.md:1: credential"]
+    assert payload["credential_reference_hits"] == []
+
+
 def test_a_literal_on_a_line_with_references_still_fails(tmp_path: Path) -> None:
     line = f"{PASSWORD_ASSIGN}$SERVICE_SECRET {TOKEN_ASSIGN}{REAL_BEARER_VALUE}"
 
@@ -247,3 +311,25 @@ def test_real_check_cli_rejects_provider_placeholder_words_inside_the_body(
         row["code"] == "public_boundary_violation"
         for row in payload["error_diagnostics"]
     )
+
+
+@pytest.mark.parametrize("token", PROVIDER_TOKEN_SAMPLES)
+@pytest.mark.parametrize(
+    "template",
+    [
+        '<Widget ' + TOKEN_ASSIGN + '"%s" />',
+        '<Widget ' + TOKEN_ASSIGN + "{'%s'} />",
+        "https://example.test/?" + TOKEN_ASSIGN + "%s",
+        "{ " + AUTH_HEADER.lower() + " '" + BEARER + " %s' }",
+        AUTH_HEADER + " " + BEARER + " %s",
+        # Every match still matters; a source reference cannot clear a literal.
+        '<Widget ' + TOKEN_ASSIGN + '{token} /> ' + AUTH_HEADER + ' ' + BEARER + ' %s',
+    ],
+)
+def test_provider_literals_block_even_beside_source_references(
+    tmp_path: Path, token: str, template: str,
+) -> None:
+    payload = _scan_line(tmp_path, template % token)
+
+    assert payload["hits"] == ["sample.md:1: credential"]
+    assert payload["credential_reference_hits"] == []

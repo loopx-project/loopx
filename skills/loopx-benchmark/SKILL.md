@@ -308,8 +308,7 @@ become a second source of score, integrity, or countability truth.
   state; put only reusable guidance in the shipped skill.
 - Verify the rendered view: requested baselines and active ablations appear,
   retired attempts are reachable through history, and links survive a selection
-  update. Review the populated first viewport for readable labels and navigation;
-  a correct query alone does not establish a usable comparison view.
+  update. Review the populated first viewport for readable labels and navigation.
 
 ## Campaign monitoring and post-run insight
 

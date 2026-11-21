@@ -255,6 +255,7 @@ def test_dsh_host_forwards_the_resolved_credential_to_the_runtime(
 
     assert calls[0]["env"] == {
         **credential,
+        "LOOPX_TURN_KEY": TURN_KEY,
         "LOOPX_TURN_GOAL_ID": "g",
         "LOOPX_TURN_AGENT_ID": "a",
         "LOOPX_TURN_TODO_ID": "",
@@ -405,6 +406,43 @@ def test_parse_model_json_tolerates_prose_and_fences() -> None:
     assert turn_host_adapter.parse_model_json(prose) == payload
     assert turn_host_adapter.parse_model_json("") is None
     assert turn_host_adapter.parse_model_json("no json at all") is None
+
+
+def test_parse_model_json_repairs_minor_delimiters_and_preserves_strings() -> None:
+    complex_payload = {
+        "result_kind": "validated_completion",
+        "details": [
+            {"label": "literal", "text": "Keep ,}, and }]}}]}} intact inside string literals."},
+            {"label": "second", "text": "Trailing text"},
+        ],
+    }
+    raw_trailing_comma = (
+        '{"result_kind": "validated_completion", "details": ['
+        '{"label": "literal", "text": "Keep ,}, and }]}}]}} intact inside string literals.",}, '
+        '{"label": "second", "text": "Trailing text",},'
+        '],}'
+    )
+    assert turn_host_adapter.parse_model_json(raw_trailing_comma) == complex_payload
+    # Extra } inside terminal closer run when outer expectation is ] followed by }
+    raw_extra_before_array_close = (
+        '{"result_kind": "validated_completion", "nested": {"sections": ['
+        '{"items": [{"summary": "ok",}]}]}]}}'
+    )
+    assert turn_host_adapter.parse_model_json(raw_extra_before_array_close) == {
+        "result_kind": "validated_completion",
+        "nested": {"sections": [{"items": [{"summary": "ok"}]}]},
+    }
+    raw_extra_outer_brace = '{"result_kind": "wait", "nested": {"a": [1,]}}}'
+    assert turn_host_adapter.parse_model_json(raw_extra_outer_brace) == {
+        "result_kind": "wait",
+        "nested": {"a": [1]},
+    }
+    # Truncated, unclosed string, mid-object mismatch, or >2 stray closers must fail closed.
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait", "items": [{"a": 1}') is None
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait", "items": [{"a": 1}}') is None
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait", "text": "unterminated}') is None
+    assert turn_host_adapter.parse_model_json('{"a": [1}, "b": 2}') is None
+    assert turn_host_adapter.parse_model_json('{"result_kind": "wait"}}}}') is None
 
 
 def test_build_result_fails_closed_without_a_typed_candidate() -> None:
@@ -1562,6 +1600,7 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     calls = []
+    monkeypatch.setenv("LOOPX_TURN_KEY", "ambient-wrong-turn")
     monkeypatch.setenv("LOOPX_TURN_GOAL_ID", "ambient-wrong-goal")
 
     def runner(**kwargs):
@@ -1569,18 +1608,21 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
         return '{"result_kind":"wait"}'
 
     monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
-    pinned = {"LOOPX_TURN_TODO_ID": "stale-todo", "DSH_PERMISSION_MODE": "read-only"}
+    pinned = {"LOOPX_TURN_KEY": "stale-turn", "LOOPX_TURN_TODO_ID": "stale-todo",
+              "DSH_PERMISSION_MODE": "read-only"}
     config = turn_host_adapter.DshHostConfig(workspace=tmp_path, env=pinned)
     turn_host_adapter.run_dsh_host(_signed_request(todo_id="first"), config=config)
     turn_host_adapter.run_dsh_host(_signed_request(todo_id="second"), config=config)
     turn_host_adapter.run_dsh_host(_signed_request(), config=config)
     assert [env["LOOPX_TURN_TODO_ID"] for env in calls] == ["first", "second", ""]
     for env in calls:
+        assert env["LOOPX_TURN_KEY"] == TURN_KEY
         assert env["LOOPX_TURN_GOAL_ID"] == "g"
         assert env["LOOPX_TURN_AGENT_ID"] == "a"
         assert env["LOOPX_TURN_WORKSPACE"] == str(tmp_path.resolve())
         assert env["DSH_PERMISSION_MODE"] == "read-only"
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-todo"
+    assert pinned["LOOPX_TURN_KEY"] == "stale-turn"
 
 
 @pytest.mark.parametrize("goal,agent,todo", [

@@ -59,8 +59,8 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   };
   if (name === "SessionStart") {
     // The provider may qualify the native-selected replay source against the
-    // completed read checkpoint. Neither an event's same ID nor a disk journal
-    // is that observation. Unknown/replaced/truncated histories still reset.
+    // completed read checkpoint.
+    //  Unknown/replaced/truncated histories still reset.
     const candidate = jsonObject(state.candidate);
     if (same && event.source === "resume" && request.resume_verified === true
         && !state.pending && candidate?.basis === NATIVE_CONTEXT_BASIS

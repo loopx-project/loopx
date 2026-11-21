@@ -1032,6 +1032,9 @@ def test_complete_candidate_scans_actual_scheduler_source_paths(operation: str, 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_private_source_is_refused_before_provider_io(tmp_path, monkeypatch, provider) -> None:
+    from loopx.control_plane.scheduler.execution_context import (
+        scheduler_execution_context_for_runtime_profile,
+    )
     from loopx.control_plane.testing.model_behavior_qualification import ModelBehaviorPairValidationError
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_quota_settlement_cli import (
@@ -1044,7 +1047,10 @@ def test_real_cli_private_source_is_refused_before_provider_io(tmp_path, monkeyp
         "--agent-id", AGENT_ID, "--codex-app", "--context-delivery", "off",
         "--turn-instance-id", "qualification-private-source", cwd=project)
     assert rc == 0 and source["ok"] is True
-    candidate = compose_turn_decision(source)
+    candidate = compose_turn_decision(
+        source,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"),
+    )
     before = json.dumps(candidate, sort_keys=True)
     calls = []
     # Real CLI context includes private runtime routing. Complete-source

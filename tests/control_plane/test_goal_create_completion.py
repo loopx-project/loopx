@@ -379,6 +379,7 @@ def test_confirmed_task_start_recovers_the_same_claim_and_dispatch(environment, 
 @pytest.mark.parametrize("completion_surface", ["native-cli", "external-worker"])
 def test_ordinary_goal_replans_after_first_todo_and_delivers_the_missing_section(environment, app, monkeypatch, provider, completion_surface):
     """Real creation, native CLI and authority; only the work decision is scripted."""
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     configure, _, _, project, runtime = environment
     _, request, _ = app
     configure(provider, mode="soft_claim")

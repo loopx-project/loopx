@@ -78,9 +78,8 @@ Host 可以保存会话 transcript，也可以保存 native Goal 的 objective �
 | Executor / Agent | 当前 Turn 的推理、工具调用、bounded delivery 与验证 | 隐式长期记忆和越权批准 |
 | LoopX control plane | Goal、Todo、Gate、quota、evidence lineage、recovery protocol | 模型推理、Git/CI 外部事实 |
 
-Dashboard、review packet 和 prompt 是 projection/interaction surfaces，不构成第五个
-authority。上一节说的"唤醒表面"就落在 Host 这一行：能不能把一个问题送到人面前，取决于
-Host 提供了什么，而不是取决于控制面写了什么。
+Dashboard、review packet 和 prompt 是 projection/interaction surfaces。上一节说的"唤醒表面"就落在 Host 这一行：能不能把一个问题送到人面前，取决于
+Host 提供了什么。
 
 ## 三种身份必须分开
 
@@ -92,7 +91,7 @@ LoopX 同时处理 Goal、Agent 和 Host，但三者回答的是不同问题：
 | `agent_id` | 当前由哪个 peer/lane 承担工作？ | 绑定 claim、Vision、quota 与 writeback；只有不存在已注册 lane 或显式 `--new-peer` 时新接入才默认注册 fresh identity |
 | `host_surface` / runtime profile | 这一轮实际由哪个产品表面执行和唤醒？ | 绑定 App heartbeat、visible Goal 或其他 host loop；必须按当前运行面显式声明 |
 
-已有 Goal 可以继续复用，不代表新 session 应接管已有 Agent identity。最新 Goal-start 合同要求：
+最新 Goal-start 合同要求：
 
 1. 多个已注册 Goal 同时存在时，先返回只读 `goal_selection_gate`，再以精确 `--goal-id` 重跑；
 2. 不根据相似的 objective、聊天摘要或目录名猜测 Goal；
@@ -103,15 +102,15 @@ LoopX 同时处理 Goal、Agent 和 Host，但三者回答的是不同问题：
    才默认注册 fresh identity：`start-goal` 返回 `fresh_agent_registration_required`
    （`register_fresh_agent`），首次接入无需额外 `--new-peer`；已绑定的 thread 沿用其绑定的 lane；
 5. 只有用户明确要求接管某个已有 Agent，才以该精确 `agent_id` 继续；
-6. Agent 名称或前缀不证明 Host，实际运行面要由 host/runtime metadata 说明。
+6. 实际运行面要由 host/runtime metadata 说明。
 
 这样，"继续同一个项目"与"冒充上一个执行者"不会被压成同一操作。
 
 ## 任务资格卡：先判断是否值得使用 LoopX
 
-LoopX 不是"任务越大越应该用"的同义词。先把任务写成一张可审查的资格卡：
+先把任务写成一张可审查的资格卡：
 
-这张卡是本书提供的决策工具，不是 LoopX CLI schema，也不会被 `start-goal` 自动写入状态。
+这张卡是本书提供的决策工具。
 真正进入 LoopX 的 Goal、Todo、Gate、acceptance 和 boundary 仍以当前协议与 CLI 为准。
 
 | 字段 | 要回答的问题 | 不满足时的默认选择 |
@@ -126,9 +125,9 @@ LoopX 不是"任务越大越应该用"的同义词。先把任务写成一张可
 
 前四个字段直接对应第二段故事里的失败：`external_wait` 为真，说明这个任务会停在等待上；
 `authority` 为真，说明这个等待必须由人给出决定。两项都满足时，"谁来唤醒那个人"就成了
-启动前必须回答的问题，而不是运行一段时间之后才发现的缺口。
+启动前必须回答的问题。
 
-满足一项不代表必须使用 LoopX。真正有价值的组合通常是：跨 session + 有外部等待或 handoff +
+真正有价值的组合通常是：跨 session + 有外部等待或 handoff +
 有独立 acceptance，并且项目需要把 authority、evidence 和恢复条件外置。
 
 ### 如何比较普通会话、Goal 与 LoopX
@@ -145,7 +144,7 @@ same time and cost budget
 记录 completion、独立 verifier、错误写入、人工介入、stop-policy、wall time 和 cost。没有 matched
 baseline 或独立 verifier 时，可以记录使用体验，不能声称产品能力提升。
 
-[Benchmark 研究 RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
+[Benchmark 研究 RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
 定义当前研究边界。Benchmark-native 研究必须明确 arm semantics、authority boundary 与独立
 verifier，才能作为产品研究证据。
 
@@ -211,10 +210,9 @@ Gate G
 
 Goal 表达项目结果，Todo 表达可调度的工作单元。LoopX 可以为 Todo 记录优先级、依赖、claim、
 lease、successor 和 handoff。Per-Agent Vision 则保存某个 peer 当前的 bounded role direction、
-acceptance summary 与 replan trigger；它是 per-Agent 的路线，也不是全局产品愿景。
+acceptance summary 与 replan trigger；它是 per-Agent 的路线。
 
-这使"目标仍 active"与"当前谁可以做哪件事"成为两个问题。Agent id 是工作身份，不证明 Host
-身份；`codex-*` 前缀也不能证明任务实际运行在 Codex App 还是 CLI。新 session 可以复用同一
+这使"目标仍 active"与"当前谁可以做哪件事"成为两个问题。Agent id 是工作身份。新 session 可以复用同一
 Goal 的历史与 frontier，并在没有已注册 lane 或显式 `--new-peer` 时以 fresh Agent identity 进入；
 已有 claim 则通过显式 takeover 或 handoff 处理。
 
@@ -260,7 +258,7 @@ Host 仍然拥有实际唤醒机制。LoopX 输出调度合同，不假装自己
 ### 5. 跨 Agent、跨 Host 与恢复
 
 LoopX 的 canonical state 属于项目。Codex App、Codex CLI 或其他受支持 Host 可以读取同一个
-Goal 边界，而不是各自维护一份"当前进度"。
+Goal 边界。
 
 ```text
 Codex App heartbeat ─┐
@@ -274,7 +272,7 @@ environment read 与 replan，不需要新 Host 继承旧 transcript。
 ### Host 兼容矩阵
 
 LoopX 保留同一 control-plane contract，但不同 Host 的启动和唤醒机制并不相同。当前公开
-[Runtime Connector Catalog](https://github.com/huangruiteng/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
+[Runtime Connector Catalog](https://github.com/loopx-project/loopx/blob/main/docs/integrations/runtime-connector-catalog.md)
 与各 Host adapter 文档给出的主要路径是：
 
 | Host surface | 驱动 | 关键限制 |
@@ -289,8 +287,7 @@ LoopX 保留同一 control-plane contract，但不同 Host 的启动和唤醒机
 | DeepSeek Harness | native skill + same-session Driver / `loopx turn run-once` | 每段 bounded execution 仍需独立 validation |
 | Shell / other Agent | guided packet + caller-owned runner | 无 runner hook 时由调用方唤醒 |
 
-这张表就是资格卡第二个维度的数据来源。表中出现一个 Host 不代表所有 Host 都支持相同
-automation API。`host_surface` 未知时，应省略一次该参数并使用只读 selection Gate；不要把
+这张表就是资格卡第二个维度的数据来源。`host_surface` 未知时，应省略一次该参数并使用只读 selection Gate；不要把
 Codex CLI、IDE plugin、App SSH 或普通 shell 猜成 Codex App heartbeat。完整表面、启动方式、
 停止策略和验证证据以 Runtime Connector Catalog 与对应 Host 文档为准；Dev Book 不复制每个
 adapter 的完整 runbook。
@@ -311,8 +308,7 @@ LoopX control plane -> Codex Goal continuation -> Agent Turn
         `---------- validated writeback -------'
 ```
 
-因此，Codex Goal 与 LoopX 的关系更像 Host lifecycle 与 project lifecycle 的组合，而不是两套
-互相替代的 Agent runtime。
+因此，Codex Goal 与 LoopX 的关系更像 Host lifecycle 与 project lifecycle 的组合。
 
 ## 代价与边界：引入一层状态买到了什么
 
@@ -337,7 +333,7 @@ evidence lineage。维护成本随任务数量增长，而它换来的是任务�
 
 **边界三：Host 表面决定哪些能力真的可用。** 资格卡判定的 `external_wait` 和 `handoff`，
 只有在当前 Host 能唤醒、能推送、能回读时才会生效。缺少这些表面的 Host 上，正确的做法是
-缩小任务范围或换一个表面，而不是把任务升级上去期待它自己解决。
+缩小任务范围或换一个表面。
 
 **边界四：控制面只为项目级问题存在。** 没有跨 session、没有外部等待、也没有交接的单次任务，
 留在会话里更快。为了"更 Agentic"而制造状态，付出的就是上面的代价一。
@@ -356,7 +352,7 @@ Todo 阻塞得对，控制面每次 tick 都做出正确判断，而那个人从
 lane 或显式 `--new-peer` 时以 fresh Agent identity 进入，这是合法路径。若推断出一个相似的 `goal_id`，或者直接接管旧
 `agent_id`，得到的就是两个写入者对同一份"当前进度"的假设。
 
-对应的观察方式是读状态，而不是读 transcript：重启之后控制面还能说出任务停在哪、在等谁，
+对应的观察方式是读状态：重启之后控制面还能说出任务停在哪、在等谁，
 以及下一步由谁执行。这三项是判断能否接手的基础，还需结合任务风险与维护成本决定是否值得接入。
 
 ## 不变式

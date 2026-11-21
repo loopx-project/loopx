@@ -286,5 +286,8 @@ class OwnerWorkGroups extends Component<OwnerWorkGroupsProps, object, string | n
 function RemainingWork({selectedTodoId, label, children}: {selectedTodoId: string | null; label: string; children: ReactNode}) {
   const disclosure = useRef<HTMLDetailsElement>(null);
   useEffect(() => {if (selectedTodoId && disclosure.current) disclosure.current.open = true;}, [selectedTodoId]);
-  return <details className="goal-work-more" ref={disclosure}><summary>{label}</summary>{children}</details>;
+  return <details className="goal-work-more" ref={disclosure}>
+    <summary>{label}</summary>
+    <div>{children}</div>
+  </details>;
 }

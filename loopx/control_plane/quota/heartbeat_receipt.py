@@ -206,6 +206,9 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
     quota_spend_source: str | None = None,
+    task_lease_proof: Mapping[str, object] | None = None,
+    task_lease_epoch: int | None = None,
+    prepared_lease_required: bool = False,
     goal_ref: Mapping[str, object] | None = None,
     before_bind: Callable[[], None] | None = None,
 ) -> dict[str, object]:
@@ -266,6 +269,15 @@ def ensure_turn_heartbeat_settlement_receipt(
             # identity before transport-specific start admission. Its owner may
             # refuse admission without writing a receipt or claiming work.
             before_bind()
+        if task_lease_proof is not None and identity.todo_id is not None:
+            from .execution_preparation import prepared_lease_receipt_fields
+
+            rebound_lease_fields = prepared_lease_receipt_fields(
+                task_lease_proof, lease_epoch=task_lease_epoch,
+            )
+        else:
+            rebound_lease_fields = None
+        preserved_details: dict[str, object] = {}
         if effective is not None:
             if observed is not None:
                 effective_details = effective.get("details")
@@ -274,9 +286,15 @@ def ensure_turn_heartbeat_settlement_receipt(
                     if isinstance(effective_details, Mapping)
                     else {}
                 )
+                preserved_details = dict(effective_details)
+                lease_unchanged = rebound_lease_fields is None or (
+                    all(effective_details.get(k) == v for k, v in rebound_lease_fields.items())
+                    and (task_lease_epoch is not None or "prepared_lease_epoch" not in effective_details)
+                )
                 if not semantic_replan_guard_scoped:
-                    return effective
-                if "semantic_replan_obligation_id" in effective_details:
+                    if lease_unchanged:
+                        return effective
+                elif "semantic_replan_obligation_id" in effective_details:
                     raw_existing_guard = effective_details.get(
                         "semantic_replan_obligation_id"
                     )
@@ -305,9 +323,11 @@ def ensure_turn_heartbeat_settlement_receipt(
                         raise HeartbeatReceiptIdentityConflictError(
                             "Turn heartbeat receipt belongs to another capability guard"
                         )
-                    return effective
+                    if lease_unchanged:
+                        return effective
 
         details = {
+            **preserved_details,
             "turn_instance_id": identity.turn_instance_id,
             "todo_id": str(identity.todo_id or ""),
             "replan_obligation_id": str(identity.replan_obligation_id or ""),
@@ -316,6 +336,12 @@ def ensure_turn_heartbeat_settlement_receipt(
             "stall_observation": "not_applicable",
             "source": "loopx_turn_run_once",
         }
+        if identity.todo_id is not None and (prepared_lease_required or task_lease_proof is not None):
+            details["prepared_lease_required"] = True
+        if rebound_lease_fields is not None:
+            details.update(rebound_lease_fields)
+            if task_lease_epoch is None:
+                details.pop("prepared_lease_epoch", None)
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
@@ -448,6 +474,7 @@ def upgrade_identityless_heartbeat_receipt(
     summary: str,
     details: Mapping[str, object],
     goal_ref: Mapping[str, object] | None = None,
+    required_semantic_replan_obligation_id: str | None = None,
 ) -> tuple[dict[str, object], bool]:
     """Append one settlement-bound receipt after an identity-less same-turn guard.
 
@@ -461,6 +488,18 @@ def upgrade_identityless_heartbeat_receipt(
         replan_obligation_id
     )
     normalized_effect_id = str(settlement_effect_id).strip()
+    normalized_required_semantic_replan_obligation_id = (
+        normalize_todo_replan_obligation_id(
+            required_semantic_replan_obligation_id
+        )
+    )
+    if (
+        required_semantic_replan_obligation_id is not None
+        and normalized_required_semantic_replan_obligation_id is None
+    ):
+        raise HeartbeatReceiptIdentityConflictError(
+            "heartbeat receipt upgrade requires a valid semantic replan obligation"
+        )
     if bool(normalized_todo_id) == bool(normalized_replan_obligation_id):
         raise HeartbeatReceiptIdentityConflictError(
             "heartbeat receipt upgrade requires exactly one deterministic "
@@ -503,6 +542,35 @@ def upgrade_identityless_heartbeat_receipt(
             raise ValueError(
                 "identity-less heartbeat receipt is missing; rerun the original guard"
             )
+        effective_details_value = effective.get("details")
+        effective_details: Mapping[str, object] = (
+            effective_details_value
+            if isinstance(effective_details_value, Mapping)
+            else {}
+        )
+        if normalized_required_semantic_replan_obligation_id is not None:
+            selected_semantic_replan_obligation_id = (
+                heartbeat_receipt_semantic_replan_obligation_id(effective)
+            )
+            if (
+                selected_semantic_replan_obligation_id
+                != normalized_required_semantic_replan_obligation_id
+            ):
+                raise HeartbeatReceiptIdentityConflictError(
+                    "heartbeat receipt semantic replan guard conflicts with the "
+                    "requested successor obligation"
+                )
+            if not (
+                effective_details.get("interaction_mode") == "autonomous_replan"
+                and effective_details.get("ok") is True
+                and effective_details.get("should_run") is True
+                and effective_details.get("must_attempt_work") is True
+                and effective_details.get("delivery_allowed") is False
+                and effective_details.get("quiet_noop_allowed") is False
+            ):
+                raise HeartbeatReceiptIdentityConflictError(
+                    "heartbeat receipt did not admit an autonomous replan successor"
+                )
         existing_identity = _receipt_settlement_identity(effective)
         expected_identity = (
             expected_identity_value.binding_kind,
@@ -536,7 +604,11 @@ def upgrade_identityless_heartbeat_receipt(
             if str(existing_details.get("settlement_effect_id") or "").strip():
                 return effective, False
 
-        corrected_details = dict(details)
+        # The effective receipt was read while holding the rollout lock. Keep
+        # fields appended by a concurrent same-Turn revision unless this
+        # correction explicitly replaces them.
+        corrected_details = dict(effective_details)
+        corrected_details.update(details)
         corrected_details.update(
             {
                 "turn_instance_id": turn_instance_id,
@@ -562,6 +634,50 @@ def upgrade_identityless_heartbeat_receipt(
         )
         _append_rollout_event_line(log_path, corrected)
         return corrected, True
+
+
+def bind_replan_successor_heartbeat_receipt(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str,
+    turn_instance_id: str,
+    replan_obligation_id: str,
+    goal_ref: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], bool]:
+    """Bind an identity-less admitted replan when its successor is selected.
+
+    Multi-candidate planning guards deliberately avoid binding a recommended
+    Todo.  Creating a concrete successor is nevertheless an explicit semantic
+    replan choice.  Upgrade that exact Turn to the already selected obligation
+    before the Todo mutation so later writeback and spend reuse one causal
+    identity.  The upgrade rechecks the effective guard while holding the
+    rollout lock; stale or non-admitted semantic targets fail closed.
+    """
+
+    identity = SettlementIdentity(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=None,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=replan_obligation_id,
+    )
+    return upgrade_identityless_heartbeat_receipt(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=replan_obligation_id,
+        settlement_effect_id=identity.effect_id,
+        status="autonomous_replan_required",
+        summary=(
+            "heartbeat quota receipt bound by explicit replan successor selection "
+            f"for turn={turn_instance_id}"
+        ),
+        details={},
+        goal_ref=goal_ref,
+        required_semantic_replan_obligation_id=replan_obligation_id,
+    )
 
 
 def requalify_bound_heartbeat_receipt(
@@ -607,14 +723,14 @@ def requalify_bound_heartbeat_receipt(
         receipt_revision = str(
             qualified_details.get("settlement_receipt_revision") or ""
         )
-        summary = (
-            "same-Turn review guard upgraded without rebinding"
-            if receipt_revision == "review_guard_upgrade"
-            else "same-Turn work admission requalified without rebinding"
-        )
+        summary = {
+            "review_guard_upgrade": "same-Turn review guard upgraded without rebinding",
+            "lease_readiness": "same-Turn lease readiness recorded without readmission",
+        }.get(receipt_revision, "same-Turn work admission requalified without rebinding")
         corrected = build_rollout_event(
             goal_id=goal_id, goal_ref=goal_ref, event_kind="quota_should_run",
-            agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id, status=status,
+            agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id,
+            status=str(original.get("status") or status) if receipt_revision == "lease_readiness" else status,
             summary=summary,
             source_event_id=event_id, caused_by=event_id, details=dict(qualified_details),
         )

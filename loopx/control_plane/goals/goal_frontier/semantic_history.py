@@ -3,9 +3,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 
+from ...runtime.time import parse_timestamp
+
 from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
 
+from ...todos.contract import normalize_todo_replan_obligation_id
 from ...work_items.autonomous_replan_ack import (
+    compact_autonomous_replan_ack,
     latest_autonomous_replan_ack_for_projection,
 )
 
@@ -232,6 +236,71 @@ def latest_autonomous_replan_ack_from_status_payload(
     )
 
 
+def receipt_bound_replan_source_acks(
+    status_payload: dict[str, Any], *, goal_id: str, agent_id: str | None,
+    recorded_before: str | None,
+) -> list[dict[str, Any] | None]:
+    """Read possible predecessor sources, never historical settlement proofs.
+
+    Second-granular run timestamps cannot order a same-second later ACK against
+    a microsecond guard. Return distinct sources for the existing obligation
+    builder to match to the receipt digest, rather than treating newest as exact.
+    The empty predecessor is also a possible original source.
+    """
+    cutoff = parse_timestamp(recorded_before)
+    if not agent_id or cutoff is None:
+        return []
+    _, context = _semantic_agent_context_for_goal(status_payload, goal_id=goal_id, agent_id=agent_id)
+    retained = context.get("latest_autonomous_replan_ack_run") if isinstance(context, dict) else None
+    rows = ([retained] if isinstance(retained, dict) else []) + _latest_runs_for_goal(status_payload, goal_id=goal_id)
+    candidates: list[dict[str, Any] | None] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not _run_agent_id_matches(row, agent_id=agent_id):
+            continue
+        stamp = parse_timestamp(row.get("generated_at"))
+        if stamp is None or stamp >= cutoff:
+            continue
+        ack = compact_autonomous_replan_ack(row)
+        obligation_id = ((ack or {}).get("semantic_delta") or {}).get("obligation_id")
+        if isinstance(obligation_id, str) and obligation_id not in seen:
+            seen.add(obligation_id)
+            candidates.append(ack)
+    return [*candidates, None]
+
+
+def receipt_bound_replan_ack_history(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    neutral_classifications: set[str],
+    receipt_bound_replan_obligation_id: str | None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Choose the ACK history a receipt-bound review may use.
+
+    A supplied candidate list is the whole owned history, including when it
+    is empty. Without that list, the status snapshot's newest ACK remains
+    the existing fallback.
+    """
+
+    latest = latest_autonomous_replan_ack_from_status_payload(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        neutral_classifications=neutral_classifications,
+    )
+    supplied = (
+        status_payload.get("receipt_bound_replan_ack_candidates")
+        if receipt_bound_replan_obligation_id
+        else None
+    )
+    if not isinstance(supplied, list):
+        return latest, None
+    owned = [candidate for candidate in supplied if isinstance(candidate, dict)]
+    return (owned[0] if owned else None), owned
+
+
 def latest_replan_ack_feedback_from_status_payload(
     status_payload: dict[str, Any],
     *,
@@ -261,6 +330,76 @@ def latest_replan_ack_feedback_from_status_payload(
         if isinstance(feedback, dict):
             return feedback
     return None
+
+
+def acknowledged_replan_obligation_id(
+    latest_replan_ack: dict[str, Any] | None,
+) -> str | None:
+    """Return the exact obligation generation closed by the latest ACK."""
+
+    raw_delta = (
+        latest_replan_ack.get("semantic_delta")
+        if isinstance(latest_replan_ack, dict)
+        else None
+    )
+    semantic_delta = (
+        cast(dict[str, Any], raw_delta) if isinstance(raw_delta, dict) else {}
+    )
+    return normalize_todo_replan_obligation_id(semantic_delta.get("obligation_id"))
+
+
+def resolve_replan_ack_history_state(
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    neutral_classifications: set[str],
+    receipt_bound_replan_obligation_id: str | None,
+) -> tuple[
+    dict[str, Any] | None,
+    list[dict[str, Any]] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    """Resolve current ACK, scoped history, fresher rejection feedback, and prior rearm ACK."""
+
+    latest_agent_replan_ack, scoped_ack_history = receipt_bound_replan_ack_history(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        neutral_classifications=neutral_classifications,
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+    )
+    latest_replan_ack_feedback = latest_replan_ack_feedback_from_status_payload(
+        status_payload,
+        goal_id=goal_id,
+        agent_id=agent_id,
+    )
+    ack_time = parse_timestamp((latest_agent_replan_ack or {}).get("generated_at"))
+    feedback_time = parse_timestamp(
+        (latest_replan_ack_feedback or {}).get("generated_at")
+    )
+    if ack_time is not None and feedback_time is not None and ack_time >= feedback_time:
+        latest_replan_ack_feedback = None
+    prior_rearm_ack = None
+    if receipt_bound_replan_obligation_id and latest_agent_replan_ack is None:
+        candidate_prior_ack = latest_autonomous_replan_ack_from_status_payload(
+            status_payload,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            neutral_classifications=neutral_classifications,
+        )
+        if (
+            acknowledged_replan_obligation_id(candidate_prior_ack)
+            != receipt_bound_replan_obligation_id
+        ):
+            prior_rearm_ack = candidate_prior_ack
+    return (
+        latest_agent_replan_ack,
+        scoped_ack_history,
+        latest_replan_ack_feedback,
+        prior_rearm_ack,
+    )
 
 
 def latest_lane_recommendation_from_status(

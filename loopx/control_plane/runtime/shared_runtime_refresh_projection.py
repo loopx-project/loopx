@@ -7,33 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from ..goals.goal_vision import compact_goal_vision_packet
-from .runtime_projection_route import (
-    resolve_runtime_projection_route,
-)
 from .runtime_projection_writer import write_compact_runtime_projection
 
 
 SHARED_RUNTIME_PROJECTION_SCHEMA_VERSION = "shared_runtime_refresh_projection_v0"
 ISO_LIKE_TIMESTAMP_RE = re.compile(r"[0-9TZ:+.\-]{10,64}")
-
-
-def registered_shared_runtime_root(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    source_runtime_root: Path,
-) -> Path | None:
-    """Compatibility wrapper over the first-class runtime projection route."""
-
-    route = resolve_runtime_projection_route(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        source_runtime_root=source_runtime_root,
-    )
-    if route.get("status") != "resolved":
-        return None
-    target = str(route.get("target_runtime_root") or "").strip()
-    return Path(target) if target else None
 
 
 def build_shared_runtime_projection(

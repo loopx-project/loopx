@@ -18,6 +18,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Callable, Mapping, TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ...chat_agent import (
     CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError,
@@ -28,6 +29,7 @@ from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController
+    from .external_conversations import ChatExternalConversations
 
 
 # Keep each native import bounded independently of the model's available context.
@@ -101,7 +103,7 @@ class NativeWorkingContinuation:
 
 @dataclass
 class NativeHistoryRestoration:
-    """Live guards for unpublished model preparation, not a new work queue."""
+    """Live guards for unpublished model preparation."""
 
     controller: Any
     session: dict[str, Any]
@@ -174,6 +176,21 @@ class NativeHistoryRestoration:
             if isinstance(provider, str) and 1 <= len(provider) <= 128:
                 return provider
         return None
+
+    def resume_working_model(self, *, codex_home: Path) -> None:
+        """Keep the verified working thread when only its machine model changes."""
+        from .codex_auth import recorded_provider
+
+        checkpoint = self.session.get("native_working_checkpoint")
+        thread_id = self.session["upstream_thread_id"]
+        if (self.binding is None or str(codex_home) != self.session.get("codex_home")
+                or not checkpoint or checkpoint["thread_id"] != thread_id):
+            return
+        provider = recorded_provider(codex_home, thread_id)
+        if not provider or provider != checkpoint["provider"]:
+            raise CodexChatAgentError("The original Codex working checkpoint could not be verified.",
+                error_code="resume_failed", gate=None)
+        self.working_continuation = NativeWorkingContinuation(thread_id, provider, [])
 
     def park_working_context(self, stored: list[dict[str, Any]], *, provider: str | None,
                              affinity: str) -> dict[str, Any] | None:
@@ -313,10 +330,12 @@ class NativeHistoryRestoration:
                 )):
                     self.invalidated = True
                     raise CodexChatAgentError("Working route changed during native continuation", error_code="resume_failed", gate=None)
-                messages = controller.store.messages(sid, strict=True)
-                if self._working_suffix(messages, original["parked_native_working"]) != self.working_continuation.suffix:
-                    self.invalidated = True
-                    raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
+                parked = original.get("parked_native_working")
+                if parked is not None:
+                    messages = controller.store.messages(sid, strict=True)
+                    if self._working_suffix(messages, parked) != self.working_continuation.suffix:
+                        self.invalidated = True
+                        raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
             self.route_check()
 
     def finish(self) -> None:
@@ -428,6 +447,63 @@ def compact_native_history(
             return import_headroom
 
 
+def _loopback_api_fallback_auth_failure(error: Any) -> dict[str, Any] | None:
+    """Return the typed error payload only for local OpenAI relay 401 failures."""
+    info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+    if not isinstance(info, dict) or len(info) != 1:
+        return None
+    variant, detail = next(iter(info.items()))
+    if (variant not in {"httpConnectionFailed", "responseStreamConnectionFailed"}
+            or not isinstance(detail, dict) or type(detail.get("httpStatusCode")) is not int
+            or detail.get("httpStatusCode") != 401):
+        return None
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str) or "OpenAI API fallback request could not complete., url: " not in message:
+        return None
+    _, url_part = message.rsplit(", url: ", 1)
+    url_token = url_part.split()[0] if url_part.split() else ""
+    parsed = urlsplit(url_token)
+    if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+            or parsed.port is None or not 1024 <= parsed.port <= 65535
+            or parsed.path not in {"/v1/responses", "/steward/v1/responses"}):
+        return None
+    return info
+
+
+def _loopback_relay_transport_ready(runtime_root: Path, codex_home: Path, consumer: str) -> tuple[bool, float]:
+    """Verify current native-account or relay health for recovering a relay-401 Turn."""
+    from loopx_codex_provider_routing import openai_relay
+    from loopx_codex_provider_routing.native import NativeAccounts
+    from loopx_codex_provider_routing.native_host import HostError
+
+    owner = NativeAccounts(runtime_root)
+    now = float(int(time.time()))
+    try:
+        state = owner._load()
+        adapter = state.get("adapter")
+        profile_home = adapter.get("profile", {}).get("home") if isinstance(adapter, dict) else None
+        if not isinstance(profile_home, str) or not profile_home:
+            return False, now
+        if Path(profile_home).expanduser().resolve() != codex_home.expanduser().resolve():
+            return False, now
+        transport = owner.model_transport(codex_home=codex_home, consumer=consumer)
+        if transport is not None:
+            relay = openai_relay.route(owner)
+            return bool(openai_relay.healthy(relay, consumer=consumer) and owner.api_keys().candidates("")), now
+        status = owner.status()
+        if status.get("available") is not True or status.get("recovery_required") is not False or status.get("login_matches") is not True:
+            return False, now
+        if status.get("api_active") is True:
+            relay = openai_relay.route(owner)
+            return bool(openai_relay.healthy(relay, consumer=consumer) and owner.api_keys().candidates("")), now
+        active_slot = status.get("active_slot")
+        accounts = {row.get("slot"): row for row in (status.get("accounts") or []) if isinstance(row, dict)}
+        return (isinstance(active_slot, str) and bool(active_slot)
+                and accounts.get(active_slot, {}).get("availability") == "available"), now
+    except (HostError, ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return False, now
+
+
 def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
     """Observe a historical pre-execution failure without resuming it.
 
@@ -465,6 +541,10 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             # can use the compaction exception to that inventory.
             return {"codex_error_info": "other", "pre_execution_routing_timeout": True,
                     "latest_routing_failure": ids[0] == turn_id}
+        loopback_auth_info = _loopback_api_fallback_auth_failure(selected.get("error"))
+        if loopback_auth_info is not None:
+            return {"codex_error_info": loopback_auth_info, "loopback_relay_auth_failure": True,
+                    "latest_routing_failure": ids[0] == turn_id}
         info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
         # `other` is evidence of a failed native request, not permission to
         # retry it. The typed admission owner separately decides whether
@@ -485,7 +565,8 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         if proof is None:
             return None
         items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
-        routing = proof.get("pre_execution_routing_timeout") is True
+        routing = (proof.get("pre_execution_routing_timeout") is True
+                   or proof.get("loopback_relay_auth_failure") is True)
         allowed = ({"userMessage", "contextCompaction"}
             if routing and proof["latest_routing_failure"] else {"userMessage"})
         ids: set[str] = set()
@@ -741,6 +822,15 @@ class CodexAppServerAdapter:
     goal_driver: CodexGoalDriver | None = None
     _managed_read_turn_guard: Callable[[], None] | None = field(default=None, repr=False)
 
+    @property
+    def team_plan_context(self) -> Mapping[str, Any] | None:
+        return self.session.team_plan_context
+
+    @team_plan_context.setter
+    def team_plan_context(self, context: Mapping[str, Any] | None) -> None:
+        # The native response parser runs inside the owning Session.
+        self.session.team_plan_context = context
+
     def completed_work_observation(self, *, thread_ids: list[str], turn_id: str,
                                    known_turn_ids: set[str] | None = None) -> dict[str, Any] | None:
         """Read live effects through the adapter that owns the original thread.
@@ -783,7 +873,9 @@ class CodexAppServerAdapter:
                                    allow_untyped_result_review: bool = False,
                                    known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
-                                   model_auth_home: Path | None = None) -> dict[str, Any] | None:
+                                   model_auth_home: Path | None = None,
+                                   runtime_root: Path | None = None,
+                                   consumer: str = "worker") -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
         The initialized stdio client is not a listener or a model runner. It
@@ -820,8 +912,7 @@ class CodexAppServerAdapter:
                 if proof is not None:
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
-                        # neither a reset clock nor a generic successful RPC
-                        # establishes usable allowance. Absence fails closed.
+                        #  Absence fails closed.
                         try:
                             from loopx_codex_provider_routing.native import policy
                             from loopx_codex_provider_routing.native_host import read_usage
@@ -841,6 +932,14 @@ class CodexAppServerAdapter:
                                 quota_observed_at=now)
                         except (ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                             proof["quota_available"] = False
+                    elif proof.get("loopback_relay_auth_failure") is True:
+                        proof["relay_transport_ready"] = False
+                        if runtime_root is not None:
+                            try:
+                                ready, observed_at = _loopback_relay_transport_ready(runtime_root, codex_home, consumer)
+                                proof.update(relay_transport_ready=ready, relay_observed_at=observed_at)
+                            except (ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                                proof["relay_transport_ready"] = False
                     return proof
                 if time.monotonic() >= deadline:
                     break
@@ -1006,8 +1105,10 @@ class CodexAppServerAdapter:
             "steering": True,
         }
 
-    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
-        return self.session.send(message, on_event=event_sink, **self._ordinary_turn_arguments())
+    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None], *,
+                   reply_image_turn_id: str | None = None) -> dict[str, Any]:
+        return self.session.send(message, on_event=event_sink, **self._ordinary_turn_arguments(),
+            **({"reply_image_turn_id": reply_image_turn_id} if reply_image_turn_id is not None else {}))
 
     def _ordinary_turn_arguments(self):
         check = self._managed_read_turn_guard
@@ -1080,6 +1181,52 @@ def start_attachment_turn(adapter: Any, session: dict[str, Any], turn: dict[str,
     if not isinstance(adapter, (CodexAppServerAdapter, AntigravityAdapter)):
         raise ValueError("attachments currently require the Codex or Antigravity Agent endpoint")
     return adapter.start_turn_with_attachments(message, event_sink, attachments)
+
+
+def start_bound_project_turn(external: ChatExternalConversations, adapter: Any, session: dict[str, Any],
+                             turn: dict[str, Any], message: str,
+                             event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any] | None:
+    from .file_discovery import reply_image_workspace
+
+    review = external._checked_completed_result_review(session, turn)
+    if review is not None:
+        if not isinstance(adapter, CodexAppServerAdapter) or not adapter.session.read_only_review:
+            raise ValueError("a completed result review requires its original read-only project adapter")
+        response = adapter.start_turn(message, event_sink)
+        external._checked_completed_result_review(session, turn)
+        if any(response.get(key) for key in
+               ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work")):
+            raise ValueError("a result review cannot admit actions or replace the retained work obligation")
+        return response
+    workspace = reply_image_workspace(session, turn)
+    if (workspace is not None and isinstance(adapter, CodexAppServerAdapter)
+            and not adapter.session.read_only_review and adapter.session.work_dir.resolve() == workspace):
+        return adapter.start_turn(message, event_sink, reply_image_turn_id=turn["turn_id"])
+    return None
+
+
+def native_turn_response(session: CodexChatAgentSession, raw: str, *, output_schema: dict | None,
+                         reply_image_turn_id: str | None) -> dict[str, Any]:
+    if output_schema is not None:
+        try:
+            result = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise session._runtime_error("Codex Turn did not return structured output.") from exc
+        if not isinstance(result, dict):
+            raise session._runtime_error("Codex Turn output is not an object.")
+        return result
+
+    from ...chat import parse_agent_response
+    from .file_discovery import capture_reply_image_plan
+
+    image_targets: list[str] | None = [] if reply_image_turn_id is not None else None
+    response = parse_agent_response(raw, protected_paths=[session.work_dir],
+        team_plan_context=getattr(session, "team_plan_context", None), image_targets=image_targets)
+    if image_targets and reply_image_turn_id is not None:
+        plan = capture_reply_image_plan(session.work_dir.resolve(), reply_image_turn_id, image_targets)
+        if plan:
+            response["answer_image_plan"] = plan
+    return response
 
 
 def prepare_native_turn_text(session: CodexChatAgentSession, user_message: str, *,

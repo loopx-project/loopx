@@ -1,5 +1,6 @@
 // <!-- loopx-managed-slash-command:v1 command=/goal surface=opencode-runtime -->
 import { execFile as execFileCallback } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -155,6 +156,7 @@ export function probeRetryPlan(binding) {
 
 
 export function pidIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
   try {
     process.kill(pid, 0)
     return true
@@ -177,7 +179,7 @@ export function createFileLockStore({ root = defaultStateRoot() } = {}) {
     async read(sessionID) {
       try {
         const payload = JSON.parse(await fs.readFile(target(sessionID), "utf8"))
-        if (!Number.isInteger(payload?.pid)) return null
+        if (!Number.isInteger(payload?.pid) || payload.pid <= 0) return null
         return payload
       } catch (error) {
         if (error?.code === "ENOENT") return null
@@ -186,24 +188,59 @@ export function createFileLockStore({ root = defaultStateRoot() } = {}) {
     },
     async acquire(sessionID, { staleMs = BINDING_LOCK_STALE_MS } = {}) {
       const lockPath = target(sessionID)
+      await fs.mkdir(root, { recursive: true, mode: 0o700 })
       const existing = await this.read(sessionID)
       if (existing && (await leaseIsLive(existing, { staleMs }))) {
         return { acquired: false, holder: existing }
       }
-      await fs.mkdir(root, { recursive: true, mode: 0o700 })
-      const temporary = `${lockPath}.${process.pid}.${Date.now()}.tmp`
-      await fs.writeFile(
-        temporary,
-        `${JSON.stringify({ pid: process.pid, heartbeatAt: new Date().toISOString() })}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      )
-      await fs.rename(temporary, lockPath)
+      if (existing) {
+        try {
+          await fs.unlink(lockPath)
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error
+        }
+      }
+      const token = randomUUID()
+      const holder = { pid: process.pid, token, heartbeatAt: new Date().toISOString() }
+      const writeExclusive = async () => {
+        const handle = await fs.open(lockPath, "wx", 0o600)
+        try {
+          await handle.writeFile(`${JSON.stringify(holder)}\n`, "utf8")
+        } finally {
+          await handle.close()
+        }
+      }
+      try {
+        await writeExclusive()
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error
+        const raceHolder = await this.read(sessionID)
+        if (raceHolder) return { acquired: false, holder: raceHolder }
+        try {
+          const stat = await fs.stat(lockPath)
+          if (Date.now() - stat.mtimeMs < staleMs) {
+            return { acquired: false, holder: null }
+          }
+          await fs.unlink(lockPath)
+          await writeExclusive()
+        } catch (retryError) {
+          if (retryError?.code === "EEXIST") {
+            return { acquired: false, holder: await this.read(sessionID) }
+          }
+          if (retryError?.code === "ENOENT") {
+            return { acquired: false, holder: null }
+          }
+          throw retryError
+        }
+      }
       await fs.chmod(lockPath, 0o600)
       return {
         acquired: true,
         holder: { pid: process.pid },
         release: async () => {
           try {
+            const current = await this.read(sessionID)
+            if (current && current.token !== undefined && current.token !== token) return
             await fs.unlink(lockPath)
           } catch (error) {
             if (error?.code !== "ENOENT") throw error
@@ -286,14 +323,35 @@ function shouldRunNow(decision) {
 }
 
 
-function waitPlan(decision, binding) {
-  const local = decision?.scheduler_hint?.unchanged_poll?.local_scheduler
-  if (!local || local === "stop") return { stop: true }
-  const token = decision?.scheduler_hint?.reset_policy?.reset_token || ""
+export function waitPlan(decision, binding) {
+  const hint = decision?.scheduler_hint || {}
+  const unchanged = hint?.unchanged_poll || {}
+  const legacyLocal =
+    typeof unchanged?.local_scheduler === "object" && unchanged.local_scheduler !== null
+      ? unchanged.local_scheduler
+      : null
+  const local = hint?.cold_path_detail?.local_scheduler || legacyLocal
+  if (
+    !local ||
+    unchanged?.local_scheduler === "stop" ||
+    unchanged?.local_scheduler === "stop_until_context_repaired"
+  ) {
+    return { stop: true }
+  }
+  const token = hint?.reset_policy?.reset_token || ""
   const sameIdentity = token && token === binding.schedulerToken
   const unchangedPolls = sameIdentity ? Number(binding.unchangedPolls || 0) : 0
-  const limit = Number.isInteger(local.unchanged_poll_limit) ? local.unchanged_poll_limit : null
-  if (limit !== null && unchangedPolls >= limit) return { stop: true }
+  const hasHintLimits = Number.isInteger(unchanged?.limits?.local_scheduler)
+  if (hasHintLimits) {
+    const limit = Number(unchanged.limits.local_scheduler)
+    const afterLimit = String(unchanged?.after_limits?.local_scheduler || "")
+    if (unchangedPolls + 1 >= limit && afterLimit === "stop_tick_loop") {
+      return { stop: true }
+    }
+  } else {
+    const limit = Number.isInteger(local.unchanged_poll_limit) ? local.unchanged_poll_limit : null
+    if (limit !== null && unchangedPolls >= limit) return { stop: true }
+  }
   const progression = Array.isArray(local.example_progression_minutes)
     ? local.example_progression_minutes.filter((value) => Number(value) > 0)
     : []

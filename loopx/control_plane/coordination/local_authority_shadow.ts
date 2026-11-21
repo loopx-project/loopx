@@ -722,28 +722,6 @@ export interface ValidatedShadowLineage {
   write_classes: string[];
 }
 
-/** The caller holds its primary partition lock. This is existing-only and
- * never takes M or writes a cursor: management cannot complete a transition
- * while that primary lock is held, and a changed binding still fails closed.
- */
-export async function readProvenShadowSequence(
-  runtimeRoot: string, goalId: string, partition: ShadowPartition, expectedLineageId: string,
-  expectedGoalRef: unknown = null,
-): Promise<number> {
-  const binding = await requireShadowCaptureBinding(runtimeRoot, goalId);
-  if (expectedGoalRef === null) {
-    requireLineage(shadowBindingGoalRef(binding) === null, "legacy_goal_binding");
-  } else {
-    requireShadowBindingGoalRef(binding, expectedGoalRef, goalId);
-  }
-  requireLineage(binding.capture_lineage_id === expectedLineageId, "stale_generation");
-  const store = new FileAuthorityStore(join(runtimeRoot, "authority-shadow", "file-v0"), goalId, { existingOnly: true });
-  const lineage = await loadValidatedShadowLineage(store, runtimeRoot, goalId, binding);
-  const current = await requireShadowCaptureBinding(runtimeRoot, goalId);
-  requireLineage(canonicalAuthorityBytes(binding).equals(canonicalAuthorityBytes(current)), "stale_generation");
-  return lineage.last_sequences[partition];
-}
-
 /** Validate the exact bootstrap, every transaction, and the final readback.
  * The caller owns maintenance exclusion; this function never takes M.
  */

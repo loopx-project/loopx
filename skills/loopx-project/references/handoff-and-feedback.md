@@ -29,7 +29,7 @@ loopx review-packet --goal-id <STABLE_GOAL_ID> --handoff-only
 
 This read-only command assembles agent context directly from current status.
 The full Review Packet consumes the same context and adds human presentation.
-Neither path grants authority or changes work state. JSON `handoff_text` and
+JSON `handoff_text` and
 `project_agent_handoff` always contain complete prepared text. On overflow,
 `project_agent_handoff_fragments` contains all ordered shards including index 0;
 Markdown prints the shard set. The complete text may exceed 16 lines / 1800

@@ -31,7 +31,6 @@ const unavailableSource = (todo: JsonObject): boolean => {
 };
 
 /** Shared outcome semantics with each caller's existing presence contract.
- * Cancelling a reminder is not an owner approval or a decision-scope outcome.
  * Native Gate closure may omit a decision; the legacy explicit bridge cannot.
  */
 export function requireCompletionDecisionOutcome(
@@ -113,7 +112,7 @@ export function planUserCompletion(
   const blockers = todos.filter(row => row.role === "user" && row.todo_id !== source.todo_id &&
     row.unblocks_todo_id === id && !isInactiveUserCompletionTarget(row)).map(row => String(row.todo_id));
   if (blockers.length) return result("other_user_blockers_active", {remaining_user_blocker_todo_ids: [...new Set(blockers)].sort()});
-  // Finishing one gate is not evidence that every independent requirement passed.
+
   if (remaining.length || remainingOutcomes.some(item => item.outcome === "reject" || item.outcome === "cancel")) return result("decision_requirements_remaining");
   updates.status = "open";
   updates.reason = `authorization satisfied by completed user todo ${source.todo_id}`;

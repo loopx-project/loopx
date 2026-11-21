@@ -182,7 +182,8 @@ def print_status(ctx):
         t = (it.get("text") or "").strip()
         if t:
             print(f"   ▸ {t}")
-    armed = "armed (.claude/loop.md present)" if loop_md_path(Path.cwd()).exists() else "not armed (run /loopx to arm)"
+    armed_root = Path(ctx.get("project_root") or Path.cwd())
+    armed = "armed (.claude/loop.md present)" if loop_md_path(armed_root).exists() else "not armed (run /loopx to arm)"
     print(f"loop      : {armed} — drive with native /loop")
 
 
@@ -193,7 +194,9 @@ def main():
 
     # off: remove the loop protocol; native /loop then has nothing to run.
     if first == "off":
-        lp = loop_md_path(proj)
+        reg = find_registry(proj)
+        target_root = reg.parent.parent if reg is not None else proj
+        lp = loop_md_path(target_root)
         if not lp.exists():
             print("goal-mode OFF (no .claude/loop.md here).")
             return
@@ -250,10 +253,16 @@ def main():
         sys.exit(1)
 
     # register the default agent (identity contract) and add the task as a todo
-    gh(["--registry", registry, "configure-goal", "--goal-id", goal_id,
-        "--agent-model", "peer_v1", "--registered-agent", DEFAULT_AGENT, "--execute"])
+    cfg = gh(["--registry", registry, "configure-goal", "--goal-id", goal_id,
+              "--agent-model", "peer_v1", "--registered-agent", DEFAULT_AGENT, "--execute"])
+    if cfg.returncode != 0:
+        print("[loopx] configure-goal failed:\n" + (cfg.stdout + cfg.stderr)[:600])
+        sys.exit(1)
     add = gh(["--registry", registry, "--format", "json", "todo", "add",
               "--goal-id", goal_id, "--role", "agent", "--text", task])
+    if add.returncode != 0:
+        print("[loopx] todo add failed:\n" + (add.stdout + add.stderr)[:600])
+        sys.exit(1)
     todo_id = ""
     try:
         todo_id = json.loads(add.stdout).get("todo_id", "")

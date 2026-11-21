@@ -165,8 +165,8 @@ def settle_refreshed_turn(
             # Keep the validated producing cwd for accounting, but pin imports to
             # this CLI's package: the delivered worktree may contain another LoopX.
             # -P excludes the child cwd from Python's initial module search path.
-            # Retain the complete CLI guards, hooks and rollout receipts; neither
-            # ambient PATH nor a lower-level debit may replace that adapter.
+            # Retain the complete CLI guards, hooks and rollout receipts.
+
             entry = (
                 "import sys; sys.path.insert(0, sys.argv.pop(1)); "
                 "import runpy; runpy.run_module('loopx.entrypoint', run_name='__main__')"

@@ -266,7 +266,7 @@ def extract_turn_authority(
     if detail or context.get("detail_ref") or replan or authority.get("vision_continuation_audit") or horizon:
         # Replan/acceptance evidence and historical capability references need
         # the saved observation's route and hash. Native capture validation owns
-        # its binding; this adapter neither reads it nor re-enters admission.
+        # its binding.
         authority["detail_ref"] = {key: value for key, value in detail.items()
             if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature
@@ -470,6 +470,69 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
     )
 
 
+def _repair_minor_json_delimiters(raw: str) -> str | None:
+    """Repair only unquoted trailing commas and <=2 extra terminal closers."""
+    out: list[str] = []
+    stack: list[str] = []
+    in_str = False
+    escaped = False
+    n = len(raw)
+    i = 0
+    while i < n:
+        ch = raw[i]
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch == ",":
+            j = i + 1
+            while j < n and raw[j] in " \t\r\n":
+                j += 1
+            if j >= n or raw[j] not in "}]":
+                out.append(ch)
+        elif ch in "{[":
+            stack.append(ch)
+            out.append(ch)
+        elif ch in "}]":
+            expected = ("}" if stack[-1] == "{" else "]") if stack else None
+            if expected == ch:
+                stack.pop()
+                out.append(ch)
+            else:
+                tail = raw[i:]
+                if not all(c in "}] \t\r\n" for c in tail):
+                    return None
+                tail_closers = [c for c in tail if c in "}]"]
+                expected_closers = ["}" if o == "{" else "]" for o in reversed(stack)]
+                if not (0 <= len(tail_closers) - len(expected_closers) <= 2):
+                    return None
+                pos = 0
+                for ec in expected_closers:
+                    while pos < len(tail_closers) and tail_closers[pos] != ec:
+                        pos += 1
+                    if pos >= len(tail_closers):
+                        return None
+                    pos += 1
+                out.extend(expected_closers)
+                stack.clear()
+                break
+        else:
+            out.append(ch)
+        i += 1
+    if in_str or stack:
+        return None
+    return "".join(out)
+
+
 def parse_model_json(text: str) -> dict[str, Any] | None:
     """Parse the host final assistant message as one JSON object.
 
@@ -499,10 +562,17 @@ def parse_model_json(text: str) -> dict[str, Any] | None:
     end = value.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
+    candidate = value[start : end + 1]
     try:
-        parsed = json.loads(value[start : end + 1])
+        parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        return None
+        repaired = _repair_minor_json_delimiters(candidate)
+        if repaired is None:
+            return None
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
     return parsed if isinstance(parsed, dict) else None
 
 

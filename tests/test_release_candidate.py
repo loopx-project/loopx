@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -37,9 +38,11 @@ def _materialize_distribution_paths(package_root: Path) -> None:
         path.touch()
 
 
+@pytest.mark.parametrize("use_alias", [False, True])
 def test_python_distribution_checks_accept_recorded_console_script_without_source_wrapper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    use_alias: bool,
 ) -> None:
     package_root = tmp_path / "site-packages"
     command_path = tmp_path / "bin" / "loopx"
@@ -59,8 +62,18 @@ def test_python_distribution_checks_accept_recorded_console_script_without_sourc
         lambda _path: {"ok": True, "results": {}, "failed": []},
     )
 
+    invocation = command_path
+    if use_alias:
+        invocation = tmp_path / "loopx"
+        try:
+            invocation.symlink_to(command_path)
+        except OSError:
+            if os.name != "nt":
+                raise
+            pytest.skip("console script symlinks unavailable")
+
     payload = collect_python_distribution_checks(
-        command_path=command_path,
+        command_path=invocation,
         package_root=package_root,
     )
 
@@ -116,16 +129,27 @@ def test_deep_distribution_checks_prefer_current_invocation_over_path_command(
     assert probed_commands == [invocation_path]
 
 
+@pytest.mark.parametrize("redirected_record", [False, True])
 def test_python_distribution_checks_reject_command_from_another_install(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    redirected_record: bool,
 ) -> None:
     package_root = tmp_path / "site-packages"
     recorded_command = tmp_path / "installed" / "bin" / "loopx"
     active_command = tmp_path / "other" / "bin" / "loopx"
-    for command_path in (recorded_command, active_command):
-        command_path.parent.mkdir(parents=True)
-        command_path.touch()
+    active_command.parent.mkdir(parents=True)
+    active_command.touch()
+    recorded_command.parent.mkdir(parents=True)
+    if redirected_record:
+        try:
+            recorded_command.symlink_to(active_command)
+        except OSError:
+            if os.name != "nt":
+                raise
+            pytest.skip("console script symlinks unavailable")
+    else:
+        recorded_command.touch()
     _materialize_distribution_paths(package_root)
     monkeypatch.setattr(
         "loopx.release_candidate.distribution",
@@ -135,10 +159,13 @@ def test_python_distribution_checks_reject_command_from_another_install(
         "loopx.release_candidate._import_summary",
         lambda: {"ok": True, "results": {}, "failed": []},
     )
-    monkeypatch.setattr(
-        "loopx.release_candidate._command_summary",
-        lambda _path: {"ok": True, "results": {}, "failed": []},
-    )
+    probed_commands: list[Path | None] = []
+
+    def probe(command_path: Path | None) -> dict:
+        probed_commands.append(command_path)
+        return {"ok": command_path is not None, "results": {}, "failed": []}
+
+    monkeypatch.setattr("loopx.release_candidate._command_summary", probe)
 
     payload = collect_python_distribution_checks(
         command_path=active_command,
@@ -148,6 +175,7 @@ def test_python_distribution_checks_reject_command_from_another_install(
     checks = {check["id"]: check for check in payload["checks"]}
     assert payload["ok"] is False
     assert checks["command_package_same_distribution"]["ok"] is False
+    assert probed_commands == [None]
 
 
 def test_command_probes_overlap_but_keep_each_failure(monkeypatch):

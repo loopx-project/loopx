@@ -5,7 +5,7 @@
 import {createHash} from "node:crypto";
 import {createReadStream} from "node:fs";
 import {lstat, readFile, readdir, statfs} from "node:fs/promises";
-import {join, isAbsolute, relative, resolve} from "node:path";
+import {join, isAbsolute, relative} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {durableWriteJson} from "../effect_runtime_io.ts";
 import {requireJsonObject} from "../runtime_decode.ts";

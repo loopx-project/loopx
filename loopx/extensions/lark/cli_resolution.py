@@ -92,7 +92,7 @@ def _semantic_version(path: Path) -> tuple[int, int, int] | None:
     match = _SEMVER_DIRECTORY.fullmatch(path.name)
     if not match:
         return None
-    return tuple(int(part) for part in match.groups())
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
 def _nvm_candidates(home: Path) -> list[Path]:
@@ -278,7 +278,7 @@ def build_lark_command_runner(
         if dispatch_guard is not None:
             with dispatch_guard():
                 process = subprocess.Popen(
-                    args, cwd=str(cwd) if cwd else None, env=env, text=True,
+                    args, cwd=str(cwd) if cwd else None, env=env, text=True, encoding="utf-8",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
             with process:

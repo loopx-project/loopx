@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+from importlib.metadata import PathDistribution
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -156,7 +159,7 @@ def test_installation_scope_uses_current_distribution_and_console_script(
     other_command = tmp_path / "old" / "bin" / "loopx"
     distribution_root = tmp_path / "current" / "site-packages"
     observed: dict = {}
-    monkeypatch.setattr(doctor, "current_script_invocation_path", lambda: invocation)
+    monkeypatch.setattr(doctor, "doctor_invocation_path", lambda: (invocation, True))
     monkeypatch.setattr(
         "loopx.command_invocation.resolve_command_path", lambda _name: other_command
     )
@@ -182,6 +185,112 @@ def test_installation_scope_uses_current_distribution_and_console_script(
     assert observed["module_path"] == Path(doctor.__file__).resolve()
     assert observed["deep_checks"]["invocation_path"] == invocation
     assert observed["deep_checks"]["distribution_root"] == str(distribution_root)
+
+
+@pytest.mark.parametrize("module", ["cli.py", "entrypoint.py"])
+@pytest.mark.parametrize(
+    "launcher_record",
+    ["owned", "missing", "missing_file", "redirected", "ambiguous", "other_distribution", "source_manifest"],
+)
+def test_both_doctors_keep_packaged_module_readback_on_its_python_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module: str, launcher_record: str,
+) -> None:
+    module_path = Path(doctor.__file__).resolve()
+    owned_console = tmp_path / ("loopx.exe" if os.name == "nt" else "loopx")
+    if launcher_record not in {"missing_file", "redirected"}:
+        owned_console.touch(mode=0o700)
+    foreign_console = tmp_path / "other" / owned_console.name
+    foreign_console.parent.mkdir()
+    foreign_console.touch(mode=0o700)
+    if launcher_record == "redirected":
+        try:
+            owned_console.symlink_to(foreign_console)
+        except OSError:
+            if os.name != "nt":
+                raise
+            pytest.skip("console script symlinks unavailable")
+    dist_info = tmp_path / "loopx.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Name: loopx\nVersion: 2.4.0\n", encoding="utf-8")
+    recorded_module = (
+        tmp_path / "other/loopx/doctor.py" if launcher_record == "other_distribution" else module_path
+    )
+    if launcher_record == "source_manifest":
+        (dist_info / "SOURCES.txt").write_text(f"{module_path.as_posix()}\n", encoding="utf-8")
+    else:
+        with (dist_info / "RECORD").open("w", encoding="utf-8", newline="") as record:
+            writer = csv.writer(record)
+            writer.writerow([recorded_module.as_posix(), "", ""])
+            if launcher_record != "missing":
+                writer.writerow([owned_console.as_posix(), "", ""])
+            if launcher_record == "ambiguous":
+                writer.writerow([foreign_console.as_posix(), "", ""])
+    monkeypatch.setattr(doctor, "distribution", lambda _name: PathDistribution(dist_info))
+    monkeypatch.setattr(doctor.sys, "argv", [str(module_path.with_name(module)), "doctor"])
+    def find_command(name):
+        return foreign_console if name == "loopx" else None
+
+    monkeypatch.setattr(doctor, "resolve_command_path", find_command)
+    monkeypatch.setattr("loopx.command_invocation.resolve_command_path", find_command)
+    monkeypatch.setattr(
+        "loopx.control_plane.effect_runtime.collect_effect_runtime_readiness",
+        lambda *, deep: {"ready": True, "status": "ready"},
+    )
+
+    runtime = tmp_path / "runtime"
+    result = doctor.collect_doctor(runtime_root_override=str(runtime))
+    installation = doctor.collect_doctor(installation_only=True)
+    assert result["path"]["loopx_on_path"] == str(foreign_console)
+    expected = {
+        "owned": str(owned_console),
+        "missing": None,
+        "missing_file": None,
+        "redirected": None,
+        "ambiguous": None,
+        "other_distribution": str(foreign_console),
+        "source_manifest": str(foreign_console),
+    }
+    assert result["path"]["loopx"] == installation["path"]["loopx"] == expected[launcher_record]
+    checks = {check["id"]: check for check in result["checks"]}
+    available = expected[launcher_record] is not None
+    assert checks["command_available"]["ok"] is available
+    assert checks["command_resolves"]["ok"] is available
+    assert installation["ok"] is available
+
+
+def test_owned_python_module_does_not_retarget_bound_macos_services(monkeypatch, tmp_path):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from loopx import runtime_activation
+
+    script = tmp_path / "loopx"
+    script.touch(mode=0o700)
+    distribution = SimpleNamespace(
+        name="loopx",
+        read_text=lambda name: "" if name == "RECORD" else None,
+        files=[script],
+    )
+    monkeypatch.setattr(doctor, "_python_distribution_owning_module", lambda _path: distribution)
+    monkeypatch.setattr(doctor.sys, "argv", [str(Path(doctor.__file__).with_name("cli.py")), "update"])
+    monkeypatch.setattr(runtime_activation.sys, "platform", "darwin")
+    monkeypatch.setattr(runtime_activation, "_managed_service_plists", lambda: [])
+    monkeypatch.setattr(runtime_activation, "managed_chat_activation_guard", lambda _plists: nullcontext())
+    monkeypatch.setattr("loopx.hosts.managed_service_runtime.has_runtime_binding", lambda: True)
+    aligned = []
+    monkeypatch.setattr(
+        "loopx.hosts.managed_service_runtime.align_managed_runtime",
+        lambda path: aligned.append(path) or {"restarted_services": []},
+    )
+
+    result = runtime_activation.restart_services_for_runtime_activation(
+        changes_applied=True, runtime_ready=True,
+    )
+
+    assert result["restart_status"] == "deferred"
+    assert result["restart_reason"] == "service_runtime_unverified"
+    assert result["activation_pending"] is True
+    assert not aligned
 
 
 def test_runtime_projection_diagnostics_bound_one_stalled_source_and_retry(

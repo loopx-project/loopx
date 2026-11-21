@@ -135,8 +135,8 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     (inspection?.capability_catalog.capabilities ?? []).filter((capability) =>
       capability.available_scopes.includes("machine")
       && (section === "conversation" ? capability.capability_id === "codex_chat" : section === "steward"
-        ? capability.capability_id === "steward_executor" || capability.capability_id === "manager_runtime"
-        : capability.capability_id !== "steward_executor" && capability.capability_id !== "manager_runtime" && capability.capability_id !== "codex_chat")),
+        ? capability.capability_id === "steward_executor" || capability.capability_id === "manager_runtime" || capability.capability_id === "steward_memory"
+        : capability.capability_id !== "steward_executor" && capability.capability_id !== "manager_runtime" && capability.capability_id !== "steward_memory" && capability.capability_id !== "codex_chat")),
     locale,
   ), [inspection, locale, section]);
   const invalidNamespace = inspection?.invalid_namespaces[0];
@@ -523,6 +523,15 @@ export function MachineConfigurationSettings({ section, onChanged }: {
               <div><strong>{locale === "zh-CN" ? "管家模型与思考深度" : "Steward model and reasoning"}</strong><ContextHelp label={locale === "zh-CN" ? "管家默认值的生效范围" : "Steward default scope"}><p>{locale === "zh-CN"
                 ? "这里设置本机管家新会话的默认模型和思考深度。已有会话可能继续使用原来的分配；配置成功不代表正在运行的会话已切换。"
                 : "Choose the model and reasoning effort for new steward sessions on this machine. Existing sessions may retain their earlier allocation; saving a default does not switch a running session."}</p></ContextHelp></div>
+            </section>
+          ) : null}
+
+          {selected.capability_id === "steward_memory" ? (
+            <section className="personal-capability-behavior-note">
+              <ShieldCheck aria-hidden size={18} />
+              <div><strong>{locale === "zh-CN" ? "仅限本人私聊与独立身份" : "Owner private chats only"}</strong><ContextHelp label={locale === "zh-CN" ? "管家记忆隔离说明" : "Steward memory isolation"}><p>{locale === "zh-CN"
+                ? "连接信息读取自本机管家私有文件，不在此表单收集；记忆按已验证发言人隔离保存，超时不阻塞正常回复，也不会进入群聊或转交给工作 Agent。"
+                : "Connection settings stay in the private local steward file outside this form. Memory stays isolated per verified speaker, fails open on timeout, and never enters group chats or worker handoffs."}</p></ContextHelp></div>
             </section>
           ) : null}
 

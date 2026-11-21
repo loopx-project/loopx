@@ -80,13 +80,12 @@ installed/enabled，可经 `loopx capability list` / `show` 查看。
   干净；解码后仍含 NUL 的字节（例如无 BOM 的 UTF-16）记为 `content_not_text` 并使
   `ok` 为 false。目录等不指向文件的路径跳过。`--scan-root` 指向不存在的路径记为 `scan_root_missing`，
   遍历中无法列出的目录（包括根目录本身）记为 `directory_unreadable`，两者都使
-  `ok` 为 false 并返回回执，而不是静默缩小候选集或抛出带绝对路径的异常。被排除的
+  `ok` 为 false 并返回回执。被排除的
   目录（见下）从不进入，读不到也不影响结果；已存在的空目录没有可漏扫的内容，仍为通过。未扫描原因与命中位置一样只含相对标签或原因码，不含绝对路径。
 - 不做任何写操作、不读取 secrets 文件内容（仅规则扫描）。
-- **文件选择是排除式，不是后缀白名单**：默认扫描根目录下所有常规文件，因此
+- **文件选择是排除式**：默认扫描根目录下所有常规文件，因此
   `.env`、`Dockerfile`、`Makefile`、`id_rsa`、`credentials` 这类无后缀或点文件
-  都会被检查（白名单式曾把它们静默跳过，而 `node_modules`/`.venv` 因含 `.js`/`.py`
-  反而被走遍）。被排除的是版本控制、依赖、缓存、构建与虚拟环境目录
+  都会被检查。被排除的是版本控制、依赖、缓存、构建与虚拟环境目录
   （版本控制元数据 `.git`/`.hg`/`.svn` 见 `scan_cli.VCS_METADATA_NAMES`，作为
   目录或文件都排除；`node_modules`、`.venv`、`dist`、`build`、`__pycache__`、
   各类 `*_cache` 等工具生成目录见 `scan_cli.TOOL_MANAGED_DIRECTORY_NAMES`，只排除

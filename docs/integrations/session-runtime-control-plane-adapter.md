@@ -48,7 +48,7 @@ that home to each app-server process, including catalog-compatibility retries.
 New managed Codex sessions persist this binding in owner-local session state.
 Resume and submit reject a different home before starting an upstream process
 or modifying a turn. Legacy sessions acquire the binding only after successful
-upstream restoration; startup alone neither rebinds nor copies their history.
+upstream restoration.
 
 Desktop-owned Chat processes explicitly default `LOOPX_CHAT_CODEX_HOME` to
 `~/.codex`, independently of the launching terminal's `CODEX_HOME`. An explicit
@@ -110,7 +110,7 @@ recorded execution home when `CODEX_HOME` is omitted; an explicit value changes
 only that service setting. A fresh install without an execution selection uses
 the Chat home. Changing the Chat override no longer overwrites an existing
 worker profile. This affects macOS-managed Chat/delegation launches, leaves
-session-profile checks in force, and neither migrates sessions nor copies auth.
+session-profile checks in force.
 
 中文：macOS 登录服务分别保存执行端 `CODEX_HOME` 与聊天端
 `LOOPX_CHAT_CODEX_HOME`。需要沿用不同的原会话时同时指定两者；升级或重启时未指定
@@ -122,8 +122,7 @@ launcher should separate ordinary open (read-only identity/configuration checks)
 from offline account switching, migration, or rollback (exclusive ownership).
 Do not make a normal open perform hidden migrations, kill managed workers, or
 move sessions into another home to pass an overly broad file-open check.
-Sharing a home also does not authorize two clients to run the same thread
-concurrently. Account changes still require quiescing all users of that home;
+Account changes still require quiescing all users of that home;
 this binding does not implement credential copying or account-refresh logic.
 
 Validation: `python -m pytest tests/test_chat_codex_home.py tests/test_chat_agent.py`
@@ -136,14 +135,14 @@ Writable `workspace_only` project conversations now receive default guidance to
 prefer direct workspace file writes, inspect command results and exit codes,
 and read back prerequisite artifacts before starting dependent work. System
 temporary directories remain denied; shell here-documents may fail before the
-intended write. A returned tool call alone is not evidence of command success.
+intended write.
 This is model guidance, with no additional permissions or mechanical workflow
 enforcement. Read-only, ordinary host and steward contexts retain their prior
 instructions. The same context builder serves local Chat and bound Lark topics.
 
 中文：可写的 `workspace_only` 项目对话现在默认提示直接在工作区写文件，检查命令结果
 与退出码，并在依赖步骤开始前读回前置产物。系统临时目录仍被拒绝，shell here-document
-可能在真正写文件前失败；工具调用返回不代表命令成功。这是模型指引，不增加权限或
+可能在真正写文件前失败；这是模型指引，不增加权限或
 机械工作流约束。只读、普通宿主与管家对话保留原指令；本机 Chat 与绑定飞书话题共用该上下文。
 
 ### Projection boundary
@@ -194,9 +193,7 @@ The same disclosure links to the existing ordinary-conversation defaults editor;
 the header does not need a second model-settings button. Refresh failures remain
 visible; successful status refreshes are announced without another header label.
 Effort and tier appear only when the native host reports
-them; Fast may be returned as `priority`. Model selection does not enable a
-LoopX Agent Loop: its separate settings own coordinator identity, token
-allowance and member bindings, and its start control remains explicit.
+them; Fast may be returned as `priority`.
 
 Ordinary Goal/project conversations can choose an advertised reasoning effort
 alongside the model. Codex choices come from the selected account's model
@@ -205,8 +202,7 @@ catalog, separately for each model. ACP choices use the host's
 and model selection is applied before reading its dependent options. An absent
 option is unavailable, never a guessed list of levels. Status-only answers are
 a separate read mode, not an executor or a model choice. Unknown actual models
-remain status text and never become a model option; catalog failure has a retry and
-does not claim to refresh the current model.
+remain status text and never become a model option.
 
 An explicit pick applies when opening the next distinct ordinary conversation;
 it does not rewrite, interrupt or merge the previous conversation. The existing
@@ -218,7 +214,6 @@ after restart. Native start/resume and the subsequent prompt must retain the
 choice. Unsupported or unconfirmed explicit settings fail before a prompt is
 dispatched or a new LoopX Session is published. Attached hosts and running
 Agent Loops keep their own settings; a conflicting resume request is refused.
-Changing a choice neither runs a model prompt nor changes global native config.
 
 This reasoning-selector increment has isolated HTTP/File-store and native
 stdio qualification. Packaged visual/interaction, installed provider adoption
@@ -246,9 +241,7 @@ This is a follow-up path for an owner already reviewing a Goal: read a specific
 Agent's result, give it a correction and keep the original conversation. It is
 not the general Goal entrypoint or a replacement for the native App. The useful
 product comparison is the complete task, including finding the right Agent,
-understanding its result and recovering an interrupted reply. An additional
-chat window or successful transport alone does not establish a better experience
-than working in Codex App. Goal progress and acceptance still come from their
+understanding its result and recovering an interrupted reply. Goal progress and acceptance still come from their
 existing owners, never from the transcript or an input acknowledgement.
 
 In the Goal overview's **By owner** view, **Work conversation** opens that owner's
@@ -284,8 +277,7 @@ Tool records use a single expandable row; long text continues in the same view
 with explicit content reads. Native text-only output blocks are decoded before
 pagination so Unicode offsets remain lossless. Structured shell output shows its
 output and recorded exit code, with every original field available in a disclosure;
-unknown formats remain verbatim. Neither a rendered exit code nor readable output
-establishes task acceptance. Native record positions order and deduplicate pages, including
+unknown formats remain verbatim. Native record positions order and deduplicate pages, including
 bursts larger than a page between observations and incomplete appends. Older and
 newer pages remain reachable when the visible window reaches 300 records.
 Looking back pauses automatic insertion; new activity is disclosed without
@@ -349,8 +341,7 @@ not observed idle, the Agent page also subscribes to that exact owner's live
 state. Unfinished visible assistant text and supported tool work update in place;
 they are labelled as live observations. Looking back freezes insertion until
 the reader scrolls back to the latest records. Completion removes the transient row; saved history remains
-the durable reader and the place to continue long output. Neither observed work
-nor its completion establishes Goal acceptance or a delivery receipt.
+the durable reader and the place to continue long output.
 
 Current visible messages and tools carry a small activity glyph rather than a
 repeated live-observation banner. It moves only for supported work observed in
@@ -358,7 +349,7 @@ the original active Turn while following the live tail. Looking back makes the
 glyph still; completion, disconnection and switching Agents stop it. Reduced
 motion keeps the readable glyph and accessible state label without rotation.
 Source/update details are available on the Codex App label; input availability
-and failures remain visible. This treatment does not imply token streaming.
+and failures remain visible.
 
 Live observation sends only the versioned following/unfollowing broadcasts. It
 never starts, resumes, steers or interrupts a Turn, loads complete history, or
@@ -379,8 +370,7 @@ shapes stop the live reader until the Agent view is reopened.
 These limits and private Desktop protocol compatibility remain coverage gaps.
 This adds observation, not native-input, approval or installed-host qualification.
 
-History is neither copied into LoopX run history nor made available to a shared
-sink. Stable Agent routing is shared
+Stable Agent routing is shared
 by the Goal directory; other providers and native approval/stream parity remain
 within the working-session acceptance. The Codex provider does not close those gaps.
 
@@ -389,8 +379,7 @@ owner to advertise support for external input, and retains the original thread
 settings. It does not use the app-tools pipe or impersonate a model tool caller.
 Busy, unknown, ambiguous, rebound and disconnected conversations cannot send
 through this surface. Continue such work in the original App. Tool approvals,
-questions and active-turn steering remain there; this stage does not claim the
-complete attached-session acceptance or Lark parity.
+questions and active-turn steering remain there.
 
 Input receipts contain an operation id, binding, content fingerprint and native
 acknowledgement, without copying the message body. The same operation cannot be
@@ -409,8 +398,7 @@ unconfirmed delivery remains pending and never silently retries a native effect.
 Check the original App before discarding an uncertain receipt. Late reads cannot
 restore a discarded operation over a new draft. The UI keeps only its reply recovery
 record and unsent draft in the current browser session, scoped to the exact Goal
-and binding; switching Agents never carries text to another recipient. Replies are explicit local owner actions;
-a registered binding or observer does not authorize an Agent to message peers.
+and binding; switching Agents never carries text to another recipient. Replies are explicit local owner actions.
 
 The local presentation API is `/api/chat/codex-attached`: GET requires the
 registered Goal, then the exact Agent/binding for history or a receipt; POST
@@ -422,7 +410,7 @@ Windows in this stage. **Open in Codex App** uses an explicit same-origin POST t
 rechecks the accepted binding and local conversation, then requests macOS open
 the fixed Codex bundle with that conversation's canonical UUID. It cannot launch
 arbitrary URLs or commands, submit input or bypass the desktop navigation fence.
-The UI reports OS dispatch, not proof that the App displayed the thread; errors
+The UI reports OS dispatch errors
 are visible and retry requires another explicit click. Other hosts report this
 operation unavailable. Leave the Agent page to stop reads; rolling back the runtime
 removes this UI/provider without editing native sessions, credentials or App

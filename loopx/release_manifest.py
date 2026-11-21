@@ -263,7 +263,7 @@ def release_runtime_identity(release_root: Path | None = None) -> dict[str, str 
     Installed snapshots carry an immutable release id and source revision. A
     source checkout has neither. Non-editable Python distributions instead
     carry a digest of their owned package files. This fences local service
-    reuse; it does not certify a publisher, release or source revision.
+    reuse.
     """
 
     root = release_root

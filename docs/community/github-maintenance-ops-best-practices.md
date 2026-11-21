@@ -220,8 +220,8 @@ monitors actually running on this repository today, split by operating loop.
 | Loop | Monitor (`target_key`) | Cadence | What it does |
 | --- | --- | --- | --- |
 | Maintenance | GitHub issue intake (`github-open-issue-intake`) | 6h | Classify and route newly opened issues |
-| Maintenance | Open PR review queue (`github:huangruiteng/loopx:open-pr-review-queue`) | 3m | Scan the PR queue; review only when gates pass |
-| Maintenance | Public smoke quality repair (`github:huangruiteng/loopx:public-smoke-quality`) | 15m | Detect and repair public-smoke failures |
+| Maintenance | Open PR review queue (`github:loopx-project/loopx:open-pr-review-queue`) | 3m | Scan the PR queue; review only when gates pass |
+| Maintenance | Public smoke quality repair (`github:loopx-project/loopx:public-smoke-quality`) | 15m | Detect and repair public-smoke failures |
 | Maintenance | Non-benchmark quality watch (`public-nonbenchmark-quality-watch`) | 6h | Watch quality regressions outside benchmarks |
 | Maintenance | Repository quality (`repository-quality-monitor`) | 14d | README first screen, quickstart, public-boundary scan |
 | Maintenance | Community feedback funnel (`community-feedback-funnel`) | 14d | Align feedback entries and triage |
@@ -320,4 +320,4 @@ readback, and publishing stays blocked until an explicit owner decision.
 - Content-ops capability:
   [`loopx/capabilities/content_ops/README.md`](../../loopx/capabilities/content_ops/README.md)
 - Releases v0.4.5 through v0.4.7:
-  [releases](https://github.com/huangruiteng/loopx/releases)
+  [releases](https://github.com/loopx-project/loopx/releases)

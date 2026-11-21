@@ -5,7 +5,13 @@ Only the paid upstream adapter is substituted; release model evaluation owns
 actual answer quality, separately from this lifecycle regression.
 """
 
+import json
+import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
+from test_native_steward_private import finish, steward  # noqa: F401
 
 from loopx.capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
@@ -16,13 +22,15 @@ from loopx.chat_manager import (
     MANAGER_CONTEXT_VERSION,
     manager_channel_binding,
     manager_executor_allocation,
+    manager_session_model_allocation,
     open_manager_session,
 )
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_store import ChatSessionStore
+from loopx.extensions.lark.conversation_identity import identity_ref
 
 
-def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
+def configure(root, *, model, effort, endpoint="codex", policy="preferred", endpoint_models=None):
     document = {
         "schema_version": "loopx_machine_configuration_v0",
         "namespaces": {"steward_executor": {
@@ -32,6 +40,7 @@ def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
             "executor_endpoint": endpoint,
             "executor_model": model,
             "executor_reasoning_effort": effort,
+            **({"endpoint_models": endpoint_models} if endpoint_models is not None else {}),
         }},
     }
     registry = build_builtin_machine_configuration_registry()
@@ -140,7 +149,6 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
 def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
     root, store, runtime, session, starts = conversation
     sid = session["session_id"]
-    import json
     legacy = {**store.load_session(sid), "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
     legacy.pop("manager_executor_allocation", None)
     store._session_path(sid).write_text(json.dumps(legacy))  # retained pre-allocation disk format
@@ -158,7 +166,6 @@ def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
 
 
 def test_legacy_model_adoption_preserves_unset_fields_and_endpoint(conversation):
-    from loopx.chat_manager import manager_session_model_allocation
     root, store, runtime, session, _ = conversation
     legacy = {**session, "manager_executor_allocation": None,
               "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
@@ -277,9 +284,15 @@ def upstream_boundary(monkeypatch, tmp_path):
     starts = []
 
     def start(**kwargs):
-        adapter = Adapter(len(starts))
-        if kwargs.get("resume_thread_id"):
-            adapter.upstream_thread_id = kwargs["resume_thread_id"]
+        transport = Adapter(len(starts))
+        adapter = CodexAppServerAdapter(SimpleNamespace(
+            thread_id=kwargs.get("resume_thread_id") or transport.upstream_thread_id,
+            resolved_model=kwargs["model"],
+            resolved_reasoning_effort=kwargs["reasoning_effort"],
+            read_only_review=kwargs["read_only_review"],
+            process=SimpleNamespace(poll=lambda: None if transport.healthcheck() else 0),
+            close=transport.close_session,
+        ))
         starts.append((kwargs, adapter))
         return adapter
 
@@ -292,13 +305,83 @@ def upstream_boundary(monkeypatch, tmp_path):
         ])
         return runtime
 
-    def open_conversation(runtime):
+    def open_conversation(runtime, **settings):
         return open_manager_session(
             controller=runtime, goal_id="loopx-manager", work_dir=tmp_path,
-            provider="fixture", audience="owner",
+            provider="fixture", audience="owner", **settings,
         )[0]
 
     return root, store, controller, open_conversation, starts
+
+
+@pytest.mark.parametrize("allocation_already_recorded", [False, True])
+def test_legacy_observed_model_does_not_override_machine_model(upstream_boundary, allocation_already_recorded):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="xhigh")
+    runtime = controller()
+    session = open_conversation(runtime)
+    sid = session["session_id"]
+    store.append_message(sid, role="user", text="Keep the original scope.")
+    messages = store.messages(sid)
+    configure(root, model="gpt-6.2-sol", effort="xhigh")
+
+    # A historical session has an observed model without a user selection.
+    # A previous runtime may also have committed the new allocation even
+    # though it reopened the provider with the model from that old observation.
+    legacy = store.load_session(sid)
+    legacy.pop("requested_agent_model_id")
+    if allocation_already_recorded:
+        allocation = manager_session_model_allocation(runtime, legacy)
+        assert allocation["model"] == "gpt-6.2-sol"
+        legacy["manager_executor_allocation"] = allocation
+    store._session_path(sid).write_text(json.dumps(legacy))
+
+    updated = open_conversation(runtime)
+
+    assert updated["session_id"] == sid and updated["channel_id"] == session["channel_id"]
+    assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6.2-sol", "xhigh")
+    assert updated["agent_model_id"] == updated["manager_executor_allocation"]["model"] == "gpt-6.2-sol"
+    assert store.messages(sid) == messages
+    assert starts[-1][0]["history"] == [{"role": "user", "content": "Keep the original scope."}]
+    assert updated["upstream_context_history"][-1]["thread_id"] == session["upstream_thread_id"]
+
+    open_conversation(runtime)
+    assert len(starts) == 2
+
+
+def test_explicit_session_model_survives_machine_default_edit(upstream_boundary):
+    root, _, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6-sol", effort="high")
+    runtime = controller()
+    session = open_conversation(runtime, agent_model_id="gpt-6.1-sol")
+    configure(root, model="gpt-6.2-sol", effort="high")
+
+    updated = open_conversation(runtime)
+    assert updated["session_id"] == session["session_id"]
+    assert starts[-1][0]["model"] == updated["agent_model_id"] == updated["requested_agent_model_id"] == "gpt-6.1-sol"
+
+
+def test_unconfirmed_machine_model_does_not_replace_binding(upstream_boundary, monkeypatch):
+    root, store, controller, open_conversation, starts = upstream_boundary
+    configure(root, model="gpt-6.1-sol", effort="high")
+    runtime = controller()
+    session = open_conversation(runtime)
+    configure(root, model="gpt-6.2-sol", effort="high")
+    start = CodexAppServerAdapter.start
+
+    def start_without_model_readback(**kwargs):
+        adapter = start(**kwargs)
+        adapter.session.resolved_model = None
+        return adapter
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start", start_without_model_readback)
+    with pytest.raises(CodexChatAgentError, match="could not be restored"):
+        open_conversation(runtime)
+
+    held = store.load_session(session["session_id"])
+    assert held["upstream_thread_id"] == session["upstream_thread_id"]
+    assert held["manager_executor_allocation"] == session["manager_executor_allocation"]
+    assert held["agent_model_id"] == "gpt-6.1-sol" and not starts[-1][1].healthcheck()
 
 
 @pytest.mark.parametrize("refresh_context", [False, True])
@@ -328,6 +411,81 @@ def test_model_edit_keeps_early_context_through_public_resume(upstream_boundary,
     # Native history is restored once, separately from the repeated objective.
     assert [item["content"] for item in starts[-1][0]["history"]] == messages
     assert all(text not in starts[-1][0]["objective"] for text in messages)
+
+
+@pytest.mark.parametrize("source", ["working", "stale_context", "missing_rollout", "wrong_provider"])
+def test_bound_steward_model_edit_uses_original_native_checkpoint(steward, monkeypatch, source):  # noqa: F811
+    from loopx.capabilities.native_chat import codex_auth
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    home = workspace.parent / "codex-home"
+    home.mkdir()
+    runtime.codex_home = home
+    monkeypatch.setattr(codex_auth, "conversation_account_epoch", lambda *args, **kwargs: ("revision", "slot"))
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace(
+        'result = {"thread": {"id": "durable-thread"}}',
+        'result = {"thread": {"id": "durable-thread"}, "modelProvider": "openai",\n'
+        '                  "model": request["params"].get("model"),\n'
+        '                  "reasoningEffort": request["params"].get("config", {}).get("model_reasoning_effort")}',
+    ))
+    configure(store.root.parent, model="gpt-6.1-sol", effort="xhigh")
+    event = provider.event("steward-app", "original-checkpoint", "Keep the original evidence.")
+    transport.admit("steward-app", event)
+    original = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    assert finish(runtime, original)["status"] == "completed"
+    sid = original["session_id"]
+    session = store.load_session(sid)
+    checkpoint = session["native_working_checkpoint"]
+    thread_id = checkpoint["thread_id"]
+    assert thread_id == session["upstream_thread_id"]
+    rollout = home / "sessions" / "original.jsonl"
+    rollout.parent.mkdir()
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": thread_id, "model_provider": "different-provider" if source == "wrong_provider" else "openai",
+    }}) + "\n")
+    with sqlite3.connect(home / "state_1.sqlite") as database:
+        database.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, archived INTEGER)")
+        database.execute("INSERT INTO threads VALUES (?, ?, 0)", (thread_id, str(rollout)))
+    if source == "missing_rollout":
+        rollout.unlink()
+    if source == "stale_context":
+        store.update_session(sid, manager_context_version=MANAGER_CONTEXT_VERSION - 1)
+    old_turn = store.load_turn(sid, original["turn_id"])
+    configure(store.root.parent, model="gpt-6.2-sol", effort="high")
+    turn, _ = store.create_queued_turn(sid, client_turn_id="next-original", message="Next question.", origin="lark")
+    queued = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    history = store.messages(sid)
+    offset = capture.stat().st_size
+
+    if source in {"missing_rollout", "wrong_provider"}:
+        with pytest.raises(CodexChatAgentError, match="could not be restored"):
+            runtime._ensure_adapter(queued, work_dir=workspace, objective="manager")
+        assert capture.stat().st_size == offset
+        assert store.load_session(sid)["agent_model_id"] == "gpt-6.1-sol"
+    else:
+        runtime._ensure_adapter(queued, work_dir=workspace, objective="manager")
+        calls = [json.loads(line) for line in capture.read_bytes()[offset:].splitlines()]
+        method = "thread/resume" if source == "working" else "thread/start"
+        assert [call["method"] for call in calls
+                if call["method"] in {"thread/resume", "thread/start", "thread/fork"}] == [method]
+        options = next(call["params"] for call in calls if call["method"] == method)
+        assert options["model"] == "gpt-6.2-sol" and options["config"]["model_reasoning_effort"] == "high"
+        assert all(call["method"] not in {"turn/start", "thread/compact/start"} for call in calls)
+        if source == "working":
+            assert options["threadId"] == thread_id
+            assert all(call["method"] != "thread/inject_items" for call in calls)
+            assert store.load_session(sid)["upstream_thread_id"] == thread_id
+        else:
+            assert any(call["method"] == "thread/inject_items" for call in calls)
+        preparation = store.load_turn(sid, turn["turn_id"])["native_context_preparation"]
+        assert preparation["planned_method"] == method
+        assert preparation["manager_context_migration"] is (source == "stale_context")
+        assert store.load_session(sid)["agent_model_id"] == "gpt-6.2-sol"
+    assert store.load_turn(sid, original["turn_id"]) == old_turn
+    assert store.load_turn(sid, turn["turn_id"])["status"] == "queued"
+    assert store.load_session(sid)["active_turn_id"] == turn["turn_id"]
+    assert store.messages(sid) == history
 
 
 @pytest.mark.parametrize("policy,effort,expected_effort", [
@@ -579,3 +737,261 @@ def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation,
         assert preparation["planned_method"] == "thread/resume" and preparation["history_message_count"] == 0
     else:
         assert preparation is None
+
+
+def test_manager_session_model_allocation_ignores_partial_pre_v0_record(conversation) -> None:
+    root, _store, runtime, session, _starts = conversation
+    configure(root, model="gpt-6.1-sol", effort="high", endpoint="codex", policy="preferred")
+    partial_allocation = {
+        "schema_version": 1,
+        "selection_policy": "preferred",
+    }
+    partial_session = {**session, "manager_executor_allocation": partial_allocation}
+    assert manager_session_model_allocation(runtime, partial_session) is None
+    assert partial_session["manager_executor_allocation"] == partial_allocation
+
+
+def test_codex_primary_flexible_quota_route_selects_carbon_and_restores_codex(conversation, monkeypatch):
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from types import ModuleType
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.chat_manager import manager_session_quota_route
+
+    root, store, runtime, session, _starts = conversation
+    configure(root, model="gpt-6.2-sol", effort="xhigh", endpoint="codex", policy="flexible")
+    store.update_session(session["session_id"], upstream_thread_id="codex-thread-1",
+        agent_model_id="gpt-6.2-sol", agent_reasoning_effort="xhigh")
+
+    parent = ModuleType("loopx_codex_provider_routing")
+    module = ModuleType("loopx_codex_provider_routing.native")
+
+    class Accounts:
+        def __init__(self, path):
+            assert path == runtime.coordination_runtime_root
+
+        def model_transport(self, **_parameters):
+            return None
+
+        def steward_route(self, *, codex_home, primary, pool, current, primary_capacity,
+                          fallback_capacity=None, blocked_primary=None, model=None):
+            assert primary == "codex" and set(pool) == {"codex", "antigravity"}
+            if current == "antigravity":
+                return {"endpoint": "codex", "blocked_primary": blocked_primary}
+            if fallback_capacity is None:
+                return {"endpoint": None, "blocked_primary": blocked_primary}
+            return {"endpoint": "antigravity", "blocked_primary": blocked_primary}
+
+    module.NativeAccounts = Accounts
+    monkeypatch.setitem(sys.modules, parent.__name__, parent)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(runtime, "capabilities", lambda: [
+        {"agent_id": "codex", "available": True},
+        {"agent_id": "antigravity", "available": True},
+    ])
+    monkeypatch.setattr(
+        AntigravityAdapter,
+        "endpoint_model_capacity",
+        staticmethod(lambda *, model_id, **_kw: {
+            "observed_at": 1767225600.0,
+            "account_ref": "b" * 64,
+            "model_id": model_id,
+            "execution_id": "probe-1",
+            "remaining_fraction": 0.99,
+            "reset_time": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "quota_exhausted": False,
+            "normal_completion": True,
+        }),
+    )
+
+    loaded = store.load_session(session["session_id"])
+    neutral_route = manager_session_quota_route(runtime, loaded)
+    assert neutral_route is not None
+    neutral_alloc = neutral_route["allocation"]
+    assert neutral_alloc["executor_endpoint"] == "antigravity"
+    assert neutral_alloc["model"] == "gemini-4-argon-high"
+    assert neutral_alloc["model_source"] == "vendor_default"
+    assert neutral_alloc["reasoning_effort"] == "high"
+    assert neutral_alloc["configured_model"] is None
+
+    configure(
+        root,
+        model="gpt-6.2-sol",
+        effort="xhigh",
+        endpoint="codex",
+        policy="flexible",
+        endpoint_models={"antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"}},
+    )
+    routed_to_ag = manager_session_quota_route(runtime, loaded)
+    assert routed_to_ag is not None
+    alloc_ag = routed_to_ag["allocation"]
+    assert alloc_ag["executor_endpoint"] == "antigravity"
+    assert alloc_ag["allocation_reason"] == "flexible_availability_fallback"
+    assert alloc_ag["model"] == "gemini-4-carbon-high"
+    assert alloc_ag["model_source"] == "machine_configuration"
+    assert alloc_ag["reasoning_effort"] == "high"
+    assert alloc_ag["configured_model"] == "gemini-4-carbon-high"
+    assert alloc_ag["configured_reasoning_effort"] == "high"
+
+    # Store transition preserves Codex provenance and allows subsequent recovery back to Codex.
+    turn1, _ = store.create_turn(session["session_id"], client_turn_id="switch-ag", message="Switch to Carbon")
+    store.update_session(
+        session["session_id"],
+        status="ready",
+        active_turn_id=turn1["turn_id"],
+        expected_upstream_thread_id="codex-thread-1",
+        agent_id="antigravity",
+        executor_endpoint_id="antigravity",
+        adapter_kind="antigravity_ls",
+        upstream_mode="default",
+        upstream_thread_id="ag-cascade-1",
+        agent_model_id=alloc_ag["model"],
+        agent_reasoning_effort=alloc_ag["reasoning_effort"],
+        manager_executor_allocation=alloc_ag,
+        upstream_context_history=[{
+            "thread_id": "codex-thread-1",
+            "manager_context_version": loaded.get("manager_context_version"),
+            "agent_id": "codex",
+            "agent_model_id": "gpt-6.2-sol",
+        }],
+    )
+    store.update_turn(session["session_id"], turn1["turn_id"], status="completed")
+    store.update_session(session["session_id"], active_turn_id=None)
+
+    on_ag = store.load_session(session["session_id"])
+    routed_back = manager_session_quota_route(runtime, on_ag)
+    assert routed_back is not None
+    alloc_codex = routed_back["allocation"]
+    assert alloc_codex["executor_endpoint"] == "codex"
+    assert alloc_codex["model"] == "gpt-6.2-sol"
+    assert alloc_codex["reasoning_effort"] == "xhigh"
+
+    turn2, _ = store.create_turn(session["session_id"], client_turn_id="restore-codex", message="Back to Codex")
+    store.update_session(
+        session["session_id"],
+        status="ready",
+        active_turn_id=turn2["turn_id"],
+        expected_upstream_thread_id="ag-cascade-1",
+        agent_id="codex",
+        executor_endpoint_id="codex",
+        adapter_kind="codex_app_server",
+        upstream_mode="chat",
+        upstream_thread_id="codex-thread-2",
+        agent_model_id=alloc_codex["model"],
+        agent_reasoning_effort=alloc_codex["reasoning_effort"],
+        manager_executor_allocation=alloc_codex,
+        upstream_context_history=[
+            *on_ag["upstream_context_history"],
+            {
+                "thread_id": "ag-cascade-1",
+                "manager_context_version": on_ag.get("manager_context_version"),
+                "agent_id": "antigravity",
+                "agent_model_id": "gemini-4-carbon-high",
+            },
+        ],
+    )
+    assert store.load_session(session["session_id"])["agent_id"] == "codex"
+
+
+def test_codex_to_antigravity_failover_resolves_short_alias_endpoint_model(conversation, monkeypatch):
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from types import ModuleType
+    from loopx.capabilities.native_chat import antigravity_adapter
+    from loopx.chat_manager import manager_session_quota_route
+
+    root, store, runtime, session, _starts = conversation
+    store.update_session(
+        session["session_id"],
+        upstream_thread_id="codex-thread-1",
+        agent_model_id="gpt-6.2-sol",
+        agent_reasoning_effort="xhigh",
+    )
+
+    parent = ModuleType("loopx_codex_provider_routing")
+    module = ModuleType("loopx_codex_provider_routing.native")
+
+    class Accounts:
+        def __init__(self, path):
+            assert path == runtime.coordination_runtime_root
+
+        def model_transport(self, **_parameters):
+            return None
+
+        def steward_route(self, *, codex_home, primary, pool, current, primary_capacity,
+                          fallback_capacity=None, blocked_primary=None, model=None):
+            if fallback_capacity is None:
+                return {"endpoint": None, "blocked_primary": blocked_primary}
+            return {"endpoint": "antigravity", "blocked_primary": blocked_primary}
+
+    module.NativeAccounts = Accounts
+    monkeypatch.setitem(sys.modules, parent.__name__, parent)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(runtime, "capabilities", lambda: [
+        {"agent_id": "codex", "available": True},
+        {"agent_id": "antigravity", "available": True},
+    ])
+    reset = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    monkeypatch.setattr(
+        antigravity_adapter,
+        "discover_antigravity_language_server",
+        lambda **_kw: {"url": "http://127.0.0.1:4321", "csrf_token": "tok"},
+    )
+    monkeypatch.setattr(
+        antigravity_adapter,
+        "_rpc_post",
+        lambda _url, _tok, method, _payload, **_kw: {
+            "userStatus": {
+                "email": "synthetic@invalid.example",
+                "cascadeModelConfigData": {
+                    "clientModelConfigs": [
+                        {
+                            "label": "Gemini 4 Carbon (High)",
+                            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                            "quotaInfo": {"remainingFraction": 0.91, "resetTime": reset},
+                        },
+                        {
+                            "label": "Gemini 4 Carbon (Medium)",
+                            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M437"},
+                            "quotaInfo": {"remainingFraction": 0.77, "resetTime": reset},
+                        },
+                    ]
+                },
+            }
+        } if method == "GetUserStatus" else {},
+    )
+
+    loaded = store.load_session(session["session_id"])
+
+    # Alias with explicit effort resolves to gemini-4-carbon-medium and passes quota route.
+    configure(
+        root,
+        model="gpt-6.2-sol",
+        effort="xhigh",
+        endpoint="codex",
+        policy="flexible",
+        endpoint_models={"antigravity": {"model": "carbon", "reasoning_effort": "medium"}},
+    )
+    routed_medium = manager_session_quota_route(runtime, loaded)
+    assert routed_medium is not None
+    alloc_medium = routed_medium["allocation"]
+    assert alloc_medium["executor_endpoint"] == "antigravity"
+    assert alloc_medium["allocation_reason"] == "flexible_availability_fallback"
+    assert alloc_medium["model"] == "carbon"
+    assert alloc_medium["reasoning_effort"] == "medium"
+
+    # Alias without explicit effort defaults to high (gemini-4-carbon-high).
+    configure(
+        root,
+        model="gpt-6.2-sol",
+        effort="xhigh",
+        endpoint="codex",
+        policy="flexible",
+        endpoint_models={"antigravity": {"model": "carbon"}},
+    )
+    routed_high = manager_session_quota_route(runtime, loaded)
+    assert routed_high is not None
+    alloc_high = routed_high["allocation"]
+    assert alloc_high["executor_endpoint"] == "antigravity"
+    assert alloc_high["model"] == "carbon"
+    assert alloc_high["reasoning_effort"] == "high"

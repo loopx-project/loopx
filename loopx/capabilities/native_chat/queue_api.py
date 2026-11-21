@@ -1,9 +1,11 @@
 """HTTP transport for original Session Tasks and the existing persisted queue."""
 
+from functools import partial
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ...chat_store import CHAT_STORE_SCHEMA_VERSION
+from ...status_server import is_loopback_host
 
 
 class ChatQueueRequestMixin:
@@ -121,7 +123,12 @@ class ChatQueueRequestMixin:
             for key in body:
                 if not isinstance(body[key], str) or not body[key] or len(body[key]) > 160:
                     raise ValueError("invalid queue steering identity")
-            result = self.server.runtime_controller.steer_queued_turn(session_id=session_id,
+            controller = self.server.runtime_controller
+            steer = controller.steer_queued_turn
+            if is_loopback_host(str(self.server.server_address[0])):
+                from .queued_admission import steer_queued_web_turn
+                steer = partial(steer_queued_web_turn, controller)
+            result = steer(session_id=session_id,
                 queued_turn_id=queued_turn_id, expected_turn_id=body["target_turn_id"],
                 client_ingress_id=body["client_ingress_id"])
             self._send_json({"ok": True, **result})

@@ -41,22 +41,31 @@ is an independent readback and recovery entry point. A provider that still
 fails remains closed until its per-extension doctor result is repaired and the
 command passes. See [Extension lifecycle](../reference/extensions.md#runtime-lifecycle).
 
+For an archive installed with custom directories, keep the same
+`LOOPX_BIN_DIR` and `LOOPX_RELEASES_DIR` overrides when rolling back.
+Unset or empty overrides use the default locations.
+
 Do not collapse package acquisition, host-material delivery, core runtime
 activation, and enabled-extension readiness into one "installed" claim. The
 [installation guide's active-layer checklist](../guides/installing-loopx.md#verify-the-active-layers)
 names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
-snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Before replacing the launcher, `loopx update --rollback
-previous` checks that the selected release can read the current authoritative
-Todos for registered local File and SQLite Goals. If it cannot verify the read,
-the running version and Goal state stay in place. Both the registry's configured
-runtime and an explicit runtime override participate in this check. Rollback
-holds the installer's existing promotion lock through Todo checks, activation,
-Doctor and recovery. Recovery restores only the launcher installed by that
-operation, preserving a later replacement. Use a release with a matching state
-backup if older code cannot read the current data. Use `loopx update plan
+snapshot, apply uses the public `stable` ref by default. Before replacing the
+launchers, `loopx update --rollback previous` checks that the selected release
+can read the current authoritative Todos for registered local File and SQLite
+Goals. Both the registry's configured runtime and an explicit runtime override
+participate in this check. Rollback switches `loopx` and an archive-managed
+`loopx-apply-rrule` to the selected release under the installer's promotion lock.
+A selected release must provide an executable scheduler helper if the helper
+is managed by that archive installation. The lock covers Todo checks, both
+replacements, Doctor and recovery. Rollback verifies each destination against
+its original inode immediately before replacing it. A changed destination,
+an interrupted or failed switch, or a failed core Doctor triggers recovery
+only for links still owned by the rollback. A failed extension Doctor leaves
+the selected release active so the extension can be repaired.
+Use a release with a matching state backup if older code cannot read the
+current data. Use `loopx update plan
 --ref main` and `loopx update apply --ref main` only for maintainer/dev archive
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
@@ -238,8 +247,7 @@ and editable setup remain untouched. A build destination overlapping the
 source package is rejected. Explicit `bdist_wheel --skip-build` still packages
 the selected existing build; it is not a fresh-source qualification. Before
 qualifying retirement, inspect the built wheel and run its installed entry
-points outside the source checkout; a source
-test or a manually cleaned build directory alone does not prove this rule.
+points outside the source checkout.
 
 Before a recovery dispatch, inspect the existing `pypi` environment's allowed
 branch/tag refs as well as the Trusted Publisher and enabled variable:
@@ -280,6 +288,32 @@ main 运行时发布器在任何远端写入前，将下载的安装资格与源
 字节数逐项核对。安装和恢复检查必须全部通过，不可变元数据必须与候选渠道元数据一致。
 证据缺失、失败或不匹配时，保留已有发布及渠道。此工程资格不证明模型结果、完整成本收益
 或 C1 默认采用资格。
+
+New runtime descriptors carry the observed, supported `default_contract`.
+The builder probes the committed runtime before writing a channel descriptor
+or replacing existing output. Qualification checks the installed candidate's
+ordinary quota writer in an isolated original Goal with context delivery off.
+The publisher requires that observation to match the immutable descriptor.
+Desktop packaging observes its actual archived source
+through the same probe and support validator. Runtime updates reject an unsupported
+declared contract before downloading or activating it, and bind the archive's
+contract identity to its metadata. Historical v1 descriptors remain readable.
+The current supported distribution scope is the existing `quota_packet` writer;
+the complete-contract default cutover stays unqualified until the original RFC §9
+matched single-session outcome/full-cost and supported-profile adoption gate is
+met. Installation checks or a new boolean cannot extend that scope. Explicit
+complete-contract opt-in, context-delivery configuration and historical recovery
+retain their existing owners; this boundary does not switch an installed writer.
+
+新 runtime 描述符记录实际观测到且受支持的 `default_contract`。构建器在写入渠道描述符
+或替换已有制品之前探测已提交的 runtime。安装资格检查在隔离的原始 Goal 中关闭
+上下文传输后再次观察普通 quota writer。发布器要求安装后的观察与不可变描述符一致。
+桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
+未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
+当前分发范围是已有 `quota_packet` writer；完整契约默认切换在满足原 RFC §9 同单会话
+匹配成果、完整成本及支持 profile 的采用门之前保持未资格化。安装检查或新增布尔值不能
+扩大该范围。显式完整契约 opt-in、上下文传输配置及历史恢复继续由原 owner 处理，此边界
+不切换已安装 writer。
 
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
@@ -888,7 +922,6 @@ path, and canary route rather than as a user-facing release baseline.
   published verified CI outputs after cancelling queued publication jobs.
   Windows execution, Apple Developer ID/notarization, live Lark/Bot channels
   and unavailable Harbor/SForge/PostgreSQL/NoKV environments remain unqualified.
-  This release does not claim a paired-version benchmark uplift.
 
 - `v1.3.1` on 2026-10-06 16:10 +08:00: a focused compatibility release at
   commit `7445ae360aaf330e0067959a5e0084ffd9f76de4`, adapting the renderer to
@@ -916,8 +949,7 @@ path, and canary route rather than as a user-facing release baseline.
   rendering. At the frozen source, 515 public smokes and 360 affected Python
   checks passed; the authorized DS Flash/high alternative passed all 22
   scenarios twice and six contrasts, with zero failures or skips. Earlier
-  Doubao qualification failures remain unqualified; this does not claim a
-  fresh full-tree Python sweep. Windows execution, Apple notarization,
+  Doubao qualification failures remain unqualified. Windows execution, Apple notarization,
   authenticated Host interaction, external backend execution and sustained
   SQLite qualification remain unqualified. No paired-version benchmark uplift
   or isolated Astra causal effect is claimed.
@@ -1013,6 +1045,17 @@ path, and canary route rather than as a user-facing release baseline.
   installation; artifact and native-host claims remain those stated by that
   release note.
 
+- `v2.3.0` release at commit
+  `92271fe114916428be6fd36558bb7a93fbe49da8` (2026-11-09).
+  The Git `stable` ref, CLI archive and bundled macOS runtime matched the tag.
+  GitHub and PyPI carry matching Python wheel and source packages.
+  The signed desktop stable feed for this release serves Apple Silicon macOS.
+  Windows stable upgrades use the MSI or NSIS installer.
+  [Published release](https://github.com/loopx-project/loopx/releases/tag/v2.3.0),
+  [PyPI packages](https://pypi.org/project/loopx/2.3.0/#files).
+  Check the installation owner and read back an existing Goal after updating.
+  [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.3.0/docs/product/releases/v2.3.0.md#upgrade).
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
@@ -1042,10 +1085,24 @@ After the individual lanes pass, bind their compact receipts to the exact clean
 release checkout before tagging or moving `stable`:
 
 ```bash
+python3 scripts/qualify_release_commit.py \
+  --repo-root . \
+  --output-dir .local/release-qualification \
+  --preflight-since v2.3.0 \
+  --resume
 loopx canary release-qualification \
   --manifest-json release-qualification.json \
   --repo-root .
 ```
+
+For clean full-suite release runs, `scripts/qualify_release_commit.py` runs an
+optional changed-file preflight first (`--preflight-since`), then executes
+hardware-sized single-wave isolated pytest shards (defaulting to
+two-thirds of host CPUs capped at 12, with optional `--durations-path`,
+`--durations-out`, and fail-closed exact-commit/tree `--resume`) and reduces
+the shards into `receipt-pytest.json` with no local paths. Keep
+`scripts/qualify-doubao-model-behavior-live.py` (`--max-workers 6` by default)
+concurrent with network/CPU lanes without mutating the clean candidate tree.
 
 The `exact_release_commit_qualification_manifest_v0` contract requires the
 same Git commit, Git tree id, package version, and version tag across pytest,
@@ -1245,8 +1302,7 @@ PR numbers in commit titles are navigation, not a completeness check. Confirm
 that metadata coverage reaches the whole range, resolving unmatched integration
 commits through their associated merged PRs. Check an author's earlier merged
 PR history before calling a contribution first-time. Reconcile both language
-lists and their summary counts against that verified set; a formatting gate
-does not establish source completeness. Refresh this evidence when the final
+lists and their summary counts against that verified set. Refresh this evidence when the final
 release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an
@@ -1277,7 +1333,7 @@ non-empty English group, or weaken contributor attribution.
 Within each non-empty group, every material claim must carry one or more direct
 GitHub pull-request links such as
 `[#2051](https://github.com/huangruiteng/loopx/pull/2051)`. A compare link is
-still useful at the end, but it does not replace per-claim PR attribution.
+still useful at the end.
 Avoid bare PR ranges as the only evidence because ranges can hide omitted or
 unrelated changes.
 
@@ -1360,9 +1416,7 @@ available, with the following durable procedure:
 
 Record the guide URL and verified ownership/readback in the existing private
 release checkpoint. Credentials, account identifiers, private reference URLs,
-drafts, and raw evidence do not belong in public repository changes. This
-procedure authorizes neither chat/group announcements nor posts to other
-social channels; those retain their own authorization boundaries.
+drafts, and raw evidence do not belong in public repository changes.
 
 ### Final Release Body Usage Gate
 

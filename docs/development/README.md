@@ -9,7 +9,7 @@ not need these documents to start LoopX.
 
 ## Start Here / 从这里开始
 
-1. Read [Contributing](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md) for repository boundaries and the
+1. Read [Contributing](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md) for repository boundaries and the
    pull-request checklist.
 2. Read [Current technical directions](../project/technical-directions.md) to
    choose an active program, understand its maturity, and find its tracker.
@@ -34,7 +34,7 @@ not need these documents to start LoopX.
 10. Follow the [documentation layout policy](documentation-layout.md) before
    adding or moving public documentation.
 
-1. 先阅读[贡献指南](https://github.com/huangruiteng/loopx/blob/main/CONTRIBUTING.md)，了解仓库边界和 PR 检查项。
+1. 先阅读[贡献指南](https://github.com/loopx-project/loopx/blob/main/CONTRIBUTING.md)，了解仓库边界和 PR 检查项。
 2. 阅读[当前技术方向](../project/technical-directions.zh-CN.md)，选择活跃计划、了解
    成熟度并找到对应 tracker。
 3. 按顺序阅读[开发者手册](/loopx/docs/book/)，从控制面基础到项目接入和开发者贡献。
@@ -69,7 +69,7 @@ not need these documents to start LoopX.
 | Quota and spend semantics / Quota 与 spend 语义 | [Quota allocation](../quota-allocation.md) |
 | Model-behavior shadow qualification / 模型行为影子验证 | [Model behavior qualification v0](../reference/protocols/model-behavior-qualification-v0.md) |
 | Release promotion / 发布晋级 | [Release readiness](../product/release-readiness.md) |
-| Benchmark research / Benchmark 研究 | [Benchmark workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md) · [Research RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) |
+| Benchmark research / Benchmark 研究 | [Benchmark workspace](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md) · [Research RFC](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md) |
 
 ## Change Loop / 变更闭环
 
@@ -86,14 +86,17 @@ The usual loop is:
 issue or regression
   -> deterministic characterization
   -> focused implementation
-  -> focused tests and durable smoke
-  -> catalog-selected canary
-  -> owner review when behavior is sensitive
+  -> focused tests, durable smoke, and catalog-selected canary (`loopx canary premerge`)
+  -> Goal-bound exact-head review (`loopx pr-review --goal-id GOAL`, respecting `wait_for_ci=false` without polling remote CI)
+  -> maintainer handoff by default (or separately authorized merge/self-merge)
   -> release outcome observation when needed
 ```
 
-通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测与 durable smoke ->
-catalog 选择的 canary -> 敏感变更 owner review -> 必要时观察发布结果。
+通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测、durable smoke 与 catalog 选择的 canary（`loopx canary premerge`）-> 绑定 Goal 的精确头评审（`loopx pr-review --goal-id GOAL`，遵守 `wait_for_ci=false`，不等待也不轮询远端 CI）-> 默认交由维护者合入（或在另行取得授权时执行合入/自合并）-> 必要时观察发布结果。
+
+When the owning Goal sets `pull_request_review.wait_for_ci=false`, deterministic local checks plus Goal-bound exact-head review and readiness (`--registry <repo>/.loopx/registry.json --goal-id <goal>`) remove remote CI waiting during review, readiness checks, or when a merge/self-merge is separately authorized; `wait_for_ci=false` and `ready=true` never grant merge authority or mean ready PRs auto-self-merge (leaving PRs open for maintainer handoff remains the default).
+
+当所属 Goal 配置了 `pull_request_review.wait_for_ci=false` 时，本地确定性验证加上显式绑定 Goal 的精确头评审与就绪检查（`--registry <repo>/.loopx/registry.json --goal-id <goal>`）可在评审、就绪检查以及另行获授权执行合入或自合并时免除对远端异步 GitHub Actions CI 的等待或轮询；`wait_for_ci=false` 与 `ready=true` 均不授予合入权限，也不意味着就绪 PR 会自动自合并（默认仍保持开启并交由维护者处理）。
 
 ## Engineering Scope And Refactoring
 
@@ -223,13 +226,11 @@ compliance and live effects. Existing sessions may retain an older copy.
 Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
 for root size, shared import, local routes and existing inbound anchors. Review
 a moved obligation clause by clause: owner, modality, scope, order, exceptions,
-evidence provenance, continuation and stop conditions. A link test or shorter
-file does not establish equivalence. Keep operational rules in their existing
+evidence provenance, continuation and stop conditions. Keep operational rules in their existing
 owners rather than adding another parallel policy collection.
 
 Design sources and the disposition of the earlier proposal are recorded in
 [the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).
-
 
 ### Progressive Context For Development
 
@@ -275,7 +276,7 @@ Existing sessions may retain old instructions; source edits alone do not prove
 native startup adoption or agent compliance.
 
 For product context delivery, selection, continuation and replanning have different
-information needs. A suggested `selected_todo` is not proof of an actual work choice.
+information needs.
 A qualified continuation can retain the bound work in full and make other candidates
 discoverable with exact details; a new choice must inspect what that choice needs.
 Do not implement this by filtering a full-required response in the caller. Change

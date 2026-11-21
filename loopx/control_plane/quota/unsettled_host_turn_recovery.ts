@@ -22,7 +22,7 @@ import {
   requireNonEmptyString,
 } from "../runtime_decode.ts";
 import {
-  goalHeartbeatReceiptsFromSnapshot,
+  committedGoalHeartbeatReceiptsFromSnapshot,
   readGoalRolloutEventSnapshot,
 } from "../rollout_receipt_log.ts";
 import { isCommittedMonitorPollEffect } from "./settlement_phase.ts";
@@ -230,7 +230,7 @@ async function preflightPriorHostTurnCloseoutForOwner(
     request.runtime_root,
     request.goal_id,
   );
-  const receipts = goalHeartbeatReceiptsFromSnapshot(
+  const receipts = committedGoalHeartbeatReceiptsFromSnapshot(
     rolloutSnapshot,
     request.goal_id,
     request.agent_id,

@@ -336,7 +336,7 @@ def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identit
         "--slots",
         "1",
         "--source",
-        "heartbeat",
+        "visible-goal",
         "--execute",
     )
     assert premature_rc == 1
@@ -363,6 +363,7 @@ def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identit
     assert settlement["lifecycle_completion"]["ok"] is True
     assert settlement["quota_spend"]["ok"] is True
     assert settlement["quota_spend"]["appended"] is True
+    assert settlement["quota_spend"]["source"] == "visible-goal"
 
     status_rc, status = _run_cli(
         registry,

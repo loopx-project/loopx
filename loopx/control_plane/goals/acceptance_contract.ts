@@ -2,8 +2,8 @@ import {NON_WORK_FIELDS, goalAcceptanceTodoDigest} from "./acceptance_work_basis
 export {goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
 import {goalOutcomeCheckBasis, projectGoalOutcomes} from "./outcome_requirements.ts";
 import {projectGoalObjective, currentGoalObjective} from "./goal_objective.ts";
-/** Owner-configured acceptance basis. This is neither a permission grant nor
- * the full shared Goal intent/amendment authority. The Todo manifest is unchanged. */
+/** Owner-configured acceptance basis.
+ *  The Todo manifest is unchanged. */
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, authorityUnicodeCompare, canonicalAuthorityBytes,
   canonicalAuthorityObject, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -439,13 +439,6 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
   const authority = readGoalAcceptanceAuthority(head, goalId);
   if (authority.kind === "legacy") return authority.state;
   return authority.owner_matches ? authority.state : null;
-}
-
-/** Private same-snapshot host inputs for read-only freshness observation.
- * They contain only already pinned files and oracle refs, never commands or
- * a new result. Public summaries keep using the acceptance projection. */
-export function goalAcceptanceOracleObservationBasis(head: JsonObject, goalId: string): JsonObject | null {
-  return new GoalAcceptanceRead(head, goalId).oracleBasis();
 }
 
 export function bindGoalAcceptanceStateOwner(

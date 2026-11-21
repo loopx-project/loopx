@@ -31,8 +31,7 @@ selected audience's previous enrollment boundary, explicitly set
 `"local_delivery_scope":"selected"` alongside its `targets` list before upgrading.
 Missing policy, missing source, a wrong sender or malformed scope grants nothing.
 Keep the policy private (0600); do not commit it. A read grant without a sender
-grant is insufficient. This does not grant remote delivery, evidence reads,
-worker launch, Todo/lease changes or protected operations.
+grant is insufficient.
 
 ### Readable answers and original-conversation returns
 
@@ -112,7 +111,7 @@ request is not receiver adoption, and adoption is not a returned conclusion.
 Expand **View delegation details** for that recipient's brief and existing
 request controls. The desktop example keeps both recipients visible; the narrow
 example shows a selected brief with vertical scrolling. These are synthetic
-packaged-browser examples, not evidence of installed or real-model completion.
+packaged-browser examples.
 
 ![One request, two independent recipient cards](../../../docs/assets/personal-workspace/multi-recipient/conversation.png)
 
@@ -159,13 +158,12 @@ an audience-safe conclusion with the existing `manager-inbox report` path, in
 addition to its peer result. Launch submission, receiver conclusion, canonical
 acceptance and provider delivery remain separate evidence. The existing return
 service replies to the original conversation; it does not start another model
-thread. Plain inbox delivery leaves receiver activity unverified; it does not claim
-that execution has not started.
+thread. Plain inbox delivery leaves receiver activity unverified.
 The native postcondition entry retires only its exact operation-owned temporary
 host input before checking a clean delivery worktree; unrelated files and actual
 artifact changes still fail canonical validation. Validation recovery resumes the
 original Turn after its retained host result, without invoking the model again.
-An external conversation is not a native Goal wake owner. The typed wake owner
+The typed wake owner
 settles that separate intent as `no_wake_owner`; the exact original inbox return
 still carries the receiver's conclusion, without a hidden Goal or retry loop.
 
@@ -249,6 +247,16 @@ work-context sources, while the full result text remains behind the existing
 `manager-inbox read` command. This preserves asynchronous pull semantics and
 does not interrupt an active Turn or treat visibility as consumption.
 
+Ordinary peer results may wait for the next work Turn. Cancellation, blocking
+and priority-control paths keep their immediate handling. Use the invocation-bound
+`read_peer_returns` tool when only the peer results need review. It binds each
+result's `read_token` to the current Turn. A committed receipt can outlast a
+lost response, so pass the token from the returned body when acknowledging
+the result. If the read fails ambiguously, repeat the same page in the same
+Turn. The required CLI read and its paged recovery record transport delivery.
+Peer results stay eligible for the next Turn until a bound Turn accepts or
+rejects them.
+
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
 and its current revision without inventing a Goal/Agent receiver. A changed
@@ -260,8 +268,7 @@ A correction updates the current brief without acknowledging earlier results.
 An older revision's undelivered return or unconsumed peer result remains in the
 agenda at its original `request_revision`, even after the current result is
 delivered and consumed. Resolved historical returns leave this compact view;
-the full Inbox/result reader retains their history. This does not certify that
-an earlier result satisfies the corrected request or authorize replaying work.
+the full Inbox/result reader retains their history.
 
 Each item names its request, receiving/source Agent where recorded, current
 revision, related Todo ids and the remaining receipt step. Counts are request
@@ -310,7 +317,7 @@ checks or requests. Custom scope resolvers keep their existing validation path.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
-项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+项目会话不混入。
 同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
 来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
 在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
@@ -397,8 +404,7 @@ lists are `null`, distinct from a verified empty list. It never retries, advance
 a cursor or reports an empty Inbox to hide that ambiguity. Inspect those exact
 durable read/delivery receipts using the existing Inbox/status readers, recheck
 the original source and Goal lifetime, then recover the same page with its
-original arguments. An absent receipt does not prove the timed-out writer has
-stopped. This recovery grants no work replay, result consumption or quota spend.
+original arguments. This recovery grants no work replay, result consumption or quota spend.
 Python releases the initial Goal lifetime guard for provider enrichment.
 Core Todo and workspace inputs retain their actual IO adapters and provider
 fences. The Host reacquires the Goal guard before native finalization.
@@ -416,8 +422,7 @@ loopx --runtime-root <runtime-root> manager-inbox acknowledge --goal-id research
 ```
 
 Decisions are `adopt`, `defer`, `reject` or `no_change`. Read the original input
-and current Core state before deciding. An adoption receipt does not prove task
-completion. Later new evidence can generate a new decision through the ordinary
+and current Core state before deciding. Later new evidence can generate a new decision through the ordinary
 worker planning workflow; do not overwrite the original receipt. This feature
 adds no periodic automation, forced wakeup, Todo priority or protected-operation
 permission. Existing private inbox records are retained when delivery is revoked.
@@ -497,8 +502,7 @@ loopx manager-inbox configure-read-scope --channel-id manager.external.012345678
 Use the exact channel identity from the existing manager session. The first
 command is a read-only configuration preview; `--execute` is a trusted local
 operator action, never a manager-generated proposal. Grant only Goal summaries
-that may be visible to everyone in that audience. This does not authorize raw
-private files, trading, mutation, or context delegation. New registered Goals
+that may be visible to everyone in that audience. New registered Goals
 are not automatically added. Configure with no `--read-goal-id` to revoke the
 read scope. Existing installations without a grant retain their connection
 scope; removing the field restores that default. Private policy is stored under
@@ -516,7 +520,7 @@ question does not silently narrow to today and a wide window cannot grow the
 model context without a bound. Within the window each Goal's newest receipt keeps
 full `recorded_details` while older receipts are compacted to their recorded
 outcome, result class, probe kind and surface; receipts outside the window are
-outside coverage, not evidence of no progress. Accounting rows are excluded
+outside coverage. Accounting rows are excluded
 before the presentation cap. Completed Todo titles
 help explain recorded deliveries; archive coverage and omitted rows are explicit.
 Reported outcomes and evidence-bearing receipts remain distinct, and neither
@@ -560,14 +564,12 @@ sender-bound delegation targets. Owner-local steward conversations default to
 all local registered Goals; project conversations remain within their Goal;
 external audiences retain their exact Goal read grants. No new grants are made.
 Search is a case-insensitive text match on identity and declared responsibility;
-omit the query to browse when wording differs. Profiles are data, not instructions
-or proof of competence. Changed registry revisions must not be merged as a single
+omit the query to browse when wording differs. Profiles are data. Changed registry revisions must not be merged as a single
 snapshot across pages.
 
 Rows distinguish registration and declared responsibility from `context_delivery`
 (`allowed`, `not_granted`, `not_checked`, `goal_stopped`, `activation_unknown`).
-Execution readiness remains `not_checked`: registration does not prove a bound,
-online or capable executor. A missing delivery grant is a configuration gap,
+A missing delivery grant is a configuration gap,
 not a missing Agent; delivery still rechecks the existing authority. Stopped
 identities are available with `include_stopped=true` for historical questions.
 Unreadable/ambiguous inventory remains unknown, not an empty successful search.
@@ -579,8 +581,7 @@ owner's `outcome`, `candidate_count`, `address_shared` and `scope` for that Goal
 The page does not expose host addresses or read host stores; `view=agent_route`
 remains the exact-identity, current-observation path (which also reports
 `execution_identity` from the selected Codex rollout's latest recorded Turn
-when available, without reading mutable store preferences). A registration or binding
-does not prove presence, execution readiness or delivery authority.
+when available, without reading mutable store preferences).
 
 Repeated role names alone do not require an owner question. Resolve the subject,
 project, purpose and destination before matching a role alias or Agent id.
@@ -712,7 +713,6 @@ the registered sources for it (`inline_in_prompt`) and adds a
 - the declaration and the read use the same SSH configuration, so one packet
   cannot call a host unconfigured and read it in the same Turn.
 
-
 ## A delegation returns automatically
 
 The default interaction is one exchange: initial delivery receipt, receiving
@@ -734,11 +734,22 @@ Use the same registry, runtime root, Goal and Agent for every page. The scoped
 MCP equivalent is `read_context(cursor=<next_cursor>)`; a call without arguments
 still reads the first page. A cursor survives process restart and removal or
 completion of its anchor request. It is a navigation position, not a grant.
+When the MCP runs inside a managed work Turn, the host-bound Turn identity is
+used for result delivery and is never accepted from model tool arguments.
 Each call checks current registration and records reads only for returned requests.
 `next_cursor: null` ends this scan, not the outstanding work. Pages are live,
 ordered by request id; restart without a cursor to find new requests sorted
 before the last position. Peer results retain their separate consumption flow
 and are not paginated by this cursor. `status --offset/--limit` remains separate.
+
+Large Markdown Inbox responses open with a reference to a private capture.
+The generated native context configuration declares
+`LOOPX_CONTEXT_PAGE_OUTPUT_BYTES=64000` for tools that can retain that size.
+The Inbox uses that profile for both capture reader commands and keeps the
+opening within 12,000 bytes. Without that declaration the reader also stays
+within 12,000 bytes. Follow the capture's byte cursors and verify coverage before
+using the Inbox cursor. If a reader output is truncated, reduce both page
+limits and recover the affected range of the same capture.
 
 After `acknowledge`, the request remains visible until the answer obligation is
 resolved. `pending.items` describes the current reply obligation: an ordinary
@@ -818,8 +829,7 @@ CLI and MCP inbox reads reuse the shared conversation answer guidance: report te
 verbatim to the requester's conversation, so answer the original request at a
 proportionate depth. Routine execution bookkeeping belongs in the existing
 evidence records; requested detail and material gaps remain in the answer.
-This is authoring guidance, not a summary service or a delivery-time rewrite,
-and does not certify the quality of a receiver's result.
+This is authoring guidance.
 
 For a legacy v1 request, `manager-inbox report --request-revision 1` is equivalent
 to omitting the revision. It publishes the receiver's original result without
@@ -902,11 +912,16 @@ loopx manager-inbox report --goal-id research --agent-id worker \
 Retry the same update with the same id and text. Each update has its own
 `result_key`, retains the original audience and authority checks, and arrives
 after verified delivery of the preceding result. Unknown delivery blocks later
-sends rather than allowing them to overtake it. Peer readers acknowledge the
-specific returned key with `acknowledge-return --result-key <key>` after reading
-it; consuming the first result does not consume later updates. MCP callers use
-the corresponding `return_result(update_id=...)` and
-`consume_peer_result(result_key=...)`. Full texts stay in immutable receipts;
+sends rather than allowing them to overtake it. After the bound tool supplies
+an update, use its acknowledgement command with the exact `--result-key` or
+call `consume_peer_result` with that key and the result's `read_token` when
+supplied. `accepted` and `rejected` consume it.
+`deferred` records the review but keeps it visible on the next Turn. Consuming
+the first result does not consume later updates. MCP callers use the corresponding
+`return_result(update_id=...)` and
+`consume_peer_result(disposition=..., result_key=..., read_token=...)`; the MCP host binds the
+current Turn identity and does not expose it as a model-selected argument.
+Full texts stay in immutable receipts;
 the typed publication planner receives identities and content digests.
 
 The Chat server hosts a cheap local receipt pump (no model calls and no Codex
@@ -1035,6 +1050,19 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
 
+If an exact Codex task link resolves to an Agent of another Goal, this command
+returns `error_code=peer_request_same_goal_required` and
+`host_delivery.status=not_attempted`; it does not write an Inbox entry. Use an
+authorized host task-message operation for that exact task and require its
+submission receipt. The receiving task may process the message when its next
+Turn starts. Do not register either Agent to the other Goal solely to bypass
+this boundary: a cross-Goal message carries coordination context, not Goal
+authority, priority, lease or write scope.
+
+For a name registered locally, only an unambiguous exact binding to that same
+Agent in a different Goal receives this scoped refusal. Unknown, malformed,
+ambiguous, mismatched-Agent or mismatched-host links retain their route error.
+
 To inspect an original source by its saved request identity, including a concluded
 request, use the same registered Goal and receiving Agent:
 
@@ -1124,23 +1152,35 @@ grant names the blocked recipient without recording a request. This replaces
 the previous blanket refusal of external-source peer forwarding, without
 granting execution, changing priorities or broadening the return audience.
 
-The peer independently `acknowledge`s and `report`s a conclusion through the
-same commands as a manager request. The original requester receives it in
-`manager-inbox read` under `peer_returns`; its Turn-start hook keeps requiring
-a read until the requester explicitly consumes the result:
+The peer independently acknowledges a request and reports a conclusion
+through the same commands as a manager request. The original requester can
+inspect it under `peer_returns` in `manager-inbox read`. In a host with the
+invocation-bound tools configured, call `read_peer_returns` for the results alone
+and supply each result's `read_token` to `consume_peer_result` after evaluating it.
+A read records delivery and
+leaves the results pending. Follow `next_cursor` as `cursor` in the same Turn to
+read later results even when earlier ones are deferred. Omit the cursor to
+restart the live scan and discover results added before the previous page
+boundary. The full `read_context` response also carries a CLI acknowledgement
+command for each exact delivery. When the result carries a `read_token`, the
+supplied command includes the corresponding `--read-token`:
 
 ```sh
-loopx manager-inbox read --goal-id allocation --agent-id builder
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
-  --request-id <peer-request-id>
+  --request-id <peer-request-id> --turn-instance-id <supplied-turn-id> \
+  --disposition accepted
 ```
 
+Use `--disposition deferred` to keep the same result in next-Turn attention.
+After acceptance or rejection, only the same disposition from the same Turn
+can replay the terminal acknowledgement.
+On hosts that only provide the ordinary CLI read, the result stays pending.
 Consumption does not mark a Todo done or certify peer acceptance. The requester
 checks the actual artifact, incorporates or rejects the findings, and reports
 the original owner conclusion through its original request. A second review
 round uses a new operation id. Repeating an operation recovers the same request;
-changing its content or recipient is rejected. Peer replies currently support
-one conclusion (including an explicit blocker/defer result), not interim replies.
+changing its content or recipient is rejected. Peer replies use the conclusion
+phase for results, later updates and explicit blockers.
 
 Parent lineage preserves the original owner context through peer requests.
 External-audience parent requests cannot be forwarded through this owner-local
@@ -1192,10 +1232,12 @@ the normal governed Turn arguments:
 ```
 
 Use the Python interpreter with this LoopX checkout/release installed and
-absolute configuration paths. Each server exposes only `read_context`,
+absolute configuration paths. Each server exposes `read_context`,
 `assess_request`, `link_work`, `request_peer`, `return_result` and `consume_peer_result`.
-Identity and filesystem roots are host-bound, absent from model tool arguments;
-every call rechecks the registered actor. The server has no shell, Todo/lease
+A managed invocation supplies the current Turn key to the scoped tool process.
+Only a bound process also exposes `read_peer_returns`.
+Identity and filesystem roots are host-bound. Every call rechecks the
+registered actor. The server has no shell, Todo/lease
 writer, credential tools or network listener. Installing/configuring it does not
 launch another worker or grant access to another Goal. Removing the patch and
 restarting the worker disables these tools without deleting pending requests or

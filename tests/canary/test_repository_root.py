@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from loopx.canary.maintainability_ratchet import MAINTAINABILITY_REPORT_SCHEMA_VERSION
 from loopx.canary.planner import DEFAULT_CATALOG_PATH
 from loopx.canary.premerge import build_premerge_validation_gate
 from loopx.canary.runner import build_canary_smoke_suite_run, normalize_canary_command
@@ -220,20 +222,17 @@ def test_concurrent_checkout_roots_do_not_share_process_state(tmp_path):
 _CLI_BUDGET_SCRIPT = "examples/control_plane/cli-output-budget-regression-smoke.py"
 _CLI_BUDGET_ENV = ("LOOPX_CLI_OUTPUT_BASE_REF", "LOOPX_CLI_OUTPUT_MAIN_REF")
 _NEIGHBOR_SCRIPT = "examples/semantic-vocabulary-drift-smoke.py"
+_RATCHET_SCRIPT = "examples/control_plane/control-plane-maintainability-ratchet-smoke.py"
 _AMBIENT_REFS = ("ambient-base", "ambient-main")
 
 
-def _cli_budget_checkout(path: Path) -> Path:
+def _cli_budget_checkout(path: Path, *, ratchet_source: str | None = None) -> Path:
     repo = _checkout(path)
     probe = (
         "import json, os\n"
         f"print(json.dumps([os.environ.get(name) for name in {_CLI_BUDGET_ENV!r}]))\n"
     )
-    for script in (
-        _NEIGHBOR_SCRIPT,
-        "examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
-        _CLI_BUDGET_SCRIPT,
-    ):
+    for script in (_NEIGHBOR_SCRIPT, _RATCHET_SCRIPT, _CLI_BUDGET_SCRIPT):
         child = repo / script
         child.parent.mkdir(parents=True, exist_ok=True)
         fail = (
@@ -241,7 +240,10 @@ def _cli_budget_checkout(path: Path) -> Path:
             "    raise SystemExit(7)\n"
             if script == _CLI_BUDGET_SCRIPT else ""
         )
-        child.write_text(probe + fail, encoding="utf-8")
+        source = probe + fail
+        if script == _RATCHET_SCRIPT and ratchet_source is not None:
+            source = ratchet_source
+        child.write_text(source, encoding="utf-8")
     metrics = Path("loopx/canary/module_metric_baseline.json")
     (repo / metrics).parent.mkdir(parents=True)
     (repo / metrics).write_bytes((DEFAULT_CATALOG_PATH.parents[2] / metrics).read_bytes())
@@ -290,6 +292,74 @@ def test_premerge_scopes_cli_budget_base_to_its_child(tmp_path, base_args, expec
     assert payload["validation_summary"]["failure_count"] == int(child_exit != 0)
     if child_exit:
         assert response.returncode != 0 and payload["gate"]["merge_gate_passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("exit_statement", "diagnostic", "findings", "returncode", "advisory"),
+    [
+        pytest.param(
+            "os.kill(os.getpid(), signal.SIGTERM)", "Scanning started", (), -signal.SIGTERM, False,
+            marks=pytest.mark.skipif(os.name != "posix", reason="POSIX signal return code"),
+            id="signal",
+        ),
+        pytest.param("raise SystemExit(2)", "Invalid invocation", (), 2, False, id="invalid-invocation"),
+        pytest.param("raise SystemExit(1)", "Scanning started", (), 1, False, id="partial-output"),
+        pytest.param(
+            "raise SystemExit(1)", "path=loopx/unrelated.py", ("loopx/unrelated.py",), 1, True,
+            id="unrelated-report",
+        ),
+        pytest.param(
+            "raise SystemExit(1)", "path=loopx/control_plane/testing/cli_output_budget.py",
+            ("loopx/control_plane/testing/cli_output_budget.py",), 1, False, id="changed-path-report",
+        ),
+        pytest.param(
+            "raise SystemExit(1)", "path=loopx/fixture_19.py",
+            ("loopx/control_plane/testing/cli_output_budget.py", *(
+                f"loopx/fixture_{index}.py" for index in range(20)
+            )), 1, False, id="changed-path-outside-output-tail",
+        ),
+    ],
+)
+def test_premerge_ratchet_advisory_requires_completed_unrelated_failure(
+    tmp_path: Path,
+    exit_statement: str,
+    diagnostic: str,
+    findings: tuple[str, ...],
+    returncode: int,
+    advisory: bool,
+) -> None:
+    output = diagnostic
+    if findings:
+        output = json.dumps({
+            "schema_version": MAINTAINABILITY_REPORT_SCHEMA_VERSION,
+            "ok": False,
+            "unreviewed_count": len(findings),
+            "unreviewed_findings": [{"id": f"fixture-{index}", "path": path}
+                                    for index, path in enumerate(findings)],
+            "magnitude_regression_count": 0,
+            "magnitude_regressions": [],
+            "invalid_exceptions": [],
+            "stale_exceptions": [],
+        })
+    repo = _cli_budget_checkout(
+        tmp_path / "repo",
+        ratchet_source=f"import os, signal\nprint({output!r}, flush=True)\n{exit_statement}\n",
+    )
+    response = run_source_cli(
+        ["--format", "json", "canary", "premerge", "--from-git-diff", "--tier", "quick",
+         "--no-progress", "--git-diff-base", "integration/base"],
+        cwd=repo, check=False, timeout=60,
+    )
+    assert response.stdout, response.stderr
+    payload = json.loads(response.stdout)
+    ratchet = _check_for_script(payload["catalog_run"], _RATCHET_SCRIPT)
+    assert ratchet["returncode"] == returncode
+    assert diagnostic in ratchet["stdout_tail"]
+    if len(findings) > 1:
+        assert findings[0] not in ratchet["stdout_tail"]
+    assert payload["gate"]["merge_gate_passed"] is advisory
+    assert (response.returncode == 0) is advisory
+    assert ratchet["status"] == ("advisory_inherited_failure" if advisory else "failed")
 
 
 def test_cli_budget_children_keep_independent_bases_and_standalone_defaults(tmp_path, monkeypatch):

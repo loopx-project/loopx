@@ -32,7 +32,7 @@ developer job
   -> current implementation and validation
 ```
 
-This chapter is a protocol-first source map. It is not a complete API catalog, and it does not ask you to memorize current function names. Its job is to help you identify the contract your Issue or PR will change.
+This chapter is a protocol-first source map. Its job is to help you identify the contract your Issue or PR will change.
 
 ## What you should learn
 
@@ -122,11 +122,11 @@ Start with:
 - `event_sourced_state_contract_v0` is retired (historical design). Current Todo state follows the
   selected File/SQLite authority — see [the state substrate](state-substrate.md); run history and rollout
   events keep their own record responsibilities;
-- [`active_state_structured_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
+- [`active_state_structured_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/active-state-structured-projection-v0.md)
   for the typed read-only projection over the active-state workbench;
-- [`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+- [`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
   for read-only Todo, Gate, dependency, validation, and handoff relations;
-- [`local_state_write_correctness_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
+- [`local_state_write_correctness_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/local-state-write-correctness-v0.md)
   for revisions, locks, idempotency keys, conflicts, and durable local writes.
 
 Typical jobs:
@@ -146,13 +146,13 @@ This family answers:
 
 Start with:
 
-- [`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+- [`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
   for Gate kind, granularity, coverage, and fail-closed behavior;
-- [`goal_vision_replan_contract_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)
+- [`goal_vision_replan_contract_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/goal-vision-replan-contract-v0.md)
   for per-Agent Vision, checkpoints, replan, and bounded routing;
-- [`peer_agent_runtime_v1`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)
+- [`peer_agent_runtime_v1`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/peer-agent-runtime-v1.md)
   for equal peer identity, claims, and continuation;
-- [`host_integration_surface_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)
+- [`host_integration_surface_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)
   for Host capabilities, controlled writes, and CLI-equivalent fallback.
 
 Typical jobs:
@@ -173,13 +173,13 @@ This family answers:
 
 Start with:
 
-- [`turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
+- [`turn_envelope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
   for a bounded next-action read model over an already computed quota decision;
-- [`protocol_action_packet_decision_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/protocol-action-packet-decision-v0.md)
+- [`protocol_action_packet_decision_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/protocol-action-packet-decision-v0.md)
   for action-packet decision semantics;
-- the [Status Data Contract](https://github.com/huangruiteng/loopx/blob/main/docs/status-data-contract.md)
+- the [Status Data Contract](https://github.com/loopx-project/loopx/blob/main/docs/status-data-contract.md)
   for status, attention, and operator-facing boundaries;
-- [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+- [State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
   for composition among Todo, Gate, quota, evidence, and scheduler state.
 
 The core contract is a precedence-ordered final result beyond one `should_run` boolean:
@@ -202,15 +202,15 @@ This family answers:
 
 Start with:
 
-- [`loopx_turn_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
+- [`loopx_turn_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
   for the experimental decide, execute, validate, writeback, and spend transaction;
-- [`session_runtime_loopx_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/session-runtime-loopx-projection-v0.md)
+- [`session_runtime_loopx_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/session-runtime-loopx-projection-v0.md)
   for the read-only first-screen projection from an external runtime into LoopX;
-- [`session_runtime_controlled_writeback_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/session-runtime-controlled-writeback-v0.md)
+- [`session_runtime_controlled_writeback_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/session-runtime-controlled-writeback-v0.md)
   for the draft boundary around controlled session-runtime metadata writeback;
-- [`host_integration_surface_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)
+- [`host_integration_surface_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/host-integration-surface-v0.md)
   for typed Host requests, results, capabilities, and fallback;
-- [`rollback_packet_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/rollback-packet-v0.md)
+- [`rollback_packet_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/rollback-packet-v0.md)
   for compensation, rollback, and evidence lineage.
 
 Keep three responsibilities separate:
@@ -231,13 +231,13 @@ This family answers:
 
 Start with:
 
-- [`model_behavior_qualification_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/model-behavior-qualification-v0.md)
+- [`model_behavior_qualification_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/model-behavior-qualification-v0.md)
   for cases where real-model behavior adds signal beyond deterministic checks;
-- [Benchmark research RFC](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
+- [Benchmark research RFC](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md)
   for matched research arms and independent outcome evidence;
-- [Testing and Quality](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md)
+- [Testing and Quality](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md)
   for unit, contract, smoke, decision replay, canary, and release Gates;
-- [Public/Private Boundary](https://github.com/huangruiteng/loopx/blob/main/docs/public-private-boundary.md)
+- [Public/Private Boundary](https://github.com/loopx-project/loopx/blob/main/docs/public-private-boundary.md)
   for evidence that may enter the public repository.
 
 Quality is not a final testing appendix. The protocol card's forbidden outcomes and expected receipt should determine the validation design before implementation.
@@ -257,7 +257,7 @@ Protocols define cross-module contracts. Bounded contexts identify which change 
 | `handoff` | Cross-runtime handoff, review packets, and owner routes |
 | `work_items` | Attention, selection, and operator-facing work read models |
 
-On the `v0.5.4` migration baseline, bounded context and implementation language are separate dimensions. Complete transactions under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` now have TypeScript semantic owners. Examples include Vision refresh, the local task-lease lifecycle, quota spend/void/monitor-poll commit, and receipt-bound scheduler follow-up. Adjacent Python facade modules may serve only as CLI transport, legacy projection, an explicit external Provider or Host effect, or writeback that has not migrated. Read the shipped baseline in the [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) and trace the active request handler and caller before assigning ownership. A Python entrypoint does not prove that Python still owns the decision.
+On the `v0.5.4` migration baseline, bounded context and implementation language are separate dimensions. Complete transactions under `goals`, `todos`, `quota`, `scheduler`, `work_items`, and `turn_driver` now have TypeScript semantic owners. Examples include Vision refresh, the local task-lease lifecycle, quota spend/void/monitor-poll commit, and receipt-bound scheduler follow-up. Adjacent Python facade modules may serve only as CLI transport, legacy projection, an explicit external Provider or Host effect, or writeback that has not migrated. Read the shipped baseline in the [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) and trace the active request handler and caller before assigning ownership.
 
 Ask:
 
@@ -296,7 +296,7 @@ Treat repository routes as owners, not as automatic placement from a directory n
 | Operator projection | Status, frontstage, or projection owner; a renderer only consumes the typed model |
 | Documentation and validation | Owning protocol document, `tests/`, `examples/`, or a public-safe fixture |
 
-Current capability packages own their documentation and register through `catalog_entry.py`. Before contributing, run `loopx capability list --format json` and `loopx capability show <capability-id> --format json` to confirm that the capability is registered and to read its entry commands, Provider boundary, and durable validation. A directory or README alone does not prove that a capability is shipped.
+Current capability packages own their documentation and register through `catalog_entry.py`. Before contributing, run `loopx capability list --format json` and `loopx capability show <capability-id> --format json` to confirm that the capability is registered and to read its entry commands, Provider boundary, and durable validation.
 
 Code under `loopx/capabilities/<name>/` is not automatically a public Capability; it still needs explicit registration and a real caller contract. `loopx/extensions/` is not a bucket for every external integration; it owns generic Extension lifecycle, while an independently versioned Provider belongs in its delivery package. Keep private helpers with the nearest owner instead of promoting them to a Capability or Extension merely because they span several files.
 
@@ -317,7 +317,7 @@ If a document needs twenty function names to explain one behavior, it is probabl
 Do not infer public work from maintainer-local state. Use public surfaces:
 
 1. Read
-   the [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md).
+   the [Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md).
 2. Choose a `Starter`, `Focused`, or already-agreed design task.
 3. Read the protocols and validation named by that task.
 4. State the smallest intended slice in the linked Issue.
@@ -376,7 +376,7 @@ scheduler, storage system, or automatic lease lifecycle.
 
 These records are learning examples, not copies of current task state. Before participating, reopen the
 Issue to confirm that it has not been closed, redirected, or claimed, and use the
-[Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+[Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 as the current public entrypoint. For `Maintainer-owned` work, ask for an independent helper slice instead
 of reproducing the active implementation in parallel.
 <!-- community-casebook:signal-to-bounded-work:end -->
@@ -389,7 +389,7 @@ This section and its Chinese counterpart are semantic mirrors.
 <!-- community-casebook:rfc-status -->
 
 Start with the
-[RFC Index](https://github.com/huangruiteng/loopx/blob/main/docs/architecture/rfcs/README.md)
+[RFC Index](https://github.com/loopx-project/loopx/blob/main/docs/architecture/rfcs/README.md)
 and read the formal status. `Accepted`, `Active research`, `Draft`, and `Draft integration proposal`
 permit different actions. The existence of an RFC or Discussion does not prove that an implementation is
 shipped, and it does not automatically create claimable work.
@@ -411,7 +411,7 @@ the proposed directory tree looks clean. Ask:
 
 A useful RFC review returns an explicit disposition such as `accept`, `revise`, `require_evidence`, or
 `defer`, plus an owner, next artifact, and review condition. Cross-direction questions may enter an
-[Open Strategy Review](https://github.com/huangruiteng/loopx/blob/main/docs/community/open-strategy-reviews.md).
+[Open Strategy Review](https://github.com/loopx-project/loopx/blob/main/docs/community/open-strategy-reviews.md).
 A meeting does not replace a versioned RFC, bounded Issue, PR review, or maintainer authority.
 <!-- community-casebook:rfc-review-lab:end -->
 
@@ -474,7 +474,7 @@ Before entering the source, confirm these hold on their own:
 1. **The owner of a rule is the module that decides legal transitions, not the module that first prints words about it.** If you cannot name the protected invariant, the change is not yet located.
 2. **A PR description carries one complete causal chain: source, invariant, decision, projection or effect, receipt, validation.** A slice that can only list function names cannot be reviewed.
 3. **Documents describe responsibility ownership; code describes current behavior.** When they conflict, pick the authority by conflict type and make this PR update the other side.
-4. **Code under `loopx/capabilities/<name>/` does not prove the Capability is shipped.** Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
+4. Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
 5. **Placement precedes implementation.** The capability id, provider id, and built-in or extension-delivered choice come with a written reason before the first line of code.
 6. **Tasks come from public entrypoints.** Public Contributor Tasks, Issues, and fixtures are the only source of work you can participate in; live active state and maintainer-local judgment are not.
 

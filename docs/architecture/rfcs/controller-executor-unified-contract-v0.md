@@ -223,10 +223,10 @@ management tree.
 
 | Role / owner | Decisions and behavior it owns | Responsibilities it does not own |
 | --- | --- | --- |
-| Router / steward | Understand intent, discover context-affine capable units, propose reuse/creation, pass revisions, synthesize results and cross-task tradeoffs | Micromanage worker tools, claim/accept for receivers, copy Goal task stores or budgets |
-| Controller / within a unit | Select work from Goal, planning horizon and evidence; maintain continuity, discover/inspect worker sessions, read/write and validate in the shared environment, interact with user/router, assess correction and acceptance, call Core | Become another authority or replace durable work with chat notes; approve every local tool step |
-| Worker / within a unit | Autonomously use tools, experiment, produce artifacts and report evidence/questions within admitted scope | Consume Core packets, author settlement or directly hold Core write access |
-| Core + managed execution + Host adapter | Existing typed rules, persistence, identity, dispatch, observation, stop and recovery | Infer authority/completion from prose or choose domain solutions for the model |
+| Router / steward | Understand intent, discover context-affine capable units, propose reuse/creation, dispatch scoped `collaboration_brief_v0` contracts, track bounded `remaining_work` and typed `resume_when` continuation predicates, synthesize results and close the original-route async inbox without polling loops | Micromanage worker tools, poll workers in loops, claim/accept for receivers, copy Goal task stores or budgets |
+| Controller / within a unit | Select work from Goal, planning horizon and evidence; emit/consume upward adaptive stride and receipt-gated context policy proposals (`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`); maintain continuity, discover/inspect worker sessions, read/write and validate in the shared environment, interact with user/router, assess correction and acceptance, call Core | Become another `AuthorityStore` writer, bypass CAS/lease fencing, replace durable work with chat notes, or approve every local tool step |
+| Worker / within a unit | Autonomously use tools, experiment, produce patches/artifacts and report evidence/questions inside an isolated **sandboxed executor worktree** within admitted scope | Consume Core packets, author settlement, access hidden verifiers/credentials, or directly hold Core write access |
+| Core (`AuthorityStore` + CAS + lease) + Host adapter | Sole deterministic owner of `AuthorityStore` transactions, conditional revision `CAS`, single-writer `claim/lease` fencing, once-only receipts, default-deny ACLs, sandbox isolation, observation, stop and recovery | Infer authority/completion from prose, rewrite active KV-cache prefixes without receipts, or choose domain solutions for the model |
 
 The router may answer simple questions from sufficient existing evidence without
 creating a unit. Prefer reuse of an Agent whose current context and authority fit;
@@ -235,6 +235,24 @@ ambiguous bindings rather than taking over by title similarity or recent presenc
 A router's priority is a request: the controller assesses local commitments and
 dependencies, returns adoption, deferral or refusal with reasons, and Core applies
 legal changes.
+
+Keep three architectural planes strictly separated across every unit:
+
+1. **Deterministic Kernel (`AuthorityStore` + CAS + single-writer lease ownership):**
+   holds authoritative Goal, Todo, `claim/lease`, generation fence, `remaining_work` /
+   `resume_when`, and once-only settlement receipts under default-deny ACLs and
+   out-of-tree deterministic validation gates.
+2. **Sandboxed Executor Worktrees:** host-enforced execution sandboxes (`linked
+   worktrees` / containers with normalized patch delivery and credential exclusion)
+   where workers experiment freely without Core credentials or write authority;
+   resetting or losing a sandbox leaves `AuthorityStore` state uncorrupted.
+3. **Upward Adaptive Stride and Context Policy Decisions:** sits beside the
+   controller and `control_plane/work_items` / `progressive_context.ts` to select
+   `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` proposals
+   ([History working sets §5.1](history-working-set-context-policy-v0.md#51-one-projection-owner),
+   [Joint decisions §5.9](target-yardstick-stride-decisions-v0.md#policy-evolution));
+   these proposals remain strictly advisory until Core validates deterministic
+   receipts, CAS preconditions, and budget bounds.
 
 <a id="agent-binding-unit"></a>
 
@@ -387,9 +405,14 @@ dependency, user-action, budget, stop or terminal condition remains effective;
 otherwise useful authorized work must not wait for the user to say “continue”.
 
 This logical loop is event-driven, not a blocking wait that occupies the
-controller session. Persist dispatch, observations, pending assessment and
-continuation through their existing owners. The host/runtime resumes eligible
-processing after a result or recorded wake; it does not keep a model polling.
+controller session. Persist dispatch, observations, pending assessment, bounded
+`remaining_work`, typed `resume_when` continuation predicates (`todo_done`,
+`pr_merged`, `capacity_available`, `monitor_changed`, `resume_at`), and
+continuation state inside the Core `AuthorityStore` owner. The host/runtime
+wakes eligible processing only when a verified result, `collaboration_brief_v0`
+return, or satisfied `resume_when` trigger arrives; it **never keeps a steward or
+controller model running polling loops**, and closes the steward async inbox
+back to the original requester upon completion or actionable blocker.
 On recovery, reconcile the original attempt and unfinished decision/effect before
 continuing, without dispatching another worker merely to restart the loop.
 
@@ -713,10 +736,14 @@ additional design choice here is **where decisions and attention are spent**:
 | What the executor must know | Deliver the task's full constraints, relevant contrary evidence, original materials and unresolved reads; explain the decision in task language | A summary is not an alternate contract or proof of source reading. Unknown relevance requires more material before dependent work |
 | What a result changes | Distinguish a finding, verified artifact, blocked attempt and accepted outcome; decide whether to continue, investigate or replan | Independent validation and current Core receipts, rather than either session's narrative, determine acceptance and settlement |
 
-Keep three operations separate. The deterministic composition owner combines
-domain facts without inventing policy; the existing codec encodes an exactly
-recoverable full/delta input; the controller performs task-dependent semantic
-selection and reasoning. A natural-language task can omit irrelevant control
+Keep three operations separate. The deterministic composition and `AuthorityStore`
+owner combines domain facts, enforces CAS/single-writer lease fencing, and gates
+`FoldToReceipt` / `EpochReset` transitions on deterministic receipts without
+inventing policy; the existing codec encodes an exactly recoverable full/delta
+input while preserving monotonic `KeepRaw` KV-cache prefixes between epochs; the
+controller performs task-dependent semantic selection, reasoning, and upward
+`{grow, switch, verify}` stride proposals over the isolated worker's sandboxed
+worktree results. A natural-language task can omit irrelevant control
 syntax and cannot promise bit-for-bit equivalence. Its adequacy is tested by
 preserved constraints, actual executor decisions and accepted outcomes, with
 the original authorized material reachable. Do not replace these operations
@@ -1372,6 +1399,15 @@ Separate shared-owner prerequisites, producer/capture cutover, reader recovery
 and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+Public-distribution isolation now reuses the runtime artifact metadata owner:
+runtime qualification observes the installed ordinary writer, desktop packaging
+observes its archived writer, and publication requires their declared supported
+contract to match. The existing quota-packet default remains supported; the
+unqualified complete-contract default cannot pass on installation checks alone.
+This does not qualify §9 outcomes/costs, replace an installed writer, add another
+current producer or retire historical readers. Extending the supported profile
+still requires the original adoption evidence. See the [release boundary](../../product/release-readiness.md).
 
 Native launch rechecks use the original `SettlementIdentity` as their sole
 Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing

@@ -343,7 +343,7 @@ def command_md() -> str:
     py = _shell_literal(_python_cmd(), powershell=False)
     return (
         "---\n"
-        "description: loopx goal-mode setup (NOT Claude Code's built-in /goal). "
+        "description: loopx goal-mode setup. "
         "`/loopx <task>` sets up a goal + writes .claude/loop.md; drive the loop with native /loop. "
         "bare /loopx = arm; off | status.\n"
         "argument-hint: <task to do>  |  (no args = arm)  |  off  |  status\n"
@@ -355,8 +355,7 @@ def command_md() -> str:
         "result. Show it to the user VERBATIM and STOP. Do NOT do any work, claim todos, write "
         "files, or loop here: the WORK runs when the user types Claude Code's native `/loop` (which "
         "executes `.claude/loop.md`). Do not summarize a multi-line `status` detail block into one line.\n\n"
-        "NOTE: this is `/loopx` (loopx control-plane SETUP), NOT a runtime and NOT Claude Code's "
-        "built-in `/goal`. The run loop is native `/loop`; loopx provides the deterministic "
+        "The run loop is native `/loop`; loopx provides the deterministic "
         "`should_run` protocol.\n"
     )
 

@@ -71,7 +71,7 @@ def test_accepted_report_fixture_supplies_the_content_it_claims_to_have_read():
 
 
 def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
-    from loopx.chat_agent import CONVERSATION_INTENT_RESOLUTION_INSTRUCTION, _turn_prompt
+    from loopx.chat import CONVERSATION_INTENT_RESOLUTION_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
 
     prompt = _turn_prompt("Continue.")
@@ -84,7 +84,7 @@ def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
 
 
 def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
-    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
 
     prompt = _turn_prompt("Save the supplied source using this project's rules.", runtime_profile="trusted_owner")
@@ -100,7 +100,7 @@ def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
 
 @pytest.mark.parametrize("existing_workspace", [False, True])
 def test_managed_owner_instructions_and_turn_agree_on_completion(tmp_path, existing_workspace):
-    from loopx.chat_agent import _turn_prompt
+    from loopx.chat import _turn_prompt
     from loopx.chat_manager import manager_workspace
 
     if existing_workspace:
@@ -117,7 +117,7 @@ def test_managed_owner_instructions_and_turn_agree_on_completion(tmp_path, exist
 
 @pytest.mark.parametrize("mode", ["restricted", "project", "execution"])
 def test_direct_manager_work_does_not_widen_other_conversations(mode):
-    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
 
     kwargs = {"runtime_profile": "restricted"}
@@ -292,7 +292,7 @@ def test_review_evidence_retains_brief_without_provider_payload():
 def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_owner_text(
     tmp_path, profile, custom_owner_instructions, previous_marker
 ):
-    from loopx.chat_agent import _turn_prompt
+    from loopx.chat import _turn_prompt
     from loopx.chat_manager import manager_workspace, MANAGED_SKILL_CURRENT_MARKER
 
     workspace = manager_workspace(tmp_path, runtime_profile=profile)
@@ -316,6 +316,7 @@ def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_own
     assert "do not end at agreement or design advice" in turn
     assert "never resend merely because reading or adoption is unrecorded" in turn
     assert "A role alias or matching Agent id is a discovery lead" in turn
+    assert "Compare ALL plausible existing work items before selecting" in turn
     assert "no new delivery audience" in skill.read_text()
 
 

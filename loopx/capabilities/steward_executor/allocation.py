@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 from ...reasoning_effort import REASONING_EFFORTS
 from .machine_defaults import (
     FLEXIBLE_SELECTION_POLICY,
     STEWARD_SELECTION_POLICIES,
 )
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION = "manager_executor_allocation_v0"
 MANAGER_ALLOCATION_REASON_USER_EXPLICIT = "user_explicit"
@@ -66,8 +68,8 @@ _NONEMPTY_TEXT_FIELDS = (
 
 
 def normalize_manager_executor_allocation(
-    raw: Mapping[str, Any],
-) -> dict[str, Any]:
+    raw: PayloadView,
+) -> Payload:
     """Validate the safe, restart-stable allocation stored on a Session."""
 
     unknown = sorted(set(raw) - _FIELDS - _CONFIGURED_FIELDS)
@@ -86,7 +88,7 @@ def normalize_manager_executor_allocation(
             f"{MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION}"
         )
 
-    normalized = dict(raw)
+    normalized: Payload = dict(raw)
     configured_fields = set(raw) & _CONFIGURED_FIELDS
     if configured_fields and configured_fields != _CONFIGURED_FIELDS:
         raise ValueError("manager_executor_allocation must capture both configured model fields")
@@ -95,8 +97,8 @@ def normalize_manager_executor_allocation(
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"manager_executor_allocation.{field} must be null or non-empty")
         normalized[field] = value.strip() if isinstance(value, str) else None
-    if (normalized.get("configured_reasoning_effort") is not None
-            and normalized["configured_reasoning_effort"] not in REASONING_EFFORTS):
+    configured_effort = normalized.get("configured_reasoning_effort")
+    if configured_effort is not None and configured_effort not in REASONING_EFFORTS:
         raise ValueError("manager_executor_allocation.configured_reasoning_effort is unsupported")
     for field in _NONEMPTY_TEXT_FIELDS:
         value = raw.get(field)
@@ -165,7 +167,7 @@ def normalize_manager_executor_allocation(
 
 
 def manager_executor_model(
-    raw: Mapping[str, Any] | None,
+    raw: PayloadView | None,
 ) -> dict[str, str] | None:
     """Project the provider model fields from one persisted allocation."""
 
@@ -179,8 +181,8 @@ def manager_executor_model(
 
 
 def manager_executor_session_fields(
-    raw: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+    raw: PayloadView | None,
+) -> Payload:
     """Persist a validated allocation without leaking its shape into runtime code."""
 
     return (
@@ -190,10 +192,19 @@ def manager_executor_session_fields(
     )
 
 
-def restored_executor_model(session: Mapping[str, Any]) -> Mapping[str, Any] | None:
+def restored_executor_model(session: PayloadView) -> PayloadView | None:
     """Restore the model binding for manager and legacy LoopX-tool Sessions."""
 
     allocation = session.get("manager_executor_allocation")
     if isinstance(allocation, Mapping):
-        return manager_executor_model(allocation)
-    return session.get("loopx_executor") if session.get("loopx_tools") else None
+        if allocation.get("schema_version") == MANAGER_EXECUTOR_ALLOCATION_SCHEMA_VERSION:
+            return manager_executor_model(allocation)
+        return None
+    if allocation is not None:
+        return None
+    legacy_executor = session.get("loopx_executor")
+    return (
+        legacy_executor
+        if session.get("loopx_tools") and isinstance(legacy_executor, Mapping)
+        else None
+    )

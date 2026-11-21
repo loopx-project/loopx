@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.chat_agent import CodexChatAgentSession  # noqa: E402
+from loopx.control_plane.collaboration.peers import read_inbox  # noqa: E402
 from loopx.control_plane.effect_runtime import restart_effect_runtime  # noqa: E402
 
 
@@ -54,7 +55,7 @@ def qualify(workspace: Path, *, codex_bin: str, codex_home: Path) -> dict:
         "acceptance": ["Allocated plus reserved equals demand", "Head and digest match"],
         "return_requirement": "Return the verdict, exact head and artifact digest to requester",
     }), encoding="utf-8")
-    env = {**os.environ, "LOOPX_CODEX_HOMES": str(codex_home)}
+    env = {**os.environ, "LOOPX_CODEX_HOMES": str(codex_home), "LOOPX_USAGE_PING": "0"}
 
     def cli(agent, action, *args, ok=True):
         process = subprocess.run([sys.executable, "-m", "loopx.cli",
@@ -170,15 +171,23 @@ def qualify(workspace: Path, *, codex_bin: str, codex_home: Path) -> dict:
         def return_handler(name, arguments, identity):
             assert identity["thread_id"] == requester_id
             calls.append(name)
+            # The App server adapter supplies the verified active Turn.
+            turn_instance_id = identity["host_turn_id"]
             if name == "peer_return_read":
-                result = cli("requester", "read")
+                result = read_inbox(
+                    runtime, registry, "peer-qualification", "requester",
+                    workspace=workspace, turn_instance_id=turn_instance_id,
+                )
                 item = next(item for item in result["peer_returns"]["items"]
                             if item["request_id"] == rid)
                 assert item["text"] == f"ACCEPT head={head} sha256={digest}"
                 return {"ok": True, "result": item}
             if name == "peer_return_consume":
                 assert "peer_return_read" in calls
-                return cli("requester", "acknowledge-return", "--request-id", rid)
+                return cli(
+                    "requester", "acknowledge-return", "--request-id", rid,
+                    "--turn-instance-id", turn_instance_id, "--disposition", "accepted",
+                )
             raise ValueError("unsupported qualification tool")
 
         requester.bound_tool_handler = return_handler

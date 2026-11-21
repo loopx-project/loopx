@@ -93,7 +93,7 @@ curl -fsS http://127.0.0.1:8767/status.json
    要让 Agent 继续验证或修改代码，再在原 Goal 中说明新增范围与权限，沿既有流程处理。
 
 跑通的标志是：找到了正确的项目、Agent 返回了有依据的说明、你能核对它的结果。
-不是只看到一张 Goal 卡片或“已完成”标签。没有可用执行器、目录不可用或来源只读时，
+没有可用执行器、目录不可用或来源只读时，
 先处理页面报告的具体问题，不把本机新建 Goal 当作远端工作的替代。
 
 **准备与费用：** 本地页面与 Agent 执行是两件事。创建首轮或发送执行任务会使用所选
@@ -108,13 +108,12 @@ for the project's documented start/test commands and their file references,
 without running tests or changing files. Inspect the returned references rather
 than treating a created card as a completed result. Reuse an existing Goal for
 the same work. Agent execution uses the selected host's allowance; recurring
-work adds wakeup/checking costs. Neither opening the page nor creating a Goal
-proves that its host is active or that its result passes acceptance.
+work adds wakeup/checking costs.
 
 ### 在原对话执行已检查的任务 / Run the checked original task
 
 需要修改文件时，在创建预览中明确选择「确认后允许修改工作区」，核对其显示的
-整个工作目录范围，再确认原请求。只读选择不授予文件写入；当前 Codex 入口不会
+整个工作目录范围，再确认原请求。当前 Codex 入口不会
 把单个文件或子目录授权扩大成整个工作区。首次回答及普通追问保持只读。
 
 ![桌面确认工作区修改范围](../assets/personal-workspace/goal-creation-workspace-review-desktop.webp)
@@ -153,7 +152,7 @@ remains retryable. Once allowance is ready, retry the original creation with
 its retained requirements and permission choice instead of creating another Goal.
 
 这些当前使用图展示打包 UI 和真实本地后端；示例中的模型回答与文件编辑由脚本
-提供，用于说明确认范围，不代表真实模型、安装版或完整目标已经通过验收。
+提供，用于说明确认范围。
 These current guide images show the packaged UI with a real local backend and
 scripted model replies/editing. They explain the confirmation scope and do not
 certify live-model, installed-runtime or full-goal acceptance.
@@ -167,7 +166,7 @@ certify live-model, installed-runtime or full-goal acceptance.
 LoopX 通过本机已安装的命令行工具驱动 Agent（Codex、Claude Code、Kiro CLI），或通过 API 密钥。
 如果这台机器上一个都没有就绪，管家总览会在顶部说明原因，逐项列出缺什么（未在 PATH 中找到的命令、
 未设置的环境变量），并提供「重新检查」和「安装指引」。安装并登录后点「重新检查」，页面重新读取
-服务的运行环境目录并回读结果；本页不会安装任何东西，也不授予任何权限。打开 Goal 对话时，如果选中的
+服务的运行环境目录并回读结果；本页不会安装任何东西。打开 Goal 对话时，如果选中的
 运行环境在本机不可用，输入框上方会给出同样的说明和重新检查。
 执行环境缺失不影响管家和 Goal 中的「仅查状态」：它保存原问题与状态回答，不启动 Agent。
 没有该选项的项目对话会明确拒绝未就绪的执行路线，并保留未发送的草稿。
@@ -270,7 +269,7 @@ Markdown links keep their readable labels instead of unusable local destinations
 status, proposals and gates still redact entire local paths. This changes answer
 presentation, not read or write authority.
 
-管家与 Goal 的前端对话共用运行视图，适用于查询、编码、投研等各种任务：回答下方显示当前正在做的一步，例如「正在读取 notes.md」。使用 Codex 执行器时，展开「执行过程」可逐步查看思考、读取、搜索、运行的命令、调用的工具和修改的文件；同一步的开始与结束合并为一行，失败的步骤标出退出码，点击一行可查看完整命令、改动文件列表或思考内容。思考内容仅在模型向宿主公开时显示（有的模型只给出思考用时）；不显示命令输出、工具参数与结果或文件改动内容，项目内路径显示为相对路径，其余本机路径和疑似凭据会被隐藏。「完成」只表示该步结束，不代表检查通过。这些步骤只保存在本机、仅所有者可读的会话回放记录中；回合结束超过 24 小时后，下次启动 LoopX Chat 时清理。其他执行器继续显示「最近活动」中的最近六条记录。尚未收到活动时保留等待提示，不根据等待时长推测执行进度。
+管家与 Goal 的前端对话共用运行视图，适用于查询、编码、投研等各种任务：回答下方显示当前正在做的一步，例如「正在读取 notes.md」。使用 Codex 执行器时，展开「执行过程」可逐步查看思考、读取、搜索、运行的命令、调用的工具和修改的文件；同一步的开始与结束合并为一行，失败的步骤标出退出码，点击一行可查看完整命令、改动文件列表或思考内容。思考内容仅在模型向宿主公开时显示（有的模型只给出思考用时）；不显示命令输出、工具参数与结果或文件改动内容，项目内路径显示为相对路径，其余本机路径和疑似凭据会被隐藏。「完成」只表示该步结束。这些步骤只保存在本机、仅所有者可读的会话回放记录中；回合结束超过 24 小时后，下次启动 LoopX Chat 时清理。其他执行器继续显示「最近活动」中的最近六条记录。尚未收到活动时保留等待提示，不根据等待时长推测执行进度。
 
 ![运行中的回答显示当前活动、最近活动和中断本轮](../assets/personal-workspace/conversation-activity-desktop.png)
 
@@ -278,7 +277,7 @@ presentation, not read or write authority.
 
 The steward and Goal conversations share the same frontend activity view across task types. The reply shows the step in progress, such as "Reading notes.md". With the Codex executor, expand **Work steps** to follow each thought, read, search, command, tool call and file edit; a step's start and end share one row, failures show their exit code, and clicking a row reveals the full command, the changed files or the thinking text. Thinking text appears only when the model exposes it to the host (some models report only how long they thought). Command output, tool arguments and results, and file diffs are never shown; project paths read as relative paths, other local paths and credential-like values are hidden. A completed step means it ended, not that a check passed. Steps live only in the owner-only local session replay; the next LoopX Chat start after a Turn is more than 24 hours old clears them. Other executors keep **Recent activity** with the latest six observations; missing activity stays an honest waiting state. **Interrupt turn** targets that reply, preserves already visible text, and keeps the conversation available for continuation. A rejected interruption leaves the live reply visible; completion wins a race with interruption. This control does not stop the Goal. Attached hosts that do not expose interruption report that limitation.
 
-运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收，这不代表调整后的任务已经完成。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。「调整本轮」和普通会话输入框中的追加指令，在发送前必须将重试信息保存到当前标签页的浏览器存储并读回；刷新后恢复原请求身份，不自动发送。存储不可用时会提示尚未发送，草稿仅保留在当前页面；恢复存储后再重试。
+运行中可点击「调整本轮」，向原任务追加指令。当前支持原生 Codex 执行器；只有收到匹配的执行器回执后才显示已接收。不支持的执行器、过期回合或无法确认的回执会保留草稿，不自动变成新任务。送达状态未知时，重试沿用同一请求编号，防止重复投递；执行器明确拒绝且确认未送达时，条件恢复后可用原文安全地重新发起。回合结束后，未发送的草稿仍可复制到输入框。「调整本轮」和普通会话输入框中的追加指令，在发送前必须将重试信息保存到当前标签页的浏览器存储并读回；刷新后恢复原请求身份，不自动发送。存储不可用时会提示尚未发送，草稿仅保留在当前页面；恢复存储后再重试。
 
 Use **Adjust turn** to add instructions to the running task. Native Codex executors currently support this control. A matching executor receipt confirms acceptance, not completion. Unsupported executors, expired turns and unconfirmed receipts retain the draft without starting another task. An unresolved delivery keeps the request identity on retry to prevent duplicates; a confirmed pre-delivery rejection allows the unchanged draft to start a new request after recovery. After the turn ends, copy an unsent draft to the composer. Both **Adjust turn** and an ordinary conversation's in-turn composer save and read back retry information in tab-local browser storage before dispatch. Reload restores the original identity without sending. If storage is unavailable, the adjustment is not sent and its draft stays in the current page; restore storage before retrying.
 
@@ -294,7 +293,7 @@ id for a fresh attempt. Existing LoopX-mode and Lark ingress keep their contract
 
 Codex 上游声明仍会重试时，会话显示「Codex 正在重试」并继续等待最终结果。若上游明确终止，LoopX 保存失败回执，不把已经出现的部分文字当成完整回答。明确的策略拦截、用量限制、频率限制、上下文超限和身份验证失败会保留各自类别；未知错误仍显示通用失败，不从报错正文猜测原因。
 
-策略拦截是本轮已结束，不是仍在安全检查中。LoopX 不会自动重放该请求；重启或重复提交同一个请求编号也会返回原失败回执。界面提示只说明上游给出的类别，不解释其未提供的具体触发原因，也不公开上游原始错误详情。
+策略拦截是本轮已结束。LoopX 不会自动重放该请求；重启或重复提交同一个请求编号也会返回原失败回执。界面提示只说明上游给出的类别，不解释其未提供的具体触发原因，也不公开上游原始错误详情。
 
 ### 3.1 停止暂时不活跃的 Goal
 
@@ -531,7 +530,7 @@ the available timeline; it makes no complete-history claim.
 （单项超过 2 个已完成前序时折叠为计数），以及待决定事项会解锁的工作；已完成或延后的其余工作
 隐藏并计数。「全部」包含早期已完成工作。互不相连的工作链分框排列，需要决定的链在前；
 没有关联的事项单独列出。选中事项会高亮全部前序与后续，检查器列出「之前 / 之后」并可打开任务详情。
-连线只来自已记录关系，不代表可以执行；遗漏、来源裁剪或依赖成环时显示「部分工作未出现在此地图中」，
+连线只来自已记录关系；遗漏、来源裁剪或依赖成环时显示「部分工作未出现在此地图中」，
 关联端点未找到时同样保留不完整提示，不能推断它已归档或属于其他 Goal。手机改为列表。
 
 **范围与刷新：**交付链覆盖当前选中工作及有限前序；完整 Goal 关系请看工作地图。
@@ -547,7 +546,7 @@ Markdown。搜索筛选不会裁剪导出；不包含原始日志、文件正文
 
 **显式验收合同：**若本地所有者已为使用 canonical authority 的 Goal 启用合同，
 交付链下方可展开「Goal 验收合同」，查看条件、任务关联与独立的产物检查结果。
-「任务关联已确认」不等于「产物检查通过」，后者也不自动批准或完成 Goal。
+
 缺失、停用保持原界面；旧检查显示其原版本，刷新失败不会作为最新结果导出。
 配置入口是本地所有者 CLI：先 `loopx goal-acceptance inspect --goal-id example-goal`，
 再按[配置与回滚指南（v0）](../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)
@@ -705,7 +704,7 @@ loopx quota should-run --goal-id <goal-id>
 
 要撤销 Dashboard 配置面的 opt-in，停止当前 Dashboard 后不带
 `--enable-goal-subagent-configuration` 重新启动。这个启动参数只暴露本机 loopback
-上的 preview-locked 配置合同，不授予 Agent 新的 Goal、仓库、凭证、发布或生产权限。
+上的 preview-locked 配置合同。
 
 关闭时再次点击开关、检查预览并确认；也可以使用同一配置入口：
 
@@ -765,7 +764,7 @@ Goal 的 Topic 路由，不删除 Goal、Agent Session、历史 Todo 或其他 G
 变化不会通知；开启当下已经在等你的事项也不会重复提醒；可选提醒（不阻塞 Agent 的用户操作）会列在
 工作区里，但不会打扰你。关闭开关后立即停止后台读取。如果浏览器曾拒绝通知，之后在站点设置里允许，
 回到本页面或打开设置时会重新读到允许，开关即可再次开启；反过来在站点设置里撤销，页面也会如实显示
-并停止后台读取。这只在本页面保持打开时生效，不是服务端推送，也不替代飞书等渠道通知。
+并停止后台读取。这只在本页面保持打开时生效。
 
 "Settings → Appearance → Desktop notifications" is a per-browser switch, off by default. Turning it
 on asks the browser for permission once and keeps the switch on only when granted; the page reads
@@ -790,7 +789,6 @@ replace channel notifications such as Lark. An optional reminder (a user action 
 Agent 在既有授权内推进普通任务，不等于每一步都要你重新点击确认。阅读页面、筛选任务、
 下载快照也不会增加执行权限。只读来源保留其限制，截图、导出和对外分享仍需检查是否含私有内容。
 
-
 ### 键盘快速导航 / Keyboard quick navigation
 
 按 **⌘K / Ctrl-K**，或点击侧栏底部的「快速导航」，按名称或 ID 搜索目标，
@@ -804,7 +802,7 @@ to close and restore focus. IME confirmation does not navigate.
 
 导航使用当前来源的投影，不创建预览、不发送 Agent 指令，也不执行操作。
 已有预览仍需在原详情中确认。只读来源只提供浏览；加载中或不可用的目标会明确标注。
-搜索不是完整历史索引；未加载的历史任务和其他结果仍通过现有任务、文件入口查看。
+未加载的历史任务和其他结果仍通过现有任务、文件入口查看。
 
 Navigation uses the current source projection. It creates no preview, sends no
 Agent instruction and executes no action. Existing previews still require their
@@ -826,7 +824,7 @@ through the existing session owner.
 在成果、对话或证据视图打开团队报告后，点击 **下载原文 / Download source**，
 保存当前显示版本的 UTF-8 原文。文件名包含版本摘要；Markdown、JSON 和文本保留
 相应扩展名，其他类型按文本保存。下载不会重新运行 Agent、核验或采用报告，也不会
-修改 Goal。它是所读版本的本地副本，不代表后续版本仍获验收；报告读取失败或失效时，
+修改 Goal。它是所读版本的本地副本；报告读取失败或失效时，
 先通过原有刷新/重试恢复可读内容。
 
 Open a team report in Results, conversation or evidence, then choose **Download source**
