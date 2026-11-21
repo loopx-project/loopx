@@ -32,6 +32,8 @@ from .steward_managed_mode import StewardManagedMode
 
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
+ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS = 60
+ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX = ".precommit-retry"
 _LOG = logging.getLogger(__name__)
 
 
@@ -67,6 +69,76 @@ def advancement_turn_id(todo: dict[str, Any]) -> str:
     stamp = todo.get("updated_at") or todo.get("created_at") or "0"
     return "advancement." + hashlib.sha256(json.dumps(
         [todo["todo_id"], stamp], sort_keys=True).encode()).hexdigest()[:40]
+
+
+def _is_precommit_retryable_advancement_turn(
+    turn: Mapping[str, Any],
+    *,
+    now: float | None = None,
+) -> bool:
+    """Allow one delayed retry only when zero kernel/Steward writes occurred."""
+    from .steward_turn import _iso_timestamp_seconds
+
+    if turn.get("status") != "completed":
+        return False
+    resp = turn.get("response")
+    if not isinstance(resp, Mapping):
+        return False
+    nl = resp.get("native_loopx")
+    if not isinstance(nl, Mapping):
+        return False
+    if nl.get("ok") is not False or nl.get("status") != "failed":
+        return False
+    if nl.get("result_kind") not in {"validation_failed", "host_failure"}:
+        return False
+    receipt = nl.get("receipt")
+    commit_eligibility = (receipt.get("commit_eligibility") if isinstance(receipt, Mapping) else None) or {}
+    effects = nl.get("effects") or {}
+    if not isinstance(commit_eligibility, Mapping) or not isinstance(effects, Mapping):
+        return False
+    if not (commit_eligibility.get("writeback") is False or effects.get("state_written") is False):
+        return False
+    if (effects.get("state_written") is True
+            or effects.get("quota_spent") is True
+            or effects.get("scheduler_acknowledged") is True):
+        return False
+    if (resp.get("steward_owner_report_queued")
+            or resp.get("context_handoff")
+            or resp.get("steward_user_action_receipts")):
+        return False
+    completed_ts = _iso_timestamp_seconds(turn.get("completed_at"))
+    if completed_ts is None:
+        return False
+    current_ts = time.time() if now is None else now
+    return current_ts - completed_ts >= ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS
+
+
+def resolve_advancement_turn_id(
+    store: Any,
+    actor: Mapping[str, Any],
+    todo: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> str | None:
+    """Resolve the active attempt id or at most one post-cooldown pre-commit retry."""
+    from .steward_turn import native_steward_client_id
+
+    base = advancement_turn_id(todo)
+    existing = store.turn_for_client(
+        actor["session_id"],
+        native_steward_client_id(actor, base),
+    )
+    if existing is None:
+        return base
+    if not _is_precommit_retryable_advancement_turn(existing, now=now):
+        return None
+    retry_token = base + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    if store.turn_for_client(
+        actor["session_id"],
+        native_steward_client_id(actor, retry_token),
+    ) is not None:
+        return None
+    return retry_token
 
 
 def _github_repo_slug(task_repository: Any) -> str | None:
@@ -549,10 +621,8 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                 if dispatched:
                     continue
             for adv in service.runnable_advancement_todos(actor):
-                from .steward_turn import native_steward_client_id
-                turn_id_token = advancement_turn_id(adv)
-                if controller.store.turn_for_client(actor["session_id"],
-                        native_steward_client_id(actor, turn_id_token)) is not None:
+                turn_id_token = resolve_advancement_turn_id(controller.store, actor, adv)
+                if turn_id_token is None:
                     continue
                 accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
                     turn_instance_id=turn_id_token, todo_id=adv["todo_id"], work_kind="native_turn")

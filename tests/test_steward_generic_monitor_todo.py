@@ -528,3 +528,275 @@ def test_scoped_signal_monitor_queues_aggregated_owner_report_without_user_todos
         role="user",
     )["todos"]
     assert user_todos == []
+
+
+def test_normalize_steward_advancement_kernel_candidate_splits_overlong_evidence() -> None:
+    from loopx.capabilities.native_chat.steward_turn import (
+        _normalize_steward_advancement_kernel_candidate,
+    )
+
+    long_item_a = (
+        "Evaluated filtered signal_snapshot.repository_snapshot.items covering 7 non-conflicting "
+        "open PRs (#9051, #9127, #9136, #9146, #9171, #9175, #9181) with GPT/OpenAI exact-head "
+        "APPROVE and zero review conflicts across multiple repositories and gates."
+    )
+    assert len(long_item_a) > 240
+    long_item_b = (
+        "Cross-checked review blockers; confirmed read-only boundary; emitted single aggregated report "
+        "without per-PR user actions; verified mergeable state and exact head SHA across all items."
+    )
+    normalized = _normalize_steward_advancement_kernel_candidate({
+        "result_kind": "validated_completion",
+        "delivery_batch_scale": "multi_surface_or_implementation",
+        "work_evidence": [long_item_a, long_item_b],
+        "validation_evidence": ["  ".join(["word"] * 120)],
+    })
+    assert normalized["delivery_batch_scale"] == "multi_surface"
+    for field in ("work_evidence", "validation_evidence"):
+        items = normalized[field]
+        assert isinstance(items, list)
+        assert 1 <= len(items) <= 8
+        assert all(1 <= len(item) <= 240 for item in items)
+        assert sum(len(item) for item in items) <= 1200
+
+    # Overflow >1200 chars / >8 items compacts strictly inside kernel limits.
+    huge = _normalize_steward_advancement_kernel_candidate({
+        "work_evidence": [" ".join(["segment"] * 60) for _ in range(6)],
+    })
+    assert 1 <= len(huge["work_evidence"]) <= 8
+    assert all(1 <= len(item) <= 240 for item in huge["work_evidence"])
+    assert sum(len(item) for item in huge["work_evidence"]) <= 1200
+
+    # Malformed shapes must remain unmasked for kernel rejection.
+    assert _normalize_steward_advancement_kernel_candidate({"work_evidence": []})["work_evidence"] == []
+    assert _normalize_steward_advancement_kernel_candidate({"work_evidence": [""]})["work_evidence"] == [""]
+    assert _normalize_steward_advancement_kernel_candidate({"work_evidence": "not-a-list"})["work_evidence"] == "not-a-list"
+
+
+def test_scoped_signal_monitor_overlong_work_evidence_commits_and_precommit_retry_unwedges_once(
+    steward, tmp_path, monkeypatch,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, "sqlite")
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        expected_plan_id=plan["plan_id"],
+        execute=True,
+    )["actor"]
+    store.load_session(sid)
+
+    monitor = StewardMonitor(runtime)
+    enable_plan = monitor.configure(binding["binding_id"], operation="enable")["plan"]
+    monitor.configure(
+        binding["binding_id"],
+        operation="enable",
+        execute=True,
+        expected_plan_id=enable_plan["plan_id"],
+    )
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    actions = transport.core.actions
+    preview = actions.preview({
+        "action_kind": "monitor.create",
+        "summary": "Track mergeable approved PRs on acme/widgets and send one aggregated report",
+        "normalized_parameters": {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": "Track mergeable approved PRs on acme/widgets and emit one aggregated report.",
+            "target_key": "steward-gpt-mergeable-pr-monitor",
+            "task_repository": "acme/widgets",
+            "cadence": "every_2_hours",
+            "timezone": "Asia/Shanghai",
+            "stop_condition": "watch_only",
+            "signal_scope": {
+                "schema_version": "steward_signal_monitor_scope_v0",
+                "include_portfolio": False,
+                "include_inbox": False,
+                "pr_filter": {
+                    "exclude_drafts": True,
+                    "exclude_conflicting": True,
+                    "effective_verdicts": ["APPROVE"],
+                    "required_approver_declarations": ["GPT", "OpenAI"],
+                },
+            },
+        },
+        "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+        "idempotency_key": "create-gpt-mergeable-pr-monitor-retry",
+    })
+    assert preview["status"] == "preview_ready"
+    created_todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+
+    import loopx.capabilities.native_chat.steward_monitor as monitor_mod
+    from loopx.capabilities.native_chat.steward_monitor import (
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        advancement_turn_id,
+        resolve_advancement_turn_id,
+    )
+    from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok",
+        "repository": repo,
+        "items": [{
+            "number": 9101,
+            "title": "Mergeable PR",
+            "url": "https://github.com/acme/widgets/pull/9101",
+            "headRefOid": "head9101",
+            "isDraft": False,
+            "mergeable": "MERGEABLE",
+            "updatedAt": "2026-11-20T09:00:00Z",
+            "author": {"login": "alice"},
+            "checks_summary": {"state": "SUCCESS", "total": 1, "passing": 1, "failing": 0, "pending": 0},
+            "bypassed_gates": [],
+            "review_summary": {
+                "effective_verdict": "APPROVE",
+                "has_review_conflict": False,
+                "stale_review_count": 0,
+                "exact_head_reviews": [{
+                    "author_login": "bob",
+                    "reviewer_declaration": "GPT-5.4",
+                    "verdict": "APPROVE",
+                    "valid_verdict_review": True,
+                    "state": "APPROVED",
+                }],
+            },
+        }],
+    })
+    poll_turns = pump_steward_monitors(runtime)
+    assert len(poll_turns) == 1
+    assert finish(runtime, poll_turns[0])["status"] == "completed"
+
+    agent_todos = list_goal_todos(
+        registry_path=runtime.registry_path,
+        runtime_root_arg=str(runtime.coordination_runtime_root),
+        goal_id=actor["goal_id"],
+        role="agent",
+    )["todos"]
+    adv_todo = next(row for row in agent_todos if row.get("target_key") == f"steward-monitor-followup:{created_todo_id}")
+    base_token = advancement_turn_id(adv_todo)
+    base_client = native_steward_client_id(actor, base_token)
+
+    # Simulate a historical pre-commit validation_failed turn (zero kernel/Steward writes).
+    recent_completed = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    simulated_failed_turn = {
+        "turn_id": "turn-sim-failed",
+        "client_turn_id": base_client,
+        "status": "completed",
+        "completed_at": recent_completed,
+        "response": {
+            "native_loopx": {
+                "ok": False,
+                "status": "failed",
+                "result_kind": "validation_failed",
+                "receipt": {"commit_eligibility": {"writeback": False, "quota_spend": False, "scheduler_ack": False}},
+                "effects": {"host_invoked": True, "state_written": False, "quota_spent": False, "scheduler_acknowledged": False},
+            },
+        },
+    }
+    monkeypatch.setattr(store, "turn_for_client", lambda s, cid: simulated_failed_turn if (s == actor["session_id"] and cid == base_client) else None)
+    # Within 60s cooldown, retry is withheld.
+    assert resolve_advancement_turn_id(store, actor, adv_todo) is None
+    # After cooldown expires, single .precommit-retry token is returned.
+    assert resolve_advancement_turn_id(store, actor, adv_todo, now=datetime.now(timezone.utc).timestamp() + 120) == (
+        base_token + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    )
+    # If any side effect or kernel write occurred, retry is strictly forbidden.
+    committed_like = {
+        **simulated_failed_turn,
+        "completed_at": (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat(),
+        "response": {
+            "steward_owner_report_queued": True,
+            "native_loopx": {
+                **simulated_failed_turn["response"]["native_loopx"],
+                "effects": {"host_invoked": True, "state_written": False, "quota_spent": False, "scheduler_acknowledged": False},
+            },
+        },
+    }
+    monkeypatch.setattr(store, "turn_for_client", lambda s, cid: committed_like if cid == base_client else None)
+    assert resolve_advancement_turn_id(store, actor, adv_todo) is None
+
+    # Restore real store method and inject an actual pre-commit failed turn >60s old + over-long work_evidence response.
+    monkeypatch.undo()
+    failed_turn = store.accept_managed_turn(
+        sid,
+        client_turn_id=base_client,
+        message="Advance the currently admitted native LoopX work.",
+        origin="native_loopx",
+        loopx_execution=True,
+        loopx_request={"operation": "native_turn", "host": "codex-app-server", "actor": actor, "turn_instance_id": base_token, "todo_id": adv_todo["todo_id"], "work_kind": "native_turn", "validation_command": None},
+    ).turn
+    completed_ts = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    store.update_turn(
+        sid,
+        failed_turn["turn_id"],
+        status="completed",
+        completed_at=completed_ts,
+        response={
+            "native_loopx": {
+                "ok": False,
+                "status": "failed",
+                "result_kind": "validation_failed",
+                "receipt": {"commit_eligibility": {"writeback": False, "quota_spend": False, "scheduler_ack": False}},
+                "effects": {"host_invoked": True, "state_written": False, "quota_spent": False, "scheduler_acknowledged": False},
+            },
+        },
+    )
+    store.release_active_turn(sid, failed_turn["turn_id"], last_activity_at=completed_ts, last_error_code=None)
+
+    overlong_work_item = (
+        "Evaluated filtered signal_snapshot.repository_snapshot.items covering 7 non-conflicting open PRs "
+        "(#9051, #9127, #9136, #9146, #9171, #9175, #9181) with GPT/OpenAI exact-head APPROVE and zero "
+        "review conflicts across multiple gates and CI policies."
+    )
+    assert len(overlong_work_item) > 240
+    aggregated_md = "### 重试后聚合报告\n- #9101 Mergeable PR"
+    _configure_codex_response(runtime, sid, {
+        "result_kind": "validated_completion",
+        "classification": "steward_scoped_pr_report_retry",
+        "summary": "Recovered pre-commit failure with bounded evidence.",
+        "next_action": "Await next monitor cadence.",
+        "delivery_batch_scale": "multi_surface_or_implementation",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": [overlong_work_item],
+        "validation_evidence": ["Verified snapshot 9101"],
+        "path_delta_mode": "unchanged",
+        "vision_unchanged_reason": "Scoped steward monitor report.",
+        "steward_owner_report": aggregated_md,
+    })
+
+    runtime._steward_monitor_next_check.clear()
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok",
+        "repository": repo,
+        "items": [],
+    })
+    # Re-create store turn only once: pump_steward_monitors should dispatch .precommit-retry.
+    retry_turns = pump_steward_monitors(runtime)
+    assert len(retry_turns) == 1
+    assert retry_turns[0]["loopx_request"]["turn_instance_id"] == base_token + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    retry_done = finish(runtime, retry_turns[0])
+    assert retry_done["status"] == "completed", retry_done
+    assert retry_done["response"]["native_loopx"]["status"] == "committed"
+    assert retry_done["response"]["steward_owner_report_queued"] is True
+
+    # No third retry is ever dispatched even if open.
+    runtime._steward_monitor_next_check.clear()
+    assert pump_steward_monitors(runtime) == []
