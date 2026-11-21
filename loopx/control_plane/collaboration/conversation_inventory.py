@@ -1,8 +1,7 @@
 """Read original conversation requests through existing Inbox/receipt owners.
 
 Host IO verifies the source Session and Goal lifetime before projecting content.
-The shared TypeScript agenda decides what remains unfinished; this is not a
-second work ledger or an acknowledgement of receiver work.
+The shared TypeScript agenda decides what remains unfinished.
 """
 from __future__ import annotations
 
@@ -71,11 +70,7 @@ def _read_receipt_batch(root, rows):
 
 
 def _project_request_observations(observations, *, history):
-    """Project request facts before selecting the response window.
-
-    Linked Core work neither selects nor orders requests. Reading it here made
-    every page wait for unrelated Goals, including completed/filtered requests.
-    """
+    """Project request facts before selecting the response window."""
     rows, unreadable = [], 0
     for row, source_session_id, turn, state, agenda, controlled, read, read_error, decision, decision_error, replies in observations:
         try:
@@ -251,7 +246,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             (row.get("brief") or {}).get("purpose"), (row.get("brief") or {}).get("context")))]
     visible.sort(key=lambda row: (row.get("last_event_at") or "", row["request_id"]), reverse=True)
     coverage = {"scan_complete": scan_complete, "unreadable": unreadable, "diagnostics": diagnostics}
-    # A page fence over observations, not an atomic snapshot or a new ledger.
+    # A page fence over observations.
     snapshot_digest = hashlib.sha256(json.dumps([visible, coverage, query], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     # Core is a separate, current observation. It must not invalidate an
     # otherwise unchanged request cursor, or load every Goal for a collapsed list.

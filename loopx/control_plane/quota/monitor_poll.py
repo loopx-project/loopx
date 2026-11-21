@@ -3,13 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
 
 from ...agent_registry import registered_agent_ids_from_registry
 from ...turn_identity import normalize_turn_instance_id
+from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import now_local_iso
 from ..scheduler.monitor_poll_writeback import (
@@ -17,19 +17,23 @@ from ..scheduler.monitor_poll_writeback import (
     write_monitor_poll_todo_state,
 )
 from ..scheduler.monitor_todo import monitor_todo_is_due
+from ..todos.authoring_scope import plan_todo_authoring_scope
 from ..todos.contract import (
     TODO_TASK_CLASS_MONITOR,
     normalize_todo_claimed_by,
     normalize_todo_id,
+    normalize_todo_resume_when,
 )
 from ..todos.external_wait_contract import (
     build_monitor_advancement_authoring_contract,
 )
-from ..todos.authoring_scope import plan_todo_authoring_scope
 from ..todos.todo_semantics import todo_item_task_class
-from .decision_summary import compact_quota_decision, quota_decision_agent_id
 from .accounting_admission import quota_accounting_admission
+from .decision_summary import compact_quota_decision, quota_decision_agent_id
 from .spend_sources import DEFAULT_SLOT_SPEND_SOURCE
+
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 QUOTA_MONITOR_POLL_CLASSIFICATION = "quota_monitor_poll"
 QUOTA_MONITOR_POLL_COMMIT_REQUEST_SCHEMA = (
@@ -46,31 +50,61 @@ class _NativeMonitorPollRejected(ValueError):
         self.diagnostic_code = diagnostic_code
 
 
-def _now_local() -> str:
-    return now_local_iso()
+def _mapping(value: object) -> Payload:
+    return {str(key): entry for key, entry in value.items()} if isinstance(value, Mapping) else {}
 
 
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
+def _clean_text(value: object) -> str | None:
+    return str(value or "").strip() or None
 
 
-def _monitor_candidate(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    if todo_item_task_class(value) != TODO_TASK_CLASS_MONITOR:
+def _opt_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _opt_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _str_list(value: object) -> list[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [str(item) for item in value]
+    return []
+
+
+def _list_items(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _normalized_poll_targets(
+    *, todo_id: str | None, target_key: str | None,
+    result_hash: str | None, turn_instance_id: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    return (
+        normalize_todo_id(todo_id) if todo_id else None,
+        _clean_text(target_key),
+        _clean_text(result_hash),
+        normalize_turn_instance_id(turn_instance_id),
+    )
+
+
+def _monitor_candidate(value: object) -> Payload | None:
+    if not isinstance(value, dict) or todo_item_task_class(value) != TODO_TASK_CLASS_MONITOR:
         return None
     todo_id = normalize_todo_id(value.get("todo_id"))
-    target_key = str(value.get("target_key") or "").strip() or None
+    target_key = _clean_text(value.get("target_key"))
     if not todo_id and not target_key:
         return None
+    resume_when = normalize_todo_resume_when(value.get("resume_when"))
     return {
         "todo_id": todo_id,
         "target_key": target_key,
         "task_class": TODO_TASK_CLASS_MONITOR,
+        **({"resume_when": resume_when} if resume_when else {}),
     }
 
 
-def _due_monitor_candidates(before: dict[str, Any]) -> list[dict[str, Any]]:
+def _due_monitor_candidates(before: PayloadView) -> list[Payload]:
     contract = _mapping(before.get("work_lane_contract"))
     if contract.get("must_attempt_work") is not True:
         return []
@@ -79,36 +113,31 @@ def _due_monitor_candidates(before: dict[str, Any]) -> list[dict[str, Any]]:
         if selected:
             return [selected]
         selected_todo_id = normalize_todo_id(contract.get("selected_todo_id"))
-        due_items = contract.get("monitor_due_items")
-        for value in due_items if isinstance(due_items, list) else []:
+        for value in _list_items(contract.get("monitor_due_items")):
             candidate = _monitor_candidate(value)
-            if not candidate:
-                continue
-            if selected_todo_id and candidate["todo_id"] != selected_todo_id:
-                continue
-            return [candidate]
+            if candidate and (
+                not selected_todo_id or candidate["todo_id"] == selected_todo_id
+            ):
+                return [candidate]
         return []
     reason_codes = contract.get("reason_codes")
     if not isinstance(reason_codes, list) or "due_monitor_context" not in reason_codes:
         return []
     summary = _mapping(before.get("agent_todo_summary"))
-    candidates = []
-    due_items = summary.get("monitor_due_items")
-    for value in due_items if isinstance(due_items, list) else []:
+    candidates: list[Payload] = []
+    for value in _list_items(summary.get("monitor_due_items")):
         candidate = _monitor_candidate(value)
         if candidate and candidate not in candidates:
             candidates.append(candidate)
     return candidates
 
 
-def _vision_wait_state(before: dict[str, Any]) -> dict[str, Any]:
+def _vision_wait_state(before: PayloadView) -> Payload:
     if before.get("schema_version") == "goal_vision_wait_state_v0":
-        return dict(before)
-    direct = _mapping(before.get("vision_wait_state"))
-    if direct:
-        return direct
-    projection = _mapping(before.get("goal_frontier_projection"))
-    return _mapping(projection.get("vision_wait_state"))
+        return _mapping(before)
+    return _mapping(before.get("vision_wait_state")) or _mapping(
+        _mapping(before.get("goal_frontier_projection")).get("vision_wait_state")
+    )
 
 
 def resolve_due_monitor_candidate(
@@ -118,7 +147,7 @@ def resolve_due_monitor_candidate(
     goal_id: str,
     todo_id: str | None,
     target_key: str | None,
-) -> dict[str, Any]:
+) -> Payload:
     if registry_path is None or not (todo_id or target_key):
         return {}
     try:
@@ -131,12 +160,37 @@ def resolve_due_monitor_candidate(
         )
     except ValueError:
         return {}
+    resume_when = normalize_todo_resume_when(item.get("resume_when"))
+    if resume_when and item.get("resume_ready") is None:
+        from ..todos.list_readback import list_goal_todos
+
+        # Target selection returns the stored Todo, where readiness may not be
+        # materialized. Read the canonical evaluation for that same target.
+        selected_id = normalize_todo_id(item.get("todo_id"))
+        if selected_id is None:
+            return {}
+        evaluated = list_goal_todos(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            role="agent",
+            todo_id=selected_id,
+            runtime_root_arg=str(runtime_root) if runtime_root else None,
+        ).get("todo")
+        if (
+            not isinstance(evaluated, dict)
+            or evaluated.get("todo_id") != selected_id
+            or evaluated.get("target_key") != item.get("target_key")
+            or evaluated.get("archive_state") == "archive"
+            or normalize_todo_resume_when(evaluated.get("resume_when")) != resume_when
+        ):
+            return {}
+        item = evaluated
     if not monitor_todo_is_due(item):
         return {}
     return {
         "due": True,
         "todo_id": normalize_todo_id(item.get("todo_id")),
-        "target_key": str(item.get("target_key") or "").strip() or None,
+        "target_key": _clean_text(item.get("target_key")),
         "task_class": todo_item_task_class(item),
         "claimed_by": normalize_todo_claimed_by(item.get("claimed_by")),
     }
@@ -149,8 +203,8 @@ def _monitor_poll_receipt_path(runtime_root: Path, goal_id: str, effect_id: str)
 
 def resolve_monitor_poll_target(
     *, registry_path: Path | None, runtime_root: Path | None, goal_id: str,
-    target_key: str | None, before: dict[str, Any], turn_instance_id: str | None,
-    execute: bool, goal_ref: Mapping[str, Any] | None,
+    target_key: str | None, before: PayloadView, turn_instance_id: str | None,
+    execute: bool, goal_ref: PayloadView | None,
 ) -> tuple[str | None, str | None]:
     due = resolve_due_monitor_candidate(registry_path=registry_path, runtime_root=runtime_root,
         goal_id=goal_id, todo_id=None, target_key=target_key)
@@ -164,10 +218,12 @@ def resolve_monitor_poll_target(
     except ValueError:
         return None, None
     todo_id = normalize_todo_id(item.get("todo_id"))
+    agent_id = quota_decision_agent_id(_mapping(before))
+    normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
     effect_id = _monitor_poll_effect_id(runtime_root=runtime_root, goal_id=goal_id,
-        agent_id=quota_decision_agent_id(before), turn_instance_id=normalize_turn_instance_id(turn_instance_id),
+        agent_id=agent_id, turn_instance_id=normalized_turn_id,
         todo_id=todo_id, target_key=target_key, goal_ref=goal_ref)
-    expected_effect = f"quota-monitor-poll:{goal_id}:{quota_decision_agent_id(before)}:{normalize_turn_instance_id(turn_instance_id)}:todo:{todo_id}"
+    expected_effect = f"quota-monitor-poll:{goal_id}:{agent_id}:{normalized_turn_id}:todo:{todo_id}"
     if effect_id != expected_effect:
         # Historical target/turn-only effects can have a null Todo on the wire.
         # The provider's resolved Todo cannot rewrite their frozen fingerprint.
@@ -180,8 +236,13 @@ def resolve_monitor_poll_target(
     return None, None
 
 
+def _runtime_capabilities(before: PayloadView) -> list[str] | None:
+    values = _mapping(before.get("agent_identity")).get("runtime_available_capabilities")
+    return runtime_capabilities_for_cli_projection(values) if isinstance(values, list) else None
+
+
 def _decision_packet(
-    before: dict[str, Any],
+    before: PayloadView,
     *,
     goal_id: str,
     todo_id: str | None,
@@ -189,7 +250,10 @@ def _decision_packet(
     registry_path: Path | None = None,
     runtime_root: Path | None = None,
     authorized_due_monitor_poll: bool | None = None,
-) -> dict[str, Any]:
+    todo_id_explicit: bool = False,
+) -> Payload:
+    before_dict = _mapping(before)
+    agent_id = quota_decision_agent_id(before_dict)
     lane = _mapping(before.get("work_lane_contract"))
     due_candidates = _due_monitor_candidates(before)
     registry_due = resolve_due_monitor_candidate(
@@ -199,35 +263,37 @@ def _decision_packet(
         todo_id=todo_id,
         target_key=target_key,
     )
+    if registry_due:
+        registry_due["todo_id_explicit"] = todo_id_explicit and todo_id is not None
     if authorized_due_monitor_poll is False:
         due_candidates = []
         registry_due = {}
     elif authorized_due_monitor_poll is True:
         lane.update(must_attempt_work=True, obligation="attempt_due_monitor")
-        requested = {
+        requested: Payload = {
             "todo_id": todo_id,
             "target_key": target_key,
             "task_class": TODO_TASK_CLASS_MONITOR,
         }
         if requested not in due_candidates:
             due_candidates.append(requested)
-    gate_scope = None
+    gate_scope: Payload | None = None
     if (before.get("requires_user_action") is True and registry_path is not None
         and registry_due.get("todo_id")):
         from ...control_plane.todos.list_readback import list_goal_todos
         from ..todos.decision_scope import todo_gate_scope_projections
         snapshot = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
             runtime_root_arg=str(runtime_root) if runtime_root else None, limit=None)
-        records = snapshot.get("todos") or []
+        records = [item for item in _list_items(snapshot.get("todos")) if isinstance(item, dict)]
         targets = [item for item in records if item.get("todo_id") == registry_due["todo_id"]]
         if len(targets) == 1:
             gate_scope = todo_gate_scope_projections(
                 [item for item in records if item.get("role") == "user"], targets,
-                agent_id=quota_decision_agent_id(before))[0]
+                agent_id=agent_id)[0]
     return {
-        **compact_quota_decision(before),
+        **compact_quota_decision(before_dict),
         "goal_id": goal_id,
-        "agent_id": quota_decision_agent_id(before),
+        "agent_id": agent_id,
         "recommended_action": before.get("recommended_action"),
         "reason": before.get("reason"),
         "requires_user_action": before.get("requires_user_action") is True,
@@ -247,38 +313,38 @@ def _decision_packet(
 
 def _observation_packet(
     *,
-    before: dict[str, Any],
-    agent_id: str | None,
-    settlement_todo_id: str | None,
+    before: PayloadView,
     reason_summary: str | None,
     todo_id: str | None,
     target_key: str | None,
     result_hash: str | None,
     material_change: bool,
     material_change_scope: str | None,
-    cadence: str | None,
-    next_due_at: str | None,
-    next_agent_todo: str | None,
-    next_action_kind: str | None,
-    next_task_repository: str | None,
-    next_required_capabilities: list[str] | None,
-    next_continuation_policy: str | None,
-    next_target_key: str | None,
-    next_user_todo: str | None,
-    next_user_task_class: str | None,
-    next_claimed_by: str | None,
+    agent_id: str | None = None,
+    settlement_todo_id: str | None = None,
+    cadence: str | None = None,
+    next_due_at: str | None = None,
+    next_agent_todo: str | None = None,
+    next_action_kind: str | None = None,
+    next_task_repository: str | None = None,
+    next_required_capabilities: Sequence[str] | None = None,
+    next_continuation_policy: str | None = None,
+    next_target_key: str | None = None,
+    next_user_todo: str | None = None,
+    next_user_task_class: str | None = None,
+    next_claimed_by: str | None = None,
     next_agent_priority: str | None = None,
     next_user_priority: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     proof = ({"idempotency_key": task_lease_idempotency_key,
               "expected_version": task_lease_expected_version}
              if task_lease_idempotency_key is not None or task_lease_expected_version is not None else None)
     return {
         **({"lease_proof": proof} if proof is not None else {}),
         "actor_agent_id": normalize_todo_claimed_by(agent_id)
-        or quota_decision_agent_id(before),
+        or quota_decision_agent_id(_mapping(before)),
         "settlement_todo_id": settlement_todo_id,
         "reason_summary": reason_summary,
         "todo_id": todo_id,
@@ -310,7 +376,7 @@ def _index_digest(index_path: Path) -> str | None:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
-def _native_result(request: Mapping[str, Any]) -> dict[str, Any]:
+def _native_result(request: PayloadView) -> Payload:
     try:
         result = effect_runtime_result("quota.monitor_poll.commit", request)
     except EffectRuntimeRejected as exc:
@@ -324,7 +390,7 @@ def _native_result(request: Mapping[str, Any]) -> dict[str, Any]:
         != QUOTA_MONITOR_POLL_COMMIT_RESULT_SCHEMA
     ):
         raise RuntimeError("TypeScript quota monitor-poll result shape mismatch")
-    return dict(result)
+    return _mapping(result)
 
 
 def _request(
@@ -338,13 +404,13 @@ def _request(
     execute: bool,
     expected_index_digest: str | None,
     turn_instance_id: str | None,
-    decision: dict[str, Any],
-    observation: dict[str, Any],
-    provider_receipt: Mapping[str, Any] | None = None,
-    status_reload_warning: Mapping[str, Any] | None = None,
-    goal_ref: Mapping[str, Any] | None = None,
-    source_admission: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    decision: Payload,
+    observation: Payload,
+    provider_receipt: PayloadView | None = None,
+    status_reload_warning: PayloadView | None = None,
+    goal_ref: PayloadView | None = None,
+    source_admission: PayloadView | None = None,
+) -> Payload:
     return {
         "schema_version": ("loopx_quota_monitor_poll_commit_request_v1" if observation.get("lease_proof") is not None
                            else QUOTA_MONITOR_POLL_COMMIT_REQUEST_SCHEMA),
@@ -359,25 +425,17 @@ def _request(
         "turn_instance_id": turn_instance_id,
         "decision": decision,
         "observation": observation,
-        "provider_receipt": (
-            dict(provider_receipt) if provider_receipt is not None else None
-        ),
+        "provider_receipt": _mapping(provider_receipt) if provider_receipt is not None else None,
         "status_reload_warning": (
-            dict(status_reload_warning)
-            if status_reload_warning is not None
-            else None
+            _mapping(status_reload_warning) if status_reload_warning is not None else None
         ),
-        **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
-        **(
-            {"source_admission": dict(source_admission)}
-            if source_admission is not None
-            else {}
-        ),
+        **({"goal_ref": _mapping(goal_ref)} if goal_ref is not None else {}),
+        **({"source_admission": _mapping(source_admission)} if source_admission is not None else {}),
     }
 
 
 def build_quota_monitor_poll_event(
-    before: dict[str, Any],
+    before: PayloadView,
     *,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
     generated_at: str | None = None,
@@ -389,12 +447,12 @@ def build_quota_monitor_poll_event(
     material_change_scope: str | None = None,
     authorized_due_monitor_poll: bool | None = None,
     turn_instance_id: str | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     goal_id = str(before.get("goal_id") or "").strip()
-    safe_todo_id = normalize_todo_id(todo_id) if todo_id else None
-    safe_target_key = str(target_key or "").strip() or None
-    safe_result_hash = str(result_hash or "").strip() or None
-    normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
+    safe_todo_id, safe_target_key, safe_result_hash, normalized_turn_id = _normalized_poll_targets(
+        todo_id=todo_id, target_key=target_key, result_hash=result_hash,
+        turn_instance_id=turn_instance_id,
+    )
     decision = _decision_packet(
         before,
         goal_id=goal_id,
@@ -404,25 +462,12 @@ def build_quota_monitor_poll_event(
     )
     observation = _observation_packet(
         before=before,
-        agent_id=None,
-        settlement_todo_id=None,
         reason_summary=reason_summary,
         todo_id=safe_todo_id,
         target_key=safe_target_key,
         result_hash=safe_result_hash,
         material_change=material_change,
         material_change_scope=material_change_scope,
-        cadence=None,
-        next_due_at=None,
-        next_agent_todo=None,
-        next_action_kind=None,
-        next_task_repository=None,
-        next_required_capabilities=None,
-        next_continuation_policy=None,
-        next_target_key=None,
-        next_user_todo=None,
-        next_user_task_class=None,
-        next_claimed_by=None,
     )
     native = _native_result(
         _request(
@@ -431,7 +476,7 @@ def build_quota_monitor_poll_event(
             runtime_root=None,
             goal_id=goal_id,
             source=source,
-            generated_at=generated_at or _now_local(),
+            generated_at=generated_at or now_local_iso(),
             execute=False,
             expected_index_digest=None,
             turn_instance_id=normalized_turn_id,
@@ -442,7 +487,7 @@ def build_quota_monitor_poll_event(
     record = native.get("record")
     if not isinstance(record, Mapping):
         raise TypeError("TypeScript quota monitor-poll preview omitted its record")
-    return dict(record)
+    return _mapping(record)
 
 
 def _find_monitor_poll_turn(
@@ -453,10 +498,11 @@ def _find_monitor_poll_turn(
     turn_instance_id: str,
     todo_id: str | None = None,
     target_key: str | None = None,
-    goal_ref: Mapping[str, Any] | None = None,
-) -> dict[str, Any] | None:
+    goal_ref: PayloadView | None = None,
+) -> Payload | None:
     normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
-    normalized_target_key = str(target_key or "").strip() or None
+    normalized_target_key = _clean_text(target_key)
+    expected_goal_ref = _mapping(goal_ref) if goal_ref is not None else None
     try:
         lines = index_path.read_text(encoding="utf-8").split("\n")
     except OSError:
@@ -474,8 +520,8 @@ def _find_monitor_poll_turn(
             and str(row.get("agent_id") or "") == agent_id
             and str(row.get("turn_instance_id") or "") == turn_instance_id
             and (
-                row.get("goal_ref") == dict(goal_ref)
-                if goal_ref is not None
+                row.get("goal_ref") == expected_goal_ref
+                if expected_goal_ref is not None
                 else "goal_ref" not in row
             )
             and (
@@ -484,11 +530,10 @@ def _find_monitor_poll_turn(
             )
             and (
                 normalized_target_key is None
-                or str(row.get("target_key") or "").strip()
-                == normalized_target_key
+                or _clean_text(row.get("target_key")) == normalized_target_key
             )
         ):
-            return row
+            return _mapping(row)
     return None
 
 
@@ -500,8 +545,8 @@ def find_quota_monitor_poll_turn(
     turn_instance_id: str,
     todo_id: str | None = None,
     target_key: str | None = None,
-    goal_ref: Mapping[str, Any] | None = None,
-) -> dict[str, Any] | None:
+    goal_ref: PayloadView | None = None,
+) -> Payload | None:
     """Return the latest matching monitor observation for one heartbeat turn."""
 
     normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
@@ -518,13 +563,13 @@ def find_quota_monitor_poll_turn(
     )
 
 
-def _persisted_monitor_effect_id(record: Mapping[str, Any] | None) -> str | None:
+def _persisted_monitor_effect_id(record: PayloadView | None) -> str | None:
     if not isinstance(record, Mapping):
         return None
     metadata = record.get("quota_monitor_poll_commit")
     if not isinstance(metadata, Mapping):
         return None
-    return str(metadata.get("effect_id") or "").strip() or None
+    return _clean_text(metadata.get("effect_id"))
 
 
 def _monitor_poll_effect_id(
@@ -535,7 +580,7 @@ def _monitor_poll_effect_id(
     turn_instance_id: str | None,
     todo_id: str | None,
     target_key: str | None,
-    goal_ref: Mapping[str, Any] | None,
+    goal_ref: PayloadView | None,
 ) -> str:
     if not turn_instance_id:
         return f"quota-monitor-poll:{goal_id}:{uuid.uuid4().hex}"
@@ -565,47 +610,43 @@ def _monitor_poll_effect_id(
     return base
 
 
+def _prepend_unique_run(target: Payload, key: str, record: Payload) -> None:
+    entries = target.get(key)
+    items = entries if isinstance(entries, list) else []
+    if record not in items:
+        target[key] = [record, *items]
+
+
 def _status_with_monitor_poll(
-    status_payload: dict[str, Any],
+    status_payload: PayloadView,
     *,
     goal_id: str,
-    index_record: dict[str, Any],
-) -> dict[str, Any]:
-    after_status = deepcopy(status_payload)
+    index_record: Payload,
+) -> Payload:
+    after_status = deepcopy(_mapping(status_payload))
     run_history = _mapping(after_status.get("run_history"))
-    goals = run_history.get("goals")
-    for goal in goals if isinstance(goals, list) else []:
-        if not isinstance(goal, dict) or str(goal.get("id") or "") != goal_id:
-            continue
-        latest = goal.get("latest_runs")
-        latest = latest if isinstance(latest, list) else []
-        if index_record not in latest:
-            goal["latest_runs"] = [index_record, *latest]
-        runs = goal.get("runs")
-        runs = runs if isinstance(runs, list) else []
-        if index_record not in runs:
-            goal["runs"] = [index_record, *runs]
-    recent = run_history.get("recent_runs")
-    recent = recent if isinstance(recent, list) else []
-    if index_record not in recent:
-        run_history["recent_runs"] = [index_record, *recent]
+    for goal in _list_items(run_history.get("goals")):
+        if isinstance(goal, dict) and str(goal.get("id") or "") == goal_id:
+            _prepend_unique_run(goal, "latest_runs", index_record)
+            _prepend_unique_run(goal, "runs", index_record)
+    _prepend_unique_run(run_history, "recent_runs", index_record)
     after_status["run_history"] = run_history
     return after_status
 
 
 def _reload_status_after_monitor_writeback(
-    status_payload: dict[str, Any],
+    status_payload: PayloadView,
     *,
-    status_reloader: Callable[[], dict[str, Any]] | None,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    status_reloader: Callable[[], PayloadView] | None,
+) -> tuple[Payload, Payload | None]:
     if status_reloader is None:
-        return deepcopy(status_payload), None
+        return deepcopy(_mapping(status_payload)), None
     try:
         reloaded = status_reloader()
         if not isinstance(reloaded, dict):
             raise TypeError("status reloader must return a dictionary")
     except Exception as exc:  # noqa: BLE001
-        return deepcopy(status_payload), {
+        return deepcopy(_mapping(status_payload)), {
             "schema_version": "monitor_poll_status_reload_warning_v0",
             "reason": (
                 "monitor todo writeback persisted, but a fresh status "
@@ -618,7 +659,7 @@ def _reload_status_after_monitor_writeback(
                 "rerun quota should-run to select the persisted successor"
             ),
         }
-    return reloaded, None
+    return _mapping(reloaded), None
 
 
 def _monitor_poll_failure(
@@ -633,18 +674,17 @@ def _monitor_poll_failure(
     material_change: bool,
     material_change_scope: str | None,
     reason: str,
-    before: dict[str, Any],
+    before: PayloadView,
     turn_instance_id: str | None = None,
-) -> dict[str, Any]:
-    payload = {
+) -> Payload:
+    payload: Payload = {
         "ok": False,
         "mode": "monitor-poll",
         "dry_run": not execute,
         "goal_id": goal_id,
         "appended": False,
         "registry_mutated": False,
-        "source": str(source or DEFAULT_SLOT_SPEND_SOURCE).strip()
-        or DEFAULT_SLOT_SPEND_SOURCE,
+        "source": _clean_text(source) or DEFAULT_SLOT_SPEND_SOURCE,
         "agent_id": normalize_todo_claimed_by(agent_id),
         "todo_id": todo_id,
         "target_key": target_key,
@@ -653,7 +693,7 @@ def _monitor_poll_failure(
         "material_change_scope": material_change_scope,
         "reason": reason,
         "decision_summary": {
-            "before": compact_quota_decision(before),
+            "before": compact_quota_decision(_mapping(before)),
             "after": None,
         },
         "before": before,
@@ -665,13 +705,12 @@ def _monitor_poll_failure(
     return payload
 
 
-def _capability_declaration_retry(before: dict[str, Any]) -> dict[str, Any] | None:
+def _capability_declaration_retry(before: PayloadView) -> Payload | None:
     gate = _mapping(before.get("capability_gate"))
-    raw_missing = gate.get("missing")
     missing = [
         str(item).strip()
-        for item in raw_missing if str(item).strip()
-    ] if isinstance(raw_missing, list) else []
+        for item in _list_items(gate.get("missing")) if str(item).strip()
+    ]
     if not missing:
         return None
     return {
@@ -694,10 +733,10 @@ def _capability_declaration_retry(before: dict[str, Any]) -> dict[str, Any] | No
 def _monitor_advancement_authoring_fields(
     *,
     material_change: bool,
-    monitor_todo_id: Any,
-    material_change_scope: Any = None,
+    monitor_todo_id: object,
+    material_change_scope: object = None,
     successor_todo_ids: list[str],
-) -> dict[str, Any]:
+) -> Payload:
     """Attach the optional cross-command recipe outside the hot-path reducer."""
 
     if not material_change:
@@ -712,11 +751,13 @@ def _monitor_advancement_authoring_fields(
 
 
 def _provider_writeback(
-    plan: Mapping[str, Any],
+    plan: PayloadView,
     *,
     registry_path: Path,
     runtime_root: Path,
-) -> dict[str, Any]:
+    available_capabilities: list[str] | None = None,
+) -> Payload:
+    lease_proof = _mapping(plan.get("lease_proof"))
     result = write_monitor_poll_todo_state(
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -724,45 +765,45 @@ def _provider_writeback(
         generated_at=str(plan.get("generated_at") or ""),
         execute=plan.get("execute") is True,
         monitor_effect_id=str(plan.get("monitor_effect_id") or "") or None,
-        todo_id=plan.get("todo_id"),
-        target_key=plan.get("target_key"),
-        result_hash=plan.get("result_hash"),
+        todo_id=_opt_str(plan.get("todo_id")),
+        target_key=_opt_str(plan.get("target_key")),
+        result_hash=_opt_str(plan.get("result_hash")),
         material_change=plan.get("material_change") is True,
-        material_change_scope=plan.get("material_change_scope"),
-        cadence=plan.get("cadence"),
-        next_due_at=plan.get("next_due_at"),
-        reason_summary=plan.get("reason_summary"),
-        next_agent_todo=plan.get("next_agent_todo"),
-        next_action_kind=plan.get("next_action_kind"),
-        next_task_repository=plan.get("next_task_repository"),
-        next_required_capabilities=list(
-            plan.get("next_required_capabilities") or []
-        ),
-        next_continuation_policy=plan.get("next_continuation_policy"),
-        next_target_key=plan.get("next_target_key"),
-        next_user_todo=plan.get("next_user_todo"),
-        next_user_task_class=plan.get("next_user_task_class"),
-        next_claimed_by=plan.get("next_claimed_by"),
-        next_agent_priority=plan.get("next_agent_priority"),
-        next_user_priority=plan.get("next_user_priority"),
-        agent_id=plan.get("agent_id"),
-        task_lease_idempotency_key=(plan.get("lease_proof") or {}).get("idempotency_key"),
-        task_lease_expected_version=(plan.get("lease_proof") or {}).get("expected_version"),
+        material_change_scope=_opt_str(plan.get("material_change_scope")),
+        cadence=_opt_str(plan.get("cadence")),
+        next_due_at=_opt_str(plan.get("next_due_at")),
+        reason_summary=_opt_str(plan.get("reason_summary")),
+        next_agent_todo=_opt_str(plan.get("next_agent_todo")),
+        next_action_kind=_opt_str(plan.get("next_action_kind")),
+        next_task_repository=_opt_str(plan.get("next_task_repository")),
+        next_required_capabilities=_str_list(plan.get("next_required_capabilities")),
+        next_continuation_policy=_opt_str(plan.get("next_continuation_policy")),
+        next_target_key=_opt_str(plan.get("next_target_key")),
+        next_user_todo=_opt_str(plan.get("next_user_todo")),
+        next_user_task_class=_opt_str(plan.get("next_user_task_class")),
+        next_claimed_by=_opt_str(plan.get("next_claimed_by")),
+        next_agent_priority=_opt_str(plan.get("next_agent_priority")),
+        next_user_priority=_opt_str(plan.get("next_user_priority")),
+        agent_id=_opt_str(plan.get("agent_id")),
+        task_lease_idempotency_key=_opt_str(lease_proof.get("idempotency_key")),
+        task_lease_expected_version=_opt_int(lease_proof.get("expected_version")),
         gate_scope_guard=plan.get("gate_scope_guard") is True,
-        legacy_batch_version=plan.get("legacy_batch_version"),
+        available_capabilities=available_capabilities,
+        admitted_resume_when=_opt_str(plan.get("admitted_resume_when")),
+        legacy_batch_version=_opt_int(plan.get("legacy_batch_version")),
     )
     if not isinstance(result, dict):
         raise TypeError("monitor Todo provider returned no writeback receipt")
-    return result
+    return _mapping(result)
 
 
 def record_quota_monitor_poll_for_decision(
-    before: dict[str, Any],
-    status_payload: dict[str, Any],
+    before: PayloadView,
+    status_payload: PayloadView,
     *,
     goal_id: str,
-    after_decision: Callable[[dict[str, Any]], dict[str, Any]],
-    render_markdown: Callable[[dict[str, Any]], str],
+    after_decision: Callable[[Payload], PayloadView],
+    render_markdown: Callable[[Payload], str] | None = None,  # Retained for existing callers.
     registry_path: Path | None = None,
     execute: bool = False,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
@@ -779,7 +820,7 @@ def record_quota_monitor_poll_for_decision(
     next_agent_todo: str | None = None,
     next_action_kind: str | None = None,
     next_task_repository: str | None = None,
-    next_required_capabilities: list[str] | None = None,
+    next_required_capabilities: Sequence[str] | None = None,
     next_continuation_policy: str | None = None,
     next_target_key: str | None = None,
     next_user_todo: str | None = None,
@@ -790,24 +831,24 @@ def record_quota_monitor_poll_for_decision(
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     use_current_task_lease: bool = False,
-    auxiliary_settlement_todo: Mapping[str, Any] | None = None,
+    auxiliary_settlement_todo: PayloadView | None = None,
     turn_instance_id: str | None = None,
     _index_lock_held: bool = False,
-    status_reloader: Callable[[], dict[str, Any]] | None = None,
-    goal_ref: Mapping[str, Any] | None = None,
+    status_reloader: Callable[[], PayloadView] | None = None,
+    goal_ref: PayloadView | None = None,
     recovery_effect_id: str | None = None,
-) -> dict[str, Any]:
-    del render_markdown
-    normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
-    safe_todo_id = normalize_todo_id(todo_id) if todo_id else None
-    safe_target_key = str(target_key or "").strip() or None
-    safe_result_hash = str(result_hash or "").strip() or None
+    todo_id_explicit: bool = True,
+) -> Payload:
+    safe_todo_id, safe_target_key, safe_result_hash, normalized_turn_id = _normalized_poll_targets(
+        todo_id=todo_id, target_key=target_key, result_hash=result_hash,
+        turn_instance_id=turn_instance_id,
+    )
     raw_runtime_root = status_payload.get("runtime_root")
     if not raw_runtime_root:
         raise ValueError("status payload does not include runtime_root")
     runtime_root = Path(str(raw_runtime_root)).expanduser()
     index_path = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
-    decision_agent_id = quota_decision_agent_id(before)
+    decision_agent_id = quota_decision_agent_id(_mapping(before))
     effect_id = _monitor_poll_effect_id(
         runtime_root=runtime_root,
         goal_id=goal_id,
@@ -854,17 +895,12 @@ def record_quota_monitor_poll_for_decision(
         target_key=safe_target_key,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        todo_id_explicit=todo_id_explicit,
     )
     if auxiliary_settlement_todo is not None:
         decision["auxiliary_settlement_todo"] = {
             key: auxiliary_settlement_todo.get(key)
-            for key in (
-                "todo_id",
-                "task_class",
-                "status",
-                "claimed_by",
-                "excluded_agents",
-            )
+            for key in ("todo_id", "task_class", "status", "claimed_by", "excluded_agents")
         }
     observation = _observation_packet(
         before=before,
@@ -892,39 +928,25 @@ def record_quota_monitor_poll_for_decision(
         task_lease_idempotency_key=task_lease_idempotency_key,
         task_lease_expected_version=task_lease_expected_version,
     )
-    generated_at = _now_local()
+    generated_at = now_local_iso()
 
-    def failure(
-        reason: str,
-        *,
-        include_capability_retry: bool = False,
-    ) -> dict[str, Any]:
+    def failure(reason: str, *, include_capability_retry: bool = False) -> Payload:
         payload = _monitor_poll_failure(
-            goal_id=goal_id,
-            execute=execute,
-            source=source,
-            agent_id=agent_id,
-            todo_id=safe_todo_id,
-            target_key=safe_target_key,
-            result_hash=safe_result_hash,
-            material_change=material_change,
-            material_change_scope=material_change_scope,
-            reason=reason,
-            before=before,
-            turn_instance_id=normalized_turn_id,
+            goal_id=goal_id, execute=execute, source=source, agent_id=agent_id,
+            todo_id=safe_todo_id, target_key=safe_target_key,
+            result_hash=safe_result_hash, material_change=material_change,
+            material_change_scope=material_change_scope, reason=reason,
+            before=before, turn_instance_id=normalized_turn_id,
         )
         if include_capability_retry:
             retry = _capability_declaration_retry(before)
             if retry:
                 payload["capability_retry"] = retry
-                payload["reason"] = (
-                    f"{reason}; {retry['reason']}: {', '.join(retry['missing'])}"
-                )
+                missing = _str_list(retry.get("missing"))
+                payload["reason"] = f"{reason}; {retry['reason']}: {', '.join(missing)}"
         return payload
 
-    def transact(
-        source_admission: Mapping[str, Any] | None,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def transact(source_admission: PayloadView | None) -> tuple[Payload, Payload]:
         # Recheck the transport precondition inside the same quota admission as
         # the native receipt read. A legal no-effect abort may have removed it
         # since target selection; that must never turn recovery into a new poll.
@@ -933,24 +955,27 @@ def record_quota_monitor_poll_for_decision(
             not _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).exists()
         ):
             raise ValueError("original Monitor poll transaction is unavailable; reconcile its original operation before retrying")
-        common: dict[str, Any] = {
-            "effect_id": effect_id,
-            "runtime_root": runtime_root,
-            "goal_id": goal_id,
-            "source": source,
-            "generated_at": generated_at,
-            "execute": execute,
-            "expected_index_digest": _index_digest(index_path),
-            "turn_instance_id": normalized_turn_id,
-            "decision": decision,
-            "observation": observation,
-            "goal_ref": goal_ref,
-            "source_admission": source_admission,
-        }
-        after_status = deepcopy(status_payload)
-        provider_needed = bool(safe_todo_id or safe_target_key)
-        if not provider_needed:
-            return _native_result(_request(phase="commit", **common)), after_status
+        expected_digest = _index_digest(index_path)
+
+        def request_for(
+            phase: str,
+            *,
+            provider_receipt: PayloadView | None = None,
+            status_reload_warning: PayloadView | None = None,
+        ) -> Payload:
+            return _request(
+                phase=phase, effect_id=effect_id, runtime_root=runtime_root,
+                goal_id=goal_id, source=source, generated_at=generated_at,
+                execute=execute, expected_index_digest=expected_digest,
+                turn_instance_id=normalized_turn_id, decision=decision,
+                observation=observation, provider_receipt=provider_receipt,
+                status_reload_warning=status_reload_warning,
+                goal_ref=goal_ref, source_admission=source_admission,
+            )
+
+        after_status = deepcopy(_mapping(status_payload))
+        if not (safe_todo_id or safe_target_key):
+            return _native_result(request_for("commit")), after_status
 
         # Validate explicit claim routing before quota reserves a pending effect.
         # Exact retries keep their frozen admission if registry membership changed.
@@ -963,7 +988,7 @@ def record_quota_monitor_poll_for_decision(
                         "actor_agent_id": decision_agent_id, "claimed_by": next_claimed_by},
             )
 
-        native = _native_result(_request(phase="preflight", **common))
+        native = _native_result(request_for("preflight"))
         if native.get("status") != "provider_required":
             return native, after_status
         plan = native.get("provider_plan")
@@ -978,27 +1003,23 @@ def record_quota_monitor_poll_for_decision(
                 plan,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
+                available_capabilities=_runtime_capabilities(before),
             )
         except LocalCoordinationAuthorityUnavailable as exc:
             # Transport the owner's typed negative evidence. TypeScript alone
             # decides whether it releases the exact pending reservation. An
             # outage/ambiguous commit carries no no-effect proof and is retained.
             if execute and exc.payload.get("no_effect") is not None:
-                _native_result(_request(phase="provider_rejected", provider_receipt=exc.payload, **common))
+                _native_result(request_for("provider_rejected", provider_receipt=exc.payload))
             raise
-        status_warning = None
+        status_warning: Payload | None = None
         if execute:
             after_status, status_warning = _reload_status_after_monitor_writeback(
                 status_payload,
                 status_reloader=status_reloader,
             )
         native = _native_result(
-            _request(
-                phase="commit",
-                provider_receipt=provider_receipt,
-                status_reload_warning=status_warning,
-                **common,
-            )
+            request_for("commit", provider_receipt=provider_receipt, status_reload_warning=status_warning)
         )
         return native, after_status
 
@@ -1038,9 +1059,8 @@ def record_quota_monitor_poll_for_decision(
         )
         if isinstance(exc, _NativeMonitorPollRejected):
             payload["error_code"] = exc.diagnostic_code
-        else:
-            if isinstance(exc, LocalCoordinationAuthorityRejection):
-                payload["error_code"] = exc.code
+        elif isinstance(exc, LocalCoordinationAuthorityRejection):
+            payload["error_code"] = exc.code
         return payload
 
     if native.get("status") == "conflict":
@@ -1058,18 +1078,18 @@ def record_quota_monitor_poll_for_decision(
     committed_payload = native.get("payload")
     if not isinstance(committed_payload, Mapping) or committed_payload.get("ok") is not True:
         raise RuntimeError("TypeScript quota monitor-poll commit omitted its payload")
-    result = dict(committed_payload)
+    result = _mapping(committed_payload)
     index_record = native.get("index_record")
     if execute and isinstance(index_record, dict):
         after_status = _status_with_monitor_poll(
             after_status,
             goal_id=goal_id,
-            index_record=index_record,
+            index_record=_mapping(index_record),
         )
     after = after_decision(after_status)
     result["decision_summary"] = {
-        "before": compact_quota_decision(before),
-        "after": compact_quota_decision(after),
+        "before": compact_quota_decision(_mapping(before)),
+        "after": compact_quota_decision(_mapping(after)),
     }
     successor_todo_ids = result.get("successor_todo_ids")
     result.update(

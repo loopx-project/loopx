@@ -335,7 +335,8 @@ def redact_local_paths(
 
 
 def redact_response_markdown(
-    text: str, *, protected_paths: Iterable[Path | str] = ()
+    text: str, *, protected_paths: Iterable[Path | str] = (),
+    image_targets: list[str] | None = None,
 ) -> str:
     """Keep local inline-link labels without publishing unusable destinations.
 
@@ -344,6 +345,8 @@ def redact_response_markdown(
     all output still passes through the existing path privacy owner.
     """
     protected = tuple(protected_paths)
+    if image_targets is not None:
+        image_targets.clear()
     lines: list[str] = []
     fence: tuple[str, int] | None = None
     for line in str(text or "").splitlines(keepends=True):
@@ -400,6 +403,14 @@ def redact_response_markdown(
                 cursor = close
                 continue
             destination = line[destination_start : close - 1]
+            is_image = bool(start and line[start - 1] == "!")
+            if (image_targets is not None and is_image and not line.startswith(("    ", "\t"))
+                    and not line[:start - 1].endswith("\\") and len(image_targets) < 5):
+                candidate = destination.strip()
+                target = (candidate[1:].partition(">")[0] if candidate.startswith("<")
+                          else candidate.split(maxsplit=1)[0] if candidate else "")
+                if target and target not in image_targets:
+                    image_targets.append(target)
             decoded = unquote(destination)
             local = decoded.lstrip("< ").lower().startswith("file:") or any(
                 redact_local_paths(value, protected_paths=protected) != value
@@ -841,6 +852,7 @@ def normalize_agent_response(
     *,
     protected_paths: Iterable[Path | str] = (),
     team_plan_context: Mapping[str, Any] | None = None,
+    image_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     """Normalize one structured provider response to the public Chat contract."""
 
@@ -848,9 +860,39 @@ def normalize_agent_response(
 
     handoff = normalize_handoff(payload.get("context_handoff"))
     protected = tuple(protected_paths)
+    memory_prefs: list[dict[str, Any]] = []
+    raw_prefs = payload.get("memory_preferences")
+    if raw_prefs is not None:
+        if not isinstance(raw_prefs, list):
+            raise ValueError("memory_preferences must be a list")
+        redacted_prefs = [
+            {
+                **{str(k): v for k, v in item.items() if k != "content"},
+                **(
+                    {"content": redact_response_markdown(str(item["content"]), protected_paths=protected)}
+                    if isinstance(item.get("content"), str)
+                    else ({"content": item["content"]} if "content" in item else {})
+                ),
+            }
+            if isinstance(item, Mapping)
+            else item
+            for item in raw_prefs
+        ]
+        from .control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+        try:
+            memory_prefs = list(
+                effect_runtime_result(
+                    "collaboration.steward.memory_preferences",
+                    {"memory_preferences": redacted_prefs},
+                ).get("preferences")
+                or []
+            )
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
     message = redact_response_markdown(
         str(payload.get("message") or ""),
         protected_paths=protected,
+        image_targets=image_targets,
     ).strip()
     goal_draft = _normalize_goal_draft(payload, protected_paths=protected)
     # A worker's bounded progress report, never a grant or a retry decision.
@@ -860,6 +902,7 @@ def normalize_agent_response(
             or unfinished.get("effects_settled") is not True
             or any(not isinstance(unfinished.get(key), str) or not 1 <= len(unfinished[key].strip()) <= 1000
                    for key in ("remaining", "dependency"))
+            or bool(memory_prefs)
             or any(payload.get(key) for key in ("gate", "protected_action", "goal_draft", "context_handoff", "proposals"))):
         unfinished = None
     else:
@@ -869,6 +912,7 @@ def normalize_agent_response(
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": message,
+        **({"memory_preferences": memory_prefs} if memory_prefs else {}),
         **({"unfinished_work": unfinished} if unfinished else {}),
         **({"goal_draft": goal_draft} if goal_draft else {}),
         **({"context_handoff": handoff} if handoff else {}),
@@ -890,6 +934,7 @@ def parse_agent_response(
     *,
     protected_paths: Iterable[Path | str] = (),
     team_plan_context: Mapping[str, Any] | None = None,
+    image_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     protected = tuple(protected_paths)
     openings, _, uncertain = _review_openings(raw_text)
@@ -915,6 +960,7 @@ def parse_agent_response(
                     payload,
                     protected_paths=protected,
                     team_plan_context=team_plan_context,
+                    image_targets=image_targets,
                 )
             except ValueError:
                 # A bad action envelope must not discard an already generated
@@ -928,7 +974,7 @@ def parse_agent_response(
                 summary = "答复正文已保留，但操作或委派元数据未通过校验；相关操作和委派尚未提交。"
                 return normalize_agent_response({"message": answer + "\n\n待处理：" + summary,
                     "gate": {"kind": "response_metadata_invalid", "summary": summary}},
-                    protected_paths=protected)
+                    protected_paths=protected, image_targets=image_targets)
         key = re.search(r'"message"\s*:\s*', body)
         if key:
             try:
@@ -939,7 +985,7 @@ def parse_agent_response(
                 return {
                     "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
                     "message": redact_response_markdown(
-                        salvaged, protected_paths=protected
+                        salvaged, protected_paths=protected, image_targets=image_targets
                     ).strip(),
                     "proposals": [],
                     "protected_action": None,
@@ -973,7 +1019,7 @@ def parse_agent_response(
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": redact_response_markdown(
-            raw_text, protected_paths=protected
+            raw_text, protected_paths=protected, image_targets=image_targets
         ).strip(),
         "proposals": [],
         "protected_action": None,
@@ -1038,7 +1084,7 @@ def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str
     }
 
 
-def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
+def _todo_preview_fingerprint(payload: dict[str, Any], *, source_identity: str | None = None) -> str:
     compact = _compact_todo_payload(payload, applied=False)
     if payload.get("decision_read_from_provider") is True:
         # Bind the transport operation to reviewed intent and provider head.
@@ -1051,6 +1097,7 @@ def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
             "added": compact["added"],
             "already_exists": compact["already_exists"],
             "expected_revision": _todo_revision(payload),
+            **({"source_identity": source_identity} if source_identity is not None else {}),
         }
     )
 
@@ -1084,6 +1131,7 @@ def _todo_no_write_receipt(
     current_preview: dict[str, Any],
     write_attempted: bool = False,
     state_revision: str | None = None,
+    source_identity: str | None = None,
 ) -> dict[str, Any]:
     receipt = {
         "schema_version": CHAT_TODO_NO_WRITE_RECEIPT_SCHEMA_VERSION,
@@ -1092,7 +1140,7 @@ def _todo_no_write_receipt(
         "outcome": "preview_stale",
         "write_attempted": write_attempted,
         **(
-            {"current_preview_id": _todo_preview_fingerprint(current_preview)}
+            {"current_preview_id": _todo_preview_fingerprint(current_preview, source_identity=source_identity)}
             if not write_attempted and state_revision is None
             else {}
         ),
@@ -1106,15 +1154,19 @@ def _add_review_todo(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_arg: str | None,
     text: str,
     priority: str | None = None,
     dry_run: bool,
     expected_provider_revision: str | None = None,
     operation_id: str | None = None,
+    expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return add_goal_todo(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         role="agent",
         text=_normalize_todo_text(text),
         priority=priority,
@@ -1127,6 +1179,10 @@ def _add_review_todo(
             if expected_provider_revision is not None
             else {}
         ),
+        **({"expected_registry_sha256": expected_registry_sha256}
+           if expected_registry_sha256 is not None else {}),
+        **({"routing_registry_witness": routing_registry_witness}
+           if routing_registry_witness is not None else {}),
     )
 
 
@@ -1134,12 +1190,15 @@ def _bound_todo_review_preview(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_arg: str | None,
     text: str,
     priority: str | None,
+    source_identity: str | None,
 ) -> dict[str, Any]:
     payload = _add_review_todo(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
         dry_run=True,
@@ -1153,10 +1212,11 @@ def _bound_todo_review_preview(
         return _add_review_todo(
             registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root_arg=runtime_root_arg,
             text=text,
             priority=priority,
             dry_run=True,
-            operation_id="chat-todo:" + _todo_preview_fingerprint(payload),
+            operation_id="chat-todo:" + _todo_preview_fingerprint(payload, source_identity=source_identity),
             expected_provider_revision=_todo_revision(payload),
         )
     except LocalCoordinationAuthorityUnavailable as exc:
@@ -1178,15 +1238,19 @@ def build_todo_review_preview(
     goal_id: str,
     text: str,
     priority: str | None = None,
+    runtime_root_arg: str | None = None,
+    source_identity: str | None = None,
 ) -> dict[str, Any]:
     payload = _bound_todo_review_preview(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
+        source_identity=source_identity,
     )
     compact = _compact_todo_payload(payload, applied=False)
-    compact["preview_id"] = _todo_preview_fingerprint(payload)
+    compact["preview_id"] = _todo_preview_fingerprint(payload, source_identity=source_identity)
     return compact
 
 
@@ -1197,28 +1261,41 @@ def apply_todo_review_preview(
     text: str,
     priority: str | None = None,
     preview_id: str,
+    runtime_root_arg: str | None = None,
+    expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
+    source_identity: str | None = None,
+    return_authority_write: bool = False,
 ) -> dict[str, Any]:
     current_preview = _bound_todo_review_preview(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
+        source_identity=source_identity,
     )
-    if not preview_id or preview_id != _todo_preview_fingerprint(current_preview):
+    if not preview_id or preview_id != _todo_preview_fingerprint(current_preview, source_identity=source_identity):
         raise TodoReviewPreviewConflict(
             "stale todo preview; preview the proposal again before applying",
             receipt=_todo_no_write_receipt(
                 goal_id=goal_id,
                 current_preview=current_preview,
+                source_identity=source_identity,
             ),
         )
     try:
         applied = _add_review_todo(
             registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root_arg=runtime_root_arg,
             text=text,
             priority=priority,
             dry_run=False,
+            **({"expected_registry_sha256": expected_registry_sha256}
+               if expected_registry_sha256 is not None else {}),
+            **({"routing_registry_witness": routing_registry_witness}
+               if routing_registry_witness is not None else {}),
             **(
                 {
                     "expected_provider_revision": _todo_revision(current_preview),
@@ -1229,7 +1306,7 @@ def apply_todo_review_preview(
             ),
         )
     except LocalCoordinationAuthorityUnavailable as exc:
-        if exc.code != "provider_revision_mismatch":
+        if exc.code not in {"provider_revision_mismatch", "authority_source_changed"}:
             raise
         # Only a conclusive owner rejection proves no write. Unknown commit
         # responses keep their existing original-operation recovery contract.
@@ -1249,4 +1326,10 @@ def apply_todo_review_preview(
         preview_payload=current_preview,
         applied_payload=applied,
     )
+    if return_authority_write and applied.get("decision_read_from_provider") is True:
+        compact["authority_write"] = {
+            "provider_revision": applied["provider_revision"],
+            "source_authority": applied["source_authority"],
+            "operation_id": applied["operation_id"],
+        }
     return compact

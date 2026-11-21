@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 import json
@@ -9,7 +10,6 @@ from pathlib import Path
 from ..effect_runtime import _node_executable
 from ..runtime.time import now_local_iso
 from ..scheduler.state import (
-    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
     CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
     CODEX_APP_SURFACE,
     normalize_scheduler_rrule,
@@ -33,17 +33,18 @@ def _scheduler_packet(
         if isinstance(before.get("scheduler_hint"), dict)
         else {}
     )
-    if surface in {"trae_app", "antigravity_app"}:
-        packet_key = "app_automation"
-    elif (
+    packet_key = (
+        "app_automation"
+        if surface in {CODEX_APP_SURFACE, "trae_app", "antigravity_app"}
+        else surface
+    )
+    # A canonical packet can own a legacy persisted state key. Only read
+    # the historical projection when the capture predates app_automation.
+    if (
         surface == CODEX_APP_SURFACE
-        and (
-            state_key == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
-            or (state_key is None and isinstance(scheduler_hint.get("app_automation"), dict))
-        )
+        and state_key in {None, CODEX_APP_STATEFUL_BACKOFF_STATE_KEY}
+        and not isinstance(scheduler_hint.get(packet_key), dict)
     ):
-        packet_key = "app_automation"
-    else:
         packet_key = surface
     surface_packet = (
         cast(dict[str, Any], scheduler_hint.get(packet_key))
@@ -184,14 +185,29 @@ def _run_native_followup(
     host_facts: dict[str, Any],
     use_current_hint: bool,
     reason_summary: str | None,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Decision-free compatibility transport for in-process Python callers."""
+    """Decision-free compatibility transport for in-process Python callers.
 
+    A receipt-bound Turn keeps the native transaction as the single owner of
+    the missing/stale/superseded receipt fence: it rejects before any
+    scheduler mutation instead of rebuilding a second staleness rule here.
+    """
+
+    receipt_turn_instance_id = (
+        str(turn_instance_id).strip() or None
+        if turn_instance_id is not None
+        else None
+    )
     request = {
         "schema_version": _FOLLOWUP_REQUEST_SCHEMA,
         "runtime_root": str(runtime_root),
-        "turn_instance_id": None,
-        "require_heartbeat_receipt": False,
+        "registry_path": str(registry_path) if registry_path is not None else None,
+        "goal_ref": dict(goal_ref) if goal_ref is not None else None,
+        "turn_instance_id": receipt_turn_instance_id,
+        "require_heartbeat_receipt": receipt_turn_instance_id is not None,
         "before": before,
         "host_facts": host_facts,
         "use_current_hint": use_current_hint,
@@ -298,6 +314,9 @@ def record_quota_scheduler_ack_for_decision(
     generated_at: str | None = None,
     use_current_hint: bool = False,
     host_match_observed: bool = False,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     state_key = _followup_state_key(before, surface=surface, state_key=state_key)
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -367,6 +386,9 @@ def record_quota_scheduler_ack_for_decision(
             host_facts=facts,
             use_current_hint=use_current_hint,
             reason_summary=reason_summary,
+            turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
+            registry_path=registry_path,
         )
     except ValueError as exc:
         return _failure_payload(
@@ -396,6 +418,9 @@ def record_quota_scheduler_failure_for_decision(
     observed_host_rrule: str | None = None,
     failure_kind: str = "host_tool_failure",
     generated_at: str | None = None,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+    registry_path: Path | None = None,
 ) -> dict[str, Any]:
     state_key = _followup_state_key(before, surface=surface, state_key=state_key)
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -443,6 +468,9 @@ def record_quota_scheduler_failure_for_decision(
             host_facts=facts,
             use_current_hint=False,
             reason_summary=None,
+            turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
+            registry_path=registry_path,
         )
     except ValueError as exc:
         return _failure_payload(

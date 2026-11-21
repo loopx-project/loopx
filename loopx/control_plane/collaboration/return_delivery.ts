@@ -212,8 +212,13 @@ function unavailableRecord(error: unknown): boolean {
     || typeof (error as NodeJS.ErrnoException)?.code === "string";
 }
 
+function deliveryProfileMatches(command: ReturnCommand, state: JsonObject): boolean {
+  // A legacy transition cannot honor a persisted exact identity or admission.
+  return command.exact || (state.goal_ref == null && state.status !== "admitted" && state.admission == null);
+}
+
 function pendingDelivery(command: ReturnCommand, state: JsonObject): boolean {
-  if (TERMINAL.has(String(state.status))) return false;
+  if (TERMINAL.has(String(state.status)) || !deliveryProfileMatches(command, state)) return false;
   if (!command.exact || state.status !== "admitted") {
     if (state.retry_at && command.nowMicros < returnClockMicros(state.retry_at)) return false;
   }
@@ -230,6 +235,28 @@ function deliveryState(value: unknown): JsonObject {
   return state;
 }
 
+async function scanPredecessorReady(command: ReturnCommand): Promise<boolean> {
+  const requestId = String(command.request.request_id);
+  const directory = join(command.folder, "replies", requestId);
+  let reply: JsonObject | null;
+  try {
+    reply = await readReturnRecord(join(directory, `${command.key}.json`));
+  } catch (error) {
+    if (unavailableRecord(error)) return true;
+    throw error;
+  }
+  if (!reply || reply.request_id !== requestId || reply.previous_result_key === undefined) return true;
+  try {
+    // Validate previous_result_key shape before constructing any filesystem path.
+    collaborationResultDeliveryReady({ result: reply, previous_delivery: null });
+    const previous = await readReturnRecord(join(directory, `${reply.previous_result_key}.delivery.json`));
+    return Boolean(collaborationResultDeliveryReady({ result: reply, previous_delivery: previous }).ready);
+  } catch (error) {
+    if (unavailableRecord(error)) return true;
+    throw error;
+  }
+}
+
 async function scanReturns(request: JsonObject): Promise<JsonObject> {
   if (request.schema_version !== RETURN_DELIVERY_TRANSACTION) {
     throw new EffectRuntimeRequestError("return delivery transaction schema mismatch");
@@ -238,6 +265,7 @@ async function scanReturns(request: JsonObject): Promise<JsonObject> {
     throw new EffectRuntimeRequestError("return scan requires at most 128 candidates");
   }
   const candidates = [];
+  const terminalCandidates = [];
   let unavailable = 0;
   for (const candidate of request.candidates) {
     let address: ReturnType<typeof returnAddress>;
@@ -252,10 +280,11 @@ async function scanReturns(request: JsonObject): Promise<JsonObject> {
     const command = returnCommand({...request, ...address, phase: "prepare", facts: {}});
     try {
       const state = deliveryState(await readReturnRecord(command.path, {}));
-      if (pendingDelivery(command, state)) candidates.push({ request_id: command.request.request_id, result_key: command.key });
+      if (TERMINAL.has(String(state.status))) terminalCandidates.push(address);
+      else if (pendingDelivery(command, state) && await scanPredecessorReady(command)) candidates.push(address);
     } catch (error) { if (!unavailableRecord(error)) throw error; unavailable += 1; }
   }
-  return returnResponse({ candidates, unavailable_count: unavailable });
+  return returnResponse({ candidates, terminal_candidates: terminalCandidates, unavailable_count: unavailable });
 }
 
 function shiftedClock(now: string, seconds: number): string {
@@ -551,6 +580,9 @@ export async function transactManagerReturnDelivery(value: unknown): Promise<Jso
     catch (error) {
       if (command.request.phase === "prepare" && unavailableRecord(error)) return returnResponse();
       throw error;
+    }
+    if (!deliveryProfileMatches(command, state)) {
+      throw new EffectRuntimeRequestError("saved return requires the exact delivery profile");
     }
     return command.request.phase === "prepare" ? prepareReturn(command, state) : finishReturn(command, state);
   });

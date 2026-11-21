@@ -1,6 +1,6 @@
 """Read existing Goal authorities through local/SSH host/container IO.
 
-This is a read transport, not a registry, lifecycle or analysis authority.
+This is a read transport.
 The native CLI and Explore owner retain their semantics. A prepared source
 scope never grants management or starts a worker, container, tunnel or daemon.
 """
@@ -386,7 +386,7 @@ class GoalSourceReader:
                 raise
             with self._lock:
                 if pages is not self._pages:
-                    raise SourceScopeError("The original Goal source became unavailable during the read")
+                    raise ValueError("The original Goal source became unavailable during the read")
             return {**page, "source": self.source.describe(), "goal_id": goal_id}
 
     def history(self, goal_id, cursor=""):

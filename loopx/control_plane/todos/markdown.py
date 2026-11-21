@@ -4,6 +4,7 @@ import json
 import shlex
 from typing import Any
 
+from ...project_prompt import host_command, shell_arg_for_host
 from ..quota.settlement import render_settlement_progress_markdown
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
 
@@ -43,7 +44,9 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
 
 def _render_settlement_plan(plan: object) -> list[str]:
     """Project the TS-owned recovery plan without adding admission decisions."""
-    if not isinstance(plan, dict) or plan.get("schema_version") != "quota_settlement_plan_v1":
+    if not isinstance(plan, dict) or plan.get("schema_version") not in {
+        "quota_settlement_plan_v1", "quota_settlement_plan_v2",
+    }:
         return []
     lines = ["", "## Same-Turn settlement plan", ""]
     for step in plan.get("ordered_steps", []):
@@ -330,6 +333,13 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        if recovery_command := payload.get("recovery_command"):
+            command = " ".join([host_command(recovery_command[0]),
+                                *(shell_arg_for_host(arg) for arg in recovery_command[1:])])
+            lines.extend([
+                "", "Read the original operation receipt:",
+                "```sh", command, "```",
+            ])
         if payload.get("error_code") == "todo_claim_invalid_arguments":
             recovery = payload["recovery"]
             lines.extend([
@@ -354,7 +364,8 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         marker = todo_marker_for_status(payload.get("status") or TODO_STATUS_OPEN)
         lines.extend(["", "## Todo", "", f"- [{marker}] {payload.get('todo')}"])
     if (not payload.get("error") and payload.get("settlement_plan")
-            and (payload.get("replan_transition") or {}).get("turn_boundary") == "settle_original_turn_before_end"):
+            and ((payload.get("replan_transition") or {}).get("turn_boundary") == "settle_original_turn_before_end"
+                 or (payload.get("settlement_progress") or {}).get("next_step") == "durable_writeback")):
         if payload.get("instruction"):
             lines.extend(["", str(payload["instruction"])])
         lines.extend(_render_settlement_plan(payload["settlement_plan"]))

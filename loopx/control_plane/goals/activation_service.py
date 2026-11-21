@@ -4,8 +4,10 @@ from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ..projects.registry_codec import (
     activation_upgrade_registry_transaction,
@@ -13,19 +15,25 @@ from ..projects.registry_codec import (
     read_activation_upgrade_registry,
 )
 from ..effect_runtime import effect_runtime_result
-from ...paths import GLOBAL_REGISTRY_FILENAME
+from ...paths import (
+    GLOBAL_REGISTRY_FILENAME,
+    global_registry_path,
+    resolve_runtime_root,
+    select_default_runtime_root,
+)
 from ...configuration_transaction import configuration_payload_revision
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ...global_registry import sync_project_registry_to_global
 from ...history import load_registry
 from ...registry import registry_goals
 from ...registry_writability import probe_registry_write_path
-from ..actor_identity import normalize_owner_controller_actor
+from ..actor_identity import OwnerControllerActorKind, normalize_owner_controller_actor
 from ..runtime.time import now_local_iso
 from .activation import (
     GoalActivationState,
     build_goal_activation,
     goal_activation_state,
+    goal_owner_resume_id,
     normalize_goal_activation_state,
 )
 from ..content_digest import BARE_SHA256_PATTERN
@@ -231,12 +239,18 @@ def _readback(
     target_registry: Path,
     goal_id: str,
     expected_state: GoalActivationState,
+    expected_owner_resume_id: str | None,
 ) -> dict[str, Any]:
     source_goal = _goal(load_registry(source_registry), goal_id)
     target_goal = _goal(load_registry(target_registry), goal_id)
     source_state = goal_activation_state(source_goal)
     target_state = goal_activation_state(target_goal)
-    verified = source_state is expected_state and target_state is expected_state
+    verified = (
+        source_state is expected_state
+        and target_state is expected_state
+        and goal_owner_resume_id(source_goal) == expected_owner_resume_id
+        and goal_owner_resume_id(target_goal) == expected_owner_resume_id
+    )
     return {
         "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
         "status": "verified" if verified else "mismatch",
@@ -257,6 +271,7 @@ def set_goal_activation_state(
     runtime_root_override: str | None = None,
     expected_state_fingerprint: str | None = None,
     actor_kind: str | None = None,
+    owner_resume_action: bool = False,
     execute: bool = False,
 ) -> dict[str, Any]:
     """Preview or apply one reversible Goal activation transition."""
@@ -266,6 +281,13 @@ def set_goal_activation_state(
         raise ValueError("goal id is required")
     actor = normalize_owner_controller_actor(actor_kind, required=execute)
     target_state = normalize_goal_activation_state(state)
+    if owner_resume_action and not (
+        target_state is GoalActivationState.ACTIVE
+        and actor is OwnerControllerActorKind.OWNER
+    ):
+        raise ValueError(
+            "owner resume action requires active state and the owner actor"
+        )
     authority_route = _source_and_target(
         registry_path=registry_path,
         goal_id=normalized_goal_id,
@@ -299,6 +321,7 @@ def set_goal_activation_state(
     )
     before_state = goal_activation_state(source_goal)
     changed = before_state is not target_state
+    write_required = changed or owner_resume_action
     actor_label = actor.value if actor is not None else "owner"
     default_reason = (
         f"Stopped by {actor_label}"
@@ -321,6 +344,8 @@ def set_goal_activation_state(
         "before_state": before_state.value,
         "after_state": target_state.value,
         "changed": changed,
+        "owner_resume_action": owner_resume_action,
+        "owner_resume_advanced": False,
         "written": False,
         "partial_write": False,
         "source_registry": str(source_registry),
@@ -336,8 +361,8 @@ def set_goal_activation_state(
         "actor_kind": actor.value if actor is not None else None,
         "readback": {
             "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
-            "status": "not_executed" if changed else "not_required",
-            "verified": not changed,
+            "status": "not_executed" if write_required else "not_required",
+            "verified": not write_required,
         },
     }
     if (
@@ -461,7 +486,20 @@ def set_goal_activation_state(
                     }
                 )
                 return payload
-            if changed:
+            owner_resume_id = goal_owner_resume_id(locked_goal)
+            if write_required:
+                # Preserve the owner resume across later lifecycle writes.
+                # Mint it inside the source lock for an actual owner resume,
+                # including an explicit host resume while the LoopX Goal is
+                # already active. Ordinary guard entry never sets this flag.
+                if (
+                    target_state is GoalActivationState.ACTIVE
+                    and actor is OwnerControllerActorKind.OWNER
+                ):
+                    owner_resume_id = uuid4().hex
+                    payload["owner_resume_advanced"] = True
+                if owner_resume_id is not None:
+                    proposed_activation["owner_resume_id"] = owner_resume_id
                 locked_goal["activation"] = proposed_activation
                 transaction.commit(source_payload)
                 payload["written"] = True
@@ -488,6 +526,7 @@ def set_goal_activation_state(
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
                     expected_state=target_state,
+                    expected_owner_resume_id=owner_resume_id,
                 )
             )
     payload["readback"] = readback
@@ -495,7 +534,9 @@ def set_goal_activation_state(
     payload["ok"] = bool(sync_ok and readback.get("verified"))
     payload["partial_write"] = bool(payload["written"] and not payload["ok"])
     payload["projection_reconciled"] = bool(
-        not changed and registries_are_distinct and readback.get("verified")
+        not write_required
+        and registries_are_distinct
+        and readback.get("verified")
     )
     if not payload["ok"]:
         payload["error"] = "goal activation shared registry readback did not verify"
@@ -525,8 +566,52 @@ def render_goal_activation_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-# Upgrade-only IO reuses the lifecycle service and codec transactions. The
-# typed migration decoder is not another normal activation decision owner.
+def authority_upgrade_roots(registry_path: Path, runtime_root_arg: str | None,
+                            *, all_known: bool) -> list[str]:
+    """Bounded discovery from existing registries; never scan arbitrary home paths."""
+    registry = read_activation_upgrade_registry(registry_path)
+    override = runtime_root_arg or os.environ.get("LOOPX_RUNTIME_ROOT")
+    selected = resolve_runtime_root(registry, override, registry_path=registry_path).resolve()
+    roots = {selected}
+    if all_known:
+        roots.add(resolve_runtime_root(registry, registry_path=registry_path).resolve())
+        common = Path(override).expanduser().resolve() if override else select_default_runtime_root().resolve()
+        roots.add(common)
+        global_path = global_registry_path(common)
+        global_registry = read_activation_upgrade_registry(global_path)
+        for goal in global_registry.get("goals", []):
+            source = goal.get("source_registry") if isinstance(goal, dict) else None
+            if not source:
+                continue
+            path = Path(str(source)).expanduser()
+            if not path.is_absolute():
+                raise ValueError("Registered source_registry must be absolute for automatic upgrade")
+            # A disconnected checkout does not hide the common runtime store.
+            if path.exists():
+                roots.add(resolve_runtime_root(read_activation_upgrade_registry(path), registry_path=path).resolve())
+    return sorted(str(root) for root in roots)
+
+
+def authority_upgrade_registries(registry_path: Path, runtime_root_arg: str | None,
+                                *, all_known: bool) -> list[Path]:
+    """Use the same registered routes as store discovery, including the selection."""
+    roots = authority_upgrade_roots(registry_path, runtime_root_arg, all_known=all_known)
+    paths = {registry_path.expanduser().resolve()}
+    for root in roots:
+        path = global_registry_path(Path(root))
+        paths.add(path)
+        for goal in read_activation_upgrade_registry(path).get("goals", []):
+            source = goal.get("source_registry") if isinstance(goal, dict) else None
+            if source:
+                source_path = Path(str(source)).expanduser()
+                if not source_path.is_absolute():
+                    raise ValueError("Registered source_registry must be absolute for automatic upgrade")
+                paths.add(source_path.resolve())
+    return sorted(path for path in paths if path.exists())
+
+
+# Upgrade-only IO reuses the lifecycle service and codec transactions.
+
 def upgrade_goal_activation_registries(
     paths: list[Path], *, execute: bool,
 ) -> dict[str, Any]:

@@ -48,12 +48,13 @@ export function modelRoute(input: {consumer: string; native: Record<string, any>
 export function stewardRoute(input: {
   now: number; primary: string; pool: string[]; current: string;
   native: Record<string, any>; primary_capacity: Record<string, any> | null;
+  fallback_capacity?: Record<string, any> | null;
   blocked_primary?: Record<string, any> | null;
   api_ready?: boolean;
 }) {
   const no = {endpoint: null, blocked_primary: input.blocked_primary ?? null};
   if (!Number.isFinite(input.now) || !["antigravity", "codex"].includes(input.current)
-      || input.primary !== "antigravity" || !Array.isArray(input.pool)
+      || !["antigravity", "codex"].includes(input.primary) || !Array.isArray(input.pool)
       || input.pool.length !== 2 || new Set(input.pool).size !== 2
       || !input.pool.includes("antigravity") || !input.pool.includes("codex")) return no;
   const validCapacity = (row: Record<string, any> | null | undefined) => row
@@ -65,32 +66,64 @@ export function stewardRoute(input: {
     && typeof row.quota_exhausted === "boolean" && typeof row.normal_completion === "boolean"
     && row.quota_exhausted !== row.normal_completion;
   if (input.blocked_primary != null && !validCapacity(input.blocked_primary)) return no;
-  if (modelRoute({consumer: "steward", native: input.native, api_ready: input.api_ready === true}).api
-      && apiRole(input.native.policy, "steward") === "primary") return {endpoint: "codex", blocked_primary: input.blocked_primary ?? null};
-  const capacity = input.primary_capacity;
-  if (!validCapacity(capacity) || !capacity || input.now < capacity.observed_at
-      || input.now - capacity.observed_at > 120) return no;
-  let blocked = input.blocked_primary ?? null;
-  if (capacity.quota_exhausted && (!blocked || blocked.execution_id !== capacity.execution_id)) blocked = capacity;
-  const restored = blocked && (blocked.account_ref !== capacity.account_ref
-    || blocked.model_id !== capacity.model_id || blocked.reset_time !== capacity.reset_time
-    || input.now >= Date.parse(blocked.reset_time) / 1000);
-  if (capacity.remaining_fraction > 0 && (!blocked || restored) && (!capacity.quota_exhausted || restored)) {
-    return {endpoint: "antigravity", blocked_primary: blocked};
-  }
   const native = input.native;
-  // API connection/model-list checks do not prove generation allowance. An
-  // already active, explicitly authorized API route remains the native owner's
-  // selection; its pre-output key failover retains that owner's own guards.
+  const role = apiRole(native.policy, "steward");
+  const codexApiPrimary = modelRoute({consumer: "steward", native, api_ready: input.api_ready === true}).api && role === "primary";
   const current = Array.isArray(native.accounts)
     ? native.accounts.find((a: any) => a.slot === native.active_slot) : null;
   const fresh = current && Number.isFinite(current.observed_at)
     && current.observed_at <= input.now && input.now - current.observed_at <= 120;
-  const usable = native.policy?.enabled === true && native.login_matches === true
+  // API connection/model-list checks do not prove generation allowance. An
+  // already active, explicitly authorized API route remains the native owner's
+  // selection; its pre-output key failover retains that owner's own guards.
+  const codexUsable = codexApiPrimary || (native.policy?.enabled === true && native.login_matches === true
     && native.recovery_required === false && (native.api_active === true
       ? modelRoute({consumer: "steward", native, api_ready: input.api_ready === true}).api
-      : native.action === "ready" && fresh && current.availability === "available");
-  return {endpoint: usable ? "codex" : null, blocked_primary: blocked};
+      : native.action === "ready" && fresh && current.availability === "available"));
+
+  if (input.primary === "antigravity") {
+    if (codexApiPrimary) return {endpoint: "codex", blocked_primary: input.blocked_primary ?? null};
+    const capacity = input.primary_capacity;
+    if (!validCapacity(capacity) || !capacity || input.now < capacity.observed_at
+        || input.now - capacity.observed_at > 120) return no;
+    let blocked = input.blocked_primary ?? null;
+    if (capacity.quota_exhausted && (!blocked || blocked.execution_id !== capacity.execution_id)) blocked = capacity;
+    const restored = blocked && (blocked.account_ref !== capacity.account_ref
+      || blocked.model_id !== capacity.model_id || blocked.reset_time !== capacity.reset_time
+      || input.now >= Date.parse(blocked.reset_time) / 1000);
+    if (capacity.remaining_fraction > 0 && (!blocked || restored) && (!capacity.quota_exhausted || restored)) {
+      return {endpoint: "antigravity", blocked_primary: blocked};
+    }
+    return {endpoint: codexUsable ? "codex" : null, blocked_primary: blocked};
+  }
+
+  if (codexUsable) return {endpoint: "codex", blocked_primary: input.blocked_primary ?? null};
+  const slots: unknown[] = Array.isArray(native.policy?.slots) ? native.policy.slots : [];
+  const accountsBySlot = new Map(
+    Array.isArray(native.accounts) ? native.accounts.map((a: any) => [a?.slot, a]) : [],
+  );
+  const allSlotsExhausted = slots.length > 0 && native.policy?.enabled === true
+    && native.login_matches === true && native.recovery_required === false
+    && slots.every(slot => {
+      const a = accountsBySlot.get(slot);
+      return a && a.availability === "exhausted"
+        && ((Number.isFinite(a.observed_at) && a.observed_at <= input.now && input.now - a.observed_at <= 120)
+            || (Number.isFinite(a.reset_at) && a.reset_at > input.now));
+    });
+  const apiFallback = role === "fallback" || native.policy?.api_fallback === true;
+  if (!allSlotsExhausted || (apiFallback && input.api_ready === true)) return no;
+  const fallback = input.fallback_capacity;
+  if (!validCapacity(fallback) || !fallback || fallback.observed_at > input.now
+      || input.now - fallback.observed_at > 120) return no;
+  const blocked = input.blocked_primary ?? null;
+  const unblockedFallback = !blocked || blocked.account_ref !== fallback.account_ref
+    || blocked.model_id !== fallback.model_id || blocked.reset_time !== fallback.reset_time
+    || input.now >= Date.parse(blocked.reset_time) / 1000;
+  if (fallback.remaining_fraction > 0 && !fallback.quota_exhausted
+      && fallback.normal_completion === true && unblockedFallback) {
+    return {endpoint: "antigravity", blocked_primary: blocked};
+  }
+  return no;
 }
 
 /** Diagnostic liveness only; this never grants switching or process authority. */
@@ -152,8 +185,7 @@ export function account(observation: Observation, now: number): Account {
   const blocked = values.filter(v => v.used === 100);
   if (blocked.length) {
     result.reset_at = Math.max(...blocked.map(v => v.reset!));
-    // Subscription exhaustion alone does not prove a credit-funded account is
-    // unusable. This observer never buys credits or invokes a paid reset.
+        //  This observer never buys credits or invokes a paid reset.
     result.availability = result.credits_available === true ? "available"
       : result.credits_available === false ? "exhausted" : "unknown";
   } else if (values.length && limits.allowed !== false && limits.limit_reached !== true) {

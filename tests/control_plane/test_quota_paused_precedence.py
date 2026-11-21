@@ -160,7 +160,7 @@ def test_paused_quota_stops_codex_app_heartbeat_until_explicit_resume() -> None:
 
     scheduler = payload["scheduler_hint"]
     assert scheduler["reason_code"] == "quota_paused"
-    codex_app = scheduler["codex_app"]
+    codex_app = scheduler["app_automation"]
     assert codex_app["applicability"] == "applicable"
     assert codex_app["apply"] == "pause_or_delete_current_heartbeat_if_possible"
     assert codex_app["host_action"] == "pause_or_delete_current_heartbeat"

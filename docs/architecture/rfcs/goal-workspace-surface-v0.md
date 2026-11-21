@@ -720,6 +720,17 @@ the existing expansion budget. This qualifies the browser driver's target
 selection; product focus recovery and the causes of earlier partial inventories
 retain their separate evidence requirements.
 
+Coverage-enabled source runs now qualify the complete M2 journey without V8
+coverage first, enforcing the ordinary below-1-second transition medians, all
+15 loaded-lens samples, and the unchanged initial-render and expansion limits.
+When coverage is requested, a second complete journey collects coverage and
+reports both timing sets while retaining classification, selection, no-effect,
+error and remote-source checks. A failed uninstrumented gate stops the run
+before coverage can supply a replacement result. Acceptance retains
+`renderQualification` and `coverageDiagnostics`; ordinary and packaged runs
+execute only the uninstrumented qualification. This changes neither the
+workload nor the numerical budgets and does not reclassify earlier failures.
+
 **Checkpoint 2026-11-12 (source-coverage execution).**
 The source lane now executes the real disposable first-Goal and runtime-readiness
 backends rather than returning packaged-only PASS receipts. Explicitly required
@@ -750,6 +761,15 @@ The failed source partitions and historical frozen failures retain their origina
 status. This is named local source qualification, not Linux CI, an installed-host
 upgrade, model task completion, kernel attribution or full-cost acceptance. V10
 thresholds and the remaining real-team/product milestones retain their owners.
+
+**Follow-up: source coverage for research-record search.**
+The original search scenario opened the compiled bundle in both lanes. Its
+assertions could pass while the source coverage reporter dropped all of its
+scripts. The source lane now opens Vite and forwards data requests to the
+same disposable paged-history owner used by the packaged lane. A PASS
+requires native history reads without mutation; source coverage also requires
+execution of the instrumented research-record browser module. This narrows
+the coverage gap without changing the historical V10 timing results.
 
 **Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), subsequently merged).**
 Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks

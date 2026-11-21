@@ -21,7 +21,6 @@ from .chat import (
     CHAT_REVIEW_CLOSE_TAG,
     CHAT_REVIEW_OPEN_TAG,
     VisibleResponseStreamFilter,
-    parse_agent_response,
 )
 
 
@@ -256,8 +255,8 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 ),
             )
     # App-server v2 exposes camel-case discriminators. Unknown/new variants
-    # retain the generic failure; message/additionalDetails are not evidence
-    # of a policy decision and may contain private upstream content.
+    # retain the generic failure; message/additionalDetails may contain private
+    # upstream content.
     known = {
         "cyberPolicy": ("cyber_policy", "Codex 上游返回了安全策略拦截，本轮未完成。"),
         "misalignmentPolicyViolation": (
@@ -500,6 +499,7 @@ def _turn_prompt(
     runtime_profile: str = "restricted",
     project_work: bool = False,
     public_source_read_context: str = "",
+    reply_image_directory: Path | None = None,
 ) -> str:
     direct_work = runtime_profile == "trusted_owner" and not execution_mode and not project_work
     try:
@@ -562,6 +562,14 @@ def _turn_prompt(
         + trusted_manager_limits
         + public_source_read_context
         + (
+            "If the requested reply includes images you create or capture for this Turn, "
+            f"save only those images in the existing workspace under {reply_image_directory} "
+            "and reference them in the final Markdown answer using their absolute paths. "
+            "Use PNG, JPEG, GIF or WebP, up to four images, 5 MiB each and 12 MiB combined. "
+            "Keep captions and order, and explain if an image could not be captured. "
+            if reply_image_directory is not None else ""
+        )
+        + (
             "For explanation-only repository questions, batch independent initial reads of applicable project instructions with focused searches of current documentation and the owning code. "
             "When the project root and search terms are already supplied, avoid a separate working-directory check or broad file inventory. Use an output budget that retains complete applicable instructions, then fetch only relevant documentation and source sections. "
             "Read applicable skills and reuse unchanged instruction reads; stop unrelated discovery when the requested facts have sufficient evidence. "
@@ -585,7 +593,7 @@ def _turn_prompt(
             "describe the bounded proposal clearly so LoopX can route it through typed preview and explicit apply. "
             "For a Todo proposal include goal_id from the verified Goal directory alongside kind='todo', text, priority and rationale. "
             "If the intended Goal is unresolved, resolve it from authorized context or ask one focused question; never infer a durable target from whichever Goal the UI happens to show. "
-            "A Todo preview is not a recorded task; the host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
+            "The host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
             if not project_work and not execution_mode else ""
         )
         + protected_action_contract
@@ -720,6 +728,8 @@ class CodexChatAgentSession:
     _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
         default=None, repr=False
     )
+    _native_task_policy_used: bool = field(default=False, repr=False)
+    _managed_goal_read_default: bool = field(default=False, repr=False)
 
     @classmethod
     def start(
@@ -1483,9 +1493,9 @@ class CodexChatAgentSession:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
 
-    def compact_history(self, *, check: Callable[[], None] | None = None) -> None:
+    def compact_history(self, *, check: Callable[[], None] | None = None) -> int | None:
         from .capabilities.native_chat.codex_adapter import compact_native_history
-        compact_native_history(self, check=check)
+        return compact_native_history(self, check=check)
 
     def steer(self, user_message: str, *, expected_turn_id: str,
               client_message_id: str | None = None) -> str:
@@ -1734,39 +1744,33 @@ class CodexChatAgentSession:
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
         check_running: Callable[[], None] | None = None,
+        reply_image_turn_id: str | None = None,
+        _native_task: bool = False,
+        sandbox_policy: dict[str, object] | None = None,
     ) -> dict[str, Any]:
-        text = str(user_message or "")
-        if not text.strip():
-            raise ValueError("user message is required")
-        if self.read_only_review and not self.metadata_review and not self.answer_review:
-            text = (
-                "Review the existing results of the interrupted original request below. "
-                "Its earlier execution may have already changed files or external systems. "
-                "Use the original native history and current local artifacts to verify what actually happened. "
-                "This Turn is read-only: do not re-execute the business request, write, send, delegate or start background work. "
-                "Return a clear answer to the original user, distinguishing verified results from remaining gaps. "
-                "If verification is incomplete, report the concrete limitation; do not claim completion. "
-                "Original request: " + text
-            )
-        if project_collaboration:
-            if (self.execution_mode or self.read_only_review or output_schema is not None
-                    or not self.project_context or self.project_context.get("audience") != "bound_owner"):
-                raise ValueError("original project collaboration requires its existing bound project session")
-            from .control_plane.effect_runtime import effect_runtime_result
-            output_schema = effect_runtime_result("collaboration.project.response_schema", {})
-        if output_schema is not None and not self.execution_mode and not project_collaboration:
-            raise ValueError("structured Turn output requires an execution session")
+        if not _native_task and (self._native_task_policy_used or self._managed_goal_read_default) and sandbox_policy is None:
+            sandbox_policy = {"type": "readOnly", "networkAccess": False}
+        from .capabilities.native_chat.codex_adapter import native_turn_response, prepare_native_turn_text
+        text, output_schema = prepare_native_turn_text(self, user_message, output_schema=output_schema,
+            project_collaboration=project_collaboration, native_task=_native_task,
+            sandbox_policy=sandbox_policy, turn_start_guard=turn_start_guard)
         with self._request_id_lock:
             request_id = self.next_request_id
             self.next_request_id += 1
+        image_dir = None
+        if reply_image_turn_id is not None:
+            from .capabilities.native_chat.file_discovery import reply_image_directory
+
+            image_dir = self.work_dir.resolve() / reply_image_directory(reply_image_turn_id)
         if output_schema is None:
             text = _turn_prompt(
                 text,
                 context_summary=self.context_summary,
-                execution_mode=self.execution_mode,
+                execution_mode=self.execution_mode or _native_task,
                 runtime_profile=self.runtime_profile,
                 project_work=self.project_context is not None and self.sandbox == "workspace-write",
                 public_source_read_context=self._public_source_read_context,
+                reply_image_directory=image_dir,
             )
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
         from .chat_attachments import native_attachment_inputs
@@ -1777,6 +1781,10 @@ class CodexChatAgentSession:
         started_at = time.monotonic()
         start_timeout = min(self.idle_timeout_sec, self.hard_timeout_sec
                             if self.hard_timeout_sec is not None else self.idle_timeout_sec)
+        if _native_task:
+            # Publication may be uncertain. Every subsequent ordinary send
+            # must narrow the sticky native policy, even after an exception.
+            self._native_task_policy_used = True
         turn_result = self._request(
             "turn/start",
             {
@@ -1788,9 +1796,13 @@ class CodexChatAgentSession:
                 # Chat renders native summaries, but a resumed thread may have
                 # disabled them. Request the public summary on each Chat Turn;
                 # execution hosts retain their own verbosity configuration.
-                **({"summary": "concise"} if not self.execution_mode else {}),
+                **({"summary": "concise"} if not (self.execution_mode or _native_task) else {}),
                 "approvalPolicy": "never",
                 **({"permissions": self.permissions_profile} if self.permissions_profile else {}),
+                **({"sandboxPolicy": sandbox_policy} if sandbox_policy is not None else {}),
+                **({"runtimeWorkspaceRoots": [str(self.work_dir.resolve())]}
+                   if _native_task and sandbox_policy is not None
+                   and sandbox_policy.get("type") == "workspaceWrite" else {}),
                 **(
                     {"outputSchema": output_schema} if output_schema is not None else {}
                 ),
@@ -1894,8 +1906,7 @@ class CodexChatAgentSession:
                         str(item.get("type") or "") if isinstance(item, dict) else ""
                     )
                     step = steps.started(item)
-                    # Transport activity does not prove a Goal read or a
-                    # successful check. The label stays typed; the step names
+                    # The label stays typed; the step names
                     # the command, tool or path through redacted fields only.
                     phase = {
                         "userMessage": "Agent 已收到消息",
@@ -1982,23 +1993,9 @@ class CodexChatAgentSession:
             visible_delta_count += 1
             on_event("answer.delta", {"text": visible_tail})
         raw_response = completed_agent_response if completed_agent_response is not None else "".join(parts)
-        if output_schema is not None:
-            try:
-                result = json.loads(raw_response)
-            except (ValueError, TypeError) as exc:
-                raise self._runtime_error(
-                    "Codex Turn did not return structured output."
-                ) from exc
-            if not isinstance(result, dict):
-                raise self._runtime_error("Codex Turn output is not an object.")
-            self.current_turn_id = ""
-            return result
-        response = parse_agent_response(
-            raw_response,
-            protected_paths=[self.work_dir],
-            team_plan_context=getattr(self, "team_plan_context", None),
-        )
-        if on_event:
+        response = native_turn_response(self, raw_response, output_schema=output_schema,
+                                        reply_image_turn_id=reply_image_turn_id)
+        if output_schema is None and on_event:
             if (
                 CHAT_REVIEW_OPEN_TAG not in raw_response
                 or CHAT_REVIEW_CLOSE_TAG not in raw_response

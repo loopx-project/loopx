@@ -371,7 +371,13 @@ async function runConversation(browser, uncertain) {
       await panel.getByText('来源：cursor。此宿主的工作记录与回复尚未接入。',{exact:true}).waitFor();
       assert.equal(await live.count(),0,'Changing the Agent removes the old live records');
       assert.equal(await recordedModel.count(),0,'Changing the Agent removes the old model observation');
-      await page.waitForFunction(async () => (await (await fetch('/fixture/following')).json()).events.at(-1) === false);
+      const readFollowEvents = async () => (await (await page.request.get(new URL('/fixture/following',url).href)).json()).events;
+      // Await the backend read itself: an async waitForFunction predicate is a
+      // truthy Promise, so it can finish before the old follower has stopped.
+      for (let attempt = 0; attempt < 100 && (await readFollowEvents()).at(-1) !== false; attempt++) {
+        await page.waitForTimeout(50);
+      }
+      assert.equal((await readFollowEvents()).at(-1),false,'Changing the Agent stops the old native follower before measuring the new one');
       await panel.getByRole('combobox',{name:'查看 Agent'}).selectOption('worker');
       await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
       assert.equal(await live.locator('article').count(),2,'A new baseline does not duplicate old live rows');
@@ -383,11 +389,10 @@ async function runConversation(browser, uncertain) {
       await page.request.post(new URL('/fixture/live-update',url).href);
       await panel.getByText('正在回看历史 · 有新活动',{exact:true}).waitFor();
       assert.equal(await live.getByText('原宿主实时草稿，已持续更新 2。',{exact:true}).count(),0,'History reading freezes the newer live draft');
-      const followEvents = async () => (await (await page.request.get(new URL('/fixture/following',url).href)).json()).events.length;
-      const followsBefore = await followEvents();
+      const followsBefore = (await readFollowEvents()).length;
       await scrollHistory(page, panel, 1);
       await live.getByText('原宿主实时草稿，已持续更新 2。',{exact:true}).waitFor({timeout: 3000});
-      assert.equal(await followEvents(),followsBefore,'Returning to the tail publishes the buffer instead of waiting for a new subscription');
+      assert.equal((await readFollowEvents()).length,followsBefore,'Returning to the tail publishes the buffer instead of waiting for a new subscription');
       assert.equal(await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).count(),0,'Returning to the tail replaces the stale draft');
       assert.equal(await inputCount(),0,'Observation never submits native input');
       await page.request.post(new URL('/fixture/live-finish',url).href);
@@ -618,7 +623,64 @@ async function runConversation(browser, uncertain) {
     await expandActivity(toolResult);
     await toolResult.locator('summary').click();
     const recordId = await toolResult.getAttribute('data-record-id');
-    let detailPages = 0;
+    const readMore = toolResult.getByRole('button',{name:'继续读取完整内容',exact:true});
+    const prefix = await toolResult.locator('pre').textContent();
+    const detailRequests = [];
+    const observeDetail = request => {
+      const target = new URL(request.url());
+      if (target.pathname === '/api/chat/codex-attached' && target.searchParams.get('entry_id') === recordId) {
+        detailRequests.push(target.search);
+      }
+    };
+    page.on('request', observeDetail);
+    await page.request.post(new URL('/fixture/content-body-denied',url).href);
+    await readMore.click();
+    await toolResult.getByRole('alert').waitFor();
+    assert.equal(await toolResult.locator('pre').textContent(), prefix);
+    assert.equal(detailRequests.length, 1, 'A denied detail read must not retry when its body is lost');
+    for (const [boundary, reopenImmediately] of [['record', false], ['activity', false], ['record', true], ['activity', true]]) {
+      const before = detailRequests.length;
+      await page.request.post(new URL('/fixture/content-body-hold',url).href);
+      const headers = page.waitForResponse(response => {
+        const target = new URL(response.url());
+        return target.pathname === '/api/chat/codex-attached' && target.searchParams.get('entry_id') === recordId;
+      });
+      await readMore.click();
+      const pending = await headers;
+      assert.equal(pending.status(), 200, 'The original read has received its success headers');
+      const requestCanceled = page.waitForEvent('requestfailed', request => request === pending.request());
+      const disclosure = boundary === 'record' ? toolResult.locator(':scope > details') :
+        toolResult.locator('xpath=ancestor::details[contains(@class,"attached-record-group")]');
+      const summary = disclosure.locator(':scope > summary');
+      if (reopenImmediately) {
+        await disclosure.evaluate(node => {
+          node.open = false;
+          node.open = true;
+        });
+      } else {
+        await summary.press('Enter');
+        assert.equal(await disclosure.evaluate(node => node.open), false);
+      }
+      await page.request.post(new URL('/fixture/content-body-release',url).href);
+      assert.match((await requestCanceled).failure()?.errorText ?? '', /ERR_ABORTED/);
+      if (!reopenImmediately) await summary.press('Enter');
+      await readMore.waitFor();
+      assert.equal(await readMore.isEnabled(), true, 'Reopening permits an explicit read at the retained position');
+      assert.equal(detailRequests.length, before + 1, `Closing ${boundary} prevents a hidden retry`);
+      assert.equal(await toolResult.locator('pre').textContent(), prefix, 'A cancelled page cannot replace the retained prefix');
+      assert.equal(await toolResult.getByRole('alert').count(), 0);
+    }
+    await page.request.post(new URL('/fixture/content-body-drop',url).href);
+    await readMore.click();
+    await page.waitForFunction(({id, previous}) => {
+      const text = document.querySelector(`article[data-record-id="${CSS.escape(id)}"] pre`)?.textContent;
+      return text != null && text !== previous;
+    }, {id: recordId, previous: prefix});
+    assert.equal(detailRequests.length, 7, 'A dropped success body recovers with one read after the explicit click');
+    assert.equal(new Set(detailRequests).size, 1, 'All three requests keep the original binding, record and offset');
+    assert.equal(await toolResult.getByRole('alert').count(), 0);
+    page.off('request', observeDetail);
+    let detailPages = 1;
     while (await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).count()) {
       const before = await toolResult.locator('pre').textContent();
       await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).click();
@@ -629,13 +691,13 @@ async function runConversation(browser, uncertain) {
       await toolResult.getByRole('button',{name:'正在读取…',exact:true}).waitFor({state:'hidden'});
       assert.ok(++detailPages <= 32, 'The bounded reference must finish reading');
     }
-    assert.ok(detailPages > 0, 'The genuine reference crosses a detail-page boundary');
     assert.equal(await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).count(),0);
     // Unicode detail offsets must count source characters, not JS UTF-16 units.
     const body = await toolResult.locator('pre').textContent();
     assert.ok(body.startsWith('🧭\n'));
     assert.deepEqual(JSON.parse(body.slice('🧭\n'.length)), benchmarkReference,
       'Every real observation, original wording, negative/unknown result and provenance survives native paging');
+    assert.equal(await inputCount(), 5, 'Recovering original content never submits a native reply');
     await page.screenshot({path:resolve(outputDir,'attached-codex-benchmark-detail-desktop.png'),animations:'disabled'});
     await page.setViewportSize({width:390,height:844});
     assert.ok(await page.locator('body').evaluate(node => node.scrollWidth <= innerWidth + 1));

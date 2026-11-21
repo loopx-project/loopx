@@ -146,7 +146,7 @@ class ChatIngressStore:
     @cached_property
     def _terminal_turn_discovery(self) -> FileChatDiscovery:
         # Queue discovery and client lookup share this hint. Concurrent first use
-        # may build two empty observers; neither holds execution authority.
+        # may build two empty observers.
         return FileChatDiscovery()
 
     def _turn_discovery_rows(
@@ -247,6 +247,11 @@ class ChatIngressStore:
                 and str(payload.get("turn_id") or "") != active_turn_id
             ):
                 rows.append(payload)
+        # The ordinary read has no selectable Turn when storage has no queued
+        # candidates. Explicit capacity and strict reads still use the owner.
+        if not rows and not strict and not include_reserved and capacity_at is None:
+            return []
+
         from .control_plane.chat_turn_acceptance import queued_chat_turn_ids
         selected = set(queued_chat_turn_ids(rows, active_turn_id, include_reserved=include_reserved, capacity_at=capacity_at))
         return sorted(
@@ -335,15 +340,28 @@ class ChatIngressStore:
 
     def steering_receipt(self, session_id: str, ingress_id: str):
         """A corrupt receipt cannot be treated as absence and resent."""
-        from .chat_store import CHAT_INGRESS_SCHEMA_VERSION
+        return self._strict_ingress_receipt(session_id, ingress_id)
+
+    def _strict_ingress_receipt(self, session_id: str, ingress_id: str) -> dict[str, Any] | None:
+        """Absent is ``None``; any other unreadable receipt fails closed."""
+        from .chat_store import CHAT_INGRESS_SCHEMA_VERSION, _opaque_id
+        # The receipt is stored under the normalized id, so a replay that repeats
+        # the original (padded) text must be matched against that same id.
+        ingress_id = _opaque_id(ingress_id, field="client_ingress_id")
         path = self._ingress_path(session_id, ingress_id)
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            if os.path.lexists(path):
+                # A link whose target is gone is an existing entry, not absence:
+                # replacing it would resend a message that may have been delivered.
+                raise OSError("Ingress receipt is unreadable") from exc
             return None
+        except (OSError, ValueError) as exc:
+            raise OSError("Ingress receipt is unreadable") from exc
         if (not isinstance(value, dict) or value.get("schema_version") != CHAT_INGRESS_SCHEMA_VERSION
                 or value.get("session_id") != session_id or value.get("client_ingress_id") != ingress_id):
-            raise OSError("Steering receipt is unreadable")
+            raise OSError("Ingress receipt is unreadable")
         return value
 
     def steering_delivery_lock(self, session_id: str, ingress_id: str):
@@ -588,7 +606,7 @@ class ChatIngressStore:
     ) -> tuple[dict[str, Any], bool]:
         """Reserve one idempotent external ingress before provider delivery."""
 
-        from .chat_store import _opaque_id, _read_json, _atomic_write_json, utc_now, CHAT_INGRESS_SCHEMA_VERSION
+        from .chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_INGRESS_SCHEMA_VERSION
 
         if self.load_session(session_id) is None:
             raise KeyError("chat session was not found")
@@ -598,8 +616,10 @@ class ChatIngressStore:
             agent_id="loopx-chat",
             operation="create_chat_ingress_receipt",
         ):
-            existing = _read_json(path)
-            if existing.get("schema_version") == CHAT_INGRESS_SCHEMA_VERSION:
+            # A damaged receipt may record a delivered send. It is not absence:
+            # recreating it would resend the message and erase that evidence.
+            existing = self._strict_ingress_receipt(session_id, client_ingress_id)
+            if existing is not None:
                 request = {"mode": _opaque_id(mode, field="mode"), "message": str(message)}
                 if expected_turn_id is not None or "expected_turn_id" in existing:
                     request["expected_turn_id"] = expected_turn_id

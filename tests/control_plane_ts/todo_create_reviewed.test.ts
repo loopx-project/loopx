@@ -11,8 +11,25 @@ import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema,
   type PostgreSqlAuthorityDatabase} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {TODO_DOMAIN_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
-import {executeCoordinationTodoCreate} from "../../loopx/control_plane/coordination/todo_create.ts";
+import {executeCoordinationTodoCreate, decodeCoordinationTodoCreateReceipt,
+  COORDINATION_TODO_CREATE_RECEIPT_SCHEMA} from "../../loopx/control_plane/coordination/todo_create.ts";
 import {createLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
+
+test("historical creation decoding preserves the receipt and rejects mismatched identity", () => {
+  const original = {schema_version: COORDINATION_TODO_CREATE_RECEIPT_SCHEMA,
+    operation_id: "created-once", goal_id: "goal-a", todo_id: "todo-created",
+    todo: {todo_id: "todo-created", status: "open", role: "agent"}};
+  const before = structuredClone(original);
+  const decoded = decodeCoordinationTodoCreateReceipt(original, "todo-created");
+  assert.equal(decoded.changed, true);
+  assert.deepEqual(decoded.fields.todo, original.todo);
+  assert.deepEqual(original, before, "projection does not rewrite historical receipts");
+  for (const malformed of [
+    {...original, schema_version: "unrelated-receipt"},
+    {...original, todo_id: "other"},
+    {...original, todo: {...original.todo, todo_id: "other"}},
+  ]) assert.throws(() => decodeCoordinationTodoCreateReceipt(malformed, "todo-created"), /identity mismatch/);
+});
 
 for (const provider of ["file", "sqlite", "postgresql"] as const) {
   test(`${provider}: reviewed create fences concurrent commits and recovers its bound identity`,

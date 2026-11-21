@@ -75,6 +75,8 @@ pub(crate) fn save(
     if !matches!(channel, "main" | "stable") || semver::Version::parse(version).is_err() {
         return Err(INVALID.into());
     }
+    #[cfg(target_os = "macos")]
+    crate::macos_update::qualify_candidate(channel, version, bytes)?;
     fs::create_dir_all(root).map_err(|_| INVALID)?;
     let old = metadata(root).ok().flatten();
     let value = json!({"schema_version":"desktop_prepared_update_v1", "channel":channel,
@@ -107,12 +109,40 @@ pub(crate) fn load(
     channel: &str,
     public_key: &str,
 ) -> Result<Option<PreparedUpdate>, String> {
+    read(root, current, channel, public_key, CacheRead::Consume)
+}
+
+/// Preparation may reuse a verified archive, but cannot retire another
+/// channel's cache while its original workspace is still running.
+pub(crate) fn peek(
+    root: &Path,
+    current: &str,
+    channel: &str,
+    public_key: &str,
+) -> Result<Option<PreparedUpdate>, String> {
+    read(root, current, channel, public_key, CacheRead::Reuse)
+}
+
+enum CacheRead {
+    Consume,
+    Reuse,
+}
+
+fn read(
+    root: &Path,
+    current: &str,
+    channel: &str,
+    public_key: &str,
+    mode: CacheRead,
+) -> Result<Option<PreparedUpdate>, String> {
     let Some(value) = metadata(root)? else {
         return Ok(None);
     };
     let version = value["version"].as_str().ok_or(INVALID)?;
     if value["channel"] != channel || !is_newer(current, version, channel) {
-        clear(root)?;
+        if matches!(mode, CacheRead::Consume) {
+            clear(root)?;
+        }
         return Ok(None);
     }
     let bytes = fs::read(root.join(archive_name(&value)?)).map_err(|_| INVALID)?;
@@ -128,6 +158,8 @@ pub(crate) fn load(
     let signature = Signature::decode(std::str::from_utf8(&signature).map_err(|_| INVALID)?)
         .map_err(|_| INVALID)?;
     key.verify(&bytes, &signature, true).map_err(|_| INVALID)?;
+    #[cfg(target_os = "macos")]
+    crate::macos_update::qualify_candidate(channel, version, &bytes)?;
     Ok(Some(PreparedUpdate {
         version: version.into(),
         signature: value["signature"].as_str().ok_or(INVALID)?.into(),

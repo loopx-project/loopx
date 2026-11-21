@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -10,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ...bootstrap_command_pack import build_start_goal_guided_packet
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
-from ..quota.turn_envelope import quota_action_signature_document
+from ..quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision, quota_action_signature_document
 from ..work_items.interaction_contract import build_interaction_contract
 from .action_portfolio_scenarios import (
     turn_scenario_source as _turn_scenario_source,
@@ -64,7 +65,8 @@ ACTUAL_DEFAULT_MODEL_BEHAVIOR_CATALOG_SCHEMA_VERSION = (
     "actual_default_model_behavior_scenario_catalog_v0"
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS = 2
-# Synthetic pretty-JSON regression allowance, not a production transport limit.
+# Historical compact-output threshold: characterizes the crowded fixture only.
+# Current actors receive the complete source; production wire/page limits are separate.
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 90_000
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION = (
     "actual_default_model_behavior_contrast_v0"
@@ -428,7 +430,7 @@ def _write_scenario_project(root: Path) -> tuple[Path, Path]:
         "status": "active", "repo": str(project),
         "state_file": str(state_file.relative_to(project)),
     }
-    # This is a new empty synthetic Goal, not an imported legacy authority.
+    # This is a new empty synthetic Goal.
     # Reuse the first-party typed creation owner before requesting its frontier.
     configure_source_creation_goal(goal, [ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID],
                                    "sqlite", "portfolio-entry-fixture")
@@ -755,12 +757,12 @@ def _build_actual_default_model_behavior_scenario_sources(
     return packets
 
 
-def _compact_actual_default_model_behavior_scenario_sources(
+def _compose_actual_default_model_behavior_scenario_sources(
     sources: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     return {
         scenario_id: (
-            compact_quota_should_run_cli_payload(deepcopy(dict(packet)))
+            compose_turn_decision(packet, composed_settlement=True)
             if packet.get("mode") == "should-run"
             else deepcopy(dict(packet))
         )
@@ -774,7 +776,7 @@ def build_actual_default_model_behavior_scenario_inputs(
     """Build paired source and actual-default actor packets from one fixture."""
 
     sources = _build_actual_default_model_behavior_scenario_sources(root)
-    return sources, _compact_actual_default_model_behavior_scenario_sources(sources)
+    return sources, _compose_actual_default_model_behavior_scenario_sources(sources)
 
 
 def build_actual_default_model_behavior_scenario_packets(
@@ -839,8 +841,7 @@ def _validate_quota_hot_path_compaction_regression(
 ) -> None:
     if _pretty_json_size(source) <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
         raise ValueError("compaction-regression source must exceed the hot-path budget")
-    if _pretty_json_size(packet) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
-        raise ValueError("compaction-regression packet exceeds the hot-path budget")
+    assert_complete_turn_decision(packet)
     if packet.get("capability_gate") != source.get("capability_gate"):
         raise ValueError("compaction regression must preserve complete capability candidate context")
     if contract.get("selected_todo_id") != expected_selected_todo_id:
@@ -1389,6 +1390,21 @@ def _contrast_result(
     }
 
 
+def _aborted_scenario_result(spec: _ScenarioSpec) -> dict[str, Any]:
+    return {
+        "scenario_id": spec.scenario_id,
+        "actor_kind": spec.actor_kind,
+        "phase": spec.phase,
+        "expected_route": spec.expected_route,
+        "status": "not_run",
+        "repeats_required": ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS,
+        "repeats_completed": 0,
+        "observed_routes": [],
+        "failure_codes": ["portfolio_aborted_after_actor_error"],
+        "receipt_digests": [],
+    }
+
+
 def run_actual_default_model_behavior_portfolio(
     scenario_packets: Mapping[str, Mapping[str, Any]],
     *,
@@ -1401,8 +1417,11 @@ def run_actual_default_model_behavior_portfolio(
     scoped_gate_successor_actor: Callable[[str], Mapping[str, Any]],
     capability_monitor_repair_actor: Callable[[str], Mapping[str, Any]],
     terminal_settlement_actor: Callable[[str], Mapping[str, Any]],
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     """Run the fixed low-frequency one-arm portfolio with bounded receipts."""
+    if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
+        raise ValueError("max_workers must be a positive integer")
     expected_ids = {spec.scenario_id for spec in _SCENARIOS}
     supplied_ids = set(scenario_packets)
     if supplied_ids != expected_ids:
@@ -1430,28 +1449,9 @@ def run_actual_default_model_behavior_portfolio(
         for spec in _SCENARIOS
     }
     _validate_contrast_source_contracts(contracts)
-    results: list[dict[str, Any]] = []
-    observations: dict[str, list[dict[str, Any]]] = {}
-    actor_call_count = 0
-    aborted = False
-    for spec in _SCENARIOS:
-        if aborted:
-            results.append(
-                {
-                    "scenario_id": spec.scenario_id,
-                    "actor_kind": spec.actor_kind,
-                    "phase": spec.phase,
-                    "expected_route": spec.expected_route,
-                    "status": "not_run",
-                    "repeats_required": ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS,
-                    "repeats_completed": 0,
-                    "observed_routes": [],
-                    "failure_codes": ["portfolio_aborted_after_actor_error"],
-                    "receipt_digests": [],
-                }
-            )
-            continue
-        result, actor_error, scenario_observations = _scenario_result(
+
+    def _run_one(spec: _ScenarioSpec) -> tuple[dict[str, Any], bool, list[dict[str, Any]]]:
+        return _scenario_result(
             spec,
             scenario_packets[spec.scenario_id],
             expected=contracts[spec.scenario_id],
@@ -1464,12 +1464,48 @@ def run_actual_default_model_behavior_portfolio(
             capability_monitor_repair_actor=capability_monitor_repair_actor,
             terminal_settlement_actor=terminal_settlement_actor,
         )
-        actor_call_count += int(result["repeats_completed"])
-        if actor_error:
-            actor_call_count += 1
-            aborted = True
-        results.append(result)
-        observations[spec.scenario_id] = scenario_observations
+
+    results: list[dict[str, Any]] = []
+    observations: dict[str, list[dict[str, Any]]] = {}
+    actor_call_count = 0
+    if max_workers == 1:
+        aborted = False
+        for spec in _SCENARIOS:
+            if aborted:
+                results.append(_aborted_scenario_result(spec))
+                continue
+            result, actor_error, scenario_observations = _run_one(spec)
+            actor_call_count += int(result["repeats_completed"])
+            if actor_error:
+                actor_call_count += 1
+                aborted = True
+            results.append(result)
+            observations[spec.scenario_id] = scenario_observations
+    else:
+        lock = threading.Lock()
+        aborted = False
+
+        def _worker(
+            spec: _ScenarioSpec,
+        ) -> tuple[_ScenarioSpec, dict[str, Any], bool, list[dict[str, Any]]]:
+            nonlocal aborted
+            with lock:
+                if aborted:
+                    return spec, _aborted_scenario_result(spec), False, []
+            result, actor_error, scenario_observations = _run_one(spec)
+            if actor_error:
+                with lock:
+                    aborted = True
+            return spec, result, actor_error, scenario_observations
+
+        worker_count = min(max_workers, len(_SCENARIOS))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as pool:
+            completed = list(pool.map(_worker, _SCENARIOS))
+        for spec, result, actor_error, scenario_observations in completed:
+            actor_call_count += int(result["repeats_completed"]) + (1 if actor_error else 0)
+            results.append(result)
+            if result["status"] != "not_run":
+                observations[spec.scenario_id] = scenario_observations
 
     contrast_results = [_contrast_result(spec, observations) for spec in _CONTRASTS]
     passed = all(result["status"] == "passed" for result in results) and all(

@@ -302,11 +302,80 @@ def test_cli_index_defaults_to_root_without_registry_or_runtime(tmp_path):
     assert not registry.exists() and not runtime.exists()
 
 
-def test_cli_nested_index_preserves_depth_and_digest_across_pages(tmp_path):
+@pytest.mark.parametrize("listing", [
+    ["--list", "context-read"],
+    ["--list", "/rows/0", "context-read", "--list=/a~1b"],
+])
+def test_cli_list_before_context_read_preserves_action(tmp_path, listing):
+    path, raw, _ = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    capture = ["--capture-file", str(path), "--capture-sha256", hashlib.sha256(raw).hexdigest()]
+    expected_args = ["--select", "/rows/0", "--select", "/a~1b"] if len(listing) > 2 else []
+    code, expected = _run_cli(registry, runtime, "quota", "context-read", "--list",
+        *expected_args, *capture, cwd=tmp_path)
+    assert code == 0 and expected["eof"], expected
+    code, actual = _run_cli(registry, runtime, "quota", *listing, *capture, cwd=tmp_path)
+    assert code == 0 and actual == expected, actual
+    assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("targets", [["/rows/0"], ["/a~1b"], [""], ["/rows/0", "/a~1b"]])
+def test_cli_list_target_shorthand_matches_explicit_selection(tmp_path, targets):
     path, raw, original = fixture_capture(tmp_path)
     registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
     command = ["quota", "context-read", "--capture-file", str(path),
-        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--list", "--list-depth", "3",
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--list-depth", "2"]
+    explicit = ["--list"] + [word for target in targets for word in ("--select", target)]
+    shorthand = [word for target in targets for word in ("--list", target)]
+    code, expected = _run_cli(registry, runtime, *command, *explicit, cwd=tmp_path)
+    assert code == 0 and expected["eof"], expected
+    code, actual = _run_cli(registry, runtime, *command, *shorthand, cwd=tmp_path)
+    assert code == 0 and actual == expected, actual
+    assert original["rows"][0]["tail"] not in actual["content"]
+    assert capture_page_range(actual, raw=raw, digest=actual["sha256"]) is None
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("options", [
+    ["--list", "/rows/0", "--select", "/a~1b"],
+    ["--select", "/rows/0", "--list", "/a~1b"],
+])
+def test_cli_list_target_combines_with_existing_selectors(tmp_path, options):
+    path, raw, _ = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    code, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), *options, cwd=tmp_path)
+    assert code == 0 and page["eof"], page
+    assert set(page["selected_pointers"]) == {"/rows/0", "/a~1b"}
+    assert not registry.exists() and not runtime.exists()
+
+
+def test_cli_list_slash_does_not_silently_select_root(tmp_path):
+    path, raw, _ = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest()]
+    code, failure = _run_cli(registry, runtime, *command, "--list", "/", cwd=tmp_path)
+    assert code != 0 and failure["diagnostic_code"] == "context_selection_missing_pointer"
+    assert "content" not in failure
+    # RFC 6901 '/' selects the empty-name property when one actually exists.
+    raw = json.dumps({"": {"child": "private body"}, "other": 1}).encode()
+    path.write_bytes(raw)
+    command[-1] = hashlib.sha256(raw).hexdigest()
+    code, page = _run_cli(registry, runtime, *command, "--list", "/", cwd=tmp_path)
+    assert code == 0 and page["selected_pointers"] == ["/"], page
+    fields = json.loads(page["content"])["selections"][0]["fields"]
+    assert [field["pointer"] for field in fields] == ["//child"]
+    assert "private body" not in page["content"]
+    assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("index_target", [[], [""]])
+def test_cli_nested_index_preserves_depth_and_digest_across_pages(tmp_path, index_target):
+    path, raw, original = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--list", *index_target, "--list-depth", "3",
         "--page-bytes", "256", "--max-page-output-bytes", "2000"]
     combined, first, offset = b"", None, 0
     while True:
@@ -342,6 +411,7 @@ def test_cli_nested_index_preserves_depth_and_digest_across_pages(tmp_path):
     ["context-read", "--list", "--list-depth", "0"],
     ["context-read", "--list", "--list-depth", "9"],
     ["should-run", "--list-depth", "2"],
+    ["should-run", "--list", "/rows", "--list-depth", "2"],
 ])
 def test_cli_rejects_invalid_depth_before_authority(tmp_path, options):
     registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"

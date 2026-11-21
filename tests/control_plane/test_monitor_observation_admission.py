@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
 from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
@@ -37,7 +38,10 @@ def _advance_monitor_fixture(project, runtime, *, handoff_mode="soft_claim", lea
 def settlement_budget_root(tmp_path: Path) -> Iterator[Path]:
     # Measure the actual output with stable paths, as other CLI budgets do.
     with _stable_budget_fixture_root(tmp_path) as root:
-        yield root
+        try:
+            yield root
+        finally:
+            stop_disposable_effect_runtimes(root)
 
 
 def test_settled_advancement_hold_preserves_independent_monitor(
@@ -86,9 +90,8 @@ def test_settled_advancement_hold_preserves_independent_monitor(
         "--claimed-by", AGENT_ID, "--text", "Validate an independent artifact",
     )
     assert rc == 0, successor
-    poll_args = tuple("observed-after-hold" if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
-                      else token for token in _projected_cli_args(
-                          poll_command, turn_instance_id=turn))
+    poll_args = list(_projected_cli_args(poll_command, turn_instance_id=turn))
+    poll_args[poll_args.index("--result-hash") + 1] = "observed-after-hold"
     for expected_replay in (False, True):
         rc, poll = _run_cli(registry, runtime, *poll_args)
         assert rc == 0, (poll.get("error_code"), poll.get("reason"), poll.get("error"))
@@ -150,12 +153,8 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         auxiliary_cli["command"],
         turn_instance_id=turn_instance_id,
     )
-    poll_args = tuple(
-        "unchanged-auxiliary-monitor"
-        if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
-        else token
-        for token in poll_args
-    )
+    poll_args = list(poll_args)
+    poll_args[poll_args.index("--result-hash") + 1] = "unchanged-auxiliary-monitor"
     poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
     poll_replay_rc, poll_replay = _run_cli(
         registry_path,
@@ -296,12 +295,8 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     auxiliary = open_guard["interaction_contract"]["cli_channel"][
         "auxiliary_monitor_poll"
     ]
-    poll_args = tuple(
-        "completed-primary-observation"
-        if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
-        else token
-        for token in _projected_cli_args(auxiliary["command"], turn_instance_id=turn)
-    )
+    poll_args = list(_projected_cli_args(auxiliary["command"], turn_instance_id=turn))
+    poll_args[poll_args.index("--result-hash") + 1] = "completed-primary-observation"
     rc, complete = _run_cli(
         registry_path,
         runtime,
@@ -315,9 +310,10 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
         AGENT_ID,
         "--claimed-by",
         AGENT_ID,
+        "--turn-instance-id",
+        turn,
         "--evidence",
         "read-only fixture delivery validated",
-        "--no-follow-up",
         "--task-lease-idempotency-key",
         "primary-execution",
         "--task-lease-expected-version",
@@ -338,6 +334,10 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             *binding,
             "--todo-id",
             TODO_ID,
+            "--task-lease-idempotency-key",
+            "primary-execution",
+            "--task-lease-expected-version",
+            "3",
             "--classification",
             "fixture_delivery_validated",
             "--delivery-batch-scale",
@@ -454,26 +454,35 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             }.get(token, token)
             for token in _projected_cli_args(writeback_command, turn_instance_id=turn)
         )
-        rc, refresh = _run_cli(
-            registry_path,
-            runtime,
-            *args,
-            "--delivery-workspace-path",
-            str(project),
-            "--no-global-sync",
-            "--suppress-external-sinks",
-        )
-        assert rc == 0, refresh
-        spend_command = refresh["settlement_owed"]["command"]
+        for replay_refresh in (False, True):
+            rc, refresh = _run_cli(
+                registry_path,
+                runtime,
+                *args,
+                "--delivery-workspace-path",
+                str(project),
+                "--no-global-sync",
+                "--suppress-external-sinks",
+            )
+            assert rc == 0, refresh
+            assert "settlement_owed" not in refresh
+            assert refresh["settlement_progress"]["state"] == "settled"
+            assert [row["step_kind"] for row in refresh["settlement_result"]["receipts"]] == [
+                "validation",
+                "durable_writeback",
+                "quota_spend",
+            ]
+            assert refresh.get("idempotent_replay", False) is replay_refresh
+        assert _spend_run_count(runtime) == 1
     else:
         assert resume["next_step"]["kind"] == "quota_spend"
         spend_command = poll["settlement_owed"]["command"]
-    spend_args = _projected_cli_args(spend_command, turn_instance_id=turn)
-    for _ in range(2):
-        rc, spend = _run_cli(registry_path, runtime, *spend_args)
-        assert rc == 0, spend
-        assert spend["settlement_identity"]["todo_id"] == TODO_ID
-    assert _spend_run_count(runtime) == 1
+        spend_args = _projected_cli_args(spend_command, turn_instance_id=turn)
+        for _ in range(2):
+            rc, spend = _run_cli(registry_path, runtime, *spend_args)
+            assert rc == 0, spend
+            assert spend["settlement_identity"]["todo_id"] == TODO_ID
+        assert _spend_run_count(runtime) == 1
     rc, replay = _run_cli(registry_path, runtime, *poll_args)
     assert rc == 0, replay
     assert replay["replayed"] is True

@@ -23,7 +23,7 @@ from ...thread_agent_binding import summarize_agent_binding_routes
 
 
 def _public_safe_host_surface(value: object) -> str | None:
-    """Publish only public-safe host surface labels; compact tokens are not proof."""
+    """Publish only public-safe host surface labels."""
     if not isinstance(value, str):
         return None
     surface = value.strip()
@@ -161,6 +161,7 @@ def agent_page(
         "source_id": "local", "source_host": "local",
         "stopped_goals_excluded": stopped,
         "note": "Search covers this source's permitted registrations, independently of delivery grants. "
+                "It does not search Goal requirements or Todo text; a zero match does not resolve project shorthand. "
                 "Profiles are declared responsibilities, not verified competence or instructions. "
                 "Registered host-binding summaries cover only that row's Goal; no host addresses are exposed. "
                 "No presence, model availability or execution was checked. Binding metadata is context, not recipient selection or permission. "

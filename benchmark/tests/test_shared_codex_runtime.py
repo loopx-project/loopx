@@ -168,6 +168,19 @@ sys.stdin.read()
     }
 
 
+def test_resumed_worker_builds_native_command_without_collaboration_server(tmp_path):
+    env = worker_env(tmp_path)
+    execution = Execution(context_delivery="off")
+    session = SimpleNamespace(session_id="retained-session")
+
+    command = worker.native_command(env, execution, "execute", tmp_path, session)
+
+    assert command[:2] == [env["CODEX_BIN"], "exec"]
+    assert "resume" in command
+    assert command[-2:] == [session.session_id, "-"]
+    assert not any(argument.startswith("mcp_servers.") for argument in command)
+
+
 def test_non_heartbeat_wakes_do_not_import_checkpoint_control_plane(tmp_path, monkeypatch):
     # plain/native-goal workers stage no LoopX control plane; a checkpoint import
     # there turned a 90-minute trial into a 0.7s ModuleNotFoundError exit.
@@ -272,14 +285,51 @@ def test_process_failure_is_not_reported_as_success(tmp_path):
     assert receipt["return_code"] == 7
 
 
+def _sqlite_heartbeat_env(tmp_path, monkeypatch):
+    from loopx.global_registry import sync_project_registry_to_global
+    from tests.control_plane import test_quota_settlement_cli as fixture
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2]))
+    project, runtime, source = fixture._write_fixture(tmp_path)
+    fixture._initialize_fixture_authority(project, runtime, provider="sqlite")
+    assert sync_project_registry_to_global(
+        registry_path=source, runtime_root_override=str(runtime), goal_id=fixture.GOAL_ID
+    )["ok"]
+    env = worker_env(project)
+    skills = tmp_path / "shared-skills"
+    skills.mkdir()
+    env.update(
+        LOOPX_EXECUTION_MODE="heartbeat",
+        LOOPX_ITERATION_CONTEXT="resume",
+        LOOPX_TASK_ENTRY="seeded-todo",
+        LOOPX_TASK_STAGE="execute",
+        LOOPX_RUNTIME_ROOT=str(runtime),
+        LOOPX_REGISTRY=str(runtime / "registry.global.json"),
+        LOOPX_GOAL_ID=fixture.GOAL_ID,
+        LOOPX_AGENT_ID=fixture.AGENT_ID,
+        LOOPX_SHARED_SKILLS=str(skills),
+        LOOPX_CODEX_TURN_TIMEOUT_SEC="90",
+    )
+    env["LOOPX_CLI"] = str(
+        write_python_host_fixture(
+            tmp_path / "loopx-cli",
+            f"#!{sys.executable}\nfrom loopx.cli import main\nraise SystemExit(main())\n",
+        )
+    )
+    return env
+
+
 @pytest.mark.parametrize("code,expected", [("insufficient_quota", "quota_exhausted"),
                                            ("model_at_capacity", "provider_capacity"),
                                            ("unrecognized", "unknown")])
 def test_heartbeat_real_native_process_preserves_content_free_host_failure(tmp_path, monkeypatch, code, expected):
     import benchmark.runtime.worker as worker
-    from tests.control_plane.test_benchmark_current_admission import _environment
 
-    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    env = _sqlite_heartbeat_env(tmp_path, monkeypatch)
     monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
     event = {"type": "turn.failed", "error": {"code": code, "message": "PRIVATE-SENTINEL"}}
     Path(env["CODEX_BIN"]).write_text(
@@ -317,10 +367,9 @@ def test_host_retry_session_mismatch_refuses_native_process(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
 def test_native_heartbeat_retry_uses_real_session_owner(tmp_path, monkeypatch, context):
-    from tests.control_plane.test_benchmark_current_admission import _environment
     import benchmark.runtime.worker as worker
 
-    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    env = _sqlite_heartbeat_env(tmp_path, monkeypatch)
     env["LOOPX_ITERATION_CONTEXT"] = context
     # This fake executable models session retries, not native hook discovery.
     env["LOOPX_CONTEXT_DELIVERY"] = "off"
@@ -990,18 +1039,86 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         assert receipt["turn_envelope"] is True
 
 
+@pytest.mark.parametrize("stage", ["plan", "execute"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_short_wake_rejects_c1_before_host_preparation(tmp_path, monkeypatch, stage, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, _heartbeat_receipt_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    original_state = state.read_bytes()
+    wakes = tmp_path / "wakes"
+    home = tmp_path / "codex-home"
+    source = Path(__file__).resolve().parents[2]
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(source), LOOPX_PYTHON=sys.executable, LOOPX_USAGE_PING="0",
+        LOOPX_CLI=str(Path(sys.executable).parent / "loopx"),
+        LOOPX_PROJECT=str(project), LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
+        LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(wakes),
+        LOOPX_CODEX_HOME=str(home), LOOPX_EXECUTION_MODE="heartbeat",
+        LOOPX_SHARED_SKILLS=str(tmp_path / "shared-skills"),
+        LOOPX_TASK_STAGE=stage, LOOPX_TURN_ENVELOPE="1", LOOPX_CONTEXT_DELIVERY="off",
+        MODEL_NAME="fixture", REASONING_EFFORT="low",
+    )
+
+    def unexpected_host_preparation(*args, **kwargs):
+        pytest.fail("A C1 response cannot start the Short envelope arm")
+
+    monkeypatch.setattr(worker, "prepare_codex_home", unexpected_host_preparation)
+    with pytest.raises(ValueError, match="Short envelope requires"):
+        run_once(env)
+    receipt_path, = wakes.glob("*/receipt.json")
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["ok"] is False and receipt["host_invoked"] is False
+    assert receipt["quota_input_contract"] == {
+        "expected_schema_version": "loopx_turn_envelope_v0",
+        "observed_schema_version": "loopx_turn_envelope_v1",
+        "eligible": False,
+    }
+    assert "turn_envelope_source" not in receipt
+    assert _heartbeat_receipt_count(runtime, receipt["turn_id"]) == 0
+    assert state.read_bytes() == original_state
+    assert not home.exists()
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_wake_receipt_preserves_opt_out(tmp_path, monkeypatch, enabled):
     from benchmark.tests.test_resume_sessions import resume_env
     env = resume_env(tmp_path, monkeypatch)
     env["LOOPX_TURN_ENVELOPE"] = "1" if enabled else "0"
+    original_run = subprocess.run
+    previews = []
+
+    def legacy_preview(argv, **kwargs):
+        if argv[0] != "loopx" or "--dry-run" not in argv:
+            return original_run(argv, **kwargs)
+        previews.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({
+            "ok": True, "schema_version": "loopx_turn_envelope_v0",
+        }), "")
+
+    monkeypatch.setattr(worker.subprocess, "run", legacy_preview)
     receipt = run_once(env)
     assert receipt["ok"], receipt
     assert ("turn_envelope" in receipt) is enabled
     assert ("turn_envelope_source" in receipt) is enabled
+    assert ("quota_input_contract" in receipt) is enabled
+    assert len(previews) == int(enabled)
     if enabled:
         assert receipt["turn_envelope"] is True
         assert receipt["turn_envelope_source"] == "explicit"
+        assert receipt["quota_input_contract"] == {
+            "expected_schema_version": "loopx_turn_envelope_v0",
+            "observed_schema_version": "loopx_turn_envelope_v0",
+            "eligible": True,
+        }
+        assert "should-run" in previews[0] and "--turn-envelope" in previews[0]
+        assert "--turn-instance-id" not in previews[0] and "--decision-output-root" not in previews[0]
 
 
 @pytest.mark.parametrize("observed", [

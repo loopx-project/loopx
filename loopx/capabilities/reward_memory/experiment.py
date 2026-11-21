@@ -20,7 +20,7 @@ from ...control_plane.operator_inbox_binding import local_private_config_digest
 from ...control_plane.todos.contract import normalize_todo_claimed_by
 from ..context_providers import build_context_provider
 from ..context_providers.base import ContextProvider
-from ..context_providers.openviking import classify_openviking_scope
+from ..context_providers.openviking_scope import classify_openviking_scope
 from .application import TOKEN_RE, normalize_reward_memory_provider_binding
 from .ingestion import normalize_reward_memory_standing_policy
 from .registry import MAX_CORPORA, normalize_reward_memory_corpus

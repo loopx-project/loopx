@@ -214,13 +214,16 @@ revision and advisory authority. This captured pre-work view does not replace th
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
 The initial read includes the bounded `unfinished_delegations` projection and
-`read_complete` flag. For an admitted normal work Turn with a large
-agenda, a complete scan and a matching required Manager Inbox read, the initial
-view keeps the incoming and outgoing request counts, scan status and required
-command. A complete scan can still hit the summary's display limit. The initial
-view then also keeps the exact omitted count and reconciliation guidance. The
-required read and its existing cursor deliver the scoped request rows. The
-captured summary remains available at its original address. An incomplete scan, unavailable scan records or an unmatched read keeps the whole summary inline.
+`read_complete` flag. For normal work with a large agenda, a complete scan
+and a matching required Manager Inbox read, the initial view keeps the incoming
+and outgoing request counts, scan status and required command. This also
+applies during explicit Todo selection when work and quota spending are
+still disabled. A complete scan can still hit the summary's display limit.
+The initial view then also keeps the exact omitted count and reconciliation
+guidance. The required read and its existing cursor deliver the scoped request
+rows. The captured summary remains available at its original address. An
+incomplete scan, unavailable scan records or an unmatched read keeps the whole
+summary inline.
 Adoption and queued returns are intermediate states. Read the full current request before
 assessing, executing or returning it. Use the existing scoped request and
 consumption routes for those actions.
@@ -316,9 +319,10 @@ read obligations fit in one page, the opening contains those controls and
 reports EOF. Follow it and its cursor before work. Both selections pin the same
 immutable capture.
 `navigation.first_read_command` replays the opening. Use
-`navigation.recovery.command` for other fields. If the response is lost, use the
-original digest-bound capture in the wake prompt. Recovery reuses the saved
-decision and its original receipt.
+`navigation.recovery.command` for fields in the delivered view. For deferred
+fields, use the original source in `context_details`. If the response is lost,
+use the original digest-bound capture in the wake prompt. Recovery reuses the
+saved decision and its original receipt.
 
 When native quota navigation requires explicit Todo selection, the opening
 keeps the discovery and same-Turn selection commands with the read obligations
@@ -327,13 +331,13 @@ large for one page, the linked remainder contains its full details and the
 suggested alternatives. The selection commands use the original Turn identity.
 
 Native ready decisions from `quota should-run` and saved `quota context-project`
-can link two reads when boundary detail pushes controls past the serialized
+can link two reads when Goal or Todo scope details push controls past the serialized
 first page budget. When those controls fit, the ordinary reader keeps its cursor.
 Read `first_read_command` for the decision, stop conditions and required reads.
-If `remaining_read_command` is present,
-follow it and its cursor before work, even when the opening reports EOF. It
-starts with the complete current write scope and any checkpointed approval
-entries. The opening shows the current approval counts and active scope summary.
+If `remaining_read_command` is present, follow it and its cursor before work,
+even when the opening reports EOF. The remainder supplies deferred Goal write
+scopes, checkpointed approval entries and the selected Todo's requested write
+scopes. The opening shows the current approval counts and active scope summary.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
@@ -356,8 +360,9 @@ presentation changes neither admission nor the explicit off view.
 和读取义务能完整放在一页时，首屏先交付这些控制信息，并给出
 `navigation.remaining_read_command`。即使首屏已到 EOF，页级 `read_instruction` 仍指向
 这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
-`navigation.first_read_command` 可重读首屏，其他字段沿
-`navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+`navigation.first_read_command` 可重读首屏。`navigation.recovery.command` 读取已交付视图
+中的字段，延迟交付的字段从 `context_details` 标明的原始捕获选读。结果丢失时，用唤醒
+正文中的原文件及摘要恢复，复用原决策和回执。
 
 原生额度导航要求显式选择 Todo 时，首读把候选发现、同一轮次的选择命令、必读项和执行
 约束放在一起。推荐候选的明细导致这些信息超出单页预算时，同一捕获的续读保留完整
@@ -367,8 +372,8 @@ presentation changes neither admission nor the explicit off view.
 控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
-续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
-数量和生效范围摘要。
+续读提供延后交付的 Goal 写入范围、已记录的审批条目及选中 Todo 的请求写入范围。
+两段绑定同一份捕获。首段保留当前审批数量和生效范围摘要。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
@@ -443,6 +448,20 @@ Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整
 原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
 通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
 
+An ordinary JSON `quota should-run` with Progressive enabled can stage an
+eligible replan from its private complete `projection.json` without an
+explicit capture destination. Read `replan_action_packet.review` before choosing
+work, then use `review.next` for selection or writeback. Both stage readers pin
+the original source hash and the exact file digest. The required view's
+`context_details` still addresses the complete source for missing facts.
+These reads do not enter the guard, update authority, or spend quota.
+
+普通 JSON `quota should-run` 启用 Progressive 时，可直接用私有完整
+`projection.json` 分阶段交付符合条件的重规划，无需指定捕获目录。选定工作前先读
+`replan_action_packet.review`，再沿 `review.next` 选任务或读取回写要求。两阶段
+均校验原决策哈希和文件字节摘要。必读视图的 `context_details` 提供完整来源，
+供补读缺失事实。读取不再进入准入检查，不写入权威状态，也不扣额度。
+
 For supporting fields folded by the existing native Progressive owner,
 `context_details.unread_context_index` contains the current complete
 `projection.json` source path/digest and exact `pointers`. The initial reader
@@ -486,10 +505,21 @@ cannot be combined with socket handoff. Ordinary callers keep their existing
 presentation, and context delivery off keeps its original pending Goal reads.
 Unbound staged replans retain their existing review-owned original Goal read.
 
+If complete Turn composition fails after quota admission, the capture contains
+the failure and original receipts for `quota context-read`. `quota context-project`
+refuses the diagnostic capture. A saved diagnostic carries no executable input
+or native claim source. Reconcile the original Turn receipt before recovery.
+
+中文：额度 guard 已准入、完整 Turn 组合随后失败时，capture 保留失败与原回执，
+可通过 `quota context-read` 读回。`quota context-project` 会拒绝该诊断
+capture，活跃会话的认领来源保持原样。恢复前先核对原 Turn 回执。
+
 After a Host claim, the ready guard uses the private
 `--prepared-capture-reference` route. It publishes the complete decision and
 returns its writer digest with the fields needed to verify the same Todo and
-Turn. The hook verifies that digest when it opens the original file. If the
+Turn. The default guard and the `--turn-envelope` and `--complete-turn`
+compatibility spellings use the same complete v1 capture. The hook verifies
+that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
 bytes before work can continue.
 The private native journal reserves automatic preparation before claiming a
@@ -499,10 +529,21 @@ readback for the original claim receipt, current lease and any verified ready
 capture without repeating the claim or guard. A Hook response alone does not
 prove delivery. For this session the repeat hint is suppressed after a tool
 read is verified against the recorded ready capture.
-Follow the captured readiness check for the same Todo and Turn once the active
-lease matches. An authorized retry of the same bound capture reuses its
-managed claim operation, and the authority owner checks the original lease on
-replay. The native session keeps the latest eligible live guard digest
+If the hook has no recorded ready capture, its readback provides
+`readiness_command` and `ready_context_command_template`. Run the readiness
+command from the original workspace after the claim receipt and the active
+lease match in Goal, Todo, owner, key and version. The same-Turn guard stages a
+private capture separately from the active session journal. Require normal
+delivery, the same Goal, Agent, Todo and Turn, and a ready lease proof with the
+original key and version. Use the returned digest to fill the template from
+that receipt. After staging, the native publisher checks the original claim
+receipt and matching active lease under the same local writer lock used by
+lease release and replacement. It holds that lock through the journal
+commit. If the lease has retired, return the original receipt readback.
+The original capture remains readable through `quota context-read`.
+An authorized retry of the same bound capture reuses its managed claim
+operation, and the authority owner checks the original lease on replay.
+The native session keeps the latest eligible live guard digest
 separately from the capture. Presenting the exact saved decision preserves
 that binding. Older captures and copies with different bytes remain readable.
 Preserve any original claim receipt and use `quota should-run` with the same
@@ -512,6 +553,17 @@ The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
 
+A successful managed `todo claim --thin` JSON reply can show peer worktree
+overlap advice with `write_scope_count` in place of long path lists. It keeps
+the other Todo, owner and overlap reason. Run `integration_overlap_detail_command`
+to read the complete advice under `receipts[].result.integration_overlap_advisories`
+for that claim operation. The command uses `todo receipt --thin --format json`
+to return the receipt identity and historical advice without copying the
+claimant's lease. The response includes `thin: true`. This read remains
+available after a lease changes. Omit `--thin` to read the entire receipt.
+Use `task-lease inspect` for a current grant. An ordinary claim reply retains
+the full path lists.
+
 For a selected Todo, preparation reads the canonical Todo and leases at one
 checked provider revision. The internal read returns only that Todo's status,
 assignment and lease facts. Unrelated Todo bodies stay with the provider
@@ -520,8 +572,14 @@ reader. Quota still checks ownership and lease expiry before reporting readiness
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
 及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
-观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。活动租约匹配后，
-沿同一 Todo 与 Turn 完成就绪检查。对同一绑定 capture 的授权重试复用原受管领取操作，
+观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。Hook 尚未登记
+ready capture 时，回读会提供 `readiness_command` 和 `ready_context_command_template`。
+先核对原领取回执与活动租约的 Goal、Todo、归属、键和版本，再在原工作目录执行就绪命令。
+同轮检查会在活动会话日志以外生成私有 capture。确认允许正常交付、Goal、Agent、Todo
+及 Turn 一致，且就绪的租约凭证与原键和版本匹配后，用返回的摘要填入同一回执的模板，
+再读取校验通过的原生上下文。暂存完成后，发布端在租约释放和换代共用的本地写锁内核对
+原领取回执和当前活动租约，并持锁提交会话日志。租约已退役时提供原回执读回。
+原 capture 仍可通过 `quota context-read` 读取。对同一绑定 capture 的授权重试复用原受管领取操作，
 由权威 owner 验证原租约。原生会话独立保存最新合格准入的摘要，重新展示逐字节一致的
 快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
@@ -659,6 +717,26 @@ transport remains an explicit projection choice; this change alone neither
 upgrades installed automations nor proves model adoption or token/latency gains.
 To roll back, install the prior revision and regenerate prompts; changing a
 transport flag does not restore the old exact Todo schema.
+
+## Experimental compaction working memory
+
+This experiment is retired. The kernel no longer prepares or restores its sparse
+memory view, and Workbench no longer offers its switch. Task effectiveness and
+complete-cost benefit remained unqualified; see the [retired RFC](../architecture/rfcs/sparse-compaction-working-memory-v0.md).
+
+Saved `compaction_memory_machine_defaults_v0` values remain strictly readable
+for settings compatibility, including a prior `enabled: true`. They have no
+runtime effect or editor. Other device settings and their transaction rollback
+remain available; reading does not rewrite the saved configuration. Existing
+immutable memory/source files and exact capture references retain their original
+lifetime and access rules. This change performs no source cleanup. Installing an
+older release that still implements the experiment can restore its behavior;
+remove its saved namespace before such a downgrade if that behavior is unwanted.
+
+中文：实验已撤回，内核不再生成或恢复实验记忆，工作台开关已移除。
+旧配置只用于兼容读取，即使曾保存开启也不生效；其他本机设置仍可编辑和事务回滚。
+已有记忆文件、原始来源与精确读取路径保留，不自动清理。降级到仍实现该实验的旧版
+可能恢复其行为；若不希望恢复，应在降级前移除旧命名空间。
 
 ## Opt-in native reuse
 
@@ -838,11 +916,14 @@ setting. Ordinary machine validation still applies to business operations.
 Native `quota should-run` and saved `context-project` persist the complete
 capture and return a small file reference, not an eager first page. The response
 names the delta/full `path`, digest and reader `command`; `recovery` names the
-current complete file. A file delta additionally carries `baseline_reference`.
+complete file for the current delivered view. A file delta also carries `baseline_reference`.
 `index_command` lists current fields and `select_command` batches exact pointers.
 Under a smaller explicit ceiling, these shortcut commands may be omitted;
 append `--list` or `--select <pointer>` to `recovery.command` instead. Both
-operations address the current complete capture, including during delta delivery.
+operations address the current delivered view, including during delta delivery.
+For a deferred field, replace `<pointer>` in `context_details.command_template`
+with its exact pointer. The template reads the original capture with its digest
+and the same CLI route as the delivered view.
 The reference stays below 7900 serialized bytes (or the explicit smaller output
 ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
@@ -981,7 +1062,8 @@ first reader and every observed reader output,
 including complete byte coverage of the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile is qualified on Codex 0.162.1 and 0.167.0-alpha.3.2 paginated rollouts. It streams only the
+profile is qualified on Codex 0.162.1, 0.167.0-alpha.3.2 and 0.169.0-alpha.11.1
+paginated rollouts. It streams only the
 baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
@@ -1097,7 +1179,8 @@ Checkpoint Host 预检在显式开启 native JSON `should-run` 捕获时使用�
 读取。未绑定任务的分阶段重规划继续沿用 review 所属的原始 Goal 读取。
 
 Host 领取 Todo 后，就绪检查使用内部 `--prepared-capture-reference` 路径。它保存完整决策，
-只返回写入时的摘要和核对同一 Todo、Turn 所需的字段。hook 打开原文件时校验该摘要；
+只返回写入时的摘要和核对同一 Todo、Turn 所需的字段。默认 guard 和 `--turn-envelope`、
+`--complete-turn` 两个兼容别名均使用同一份完整 v1 捕获。hook 打开原文件时校验该摘要。
 若文件已被替换，回执保留原领取记录，恢复原始内容后才能继续工作。
 
 Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；关闭 native
@@ -1234,10 +1317,12 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 沿用可见 Goal 的执行与结算身份；仅启用差分时接入捕获目录，不转换成自动心跳。
 原生 `quota should-run` 与 `context-project` 先保存完整捕获，默认返回小型文件入口，
 不内联第一页。`path`、摘要与 `command` 指向当前差分或全量；`recovery` 指向当前
-完整文件；文件差分另带 `baseline_reference`。`index_command` 展示当前字段目录，
+交付视图的完整文件；文件差分另带 `baseline_reference`。`index_command` 展示当前字段目录，
 `select_command` 批量选读精确路径。引用输出不超过 7900 序列化字节或调用者显式更小
 的上限；较小预算下可省略这两个快捷命令，改在 `recovery.command` 后追加
-`--list` 或 `--select <pointer>`，差分投递时也直接读取当前完整捕获。
+`--list` 或 `--select <pointer>`，差分投递时也直接读取当前交付视图。延迟字段可将
+`context_details.command_template` 中的 `<pointer>` 换成精确地址，沿原捕获摘要和
+本次交付使用的同一个 CLI 入口选读。
 元数据仍放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
 原始工具日志完整，不证明宿主保留给模型的字节也完整。
 
@@ -1284,7 +1369,8 @@ context journal。当前工作到达正常安全边界后，沿宿主正常启�
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 和 0.167.0-alpha.3.2 的分页
+中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1、0.167.0-alpha.3.2
+和 0.169.0-alpha.11.1 的分页
 rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
 文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
 code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。
@@ -1496,6 +1582,13 @@ returned `settlement_owed` command for the original Turn. Read the result's
 supporting snapshot only when needed. Raw delivery, manual plans and other
 profiles retain their original settlement commands.
 
+A captured direct replan can also offer a combined `settlement_command` in its
+writeback view. It uses the captured semantic writer: fill the evidence
+placeholders after review, run it on the original obligation, and check its
+receipts. The original plan and manual steps remain available for recovery.
+Do not debit again after a settled receipt. Successor creation and Todo-bound
+replans retain their original authoring and settlement routes.
+
 Generated Turn-bound JSON `quota spend-slot` commands include
 `--max-page-output-bytes 64000`. This output option does not enable Context
 Delivery or create a native continuity baseline. Small results remain complete;
@@ -1526,6 +1619,11 @@ Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可
 执行计划给出的写回命令。该命令会执行尚欠的扣额，并返回原回执。部分失败时，
 沿返回的 `settlement_owed` 命令恢复原 Turn。结果中的支持快照按需读取。
 原始投递、手动计划和其他运行模式继续使用原结算命令。
+
+已捕获的直接重规划也可在写回视图提供合并的 `settlement_command`。该命令复用
+捕获中的语义写回参数；复盘后填写证据占位符，沿原义务执行并检查回执。原计划和
+手动步骤仍可用于恢复。确认已结算后不再扣额。创建后继 Todo 或已绑定 Todo 的
+重规划保留原有的写回和结算路径。
 
 生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
 `--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.domain_packs.issue_fix import (
     default_issue_fix_domain_state_ledger_path,
@@ -400,7 +401,17 @@ def test_t05_missing_event_metadata_is_context_only(harness: Harness) -> None:
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_t06_stopped_goal_refuses_at_effect_time(tmp_path: Path, provider: str) -> None:
-    h = Harness(tmp_path, provider, goal_overrides={"activation_state": "stopped"})
+    h = Harness(
+        tmp_path,
+        provider,
+        goal_overrides={
+            "activation": build_goal_activation(
+                state="stopped",
+                updated_at="2026-06-20T09:00:00Z",
+                reason="Owner stopped goal before correction settlement.",
+            )
+        },
+    )
     event = _event("6001")
     payload = h.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
     admission = payload["maintainer_correction_admission"]

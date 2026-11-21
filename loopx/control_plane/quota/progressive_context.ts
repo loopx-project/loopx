@@ -8,7 +8,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, selectedWorkTodoId}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -652,7 +652,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Repeat --select to batch needed fields without replaying the outcome's requirements. "
         + "unread_context_index lists supporting fields not observed read in this epoch, or changed since that read. "
         + "source_blocks conservatively includes partially read current sources; this index is not a full-read gate. "
-        + "Use its source path and sha256 with quota context-read --select for each exact pointer. "
+        + "Substitute the exact pointer in context_details.command_template, or use the source path and sha256 "
+        + "with quota context-read --select. "
         + "A prior selected read, EOF or saved file does not confirm model-visible coverage or retention. "
         + "Detail reads never establish a full baseline. "
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
@@ -732,7 +733,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const required = requiredNativeContext(request, sourceValues, plan);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
-  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context), request);
   // The Python edit adapter already reconstructs this exact required view.
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
@@ -762,8 +763,10 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
+type InitialOpeningSplit = {controls: Map<string, string[]>; details: string[]; linkedDetail: string};
+
 function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
-    scope?: Path): {boundary: string; detail: string; controls: string[]; checkpointEntries?: string} | undefined {
+    scope?: Path): InitialOpeningSplit | undefined {
   const cli = jsonObject(jsonObject(context.interaction_contract)?.cli_channel);
   const candidate = "/selected_todo";
   if (cli?.selection_required === true && groups.opening.includes(candidate)) {
@@ -776,31 +779,50 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
       const index = groups.remaining.indexOf(control);
       if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
     }
-    return {boundary: candidate, detail: candidate, controls: []};
+    return {controls: new Map([[candidate, []]]), details: [candidate], linkedDetail: candidate};
   }
   if (!scope) return undefined;
   const parent = scope.slice(0, -1), detail = scope.at(-1)!;
   const body = jsonObject(at(context, parent)), boundary = pointer(parent);
-  if (!groups.opening.includes(boundary) || !body
-      || !Array.isArray(body[detail]) || !body[detail].length) return undefined;
+  const controls = new Map<string, string[]>();
+  const details: string[] = [];
+  let linkedDetail: string | undefined;
+  if (groups.opening.includes(boundary) && body && Array.isArray(body[detail]) && body[detail].length) {
+    const boundaryControls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
+    linkedDetail = pointer(scope);
+    details.push(linkedDetail);
+    controls.set(boundary, boundaryControls);
+    const checkpointPath = [...parent, "checkpointed_boundary_authority"];
+    const checkpoint = jsonObject(at(context, checkpointPath));
+    if (checkpoint?.schema_version === "checkpointed_boundary_authority_v0"
+        && Array.isArray(checkpoint.active_write_scope) && Number.isSafeInteger(checkpoint.active_count)
+        && Number.isSafeInteger(checkpoint.inactive_count) && Array.isArray(checkpoint.entries)
+        && checkpoint.entries.length) {
+      // Keep the current approval summary in the opening. Read the exact
+      // entries and write scope from the same capture before work.
+      const checkpointIndex = boundaryControls.indexOf(pointer(checkpointPath));
+      boundaryControls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
+        .map(key => pointer([...checkpointPath, key])));
+      details.push(pointer([...checkpointPath, "entries"]));
+    }
+  }
+  const selected = jsonObject(context.selected_todo), requested = "required_write_scopes";
+  const scopes = selected?.[requested];
+  if (groups.opening.includes(candidate) && selected?.schema_version === "quota_selected_todo_v0"
+      && Array.isArray(scopes) && scopes.length && scopes.every(value => typeof value === "string" && value)) {
+    controls.set(candidate, Object.keys(selected).filter(key => key !== requested)
+      .map(key => pointer(["selected_todo", key])));
+    // Current requested scopes need this read even when the Goal's exact
+    // write scope can carry forward from an earlier observation.
+    linkedDetail = pointer(["selected_todo", requested]);
+    details.push(linkedDetail);
+  }
+  if (!linkedDetail) return undefined;
   // Current readiness belongs with the decision. Reorder only the new pinned
   // reader, so an explicit historical initial-read cursor still replays.
   const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
   if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
-  const controls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
-  const checkpointPath = [...parent, "checkpointed_boundary_authority"];
-  const checkpoint = jsonObject(at(context, checkpointPath));
-  const opening = {boundary, detail: pointer(scope), controls};
-  if (checkpoint?.schema_version !== "checkpointed_boundary_authority_v0"
-      || !Array.isArray(checkpoint.active_write_scope) || !Number.isSafeInteger(checkpoint.active_count)
-      || !Number.isSafeInteger(checkpoint.inactive_count) || !Array.isArray(checkpoint.entries)
-      || !checkpoint.entries.length) return opening;
-  // Keep the current approval summary in the opening. The exact entries and
-  // write scope are both required from the same capture before work.
-  const checkpointIndex = controls.indexOf(pointer(checkpointPath));
-  controls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
-    .map(key => pointer([...checkpointPath, key])));
-  return {...opening, checkpointEntries: pointer([...checkpointPath, "entries"])};
+  return {controls, details, linkedDetail};
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
@@ -817,8 +839,8 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   let {opening, remaining} = groups;
   if (openingSplit) {
     // The reader chooses the split using the actual serialized opening.
-    opening = opening.flatMap(field => field === openingSplit.boundary ? openingSplit.controls : [field]);
-    remaining = [openingSplit.detail, ...(openingSplit.checkpointEntries ? [openingSplit.checkpointEntries] : []), ...remaining];
+    opening = opening.flatMap(field => openingSplit.controls.get(field) ?? [field]);
+    remaining = [...openingSplit.details, ...remaining];
   }
   const ordinaryRows = openingSplit ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
@@ -826,7 +848,7 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(openingSplit ? {linked_opening_detail: openingSplit.detail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(openingSplit ? {linked_opening_detail: openingSplit.linkedDetail, ordinary_opening_rows: ordinaryRows} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -867,8 +889,7 @@ export function scopedReplanYardstickReversal(decision: JsonObject) {
   return {cue, fields, path: [...REPLAN_CONTEXT_PATH, "explore_basis", "work_yardsticks", index]};
 }
 
-/** A pending Manager Inbox read already delivers these scoped request rows. */
-function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+function requiredManagerAgenda(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -879,12 +900,20 @@ function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): s
       || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
-        "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
+        "return_attention", "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
       || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  return agenda;
+}
+
+/** A pending Manager Inbox read already delivers these scoped request rows. */
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  if (!agenda) return undefined;
   const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
       || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Array.isArray(items)
       || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
       || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
   const fields = ["incoming_count", "outgoing_count", "scan_complete"];
@@ -895,6 +924,26 @@ function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): s
     return [...fields, "omitted_count", "instruction"];
   }
   return undefined;
+}
+
+/** Keep only returned-result identities in the first page; full Inbox text stays on its owner read. */
+function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  const attention = jsonObject(agenda?.return_attention);
+  if (!attention || !known(attention, ["count", "items", "omitted_count"])
+      || typeof attention.count !== "number" || !Number.isSafeInteger(attention.count) || attention.count <= 0
+      || typeof attention.omitted_count !== "number" || !Number.isSafeInteger(attention.omitted_count)
+      || attention.omitted_count < 0 || !Array.isArray(attention.items) || attention.items.length > 4
+      || attention.count !== attention.items.length + attention.omitted_count) return undefined;
+  for (const value of attention.items) {
+    const item = jsonObject(value);
+    if (!item || item.step !== "consume_peer_result" || typeof item.request_id !== "string"
+        || typeof item.unconsumed_return_count !== "number" || item.unconsumed_return_count <= 0
+        || !Array.isArray(item.returns) || !item.returns.some(value => jsonObject(value)?.consumed !== true)) {
+      return undefined;
+    }
+  }
+  return attention;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -927,16 +976,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
+  const replanRequired = context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+    && replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required"
+    && replan.settlement_only !== true;
   let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
-  if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
-      replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
-      replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
+  if (replanRequired && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
-  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
-      context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replan?.schema_version === "replan_action_packet_v0" &&
-      replan.decision === "replan_required" &&
-      replan.settlement_only !== true) {
+  } else if (replanRequired && context.schema_version === "loopx_turn_envelope_v1") {
     // The complete contract already carries the review facts: use its own
     // obligations and the indexed outcome paths below, without another writer.
     for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
@@ -966,28 +1013,53 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
   const turnBindingRequired = cli?.turn_binding_required === true;
   const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
-  if (turnBindingRequired)
+  if (turnBindingRequired) {
     for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
-  include("interaction_contract", "agent_channel", "required_reads");
+  } else if (context.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    for (const field of admissionFields)
+      include("interaction_contract", "cli_channel", field);
+  }
+  const channel = object(interaction.agent_channel);
+  // The matching inbox read is already required during explicit Todo selection.
+  const selectingBeforeWork = context.ok === true && context.should_run === true &&
+    channel?.delivery_allowed === false && cli?.spend_allowed_now === false &&
+    cli.spend_after_validation === false && hasUnboundActionSelection(cli);
+  const normalWork = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && (channel?.delivery_allowed === true || selectingBeforeWork);
+  // The same pending owner read applies before a required replan. Delivery
+  // remains disabled while that review is being settled.
+  const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true
+    && cli?.spend_allowed_now === false;
+  const requiredInboxReads = (normalWork || replanningBeforeWork) && channel?.must_attempt === true
+    && Array.isArray(channel.required_reads)
+    ? channel.required_reads : [];
+  const sources = object(channel?.work_context)?.sources;
+  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const attentionSources = sourceRows.filter(({source}) => managerReturnAttention(source, requiredInboxReads));
+  const requiredReadsPath = ["interaction_contract", "agent_channel", "required_reads"];
+  if (!attentionSources.length) include(...requiredReadsPath);
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
   if (deferredReentry) {
     // Surface the owner's reopen and same-Turn guard before the long read.
     for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
   }
-  const channel = object(interaction.agent_channel);
-  const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
-    ? channel.required_reads : [];
-  const sources = object(channel?.work_context)?.sources;
-  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  // A long Manager Inbox agenda stays behind its required read. Surface only
+  // the bounded returned-result identities before work so paging or context
+  // recovery cannot hide that the requester has a result to consume.
+  const cueStart = pointers.length;
+  if (attentionSources.length) {
+    include(...requiredReadsPath);
+    for (const {index} of attentionSources) {
+      include(...work, "sources", index, "content", "unfinished_delegations", "return_attention");
+    }
+  }
   const selectedTodo = object(context.selected_todo);
   const identityAgent = object(context.agent_identity)?.agent_id;
   const agentId = context.agent_id ?? identityAgent;
   // Deliver the opted-in decision cue before work, while the candidate or
   // test can still change. The template and evidence stay on their owner read.
-  const cueStart = pointers.length;
   if (replanReversal) {
     for (const field of replanReversal.fields) include(...replanReversal.path, field);
   }

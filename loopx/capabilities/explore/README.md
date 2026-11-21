@@ -238,7 +238,7 @@ summary limit. This raises the previous 300/300 attachment and 1200 summary
 limits to preserve legal Goal route decisions and their last negative condition.
 The next-turn view preserves that entire summary, with the same three-result
 default and existing paginated detail reads. Short findings and off mode retain
-their behavior. This is a transport limit change, not evidence of model adoption.
+their behavior. This is a transport limit change.
 
 Alternatively, add `--explore-result-json result.json` to the ordinary admitted work
 writeback, retaining its Goal, Agent, Todo, Turn and delivery fields. When both
@@ -316,8 +316,7 @@ in the interpretation. Use the existing optional `question_update` to close an
 answered question independently of finding status or overall Goal completion.
 Existing recorded statuses and the CLI finding default are unchanged.
 
-Use `tentative` for inconclusive observations or prerequisite failures. Neither
-compilation failure nor a score alone supplies a scientific interpretation.
+Use `tentative` for inconclusive observations or prerequisite failures.
 Routine work without reusable evidence needs no attachment. Omitting the option
 preserves ordinary writeback behavior; disabled Explore rejects an attachment
 before committing it. Disable further ingestion through the existing
@@ -345,7 +344,14 @@ measurements are explicit `null` (never `0`). Its `input_revision` and
 [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md) and
 [execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)).
 This records producer attribution, not verified execution or utility; omitting
-it preserves legacy events.
+it preserves legacy events. Detail reads also connect confirmed
+`execution_observation` records to the current or explicitly preceding
+`work_yardstick_decision` through `previous_decision_followthrough` (omitting
+`work_yardstick_decision` retains the active choice). Attribution requires the
+same Goal/Agent/Todo, question, tested input, original commit, and visible work
+window; a verified successor history prefix determines visibility even across
+clock rollback, while legacy captures without that prefix retain the strict
+timestamp bound.
 
 ### Quantitative Measurements & Scope-Tuple Comparability
 
@@ -377,7 +383,7 @@ Key measurement invariants (canonicalized in `explore_measurements.ts`):
 
 - **Exact 7-key scope tuple:** Comparisons group strictly by `(node_id, metric, unit, higher_is_better, comparison_scope, input_revision, evaluation_ref)`. Putting candidate hashes in `input_revision` or submission IDs in `evaluation_ref` creates singleton groups with `null` improvement (`null` is unknown, never zero gain). Never invent a shared revision when conditions changed or are unknown.
 - **Null vs. zero & paired findings:** Unmeasured values are explicit `null`; `0` and negative numbers are valid scores. A single finding may record paired distinct candidates under identical scope, while repeated evaluations of the same candidate belong in a new finding. Use a new finding ID per evaluation and reuse an ID only to correct a mistaken finding (corrections replace prior versions in active comparisons while preserving append-order history).
-- **Append-order feedback & replay prefix isolation:** `explore turn-context`, `explore finding`, and Yardstick-enabled `refresh-state` (`explore_result_delivery`) compute latest, historical best, and direction-adjusted delta along canonical log append order (and array order within a batch), paginated via `--result-limit` (`1..20`, default `3`), `--result-offset`, `--result-revision`, and `--result-node`. Successful settlement replays freeze and read only the original committed event prefix. When no Yardstick decision is active, receipts supplement current feedback with at most two other `work_measurements` groups from the Todo's linked questions. Manually captured measured findings participate in result pages and exact-source comparison cards without needing a `writeback-result` tag. Scores and `best` markers never certify adoption, causality, acceptance, or execution authority.
+- **Append-order feedback & replay prefix isolation:** `explore turn-context`, `explore finding`, `turn run-once` (via inline `explore_result` inside `agent_vision_json`), and Yardstick-enabled `refresh-state` (`explore_result_delivery`) compute latest, historical best, and direction-adjusted delta along canonical log append order (and array order within a batch), paginated via `--result-limit` (`1..20`, default `3`), `--result-offset`, `--result-revision`, and `--result-node`. Successful settlement replays freeze and read only the original committed event prefix (even after Yardstick is disabled). Off mode with an omitted attachment creates no finding and adds no capability preflight, while supplied invalid or disabled attachments reject before Todo completion and primary writeback. In both `turn run-once` and `refresh-state`, the quota writeback receipt is published only after requested attachment delivery finishes (the public quota CLI rejects a debit while missing, and `refresh-state --settle-turn` recovery delivers the verified original Run before repairing its receipt). When no Yardstick decision is active, receipts supplement current feedback with at most two other `work_measurements` groups from the Todo's linked questions. Manually captured measured findings participate in result pages and exact-source comparison cards without needing a `writeback-result` tag. Scores and `best` markers never certify adoption, causality, acceptance, or execution authority.
 
 ### Stage Methodology Operators & Quantitative Planning
 
@@ -523,8 +529,7 @@ The command is read-only and sits behind the same effective Goal-mode gate as
 `worker-branch-plan` (see "Per-Goal Opt-In Gate" below): without
 `explore_harness.enabled=true` on the Goal's effective orchestration boundary it returns
 a disabled packet, and `--width` is capped by `max_children` in addition to
-its own ceiling. It does not claim todos, acquire leases, launch agents,
-spend quota, or change the active state. Instead it emits a prediction
+its own ceiling. Instead it emits a prediction
 packet with:
 
 - selected branches, confidence, hazards, and reason codes;
@@ -627,7 +632,7 @@ Declaring resource capacities is an explicit portfolio-fill mode: the requested
 overall width becomes the selection ceiling instead of the legacy confidence
 prefix, while existing scores, hazards, and typed evidence remain unchanged.
 An available slot therefore makes a ranked candidate eligible for the analysis
-packet; it is not evidence that the candidate is valuable enough to execute.
+packet.
 The agent must still apply the goal's evidence, serving-cost, quota, claim, and
 lease gates before launch.
 
@@ -765,15 +770,13 @@ Writeback replays the current canonical task links and exact page without
 replacing the original global stride basis or changing its review revision.
 Changed links, a missing/closed task or another agent's claim invalidate the
 scoped page. Restart the read after correcting the scope. Unscoped global reads
-and citations retain their existing behavior. This improves evidence delivery;
-it does not prove that the Agent used it or improved an outcome.
+and citations retain their existing behavior. This improves evidence delivery.
 
 Each comparison card retains every linked outcome on that result page, up to
 the same 20-result bound. Expanding `--result-limit` therefore also makes the
 fourth and later displayed outcomes available to `selected_candidate`; writeback
 replays the same page and exact source digest. The default three-result view
-and the separate number-of-cards limit remain unchanged. A larger page grants
-no execution permission and does not certify the quality of a selection.
+and the separate number-of-cards limit remain unchanged.
 
 Planning context also keeps a bounded `typed_evidence_audit` on suggested
 branches with explicit Todo/node links, and up to three existing exploring
@@ -812,8 +815,7 @@ An authorized `refresh-state` fails when a configured sink cannot sync and
 read back; the caller must retry before claiming delivery. A suppressed run
 may still commit canonical local state, but its packet reports an unsatisfied,
 retryable postcondition and requires a concrete authorized-sync successor.
-With no configured sink, local projection satisfies the postcondition. This
-contract does not enable Explore Harness.
+With no configured sink, local projection satisfies the postcondition.
 
 #### Explore Harness planning gate
 
@@ -909,8 +911,7 @@ packets when `spawn_policy.explore_harness.enabled=true`:
 - `selected_gap`: the first pending gap (pending sorts before scheduled, then
   by input count descending, then by stable gap id); at most 3 gaps are
   projected (`MAX_PROJECTED_GAPS`).
-- This legacy projection only considers open experiments; dropping a closed
-  experiment or marking all gaps scheduled does not certify research closure.
+- This legacy projection only considers open experiments.
   The separate typed research shadow requires attributable terminal evidence
   and current input fingerprints. Evidence-backed dismissal and shared
   write-time enforcement remain RFC milestones.
@@ -1361,7 +1362,6 @@ fatal structural preflight, record-mode malformed-item isolation with resume
 continuity, aggregate metric projection, and episode-only adapters without a
 legacy `execute` method.
 
-
 ## Machine default
 
 In Settings → Device → Explore Harness, choose **Off**, **Evidence**, or
@@ -1437,10 +1437,8 @@ ingestion intent，并精确匹配来源、记录时间、canonical finding 与�
 此路径不写图或 Todo。未完成交付仍须遵守普通写入与归属检查，冲突附件重试仍拒绝。
 CLI 附件解析保留结构合法的历史输入，由既有 primary owner 精确匹配不可变重试；
 新 primary 写入和新 ingestion intent 仍在产生效果前检查执行与测量归属。
-解析成功不代表新写入合格，也不提供公开的绕过参数。
 
-`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录，不是恢复完整
-归档前缀。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
+`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
 快照；部分旧 finding 归因矛盾不会
 阻断其他合法结果恢复。计划通过 `blocked_event_count`、被阻断事件 id 的摘要和
 `blocked_reasons` 报告原因，Markdown 的 warnings 同时显示这些原因。被阻断记录

@@ -128,8 +128,7 @@ This first version is single-level. Review one final diff; do not recursively
 review the review, spawn a hierarchy of quality agents, or require agreement
 between several models.
 
-The guardrail catalog is review guidance, not an Agent output checklist or
-evidence that a particular model applies it well. Maintainers qualify model
+The guardrail catalog is review guidance. Maintainers qualify model
 behavior separately against the public clean-PR and seeded Python, Rust, and
 TypeScript shadow matrix.
 Normal delivery does not launch that low-frequency evaluation, and a model

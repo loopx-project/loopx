@@ -41,6 +41,7 @@ from loopx.control_plane.quota.settlement_cli import (
 from loopx.control_plane.quota.error_codes import (
     HeartbeatReceiptIdentityConflictError,
 )
+from loopx.control_plane.quota.effective_action import EffectiveAction
 from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
 from loopx.control_plane.scheduler.execution_context import (
     SchedulerRuntimeProfile,
@@ -255,6 +256,22 @@ def test_selected_todo_suppresses_stale_replan_packet_binding() -> None:
     assert quota_rollout_replan_obligation_id(payload, args) is None
 
 
+def test_current_replan_preserves_explicit_planning_selection_gate() -> None:
+    obligation_id = "replan-0000000000000001"
+    payload = {
+        "effective_action": EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value,
+        "selected_todo": {"todo_id": TODO_ID},
+        "action_portfolio": {
+            "selection_policy": {"requires_explicit_turn_binding": True},
+        },
+        "replan_action_packet": {"obligation_id": obligation_id},
+    }
+    args = SimpleNamespace(todo_id=None, replan_obligation_id=None)
+
+    assert quota_rollout_todo_id(payload, args) is None
+    assert quota_rollout_replan_obligation_id(payload, args) is None
+
+
 def test_explicit_replan_binding_survives_newly_selected_todo() -> None:
     obligation_id = "replan-0000000000000001"
     payload = {"selected_todo": {"todo_id": TODO_ID}}
@@ -418,6 +435,27 @@ def test_turn_guard_remains_readable_after_a_torn_rollout_tail(
     )
     assert readback is not None
     assert readback["event_id"] == written["event_id"]
+
+
+@pytest.mark.parametrize("lease_epoch", [None, 3])
+def test_managed_turn_binding_preserves_qualified_lease_epoch(tmp_path: Path, lease_epoch: int | None) -> None:
+    runtime_root = tmp_path / "runtime"
+    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
+    receipt = ensure_turn_heartbeat_settlement_receipt(
+        runtime_root, identity, semantic_replan_guard_scoped=False,
+        semantic_replan_obligation_id=None,
+        task_lease_proof={"idempotency_key": "fixture-managed-lease", "expected_version": 7},
+        task_lease_epoch=lease_epoch,
+    )
+    assert receipt["details"]["prepared_lease_version"] == 7
+    assert receipt["details"].get("prepared_lease_epoch") == lease_epoch
+    readback = read_heartbeat_settlement(
+        runtime_root, goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
+    )
+    assert readback is not None and readback.prepared_lease_required
+    assert readback.prepared_lease is not None
+    assert readback.prepared_lease["prepared_lease_version"] == 7
+    assert readback.prepared_lease.get("prepared_lease_epoch") == lease_epoch
 
 
 def test_turn_guard_refuses_to_change_an_existing_semantic_selection(

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode,
-  planStewardMonitor, observeStewardPortfolio} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {admitStewardManagedTurn, bindStewardManagedActor, observeStewardNativeExecutor, planStewardManagedMode,
+  planStewardMonitor, observeStewardPortfolio,
+  observeStewardSignalMonitor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 
 function fixture() {
@@ -78,6 +79,45 @@ test("identity-refused watches need independent collector evidence and retain cu
   for (const changed of [{queued_turn_count: 1}, {goal_active: false},
     {monitor_todo: {...monitor, status: "blocked"}}, {observation: {...params.observation, verified: false}}]) {
     assert.throws(() => admitStewardManagedTurn({...input, ...changed}));
+  }
+});
+
+test("signal-unavailable custom monitors admit exactly one zero-effect recovery after manager_context", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.signal", todo_id: "todo_signal_watch", validation_command: null,
+    monitor_deadline: "2026-11-19T13:21:54Z", monitor_lease_version: 0};
+  const original = {turn_id: "2".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_error",
+    error: "steward monitor external signal source temporarily unavailable",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, loopx_request: prior};
+  const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true};
+  const monitor = {todo_id: "todo_signal_watch", task_class: "continuous_monitor",
+    target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const changed of [
+    {contexts: []},
+    {contexts: [{schema_version: "wrong_schema"}]},
+    {contexts: [...basis.contexts, ...basis.contexts]},
+    {phases: [{phase: "model_start"}]},
+    {event_kinds: ["turn.queued", "agent.phase", "turn.failed"]},
+    {poll_absent: false},
+    {lease_available: false},
+    {original: {...original, error: "other transient failure"}},
+    {original: {...original, upstream_turn_id: "model-started"}},
+    {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "3".repeat(32)}}}},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...changed}}));
   }
 });
 
@@ -226,4 +266,211 @@ test("publication changes only the native actor reference; scope configuration r
   assert.deepEqual((configured.state as typeof next).bindings[0].managed_actor, prepared.managed_actor);
   assert.throws(() => planConversationBinding({current: next, expected_revision: 5, operation: "configure",
     binding: {...prepared, context_kind: "project", grant: "workspace_read"}, observation: params.observation}));
+});
+
+test("custom steward signal monitors admit model-free probes while excluding local-session watches", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const request = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.custom", todo_id: "todo_pr_watch", validation_command: null,
+    monitor_deadline: "2026-11-19T12:00:00Z", monitor_lease_version: 0};
+  const customMonitor = {todo_id: "todo_pr_watch", task_class: "continuous_monitor",
+    target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
+    next_due_at: request.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request, monitor_todo: customMonitor};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+  for (const excludedKey of ["managed-session-watch." + "0".repeat(32), "steward-monitor-followup:todo_1", "bad key!"]) {
+    assert.throws(() => admitStewardManagedTurn({
+      ...input,
+      monitor_todo: {...customMonitor, target_key: excludedKey},
+    }));
+  }
+
+  const prItem = {number: 9024, headRefOid: "abc123", reviewDecision: "CHANGES_REQUESTED"};
+  const first = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [prItem], observed_at: "t1"},
+    previous_hash: null,
+  });
+  assert.equal(first.material_change, true);
+  assert.equal(first.observation_incomplete, false);
+
+  const unchanged = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [prItem], observed_at: "t2", collected_at: "later"},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(unchanged.result_hash, first.result_hash);
+  assert.equal(unchanged.material_change, false);
+
+  const changed = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [{...prItem, headRefOid: "def456"}]},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(changed.material_change, true);
+  assert.notEqual(changed.result_hash, first.result_hash);
+
+  const unavailable = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: [{request_id: "req_1", source_id: "peer"}],
+    repository_snapshot: {status: "unavailable", repository: "acme/widgets"},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(unavailable.observation_incomplete, true);
+  assert.equal(unavailable.material_change, false);
+  assert.equal(unavailable.result_hash, first.result_hash);
+});
+
+test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallback while rejecting unallocated antigravity", () => {
+  const {params} = fixture();
+  assert.equal(observeStewardNativeExecutor(params).execution_available, true);
+  const pureAntigravity = {
+    binding: {...params.binding, executor_endpoint_id: "antigravity"},
+    session: {...params.session, agent_id: "antigravity", executor_endpoint_id: "antigravity"},
+  };
+  assert.deepEqual(observeStewardNativeExecutor(pureAntigravity), {
+    execution_available: false,
+    execution_error_code: "unsupported_executor",
+  });
+  const qualifiedFallback = {
+    binding: params.binding,
+    session: {
+      ...params.session,
+      agent_id: "antigravity",
+      executor_endpoint_id: "antigravity",
+      upstream_context_history: [{agent_id: "codex", thread_id: params.session.upstream_thread_id}],
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "codex",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_availability_fallback",
+        configuration_revision: "rev-1",
+        eligible_endpoints: ["codex", "antigravity"],
+      },
+    },
+  };
+  assert.equal(observeStewardNativeExecutor(qualifiedFallback).execution_available, true);
+  assert.equal(observeStewardNativeExecutor({
+    ...qualifiedFallback,
+    session: {...qualifiedFallback.session, upstream_context_history: []},
+  }).execution_available, false);
+  const flexiblePrimaryMigrated = {
+    binding: params.binding,
+    session: {
+      ...qualifiedFallback.session,
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "antigravity",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_primary_available",
+        configuration_revision: "rev-2",
+        eligible_endpoints: ["antigravity", "codex"],
+      },
+    },
+  };
+  assert.equal(observeStewardNativeExecutor(flexiblePrimaryMigrated).execution_available, true);
+});
+
+test("zero-effect worker exit, storage I/O, and runtime unavailability monitors admit one bounded recovery", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.transient", todo_id: "todo_transient_watch", validation_command: null,
+    monitor_deadline: "2026-11-20T07:44:39Z", monitor_lease_version: 0};
+  const monitor = {todo_id: "todo_transient_watch", task_class: "continuous_monitor",
+    target_key: "steward-portfolio-watch", watch_only: true, claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const workerExitedError =
+    "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+  for (const scenario of [
+    {
+      error_code: "runtime_error",
+      error: workerExitedError,
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_error",
+      error: "disk I/O error",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_unavailable",
+      error: "The Agent runtime could not be prepared.",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "turn.failed", "agent.phase", "manager.context"],
+    },
+  ]) {
+    const original = {turn_id: "4".repeat(32), session_id: params.session.session_id,
+      status: "failed", error_code: scenario.error_code, error: scenario.error,
+      origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+      delta_count: 0, loopx_request: prior};
+    const basis = {original, contexts: scenario.contexts, phases: [{phase: "manager_context"}],
+      event_kinds: scenario.event_kinds, poll_absent: true, old_worker_excluded: true, lease_available: true};
+    const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+      request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+      monitor_todo: monitor, monitor_restart_basis: basis};
+    assert.equal(admitStewardManagedTurn(input).observation_only, true);
+    for (const bad of [
+      {contexts: []},
+      {phases: []},
+      {contexts: [{schema_version: "wrong"}]},
+      {contexts: [{schema_version: "manager_turn_context_v1"}, {schema_version: "manager_turn_context_v1"}]},
+      {poll_absent: false},
+      {old_worker_excluded: false},
+      {lease_available: false},
+      {original: {...original, upstream_turn_id: "started-upstream"}},
+      {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "5".repeat(32)}}}},
+    ]) {
+      assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...bad}}));
+    }
+  }
+});
+
+test("chained post-context transient watch carriers recover only after cooldown while scope and identity refusals remain one-shot", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const baseRequest = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.chained", todo_id: "todo_chained_watch", validation_command: null,
+    monitor_deadline: "2026-11-20T07:45:00Z", monitor_lease_version: 0};
+  const completedAt = "2026-11-20T07:45:00Z";
+  const completedSec = Date.parse(completedAt) / 1000;
+  const monitor = {todo_id: "todo_chained_watch", task_class: "continuous_monitor",
+    target_key: "steward-portfolio-watch", watch_only: true, claimed_by: "steward", status: "open",
+    next_due_at: baseRequest.monitor_deadline};
+  const carrier = {turn_id: "6".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_unavailable",
+    error: "The Agent runtime could not be prepared.",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, completed_at: completedAt,
+    loopx_request: {...baseRequest, monitor_restart_recovery: {original_turn_id: "5".repeat(32)}}};
+  const basis = {original: carrier, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const badBasis of [
+    {observed_at: completedSec + 299},
+    {observed_at: undefined},
+    {original: {...carrier, completed_at: undefined}},
+    {original: {...carrier, error_code: "runtime_error", error: "the portfolio observation omitted authorized Goals",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [], warnings: ["external_authorization_changed"],
+        coverage: {discovered: null, verified: 0, complete: false}}]}, observed_at: completedSec + 600},
+    {original: {...carrier, error_code: "runtime_error", error: "the selected App identity could not be verified"},
+      contexts: [], event_kinds: ["turn.queued", "agent.phase", "turn.failed"], observed_at: completedSec + 600},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...badBasis}}));
+  }
 });

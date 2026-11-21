@@ -8,10 +8,12 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { describe, expect, it, onTestFinished } from 'vitest'
 
-import { runFile } from '../src/cli.ts'
+import { LoopXCliError, runFile } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
 import { LoopXContinuationDriver } from '../src/driver.ts'
 import { pluginPythonCandidates } from '../src/managed-runtime.ts'
+import { GoalBarCoordinator } from '../src/goalbar/events.ts'
+import { createGoalBarService } from '../src/goalbar/service.ts'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const sessionId = 'dsh-closeout-session'
@@ -114,7 +116,7 @@ async function setAllowedSlots(testFixture: Fixture, allowedSlots: number): Prom
   await writeFile(testFixture.registry, JSON.stringify(registry))
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(provider: 'file' | 'sqlite' = 'file'): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-loopx-closeout-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
   const project = join(root, 'project')
@@ -194,8 +196,8 @@ async function fixture(): Promise<Fixture> {
     '        "task_class": "advancement_task", "action_kind": "validate",',
     '    }])',
     'initialize_canonical_authority(Path(sys.argv[2]), sys.argv[3], projection,',
-    '    state_path=Path(sys.argv[4]), provider="file")',
-  ].join('\n'), repoRoot, runtime, goalId, state, todoId], {
+    '    state_path=Path(sys.argv[4]), provider=sys.argv[6])',
+  ].join('\n'), repoRoot, runtime, goalId, state, todoId, provider], {
     cwd: repoRoot,
     env: { ...process.env, PYTHONPATH: repoRoot },
   })
@@ -281,12 +283,13 @@ function receiptEffectIds(payload: Record<string, unknown>): string[] {
 
 function executablePlanArgs(
   steps: readonly Record<string, unknown>[],
-  kind: 'durable_writeback' | 'quota_spend',
+  kind: 'durable_writeback',
   replacements: Readonly<Record<string, string>> = {},
 ): string[] {
   const command = String(
     steps.find(step => step.kind === kind)?.command_template ?? '',
   )
+  expect(command).not.toBe('')
   const tokens = command.match(/'[^']*'|"[^"]*"|\S+/gu) ?? []
   expect(tokens.shift()).toBe('loopx')
   const args = tokens.map(token => replacements[token] ?? token.replace(/^(['"])(.*)\1$/u, '$2'))
@@ -295,6 +298,77 @@ function executablePlanArgs(
 }
 
 describe('DSH admission-to-closeout integration', () => {
+  it.skipIf(process.platform === 'win32').each(['file', 'sqlite'] as const)(
+    'fences an escaped old Pause after a newer Start on real %s authority', async provider => {
+      const f = await fixture(provider)
+      const release = join(f.project, 'release-old-pause')
+      const resultPath = join(f.project, 'old-pause-result.json')
+      const python = await integrationPython
+      const coordinator = new GoalBarCoordinator()
+      coordinator.registerDriverBridge({
+        evaluateActivatedSession: async () => ({ kind: 'applied' }),
+        cancelQueued: async () => ({ kind: 'applied' }),
+        readContinuationAdmission: () => ({ state: 'clear' }),
+      })
+      let intercept = true
+      const runner: FileRunner = async (file, args, options) => {
+        const fullArgs = ['--runtime-root', f.runtime, ...args]
+        if (intercept && args.includes('--execute') && args.includes('stop')) {
+          intercept = false
+          const escaped = [
+            'import pathlib,subprocess,sys,time',
+            'release=pathlib.Path(sys.argv[1])',
+            'deadline=time.monotonic()+20',
+            'while not release.exists() and time.monotonic()<deadline: time.sleep(0.01)',
+            'if not release.exists(): raise SystemExit(2)',
+            'with open(sys.argv[2],"w") as out:',
+            ' subprocess.run([sys.executable,"-m","loopx.cli",*sys.argv[3:]],stdout=out)',
+          ].join('\n')
+          const launcher = [
+            'import subprocess,sys,time',
+            'subprocess.Popen([sys.executable,"-c",sys.argv[1],*sys.argv[2:]],start_new_session=True)',
+            'time.sleep(20)',
+          ].join('\n')
+          return runFile(python, ['-c', launcher, escaped, release, resultPath, ...fullArgs], {
+            ...options, timeoutMs: 100,
+            env: { ...process.env, ...options.env, PYTHONPATH: repoRoot, LOOPX_USAGE_PING: '0' },
+          })
+        }
+        return realLoopXRunner(file, fullArgs, options)
+      }
+      const service = createGoalBarService({
+        getAgent: id => id === sessionId ? f.agent : undefined,
+        coordinator, runner,
+        command: { file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0' },
+      })
+      const request = (op: 'start' | 'pause') => ({
+        v: 'loopx_goalbar_request_v2' as const, op, sessionId,
+        expected: { goalId, loopxAgentId: agentId },
+      })
+      try {
+        expect((await service.handle(request('pause'), new AbortController().signal)).result)
+          .toEqual({ kind: 'unknown', code: 'operation_result_unknown' })
+        // An independently verified stop precedes the owner's new Start.
+        expect((await runCli(f, ['goal-lifecycle', '--goal-id', goalId,
+          '--operation', 'stop', '--actor-kind', 'owner', '--execute'])).payload.ok).toBe(true)
+        expect((await service.handle(request('start'), new AbortController().signal)).result.kind)
+          .toBe('succeeded')
+        await writeFile(release, '')
+        let stale: Record<string, unknown> | undefined
+        for (let i = 0; i < 100; i += 1) {
+          try { stale = record(JSON.parse(await readFile(resultPath, 'utf8'))); break } catch { /* writer still settling */ }
+          await new Promise(resolve => setTimeout(resolve, 25))
+        }
+        expect(stale).toMatchObject({ ok: false, written: false })
+        expect((await runCli(f, ['goal-lifecycle', '--goal-id', goalId,
+          '--operation', 'stop'])).payload.before_state).toBe('active')
+      } finally {
+        await writeFile(release, '')
+        await service.dispose()
+      }
+    }, 30_000,
+  )
+
   it.each([
     { route: 'compatibility', version: 'loopx 1.2.4', setting: 'on', readerCalls: 0 },
     { route: 'progressive', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4 },
@@ -303,8 +377,10 @@ describe('DSH admission-to-closeout integration', () => {
       readOnlyFromGuard: 1 },
     { route: 'read-only paged revalidation', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4,
       readOnlyFromGuard: 3, readOnlyPageBytes: '256' },
+    { route: 'lost response on a later page', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4,
+      readOnlyFromGuard: 3, readOnlyPageBytes: '256', loseReaderResponse: true },
   ])('settles the queued exact receipt once through $route admission', async ({
-    route, version, setting, readerCalls, readOnlyFromGuard, readOnlyPageBytes,
+    route, version, setting, readerCalls, readOnlyFromGuard, readOnlyPageBytes, loseReaderResponse,
   }) => {
     const testFixture = await fixture()
     const warnings: string[] = []
@@ -312,6 +388,8 @@ describe('DSH admission-to-closeout integration', () => {
     let reads = 0
     let inlinePages = 0
     let inlineContinuations = 0
+    let lostPage: { argv: readonly string[]; stdout: string } | undefined
+    let recoveredPage = false
     const runner: FileRunner = async (file, args, options) => {
       if (args.includes('context-read')) reads += 1
       if (args.includes('should-run')) {
@@ -332,6 +410,17 @@ describe('DSH admission-to-closeout integration', () => {
         if (page.offset !== 0) {
           inlineContinuations += 1
           expect(readerArgs).toContain('--selection-sha256')
+          if (loseReaderResponse && lostPage === undefined) {
+            lostPage = { argv: readerArgs, stdout: response.stdout }
+            // The original Core read succeeded, but its output was lost
+            // before the Driver could observe it.
+            throw new LoopXCliError('transport', 'synthetic reader response loss', true)
+          }
+          if (lostPage !== undefined && !recoveredPage) {
+            expect(readerArgs).toEqual(lostPage.argv)
+            expect(response.stdout).toEqual(lostPage.stdout)
+            recoveredPage = true
+          }
         }
         return response
       }
@@ -359,6 +448,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(source).toEqual({
       kind: 'loopx-continuation',
       schemaVersion: 'loopx_dsh_continuation_v0',
+      selectionRequired: true,
       goalId,
       agentId,
       turnInstanceId,
@@ -379,6 +469,11 @@ describe('DSH admission-to-closeout integration', () => {
       async () => ({ kind: 'enter', messages: [queued] }),
     )
     expect(admission.kind).toBe('enter')
+    if (loseReaderResponse) {
+      expect(recoveredPage).toBe(true)
+      expect(warnings).toEqual([])
+      expect(testFixture.queued).toHaveLength(0)
+    }
     // The Driver intentionally revalidates before and after the next pre-step hook.
     expect(guardCalls).toBe(3)
     if (readOnlyPageBytes) {
@@ -428,6 +523,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(heartbeatReceipt.turn_instance_id).toBe(turnInstanceId)
     const cliChannel = record(record(guard.payload.interaction_contract).cli_channel)
     const rawPlan = record(cliChannel.settlement_plan)
+    expect(rawPlan.schema_version).toBe('quota_settlement_plan_v2')
     const identity = record(rawPlan.identity)
     const replayChannel = record(record(guardReplay.payload.interaction_contract).cli_channel)
     expect(record(record(replayChannel.settlement_plan).identity)).toEqual(identity)
@@ -436,16 +532,15 @@ describe('DSH admission-to-closeout integration', () => {
     expect(identity.todo_id).toBe(todoId)
     expect(JSON.stringify(rawPlan)).not.toContain('${LOOPX_TURN:?}')
     const steps = array(rawPlan.ordered_steps).map(record)
-    const writebackTemplate = String(
-      steps.find(step => step.kind === 'durable_writeback')?.command_template,
-    )
-    const spendTemplate = String(
-      steps.find(step => step.kind === 'quota_spend')?.command_template,
-    )
-    for (const command of [writebackTemplate, spendTemplate]) {
-      expect(command).toContain(`--turn-instance-id ${turnInstanceId}`)
-      expect(command).toContain(`--todo-id ${todoId}`)
-    }
+    const writebackStep = steps.find(step => step.kind === 'durable_writeback')
+    const spendStep = steps.find(step => step.kind === 'quota_spend')
+    const writebackTemplate = String(writebackStep?.command_template)
+    expect(writebackStep?.owner).toBe('agent')
+    expect(writebackTemplate).toContain(`--turn-instance-id ${turnInstanceId}`)
+    expect(writebackTemplate).toContain(`--todo-id ${todoId}`)
+    expect(writebackTemplate).toContain('--settle-turn')
+    expect(spendStep?.owner).toBe('runtime')
+    expect(spendStep?.command_template).toBeUndefined()
 
     const writeback = await runCli(testFixture, [
       ...executablePlanArgs(steps, 'durable_writeback', {
@@ -458,15 +553,25 @@ describe('DSH admission-to-closeout integration', () => {
     ])
     expect(writeback.exitCode, JSON.stringify(writeback.payload)).toBe(0)
     expect(new Set(receiptEffectIds(writeback.payload))).toEqual(new Set([effectId]))
+    expect(
+      array(record(writeback.payload.settlement_result).receipts)
+        .map(receipt => String(record(receipt).step_kind)),
+    ).toEqual(['validation', 'durable_writeback', 'quota_spend'])
 
-    const spendArgs = executablePlanArgs(steps, 'quota_spend')
-    const spend = await runCli(testFixture, spendArgs)
-    const spendReplay = await runCli(testFixture, spendArgs)
-    expect(spend.exitCode).toBe(0)
-    expect(spendReplay.exitCode).toBe(0)
+    const spendReplay = await runCli(testFixture, [
+      'quota', 'spend-slot',
+      '--goal-id', goalId,
+      '--slots', '1',
+      '--source', 'heartbeat',
+      '--execute',
+      '--todo-id', todoId,
+      '--agent-id', agentId,
+      '--turn-instance-id', turnInstanceId,
+    ])
+    expect(spendReplay.exitCode, JSON.stringify(spendReplay.payload)).toBe(0)
     expect(spendReplay.payload.idempotent_replay).toBe(true)
     expect(spendReplay.payload.appended).toBe(false)
-    expect(new Set(receiptEffectIds(spend.payload))).toEqual(new Set([effectId]))
+    expect(new Set(receiptEffectIds(spendReplay.payload))).toEqual(new Set([effectId]))
 
     const closeout = await runCli(testFixture, [
       'todo', 'complete',
@@ -565,7 +670,7 @@ describe('DSH admission-to-closeout integration', () => {
     }
   }, 45_000)
 
-  it.each(['held', 'digest mismatch', 'inline digest mismatch', 'paged'] as const)(
+  it.each(['held', 'digest mismatch', 'inline digest mismatch', 'paged', 'transport exhausted'] as const)(
     'keeps one guard when the progressive capture is %s',
     async scenario => {
       const testFixture = await fixture()
@@ -575,6 +680,7 @@ describe('DSH admission-to-closeout integration', () => {
       const warnings: string[] = []
       let guards = 0
       let reads = 0
+      const lostReads: string[][] = []
       const runner: FileRunner = async (file, args, options) => {
         const child = { ...options, env: { ...options.env, LOOPX_CONTEXT_DELIVERY: 'on' } }
         if (args.includes('context-read')) {
@@ -591,7 +697,13 @@ describe('DSH admission-to-closeout integration', () => {
             expect(page.schema_version).toBe('context_capture_page_v1')
             return { ...response, stdout: JSON.stringify({ ...page, selection_sha256: '0'.repeat(64) }) }
           }
-          return realLoopXRunner(file, readerArgs, child)
+          const response = await realLoopXRunner(file, readerArgs, child)
+          if (scenario === 'transport exhausted') {
+            expect(record(JSON.parse(response.stdout)).ok).toBe(true)
+            lostReads.push(readerArgs)
+            throw new LoopXCliError('transport', 'synthetic reader response loss', true)
+          }
+          return response
         }
         if (!args.includes('should-run')) return realLoopXRunner(file, args, child)
         guards += 1
@@ -625,7 +737,13 @@ describe('DSH admission-to-closeout integration', () => {
         driver.observeAgent(testFixture.agent)
         await evaluated
         expect(guards).toBe(1)
-        if (scenario === 'digest mismatch' || scenario === 'inline digest mismatch') {
+        if (scenario === 'transport exhausted') {
+          expect(reads).toBe(3)
+          expect(lostReads).toEqual([lostReads[0], lostReads[0], lostReads[0]])
+          expect(testFixture.queued).toHaveLength(0)
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain('admission_failed stage=quota kind=transport')
+        } else if (scenario === 'digest mismatch' || scenario === 'inline digest mismatch') {
           expect(reads).toBe(1)
           expect(testFixture.queued).toHaveLength(0)
           expect(warnings).toHaveLength(1)

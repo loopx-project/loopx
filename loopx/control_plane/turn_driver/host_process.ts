@@ -48,7 +48,7 @@ export function decodeHostProcessRequest(value: unknown): HostProcessRequest {
   return v as unknown as HostProcessRequest;
 }
 
-/** A stopped leader does not prove that its process group has stopped. */
+
 function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): boolean {
   if (!child.pid) return false;
   try { process.kill(-child.pid, signal); return true; }
@@ -138,7 +138,7 @@ export async function runHostProcess(request: HostProcessRequest,
           if (stdoutBytes > request.stdout_limit_bytes) { complete = false; stop("output_limit"); continue; }
         }
         const text = decoder.write(bytes);
-        if (text) await output({kind, text}); // Backpressure, not an unbounded output queue.
+        if (text) await output({kind, text}); // Backpressure.
       }
       const tail = decoder.end();
       if (tail && !(kind === "stdout" && outcome === "output_limit")) await output({kind, text: tail});

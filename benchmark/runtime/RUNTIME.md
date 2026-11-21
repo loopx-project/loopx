@@ -81,17 +81,22 @@ agents:
       replan_after_turns: 6
 ```
 
-For an explicitly selected **heartbeat-only** context experiment, add
-`turn_envelope: true` to `kwargs` (default `false`). Each wake creates a private
-capture root and asks the product renderer for a short TurnEnvelope dispatcher.
-Full decisions remain available through `detail_ref.full_decision` from the same
-guard invocation. Selection/reentry still evaluate current authority; generated
-selection commands retain the capture root. When enabled, the setting appears in install,
-execution and wake receipts as `turn_envelope: true`. When disabled, the field
-and worker environment override are absent, preserving the pre-opt-in shape. Invalid native-Goal/plain/Turn-driver combinations
-fail before execution. Set it back to `false` for the next run to roll back;
-do not change a running trial's treatment. Captures contain private Goal context.
-Transport tests do not establish lower token cost or better model decisions.
+Historical Short trials request `turn_envelope: true` in heartbeat `kwargs`.
+Before planning or execution starts a model, the worker previews the selected
+product's quota response through the same CLI. Its wake receipt records the
+expected and observed versions and eligibility in `quota_input_contract`. C1
+sources return v1 and the Short request fails before Host preparation. A
+`fresh_replan` checkpoint preloads a distinct view and also prevents a Short
+launch. The preview has no Turn identity and creates no admission or capture.
+Ordinary and explicit Complete wakes proceed without this Short preview.
+
+Use the recorded product and runner revisions to reproduce a historical
+treatment. On a qualified v0 source, an execution wake records
+`turn_envelope_source=explicit` once it renders the Short bootstrap. Its
+same-invocation full decision remains available through `detail_ref.full_decision`.
+The planning prompt has its own input. Include the preview in startup
+and wake cost when measuring a new attempt with this runner. Keep captures
+private and preserve the settings and receipts of existing attempts.
 
 New native heartbeat trials default to context delivery `on`. Add
 `context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
@@ -171,10 +176,23 @@ release remains the original typed transport failure, without publishing an
 optimized result or rerunning the guard. An interrupted guard continues with
 the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification binds the context-directory/root option and the worker's
-original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
-a complete-mode binding cannot verify a pending command that uses
-`--complete-turn`. Historical ordinary and envelope guards remain readable.
+original `--complete-turn` and `--turn-envelope` choices. Current generated
+heartbeat guards use the default complete v1 contract without emitting either
+alias. A checkpoint without a complete-mode binding cannot verify a pending
+command that uses `--complete-turn`. Historical ordinary and envelope guards
+remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
+
+Restoring a pending replan for a fresh native conversation and checking whether
+a restored session may capture again use the same checkpoint artifact reader.
+It verifies the sealed decision member and original replan binding. Present
+complete-source versions are verified; an unversioned decision is readable
+only as historical evidence in this sealed path. A refusal holds that recovery
+before a session reset or a new capture. A successful read does not replace
+current native admission, current semantic settlement, or full archive checking.
+Empty historical replan annotations keep the ordinary restore path. A declared
+held-decision member still requires its original intent and sealed bytes, even
+when an annotation is empty.
 
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`
@@ -192,10 +210,14 @@ establish safe recovery, the command returns a typed transport failure with the
 original full-read reference and receipt; use that explicit reference without
 rerunning admission. An optional cache write after recovery is established can
 still fall back to the same full input. A bad source hash/scope is refused before
-publication. This does not renew decision
-freshness or establish autonomous solver benefit. Default-off preloading is
-unchanged. Include the projection command, descriptor, recovery and page reads
-in subsequent total-cost comparisons.
+publication. This does not renew decision freshness or establish autonomous solver benefit.
+With context delivery off, the worker supplies a bounded, digest-checked reader
+for the complete saved CLI view. Each preflight stores its view in its own
+capture directory, so a retry of the same Turn preserves previously issued
+page cursors. Follow those cursors before using the original Turn's interaction
+contract. Reading the capture requires no hooks and performs no new admission.
+Include the projection command, descriptor, recovery and page reads in subsequent
+total-cost comparisons.
 Across distinct worker wakes, settle the prior Turn before selecting new work;
 reading an old prompt from resumed history cannot supply the next wake's guard.
 Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new trial
@@ -369,13 +391,22 @@ For a task-entry comparison, pin the same source and vary only `task_entry`;
 keep task inputs, scoring, model, budget and evaluation windows fixed. Include
 planning time in the common run budget.
 
-New `loopx-planned` invocations deliver the product planning packet without the
-previous benchmark research-strategy prefix. Only explicitly selected execution
-observation tool context is added. This applies to both Harbor and SForge callers;
-task content, the Core first-delivery contract, identity/readback validation and
-host deadline enforcement remain unchanged. Pin the runner revision when comparing
-planning policies. This adapter change does not qualify model adoption, earlier
-evaluation or outcome improvement.
+New `loopx-planned` invocations deliver the product planning packet, optional
+initial batch authoring and explicitly selected execution observation tool
+context. This applies to both Harbor and SForge callers. Pin the runner revision
+when comparing planning policies. The batch changes how the planner submits its
+decisions. Model adoption, time to a scored candidate and outcome improvements
+require separate run evidence.
+
+For an empty planning frontier, the model can save the same requirement
+declaration and ordered advancement Todos in one JSON proposal and invoke
+`python -m benchmark.runtime.planning_batch PROPOSAL.json` during the planning
+wake. Use the checkpoint's exact input digest and acceptance provider revision.
+The command declares requirements, writes Todos and binds their actual IDs
+through public LoopX operations. Each write has its own receipt. If the command
+is interrupted, reuse the unchanged proposal so the original effects can be
+replayed and missing links completed. Use the ordinary planning steps for
+existing work, changes to requirements and blockers.
 
 The model writes or reuses actual task Todos through the public CLI. The worker
 reads the product packet again and checks the input digest, identity, Todo ids
@@ -440,17 +471,18 @@ Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
 
-An operator may explicitly hand off an unchanged stopped legacy heartbeat Host
-whose failed attempt produced no stdout/stderr and returned a phase timeout,
-while the native session remained idle. This is disabled by default. First run
-`benchmark.edgebench.stopped_recovery` with `--idle-host-handoff` and, when
-needed, `--install` to place its inert proof in that same stopped worker. The
-producer requires the exact failed scheduler, pending witness, latest unique
-wake, original workspace, registry, runtime and native stores, including committed
-SQLite WALs. It preserves the unknown failure and does not infer a quota failure
-from diagnostic text. The proof grants no execution or evaluator authority.
-The empty-output witness uses the worker's `stdout.jsonl` and `stderr.log` files;
-the producer and receiver share that writer-owned layout.
+An operator may explicitly hand off an unchanged stopped heartbeat worker when
+its native session is idle. First run `benchmark.edgebench.stopped_recovery`
+with `--idle-host-handoff` and, when needed, `--install` to place its inert
+proof in that same stopped worker. The proof includes the latest unique wake,
+the scheduler and its independent pending witness, the original workspace,
+registry, runtime and native stores, including committed SQLite WALs.
+This path is disabled by default and grants no execution or evaluator authority.
+
+A completed Host requires a successful process receipt at the recorded phase
+deadline and a cleared pending witness. The producer also supports a legacy
+empty-output phase timeout with a still-pending witness. It checks the worker's
+`stdout.jsonl` and `stderr.log` and preserves the recorded unknown failure.
 
 After the owner restores compatible native evaluator authority separately,
 restart only the original inert container and retain its original environment.
@@ -460,8 +492,9 @@ authorized finite `LOOPX_PHASE_DEADLINE_EPOCH`. Invoke
 `--idle-host-state-sha256 ORIGINAL_SCHEDULER_SHA256`. The consumer verifies the
 same namespace and complete unchanged source, current Goal/session/profile and
 fresh native account allowance. The native history owner must return a stable
-complete history whose last completed cursor precedes the failed attempt, with
-no pending effects. Its observer uses a disposable copy of the native store and
+complete history with no pending effects. For a completed Host, the last
+native Turn must fall inside the original process window. For a legacy timeout,
+it must precede the attempted launch. The observer uses a disposable copy of the native store and
 committed WALs because native read APIs can update their own history index; it
 copies no authentication file. Every copied native base participant must match
 the producer's sealed set; an extra archived-session/index store or database
@@ -474,10 +507,12 @@ existing lock owner's process/token witnesses; registry contents, SQLite/WALs,
 work files and unrelated lock files remain protected.
 
 An accepted handoff creates a new finite transport phase linked to the original
-failed record. It retains the session, Goal, Todos, work and failure evidence;
-it does not settle an old Turn, refill native opportunities/cooldown, or create
-another task budget. Repeating the exact phase retains its clock and any later
-failure; a changed deadline cannot replay the original handoff. The owner still
+scheduler record. It retains the session, Goal, Todos, work, and any pending
+semantic settlement. The existing owners still enforce settlement, native
+opportunities, cooldown and the total task budget. Repeating the exact phase retains its clock and any later
+failure. The original pending witness must still be a Boolean and match the
+bytes in the exported proof. A changed witness or deadline cannot replay the
+original handoff. The owner still
 enforces its audited remaining solver allowance and external cutoff, including
 setup and cleanup. Omit both new opt-ins to keep the ordinary refusal path.
 Retain the proof and phase records when disabling future handoffs. Genuine Stop,

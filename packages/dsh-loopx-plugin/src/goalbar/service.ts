@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import {
   LoopXCliError,
@@ -25,10 +26,13 @@ import {
   unavailableGoalBarSourceRevision,
 } from './read-model.ts'
 import {
+  GOALBAR_ADMISSION_CLEAR,
   GOALBAR_RESPONSE_VERSION,
 } from './protocol.ts'
 import type {
   GoalBarActionResultV1,
+  GoalBarExpectedBindingV1,
+  GoalBarContinuationAdmissionV1,
   GoalBarReadFaultCode,
   GoalBarReadResultV1,
   GoalBarRequestV1,
@@ -73,6 +77,10 @@ export interface GoalBarCoordinatorPort {
   cancelQueued(
     capture: GoalBarSessionCapture,
   ): Promise<GoalBarDriverActionReceipt>
+  hasRecoveryAttention?(capture: GoalBarSessionCapture, expected: GoalBarExpectedBindingV1): boolean
+  readContinuationAdmission(
+    capture: GoalBarSessionCapture,
+  ): GoalBarContinuationAdmissionV1
 }
 
 export interface GoalBarServiceOptions {
@@ -141,6 +149,16 @@ function exactRecord(
     && actual.every(key => typeof key === 'string' && allowed.has(key))
     ? input
     : undefined
+}
+
+function recoverySourceRevision(
+  revision: string, recoveryAttention: boolean,
+  admission: GoalBarContinuationAdmissionV1 = GOALBAR_ADMISSION_CLEAR,
+): string {
+  // Retain the ordinary source revision shape for clients and unaffected sessions.
+  if (!recoveryAttention && admission.state === 'clear') return revision
+  return `sha256:${createHash('sha256').update('goalbar-runtime-state\0')
+    .update(revision).update(JSON.stringify([recoveryAttention, admission])).digest('hex')}`
 }
 
 /** Strict verified relation for the existing lifecycle execution V1 receipt. */
@@ -363,7 +381,6 @@ export class GoalBarService implements GoalBarServiceHandle {
         sourceRevision: unavailableGoalBarSourceRevision(),
       }
     }
-
     // This cursor is captured before command resolution or any other CLI read.
     const baseSessionEventSeq = latestSessionEventSeq(capture.session)
     const operationSignal = this.combinedSignal(signal)
@@ -421,14 +438,20 @@ export class GoalBarService implements GoalBarServiceHandle {
     if (model.kind === 'fault') {
       return { kind: 'fault', code: model.code, baseSessionEventSeq, sourceRevision }
     }
+    const recoveryAttention = this.coordinator.hasRecoveryAttention?.(capture, model.snapshot) === true
+    const admission = this.coordinator.readContinuationAdmission(capture)
     return {
       kind: 'present',
       baseSessionEventSeq,
-      sourceRevision,
+      sourceRevision: recoverySourceRevision(sourceRevision, recoveryAttention, admission),
       snapshot: {
         ...model.snapshot,
         // Status is process-local authority and is refreshed at publication.
         agentStatus: capture.agent.status,
+        ...(recoveryAttention ? { recoveryAttention: true } : {}),
+        // The latched admission failure is driver-process state for the exact
+        // Session and is refreshed from the same process-local authority.
+        continuationAdmission: admission,
       },
     }
   }
@@ -498,6 +521,19 @@ export class GoalBarService implements GoalBarServiceHandle {
     if (cursor !== null && (upperBound === null || cursor > upperBound)) {
       return { kind: 'fault', code: 'session_unavailable' }
     }
+    // An admission change that landed while no watcher was registered (for
+    // example during the client's own re-read) still differs from the last
+    // served value; surface it immediately instead of waiting for an event.
+    const initialRevision = await this.watchSourceRevision(capture, request.expected)
+    if (operationSignal.aborted || !this.captureIsCurrent(capture)) {
+      return { kind: 'fault', code: 'session_unavailable' }
+    }
+    if (initialRevision !== request.sourceRevision) {
+      return {
+        kind: 'source_changed',
+        sessionEventSeq: latestSessionEventSeq(capture.session) ?? cursor,
+      }
+    }
     while (!operationSignal.aborted && this.captureIsCurrent(capture)) {
       const remaining = Math.max(0, deadline - Date.now())
       const receipt = await this.watchService.waitForSessionChange(
@@ -514,11 +550,7 @@ export class GoalBarService implements GoalBarServiceHandle {
       if (receipt.kind === 'runtime_changed'
         && receipt.sessionId === request.sessionId) {
         try {
-          const revision = await computeGoalBarSourceRevision({
-            cwd: capture.cwd,
-            goalId: request.expected?.goalId,
-            loopxAgentId: request.expected?.loopxAgentId,
-          })
+          const revision = await this.watchSourceRevision(capture, request.expected)
           if (!this.captureIsCurrent(capture)) {
             return { kind: 'fault', code: 'session_unavailable' }
           }
@@ -541,15 +573,24 @@ export class GoalBarService implements GoalBarServiceHandle {
         cursor = receipt.sessionEventSeq
       } else if (receipt.kind === 'timeout') {
         cursor = receipt.sessionEventSeq
+      } else if (receipt.kind === 'admission_changed'
+        && receipt.sessionId === request.sessionId) {
+        // Driver admission state lives in the read snapshot but not in any
+        // hashed source file, so the watcher must re-read even when the
+        // revision is unchanged. Report it as a source change to force one
+        // bounded re-read; the read itself stays idempotent.
+        if (!this.captureIsCurrent(capture)) {
+          return { kind: 'fault', code: 'session_unavailable' }
+        }
+        return {
+          kind: 'source_changed',
+          sessionEventSeq: latestSessionEventSeq(capture.session) ?? cursor,
+        }
       } else {
         return { kind: 'fault', code: 'session_unavailable' }
       }
       try {
-        const revision = await computeGoalBarSourceRevision({
-          cwd: capture.cwd,
-          goalId: request.expected?.goalId,
-          loopxAgentId: request.expected?.loopxAgentId,
-        })
+        const revision = await this.watchSourceRevision(capture, request.expected)
         if (!this.captureIsCurrent(capture)) {
           return { kind: 'fault', code: 'session_unavailable' }
         }
@@ -564,6 +605,24 @@ export class GoalBarService implements GoalBarServiceHandle {
       }
     }
     return { kind: 'fault', code: 'session_unavailable' }
+  }
+
+  private async watchSourceRevision(
+    capture: LiveCapture,
+    expected: GoalBarExpectedBindingV1 | null,
+  ): Promise<string> {
+    const revision = await computeGoalBarSourceRevision({
+      cwd: capture.cwd,
+      goalId: expected?.goalId,
+      loopxAgentId: expected?.loopxAgentId,
+    })
+    // Hidden snapshots have no binding or admission projection. Keep their
+    // anchor in that same revision domain, so a retained driver failure cannot
+    // turn an unbound page's read/watch cycle into an immediate retry loop.
+    if (expected === null) return revision
+    const recoveryAttention = this.coordinator.hasRecoveryAttention?.(capture, expected) === true
+    return recoverySourceRevision(revision, recoveryAttention,
+      this.coordinator.readContinuationAdmission(capture))
   }
 
   private actionAdmission(): ActionAdmission {
@@ -657,10 +716,12 @@ export class GoalBarService implements GoalBarServiceHandle {
     if (validationSignal.aborted || !this.captureIsCurrent(capture)) {
       return { kind: 'rejected', code: 'binding_validation_failed' }
     }
-    const actionable = activation.kind === 'value'
-      && (request.op === 'start'
+    if (activation.kind !== 'value' || activation.stateFingerprint === undefined) {
+      return { kind: 'rejected', code: 'binding_validation_failed' }
+    }
+    const actionable = request.op === 'start'
         ? activation.goalActivation === 'stopped' && capture.agent.status === 'idle'
-        : activation.goalActivation === 'active')
+        : activation.goalActivation === 'active'
     if (!actionable) return { kind: 'rejected', code: 'not_actionable' }
 
     // Last identity/status fence before the child is synchronously launched.
@@ -680,6 +741,7 @@ export class GoalBarService implements GoalBarServiceHandle {
         '--goal-id', binding.goalId,
         '--operation', operation,
         '--actor-kind', 'owner',
+        '--expected-state-fingerprint', activation.stateFingerprint,
         '--execute',
       ], {
         runner: this.runner,
@@ -697,7 +759,8 @@ export class GoalBarService implements GoalBarServiceHandle {
     } catch {
       return { kind: 'unknown', code: 'operation_result_unknown' }
     } finally {
-      // The runner promise settles only after child close, including forced kill.
+      // Release the local operation after the runner has verified the result
+      // or reported it unknown. Never replay a lifecycle mutation here.
       admission.resolveMutation()
     }
     if (!verified) return { kind: 'unknown', code: 'operation_result_unknown' }

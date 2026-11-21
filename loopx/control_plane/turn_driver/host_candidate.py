@@ -16,7 +16,7 @@ from ..quota.turn_envelope import (
     COMPLETE_TURN_HOST_REQUEST_SCHEMA as COMPLETE_TURN_HOST_REQUEST_SCHEMA,
     LOOPX_TURN_HOST_REQUEST_SCHEMA as LOOPX_TURN_HOST_REQUEST_SCHEMA,
     assert_turn_envelope_consumer_version, turn_envelope_action_signature_document,
-    captured_turn_host_input, complete_turn_host_source,
+    captured_turn_host_input, complete_turn_host_source, projected_host_model_input,
     assert_turn_host_request_version as assert_turn_host_request_version,
 )
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
@@ -140,7 +140,8 @@ def extract_turn_authority(
 
     try:
         checked = complete_turn_host_source(request, operation="host_dispatch_context",
-                                        include_session_lineage=include_session_lineage)
+                                        include_session_lineage=include_session_lineage,
+                                        include_model_context=True)
     except RuntimeError as exc:
         raise ValueError("complete Turn contract rejected") from exc
     if checked is not None:
@@ -155,7 +156,7 @@ def extract_turn_authority(
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
             "_work_identity": dict(checked["work_identity"]),
             **({"_session_lineage": dict(checked["session_lineage"])} if include_session_lineage else {}),
-            "_model_input": captured_turn_host_input(request)}
+            "_model_input": projected_host_model_input(request, checked)}
 
     envelope = _mapping(request.get("turn_envelope"))
     signature = _mapping(envelope.get("action_signature"))
@@ -265,7 +266,7 @@ def extract_turn_authority(
     if detail or context.get("detail_ref") or replan or authority.get("vision_continuation_audit") or horizon:
         # Replan/acceptance evidence and historical capability references need
         # the saved observation's route and hash. Native capture validation owns
-        # its binding; this adapter neither reads it nor re-enters admission.
+        # its binding.
         authority["detail_ref"] = {key: value for key, value in detail.items()
             if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature
@@ -331,7 +332,8 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         detail = _mapping(model_input.get("detail_ref"))
         input_prompt = (
             "You are executing one bounded LoopX-governed work segment.\n"
-            "Use work_contract as the complete source of truth. Read its "
+            "Use task_context for the admitted work. The outer executor retains "
+            "the complete original source and its control/effect instructions. Read "
             "interaction_contract.agent_channel.work_context and remaining required_reads "
             "before primary_action; do not repeat fulfilled reads. Perform work only "
             "when its contract allows it. Obey every supplied write scope, workspace "
@@ -441,8 +443,11 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         "result_kind to replan_required, and agent_vision_json to a JSON-encoded "
         "bounded goal_vision_replan_contract_v0 packet whose path_delta is "
         "goal_path_delta_v0 with outcome replan; leave vision_unchanged_reason "
-        "empty. For unchanged paths, set path_delta_mode to unchanged, omit "
-        "agent_vision_json, and provide vision_unchanged_reason. These fields "
+        "empty. For unchanged paths, explicitly set path_delta_mode to unchanged. "
+        "Reuse the current checkpoint with vision_unchanged_reason and no "
+        "agent_vision_json, or record new progress/completion evidence in a fresh "
+        "agent_vision_json packet with path_delta.outcome continue or no_change "
+        "and no vision_unchanged_reason. These fields "
         "describe the result only; they grant no authority. For stop results "
         "(wait, user_action_required, iteration_failed), omit both "
         "path_delta_mode and agent_vision_json.\n"
@@ -463,6 +468,69 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             if authority.get("execution_profile") else ""
         )
     )
+
+
+def _repair_minor_json_delimiters(raw: str) -> str | None:
+    """Repair only unquoted trailing commas and <=2 extra terminal closers."""
+    out: list[str] = []
+    stack: list[str] = []
+    in_str = False
+    escaped = False
+    n = len(raw)
+    i = 0
+    while i < n:
+        ch = raw[i]
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch == ",":
+            j = i + 1
+            while j < n and raw[j] in " \t\r\n":
+                j += 1
+            if j >= n or raw[j] not in "}]":
+                out.append(ch)
+        elif ch in "{[":
+            stack.append(ch)
+            out.append(ch)
+        elif ch in "}]":
+            expected = ("}" if stack[-1] == "{" else "]") if stack else None
+            if expected == ch:
+                stack.pop()
+                out.append(ch)
+            else:
+                tail = raw[i:]
+                if not all(c in "}] \t\r\n" for c in tail):
+                    return None
+                tail_closers = [c for c in tail if c in "}]"]
+                expected_closers = ["}" if o == "{" else "]" for o in reversed(stack)]
+                if not (0 <= len(tail_closers) - len(expected_closers) <= 2):
+                    return None
+                pos = 0
+                for ec in expected_closers:
+                    while pos < len(tail_closers) and tail_closers[pos] != ec:
+                        pos += 1
+                    if pos >= len(tail_closers):
+                        return None
+                    pos += 1
+                out.extend(expected_closers)
+                stack.clear()
+                break
+        else:
+            out.append(ch)
+        i += 1
+    if in_str or stack:
+        return None
+    return "".join(out)
 
 
 def parse_model_json(text: str) -> dict[str, Any] | None:
@@ -494,10 +562,17 @@ def parse_model_json(text: str) -> dict[str, Any] | None:
     end = value.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return None
+    candidate = value[start : end + 1]
     try:
-        parsed = json.loads(value[start : end + 1])
+        parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        return None
+        repaired = _repair_minor_json_delimiters(candidate)
+        if repaired is None:
+            return None
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
     return parsed if isinstance(parsed, dict) else None
 
 

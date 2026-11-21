@@ -4,7 +4,7 @@ This opt-in source-checkout service lets independent clients claim a canonical
 task, record progress, renew/release its execution lease and read back the result
 over authenticated HTTPS. It reuses PostgreSQL service admission and the existing
 Todo/lease transaction owners. It does not select a provider, seed or migrate a
-Goal, expose arbitrary authority commits, or enable a shipped App/CLI route.
+Goal, expose arbitrary authority commits, or allow the host scheduler to admit remote turns.
 
 ## Ownership and access
 
@@ -40,7 +40,7 @@ The policy schema is `loopx_remote_authority_policy_v0`:
       "tenant_id": "tenant-one",
       "goal_id": "goal-one",
       "actor_id": "actor-a",
-      "operations": ["read", "claim", "progress", "renew", "release"]
+      "operations": ["read", "claim", "progress", "renew", "release", "complete", "block", "defer", "todo_add", "snapshot"]
     }]
   }]
 }
@@ -56,12 +56,90 @@ Revocation prevents subsequent admissions. A request already admitted under a
 policy snapshot may finish and retains that snapshot's revision in its receipt;
 revocation does not claim to undo an in-flight commit.
 
+### Scoped Todo reads
+
+For a read-only listener with resource authorization, set `schema_version` to
+`loopx_remote_authority_scoped_read_policy_v1` in the existing service policy.
+Each scope requires `todo_read_acl`, an array of entries with `goal_ref`,
+`todo_id`, `principal_id` and `actor_id`. Each credential grant also requires
+`goal_ref` with the exact `goal_id` and `goal_instance_id`. Grant `read` or
+`snapshot` for the actions the caller needs. The operator must approve each
+Todo and audience for that lifetime. Grant and ACL entries must agree with the
+service scope, authenticated principal and actor. An empty ACL grants no access.
+
+For current Todo or snapshot reads, each entry also needs
+`todo_origin_operation_id`: the canonical operation id of that Todo's successful
+creation under this exact lifetime, or the trusted source owner's successful
+first `bind_existing` transaction that adopted the existing Todo. The service
+verifies that original receipt and projection through the existing PostgreSQL
+checkpoint owner, bounded by the admitted current head. An ACL is permission,
+not proof of ownership: a claim, update, successor activation, no-op rebind,
+missing receipt or predecessor's receipt cannot move retained work into a new
+lifetime. Entries without a valid origin are excluded; a direct/targeted read
+without proof, or a snapshot with no proven resources, is rejected. Shared
+first-bind proofs are read once per request; no authorization is cached between
+requests. The origin operation id stays in the private policy and is not
+returned to callers. Existing bound work without such evidence stays unavailable
+until the source owner supplies valid historical proof; do not rebind or rewrite
+its history to manufacture one.
+
+Launch the service with the scoped policy and use the current TLS client with
+the existing v0 request JSON. The server supplies the exact Goal reference
+from its private policy and verifies it against the active lifecycle on the
+same PostgreSQL head used to compose the response. Unbound, retiring and
+mismatched lifetimes deny access. A direct read or targeted snapshot outside
+the ACL returns rejection without revealing whether the Todo exists. The
+scoped listener denies write commands.
+
+Scoped successes use `loopx_remote_authority_scoped_read_response_v1`. They
+return the exact Goal reference, authorized Todo status and assignment, and
+matching lease metadata. Snapshots also include role and priority. Free-form
+notes and lease keys are withheld. Scoped clients reject unknown nested Todo
+and lease fields even when a snapshot digest matches; the trusted v0 decoder
+keeps its existing compatibility behavior. The snapshot receipt digest covers only the
+authorized projection and its scope. The global provider revision is withheld,
+so changing a hidden Todo leaves the returned view and digest intact. Clients
+that lack support for this response version report an unavailable read.
+
+Revoke access by replacing the policy with a new version of the same schema
+that removes the matching ACL entry or grant. The service pins the policy
+schema at startup and fails closed on a schema change during reload. Stop the
+listener to disable it. Keep the v0 policy for an explicitly configured
+legacy listener with trusted access to the whole Goal.
+
+#### Historical receipt proof
+
+To authorize recovery of a specific remote operation, add its canonical
+`operation_id` to `receipt_operation_ids` on the Todo's read ACL entry. The
+credential also needs `read` in its grant. The ID comes from the original
+operation or its trusted service receipt. An omitted or empty list grants
+no receipt access. Use `--recover` with the complete original command.
+
+The service checks the active Goal and allowed Todo before it opens the
+receipt. The original request digest, principal and actor must match the
+receipt. The original committed projection must prove the same Goal lifetime.
+The service reuses the provider's bounded checkpoint and delta reader for that
+exact cursor. Missing, unbound or cross-lifetime receipts are rejected, even
+with a matching operation ID. The scoped service role needs read access to the
+existing tenant-scoped `authority_checkpoints` table as part of this journal read.
+
+A scoped success returns the exact Goal, Todo and operation, `historical_only`
+and the original receipt digest. It withholds the original result payload,
+lease key, cursor and provider revision. The original receipt confirms
+recorded history. Execution authority still comes from a current lease and
+the existing mutation owner. Remove the operation ID to revoke recovery while
+leaving the authorized Todo read available.
+
+Artifact versions, delegated sources and cross-person writes require separate
+qualification before they can be exposed.
+
 ## Commands and recovery
 
 POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command includes
 `schema_version: "loopx_remote_authority_request_v0"`, `tenant_id`, `goal_id`,
-`actor_id`, `store_identity`, `todo_id` and `operation`. Task IDs use canonical
-`todo_<token>` syntax. Unknown fields and operations are rejected.
+`actor_id`, `store_identity` and `operation`. Supply `todo_id` for individual
+task commands; omit it on `snapshot` for a whole Goal read. Task IDs use
+canonical `todo_<token>` syntax. Unknown fields and operations are rejected.
 
 | Operation | Additional fields | Behavior |
 | --- | --- | --- |
@@ -70,6 +148,11 @@ POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command inclu
 | `progress` | `request_id`, `claim_request_id`, `note` | Update a note using the original claim and current execution fence. |
 | `renew` | `idempotency_key`, `expected_version`, `ttl_seconds` | Renew the current lease through the existing lifecycle owner. |
 | `release` | `idempotency_key`, `expected_version` | Release execution; this does not clear the task's assignment or complete it. |
+| `complete` | `request_id`, `claim_request_id`, `evidence`, `note?`, `no_followup?` | Complete the task with evidence, preserve a recorded successor and release the execution lease. |
+| `block` | `request_id`, `reason`, `claim_request_id?`, `resume_when?`, `note?` | Pause task as blocked with explicit reason, releasing execution lease. |
+| `defer` | `request_id`, `reason`, `resume_when`, `claim_request_id?`, `note?` | Defer task with resumption condition and rationale, releasing execution lease. |
+| `todo_add` | `request_id`, `text`, `priority?`, `role?`, ... | Create a canonical task under policy grant and tenant fence. |
+| `snapshot` | `todo_id?` (optional) | Read-only projection of Goal todos, leases, and deterministic cross-machine receipt digest. |
 
 Use the lease key/version returned by claim or renewal for lifecycle commands.
 Progress names the original claim's client `request_id`; normal activity can
@@ -94,6 +177,26 @@ Claim/progress request IDs identify immutable intent within
 the principal/tenant/Goal/actor scope. Reusing one with different intent fails.
 Renew/release retain the canonical lease operation identity. Their receipts also
 verify the admitted principal, actor and request digest before reuse.
+
+Ordinary `complete` follows the Todo's continuation policy. A recorded successor
+stays linked. With neither a successor nor a terminal declaration, completion
+records `active_goal`. Supply `no_followup: true` only
+for an explicit terminal completion. A recorded successor conflicts with that
+intent, so the operation fails before writing a completion receipt or releasing
+the lease. Existing successful completions replay their original continuation
+when clients supply the same request.
+
+For `block` and `defer`, use the existing Todo resume condition syntax, such as
+`todo_done:todo_dependency` or `resume_at:2026-12-01T00:00:00Z`. A reason alone
+can block a task; deferral requires a valid condition.
+
+A snapshot observes one provider revision. The client recomputes its digest from
+the tenant, Goal, store incarnation, revision and ordered Todo and lease rows,
+and rejects rows outside the requested scope or without a matching Todo. Two
+authorized clients reading the same revision and scope get the same digest.
+The example client exits successfully for a valid snapshot. A response over
+64 KiB is unavailable; retry a narrower read if applicable. A snapshot has no
+recovery operation, produces no write, and never includes lease keys.
 
 The service clock decides expiry. Mutations require `hard_lease`; normal task
 eligibility, write-scope and lease checks still apply. A receipt is historical
@@ -121,6 +224,11 @@ the operator must explicitly authorize the new identity. The same principal and
 intent can then query retained historical receipts with that new binding.
 
 ## Running the candidate
+
+For a local PostgreSQL 16 server and HTTPS gateway, build the
+[self-hosted Compose bundle](../../examples/coordination/remote-authority-compose/README.en.md)
+from a pinned commit. The bundle boots an isolated starter Goal with two
+independent client credentials. [简体中文](../../examples/coordination/remote-authority-compose/README.md)
 
 Use the repository's qualified Node runtime and `npm ci --ignore-scripts`.
 Provision an isolated PostgreSQL authority schema/head using the existing
@@ -160,6 +268,25 @@ socket has gone away. Disconnecting a client does not establish that its write r
 Stop the listener and remove access grants to disable this candidate; existing
 local provider selection is unaffected and durable receipts remain in PostgreSQL.
 
+## Optional host observation
+
+The local registry can explicitly opt one registered Goal into a **read-only**
+health observation. Set `remote_authority.enabled: true` on that Goal with a
+credential-free HTTPS `endpoint`, verified `tenant_id`, `store_identity`,
+registered `actor_id` and a stable existing `probe_todo_id`. Set `ca_file` to
+an absolute path to a trusted CA when using a private CA. Use the service
+credential environment variable above; the legacy environment-only canary flag
+does not activate any Goal. The binding and credentials stay private.
+
+A full `heartbeat-prompt` can describe the configuration as unverified.
+`quota should-run` runs one bounded read of the known Todo for the current
+registered actor. Missing credentials, wrong scope, an invalid TLS certificate,
+a missing probe Todo, revocation and an unreachable service never count as
+verified. A verified read still waits for shared Turn admission. The scheduler
+does not select local work, spend quota, or acquire a remote lease from this
+observation. Owner Stop and paused quota keep their precedence. Disabling the
+setting removes the observation; local File/SQLite behavior is unchanged.
+
 ## Qualification and remaining work
 
 `npm run test:remote-authority` runs decoding/policy/TLS tests. With
@@ -167,7 +294,9 @@ local provider selection is unaffected and durable receipts remain in PostgreSQL
 it additionally creates a private test database and a restricted runtime role,
 starts real TLS server/client processes, and checks races, replay, revocation,
 expiry/takeover, incarnation rotation and response loss followed by restart.
-It removes its own database and role afterwards. The dedicated PostgreSQL CI
+The suite also invokes the real quota CLI against that isolated TLS service;
+it checks revocation, disconnection and recovery without changing the remote
+head. It removes its own database and role afterwards. The dedicated PostgreSQL CI
 workflow requires a real integration subtest; a skipped backend is not a pass.
 
 This qualifies a source candidate on one host with independent client processes

@@ -524,6 +524,7 @@ def _heartbeat_commands(
     agent_type: str,
     cli_bin: str,
     runtime_root: str | None = None,
+    registry: str | None = None,
     agent_id: str | None,
     available_capabilities: list[str] | None = None,
 ) -> dict[str, str]:
@@ -558,6 +559,7 @@ def _heartbeat_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -568,6 +570,7 @@ def _heartbeat_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -1116,23 +1119,26 @@ def _traex_activation(commands: dict[str, str]) -> dict[str, Any]:
         "host_mutation": {
             "owner": "TraeX CLI TUI",
             "host_command": "/goal <task_body>",
+            "preferred_tool": "create_goal",
             "cli_can_mutate_directly": False,
             "requires_host_feature_flag": "[features] goals = true in ~/.trae/traecli.toml",
             "missing_host_tool_gate": (
-                "TraeX /goal is unavailable; if goal mode is disabled, show the exact "
+                "Native Goal tools and active Goal context are unavailable; show the exact "
                 "`/goal <task_body>` text for the user to paste after enabling "
-                "`[features] goals = true`. Do not claim another host-loop surface "
+                "`[features] goals = true` if goal mode is disabled. Do not claim another host-loop surface "
                 "without a verified LoopX adapter."
             ),
         },
         "activation_steps": [
             "Run the visible-goal prompt JSON command after project state and todos are written.",
             "Read task_body from the JSON payload.",
-            "Set the visible TraeX goal to `/goal <task_body>`; enable `[features] goals = true` first if goal mode is off.",
+            "Read the current native Goal with get_goal when available, otherwise use the current host-provided Goal context. Tool availability is an observation, not permission to change a Goal.",
+            "For continuation inside the verified same-thread LoopX Goal/Agent binding, retain the active native Goal and its original objective. Do not call create_goal or replace that objective with task_body. Preserve paused, blocked and completed states; never resume them without user direction.",
+            "For an authorized fresh start, when the host confirms no native Goal exists, call create_goal with objective=task_body if available, then verify the Goal with get_goal or current host context. If native tools and active Goal context are unavailable, use the missing_host_tool_gate manual /goal path; enable `[features] goals = true` only if goal mode is off.",
             "Keep delivery in the visible TUI turn; gate each continuation through LoopX quota should-run and do not switch to hidden headless execution.",
         ],
         "success_criteria": [
-            "The visible TraeX TUI has `/goal <task_body>` active for this goal.",
+            "The visible TraeX TUI has a verified active native Goal for this work: retain its original objective on continuation, or verify task_body after fresh activation. A preview is not activation or model adoption.",
             "Future goal turns enter through LoopX quota/status/state before delivery work.",
         ],
     }
@@ -1238,6 +1244,7 @@ def build_host_loop_activation_packet(
     goal_id: str,
     cli_bin: str = "loopx",
     runtime_root: str | None = None,
+    registry: str | None = None,
     identity_runtime_root: str | None = None,
     agent_id: str | None = None,
     registered_agents: list[str] | None = None,
@@ -1263,6 +1270,7 @@ def build_host_loop_activation_packet(
             agent_type=canonical,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry=registry,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=normalized_available_capabilities,
         )
@@ -1277,6 +1285,8 @@ def build_host_loop_activation_packet(
         cadence_args = [cli_bin, "--format", "json"]
         if runtime_root:
             cadence_args.extend(["--runtime-root", runtime_root])
+        if registry:
+            cadence_args.extend(["--registry", registry])
         cadence_args.extend(["automation-cadence", "--goal-id", goal_id])
         if selected_agent_id:
             cadence_args.extend(["--agent-id", str(selected_agent_id)])
@@ -1325,6 +1335,7 @@ def build_host_loop_activation_packet(
             goal_id=goal_id,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             runtime_root=runtime_root,
+            registry=registry,
         )
     elif canonical == "kiro-cli":
         surface = kiro_cli_activation(commands, cli_bin)
@@ -1346,6 +1357,7 @@ def build_host_loop_activation_packet(
                 agent_type=canonical,
                 cli_bin=cli_bin,
                 runtime_root=runtime_root,
+                registry=registry,
                 agent_id=candidate,
                 available_capabilities=normalized_available_capabilities,
             )

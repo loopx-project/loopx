@@ -266,8 +266,89 @@ def test_append_starts_a_new_row_after_a_torn_final_record(
     else:
         written = append_rollout_event(log_path, event)
 
-    assert torn_record + b"\n" in log_path.read_bytes()
+    assert torn_record not in log_path.read_bytes()
     assert load_rollout_events(log_path) == [existing, written]
+
+
+@pytest.mark.parametrize("idempotent", [False, True])
+def test_unterminated_json_row_is_not_an_existing_record(
+    tmp_path: Path,
+    idempotent: bool,
+) -> None:
+    """A row missing its committing newline is not a deduplication record."""
+    log_path = tmp_path / "rollout-event-log.jsonl"
+    event = build_rollout_event(
+        goal_id="goal-a",
+        event_kind="quota_should_run",
+        agent_id="agent-a",
+        run_id="turn-a",
+        status="run",
+        recorded_at="2026-09-23T00:00:00Z",
+    )
+    encoded = json.dumps(event, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    log_path.write_bytes(encoded)
+    # The diagnostic reader still sees the decodable tail row.
+    assert load_rollout_events(log_path) == [event]
+
+    if idempotent:
+        written, appended = append_rollout_event_once(
+            log_path,
+            event,
+            identity_fields=("goal_id", "event_kind", "agent_id", "run_id"),
+        )
+        assert appended is True
+    else:
+        written = append_rollout_event(log_path, event)
+
+    # The tail was dropped and the event committed exactly once.
+    assert log_path.read_bytes() == encoded + b"\n"
+    assert load_rollout_events(log_path) == [event]
+    assert written == event
+
+
+def test_a_torn_record_is_dropped_before_the_next_row(
+    tmp_path: Path,
+) -> None:
+    """Uncommitted torn bytes vanish; the log stays readable by every reader.
+
+    A torn write can hold a complete JSON object and still be missing its
+    committing newline.  The append owner drops those bytes instead of finishing
+    them, so no reader treats a row its writer never committed as an admission
+    and older strict readers still parse the history.
+    """
+
+    log_path = tmp_path / "rollout-event-log.jsonl"
+    committed = build_rollout_event(
+        goal_id="goal-a",
+        event_kind="quota_should_run",
+        agent_id="agent-a",
+        run_id="turn-before",
+        recorded_at="2026-09-22T00:00:00Z",
+    )
+    torn = (
+        b'{"agent_id":"agent-a","event_kind":"quota_should_run",'
+        b'"goal_id":"goal-a","run_id":"turn-lost",'
+        b'"schema_version":"loopx_rollout_event_v0"}'
+    )
+    log_path.write_bytes(
+        json.dumps(committed, sort_keys=True).encode("utf-8") + b"\n" + torn
+    )
+    appended = build_rollout_event(
+        goal_id="goal-a",
+        event_kind="todo_complete",
+        agent_id="agent-a",
+        recorded_at="2026-09-23T00:00:00Z",
+    )
+
+    append_rollout_event(log_path, appended)
+
+    assert torn not in log_path.read_bytes()
+    assert log_path.read_bytes() == (
+        json.dumps(committed, sort_keys=True).encode("utf-8") + b"\n"
+        + json.dumps(appended, sort_keys=True).encode("utf-8") + b"\n"
+    )
+    assert load_rollout_events(log_path) == [committed, appended]
+    assert list(iter_rollout_events(log_path, strict=True)) == [committed, appended]
 
 
 @pytest.mark.parametrize("idempotent", [False, True])

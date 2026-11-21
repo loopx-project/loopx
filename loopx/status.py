@@ -11,17 +11,6 @@ from .control_plane.work_items.replan_history_codec import (
 from .control_plane import compact_control_plane_policy
 from .control_plane.coordination.local_authority import CanonicalTodoSnapshot as _CanonicalTodoSnapshot
 from .control_plane.effect_runtime import effect_runtime_request_scope
-# Refs #4447: one definition for each carrier this facade used to restate. The
-# owner is the projection that feeds the value into a read model; `loopx/status.py`
-# keeps exporting the established public name as an identity alias instead of
-# writing the same literal a second time, so a change in the owner cannot quietly
-# diverge from a change here.
-from .control_plane.status.active_state_projection import (
-    BACKLOG_HYGIENE_BULLET_PATTERN as BACKLOG_HYGIENE_BULLET_PATTERN,
-    BACKLOG_HYGIENE_HINT_PATTERN as BACKLOG_HYGIENE_HINT_PATTERN,
-    BACKLOG_HYGIENE_SECTION_HEADINGS as BACKLOG_HYGIENE_SECTION_HEADINGS,
-    SECTION_HEADING_PATTERN as SECTION_HEADING_PATTERN,
-)
 from .control_plane.status.adapter_status_vocabulary import (
     CONNECTED_ADAPTER_STATUSES as CONNECTED_ADAPTER_STATUSES,
     CONNECTED_DELIVERY_ADAPTER_STATUSES as CONNECTED_DELIVERY_ADAPTER_STATUSES,
@@ -33,19 +22,11 @@ from .control_plane.status.adapter_status_vocabulary import (
 # instead of restating the values.
 from .control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD as AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
-    AUTONOMOUS_REPLAN_SCHEMA_VERSION as AUTONOMOUS_REPLAN_SCHEMA_VERSION,
-    DEAD_MONITOR_REPEAT_SCHEMA_VERSION as DEAD_MONITOR_REPEAT_SCHEMA_VERSION,
     DEAD_MONITOR_REPEAT_THRESHOLD as DEAD_MONITOR_REPEAT_THRESHOLD,
 )
 from .control_plane.status.collection import (
     StatusCollectionContext,
     collect_status as _collect_status_read_model,
-)
-from .control_plane.status.contract_projection import (
-    MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION as MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION,
-    STATUS_CONTRACT_RELOAD_HINT as STATUS_CONTRACT_RELOAD_HINT,
-    STATUS_CONTRACT_SCHEMA_VERSION as STATUS_CONTRACT_SCHEMA_VERSION,
-    STATUS_CONTRACT_SIGNAL_LIMIT as STATUS_CONTRACT_SIGNAL_LIMIT,
 )
 from .control_plane.status.goal_attention_projection import (
     # Read, not only re-exported, by this facade, so this stays a plain import and
@@ -54,13 +35,7 @@ from .control_plane.status.goal_attention_projection import (
     PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION as PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION,
     REGISTRY_WAITING_ON_OVERRIDES as REGISTRY_WAITING_ON_OVERRIDES,
 )
-# Refs #4447: one definition for this vocabulary. The control_plane projection
-# owns it because it feeds the monitor/attention read models; this module keeps
-# re-exporting each name for existing callers instead of restating its value.
 from .control_plane.status.monitor_display_projection import (
-    MONITOR_DISPLAY_FALLBACK_ACTION as MONITOR_DISPLAY_FALLBACK_ACTION,
-    MONITOR_DISPLAY_SCHEMA_VERSION as MONITOR_DISPLAY_SCHEMA_VERSION,
-    MONITOR_DISPLAY_STOP_CONDITION as MONITOR_DISPLAY_STOP_CONDITION,
     MONITOR_SIGNAL_WAITING_ON,
     build_project_asset,
 )
@@ -228,17 +203,12 @@ from .control_plane.todos.todo_summary import (
     attach_dependency_blockers,
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
-    open_todo_items as open_todo_items,
-    todo_item_task_class as todo_item_task_class,
     first_open_todo_text,
     open_todo_items as open_todo_items,
     project_asset_todo_summary,
     sync_connected_attention_action_from_todos as _sync_connected_attention_action_from_todos_read_model,
     todo_lane_items as todo_lane_items,
     todo_item_is_deferred as todo_item_is_deferred,
-    todo_item_is_due_monitor as todo_item_is_due_monitor,
-    todo_item_missing_monitor_schedule as todo_item_missing_monitor_schedule,
-    todo_item_next_due_at as todo_item_next_due_at,
     todo_item_task_class as todo_item_task_class,
     todo_projection_sort_key as todo_projection_sort_key,
 )
@@ -275,37 +245,17 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "todo_item_task_class": "loopx.control_plane.todos.todo_summary",
     "todo_lane_items": "loopx.control_plane.todos.todo_summary",
     "todo_item_is_deferred": "loopx.control_plane.todos.todo_summary",
-    "todo_item_is_due_monitor": "loopx.control_plane.todos.todo_summary",
-    "todo_item_missing_monitor_schedule": "loopx.control_plane.todos.todo_summary",
-    "todo_item_next_due_at": "loopx.control_plane.todos.todo_summary",
     "todo_projection_sort_key": "loopx.control_plane.todos.todo_summary",
     "normalize_todo_task_class": "loopx.control_plane.todos.contract",
     "todo_item_is_expired_monitor": "loopx.control_plane.todos.todo_semantics",
-    # Refs #4447: single-sourced monitor/status vocabulary. Each name was already
-    # defined here and again in the control_plane projection that owns it; these
-    # entries keep the facade exporting one definition instead of a second copy.
-    "MONITOR_DISPLAY_STOP_CONDITION": "loopx.control_plane.status.monitor_display_projection",
-    "MONITOR_DISPLAY_FALLBACK_ACTION": "loopx.control_plane.status.monitor_display_projection",
-    "STATUS_CONTRACT_RELOAD_HINT": "loopx.control_plane.status.contract_projection",
     "PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION": "loopx.control_plane.status.goal_attention_projection",
-    # Refs #4447: the facade restated thirteen carriers its own projections
-    # already own - the status contract schema numbers, the monitor display schema
-    # version, the goal-attention override set, and the active-state, autonomous-
-    # replan, dead-monitor and backlog-hygiene carriers. Each is now defined once
-    # by the projection that feeds it to a read model.
+    # Refs #4447: the facade restated three carriers its own projections already
+    # own - the autonomous-replan and dead-monitor thresholds and the goal-attention
+    # override set. Each is now defined once by the projection that feeds it to a
+    # read model.
     "AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD": "loopx.control_plane.status.autonomous_replan_projection",
-    "AUTONOMOUS_REPLAN_SCHEMA_VERSION": "loopx.control_plane.status.autonomous_replan_projection",
-    "BACKLOG_HYGIENE_BULLET_PATTERN": "loopx.control_plane.status.active_state_projection",
-    "BACKLOG_HYGIENE_HINT_PATTERN": "loopx.control_plane.status.active_state_projection",
-    "BACKLOG_HYGIENE_SECTION_HEADINGS": "loopx.control_plane.status.active_state_projection",
-    "DEAD_MONITOR_REPEAT_SCHEMA_VERSION": "loopx.control_plane.status.autonomous_replan_projection",
     "DEAD_MONITOR_REPEAT_THRESHOLD": "loopx.control_plane.status.autonomous_replan_projection",
-    "MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION": "loopx.control_plane.status.contract_projection",
-    "MONITOR_DISPLAY_SCHEMA_VERSION": "loopx.control_plane.status.monitor_display_projection",
     "REGISTRY_WAITING_ON_OVERRIDES": "loopx.control_plane.status.goal_attention_projection",
-    "SECTION_HEADING_PATTERN": "loopx.control_plane.status.active_state_projection",
-    "STATUS_CONTRACT_SCHEMA_VERSION": "loopx.control_plane.status.contract_projection",
-    "STATUS_CONTRACT_SIGNAL_LIMIT": "loopx.control_plane.status.contract_projection",
     # Refs #4447: the connected-adapter sets were defined here and in both status
     # projections that pass them to the same injected read-model parameters. The
     # status package now owns each set once; the facade keeps exporting the
@@ -1093,6 +1043,8 @@ def build_attention_queue(
     current_registry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     include_goal_channel_projection: bool = True,
+    tolerate_malformed_settlement_history: bool = False,
+    agent_lane_id: str | None = None,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1155,12 +1107,16 @@ def build_attention_queue(
             monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
             external_progress_review_context=external_progress_review_context,
             registry_path=registry_path,
+            tolerate_malformed_settlement_history=(
+                tolerate_malformed_settlement_history
+            ),
         ),
         runtime_root=runtime_root,
         include_task_graph=include_task_graph,
         goal_id_filter=goal_id_filter,
         include_stopped_goal_context=include_stopped_goal_context,
         include_goal_channel_projection=include_goal_channel_projection,
+        agent_lane_id=agent_lane_id,
     )
     if runtime_root is not None:
         for item in queue.get("items") or []:
@@ -1325,7 +1281,10 @@ def build_status_runtime_summaries(
     )
 
 
-def build_status_collection_context() -> StatusCollectionContext:
+def build_status_collection_context(
+    *,
+    tolerate_malformed_settlement_history: bool = False,
+) -> StatusCollectionContext:
     return StatusCollectionContext(
         load_registry=load_registry,
         resolve_runtime_root=resolve_runtime_root,
@@ -1341,6 +1300,9 @@ def build_status_collection_context() -> StatusCollectionContext:
         build_goal_channel_notification_projection=build_goal_channel_notification_projection,
         status_control_plane_context_limit=STATUS_CONTROL_PLANE_CONTEXT_LIMIT,
         max_todo_index_items=MAX_TODO_INDEX_ITEMS,
+        tolerate_malformed_settlement_history=(
+            tolerate_malformed_settlement_history
+        ),
     )
 
 
@@ -1359,6 +1321,7 @@ def collect_status(
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
+    tolerate_malformed_settlement_history: bool = False,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
@@ -1377,5 +1340,9 @@ def collect_status(
             activation_state_filter=activation_state_filter,
             agent_lane_id=agent_lane_id,
             include_presentation_projections=include_presentation_projections,
-            context=build_status_collection_context(),
+            context=build_status_collection_context(
+                tolerate_malformed_settlement_history=(
+                    tolerate_malformed_settlement_history
+                ),
+            ),
         )

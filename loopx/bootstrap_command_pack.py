@@ -7,10 +7,7 @@ from typing import Any
 from .agent_registry import registered_agent_ids_for_goal
 from .control_plane.projects.identity import default_goal_id
 from .paths import registered_goal_state_file
-from .capabilities.issue_fix.candidate_preflight import (
-    candidate_preflight_input_contract,
-)
-from .capabilities.issue_fix.workflow_plan import (
+from .capabilities.issue_fix.command_templates import (
     ISSUE_FIX_GOAL_CANDIDATE_DISCOVERY_COMMAND_TEMPLATE,
     build_issue_fix_goal_command_templates,
 )
@@ -53,7 +50,7 @@ from .project_prompt import (
     render_refresh_state_command,
     shell_arg_for_host,
 )
-from .paths import resolve_runtime_root
+from .paths import global_registry_path, resolve_runtime_root
 from .registry import registry_goals, resolve_state_file
 from .slash_commands import build_slash_command_catalog
 from .thread_agent_binding import normalize_thread_id, resolve_thread_agent_binding
@@ -566,6 +563,17 @@ def _read_registry(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
+def resolve_bootstrap_activation_registry(
+    agent_type: str, registry_path: Path, *, connected: bool, runtime_root_override: str | None,
+) -> str | None:
+    """Carry the selected project into activation from an explicit App runtime."""
+    if agent_type == "antigravity-app" or (
+        agent_type == "codex-app" and connected and runtime_root_override is not None
+    ):
+        return str(registry_path)
+    return None
+
+
 def _runtime_roots(
     registry: dict[str, Any] | None,
     *,
@@ -601,21 +609,82 @@ def _select_goal(goals: list[dict[str, Any]], goal_id: str | None) -> tuple[str,
 _BootstrapConnectionSnapshot = tuple[dict[str, object], dict[str, object] | None]
 
 
+def _declared_project_runtime(registry_path: Path) -> str | None:
+    if (registry_path.parent.name, registry_path.name) != (".loopx", "registry.json"):
+        return None
+    registry, _ = _read_registry(registry_path)
+    if registry and registry.get("common_runtime_root"):
+        return str(resolve_runtime_root(registry, registry_path=registry_path))
+    return None
+
+
+def resolve_bootstrap_project_route(
+    project: Path,
+    *,
+    goal_id: str | None,
+    runtime_root_arg: str | None,
+    explicit_project_registry: Path | None = None,
+    resolve_linked_worktree_alias: bool = True,
+    connection_snapshot: _BootstrapConnectionSnapshot | None = None,
+) -> tuple[str | None, _BootstrapConnectionSnapshot]:
+    """Resolve the connection and the runtime carried into emitted host commands."""
+    runtime_root = None
+    if runtime_root_arg:
+        registry_path = _resolve_project(project) / ".loopx" / "registry.json"
+        runtime_root = str(resolve_runtime_root({}, runtime_root_arg, registry_path=registry_path))
+    if connection_snapshot is not None:
+        return runtime_root, connection_snapshot
+
+    if runtime_root is None and explicit_project_registry is not None:
+        registry_path = explicit_project_registry.resolve()
+        declared_runtime = _declared_project_runtime(registry_path)
+        if declared_runtime is not None:
+            snapshot = _inspect_bootstrap_connection(
+                project, goal_id=goal_id, runtime_root=declared_runtime,
+                resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+            )
+            connection, _ = snapshot
+            if (
+                connection["connection_state"] == "connected"
+                and Path(str(connection["registry"])).resolve() == registry_path
+            ):
+                return declared_runtime, snapshot
+
+    return runtime_root, _inspect_bootstrap_connection(
+        project, goal_id=goal_id, runtime_root=runtime_root,
+        resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+    )
+
+
 def inspect_bootstrap_connection(
-    project: Path, *, goal_id: str | None = None, resolve_linked_worktree_alias: bool = True,
+    project: Path,
+    *,
+    goal_id: str | None = None,
+    resolve_linked_worktree_alias: bool = True,
+    runtime_root: str | None = None,
 ) -> dict[str, Any]:
     """Inspect either the canonical project route or the caller's exact route."""
-    return _inspect_bootstrap_connection(project, goal_id=goal_id,
-        resolve_linked_worktree_alias=resolve_linked_worktree_alias)[0]
+    return _inspect_bootstrap_connection(
+        project, goal_id=goal_id, resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+        runtime_root=runtime_root,
+    )[0]
 
 
 def _inspect_bootstrap_connection(
-    project: Path, *, goal_id: str | None, resolve_linked_worktree_alias: bool,
+    project: Path,
+    *,
+    goal_id: str | None,
+    resolve_linked_worktree_alias: bool,
+    runtime_root: str | None = None,
 ) -> _BootstrapConnectionSnapshot:
     """Capture the connection and the registry used to build it together."""
     input_project = _resolve_project(project)
     alias = (
-        resolve_canonical_project_alias(input_project, goal_id=goal_id)
+        resolve_canonical_project_alias(
+            input_project,
+            goal_id=goal_id,
+            global_registry=global_registry_path(Path(runtime_root)) if runtime_root else None,
+        )
         if resolve_linked_worktree_alias
         else {
             "applied": False,
@@ -760,6 +829,8 @@ def _selected_goal_capability_route(
             "unsupported --capability-route; expected one of: "
             + ", ".join(START_GOAL_CAPABILITY_ROUTES)
         )
+    from .capabilities.issue_fix.candidate_preflight import candidate_preflight_input_contract
+
     return {
         "schema_version": GOAL_CAPABILITY_ROUTE_SCHEMA_VERSION,
         "capability_id": "issue-fix",
@@ -815,10 +886,15 @@ def build_loopx_bootstrap_command_pack(
     resolve_linked_worktree_alias: bool = True,
     display_name: str | None = None,
     runtime_root_arg: str | None = None,
+    explicit_project_registry: Path | None = None,
     _connection_snapshot: _BootstrapConnectionSnapshot | None = None,
 ) -> dict[str, Any]:
-    inspection, registry_payload = _connection_snapshot or _inspect_bootstrap_connection(
-        project, goal_id=goal_id, resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+    agent_type = agent_type_for_host_surface(host_surface)
+    runtime_root_override, (inspection, registry_payload) = resolve_bootstrap_project_route(
+        project, goal_id=goal_id, runtime_root_arg=runtime_root_arg,
+        explicit_project_registry=explicit_project_registry if agent_type == "codex-app" else None,
+        resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+        connection_snapshot=_connection_snapshot,
     )
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
@@ -831,7 +907,6 @@ def build_loopx_bootstrap_command_pack(
         cli_bin=cli_bin,
         goal_id="<goal-id>",
     )
-    agent_type = agent_type_for_host_surface(host_surface)
     registry_path = Path(str(inspection["registry"]))
     registry_goal = next(
         (
@@ -845,7 +920,10 @@ def build_loopx_bootstrap_command_pack(
     command_runtime_root, identity_runtime_root = _runtime_roots(
         registry_payload,
         registry_path=registry_path,
-        runtime_root_arg=runtime_root_arg,
+        runtime_root_arg=runtime_root_override,
+    )
+    activation_registry = resolve_bootstrap_activation_registry(
+        agent_type, registry_path, connected=connected, runtime_root_override=runtime_root_override,
     )
     thread_binding = resolve_thread_agent_binding(
         registry_goal,
@@ -891,6 +969,7 @@ def build_loopx_bootstrap_command_pack(
         goal_id=resolved_goal_id,
         cli_bin=cli_bin,
         runtime_root=command_runtime_root,
+        registry=activation_registry,
         identity_runtime_root=identity_runtime_root,
         agent_id=effective_agent_id,
         registered_agents=registered_agents,
@@ -924,6 +1003,7 @@ def build_loopx_bootstrap_command_pack(
             resolved_goal_id,
             cli_bin=cli_bin,
             runtime_root=command_runtime_root,
+            registry_path=activation_registry,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=available_capabilities,
             begin_turn=guided_start_begins_turn,
@@ -1285,6 +1365,8 @@ def _build_multi_goal_start_selection_packet(
             "activation_state": "goal_selection_required",
             "activation_allowed": False,
             "activation_required_after_todo_write": False,
+            "host_surface": None,
+            "activation_method": None,
         },
         "available_slash_commands": slash_command_catalog,
         "onboarding_hint": slash_command_catalog["onboarding"],
@@ -1300,8 +1382,8 @@ def _build_multi_goal_start_selection_packet(
             fine_grained=fine_grained,
         ),
         "commands": {
-            "doctor": f"{shell_arg_for_host(cli_bin)} doctor",
-            "status": _project_command(resolved_project, f"{shell_arg_for_host(cli_bin)} status"),
+            "doctor": f"{render_cli_command_prefix(cli_bin=cli_bin)} doctor",
+            "status": _project_command(resolved_project, f"{render_cli_command_prefix(cli_bin=cli_bin)} status"),
             "goal_selection_choices": choices,
         },
         "safety_contract": {
@@ -1484,6 +1566,7 @@ def build_start_goal_guided_packet(
     )
     commands = command_pack.get("commands")
     commands = commands if isinstance(commands, dict) else {}
+    plan_prompt = commands.get("goal_start_plan_prompt")
     activation = command_pack.get("host_loop_activation")
     activation = activation if isinstance(activation, dict) else {}
     identity_selection_gate = activation.get("identity_selection_gate")
@@ -1611,7 +1694,7 @@ def build_start_goal_guided_packet(
         *fine_mode_steps,
         *todo_authoring_steps(
             existing_runnable_frontier=guided_frontier,
-            plan_prompt=commands.get("goal_start_plan_prompt"),
+            plan_prompt=plan_prompt,
             fine_grained=fine_grained,
             cli_bin=cli_bin,
             runtime_root=command_pack.get("command_runtime_root"),
@@ -1772,6 +1855,14 @@ def build_start_goal_guided_packet(
     if isinstance(orphaned_gate, dict):
         guided_transaction.update(guided_fence(orphaned_gate))
         guided_transaction.pop("identity_selection_gate", None)
+    recommendation = command_pack.get("recommended_next_step")
+    if (not include_command_pack_detail and isinstance(recommendation, dict)
+            and isinstance(plan_prompt, str) and plan_prompt
+            and recommendation.get("plan_prompt") == plan_prompt):
+        # The same packet already carries the complete prompt in its commands.
+        recommendation = dict(recommendation)
+        del recommendation["plan_prompt"]
+        recommendation["plan_prompt_ref"] = "#/command_pack/commands/goal_start_plan_prompt"
     payload = {
         "ok": True,
         "schema_version": GUIDED_START_SCHEMA_VERSION,
@@ -1783,7 +1874,7 @@ def build_start_goal_guided_packet(
         "host_surface": command_pack.get("host_surface"),
         "goal_text": command_pack.get("goal_text"),
         "project_connection": command_pack.get("project_connection"),
-        "recommended_next_step": command_pack.get("recommended_next_step"),
+        "recommended_next_step": recommendation,
         "guided_transaction": guided_transaction,
         "command_pack": selected_command_pack,
         "command_pack_detail_included": include_command_pack_detail,

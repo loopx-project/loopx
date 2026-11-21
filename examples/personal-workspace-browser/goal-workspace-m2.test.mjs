@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {loadedLensBudget} from './goal-workspace-m2.mjs';
+import {loadedLensBudget, runM2Rendering} from './goal-workspace-m2.mjs';
 
 const fast = () => Array.from({length:5}, () => [400,500,600]);
 
@@ -57,4 +57,47 @@ test('missing transitions, missing repetitions and invalid timings cannot qualif
     const samples = fast(); samples[0] = row;
     assert.throws(() => loadedLensBudget(samples));
   }
+});
+
+test('coverage retains a separate diagnostic after the required uninstrumented journey', async () => {
+  const calls = [];
+  const qualification = {renderBudget:{withinBudget:true}, coverageEntries:[]};
+  const diagnostic = {renderBudget:{withinBudget:false}, coverageEntries:['covered']};
+  const result = await runM2Rendering({collectCoverage:true, url:'fixture'}, async context => {
+    calls.push(context);
+    return context.collectCoverage ? diagnostic : qualification;
+  });
+  assert.deepEqual(calls, [{collectCoverage:false,url:'fixture'}, {collectCoverage:true,url:'fixture'}]);
+  assert.equal(result.measurements.renderQualification, qualification.renderBudget);
+  assert.equal(result.measurements.coverageDiagnostics, diagnostic.renderBudget);
+  assert.deepEqual(result.coverageEntries,['covered']);
+});
+
+test('a failed uninstrumented gate cannot be rescued by a coverage pass', async () => {
+  const calls = [];
+  const failure = new Error('Repeated lens slowdown');
+  await assert.rejects(runM2Rendering({collectCoverage:true}, async context => {
+    calls.push(context.collectCoverage);
+    throw failure;
+  }), error => error === failure);
+  assert.deepEqual(calls,[false]);
+});
+
+test('coverage correctness failures still fail the combined journey', async () => {
+  const failure = new Error('Unexpected effect request');
+  await assert.rejects(runM2Rendering({collectCoverage:true}, async context => {
+    if (context.collectCoverage) throw failure;
+    return {renderBudget:{withinBudget:true},coverageEntries:[]};
+  }), error => error === failure);
+});
+
+test('ordinary qualification runs once and has no coverage diagnostic', async () => {
+  const calls = [];
+  const result = await runM2Rendering({}, async context => {
+    calls.push(context.collectCoverage);
+    return {renderBudget:{withinBudget:true},coverageEntries:[]};
+  });
+  assert.deepEqual(calls,[false]);
+  assert.equal(result.measurements.renderQualification.withinBudget,true);
+  assert.equal('coverageDiagnostics' in result.measurements,false);
 });

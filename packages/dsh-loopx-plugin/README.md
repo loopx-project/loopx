@@ -61,28 +61,30 @@ copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that
 enforce PEP 668; the plugin does not use `--break-system-packages`.
-This version requires LoopX 1.2.4 or newer, the published release that
-includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
+The 0.1.1-beta.7 release requires LoopX 2.4.0 or newer (`loopx>=2.4.0`) for
+the original-Turn `quota receipt` reader; LoopX 2.3.0 does not provide that
+command. Publish or install the matching 2.4.0 Core release alongside the
+plugin.
+Bootstrap, Driver and GoalBar use the same
 version floor; an older global or managed CLI is upgraded or rejected before
 business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
 owner. Older plugin releases retain their original CLI requirements.
-The continuation driver follows LoopX's context delivery setting on CLI 2.3
-and later. When the guard returns a capture reference, the driver reads the
-admission fields from that same capture. The driver requests raw admission
-JSON from older supported CLIs.
-Install the prebuilt release into the web profile:
+The continuation driver follows LoopX's context delivery setting.
+When the guard returns a capture reference, the driver reads the
+admission fields from that same capture.
+Install the prebuilt `0.1.1-beta.7` release into the web profile:
 
 ```bash
 dsh plugin --profile web add \
-  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz"
+  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.7/dsh-loopx-plugin-0.1.1-beta.7.tgz"
 ```
 
-The beta.6 package targets the qualified DSH 0.2.0-rc.2 API and retains the
-qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
-RPC registration remains available to explicit callers, but plugin startup
-always uses the shared API.
-
-The source candidate additionally qualifies DSH 0.2.1-rc.2. Its frozen source
+The `0.1.1-beta.7` package requires `loopx>=2.4.0`, adds DSH `0.2.2-rc.1`
+through `0.2.2-rc.3` qualification (specifically `0.2.2-rc.1` and `0.2.2-rc.3`,
+with Cordis 4.1.0 as the pinned development host), and retains the qualified
+0.1.5, 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1, and 0.2.1-rc.2 compatibility
+ranges. The exported legacy RPC registration remains available to explicit
+callers, but plugin startup always uses the shared API. Its frozen development
 host uses MCP client 2.3.0 and SDK 1.32.0 to address
 [GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw).
 These dependency overrides do not patch an independently installed DSH binary;
@@ -98,9 +100,10 @@ cd packages/dsh-loopx-plugin
 Start DSH on loopback (port `0` asks the OS for a free port) and open the
 printed URL. The plugin finishes its idempotent LoopX CLI and skill bootstrap
 before DSH publishes the Web URL through its native Loader readiness boundary.
-The source candidate gates only LoopX's Host and Driver on `loopxBootstrap`,
-so disabling or uninstalling it keeps the shared Web server and runtime alive.
-The published beta.6 limitation is described under automatic initialization:
+Release `0.1.1-beta.7` gates only LoopX's Host and Driver on `loopxBootstrap`,
+so disabling or uninstalling it keeps the shared Web server and runtime alive
+(see the earlier published `0.1.1-beta.6` limitation under automatic
+initialization):
 
 ```bash
 dsh --profile web --port 0
@@ -482,16 +485,16 @@ rows unavailable while DSH remains usable. Removing the package's
 rows releases its routes without stopping the shared Web server or runtime.
 Automatic startup does not create Agent followups or model calls.
 
-The host-isolation repair in this source is pending a new plugin release.
-Published beta.6 still adds the shared Web dependency and can disconnect DSH
-during hot uninstall, including with Hub 1.6.4. For that published package,
+Release `0.1.1-beta.7` ships this host-isolation repair. Earlier published
+`0.1.1-beta.6` still added the shared Web dependency and could disconnect DSH
+during hot uninstall, including with Hub 1.6.4. When removing `0.1.1-beta.6`,
 close DSH, remove it with the native plugin CLI, then restart DSH.
 
 The repair command has no arguments. Extra input returns a usage error before any
 model work or CLI probe. A valid invocation queues a bounded start followup on
 the exact receiving Agent, then probes the current LoopX installation. When the
 CLI is missing or lacks the DSH-native skill contract, it runs exactly one
-fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=1.2.4'`, writes a
+fixed-argv `pip install --upgrade --target <plugin-runtime> 'loopx>=2.4.0'`, writes a
 small managed Python launcher beside that target, then uses that same
 interpreter and launcher to install and read back the skills. Driver and
 GoalBar resolve this same managed runtime, including after an explicit repair.
@@ -549,9 +552,21 @@ pre-step revalidation order remains authoritative.
 DSH's LLM retry plugin owns provider-request retries. For CLI calls, this Driver
 retries only safe fixed-argv LoopX reads and an idempotent `quota should-run`
 receipt, at most twice beyond the first attempt. Every retry uses the same
-`--turn-instance-id`. Typed authority denials, incompatible schemas,
-cancellation, and human input are never retried. There is no cumulative
-eight-failure breaker or plugin-owned durable activation state. The small
+`--turn-instance-id`. If a saved quota page loses its CLI response, retry
+only that page with the same reference, selection and offset. This also
+applies during pre-step revalidation. Typed authority denials, incompatible schemas,
+cancellation, and human input are never retried.
+
+On macOS and Linux, the plugin cancels commands in the process group it started
+and waits for that group and its output pipes before retrying a timed-out read.
+If cleanup cannot be confirmed, it stops the attempt. This does not guarantee
+cleanup of a process that starts its own session, or of descendants on Windows.
+
+GoalBar never retries a lifecycle write. If no result can be verified, refresh
+to read the Goal's current state before trying the action again.
+
+There is no cumulative eight-failure breaker or plugin-owned durable activation
+state. The small
 process-local activation projection is bound to one exact Session and is
 reconstructed only from its typed event history. Exhausting the three attempts
 stops that evaluation; it does not create a periodic error-retry loop. Only a
@@ -560,6 +575,21 @@ cadence from `scheduler_hint.cold_path_detail.local_scheduler` with
 `--include-detail scheduler`, caps the wait by `recheck_after_seconds` when
 present, and enforces `unchanged_poll.limits.local_scheduler`. A changed
 `reset_policy.reset_token` resets the unchanged-poll streak.
+
+When Core's recovery allowance is exhausted, the GoalBar for that exact
+Session shows **Prior turn needs recovery**. An owner can repair the original
+Turn or pause and start the Goal to renew the existing allowance. The label
+reflects the Driver's last verified quota decision and updates with the existing
+GoalBar watch. In-flight activity and an explicit Pause keep their usual labels.
+
+A normal DSH completion can also leave the original Turn awaiting required
+Todo selection. For guarded Turns with that explicit requirement, the Driver
+reads the exact receipt before scheduling another automatic Turn. If selection
+is still owed, the Driver retries once with the original Turn identity. A second
+completed attempt that still owes selection shows the recovery status and waits.
+Pause and Start requests another attempt on the same Turn. A committed selection
+lets the Driver follow the ordinary scheduling path. Interactive human messages
+continue to use the native Session.
 
 If DSH refuses the maintenance slot before admission starts, the Driver waits
 for `Agent.whenIdle()` and re-requests evaluation for that same Session. This
@@ -580,26 +610,81 @@ writeback, spend, or void receipt.
 The Driver resolves the current project registry with
 `resolve-agent-thread`, requires one exact Goal/Agent match for the live DSH
 session, and rechecks binding plus quota before and after downstream pre-step
-listeners. A human message removes an unclaimed automatic reservation; a
-mixed batch rejects the automatic message and restores the human work.
+listeners. A human message removes an unclaimed automatic reservation. A
+mixed batch detected before downstream approval returns independent work to
+the inbox. When the downstream decision already accepts independent user input,
+the current step can enter with that input and its allowed companion messages.
+The Driver removes its continuation and leaves already-queued messages in
+their original inbox position.
 DSH's built-in `runtime-context`, `time-context`, and `skill-catalog` producers
 may share the step with that continuation, including after downstream listeners.
 The source's `kind` identifies those producers; a plugin's snapshot or catalog
 `form` alone does not make its message host-owned context.
+If a downstream pre-step listener removes or rewrites the reserved continuation
+and leaves no competing input, the Driver holds automatic admission until the
+next human message or an explicit GoalBar Pause and Start. A rejected batch's
+host context is restored only alongside independent input.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
+
+## Driver replacement boundary
+
+Plugin-tree recomposition is not user disposal. When the host replaces the
+plugin inside a live process — a watched module changed and the host evicts
+and re-imports it, or a fiber restart reloads its config — a claimed or
+admitted continuation Turn keeps its Session-owned execution and its single
+settlement identity. The unloading Driver retires its own future work only:
+timers, evaluations, and queued-but-unclaimed reservations. It does not
+cancel the running Turn and does not block the replacement until idle. The
+successor Driver re-attaches to the same live Agents, admits nothing while
+the drained Turn still runs, and after the Turn settles and the Agent is idle
+it evaluates freshly under new admission authority and a new receipt; the
+drained Turn settles through its own already-admitted plan. A Turn that ends
+aborted or at max-tokens after the successor attached still latches the
+error pause through the same `turn/end` contract.
+
+User disable or uninstall of the plugin, removal of its loader entry, and
+host cascade disposal keep the original semantics: a claimed or admitted
+running automatic Turn is cancelled and the disposal awaits idle. The two
+cases are distinguished from the host's own disposal mechanics, not from a
+typed reason: a restart keeps the fiber identity, and a module replacement
+deletes the plugin runtime from the registry before disposing its fibers,
+while user removal disposes the fiber first. Anything not identifiable as
+replacement keeps the cancellation semantics, including older hosts.
+
+The successor retains process-local cancellation ownership for the exact live
+Agent and Session, including a second replacement followed by user removal.
+An error pause survives replacement and is reconstructed from typed Session
+history on reopen; only new human input or explicit Start releases it. A pending host-context message cannot release a rejected
+continuation. Verified Core recovery decisions update the GoalBar even if the
+subsequent heartbeat body read fails.
+
+Start and Pause carry the fresh Core source fingerprint into the existing
+lifecycle mutation. Core checks it again under its source lock. A delayed old
+Pause cannot overwrite a newer Start, including when process cleanup was
+unconfirmed. Snapshot revisions include the Session's safe admission category,
+so a read in one page cannot acknowledge another page's stale watch anchor.
+
+The Linux 0.1.5 regression host freezes the complete published rc.2 SDK
+family and its Cordis dependencies. Pinning only the top-level CLI allows
+caret ranges to mix rc.2 with rc.3 components, whose boot graph requests a
+sandbox provider absent from the old CLI. The qualification keeps the native
+sandbox configuration and the PEP 668 guard intact.
 
 ## Installation and upgrade recovery
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2 candidates. It
-excludes earlier 0.2 candidates, stable 0.2.1, and other unqualified prerelease
+qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1, 0.2.1-rc.2, 0.2.2-rc.1 and
+0.2.2-rc.3 candidates. It excludes earlier 0.2 candidates, stable 0.2.1 and
+0.2.2, and other unqualified prerelease
 tuples. A stable-version range alone does not admit every prerelease.
-The immutable beta.6 download above is the published package. Building this
-checkout also produces version beta.6, but the local artifact is not the
-published release asset.
+Building this checkout produces the `0.1.1-beta.7` package (requiring
+`loopx>=2.4.0` and supporting DSH `0.2.2-rc.1..rc.3`) as its own immutable
+tag and asset alongside LoopX `2.4.0`; it never replaces the earlier immutable
+`0.1.1-beta.6` asset. Candidate qualification is separate from publishing and
+public npm/Hub adoption.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing
@@ -607,9 +692,10 @@ selected the monorepo root instead of this plugin package. Installing
 plugin. The marketplace's npm route requires a published `dsh-loopx-plugin`
 whose repository points here and whose keywords include `dsh-plugin`; otherwise
 older Hubs fall back to that invalid Git target.
-The [source catalog entry](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
-points to the published beta.6 release tarball, though the live [marketplace listing](https://dsh-plugin.org/plugins/loopx-project/loopx?ref=hub)
-may still show the cached beta.5 install command until the site redeploys.
+Earlier catalog updates (such as [PR #6633](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
+for `beta.6`) pointed to prior tarballs; once `dsh-loopx-plugin-v0.1.1-beta.7`
+is published and the [marketplace listing](https://dsh-plugin.org/plugins/loopx-project/loopx?ref=hub)
+updates, install via Hub or the pinned `0.1.1-beta.7` release URL below.
 [DSH Plugin Hub v1.6.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.6.0)
 or later provides profile-specific install guidance and includes the earlier
 fixes for release-package readback, stale npm targets, and desktop-profile
@@ -620,11 +706,12 @@ dsh plugin --profile web add dsh-plugin
 ```
 
 Replace `web` with `desktop` when using the desktop app. LoopX is not currently
-published to npm as `dsh-loopx-plugin`. While the web catalog entry redeploys its
-command, install the verified beta.6 release package directly from its immutable asset:
+published to npm as `dsh-loopx-plugin`. Until the web catalog entry updates to
+`0.1.1-beta.7`, install the `0.1.1-beta.7` release package directly from its
+immutable asset once published:
 
 ```bash
-dsh plugin --profile web add https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz
+dsh plugin --profile web add https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.7/dsh-loopx-plugin-0.1.1-beta.7.tgz
 ```
 
 To build from source instead, use the package installer with
@@ -635,7 +722,6 @@ cd packages/dsh-loopx-plugin
 DSH_BIN="$(command -v dsh)" ./install.sh
 dsh --profile web --dump-config
 ```
-
 The installer rejects an incompatible host before changing its profile. A
 successful profile contains `loopx-goalbar`, `loopx-init-command`, `loopx-driver`,
 and the passive `loopx-shadow-observer` in that order. The installer also reads

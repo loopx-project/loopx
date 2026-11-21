@@ -50,6 +50,17 @@ An outcome is useful when it has a separately recognizable result and criteria,
 especially across multiple turns, tasks or repeated user corrections. Do not
 promote every message, housekeeping action or intermediate step.
 
+## Evolution beyond additive refinement
+
+[Goal contract evolution](goal-contract-evolution-v0.md) defines the next R4/R5
+proposal: unify operating-objective and requirement changes, retain exact prior
+versions, separate applicability from satisfaction, and provide bounded working
+context over scalable canonical records. It also qualifies whether a model
+recognizes a natural correction and adopts it in subsequent work. This extends
+the existing acceptance/amendment owners; it does not replace today's additive
+operation, capacity limits or full-context obligations before migration qualifies.
+Vision remains a route checkpoint, never fallback acceptance after a failed save.
+
 ## Ordinary user messages
 
 <a id="current-operating-objective"></a>
@@ -84,9 +95,12 @@ missing evidence remains unresolved, and display drift belongs to its projection
 owner. This is semantic Agent guidance, not a prose classifier or a new admission
 gate. The existing typed authority, stop and replan-discharge rules remain.
 
-Ordinary conversation keeps the callable API without proactively directing a
-revision. When a material user direction change makes the recorded objective
-misleading, preparation retains the existing owner-review boundary. The native
+Ordinary conversation exposes the revision route when direct user direction
+changes the current Goal's purpose or adds a lasting responsibility to it. For
+an addition, carry the existing commitments into the revised objective and add
+or update the Todo in the same Goal. An explicit request for a separate Goal
+uses existing Goal creation, including within the same project. Reconcile scope
+conflicts before altering the current objective. Preparation retains the owner-review boundary. The native
 `loopx_collaboration` tool exposes `prepare_goal_objective`, and fixes its
 Goal/Agent/source Turn instead of accepting caller-supplied routing. Preparation
 uses the existing `goal.update` review/apply channel, with no Goal effect.
@@ -140,8 +154,14 @@ do not delete revision or adoption history to make an older reader accept it.
 
 Revisions are exceptional direction changes, not per-Turn maintenance. Ordinary
 progress, Todo/route changes, diagnostic feedback and wording polish do not
-justify a new shared objective. Agents reuse a pending proposal for the same
-objective rather than prompting the owner again or polling. The owner reviews
+justify a new shared objective. Agents share one pending review when objective,
+reason, source and the current reviewed objective basis match. Each accepted
+preparation operation stays bound to its normalized request and that proposal.
+The CLI and Chat preview can recover the
+same accepted operation, including after owner review or a Goal stop. New
+proposals and new bindings to a pending proposal require an active Goal. The
+retry must retain the Goal, preparing Agent, and proposal provenance. A changed
+reason or source requires a new operation ID. The owner reviews
 semantic necessity; the runtime rejects identical/whitespace-only objectives
 but does not pretend to detect semantic equivalence. An unchanged repeated
 adoption does not write a provider revision. Work changes and peer adoption
@@ -179,7 +199,7 @@ adherence or a long-horizon benefit.
 The bound Agent distinguishes a direct human request from heartbeat instructions,
 quoted documents, tool results and peer messages using the actual host context.
 No substring classifier infers user authority or importance. Before continuing a
-material new deliverable or correction, the Agent reuses inline outcome context
+material new deliverable or a change to success criteria, the Agent reuses inline outcome context
 (or inspects it only when missing),
 refines the matching outcome and links work through normal Todo operations.
 It retains previously stated requirements and records the latest source reference.
@@ -311,7 +331,9 @@ not installed adoption, general atomicity or a model-efficiency claim.
 
 | Event | Default action | Existing mechanism |
 | --- | --- | --- |
-| Material direct-user deliverable/correction | Add to the matching outcome, retaining prior intent | Host context + native refinement or skill/CLI bridge |
+| Direct user adds a lasting responsibility to the current Goal | Retain commitments, revise the current Goal objective, and add or update its Todo | Existing owner revision and Todo operations |
+| Direct user explicitly requests a separate Goal | Preserve the current Goal and follow the requested scope | Existing Goal creation |
+| Material deliverable or changed success criteria | Refine the matching outcome, retaining prior requirements | Host context + native refinement or skill/CLI bridge |
 | Resume, focus switch, replan | Reuse full requirements, then choose work | Shared work context; missing-source required read only |
 | Meaningful artifact/experiment milestone | Review all retained requirements against actual evidence | One refinement, optionally batched with normal writeback |
 | Unmet/unreviewed outcome without linked active/waiting work | Carry a typed gap into planning | Existing frontier replan, only when no runnable advancement wins |
@@ -603,3 +625,23 @@ SQLite/HTTP/CLI authority and injects transport failures, not fabricated commits
 These checks establish product semantics and recovery. Live-model recognition,
 installed host adoption and comparative quality/attention gains remain unproven
 until separately measured; test counts and a merged PR are not those outcomes.
+
+### Record-format capacity recovery
+
+The opt-in `storage_format: "records"` refinement now selects
+`loopx_goal_outcome_records_v1` with the same Goal lifetime, ordered declarations,
+origins, work, reviews and CAS/receipt owner. Legacy v0 limits remain unchanged.
+Record pages and new operations have independent 128 KiB budgets; retained
+collection length no longer consumes the per-operation budget. Inventory digests
+reject missing/altered pages. `review_patch` retains per-item basis freshness;
+complete `review` remains complete. App additions and native/CLI operations use
+the same owner. See the [operational contract](../../reference/goal-acceptance-observations.md#long-horizon-record-storage).
+
+This is capacity recovery and an additive evolution path, not completion of
+record-indexed persistence, scoped concurrency, objective/condition replacement,
+peer adoption, model benefit or installed qualification. Physical pages remain
+inside the full provider snapshot; complete readback/transport costs still grow.
+The existing objective proposal/apply/adopt owner is unchanged. Migration occurs
+only with the explicit committed refinement; old receipts are never rewritten.
+New record-format receipts recover the current projection without embedding a
+full duplicate declaration. A compatible runtime is required after cutover.

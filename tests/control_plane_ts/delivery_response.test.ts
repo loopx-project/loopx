@@ -18,7 +18,7 @@ const input = { run, todo: waiting, run_agent_id: "agent-a", agent_id: "agent-a"
 
 test("wait proof consumes the real resume evaluator for all five condition kinds", () => {
   const dependency = { todo_id: "todo_dependency", role: "agent", status: "open", task_class: "advancement_task" };
-  for (const [resume, source, capabilities, valid] of [
+  const cases: Array<[string, JsonObject[], string[] | null, boolean]> = [
     ["todo_done:todo_dependency", [dependency], [], true],
     ["todo_done:todo_dependency", [], [], false],
     ["monitor_changed:todo_dependency", [{ ...dependency, task_class: "continuous_monitor", material_change_generation: 0 }], [], true],
@@ -28,7 +28,8 @@ test("wait proof consumes the real resume evaluator for all five condition kinds
     ["pr_merged:example/project#1", [], [], false],
     ["pr_merged:#1", [], [], false],
     ["resume_at:2026-09-15T00:00:00Z", [], [], true],
-  ] as const) {
+  ];
+  for (const [resume, source, capabilities, valid] of cases) {
     const todo = { ...waiting, resume_when: resume, resume_monitor_generation: 0 };
     const evaluated = evaluateTodoResumeConditions({ schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
       items: [todo], source_items: source, rollout_events: [], available_capabilities: capabilities,
@@ -94,7 +95,7 @@ test("exact dependency identity and a supported completion class are required", 
 });
 
 test("history alone, missing source, invalid wait, and other actors cannot exempt the floor", () => {
-  for (const patch of [
+  const patches: Record<string, unknown>[] = [
     { todo: null }, { agent_id: "agent-b" }, { run_agent_id: "agent-b" },
     { agent_id: null }, { run_agent_id: null }, { agent_id: "", run_agent_id: "" },
     { todo: { ...waiting, todo_id: "todo_other" } },
@@ -112,7 +113,8 @@ test("history alone, missing source, invalid wait, and other actors cannot exemp
     { run: { ...run, progress_observation: null, delivery_turn_kind: "blocker_writeback" } },
     { run: { ...run, replan_obligation_id: "replan_other" } },
     { run: { ...run, progress_observation: { ...run.progress_observation, evidence_ids: [] } } },
-  ]) assert.equal(projectDeliveryResponse({ ...input, ...patch }).outcome_floor_applicable, true, JSON.stringify(patch));
+  ];
+  for (const patch of patches) assert.equal(projectDeliveryResponse({ ...input, ...patch }).outcome_floor_applicable, true, JSON.stringify(patch));
 });
 
 test("surface-only supervision and unknown remain distinct from durable work state", () => {

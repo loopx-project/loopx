@@ -29,20 +29,6 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"agent-onboard",
 		"connect",
 		"codex-cli-bootstrap-message",
-		"codex-cli-bounded-visible-pilot-adapter",
-		"codex-cli-exec-handoff",
-		"codex-cli-visible-first-response-capture-plan",
-		"codex-cli-local-driver-plan",
-		"codex-cli-local-scheduler-exec",
-		"codex-cli-local-scheduler-tick",
-		"codex-cli-one-message-loop-pilot",
-		"codex-cli-runtime-idle-detector",
-		"codex-cli-session-probe",
-		"codex-cli-visible-attach-acceptance",
-		"codex-cli-visible-local-driver-pilot",
-		"codex-cli-visible-driver-run",
-		"codex-cli-visible-driver-plan",
-		"codex-cli-visible-session-proof",
 		"commands",
 		"demo",
 		"doctor",
@@ -62,6 +48,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"sync-global",
 		"uninstall-project",
 		"version",
+		"postgres",
 		"host-mode-plan",
 		"migrate-local-state",
 	}
@@ -75,8 +62,9 @@ PROJECT_LIFECYCLE_COMMANDS = {
 _REGISTRY_INSPECTION_COMMANDS = frozenset({"registry", "registry-boundary"})
 _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | _REGISTRY_INSPECTION_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
-	"bootstrap", "connect", "configure-goal",
-	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"bootstrap", "connect", "configure-goal", "start-goal", "bootstrap-command-pack",
+	"register-agent", "bind-agent-thread",
+	"authority-archive", "postgres", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
@@ -84,6 +72,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"heartbeat-prompt",
 	"heartbeat-prequota",
 	"goal-acceptance",
+	"goal-lifecycle",
 	"host-mode-plan",
 	"capability",
 	"history",
@@ -109,6 +98,20 @@ class _SelectedArgumentParser(LoopXArgumentParser):
 		raise _SelectedParseRejected(message)
 
 
+def report_json_text(payload: object) -> str:
+	r"""Encode one machine report as strictly UTF-8 decodable JSON.
+
+	Ordinary text keeps its literal spelling. A report can still carry a code
+	point no UTF-8 stream can encode - the lone surrogate that spells one
+	undecodable path byte inside a structured identity. Those become ``\uXXXX``
+	escapes, which JSON reads back as the same value, so identity round trips
+	and the report stays parseable byte for byte.
+	"""
+
+	text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+	return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def print_payload(
 	payload: dict[str, object],
 	fmt: str,
@@ -119,7 +122,7 @@ def print_payload(
 	if fmt == "json":
 		# JSON is the machine contract; retain every value and remove only
 		# presentation whitespace. Human-readable output remains Markdown.
-		print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+		print(report_json_text(payload))
 	else:
 		print(markdown_renderer(payload))
 
@@ -189,7 +192,7 @@ def resolve_cli_registry(
 	)
 	if args.command == "update" and getattr(args, "update_action", None) == "activate":
 		# Service activation reads its route from the loaded original manager.
-		# It neither opens Goal authority nor guesses a default Chat store.
+
 		return registry_path, registry_was_configured
 	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "context-project", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
@@ -295,6 +298,14 @@ def _top_level_command(argv: list[str]) -> str | None:
 	return None
 
 
+def parse_cli_args(parser: LoopXArgumentParser, argv: list[str]) -> argparse.Namespace:
+	if _top_level_command(argv) == "quota":
+		from .cli_commands.quota_registration import normalize_context_list_args
+
+		argv = normalize_context_list_args(argv)
+	return parser.parse_args(argv)
+
+
 @contextmanager
 def cli_invocation_route(argv: list[str]):
 	"""Read the global route only; the canonical parser still validates argv."""
@@ -314,7 +325,11 @@ def cli_invocation_route(argv: list[str]):
 		if option == "--cli-bin":
 			program = argument
 		index += 1
-	with loopx_cli_route(program):
+	# A standalone core may be invoked without activating its environment. Its
+	# returned commands must stay on this artifact, even when PATH/PYTHONPATH
+	# names another LoopX installation. Explicit routes remain caller-owned.
+	default_argv = [sys.executable, "-I", "-m", "loopx.entrypoint"] if _standalone_core() else None
+	with loopx_cli_route(program, default_argv=default_argv):
 		yield
 
 
@@ -393,7 +408,19 @@ def _handle_registry_inspection_command(
 
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	parser, subparsers = build_cli_parser(parser_class=_SelectedArgumentParser)
-	if command in {"bootstrap", "connect"}:
+	if command == "start-goal":
+		from .cli_commands.start_goal import register_start_goal_command
+
+		register_start_goal_command(subparsers)
+	elif command == "bootstrap-command-pack":
+		from .cli_commands.starter_bootstrap_registration import register_starter_bootstrap_commands
+
+		register_starter_bootstrap_commands(subparsers)
+	elif command in {"register-agent", "bind-agent-thread"}:
+		from .cli_commands.registry_admin import register_registry_admin_commands
+
+		register_registry_admin_commands(subparsers)
+	elif command in {"bootstrap", "connect"}:
 		from .cli_commands.bootstrap_connect import register_bootstrap_connect_command
 
 		register_bootstrap_connect_command(subparsers)
@@ -467,6 +494,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.authority_archive import register_authority_archive_command
 
 		register_authority_archive_command(subparsers, add_subcommand_format)
+	elif command == "postgres":
+		from .cli_commands.postgres import register_postgres_commands
+
+		register_postgres_commands(subparsers, add_subcommand_format)
 	elif command == "coordination-shadow":
 		from .cli_commands.coordination_shadow import register_coordination_shadow_command
 
@@ -503,6 +534,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.goal_acceptance import register_goal_acceptance_command
 
 		register_goal_acceptance_command(subparsers, add_subcommand_format)
+	elif command == "goal-lifecycle":
+		from .cli_commands.goal_lifecycle import register_goal_lifecycle_command
+
+		register_goal_lifecycle_command(subparsers)
 	elif command == "host-mode-plan":
 		from .cli_commands.host_mode_plan import register_host_mode_plan_command
 
@@ -525,14 +560,47 @@ def _dispatch_common_command(
 	*,
 	registry_path: Path,
 	allow_missing_registry: bool,
+	registry_was_configured: bool | None = None,
 ) -> int | None:
+	if args.command == "start-goal":
+		from .cli_commands.start_goal import handle_start_goal_command
+
+		return handle_start_goal_command(
+			args, print_payload, runtime_root_arg=args.runtime_root,
+		)
+	if args.command in {"bootstrap-command-pack", "agent-onboard"}:
+		from .cli_commands.starter_bootstrap import (
+			handle_agent_onboard_command, handle_loopx_bootstrap_command_pack_command,
+		)
+
+		runtime_root_arg = args.runtime_root
+		# Project commands use a registry anchor only when it was supplied on the CLI.
+		if runtime_root_arg and not allow_missing_registry:
+			from .paths import resolve_runtime_root
+
+			runtime_root_arg = (
+				str(registry_path.parent.absolute())
+				if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR
+				else str(resolve_runtime_root({}, runtime_root_arg, registry_path=registry_path))
+			)
+		handler = (
+			handle_agent_onboard_command if args.command == "agent-onboard"
+			else handle_loopx_bootstrap_command_pack_command
+		)
+		explicit_project_registry = (
+			registry_path
+			if not allow_missing_registry and str(args.registry) != HOST_GLOBAL_REGISTRY_SELECTOR
+			else None
+		)
+		return handler(args, print_payload, runtime_root_arg=runtime_root_arg,
+			explicit_project_registry=explicit_project_registry)
 	if args.command in {"bootstrap", "connect"}:
 		from .cli_commands.bootstrap_connect import handle_bootstrap_connect_command
 
 		return handle_bootstrap_connect_command(
 			args, registry_path=registry_path, print_payload=print_payload,
 		)
-	if args.command == "configure-goal":
+	if args.command in {"configure-goal", "register-agent", "bind-agent-thread"}:
 		from .cli_commands.registry_admin import handle_registry_admin_command
 
 		return handle_registry_admin_command(
@@ -558,6 +626,12 @@ def _dispatch_common_command(
 		return handle_goal_acceptance_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "goal-lifecycle":
+		from .cli_commands.goal_lifecycle import handle_goal_lifecycle_command
+
+		return handle_goal_lifecycle_command(
+			args, registry_path=registry_path, print_payload=print_payload,
 		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
@@ -628,6 +702,13 @@ def _dispatch_common_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
+	if args.command == "postgres":
+		from .cli_commands.postgres import handle_postgres_command
+
+		return handle_postgres_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
 	if args.command == "coordination-shadow":
 		from .cli_commands.coordination_shadow import handle_coordination_shadow_command
 
@@ -639,14 +720,18 @@ def _dispatch_common_command(
 		from .cli_commands.extension import handle_extension_command
 
 		return handle_extension_command(
-			args, runtime_root_arg=args.runtime_root,
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
 	if args.command == "slash-commands":
 		from .cli_commands.slash_commands import handle_slash_commands_command
 
 		return handle_slash_commands_command(
-			args, output_format=output_format, print_payload=print_payload,
+			args,
+			output_format=output_format,
+			print_payload=print_payload,
+			registry_path=registry_path,
+			registry_was_configured=registry_was_configured,
 		)
 	if args.command == "doctor":
 		from .cli_commands.doctor import handle_doctor_command
@@ -804,6 +889,7 @@ def dispatch_common_command(
 	*,
 	registry_path: Path,
 	allow_missing_registry: bool,
+	registry_was_configured: bool | None = None,
 ) -> int | None:
 	from .control_plane.effect_runtime import effect_runtime_request_scope
 
@@ -812,6 +898,7 @@ def dispatch_common_command(
 			args,
 			registry_path=registry_path,
 			allow_missing_registry=allow_missing_registry,
+			registry_was_configured=registry_was_configured,
 		)
 
 
@@ -822,7 +909,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	guard_result = enforce_native_controller_guard(args)
 	if guard_result is not None:
 		return guard_result
-	registry_path, _registry_was_configured = resolve_cli_registry(args, raw_argv)
+	registry_path, registry_was_configured = resolve_cli_registry(args, raw_argv)
 	if args.command in _REGISTRY_INSPECTION_COMMANDS:
 		from .registry import (
 			inspect_registry, inspect_registry_boundary,
@@ -870,6 +957,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args,
 			registry_path=registry_path,
 			allow_missing_registry=not user_supplied_registry(raw_argv),
+			registry_was_configured=registry_was_configured,
 		)
 	if result is None:  # pragma: no cover - caller guards the private interface
 		raise AssertionError(f"selected command was not dispatched: {args.command}")
@@ -877,9 +965,15 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 
 def _standalone_core() -> bool:
-	from importlib.util import find_spec
+	if sys.modules.get("loopx.cli") is not None:
+		return False
+	from importlib.machinery import PathFinder
 
-	if find_spec("loopx.cli") is not None:
+	package = sys.modules.get(__package__ or "loopx")
+	search_path = list(getattr(package, "__path__", ())) or [
+		str(Path(__file__).resolve().parent)
+	]
+	if PathFinder.find_spec("loopx.cli", search_path) is not None:
 		return False
 	from importlib.metadata import PackageNotFoundError, distribution
 	from .python_install_owner import installed_loopx_distribution
@@ -958,7 +1052,7 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 		return _run_full_cli(raw_argv)
 	if command in _SELECTED_COMMANDS:
 		try:
-			args = _build_selected_parser(command).parse_args(raw_argv)
+			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:
 			return _run_full_cli(raw_argv)
 		if command == "history" and args.history_action is not None and not _standalone_core():

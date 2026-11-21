@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shlex
 from typing import Any
 
 from ...command_invocation import loopx_cli_argv
+from ...install_contract import render_host_cli_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
+from .error_codes import HeartbeatReceiptIdentityConflictError
 from .effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
     SETTLEMENT_PLAN_SCHEMA_VERSION,
@@ -150,6 +153,7 @@ class QuotaSpendPrecheck:
     settlement: SettlementResult[dict[str, Any]]
     progress: dict[str, Any] | None
     spend_run_present: bool
+    spend_request_rejection: SettlementResult[dict[str, Any]] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,12 +175,22 @@ class QuotaSettlementReadback:
     completion_event: dict[str, Any] | None
     monitor_phase: ReceiptBoundMonitorPhase | None
     replay_phase: ReceiptBoundReplayPhase | None
+    supersede_event: dict[str, Any] | None = None
     refresh_recovery: dict[str, Any] | None = None
     external_delivery: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
     native_child_admission: dict[str, Any] | None = None
     heartbeat_reentry_qualification: dict[str, Any] | None = None
     successor_replan_pending: bool = False
+    replan_execution_pending: bool = False
+    admission_recorded_at: str | None = None
+    admission_event_id: str | None = None
+    prepared_lease: dict[str, Any] | None = None
+    prepared_lease_required: bool = False
+
+
+def render_owed_host_command(argv: list[str]) -> str:
+    return render_host_cli_command(argv)
 
 
 def attach_settlement_progress(
@@ -196,7 +210,8 @@ def attach_settlement_progress(
     identity = readback.identity.value
     if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
         return
-    prefix = shlex.join(loopx_cli_argv())
+    route = loopx_cli_argv()
+    prefix = shlex.join(route)
     if registry_path is not None:
         prefix += f" --registry {shlex.quote(str(registry_path))}"
     if runtime_root is not None:
@@ -213,7 +228,8 @@ def attach_settlement_progress(
         quota_spend_source=progress["quota_spend_source"],
         goal_ref=goal_ref,
     )
-    payload["settlement_owed"] = {
+    command = settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND)
+    owed = {
         **identity.as_dict(), "schema_version": "turn_settlement_owed_v0",
         "kind": "quota_spend", "recovery_does_not_spend": True,
         "reason": (
@@ -221,11 +237,26 @@ def attach_settlement_progress(
             if progress["state"] == "spend_receipt_required" else
             "writeback is verified; execute quota spend once for the same settlement identity"
         ),
-        "command": settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND),
+        "command": command,
     }
+    # PowerShell quoting applies to every argument, even with an unquoted launcher.
+    # Keep the argv for the composed CLI so it does not have to parse shell text.
+    if os.name == "nt" or route[0].lower().endswith(".ps1"):
+        argv = shlex.split(command)
+        owed.update(command=render_owed_host_command(argv), command_argv=argv)
+    payload["settlement_owed"] = owed
 
 
 def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
+    recovery = payload.get("settlement_recovery")
+    if isinstance(recovery, dict):
+        identity = recovery["settlement_identity"]
+        lines = [f"- Pending settlement: `{identity['turn_instance_id']}`", recovery["instruction"]]
+        for command in recovery["next_cli_actions"]:
+            lines.extend(["", "```sh", command, "```"])
+        return lines
+    if payload.get("settlement_recovery_error"):
+        return [f"- Settlement recovery could not be read: {payload['settlement_recovery_error']}"]
     progress = payload.get("settlement_progress")
     if not isinstance(progress, dict):
         return []
@@ -288,6 +319,14 @@ def _optional_readback_record(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
     return dict(value)
+
+
+def _optional_readback_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+    return value
 
 
 def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
@@ -359,6 +398,8 @@ def _read_heartbeat_settlement_payload(
                 large_local_snapshot=True,
             )
         except EffectRuntimeRejected as exc:
+            if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
+                raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
             raise ValueError(str(exc)) from None
 
     if source_admission is not None:
@@ -401,6 +442,7 @@ def read_quota_spend_precheck(
     allow_unbound_binding: bool = False,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
+    spend_request: Mapping[str, Any] | None = None,
 ) -> QuotaSpendPrecheck | None:
     """Read the identity and replay controls before building a fresh preview."""
 
@@ -415,6 +457,7 @@ def read_quota_spend_precheck(
             "infer_turn_instance_id": infer_turn_instance_id,
             "allow_unbound_binding": allow_unbound_binding,
             "spend_precheck": True,
+            **({"spend_request": dict(spend_request)} if spend_request is not None else {}),
         },
         registry_path=registry_path,
         goal_ref=goal_ref,
@@ -429,6 +472,10 @@ def read_quota_spend_precheck(
         settlement=_readback_result(payload.get("settlement")),
         progress=_optional_readback_record(payload.get("progress")),
         spend_run_present=spend_run_present,
+        spend_request_rejection=(
+            _readback_result(payload["spend_request_rejection"])
+            if "spend_request_rejection" in payload else None
+        ),
     )
 
 
@@ -443,6 +490,7 @@ def read_heartbeat_settlement(
     infer_turn_instance_id: bool = False,
     allow_unbound_binding: bool = False,
     resolve_original_binding: bool = False,
+    pending_closeout: bool = False,
     refresh_retry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
@@ -450,6 +498,7 @@ def read_heartbeat_settlement(
     borrow_source_admission: bool = False,
     heartbeat_reentry_guard: dict[str, Any] | None = None,
     include_record_bodies: bool = True,
+    tolerate_malformed_history: bool = False,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
@@ -468,7 +517,13 @@ def read_heartbeat_settlement(
                 if include_record_bodies is not True
                 else {}
             ),
+            **(
+                {"tolerate_malformed_history": True}
+                if tolerate_malformed_history
+                else {}
+            ),
             **({"resolve_original_binding": True} if resolve_original_binding else {}),
+            **({"pending_closeout": True} if pending_closeout else {}),
             **({"refresh_retry": refresh_retry} if refresh_retry is not None else {}),
             **({"borrow_source_admission": True} if borrow_source_admission else {}),
             **(
@@ -515,11 +570,13 @@ def read_heartbeat_settlement(
         native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
         heartbeat_reentry_qualification=_optional_readback_record(payload.get("heartbeat_reentry_qualification")),
         successor_replan_pending=payload.get("successor_replan_pending") is True,
+        replan_execution_pending=payload.get("replan_execution_pending") is True,
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
         spend_event=_optional_readback_record(payload.get("spend_event")),
         completion_event=_optional_readback_record(payload.get("completion_event")),
+        supersede_event=_optional_readback_record(payload.get("supersede_event")),
         monitor_phase=(
             ReceiptBoundMonitorPhase(str(monitor_phase))
             if monitor_phase is not None
@@ -530,4 +587,8 @@ def read_heartbeat_settlement(
             if replay_phase is not None
             else None
         ),
+        admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
+        admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
+        prepared_lease=_optional_readback_record(payload.get("prepared_lease")),
+        prepared_lease_required=payload.get("prepared_lease_required") is True,
     )

@@ -36,11 +36,11 @@ The Workspace presents and initiates governed actions, but Goal, Todo, Gate, eve
 - **HTTP success is not write completion.** A request being accepted and an action completing are two different things, and the second may be stopped by a Gate or rejected by a stale check.
 - **A button is not an independent authority.** Goal stop/resume checks owner authority and the reviewed fingerprint; Todo actions use lifecycle rules; quota governs eligibility for automated Turns.
 
-The whole chapter compresses into one sentence: **the Workspace is where you observe and initiate; it is not a new source of truth.**
+The whole chapter compresses into one sentence: **the Workspace is where you observe and initiate.**
 
 ## Confirm the runtime before trusting the page
 
-A page appearing does not mean the control plane is healthy. Check version and diagnostics before starting or reusing the service; `dashboard --no-open` is not merely a state query:
+Check version and diagnostics before starting or reusing the service; `dashboard --no-open` is not merely a state query:
 
 ```bash
 loopx --version
@@ -170,7 +170,7 @@ Continuous reporting is a separate authorization chain: a custom profile declare
 
 **Cost three: four kinds of "enabled" must be distinguished.** Collapsing them into one switch misjudges capability availability, and keeping them apart carries real mental overhead.
 
-**Boundary one: the Workspace does not own facts.** A broken UI proves neither a healthy control plane nor stopped execution. Distinguish source, runtime and projection first. Only after confirming source and execution conditions can the fault be limited to display recovery, not manual state edits through the UI. It also does not constitute Stage 2C authority — qualification and promotion of a shared-authority provider come from separate shadow and conformance work, not from the existence of an operator surface.
+**Boundary one: the Workspace does not own facts.** Distinguish source, runtime and projection first. Only after confirming source and execution conditions can the fault be limited to display recovery, not manual state edits through the UI. It also does not constitute Stage 2C authority — qualification and promotion of a shared-authority provider come from separate shadow and conformance work, not from the existence of an operator surface.
 
 **Boundary two: desktop updates are narrowly scoped.** Updates can only come from the fixed official feed; macOS uses updater signature and ad-hoc code signing and should not be described as notarized. Restoring a previous version also does not promise to reverse a future-incompatible Goal schema.
 
@@ -195,5 +195,3 @@ For one Workspace acceptance pass, confirm at least that:
 3. **A click is not authorization.** Goal lifecycle accepts owner operations, Todo lifecycle checks work transitions, and the current quota contract admits automated Turns. The page grants none of these permissions.
 4. **The four kinds of "enabled" need separate evidence.** They may be prerequisites for one another; one switch does not establish that every condition holds.
 5. **A message arriving does not widen permission.** Neither capture scope nor ingress mode grants new write authority.
-
-These five answer one question: **when the interface tells you everything is fine, what makes that believable?**

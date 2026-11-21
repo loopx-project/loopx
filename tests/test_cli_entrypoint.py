@@ -15,6 +15,29 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("preview", [False, True])
+def test_goal_start_does_not_load_unselected_issue_fix_execution(tmp_path, preview):
+    arguments = ["start-goal", "--help"]
+    if preview:
+        arguments = ["--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+            "start-goal", "--guided", "--project", str(tmp_path / "project"),
+            "--goal-id", "fixture", "--host-surface", "shell",
+            "--goal-text", "Produce a verified report; preserve 总计."]
+    result = run_cli_main("loopx.entrypoint", arguments,
+        forbidden_modules=("loopx.cli", "loopx.capabilities.issue_fix.workflow_plan",
+            "loopx.capabilities.issue_fix.candidate_preflight",
+            "loopx.capabilities.issue_fix.acceptance_loop",
+            "loopx.capabilities.issue_fix.metadata_preview",
+            "loopx.capabilities.issue_fix.repository_context"),
+        environment={"LOOPX_USAGE_PING": "0"})
+    assert result.returncode == 0, result.stderr
+    if preview:
+        packet = json.loads(result.stdout)
+        assert packet["goal_text"] == "Produce a verified report; preserve 总计."
+        assert packet["guided_transaction"]["writes_now"] is False
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
 @pytest.mark.parametrize("command", ["auto-research", "multi-agent"])
 def test_retired_demo_commands_reject_execution_without_writing_state(
@@ -496,6 +519,7 @@ assert payload["groups"]
 		(["agent-directory", "--help"], "loopx.cli_commands.agent_directory", "loopx.cli_commands.agent_directory"),
 		(["agent-capabilities", "--help"], "loopx.cli_commands.agent_capabilities", "loopx.cli_commands.agent_capabilities"),
 		(["goal-acceptance", "--help"], "loopx.cli_commands.goal_acceptance", "loopx.cli_commands.goal_acceptance"),
+		(["goal-lifecycle", "--help"], "loopx.cli_commands.goal_lifecycle", "loopx.cli_commands.goal_lifecycle"),
 		(["host-mode-plan", "--help"], "loopx.cli_commands.host_mode_plan", "loopx.cli_commands.host_mode_plan"),
 		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
@@ -638,7 +662,8 @@ def test_heartbeat_chain_routes_do_not_load_the_chat_layer(tmp_path, monkeypatch
 	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider="sqlite")
 	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command]
 	result = run_cli_main("loopx.entrypoint", argv,
-		forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"))
+		forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store",
+            "loopx.capabilities.issue_fix.pr_wait_reconcile"))
 	assert result.returncode == 0, result.stderr
 	assert json.loads(result.stdout)["ok"] is True
 
@@ -677,6 +702,10 @@ for name in (
     "issue_fix.periodic_report",
     "issue_fix.pr_description",
     "issue_fix.reward_memory",
+    "issue_fix.pr_wait_reconcile",
+    "issue_fix.pr_lifecycle",
+    "issue_fix.metadata_preview",
+    "content_ops.surface",
     "reward_memory.codex_app_outcome",
     "reward_memory.dogfood",
     "reward_memory.evaluation",
@@ -694,6 +723,75 @@ for facade in (issue_fix, reward_memory):
 """
 	completed = run_isolated_script(script)
 	assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("permission", ["denied", "revoked", "source-unavailable", "recheck-unavailable", "granted"])
+def test_pr_wait_provider_import_obeys_permission_and_failure_owner(permission):
+    script = f"""
+import importlib.abc
+import sys
+from pathlib import Path
+
+attempts = []
+class UnavailableProvider(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "loopx.capabilities.issue_fix.pr_wait_reconcile":
+            attempts.append(fullname)
+            raise ImportError("optional observation provider unavailable")
+
+sys.meta_path.insert(0, UnavailableProvider())
+from loopx.capabilities.issue_fix import pr_wait_hook
+
+permission = {permission!r}
+grant = ["external_evidence_poll"]
+states = iter({{
+    "denied": [[]], "revoked": [grant, []],
+    "source-unavailable": [OSError("permission source unavailable")] * 2,
+    "recheck-unavailable": [grant, OSError("permission source unavailable")],
+    "granted": [grant, grant],
+}}[permission])
+checks = []
+def availability(*args):
+    value = next(states)
+    checks.append(value)
+    if isinstance(value, Exception):
+        raise value
+    return {{"effective": value}}
+
+pr_wait_hook._availability = availability
+hook = pr_wait_hook.turn_start_hook(registry_path=Path("unused"), runtime_root=Path("unused"),
+    goal_id="fixture", agent_id="fixture", available=None)
+assert attempts == [], attempts
+if permission == "denied":
+    assert hook is None and len(checks) == 1
+else:
+    assert hook is not None
+    result = hook.producer()
+    assert len(checks) == 2
+    assert result["external_writes_performed"] is False
+    if permission == "granted":
+        assert len(attempts) == 1
+        assert result["status"] == "failed"
+        assert result["error_code"] == "dependency_observation_failed"
+        assert result["external_reads_performed"] is None
+        assert result["local_private_state_mutated"] is None
+        assert result["readback"]["external_read_count"] is None
+        assert result["readback"]["state_written"] is None
+        assert result["readback"]["error_category"] == "ImportError"
+    else:
+        assert attempts == []
+        assert result["external_reads_performed"] is False
+        assert result["local_private_state_mutated"] is False
+        assert result["status"] == ("not_applicable" if permission == "revoked" else "unavailable")
+        if permission != "revoked":
+            assert result["error_code"] == "capability_source_unavailable"
+            assert result["readback"]["external_read_count"] == 0
+for name in ("pr_wait_reconcile", "pr_lifecycle", "metadata_preview"):
+    assert "loopx.capabilities.issue_fix." + name not in sys.modules
+assert "loopx.capabilities.content_ops.surface" not in sys.modules
+"""
+    completed = run_isolated_script(script)
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_quota_facade_lazy_exports_preserve_owner_identity() -> None:
@@ -902,6 +1000,10 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	argv_cases.extend([["goal-acceptance", "--help"], ["goal-acceptance", "inspect"],
 		["goal-acceptance", "unknown-action", "--goal-id", "goal"],
 		["goal-acceptance", "inspect", "--goal-id", "goal", "--unknown-option"]])
+	argv_cases.extend([["goal-lifecycle", "--help"], ["goal-lifecycle", "--operation", "stop"],
+		["goal-lifecycle", "--goal-id", "goal", "--operation", "unknown"],
+		["goal-lifecycle", "--goal-id", "goal", "--operation", "stop", "--actor-kind", "unknown"],
+		["goal-lifecycle", "--goal-id", "goal", "--operation", "stop", "--unknown-option"]])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
@@ -1220,6 +1322,99 @@ def test_selected_goal_acceptance_refusals_match_without_full_cli(tmp_path, argu
 	assert selected.stderr == full.stderr
 	assert json.loads(selected.stdout)["ok"] is False
 	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("arguments, expected", [
+	(["--operation", "stop"], 0),
+	(["--operation", "resume"], 0),
+	(["--operation", "stop", "--execute"], 1),
+	(["--operation", "stop", "--actor-kind", "owner", "--execute",
+	  "--expected-state-fingerprint", "0" * 64], 1),
+])
+def test_selected_goal_lifecycle_preserves_preview_and_refusals(tmp_path, arguments, expected):
+	from datetime import datetime
+
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal", *arguments]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == expected
+	assert selected.stderr == full.stderr
+	payload = json.loads(selected.stdout)
+	legacy = json.loads(full.stdout)
+	for result in (payload, legacy):
+		if "activation" in result:
+			# Proposed activation timestamps are generated for each invocation.
+			assert datetime.fromisoformat(result["activation"].pop("updated_at")).tzinfo is not None
+	assert payload == legacy
+	assert payload["written"] is False and payload["ok"] is (expected == 0)
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+def test_goal_lifecycle_stop_resume_reaches_existing_source_owner(tmp_path, module):
+	registry, runtime = write_command_fixture(tmp_path)
+	prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal"]
+	for operation, state in (("stop", "stopped"), ("resume", "active")):
+		before = registry.read_bytes()
+		preview = run_cli_main(module, [*prefix, "--operation", operation],
+			forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+		assert preview.returncode == 0, preview.stderr
+		assert registry.read_bytes() == before
+		fingerprint = json.loads(preview.stdout)["observed_state_fingerprint"]
+		result = run_cli_main(module, [*prefix, "--operation", operation,
+			"--actor-kind", "owner", "--expected-state-fingerprint", fingerprint, "--execute"],
+			forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["written"] and payload["readback"]["verified"]
+		assert json.loads(registry.read_text())["goals"][0]["activation"]["state"] == state
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("operation", ["stop", "resume"])
+@pytest.mark.parametrize("actor", ["owner", "controller"])
+def test_goal_lifecycle_cannot_override_outer_controller(tmp_path, module, operation, actor):
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal", "--operation", operation, "--actor-kind", actor]
+	environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": "1",
+		"LOOPX_KUNLUNCODE_OUTER_GOAL_ID": "perf-goal"}
+	forbidden = ("loopx.cli",) if module == "loopx.entrypoint" else ()
+	preview = run_cli_main(module, prefix, forbidden_modules=forbidden, environment=environment)
+	assert preview.returncode == 0, preview.stderr
+	assert json.loads(preview.stdout)["written"] is False
+	assert registry.read_bytes() == before
+	blocked = run_cli_main(module, [*prefix, "--execute"],
+		forbidden_modules=forbidden, environment=environment)
+	assert blocked.returncode == 2 and blocked.stdout == ""
+	payload = json.loads(blocked.stderr)
+	assert payload["error_code"] == "kunluncode_outer_controller_write_owned"
+	assert payload["goal_id"] == "perf-goal"
+	assert payload["operation"] == f"goal-lifecycle {operation}"
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("controller, owned_goal", [("0", "perf-goal"), ("1", "other-goal")])
+def test_goal_lifecycle_preserves_unowned_goal_operations(tmp_path, module, controller, owned_goal):
+	registry, runtime = write_command_fixture(tmp_path)
+	prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-lifecycle", "--goal-id", "perf-goal", "--actor-kind", "owner", "--execute"]
+	environment = {"LOOPX_KUNLUNCODE_OUTER_CONTROLLER": controller,
+		"LOOPX_KUNLUNCODE_OUTER_GOAL_ID": owned_goal}
+	forbidden = ("loopx.cli",) if module == "loopx.entrypoint" else ()
+	for operation, state in (("stop", "stopped"), ("resume", "active")):
+		result = run_cli_main(module, [*prefix, "--operation", operation],
+			forbidden_modules=forbidden, environment=environment)
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["written"] and payload["readback"]["verified"]
+		assert json.loads(registry.read_text())["goals"][0]["activation"]["state"] == state
 
 
 @pytest.mark.parametrize("format_name", ["json", "markdown"])
@@ -2056,3 +2251,38 @@ def test_selected_connect_preview_keeps_full_cli_result_without_workspace(tmp_pa
     assert selected.returncode == ordinary.returncode == 0, (selected.stderr, ordinary.stderr)
     assert json.loads(selected.stdout) == json.loads(ordinary.stdout)
     assert not registry.exists()
+
+
+@pytest.mark.parametrize('arguments', [
+    ['start-goal', '--help'],
+    ['bootstrap-command-pack', '--help'],
+    ['register-agent', '--help'],
+    ['bind-agent-thread', '--help'],
+    ['start-goal', '--guided', '--goal-text', '完整 goal', '--host-surface', 'unsupported'],
+    ['register-agent', '--goal-id', 'missing'],
+    ['bind-agent-thread', '--goal-id', 'missing', '--agent-id', 'test'],
+])
+def test_guided_core_routes_match_complete_parser(arguments):
+    # Invalid argv retains the ordinary installation's canonical full-parser
+    # diagnostic fallback; valid selected help must never load that facade.
+    selected = run_cli_main('loopx.entrypoint', arguments,
+                           forbidden_modules=('loopx.cli',) if '--help' in arguments else ())
+    full = run_cli_main('loopx.cli', arguments)
+    assert (selected.returncode, selected.stdout, selected.stderr) == (full.returncode, full.stdout, full.stderr)
+
+
+def test_guided_core_preview_matches_complete_owner_without_writes(tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    argv = ['--runtime-root', str(tmp_path / 'runtime'), '--format', 'json',
+            'start-goal', '--guided', '--project', str(project),
+            '--host-surface', 'shell', '--goal-text', 'Report "inventory" and 总计.']
+    environment = {'CODEX_THREAD_ID': '', 'TRAECLI_THREAD_ID': '', 'LOOPX_USAGE_PING': '0'}
+    selected = run_cli_main('loopx.entrypoint', argv, forbidden_modules=('loopx.cli',), environment=environment)
+    full = run_cli_main('loopx.cli', argv, environment=environment)
+    assert selected.returncode == full.returncode == 0
+    assert selected.stdout == full.stdout and selected.stderr == full.stderr
+    packet = json.loads(selected.stdout)
+    assert packet['goal_text'] == 'Report "inventory" and 总计.'
+    assert packet['guided_transaction']['writes_now'] is False
+    assert not list(project.iterdir()) and not (tmp_path / 'runtime').exists()

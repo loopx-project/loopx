@@ -14,14 +14,51 @@ Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reade
 readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不代表 C1 切换、已安装
 采用，或模型费用与长程收益已取得资格。
 
-源码实际共享的部分比输出名称体现的更多。`_emit_quota_result` 在
-`_project_quota_cli_payload` 选择普通 CLI 压缩或 `buildTurnEnvelope` **之前**，
-已经捕获完整决策。后者委托 TypeScript owner，Python 模块是传输 adapter。
+普通 CLI 切换让每个已形成决策的 `quota should-run` 在 capture **之前**复用既有
+TypeScript `composeCompleteTurnDecision` owner。默认调用及兼容别名
+`--turn-envelope` / `--complete-turn` 使用同一来源。显式关闭 context delivery 时，
+完整来源以内联形式返回，不选择旧格式，也不打开渐进交付；完整 Goal 材料的取得与
+此展示选择分开。CLI 中选择 compactor 或 `buildTurnEnvelope` 的活跃分支删除。
+Status、plan 与 scheduler-observation 保留各自用途；本切片不退役历史 reader 或
+其他剩余调用方。
+当前 model-behavior portfolio 的 should-run 输入也复用该完整来源 owner，不再把
+已退役 CLI compactor 当作产品默认路径。候选上下文、规划关系、任务续接与诊断事实
+保留。Crowded 回归的 pretty JSON 从压缩后的 86,172 字节变为完整的 121,318 字节
+（原来源 120,963 字节）；旧 90,000 字节压缩输出允许量只刻画历史 fixture，不约束
+新的完整 carrier。Wire/page 上限和终态 actor 的十次调用预算不变。冻结的 raw/v0
+模型对照继续独立保留。
+
+Benchmark worker 在启动规划或执行模型前核实显式历史 Short 请求。它从已固定
+的 CLI 只读预演 quota 响应，不准入工作，并在 wake 回执记录预期与实际版本及
+资格。v1 或无法核实的响应会拒绝 Short。Fresh-replan checkpoint 会预载另一种
+输入，不能算作直接 Short。当前普通与 Complete 请求继续复用 C1 producer。
+历史实验保留原版本与回执。
+
+Todo 验收完成、replan-successor 返回及 blocked-completion 恢复的当前续接计划复用
+既有 TypeScript 结算 composer，保留原身份、路由与已提供的 lease 证明。JSON 与
+Markdown 展示随写回执行的运行时扣额，不再要求模型执行第二条 spend 命令。
+当前终态 qualifier 校验原 effect 的已提交回执，拒绝缺失、其他身份、未知或未提交
+的回执及模型重复 spend。副作用之后的命令失败仍停止 actor；独立提交的写回／扣额
+回执不回滚，也不能报告为不存在。历史 plan 展示／解码继续支持；这些工程检查
+不代表真实模型采用或成本收益。
 Quota capture 与 Turn journal capture 都调用
 [`decision_capture.py`](../../../../loopx/control_plane/turn_driver/decision_capture.py)
 中的 `write_decision_capture`。原生上下文交付与显式宿主 handoff 也复用该模块和既有
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
-也不重写已经共享的差分与 native-resume 逻辑。
+也不重写已经共享的差分与 native-resume 逻辑。请求保存原 capture 时，公布的
+`detail_ref.full_decision` 复用既有不可变 reader sidecar：先将路由纳入签名，再在
+capture 发布后写入最终字节摘要，避免循环自哈希。Reader 发布失败仍保留已提交
+来源和回执；读取不重新准入或结算工作。
+
+同一份冻结的 `ef099ae3` small/crowded/multi-agent quota fixture，JSON 字符数为
+**23,289/42,965/25,514 → 24,984/53,441/29,574**，Markdown 为
+**7,476/8,143/6,441 → 25,083/53,543/29,674**。完整 Goal 字节此前需要另行读取，
+完整 Markdown carrier 现保留所有来源字段。这些只是 stdout 测量，不代表模型费用、
+时延或验收成果。保留原 JSON 25k/51k/26.5k 与 Markdown 10k/17k/7k 上限失败。
+新有界上限两种格式均为 26k/55k/31k，行数限制不变。Crowded 减 small 的 JSON
+增长为 19,676 → 28,457 字符：每 Todo 允许量调整为 600，固定 9,700 允许量不变。
+此工程校准不豁免独立的匹配单会话成果／完整成本 gate、其他 Host、打包、安装采用
+或原生 Windows 验收。
 
 可选 host poll 也是该次原始观测的一部分。来源保真切片在 capture 前仅记录一次
 `--record-host-poll`，普通 CLI、envelope 与原生上下文交付复用同一回执；恢复读取不再
@@ -394,6 +431,11 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 | `turn_driver/decision_capture.py` 与 `cli_commands/quota_capture.py` | 复用不可变 capture、校验读取器和 full/delta 交付。首次交付和保存后恢复必须重建同一契约；不能仅因 Turn 身份相同，就把某投影的 continuity baseline 用于另一投影。 |
 | `benchmark/runtime/worker.py`、`benchmark/runtime/sessions.py` 与 `scripts/external_scheduler_worker.py` | 迁移它们实际调用的产品入口。保留评估配置与外层唤醒归属，不新增 benchmark 专用转换，也不把 managed-host 测试算作 attached-host 验收。 |
 
+当前 heartbeat 生成器通过 `interaction_contract` 交付目标选择、必读和原 Turn
+结算。已保存的 bootstrap 在唤醒时重新调用该生成器。树内所有生成调用都已采用
+此路径，因此退役旧 envelope 专用指令和额外提示词预算。已有 capture 中的工作
+继续由记录的恢复 reader 读取。
+
 替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
 恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或
 验收义务。未知数据不得静默消失；未知的必需执行语义也不能靠转发 JSON 就变安全，
@@ -420,6 +462,11 @@ reader；这个分阶段边界保留普通 quota writer 和 thin-heartbeat 的�
 仍负责普通 quota 与 heartbeat 迁移、最终输入／材料读取覆盖、全宿主配置，以及原单会话
 成果与完整成本对照。评审须包含匹配基线／候选版本的真实 provider 成果、拒绝敏感性和
 打包恢复。只有切片合入 main、父提案集成 main 后，父提案的差异才会减少；开 PR 不算。
+
+当前 v1 Host 的派发预检、模型输入和会话身份读回直接校验完整来源与捕获标头。选择
+校验、主动作判定和写权限审批仍由同一套 TypeScript 规则处理。Codex 与结构化 Host
+在最终输入中保留原捕获的材料引用。历史执行投影继续校验过渡期的 v0/v1 成对记录并
+支持已记录工作的恢复。仍依赖该投影的 plan 和 effect 消费方有各自的退役条件。
 
 对 normal、selection、replan、wait、recovery 和 capability-off 的每个 fixture，
 在**三个边界**核对独立编写的义务：组合契约、重建交付、最终模型输入及必需材料读取。

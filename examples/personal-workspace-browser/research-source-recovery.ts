@@ -10,6 +10,7 @@ import {pathToFileURL} from "node:url";
 import type {Browser} from "playwright";
 import {launchBrowser, loadPlaywright} from "../dashboard-browser-smoke-support.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {analysisReadback} from "./research-history.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const output = resolve(root, "output/playwright/research-source-recovery");
@@ -130,12 +131,50 @@ threading.Event().wait()
         await coverage.filter({hasText:"33 / 33"}).waitFor();
         await page.goForward();
         await coverage.filter({hasText:"11 / 11"}).waitFor();
+
+        const empty = analysisReadback("c");
+        empty.pack.result = null;
+        empty.pack.job = null;
+        const saved = analysisReadback("a");
+        const namespace = new URL(catalog[1].status_url).searchParams.get("source_namespace");
+        await page.route("**/api/chat/research-analysis?*", async route => {
+          const query = new URL(route.request().url()).searchParams;
+          if (query.get("source_namespace") !== namespace) return route.continue();
+          const response = query.get("pack_id") === empty.pack.pack_id ? empty : saved;
+          const language = query.get("output_language");
+          const config = {...response.pack.config, ...(language ? {output_language:language} : {})};
+          const result = response.pack.result ? {...response.pack.result, output_language:language} : null;
+          await route.fulfill({json:{...response, execution_enabled:false, pack:{...response.pack, config, result}}});
+        });
+        await page.reload();
+        const progress = page.locator(".research-progress");
+        const scope = progress.locator(":scope > header select");
+        const savedScope = progress.locator(`.research-progress-scope[data-pack-id="${saved.pack.pack_id}"]`);
+        const emptyScope = progress.locator(`.research-progress-scope[data-pack-id="${empty.pack.pack_id}"]`);
+        await savedScope.waitFor();
+        const originalSelect = await scope.elementHandle();
+        await scope.focus();
+        await scope.selectOption(empty.pack.pack_id);
+        await emptyScope.waitFor();
+        assert.equal(await scope.evaluate((select, original) => select === original && select === document.activeElement, originalSelect), true,
+          "Moving the empty analysis below history keeps the focused selector");
+        assert.equal(await progress.evaluate(element =>
+          Boolean(document.querySelector(".research-axis")!.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+        await scope.selectOption(saved.pack.pack_id);
+        await savedScope.waitFor();
+        assert.equal(await scope.evaluate((select, original) => select === original && select === document.activeElement, originalSelect), true,
+          "Moving the saved analysis above history keeps the focused selector");
+        assert.equal(await progress.evaluate(element =>
+          Boolean(element.compareDocumentPosition(document.querySelector(".research-axis")!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+        await page.keyboard.press("Tab");
+        assert.equal(await progress.evaluate(element => element.contains(document.activeElement)), true,
+          "The next Tab continues within the saved analysis");
         assert.deepEqual(writes, [], "Browsing and retry never dispatch work, analysis or source mutations");
         assert.deepEqual(errors, []);
         await page.close();
       }
       for (let i=0;i<fixturePaths.length;i++) assert.equal(await readFile(fixturePaths[i], "utf8"), originals[i]);
-      return {coverageEntries:[], note:"Original R7 on/off; same-source retention, cross-source failure/retry/export, Back/Forward, bilingual/narrow/keyboard, zero writes."};
+      return {coverageEntries:[], note:"Original R7 on/off; same-source retention, cross-source failure/retry/export, Back/Forward, bilingual/narrow/keyboard, analysis scope focus, zero writes."};
     } finally {
       if (backend.exitCode === null && backend.signalCode === null) {
         const stopped = once(backend, "exit"); backend.kill("SIGTERM"); await stopped;

@@ -221,7 +221,18 @@ async function runLoopxTaskLeaseCli(
 
 async function probeLoopxQuota(binding: Record<string, unknown>): Promise<Record<string, unknown>> {
   const args = buildQuotaArgs(binding);
-  const stdout = await runLoopxCli(args, String(binding.directory || ""));
+  let stdout: string;
+  try {
+    stdout = await runLoopxCli(args, String(binding.directory || ""));
+  } catch (error) {
+    // A denied/gated decision exits non-zero while still carrying the authoritative
+    // JSON decision payload on stdout; only rethrow when stdout lacks a JSON object.
+    const failure = error as { stdout?: unknown };
+    const candidate = typeof failure?.stdout === "string" ? failure.stdout.trim() : "";
+    const parsed = candidate ? parseJsonObject(candidate) : null;
+    if (!parsed) throw error;
+    return parsed as Record<string, unknown>;
+  }
   const decision: unknown = JSON.parse(stdout || "{}");
   if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
     throw new Error("loopx quota should-run returned a non-object payload");

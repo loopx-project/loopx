@@ -797,7 +797,7 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         CODEX_THREAD_ID=event["session_id"], LOOPX_PHASE_DEADLINE_EPOCH="9876543210.125")
     body = heartbeat_body(env, turn, native_goal=False)
     block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
-    assert block.count("--complete-turn") == 1 and "--turn-envelope" not in block
+    assert "--complete-turn" not in block and "--turn-envelope" not in block
     if checkpoint_preflight:
         from benchmark.runtime.checkpoint import capture_before_replan
 
@@ -814,8 +814,9 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         original, = wake.glob("checkpoint-start-*/decision-*/decision.json")
         assert (wake / "checkpoint-start-guard.json").read_bytes() == original.read_bytes()
         if delivery == "off":
-            packet = json.loads((wake / "checkpoint-start-view.json").read_text())
-            assert str(wake / "checkpoint-start-view.json") in body
+            view, = wake.glob("checkpoint-start-*/checkpoint-start-view.json")
+            assert str(view) in body
+            packet = json.loads(view.read_text())
         else:
             block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
             assert "context-project" in block and "should-run" not in block

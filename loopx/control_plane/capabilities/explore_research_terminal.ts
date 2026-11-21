@@ -9,8 +9,6 @@ import {createInterface} from "node:readline";
 import type {JsonObject} from "../effect_program.ts";
 import type {TodoTerminalEvidenceGuard} from "../coordination/todo_terminal_lifecycle.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
-import {normalizeResearchCompositionPolicy, qualifyResearchCompletion} from "./explore_research_execution.ts";
-import {resolveExploreGoalConfiguration} from "./explore_configuration.ts";
 
 export class ResearchTerminalEvidenceHost {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -26,6 +24,7 @@ export class ResearchTerminalEvidenceHost {
         && context.todo.capability_binding_ref !== "explore:research-composition-v0"
         && !(Array.isArray(context.todo.explore_result_node_refs) && context.todo.explore_result_node_refs.length)
         && !context.todo.replan_obligation_id) return {required: false, allowed: true, evidence: null};
+    const {normalizeResearchCompositionPolicy, resolveExploreGoalConfiguration} = await import("./explore_configuration.ts");
     const source = requireJsonObject(this.source, "research registry source");
     const bytes = await readFile(String(source.path));
     if (createHash("sha256").update(bytes).digest("hex") !== source.sha256) {
@@ -46,17 +45,22 @@ export class ResearchTerminalEvidenceHost {
     if (policy.mode === "disabled" || mode.mode_source === "goal_override" && !policy.enabled) {
       return {required: false, allowed: true, evidence: null};
     }
+    const {qualifyResearchCompletion} = await import("./explore_research_execution.ts");
     const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
     if (!python || !isAbsolute(python) || python.includes("\0")) {
       return {allowed: false, reason_code: "research_evidence_host_required",
         reason: "Native research completion needs the source-selected Python adapter context; use the installed LoopX entrypoint."};
+    }
+    if (this.child) {
+      throw new Error("ResearchTerminalEvidenceHost.qualify() cannot run while a child host is already active");
     }
     this.child = spawn(python, ["-m", "loopx.capabilities.explore.research_snapshot_host"], {
       stdio: ["pipe", "pipe", "pipe"], env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
     });
     this.exited = new Promise(resolve => this.child!.once("close", () => resolve()));
     this.child.on("error", () => {}); this.child.stdin.on("error", () => {}); this.child.stderr.resume();
-    const replies = createInterface({input: this.child.stdout})[Symbol.asyncIterator]();
+    const rl = createInterface({input: this.child.stdout});
+    const replies = rl[Symbol.asyncIterator]();
     this.child.stdin.write(JSON.stringify({runtime_root: this.root, goal_id: this.goal,
       graph: graph ?? {}, harness: harness ?? {}, agent_id: context.actor_agent_id ?? context.todo.claimed_by,
       todos: context.todos.map(todo => Object.fromEntries([
@@ -84,7 +88,10 @@ export class ResearchTerminalEvidenceHost {
       }
       return qualifyResearchCompletion({frontier: snapshot.frontier, todo: context.todo,
         actor_agent_id: context.actor_agent_id, goal_id: context.goal_id});
-    } finally {clearTimeout(timer);}
+    } finally {
+      clearTimeout(timer);
+      rl.close();
+    }
   };
 
   current(): boolean {
@@ -95,11 +102,31 @@ export class ResearchTerminalEvidenceHost {
 
   async close(): Promise<void> {
     if (this.child) {
-      this.child.stdin.end("release\n");
-      // The host exits after releasing its kernel lock. A bounded forced exit
-      // also closes the descriptors if its process cannot finish normally.
-      const timer = setTimeout(() => this.child?.kill(), 1000);
-      try {await this.exited;} finally {clearTimeout(timer);}
+      const child = this.child;
+      const exited = this.exited;
+      try {
+        child.stdin.end("release\n");
+      } catch {
+        // Best-effort pipe close before waiting/escalating.
+      }
+      // The host exits after releasing its kernel lock. Escalate from SIGTERM
+      // to SIGKILL so close() cannot hang if Python blocks or ignores SIGTERM.
+      const termTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      }, 1000);
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, 2000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(termTimer);
+        clearTimeout(killTimer);
+        if (this.child === child) {
+          this.child = null;
+          this.exited = null;
+        }
+      }
     }
   }
 }

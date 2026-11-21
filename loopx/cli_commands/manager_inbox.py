@@ -1,6 +1,7 @@
 """Private context consumption; never creates or reprioritizes Todos."""
 
 import json
+import os
 from pathlib import Path
 from ..agent_registry import registered_agent_ids_for_goal
 from ..capabilities.manager_context import (
@@ -14,7 +15,69 @@ from ..control_plane.collaboration.peers import InboxReadResponseAmbiguous
 from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
-def _read_markdown(result: dict) -> str:
+class ManagerInboxCommandError(ValueError):
+    """Typed refusal whose recovery details must remain visible to the caller."""
+
+    def __init__(self, message: str, *, error_code: str, **details: object) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.details = details
+
+
+def _same_goal_peer_refusal(
+    goal_id: str, sender_agent_id: str, peer_agent_id: str,
+) -> ManagerInboxCommandError:
+    return ManagerInboxCommandError(
+        "peer requests require both Agents to be registered to the same Goal; "
+        "no request was recorded",
+        error_code="peer_request_same_goal_required",
+        host_delivery={"status": "not_attempted"},
+        goal_id=goal_id,
+        sender_agent_id=sender_agent_id,
+        peer_agent_id=peer_agent_id,
+        recommended_action=(
+            "Resolve the peer's exact Codex task link with resolve-agent-thread. "
+            "If it is bound to another Goal, use an authorized host task-message tool "
+            "and require its submission receipt; the receiver may consume the message "
+            "on its next Turn. Do not register either Agent to another Goal solely to "
+            "send a message."
+        ),
+    )
+
+
+def _confirms_foreign_peer_link(
+    registry_path: Path,
+    *,
+    goal_id: str,
+    peer_agent_id: str,
+    thread_link: str,
+    host_surface: str | None,
+) -> bool:
+    from ..thread_agent_binding import (
+        CODEX_THREAD_HOST_SURFACES,
+        ThreadBindingRequestError,
+        resolve_registry_thread_agent_binding,
+    )
+
+    # Route selection compares the raw surface. Binding lookup normalizes it.
+    if host_surface is not None and host_surface not in CODEX_THREAD_HOST_SURFACES:
+        return False
+    try:
+        binding = resolve_registry_thread_agent_binding(
+            registry_path=registry_path,
+            thread_link=thread_link,
+            host_surface=host_surface,
+        )
+    except ThreadBindingRequestError:
+        return False
+    return (
+        binding["status"] == "bound"
+        and binding["goal_id"] != goal_id
+        and binding["agent_id"] == peer_agent_id
+    )
+
+
+def _share_item_guidance(result: dict) -> dict:
     items = result.get("items")
     shared = {}
     if isinstance(items, list) and len(items) > 1 and all(isinstance(item, dict) for item in items):
@@ -22,17 +85,93 @@ def _read_markdown(result: dict) -> str:
             text = items[0].get(key)
             if isinstance(text, str) and text and all(item.get(key) == text for item in items[1:]):
                 shared[key] = text
+        advice = items[0].get("receiver_followthrough")
+        if isinstance(advice, dict) and advice:
+            encoded = json.dumps(advice)
+            if all(json.dumps(item.get("receiver_followthrough")) == encoded for item in items[1:]):
+                shared["receiver_followthrough"] = advice
 
-    lines = ["# Manager Inbox"]
     if shared and "shared_item_guidance" not in result:
-        lines.append("Apply the exact fields in `shared_item_guidance` to every item on this page.")
-        result = {
+        return {
             "shared_item_guidance": shared,
             **result,
             "items": [{key: value for key, value in item.items() if key not in shared} for item in items],
         }
+    return result
+
+
+def _render_read_markdown(result: dict) -> str:
+    lines = ["# Manager Inbox"]
+    if result.get("shared_item_guidance"):
+        lines.append("Apply the exact fields in `shared_item_guidance` to every item on this page.")
     body = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     return "\n\n".join(lines) + "\n\n```json\n" + body + "\n```"
+
+
+def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
+    """Deliver the already-recorded scoped read without repeating its effects."""
+    from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+
+    limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    view = _share_item_guidance(result)
+    body = _render_read_markdown(view)
+    size = len((body + os.linesep).encode("utf-8"))
+    if size <= limit:
+        return body, True
+
+    from ..command_invocation import current_loopx_cli_argv
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from ..control_plane.turn_driver.decision_capture import (
+        CONTEXT_CAPTURE_CODE_MODE_GUIDANCE,
+        context_capture_read_command,
+        private_capture_supported,
+        write_context_read_reference,
+    )
+    from .context_machine import capture_context_recovery
+
+    if size <= MAX_REQUEST_BYTES:
+        reference = capture_context_recovery(view, runtime_root=runtime_root, index_and_select=False)
+        if reference.get("available") is not False:
+            path = Path(reference["path"])
+            digest = reference["sha256"]
+            reader_argv = current_loopx_cli_argv()
+            direct_command = context_capture_read_command(path, digest,
+                page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+            opening = {"ok": True, "read_complete": False, "sha256": digest, "command": direct_command,
+                "instruction": "Run command to read this exact Inbox page; do not call manager-inbox read again for it. "
+                    "Follow next_command through eof in UTF-8 byte-offset order. Compare each reported digest with "
+                    "this opening's SHA-256. Check each "
+                    "page's content length against its offsets, and complete coverage through total_bytes. "
+                    "If output is missing or truncated, reread that range of the same capture with a smaller page. "
+                    + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE
+                    + "Apply any shared_item_guidance to the items on this page. After the page is complete, "
+                      "follow its next_cursor, operation_handoff_next_cursor, or native_child_results.next_cursor with the original Inbox command. "
+                      "A captured page is not request adoption, result consumption or completion."}
+            if private_capture_supported():
+                try:
+                    reader = write_context_read_reference(path, digest)
+                except (OSError, ValueError):
+                    reader = None
+                if reader is not None:
+                    short_command = context_capture_read_command(path, digest, reference_file=reader,
+                        page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+                    short_opening = _render_read_markdown({**opening, "command": short_command,
+                        "recovery_command": direct_command,
+                        "instruction": opening["instruction"] + " If the reader reference is unavailable or the "
+                            "digest differs, restart this same capture "
+                            "with recovery_command."})
+                    if len((short_opening + os.linesep).encode("utf-8")) <= limit:
+                        return short_opening, True
+            direct_opening = _render_read_markdown(opening)
+            if len((direct_opening + os.linesep).encode("utf-8")) <= limit:
+                return direct_opening, True
+
+    return _render_read_markdown({"ok": False, "read_complete": False,
+        "error": "The Inbox page could not be published within the reader limits.",
+        "instruction": "This read may already have recorded request or result delivery receipts. Keep the same "
+            "scope and cursor; this is not an empty Inbox. Inspect existing receipts before retrying this read "
+            "after repairing private capture storage. Use the JSON view only in a tool that can retain its full "
+            "output. Do not rerun the Turn guard or skip to another cursor."}), False
 
 
 def register_manager_inbox(subparsers, add_format):
@@ -107,11 +246,15 @@ def register_manager_inbox(subparsers, add_format):
                         help="For report: explicit relative file in the registered Goal workspace; bound-owner App only, at most four files.")
     parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
     parser.add_argument("--result-key", help="For acknowledge-return: the exact peer result read; defaults to the initial conclusion.")
+    parser.add_argument("--read-token", help="For acknowledge-return: the read_token supplied with the peer result, if present.")
+    parser.add_argument("--turn-instance-id", help="For acknowledge-return: identify the work Turn that already received the peer result.")
+    parser.add_argument("--disposition", choices=("accepted", "deferred", "rejected"),
+                        help="For acknowledge-return: whether this Turn used, deferred, or rejected the peer result.")
     parser.add_argument("--related-todo-id", action="append", default=[])
     parser.add_argument("--evidence-id", action="append", default=[])
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=8)
-    parser.add_argument("--cursor", help="For read: continue with the previous page's next_cursor.")
+    parser.add_argument("--cursor", help="For read: continue with the previous request or native child result cursor.")
     parser.add_argument("--operation-cursor", help="For read: continue the independent original-operation page.")
     parser.add_argument("--decision", choices=("adopt", "defer", "reject", "no_change"))
     parser.add_argument("--reason")
@@ -201,6 +344,12 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             raise ValueError("--attachment-ref is only supported for report")
         if getattr(args, "result_key", None) is not None and args.manager_inbox_action != "acknowledge-return":
             raise ValueError("--result-key is only supported for acknowledge-return")
+        if getattr(args, "read_token", None) is not None and args.manager_inbox_action != "acknowledge-return":
+            raise ValueError("--read-token is only supported for acknowledge-return")
+        if getattr(args, "turn_instance_id", None) is not None and args.manager_inbox_action not in {"read", "acknowledge-return"}:
+            raise ValueError("--turn-instance-id is only supported for read/acknowledge-return")
+        if getattr(args, "disposition", None) is not None and args.manager_inbox_action != "acknowledge-return":
+            raise ValueError("--disposition is only supported for acknowledge-return")
         cursor = getattr(args, "cursor", None)
         operation_cursor = getattr(args, "operation_cursor", None)
         if cursor is not None and args.manager_inbox_action != "read":
@@ -247,6 +396,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             from ..control_plane.collaboration.peer_host_route import resolve_peer_host_route
             if not args.brief_file:
                 raise ValueError("--brief-file is required for a peer request")
+            if args.peer_agent_id not in registered_agent_ids_for_goal(goal):
+                raise _same_goal_peer_refusal(args.goal_id, args.agent_id, args.peer_agent_id)
             if (args.peer_thread_link or args.peer_host_surface) and not args.require_host_route:
                 raise ValueError("peer host selection requires --require-host-route")
             route = None
@@ -259,6 +410,20 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                     host_surface=args.peer_host_surface,
                 )
                 if route["status"] != "resolved":
+                    if (
+                        route["reason"] == "thread_not_bound_to_peer"
+                        and args.peer_thread_link
+                        and _confirms_foreign_peer_link(
+                            registry_path,
+                            goal_id=args.goal_id,
+                            peer_agent_id=args.peer_agent_id,
+                            thread_link=args.peer_thread_link,
+                            host_surface=args.peer_host_surface,
+                        )
+                    ):
+                        raise _same_goal_peer_refusal(
+                            args.goal_id, args.agent_id, args.peer_agent_id,
+                        )
                     raise ValueError(
                         f"peer host route {route['status']}: {route['reason']}; "
                         "no request was recorded"
@@ -285,6 +450,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 }
         elif args.manager_inbox_action == "acknowledge-return":
             from ..control_plane.collaboration.peers import consume_return
+            if not args.turn_instance_id or not args.disposition:
+                raise ValueError("acknowledge-return requires --turn-instance-id and --disposition")
             result = consume_return(
                 runtime_root,
                 args.goal_id,
@@ -292,10 +459,14 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id,
                 registry=registry_path,
                 result_key=getattr(args, "result_key", None) or "conclusion",
+                turn_instance_id=args.turn_instance_id,
+                disposition=args.disposition,
+                read_token=getattr(args, "read_token", None),
             )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
             request_id = getattr(args, "request_id", None)
+            # Only the invocation-bound host reader can record Turn delivery.
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,
                                 request_id=request_id)
@@ -370,11 +541,19 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             )
     except InboxReadResponseAmbiguous as exc:
         result = exc.result
+    except ManagerInboxCommandError as exc:
+        result = {
+            "ok": False,
+            "error": str(exc),
+            "error_code": exc.error_code,
+            **exc.details,
+        }
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}
     fmt = getattr(args, "subcommand_format", None) or getattr(args, "format", None)
     if args.manager_inbox_action == "read" and fmt == "markdown" and result["ok"]:
-        print(_read_markdown(result))
-    else:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        body, ok = _read_markdown(result, runtime_root=runtime_root)
+        print(body)
+        return 0 if ok else 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1

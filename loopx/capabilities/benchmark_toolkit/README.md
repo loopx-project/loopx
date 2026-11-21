@@ -32,8 +32,7 @@ Once the runner has durably proved that the solver and its token-producing
 session stopped, it may mark the group `solver_capacity_released`. That group no longer
 blocks another reclaim decision even when an accepted evaluator or scorer still
 drains in the background. The runner must preserve that scoring process and its
-artifacts; process liveness alone neither proves live solver capacity nor proves
-capacity release.
+artifacts.
 
 The command is read-only. It sends no signal, changes no concurrency envelope,
 and does not classify runtime liveness. The runner must build the complete live
@@ -62,8 +61,7 @@ variable interface in this toolkit.
   [Turn contract](../../../docs/reference/protocols/loopx-turn-v0.md):
   inspect `loopx turn plan`, then explicitly execute
   `loopx turn run-once --execute` with a supported host or typed host adapter
-  and independent validator. Turn is not an argv-compatible alias for
-  `agent-phase`, and does not replace benchmark isolation or scoring.
+  and independent validator.
 
 Integrations using `LOOPSBENCH_EXTERNAL_AGENT_REQUEST`,
 `LOOPSBENCH_EXTERNAL_AGENT_RESULT`, or
@@ -813,8 +811,7 @@ loopx benchmark four-arm-contract \
 
 The default CLI receipt contains prompt hashes but not prompt text. Its
 `qualified` field covers factor design and within-pair prompt parity only;
-`execution_qualified` remains `false`. The listed runner obligations are requirements,
-not evidence that launch-time parity, input pinning, or board registration occurred.
+`execution_qualified` remains `false`. The listed runner obligations are requirements.
 A trusted local
 runner may use the Python builder or explicitly pass `--include-prompt-text`. At
 launch it must compare the final task-goal hash with the selected arm, pin every
@@ -976,8 +973,7 @@ The TypeScript policy checks the exact admission generation (`admitted_at` as
 well as run/case/role). The existing local ledger transports lock the concurrency
 envelope and board in that order, recheck the policy's input snapshot, write and
 read back the terminal row, then release and read back that original slot.
-An intervening write requires retrying the original proof; it does not authorize
-a replacement admission. A process interruption after the board write can be
+An intervening write requires retrying the original proof. A process interruption after the board write can be
 replayed. Same-terminal replay preserves later scores, insight and observation
 time, and an already released run is idempotent. This is process-crash recovery,
 not a new power-loss durability guarantee. New state transitions use the actual
@@ -988,8 +984,7 @@ running shard can therefore be merged again without an equal-time ambiguity.
 This command never stops workers, deletes artifacts, restarts an experiment,
 changes duration allowances or upgrades score qualification. Keep accepted
 grading alive until it drains. The provider/controller owns bounded retry after
-an unavailable writer; no scheduler or polling loop is installed. A terminal
-board row alone is not a release receipt. Read `board_readback_verified` and
+an unavailable writer; no scheduler or polling loop is installed. Read `board_readback_verified` and
 `slot_readback_verified`; new admission still needs its own resource checks.
 Standalone board upserts and explicit `concurrency-release` retain their
 existing behavior. The managed command additionally requires a registered Goal
@@ -1206,7 +1201,7 @@ Upsert now returns the complete normalized affected `row` and `write` receipt
 by default, for both preview and execution. Check `write.dry_run` and
 `write.write_performed` before treating a preview as a saved update. The receipt
 retains metrics, countability, protocol identity and total ledger `row_count`;
-it does not imply a matched comparison or replace whole-study inspection.
+
 Consumers of the previous board-shaped response can add `--include-board`.
 `--benchmark-id` and `--study-id` filter that optional board projection; they do
 not constrain the write or hide the affected row in the default receipt.
@@ -1367,8 +1362,7 @@ solver progress. `git status` observes only uncommitted changes. Bind the readba
 to the exact job, compare its current `HEAD` with the start revision recorded at
 admission, and combine that committed delta with the current worktree status.
 Correlate those facts with Goal/event freshness, typed runner errors, and the
-solver's trajectory phase. A clean worktree or a high raw log-error count alone is
-not evidence that a run is stuck. The provider-owned classifier may mark a run
+solver's trajectory phase. The provider-owned classifier may mark a run
 stalled only when committed and uncommitted progress are both absent and either the
 trajectory is stale or typed fatal runner evidence is present.
 
@@ -1598,8 +1592,7 @@ loopx benchmark upload-envelope \
 
 Before implementing a remote provider, exercise the transport lifecycle against
 the built-in local simulation. Preview is the default and performs no write;
-`--execute` appends to the explicitly named JSONL store under a file lock. Neither
-mode performs network access or grants upload/submission authority.
+`--execute` appends to the explicitly named JSONL store under a file lock.
 
 ```bash
 loopx benchmark upload-local \

@@ -401,13 +401,6 @@ export function leaseStatusTone(status?: string | null): BadgeTone {
   return LEASE_STATUS_TONES[normalizeToken(status)] ?? "neutral";
 }
 
-function stringifySourceRef(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined) {
-    return "n/a";
-  }
-  return String(value);
-}
-
 export function deriveOperatorStateSignals(
   projection: GoalChannelProjection,
 ): OperatorStateSignal[] {

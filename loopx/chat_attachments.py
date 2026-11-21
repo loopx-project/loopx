@@ -80,7 +80,9 @@ def normalize_chat_image_attachments(value: Any) -> list[dict[str, Any]]:
         if decoded_size > CHAT_IMAGE_MAX_BYTES:
             raise ValueError("image attachment exceeds the 5MB limit")
         declared_size = raw.get("size")
-        if declared_size is not None and int(declared_size) != decoded_size:
+        if declared_size is not None and (
+            type(declared_size) is not int or declared_size != decoded_size
+        ):
             raise ValueError("image attachment size does not match its data")
         total_bytes += decoded_size
         if total_bytes > CHAT_IMAGE_MAX_TOTAL_BYTES:
@@ -175,7 +177,7 @@ def normalize_local_chat_attachments(session: dict[str, Any], value: Any) -> lis
 
 
 def native_attachment_inputs(attachments: Any) -> list[dict[str, Any]]:
-    """Translate validated source bytes into native Codex input, not instructions."""
+    """Translate validated source bytes into native Codex input."""
     inputs: list[dict[str, Any]] = []
     for attachment in normalize_chat_attachments(attachments):
         if attachment["mime_type"] in CHAT_TEXT_TYPES:

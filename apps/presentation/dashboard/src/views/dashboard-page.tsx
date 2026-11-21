@@ -58,6 +58,7 @@ import {
   createChatSession,
   type ConversationContext,
   type BoundConversationTarget,
+  type ManagedConversationTarget,
   updateLoopXMode,
   type LoopXModeSettings,
   fetchChatCapabilities,
@@ -411,7 +412,7 @@ function quotaStateForShare(row?: GoalDirectoryRow) {
 
 function buildAgentManagementRows(
   rows: GoalDirectoryRow[],
-  todoIndex?: TodoIndexSummary | null,
+  _todoIndex?: TodoIndexSummary | null,
   projection?: AgentManagementProjection | null,
 ): AgentManagementRow[] {
   const items: TodoExplorerItem[] = [];
@@ -1324,7 +1325,7 @@ function PersonalGoalHome({
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
-  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
+  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) => void;
   onSelectWorkspace: (projectRef: string | null) => void;
   onOpenOriginalConversation: (target: BoundConversationTarget) => void;
   boundConversation: BoundConversationTarget | null;
@@ -1443,8 +1444,8 @@ function PersonalGoalHome({
   const originalConversation = rootGoalId && boundConversation
     ? { session: undefined, source: undefined, error: "Original conversation is outside this Goal navigation scope.", retry: originalReadback.retry }
     : originalReadback;
-  const managedTarget = selectedWorkAgentId != null && selectedWorkSessionId?.startsWith("managed:") && selectedGoal
-    ? {goalId: selectedGoal.goalId, agentId: selectedWorkAgentId, sessionId: selectedWorkSessionId.slice(8)} : null;
+  const managedTarget = selectedWorkAgentId != null && selectedWorkSessionId?.startsWith("managed:") && requestedGoalId
+    ? {goalId: requestedGoalId, agentId: selectedWorkAgentId, sessionId: selectedWorkSessionId.slice(8)} : null;
   const managedConversation = useManagedConversation(managedTarget, !readOnly);
   const fixedSession = Boolean(boundConversation || managedTarget);
   const conversationContext: ConversationContext = managedTarget ? {kind: "managed", ...managedTarget} : boundConversation
@@ -1808,7 +1809,8 @@ function PersonalGoalHome({
     const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
       runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
     return reconcileConversationHistory(previous, messages,
-      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label));
+      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
+      boundConversation?.sessionId);
   };
   useEffect(() => {
     if (!conversationHistory.history) return;
@@ -1819,13 +1821,16 @@ function PersonalGoalHome({
     });
   }, [conversationHistory.history, contextId, selectedAgent.label, runtimeAgents]);
 
+  // Switching steward views keeps the same conversation. A Goal's overview
+  // still cannot initiate recovery for a conversation that was not opened.
+  const mayRecoverConversation = !selectedGoal || selectedView === "chat";
   useEffect(() => {
     if (readOnly || appEntryBlocked) return;
     if (!selectedAgent.available) return;
     if (!conversationHistory.connectionKey || !conversationHistory.history) return;
     // Browsing a Goal (including palette navigation) must not create/resume
     // a session. Explicit Chat entry or sending through the composer owns that.
-    if (selectedGoal && selectedView !== "chat") return;
+    if (!mayRecoverConversation) return;
     const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
@@ -2098,7 +2103,7 @@ function PersonalGoalHome({
       retireRecoveryObservation?.();
       window.clearTimeout(handoffRetryTimer);
     };
-  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, appEntryBlocked, selectedView, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
+  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, appEntryBlocked, mayRecoverConversation, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   // The projection deliberately outlives the mounted view. Its caller may be
   // running for a Goal the owner has already left, and the recovery stream's
@@ -3106,7 +3111,7 @@ function PersonalGoalHome({
         observedConversationRunning={observedConversationRunning}
         workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
           onOpenOriginal: onOpenOriginalConversation,
-          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
+          entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, ownerLoginUnavailable: appEntry.ownerLoginUnavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
         agents={(fixedSession ? [selectedAgent] : agentOptions).map((agent) => ({
           adapterKind: agent.adapterKind,
           agentId: agent.agentId,
@@ -3356,7 +3361,7 @@ function PersonalGoalHome({
           onSelectAgent: (agentId) => { onClearMessageFocus?.(); return chooseAgent(agentId); },
           onSelectAgentModel: chooseAgentModel,
           onSelectAgentReasoningEffort: chooseAgentReasoningEffort,
-          onSelectGoal: (goalId, view) => onSelectGoal(goalId ?? "", view),
+          onSelectGoal: (goalId, view, managedSession) => onSelectGoal(goalId ?? "", view, managedSession),
           onSelectView,
           onSelectWorkAgent,
           onSelectWorkSession,
@@ -3920,12 +3925,12 @@ export function DashboardPage() {
     }
   }, [search.goalId, isLoading, progress, source]);
 
-  function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
+  function selectGoal(goalId: string, view?: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) {
     void navigate({
       hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
       search: (current) => {
         const currentSearch = current as Partial<typeof search>;
-        const keepResearch = Boolean(currentSearch.research_goal) || currentSearch.goalId === goalId;
+        const keepResearch = (currentSearch.research_goal ?? currentSearch.goalId) === goalId;
         return ({
           ...current,
           ...(keepResearch ? {} : clearedResearchSearch),
@@ -3934,7 +3939,7 @@ export function DashboardPage() {
           conversationBinding: undefined,
           conversationSession: undefined,
           messageSession: undefined, message: undefined,
-          workAgent: undefined, workSession: undefined,
+          workAgent: managedSession?.agentId, workSession: managedSession ? `managed:${managedSession.sessionId}` : undefined,
           todo: undefined,
           view: view === "chat" ? "conversation" : view,
         });

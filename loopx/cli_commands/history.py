@@ -246,6 +246,9 @@ def handle_history_command(
             limit=max(0, args.limit),
             agent_lane_id=args.agent_id,
             scoped_agent_id=args.agent_id,
+            # This display shows what remains readable and reports the quota as
+            # unreadable; no projection or export is built from it.
+            tolerate_undecodable=True,
         )
         if args.agent_id:
             # Scope every row-bearing history surface, including retained

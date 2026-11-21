@@ -1,5 +1,4 @@
 /** Compact Explore read model. Existing Graph/Harness owners retain all gates. */
-import {isDeepStrictEqual} from "node:util";
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -7,90 +6,14 @@ import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringA
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
-import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreInTurnFeedbackGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
+import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreInTurnFeedbackGuidance,
+  exploreResultWritebackAffordance, exploreTurnContextBoundary, resultWritebackFields} from "./explore_context_delivery.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
-import {projectWorkMeasurementFacts, projectWorkYardstickCue, workYardstickTodos, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback, type ExploreMeasurementPoint} from "./explore_measurements.ts";
 import {evaluateMethodologyActivation, projectBoundedMethodologyItems} from "./stage_methodology_operator.ts";
 
-/** Reusable evidence and instructions in this owner's read model. Current
- * selection, eligibility, source revisions and pagination stay outside this
- * split. Exact array edits retain every change, including its status,
- * provenance and applicability; no timestamp or revision is normalized away. */
-export function exploreReusableContextPaths(content: JsonObject = {}): (string | number)[][] {
-  return [
-    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback", "work_measurements", "work_yardsticks", "work_yardstick_capture",
-      "path_delta_attachment_template", "linked_question_attachment_template",
-      "optional_question_evolution_example", "optional_execution_observation_example", "result_writeback_guidance",
-      "result_attachment_template", "optional_measurement_example", "measurement_guidance",
-      "record_node_template", "record_finding_template", "guidance",
-      "result_writeback_option", "result_writeback_inline_option", "result_writeback_inline_field",
-      "result_attachment_schema", "path_delta_attachment_schema"].map(key => ["graph", key]),
-    ["harness", "guidance"], ["harness", "link_evidence_template"],
-    // The branch's identity, selection, status and resume facts stay fresh.
-    // Its evidence audit is a read model, not an eligibility or execution grant.
-    ...["selected_branches", "comparison_candidates", "rejected_candidates", "frontier"].flatMap(lane => {
-      const branches = (content.harness as JsonObject | undefined)?.[lane];
-      return Array.isArray(branches) ? branches.flatMap((branch, index) =>
-        branch !== null && typeof branch === "object" && !Array.isArray(branch)
-          && typeof branch.todo_id === "string" && branch.todo_id
-          ? [["harness", lane, index, "typed_evidence_audit"]] : []) : [];
-    }),
-  ];
-}
-
-/** The same authoring projection is used inline and by the captured writer. */
-function resultWritebackFields(writeback: JsonObject): JsonObject {
-  return {
-      result_writeback_option: writeback.option,
-      result_writeback_inline_option: writeback.inline_option,
-      result_writeback_inline_field: writeback.inline_field,
-      result_attachment_schema: writeback.attachment_schema,
-      path_delta_attachment_schema: writeback.path_delta_attachment_schema,
-      path_delta_attachment_template: writeback.path_delta_attachment_template,
-      linked_question_attachment_template: writeback.linked_question_attachment_template,
-      optional_question_evolution_example: writeback.optional_question_evolution_example,
-      optional_execution_observation_example: writeback.optional_execution_observation_example,
-      result_writeback_guidance: writeback.guidance,
-      result_attachment_template: writeback.attachment_template,
-      optional_measurement_example: writeback.optional_measurement_example,
-  };
-}
-
-/** Reference only exact, recognized authoring already delivered by the captured
- * settlement plan. Unknown/custom guidance stays inline: no prose classification
- * or migration of old obligations to a later phase. Evidence and paging stay put.
- */
-function withoutCurrentResultWriteback(content: JsonObject, attachment: JsonObject): JsonObject | null {
-  const rawGraph = content.graph;
-  if (content.ok !== true || content.graph_enabled !== true || !rawGraph || typeof rawGraph !== "object" || Array.isArray(rawGraph) ||
-      attachment.capability_id !== "explore" || attachment.guidance !== exploreResultWritebackAffordance().guidance) return null;
-  const graph = requireJsonObject(rawGraph, "Explore graph");
-  const fields = resultWritebackFields(attachment);
-  if (Object.entries(fields).some(([key, value]) => value === undefined || !isDeepStrictEqual(graph[key], value))) return null;
-  const retained = {...graph};
-  for (const key of Object.keys(fields)) delete retained[key];
-  return retained;
-}
-
-export function referenceExploreResultWriteback(content: JsonObject, attachment: JsonObject, read: string): JsonObject {
-  const retained = withoutCurrentResultWriteback(content, attachment);
-  return retained === null ? content : {...content, graph: {...retained,
-    result_writeback_guidance: exploreBeforeWorkGuidance(), result_writeback_read: read}};
-}
-
-/** A pure replan has no admitted Todo for refresh-state's result attachment.
- * Preserve evidence collection obligations and the independent graph commands;
- * do not advertise unusable authoring or invent a later attachment authority.
- * The caller must establish the autonomous settlement binding first.
- */
-export function omitUnboundExploreResultWriteback(content: JsonObject): JsonObject {
-  const retained = withoutCurrentResultWriteback(content, exploreResultWritebackAffordance());
-  return retained === null ? content : {...content, graph: {...retained,
-    result_writeback_guidance: exploreBeforeWorkGuidance() +
-      " The refresh-state Explore attachment requires an admitted Todo and is unavailable for this pure replan. " +
-      "The independent graph record commands remain available for reusable evidence."}};
-}
+type YardstickProjection = Pick<typeof import("../work_items/yardstick_decision.ts"),
+  "projectWorkMeasurementFacts" | "projectWorkYardstickCue" | "workYardstickTodos" | "WORK_YARDSTICK_DECISION_SCHEMA">;
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -170,14 +93,18 @@ function prioritizeLinkedResults(results: JsonObject[], refs: Set<string>, fallb
   return [...counterexamples, ...linked.filter(row => !reserved.has(row)),
     ...fallbackResults.filter(row => !refs.has(String(row.node_id ?? "")))];
 }
-export function projectExploreTurnContext(params: JsonObject): JsonObject {
+export function projectExploreTurnContext(params: JsonObject, yardstick?: YardstickProjection): JsonObject {
   const goal = requireNonEmptyString(params.goal_id, "goal_id");
   const agent = requireNonEmptyString(params.agent_id, "agent_id");
   const route = requireStringArray(params.route, "route");
   const gate = requireJsonObject(params.harness_gate, "harness_gate");
   const graph = evaluateMethodologyActivation({enabled: params.graph_enabled}).active;
   const harness = evaluateMethodologyActivation({enabled: gate.enabled}).active;
-  const yardstickEnabled = evaluateMethodologyActivation({enabled: params.yardstick_enabled}).active;
+  const yardstickEnabled = graph && evaluateMethodologyActivation({enabled: params.yardstick_enabled}).active;
+  const evaluation = yardstickEnabled ? yardstick : undefined;
+  if (yardstickEnabled && !evaluation) {
+    throw new EffectRuntimeRequestError("The selected Yardstick projection is unavailable");
+  }
   let todoId: string | null = null;
   let focusedRefs = new Set<string>();
   if ((graph || harness) && params.todo_id != null) {
@@ -315,7 +242,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       try {
         const replay = projectExploreTurnContext({...params, todo_id: page.todo_id,
           focus_todo: matches[0], review_pages: undefined, result_offset: page.offset,
-          result_limit: page.limit, result_revision: page.revision});
+          result_limit: page.limit, result_revision: page.revision}, evaluation);
         const found = (replay.graph as JsonObject).writeback_results as JsonObject[];
         const choices = replay.harness as JsonObject | null;
         return [{...page, finding_refs: found.map(row => row.finding_id),
@@ -347,24 +274,24 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     ...(resultNode == null ? [] : ["--result-node", resultNode]),
   ) : null;
   const writeback = exploreResultWritebackAffordance();
-  const workTodos = workYardstickTodos({...params, todo_id: todoId});
-  const currentWorkCues = workTodos.map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
+  const workTodos = evaluation?.workYardstickTodos({...params, todo_id: todoId}) ?? [];
+  const currentWorkCues = evaluation ? workTodos.map(todo => evaluation.projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
       findings: findings.filter(row => (todo.explore_result_node_refs as unknown[] ?? []).includes(row.node_id)),
       cited_sources: params.yardstick_sources,
       measurement_feedback: measurementFeedback}))
-    .filter((cue): cue is JsonObject => cue !== null);
+    .filter((cue): cue is JsonObject => cue !== null) : [];
   const workCues = currentWorkCues.filter(cue => resultNode === null || cue.node_id === resultNode);
   // A first decision may use measurements recorded before any Yardstick
   // declaration. Reuse exact-profile feedback through canonical question links;
   // those links do not establish which Todo executed a shared finding.
-  const workMeasurements = workTodos.flatMap(todo => {
+  const workMeasurements = evaluation ? workTodos.flatMap(todo => {
     if (todo.status !== "open" || currentWorkCues.some(cue => (cue.binding as JsonObject).todo_id === todo.todo_id)) return [];
     const linked = new Set(requireStringArray(todo.explore_result_node_refs ?? [], "Explore task question refs"));
     const available = measurementFeedback.filter(row => linked.has(row.node_id));
-    const facts = projectWorkMeasurementFacts(String(todo.todo_id), available,
+    const facts = evaluation.projectWorkMeasurementFacts(String(todo.todo_id), available,
       command("turn-context", "--agent-id", agent, "--todo-id", String(todo.todo_id), "--result-limit", "20"));
     return facts ? [facts] : [];
-  });
+  }) : [];
   const boundedWorkMeasurements = projectBoundedMethodologyItems(workMeasurements, 3);
   const boundedWorkCues = projectBoundedMethodologyItems(workCues, 3);
   const boundedRecentNodes = projectBoundedMethodologyItems(nodes, 3);
@@ -378,10 +305,10 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     ...(reviewPages ? {review_pages: reviewPages} : {}),
     graph: graph ? {
       counts: projection.counts ?? {},
-      ...(yardstickEnabled ? {
-        work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
+      ...(evaluation ? {
+        work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: evaluation.WORK_YARDSTICK_DECISION_SCHEMA,
           guidance: "Before a proxy would discard a viable candidate or redirect work, check agreement with the accepted outcome in this scope. When agreement is unknown or the signals disagree, use one bounded accepted-outcome comparison if available within the existing constraints. At a meaningful target, yardstick or method change, optionally record that decision and its counterevidence in the same Todo's Explore result. Cite its prior_finding_id (null initially); omit the attachment when the decision is unchanged. Read the task-scoped Explore context for the template and omitted decisions." + (todoId === null ? "" : " " + exploreInTurnFeedbackGuidance()),
-          template: {schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
+          template: {schema_version: evaluation.WORK_YARDSTICK_DECISION_SCHEMA,
             target: {summary: "", scope: "", acceptance_ref: ""},
             authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},
             proxy: null, counterevidence_refs: [], next_action: {method_id: "", reason: "", cost_bound: ""}, prior_finding_id: null}},
@@ -473,7 +400,6 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       link_evidence_template: [...route, "todo", "update", "--goal-id", goal, "--agent-id", agent, "--todo-id", "<todo-id>", "--explore-result-node-ref", "<node-id>"],
       guidance: "Before choosing an experiment, compare its question with linked findings and the active frontier. Explain which evidence supports changing or retaining the route, and what the next probe can distinguish. Refutation is scoped evidence, not a permanent ban: a retry can test changed conditions or uncertainty. Link relevant existing nodes to the Todo; missing links mean unknown evidence, not a clean route. With one candidate or no active frontier, form useful alternatives only when evidence warrants them. Record results on the same hypothesis and adopt the decision through the ordinary task step or successor. These are decision guidelines, not a new writeback gate or permission to spawn. Read the full planner/summary when this bounded view is insufficient; normal quota, claim and lease admission still applies.",
     } : null,
-    boundary: {read_only: true, changes_configuration: false, writes_evidence: false,
-      claims_todos: false, starts_agents: false, changes_quota: false},
+    boundary: exploreTurnContextBoundary(),
   };
 }

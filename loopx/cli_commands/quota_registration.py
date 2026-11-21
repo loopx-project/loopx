@@ -13,6 +13,28 @@ from .quota_request import (
 )
 
 
+def normalize_context_list_args(argv: list[str]) -> list[str]:
+    """Translate only an explicit JSON pointer after the existing flag."""
+    normalized = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            normalized.extend(argv[index:])
+            break
+        if arg.startswith("--list="):
+            normalized.extend(("--list", "--select=" + arg.removeprefix("--list=")))
+        else:
+            normalized.append(arg)
+            if arg == "--list" and index + 1 < len(argv):
+                pointer = argv[index + 1]
+                if pointer == "" or pointer.startswith("/"):
+                    normalized.append("--select=" + pointer)
+                    index += 1
+        index += 1
+    return normalized
+
+
 def register_quota_command(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
@@ -27,6 +49,7 @@ def register_quota_command(
             "status",
             "plan",
             "should-run",
+            "receipt",
             "context-read",
             "context-project",
             "context-hook",
@@ -40,7 +63,7 @@ def register_quota_command(
             "void-slot",
         ],
         default="status",
-        help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
+        help="Use status for all groups, plan for next-turn groups, should-run for one goal, receipt to read one exact committed guard without admission, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
     quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view.")
@@ -198,13 +221,13 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Select the complete v1 work contract for quota should-run. "
+            "Context and Delta delivery remain independent."
         ),
     )
     turn_view.add_argument("--complete-turn", action="store_true",
-        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
-             "The legacy --turn-envelope and unselected output keep their existing versions. Context/Delta delivery remain independent.")
+        help="Select the complete v1 work contract for JSON quota should-run "
+             "and its shared exact-Turn settlement. Context and Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",
@@ -230,6 +253,7 @@ def register_quota_command(
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
     quota_parser.add_argument("--prepared-capture-reference", action="store_true", help=argparse.SUPPRESS)
+    quota_parser.add_argument("--prepared-claim-operation-id", help=argparse.SUPPRESS)
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
@@ -249,7 +273,8 @@ def register_quota_command(
         help="Existing private native context root, with independent journals per native session. "
              "Use for shared Codex App hook configuration; cannot combine with --codex-context-dir. "
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
-    quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
+    quota_parser.add_argument("--capture-sha256",
+        help="For context-read, context-project or replan-view: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--initial-read", action="store_true",
         help="For JSON context-read or enabled context-project: read current controls, task text and source navigation from a recognized capture. "
              "Detailed criteria and operation contracts remain required before dependent work. Start at offset zero; follow next_command for continuation.")
@@ -257,7 +282,8 @@ def register_quota_command(
         help="For context-read or enabled native JSON context-project: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
              "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
     quota_parser.add_argument("--list", dest="list_fields", action="store_true",
-        help="For context-read: list immediate fields at the selected pointers (root by default), "
+        help="For context-read: list immediate fields at the selected pointers (root by default). "
+             "An optional exact JSON pointer is shorthand for --list --select POINTER; repeat to list related parents, "
              "with exact pointers, types and sizes. Does not read bodies or establish a delta baseline.")
     quota_parser.add_argument("--list-depth", type=int,
         help="For context-read --list: expand 1 to 8 levels in one index (default: 1). "
@@ -279,7 +305,7 @@ def register_quota_command(
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(
-            "Stable heartbeat settlement id for `quota should-run`, "
+            "Stable heartbeat settlement id for `quota should-run`, `quota receipt`, "
             "`quota monitor-poll`, scheduler ACK/failure follow-ups, and "
             "`quota spend-slot`. The guard persists one idempotent receipt; "
             "reuse the same id through monitor writeback, scheduler handoff, "
@@ -320,6 +346,14 @@ def register_quota_command(
         choices=sorted(VALID_SLOT_SPEND_SOURCES),
         default=DEFAULT_SLOT_SPEND_SOURCE,
         help="Source label for `quota spend-slot`.",
+    )
+    quota_parser.add_argument(
+        "--delivery-workspace-path",
+        help=(
+            "Local git worktree that produced this accountable delivery for "
+            "`quota spend-slot`. Use when spend-slot runs outside the worktree; "
+            "the local path is validated but is not persisted."
+        ),
     )
     quota_parser.add_argument(
         "--void-generated-at",

@@ -108,6 +108,24 @@ an answer needs Goal status, the executor uses `loopx_manager_read` with
 Native execution, observations and prompt-only endpoints keep their existing
 evidence preparation.
 
+Agent discovery without a `source_id` treats local and authorized SSH sources
+equally. The reader fans out a bounded batch only when called, and interleaves
+source-qualified rows so a large local registry cannot hide a remote project.
+It preserves each source's read quality and `next_reads` for remaining pages,
+failures or sources beyond the batch; a scoped continuation does not reread other
+hosts. Explicit `source_id=local` and Goal-scoped conversations retain local-only
+reads. The initial local preview is not evidence that the subject belongs locally.
+Registration search does not cover requirements: browse responsibilities and
+read relevant Todos when a shorthand has no match. Todo `query` searches permitted
+full text before paging; exact Todo reads recover excerpted decision terms.
+Older source CLIs that cannot apply this query return a compatibility gap, not
+an apparently empty or unfiltered search. All existing audience grants remain.
+
+Legacy bound steward sessions without a stored executor allocation adopt explicit
+machine model/effort choices at the next idle boundary. Unset fields retain their
+observed settings; this repair does not change endpoints, interrupt an active
+Turn, discard history or affect worker configuration.
+
 The manager channel's model and reasoning effort follow its executor. On the
 interactive CLI endpoint the defaults are `gpt-6.1-sol` with `xhigh` reasoning; on
 the managed host they are the managed execution profile

@@ -68,7 +68,11 @@ def claim_cli(tmp_path, monkeypatch, request):
 
     def snapshot():
         readback = run([*prefix, "todo", "list", "--goal-id", GOAL])
-        return readback["todos"], readback.get("provider_revision"), state.read_bytes() if state.exists() else None
+        return (
+            readback["todos"],
+            readback["authority_read"]["provider_revision"],
+            state.read_bytes() if state.exists() else None,
+        )
 
     yield provider, run, snapshot, prefix, claim, lease, project, state
     subprocess.run(
@@ -78,12 +82,17 @@ def claim_cli(tmp_path, monkeypatch, request):
     )
 
 
-def test_one_packet_repairs_all_grammar_errors_and_preserves_route(claim_cli):
-    provider, run, snapshot, prefix, claim, lease, project, state = claim_cli
+@pytest.mark.parametrize("thin", [False, True])
+def test_one_packet_repairs_all_grammar_errors_and_preserves_route(claim_cli, thin):
+    _, run, snapshot, prefix, claim, lease, project, state = claim_cli
     before = snapshot()
+    # An operation ID that starts with a dash is valid in the joined CLI form.
+    operation = "--original-claim" if thin else lease[1]
+    operation_args = [f"--claim-operation-id={operation}"] if thin else lease[:2]
     rejected = run([
-        *prefix, *claim, *lease, "--turn-instance-id", "unrelated-turn", "--note", "not a claim field",
-        "--project", str(project), "--state-file", str(state), "--role", "agent", "--dry-run",
+        *prefix, *claim, *operation_args, *lease[2:], "--turn-instance-id", "unrelated-turn",
+        "--note", "not a claim field", "--project", str(project), "--state-file", str(state),
+        "--role", "agent", "--dry-run", *(["--thin"] if thin else []),
     ], expected_exit=1)
     assert snapshot() == before
     assert rejected["error_code"] == "todo_claim_invalid_arguments"
@@ -101,21 +110,45 @@ def test_one_packet_repairs_all_grammar_errors_and_preserves_route(claim_cli):
     ):
         assert repaired[repaired.index(flag) + 1] == value
     assert "--dry-run" in repaired
-    if lease:
-        for flag, value in zip(lease[::2], lease[1::2]):
-            assert repaired[repaired.index(flag) + 1] == value
+    assert repaired.count("--thin") == int(thin)
+    for flag, value in zip(lease[2::2], lease[3::2]):
+        assert repaired[repaired.index(flag) + 1] == value
+    receipt_args = [*prefix, "todo", "receipt", "--goal-id", GOAL, f"--operation-id={operation}"]
     preview = run([*repaired, "--claimed-by", "peer-a"])
     assert preview["ok"] is True
     assert snapshot() == before
+    assert run(receipt_args)["status"] == "missing"
     repaired.remove("--dry-run")
     applied = run([*repaired, "--claimed-by", "peer-a"])
     assert applied["ok"] is True
-    assert snapshot()[0][0]["claimed_by"] == "peer-a"
+    after = snapshot()
+    assert after[0][0]["claimed_by"] == "peer-a"
     assert applied["lease"]["version"] == 1
     assert applied["lease"]["write_scopes"] == ["src/**"]
+    receipt = run(receipt_args)
+    assert receipt["status"] == "found"
+    assert receipt["operation_id"] == operation
     replay = run([*repaired, "--claimed-by", "peer-a"])
     assert replay["status"] == "replayed"
     assert replay["changed"] is False
+    assert snapshot() == after
+    assert run(receipt_args) == receipt
+
+
+def test_repair_retains_empty_claim_operation_id_for_authority_rejection(claim_cli):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    before = snapshot()
+    ordinary = [*prefix, *claim, "--claimed-by", "peer-a", "--claim-operation-id", ""]
+    direct = run(ordinary, expected_exit=1)
+    assert "operation id must be a non-empty trimmed string" in direct["error"]
+    rejected = run([*ordinary, "--note", "invalid"], expected_exit=1)
+    assert rejected["error_code"] == "todo_claim_invalid_arguments"
+    repaired = rejected["recovery"]["cli_args"]
+    assert repaired[repaired.index("--claim-operation-id") + 1] == ""
+    retried = run(repaired, expected_exit=1)
+    assert retried["error_code"] == direct["error_code"]
+    assert retried["error"] == direct["error"]
+    assert snapshot() == before
 
 
 def test_syntax_repair_does_not_authorize_a_different_executor(claim_cli):
@@ -289,22 +322,24 @@ def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, sel
     _, run, snapshot, prefix, claim, _, _, _ = claim_cli
     program, execute = selected_runtime
     before = snapshot()
-    rejected = run(["--cli-bin", program, *prefix, *claim, "--note", "invalid"], expected_exit=1)
+    operation_id = "--selected-runtime-claim"
+    reference = f"--claim-operation-id={operation_id}"
+    rejected = run([
+        "--cli-bin", program, *prefix, *claim, reference, "--thin", "--note", "invalid",
+    ], expected_exit=1)
     assert snapshot() == before
     recovery = rejected["recovery"]
     assert recovery["requires_flags"] == ["--claimed-by"]
     assert recovery["remove_flags"] == ["--note"]
     assert shlex.split(recovery["command"]) == [program, "--cli-bin", program, "todo", "claim"]
-    repaired = [program, *recovery["cli_args"], "--claimed-by", "peer-a",
-                "--claim-operation-id", "selected-runtime-claim"]
+    repaired = [program, *recovery["cli_args"], "--claimed-by", "peer-a"]
     accepted = execute(repaired)
     assert accepted["execution_managed"] is True
+    assert accepted["claim_operation_id"] == operation_id
     from loopx.control_plane.todos.markdown import render_todo_markdown
     assert all(action in render_todo_markdown(accepted) for action in accepted["next_cli_actions"])
     actions = [shlex.split(action) for action in accepted["next_cli_actions"]]
     assert all(argv[:3] == [program, "--cli-bin", program] for argv in actions)
-    assert all(argv[argv.index("--claim-operation-id") + 1] == "selected-runtime-claim"
-               for argv in actions)
     progress = [{"<progress-operation-id>": "selected-runtime-progress", "<progress>": "Validation passed"}
                 .get(part, part) for part in actions[0]]
     claimed = snapshot()
@@ -323,6 +358,7 @@ def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, sel
     assert completed[0][0]["status"] == "done"
     assert execute(complete)["ok"] is True
     assert snapshot() == completed
+    assert all(reference in argv for argv in actions)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable alias and PATH fixture")

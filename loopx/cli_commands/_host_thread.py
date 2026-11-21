@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 
+from ..agy_goal_mode import ANTIGRAVITY_CONVERSATION_ID_ENV
 from ..kiro_cli_goal_mode import KIRO_CLI_AGENT_TYPE, KIRO_CLI_SESSION_ID_ENV
 
 # Host surface -> the environment variable that host exports for its own
@@ -16,6 +17,9 @@ HOST_THREAD_ID_ENV: dict[str, str] = {
     "codex-ide-plugin": "CODEX_THREAD_ID",
     "codex-cli-tui": "CODEX_THREAD_ID",
     "trae_app": "TRAECLI_THREAD_ID",
+    "traex-cli": "TRAECLI_THREAD_ID",
+    "antigravity-app": ANTIGRAVITY_CONVERSATION_ID_ENV,
+    "agy": ANTIGRAVITY_CONVERSATION_ID_ENV,
     KIRO_CLI_AGENT_TYPE: KIRO_CLI_SESSION_ID_ENV,
 }
 

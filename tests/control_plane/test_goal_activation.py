@@ -385,6 +385,60 @@ def test_stop_and_resume_sync_source_global_and_quota(
     assert resumed_quota["allowed_slots"] == 4
 
 
+def test_controller_transitions_retain_legacy_owner_resume(
+    connected_registries: tuple[Path, Path],
+) -> None:
+    source_registry, global_registry = connected_registries
+    prior_resume = "2026-06-01T12:00:00Z"
+    source = load_registry(source_registry)
+    registry_goals(source)[0]["activation"] = {
+        "schema_version": "loopx_goal_activation_v1", "state": "active",
+        "updated_at": prior_resume, "reason": "Resumed by owner", "actor_kind": "owner",
+    }
+    _write_json(source_registry, source)
+    for state in ("stopped", "active"):
+        result = set_goal_activation_state(
+            registry_path=global_registry, goal_id="goal-one", state=state,
+            actor_kind="controller", execute=True,
+        )
+        assert result["ok"] and result["written"] and result["readback"]["verified"], result
+        assert _goal(source_registry)["activation"]["owner_resume_id"] == prior_resume
+        assert _goal(global_registry)["activation"]["owner_resume_id"] == prior_resume
+
+
+def test_explicit_owner_resume_advances_epoch_while_goal_is_already_active(
+    connected_registries: tuple[Path, Path],
+) -> None:
+    source_registry, global_registry = connected_registries
+    first = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="active",
+        actor_kind="owner",
+        owner_resume_action=True,
+        execute=True,
+    )
+    first_resume = _goal(source_registry)["activation"]["owner_resume_id"]
+    assert first["ok"] is True
+    assert first["changed"] is False
+    assert first["written"] is True
+    assert first["owner_resume_advanced"] is True
+    assert _goal(global_registry)["activation"]["owner_resume_id"] == first_resume
+
+    second = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="goal-one",
+        state="active",
+        actor_kind="owner",
+        owner_resume_action=True,
+        execute=True,
+    )
+    second_resume = _goal(source_registry)["activation"]["owner_resume_id"]
+    assert second["ok"] is True and second["readback"]["verified"] is True
+    assert second_resume != first_resume
+    assert _goal(global_registry)["activation"]["owner_resume_id"] == second_resume
+
+
 def test_activation_and_agent_registration_share_source_to_global_lock_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -510,7 +564,7 @@ def test_stopped_goal_and_zero_compute_keep_distinct_resume_authority() -> None:
     assert stopped["automation_liveness"]["automation_action"] == "stop_goal_stopped"
     assert stopped["scheduler_hint"]["reason_code"] == "goal_stopped"
     assert (
-        stopped["scheduler_hint"]["codex_app"]["resume_trigger"]
+        stopped["scheduler_hint"]["app_automation"]["resume_trigger"]
         == "explicit Goal lifecycle resume"
     )
 

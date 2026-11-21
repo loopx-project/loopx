@@ -12,10 +12,10 @@ repo_root_text = str(REPO_ROOT)
 if sys.path[0] != repo_root_text:
     sys.path.insert(0, repo_root_text)
 
-from loopx.control_plane.testing.release_commit_qualification import (
+from loopx.control_plane.testing.release_commit_qualification import (  # noqa: E402
     collect_release_source_identity,
 )
-from loopx.control_plane.testing.scoped_gate_successor_tool_behavior import (
+from loopx.control_plane.testing.scoped_gate_successor_tool_behavior import (  # noqa: E402
     DoubaoScopedGateSuccessorToolBehaviorActor,
 )
 

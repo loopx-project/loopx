@@ -19,6 +19,8 @@ export interface TrajectoryInput {
   /** Explicit curator binding to a complete source-bound native capture.
    * Context constrains interpretation without widening episode evidence. */
   native_outcomes_source_id?: string;
+  /** Explicit human-observation capture; omitted historical inputs remain unchanged. */
+  human_attention_source_id?: string;
   /** Trusted curator's complete Explore history capture, already in sources.
    * Omission keeps the existing assessment contract and identity unchanged. */
   display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string;
@@ -117,7 +119,7 @@ export type TrajectoryLoopXRequests = {method: 'codex_ordered_loopx_requests_v1'
     tokens: TrajectoryRequestTokens;
     /** Unknown when no requests are recognized and any calls are unclassified or unmatched. */
     input_fraction: number | null; uncached_input_fraction: number | null;
-    /** Neither ordered tool records nor token receipts measure generation latency or money. */
+
     model_seconds: null; charged_cost: null;
     requests: Array<{response_id: string; turn_id: string; line: number; call_lines: number[];
       operations: string[]; other_calls: number; tokens: TrajectoryRequestTokens}>}

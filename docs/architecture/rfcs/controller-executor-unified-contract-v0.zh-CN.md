@@ -2,13 +2,13 @@
 
 <a id="rfccontroller--executor-会话与统一受治理工作契约v0"></a>
 
-- **RFC 状态：** 已接受，适用于既有契约。Router 与绑定单元扩展待评审。
+- **RFC 状态：** 已接受，适用于既有契约。Router、绑定单元及会话发现/共享环境扩展待评审。
 - **替代 / 关闭：** 无
 - **交付成熟度：** 单 Worker 的 EdgeBench 入口已合入。#8484 在 C1 上验收通用双角色 Turn；跨准入延续、多题效果与成本、对话产品接入待验证。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-11-10
-- **源码版本：** main `9508f4de93`、C1 `9d283862e3`。§11 区分实现 PR 的实测、原始对照及待验收边界。
+- **最近规范性修订：** 2026-11-17
+- **源码版本：** main `f15ebdd16b`（§4–10 基线 `9508f4de93`，C1 `9d283862e3`）。§11 区分实现 PR 的实测、原始对照、减法治理及待验收边界。
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
 
@@ -39,17 +39,20 @@ flowchart TB
   R <-->|路由 / 请求的 typed 操作| K[既有 Core owners 与所选 AuthorityStore]
   C1 <-->|工作准入 / 原身份结算| K
   C2 <--> K
-  W1 --> H1[受限 Host 工具]
-  W2 --> H2[受限 Host 工具]
+  C1 --> H1[同单元工作区 / 受限普通工具]
+  W1 --> H1
+  C2 --> H2[同单元工作区 / 受限普通工具]
+  W2 --> H2
 ```
 
 | 你要了解什么 | 阅读入口 |
 | --- | --- |
 | 为什么这样拆、当前差距 | 第 1–4 节；[最新源码核对](#current-delivery-audit) |
 | 三层关系与一个 Agent 的身份 | [系统图](#system-topology)、[绑定单元](#agent-binding-unit) |
+| Controller 如何了解 worker、在哪里读写 | [会话发现与证据读取](#worker-session-discovery)、[共享工作环境与读写](#shared-workspace-and-tools) |
 | 没有用户新消息时，工作怎么持续推进 | [执行主循环](#controller-worker-main-loop) |
 | 干活时怎么交流、停止、恢复 | [异步时序](#asynchronous-control)、[注意力与插队](#controller-attention-and-preemption)、[故障隔离](#router-failure-recovery) |
-| 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、第 8–11 节 |
+| 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、[减法门禁](#subtraction-gate)、第 8–11 节 |
 | C1 字段、上下文、wire 与基线细节 | [技术附录](controller-executor-unified-contract-v0/contract-and-context.zh-CN.md) |
 
 中英互为语义镜像。主文维护当前设计；技术附录保留迁移细节，日期 ledger 保留历史证据。
@@ -66,10 +69,12 @@ flowchart TB
 2. 在可选的双会话 profile 中，**controller 模型会话是该单元工作控制与结算的唯一模型客户端，
    也是控制工作的智能中介**。
    它读契约、判断工作、与 executor 沟通并提交显式 typed Core 操作。Core 拥有合法迁移与
-   回执；controller 不是第二个权威。
+   回执；controller 不是第二个权威。它也能在与 worker 相同的工作环境中，按当前授权
+   直接读写项目文件并使用普通宿主工具。
 3. Executor 接收自然语言任务对话、原始材料和普通宿主工具，返回发现、产物、证据与问题。
    它不消费第二份 Core packet 视图，不编写 quota、Vision、lease 或 settlement 字段。
-   任务正文之外的小型机器载体负责记录路由与因果关系。
+   任务正文之外的小型机器载体负责记录路由与因果关系。Controller 可发现并按需检查
+   本单元 worker 的会话与工作证据；当前活动来自宿主观察，历史索引只补充历史。
 4. 先保存完整上下文，再组合两个独立交付层：**跨 Host 默认 Progressive**，以及
    **仅在已资格化 Host 自动使用 Delta**。未读材料仍可从当前 capture 发现。
    Controller 与 executor 分别证明连续性，不能借用对方的基线；完整恢复始终可用。
@@ -178,15 +183,29 @@ Router 只汇总获授权的结果，不能因此读取所有单元的私有会�
 
 | 角色 / owner | 负责的判断与行为 | 不承担的职责 |
 | --- | --- | --- |
-| Router（管家） | 理解用户意图，发现有上下文和能力的单元，选择复用/创建的提议，传递修订，汇总结果及跨任务取舍 | 不逐工具指挥 worker，不替接收方认领/验收，不复制各 Goal 的任务库与预算 |
-| Controller（单元内） | 结合 Goal、planning horizon 与证据选择工作，维护任务连续性，与用户/router 交互，判断纠偏与验收并调用 Core | 不成为第二权威，不用自己的聊天笔记代替工作状态；不必为每个工具步骤审批 |
-| Worker（单元内） | 在已准入范围内自主使用工具、实验、产出及报告证据/问题 | 不消费 Core packet，不编造结算，不直接持有 Core 写权限 |
-| Core + 受管执行 + Host adapter | 既有 typed 规则、持久化、身份、派发、观察、停止和恢复 | 不从自然语言猜权限/完成，不替模型决定领域方案 |
+| Router（管家） | 理解用户意图，发现有上下文和能力的单元，选择复用/创建的提议，传递作用域受限的 `collaboration_brief_v0` 契约，持久化有界 `remaining_work` 与类型化 `resume_when` 接续谓词，汇总结果并无轮询地闭合原路异步 inbox | 不逐工具指挥 worker，不执行轮询循环，不替接收方认领/验收，不复制各 Goal 的任务库与预算 |
+| Controller（单元内） | 结合 Goal、planning horizon 与证据选择工作，提出或消费向上自适应步幅与受回执门控上下文策略建议（`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`），维护任务连续性，发现并检查 worker 会话，在共享工作环境中读写、核验，与用户/router 交互，判断纠偏与验收并调用 Core | 不成为第二个 `AuthorityStore` 写入方，不绕过 CAS/租约围栏，不用自己的聊天笔记代替工作状态，不必为每个工具步骤审批 |
+| Worker（单元内） | 在已准入范围内，于隔离的**沙盒执行器 worktree（sandboxed executor worktree）**中自主使用工具、实验、产出补丁/产物及报告证据/问题 | 不消费 Core packet，不编造结算，不接触隐藏 verifier 或凭据，不直接持有 Core 写权限 |
+| Core（`AuthorityStore` + CAS + 单写者租约）+ Host adapter | `AuthorityStore` 事务、条件版本 `CAS`、单写者 `claim/lease` 围栏、仅一次回执、默认拒绝 ACL、沙盒隔离、观察、停止和恢复的唯一确定性权威 | 不从自然语言猜权限/完成，不在缺少回执时改写在线 KV-cache 前缀，不替模型决定领域方案 |
 
 Router 可以直接回答已有证据足够的简单问题，不必每次创建单元。分配工作优先复用
 当前上下文与授权匹配的 Agent；创建新 Agent 仍沿既有生命周期和资源准入。多个候选
 绑定不明时先消歧，不能按标题相似或“最近在线”抢占。Router 给出的优先级是请求；
 controller 结合本地承诺与依赖评估并返回接受、延后或拒绝及理由，Core 执行合法变更。
+
+每个单元严格分离三个架构平面：
+
+1. **确定性内核（`AuthorityStore` + CAS + 单写者租约归属）：** 在默认拒绝 ACL 与树外确定性
+   验证门禁保护下，唯一持有权威 Goal、Todo、`claim/lease`、代际围栏、`remaining_work` /
+   `resume_when` 与仅一次结算回执。
+2. **沙盒执行器 worktree：** 宿主强制隔离的执行沙盒（带归一化补丁交付与凭据排除的 `linked
+   worktree` / 容器），worker 可在其中自由实验而无 Core 凭据或写权限；沙盒重置或丢失不破坏
+   `AuthorityStore` 持久状态。
+3. **向上自适应步幅与上下文策略决策：** 位于 controller 与 `control_plane/work_items` /
+   `progressive_context.ts` 一侧，用于选择 `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`
+   建议（见[历史工作集策略 §5.1](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)、
+   [联合决策 §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)）；这些建议在
+   Core 验证确定性回执、CAS 前置条件与预算边界前始终仅为建议态。
 
 <a id="agent-binding-unit"></a>
 
@@ -212,6 +231,58 @@ flowchart LR
 把同一 attempt 复制多份。业务 Turn 与原生模型轮次不同：controller 回复三条消息
 不等于扣三次业务 Turn，但这三次模型调用都必须计入成本。团队资源上限不能给每个单元
 各复制一份；router 不新增预算账本。
+
+<a id="worker-session-discovery"></a>
+
+### Controller 的 worker 会话发现与证据读取
+
+Controller 应有类似 [Obelisk 会话证据检索](obelisk-session-evidence-provider-v0.zh-CN.md)
+的发现能力：知道本单元有哪些 worker 会话，当前任务绑定了哪一个，并能按需读取允许
+查看的工作过程。只等待 worker 自报摘要不足以支持检查失败、定位产物和恢复原 attempt。
+这是一项待交付的产品要求，不代表现有 Host 已具备完整能力。
+
+- **先定位，再读取。** 复用现有 session/binding、request/attempt 和 Host observation
+  owner，发现精确 Goal lifetime/Agent 下的 role、native session、generation、原请求
+  revision/Turn/attempt、实际 provider/模型、工作区，以及宿主确实观察到的运行/停止/失败
+  事实。显示来源、观察时间、读取覆盖和继续读取入口；多个绑定、缺失和不可读保留明确
+  不确定性，不以注册、会话名称或最近更新时间推断当前执行者和可执行资格。
+- **按范围检查过程。** 可按任务、会话与事件定位获授权的消息、工具调用/结果、失败、
+  产物及原始材料引用，并读取必要的上下文和分页内容。保留原作者、顺序与版本；摘要
+  不是完整正文，零命中不是没有工作。原始内部推理、无关会话与其他受众的私密内容
+  不因此开放。读取发现不授予 resume、steer、interrupt、写入或接管权限。
+- **当前事实与历史召回分开。** 活跃 attempt 和新鲜状态由当前 Host/Core owner 提供。
+  Obelisk 等可选 provider 仅在独立授权范围内补充已索引的历史证据；默认关闭、同 Agent/
+  项目限制和来源访问校验沿原契约，不因角色绑定而自动继承 archive 权限。缺 provider、
+  索引过期、来源撤销、超时或零命中时明确覆盖缺口；基础会话发现与已授权工作无需等待
+  历史索引。本文不安装或启动索引，也不复制一套会话库。
+
+发现与阅读采用有界索引、按需正文和既有事件续读。记录扫描、索引维护、补读、模型输入
+和延迟成本；不每轮扫描全部历史或向两个会话重复注入 transcript，不预设检索必然省钱。
+
+<a id="shared-workspace-and-tools"></a>
+
+### 同一工作环境中的普通读写能力
+
+Controller 与 worker 应访问**同一个已授权工作环境**：同一项目/工作区、可核验的源码
+revision、工具链/依赖、任务资源及产物命名空间。Controller 也持有范围内的文件读写、
+搜索、测试和普通进程工具，可直接检查原始产物、验证问题并完成有边界的本地工作。
+同一环境不合并两个原生会话的上下文、队列或 continuity baseline。
+
+Host 将实际 cwd/worktree、版本、工具能力和可读写范围绑定到该单元。Controller 写入的
+获准材料应能由 worker 读取，worker 的产物也应能由 controller 按原版本读取。不同路径
+别名、容器或远程 Host 必须证明映射到同一获准资源和依赖；不支持时明确不支持，不能
+静默改用另一份 checkout、复制陈旧产物或把远程环境当成本地。
+
+普通工具共享仍保留角色权限：controller 经既有 typed owner 操作 Core；worker 的 Core
+凭据与写入口继续隔离。两者各用已授权的工具/凭据代理，不复制全部环境变量或凭据，
+不改变认证、provider、连接模式或 protected operation 的确认路径。只读授权、撤权、
+路径越界与受众限制仍由 Host 在实际调用时执行，不能靠“同环境”升级权限。
+
+读写能力不增加第二个未协调的写入方。Controller 可检查正在执行的 worker，并进行
+权限与所有权允许的非冲突操作；重叠文件、进程或 effect 的修改需沿既有 claim/lease、
+request revision 和安全边界协调。需要接续同一业务执行时，先观察并对账原 attempt，
+完成必要的让出/停止与所有权交接，再写入；消息 ACK 不证明原进程已退出。不得覆盖
+worker 未提交改动、重复启动任务或制造另一笔结算。所有普通工具与恢复成本合并计量。
 
 <a id="controller-worker-main-loop"></a>
 
@@ -253,10 +324,13 @@ flowchart TB
 完成，都不等于整个 Goal 结束。真实依赖、用户操作、预算、停止或终态条件仍然有效；
 除此之外，有用且已获授权的工作不应停等用户说“继续”。
 
-这个逻辑循环由事件驱动，不是占住 controller 会话的阻塞等待。派发、观察、待评估结果与
-接续仍由各自既有 owner 持久化；结果或已记录唤醒到达后，由 host/runtime 恢复合格处理，
-不让模型空轮询。恢复时先核对原 attempt 以及未完成决策/effect，再继续，不能为了
-“重启循环”另派一个 worker。
+这个逻辑循环由事件驱动，不是占住 controller 会话的阻塞等待。派发、观察、待评估结果、
+有界 `remaining_work`、类型化 `resume_when` 接续谓词（`todo_done`、`pr_merged`、
+`capacity_available`、`monitor_changed`、`resume_at`）与接续状态均由 Core `AuthorityStore`
+owner 持久化；仅当已验证结果、`collaboration_brief_v0` 回传或满足的 `resume_when`
+触发器到达时，才由 host/runtime 唤醒合格处理，**绝不让管家或 controller 模型保持空轮询循环**，
+并在完成或遇可操作阻塞时将管家异步 inbox 原路闭合回请求方。恢复时先核对原 attempt 以及
+未完成决策/effect，再继续，不能为了“重启循环”另派一个 worker。
 
 处理完用户/router 输入后，**从当前主循环待办重新选择**：可能先评估未读结果、补上反馈、
 派发已合格工作或结算，而不是无条件恢复旧汇报。汇报根据已有证据，在执行并行期间或
@@ -526,9 +600,11 @@ digest 保护传输，canonical hash 保护语义内容，既有 effect 身份�
 | Executor 必须知道什么 | 交付任务完整约束、相关反证、原始材料和未完成必读，用任务语言解释判断 | 摘要不是另一份契约，也不证明读过来源；相关性未知时，依赖工作前须补足材料 |
 | 结果改变什么 | 区分发现、已验证产物、受阻尝试与已接受成果，判断继续、调查或 replan | 独立验证与当前 Core 回执决定验收和结算，不能由任一会话的叙述替代 |
 
-区分三种操作：确定性的 composition owner 组合 domain 事实，不另造 policy；既有
-codec 编码可精确恢复的 full/delta 输入；controller 按任务进行语义选择和推理。自然
-语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
+区分三种操作：确定性的 composition 与 `AuthorityStore` owner 组合 domain 事实、强制 CAS/单写者
+租约围栏，并以确定性回执门控 `FoldToReceipt` / `EpochReset` 迁移，不另造 policy；既有
+codec 编码可精确恢复的 full/delta 输入，并在 epoch 间维持单调 `KeepRaw` KV-cache 前缀；
+controller 围绕沙盒执行器 worktree 返回的证据按任务进行语义选择、推理及向上的
+`{grow, switch, verify}` 步幅提议。自然语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
 实际决策与验收成果检验，同时原始获授权材料仍可到达。不能用第二套 schema、模型编写的
 状态库或按关键词判断相关性的分类器替代这些操作。Controller 笔记是工作上下文，不是
 新的持久权威。
@@ -632,8 +708,8 @@ Executor 在委派范围内自主选择工具和步骤，不必每次调用工�
 一个 Goal/Todo/quota 身份。扩展既有 session binding owner，加入 role/generation、
 独立有序队列及上下文基线；不能把两个 native ID 写进当前单一 Agent 级槽位。
 一个 controller 拥有控制对话，选定工作最多由一个 executor attempt 执行。Controller
-role 不是第二个并发业务 executor。Peer 或并行执行仍需既有独立 claim/lease/handoff
-契约。
+的普通读写遵守[共享工作环境](#shared-workspace-and-tools)的所有权与冲突约束，不形成
+未协调的第二个业务 executor。Peer 或并行执行仍需既有独立 claim/lease/handoff 契约。
 
 1. 既有入口取得新鲜准入或恢复应结回执，把捕获的统一契约交给 controller。
 2. Controller 围绕 Goal、未满足要求、已有结果和可行工作判断，Core 验证其选定操作。
@@ -719,6 +795,8 @@ capture/回执保留原版本/签名与 replay 身份，不能改写成新 schem
 | 一份完整契约 | 字段/条款盘点；同次捕获的正常、replan、wait、recovery、能力关闭负载经过全部活跃入口；重建语义实例相同 | 单 serializer 单测不足；畸形/不支持版本显式失败 |
 | 无损上下文交付 | Full/delta/recovery 等价；缺页、迟到、截断、role/session 不符与真实原生压缩/续接 | 合计所有读取/恢复成本，不重新准入/扣额 |
 | 角色隔离与恢复 | 实际 host tools 下的 controller/executor 崩溃窗口、重复 dispatch、迟到结果、revision 变化、lease 到期、Stop | Executor 不能访问 Core，不能采用过时结果或隐藏第二个业务 executor |
+| Worker 会话可发现、证据可检查 | 从 controller 定位真实绑定并按需读取原消息、工具结果与产物；覆盖多绑定、重启/旧 generation、分页、不完整索引、无 provider 与来源失效 | 当前状态不由历史命中推断；外 Agent/项目/受众、未授权 archive 和内部推理不可读；发现不执行/接管会话 |
+| 同环境且双方可读写 | 原生 Host 上验证 controller 写入→worker 读取、worker 产物→controller 按版本读取，以及真实工具链/依赖一致性 | 只读/撤权、越界路径、环境不匹配、Core 凭据泄露与忙碌 worker 的重叠写入须拒绝；合法交接后仍仅一次执行/结算 |
 | 语义采用 | 原始要求 → controller 判断 → executor 实际工作 → 独立验证 → 接受结果并回原受众 | 读回执、合法 JSON 或 replan 成功不能单独通过 |
 | 智能中介 | 普通继续、共同约束变化、controller 丢失和小任务反例中的连贯交接、变化／反向证据及结果解释 | 说明真实判断后果与保留义务；少查询或短交接均不足 |
 | 执行期间的人机交互 | 下表 C6/C8 旅程经真实受支持 host 和打包对话验证 | Controller 响应、主动投递和反馈采用分别需要证据；不能从路由 ACK 或预览推断 |
@@ -963,7 +1041,7 @@ judge 评分。分别记录最后验证的分数、黑盒调用次数、完整 t
 | --- | --- | --- |
 | **C1 — 统一契约；新 profile 切换依赖** | Interaction/work-context + quota/Turn owner：盘点字段/指令、capture/视图/读取证据映射及分版本双层配置；捕获同一 schema，迁移普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节 quota 基线效果/完整成本对照；保留显式 off，cutover 合格前保留绑定版本的 reader |
 | **C2 — 一个上下文交付管线；C1** | Context owner + host observer：组合跨 Host Progressive、独立资格化 Delta、同 capture 详情/恢复和保守未读发现，替换分阶段候选交付及重复 packet 分支 | 未变未读约束抵达下一 Turn 实际工作；按完整成本验收无 Hook reader、精确证据/连续性和四种分层组合；full 回退不重新准入；经既有 owner 回退编码/配置 |
-| **C3 — 会话绑定与原生生命周期；切换依赖 C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
+| **C3 — 会话绑定与原生生命周期；切换依赖 C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列，提供带来源的 worker 发现及共享环境/普通工具访问 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；会话发现与双向读写通过第 9 节的权限/环境负例；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
 | **C4 — 共享受治理生命周期；切换依赖 C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
 | **C5 — Replan 与结果编写边界；切换依赖 C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |
 | **C6 — Controller/executor 交流；C2–C5** | Manager/request + host owner：复用版本化语义请求与结果返回，用自然语言工作/材料交流替换 executor 的 schema 约束任务；执行时用户仍可交互 | 完整来源、局部自主、Core 隔离、无需人工催促的普通结果→评估→反馈→后续执行、有序 revision 下的反馈实际采用、原结算/新鲜接续与独立验收结果；第 9 节忙碌、冲突、Stop 和迟到结果场景；回退后新工作使用合格单会话 profile |
@@ -1023,6 +1101,12 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 共享 owner 前置、producer/capture 切换、reader 恢复与退役、采用及完整成本验收，
 可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
 也不豁免第 9 节相对原 quota 基线的验证。
+
+公开分发隔离现在复用 runtime 制品元数据 owner：runtime 资格检查观察已安装的普通
+writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。现有 quota
+packet 默认保持支持；未资格化的完整契约默认不能只凭安装检查通过。此改动不证明
+第 9 节的成果/成本，不替换已安装 writer、不增加当前 producer，也不退役历史 reader。
+扩大支持 profile 仍须原采用证据，详见[发布边界](../../product/release-readiness.md)。
 
 原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
 `codex-cli` 和 `codex-app-server` 都调用既有
@@ -1096,6 +1180,71 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 及 [smoke 合并规则](../../development/good-smokes.md)。内部行为保持替换需要真实调用方/
 后端证据，无需新设置页面。改变调用方操作/readback 时，仍需 C8 的打包前端失败/恢复
 旅程及首屏证据。C1/默认采用的完整成本与收益资格不变；有界重构不代表完整 RFC 验收。
+
+<a id="subtraction-gate"></a>
+
+### 减法门禁与反上下文重力规则
+
+基于 `main@f15ebdd16b` 与 C1 PR `#8266`（跨 `289` 个文件 `+26,672 / -4,561`，净增
+`+22,111` 行）的实测表明：除非设立显式的减法门禁，否则名义上的“统一”工作仍会默认导致
+代码库净膨胀。
+
+#### 1. “统一”PR 为何反而推高净代码量（四类实测驱动因素）
+
+在 `#8266` 中，所有主要目录均出现净扩张而非缩减：
+
+| `#8266` 实测驱动因素 | 变更体量 | 观测到的根因机制 |
+| --- | --- | --- |
+| 只增不减的双语 RFC 与台账日志 | `docs/` 净增 `+9,564` 行（`+9,715 / -151`，含 `14` 个 `ledger/` 文件 `+7,749` 行及 RFC/附录 `+1,218 / -35` 行；仅 `2026-10-30-c1-source-convergence.{md,zh-CN.md}` 即 `+5,874` 行） | 把数千行按时间追加的执行流水账当作收敛证据，而非紧凑的边界与实证表。 |
+| 旧 × 新模式组合矩阵测试 | `tests/` 净增 `+9,976` 行（跨 `142` 个文件 `+12,074 / -2,098`） | 在重复的端到端 fixture 上对 `loopx_turn_envelope_v0`、`--context-delivery off` 与统一 schema 做笛卡尔积扩展，而未抽提共享不变量 oracle。 |
+| 运行时与 CLI 增补兼容适配层 | `loopx/` 净增 `+2,236` 行（跨 `92` 个文件 `+4,224 / -1,988`） | 在 `loopx/cli_commands/quota.py`、`quota_presentation.py`、`quota_capture.py`、`quota_context_reader.py` 增补推导 shim（如 `raw_quota_turn_view`、`compose_turn_decision_with_raw_envelope`、`--context-delivery off` 分支），保留旧视图而非退役被替代的 producer。 |
+| 跨语言 Python ↔ TS 包装重复 | `loopx/cli_commands/`（`+1,639 / -645`）、`loopx/control_plane/*.py`（`+1,167 / -685`）、`loopx/control_plane/*.ts`（`+1,080 / -532`） | 在 TypeScript owner 旁长期保留 Python 投影与编排包装。 |
+
+相同的“门面叠加”模式也出现在开放中的统一 PR `#8484`（`+1,979 / -174`，`41` 个文件）和
+`#7568`（`+6,230 / -349`，`56` 个文件）上，与聚焦规范修订的 `#8749`（`+538 / -2`，已合入）
+以及 `#5072`、`#8787` 所跟踪的结构/CI 膨胀问题形成对照。
+
+#### 2. 上下文重力 vs. 保留伤疤的减法
+
+在 `main@f15ebdd16b` 上，仓库受跟踪代码/脚本总计约 `1.79M` 行（`1,785,239` 行，覆盖
+`loopx/`：`1,864` 文件 / 约 `658k` 行；`tests/`：`1,956` 文件 / 约 `727k` 行；`examples/`：
+`688` 文件 / 约 `204k` 行，以及 `apps/`、`packages/`、`scripts/` 与 `benchmark/`），另有
+`docs/architecture/rfcs/ledger/` 下的 `152` 个文件（约 `11.5k` 行）及[小内核 RFC](monorepo-distribution-split-v0.zh-CN.md)
+附录 A 中约 `3,990` 行历史台账。
+
+- **上下文重力：** 当强模型被置入 `1.79M` 行规模的代码树中，往往默认把既有模块、CLI 开关
+  与历史投影视作不可移除的前提，从而在旧代码外层包裹兼容适配器，而不是化简退役。
+- **保留伤疤的减法：** LoopX 的持久护城河不是包装面或代码行数，而是**四项不可替代的内核
+  不变量**——（1）排他租约与写入/代际围栏、（2）默认拒绝的权限与 ACL/受众隔离、（3）一次性
+  幂等结算回执、（4）同源反事实检查点与评估台账——以及**失败反例测试集**（负例、变异与
+  恢复反例）。合法的减法删除失效 pilot、冗余包装与无引用脚本，同时完整保留全部内核不变量
+  与失败反例。
+
+#### 3. 具名退役清单与棘轮规则
+
+所有 C1–C9 及相关收敛 PR 均执行以下门禁（与[小内核减法门禁](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)联动）：
+
+1. **退役 Turn 前置 pilot CLI 子命令与顶层模块。** 删除已被 `loopx turn`（`turn_driver/codex_cli.py`）、
+   `start-goal` 与 `codex_app` heartbeat 替代的 `codex-cli-*` pilot/证明子命令（共 `15` 个
+   pilot/证明子命令，其中 `14` 个在非 pilot 生产路径中零调用方，另有 `codex-cli-session-probe`
+   仅在 `loopx/project_prompt.py` 中作为提示字符串引用），连同 `4` 个顶层 `loopx/codex_cli_*.py`
+   模块（`3,767` 行）与 `6` 个 `loopx/cli_commands/starter_*.py` 包装（`859` 行）；保留正在使用的
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py`。
+2. **归并剩余顶层目录并严格单向下调棘轮。** 将剩余 `20` 个顶层 `loopx/chat_*.py`（`20,562` 行）
+   迁入 `loopx/chat/`，将 `9` 个 `loopx/*_goal_mode/` 目录（`59` 文件 / `17,655` 行；其中
+   `33` 个 `.py` / `7,062` 行）迁入 `loopx/hosts/`，并在删除或迁出顶层模块同一 PR 内同步下调
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json) 中的
+   `max_top_level_modules`（当前 `127`）（见[小内核 RFC 减法门禁](monorepo-distribution-split-v0.zh-CN.md#subtraction-gate)）。
+3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
+   测得 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
+   并按 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
+   CLI 行为的 `examples/cli-*-command-modularization-smoke.py`。
+4. **约束 RFC 与台账体量。** 规范文档与 `ledger/` 条目仅保留紧凑的边界、不变量、退役清单与
+   实证表，不再追加数千行时间流水账。
+5. **所有兼容视图必须自带退出门禁（C1/C9 完成硬门槛）。** 任何过渡性 `v0` 投影
+   （`loopx_turn_envelope_v0`、`raw_quota_turn_view`）、`legacy_fallback` 路径或关闭模式开关
+   （`--context-delivery off`）都必须具名活跃消费者、运行时可观测计数与确切删除里程碑。
+   在被替代的重复 producer 与组合开关真正删除前，C1/C9 收敛均未完成。
 
 ## 12. 待决事项
 

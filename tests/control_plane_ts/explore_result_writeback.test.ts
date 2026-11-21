@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {normalizeExploreExecutionObservation} from "../../loopx/control_plane/capabilities/explore_execution_observation.ts";
-import {exploreResultWritebackAffordance, normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
+import {exploreResultWritebackAffordance} from "../../loopx/control_plane/capabilities/explore_context_delivery.ts";
+import {normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 
 const attachment = {
   schema_version: "explore_result_attachment_v0", node_id: "tail-bound",

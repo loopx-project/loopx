@@ -7,11 +7,11 @@ This adapter does not activate a native Goal or add a second scheduler.
 
 ## Install and select
 
-Install both packages from the same integrated LoopX 2.2 checkout containing
+Install both packages from the same integrated LoopX checkout containing
 `loopx.extensions.turn_host.extract_turn_work_identity` and
 `assert_turn_host_request_version`. The shared decoder accepts complete-source
 Host request v1 and historical v0; identity and provider permissions still use
-their existing owners. The version floor alone
+their existing owners. The package version alone
 does not establish that an older wheel contains this shared contract:
 
 ```bash
@@ -41,6 +41,15 @@ executor; it is not a public remote authority endpoint.
 The default managed host and existing `ark-managed-agent` native Goal profile
 are unchanged. A fresh cloud session is required for each admitted iteration;
 continuation comes from the existing LoopX driver, not an automation prompt.
+
+For complete-source requests, the shared renderer sends the model a
+`loopx_turn_model_context_v0` presentation with `task_context`, retaining task
+requirements and original-reader provenance while the outer executor keeps
+scheduler and effect instructions. Adapter stdin and the private receipt's
+binding still use the complete original Host request; the model presentation
+cannot replace it. Historical envelope-only input keeps its existing rendering.
+See the [Turn protocol](../../docs/reference/protocols/loopx-turn-v0.md) for the
+presentation and source boundaries.
 
 ## File execution profiles
 
@@ -74,7 +83,10 @@ inside the cloud sandbox. Only connect trusted, appropriately isolated servers.
 The existing `python -m loopx.collaboration_mcp` server can be selected with its
 operator-bound registry, runtime, Goal, Agent and workspace argv. Select only
 the needed `read_context`, `assess_request`, `request_peer`, `return_result`,
-and `consume_peer_result` tools. Those existing tools own semantic requests,
+and `consume_peer_result` tools. The collaboration server validates the
+host-bound `LOOPX_TURN_*` scope. `read_context` records peer-result delivery
+under that invocation's `LOOPX_TURN_KEY`. `consume_peer_result` accepts a
+disposition for a result supplied under the same key. Those tools own semantic requests,
 adoption and return; they do not launch workers. This adapter transports their
 calls without creating another Inbox or adding manager-specific authority.
 

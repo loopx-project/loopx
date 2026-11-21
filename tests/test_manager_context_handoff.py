@@ -1,4 +1,5 @@
 import json
+import shlex
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,7 @@ from loopx.capabilities.manager_context import (
 )
 from loopx.capabilities.manager_context.tracking import query
 from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
+from loopx.control_plane.goals.activation import build_goal_activation
 
 
 @pytest.fixture
@@ -197,8 +199,8 @@ def test_lifecycle_only_registry_cannot_supply_context_recipients(
     {},
     {"goal_instance_id": "invalid"},
     {"goal_instance_id": "ginst_" + "b" * 32, "id": "unsafe/alias"},
-    {"goal_instance_id": "ginst_" + "b" * 32, "activation_state": "stopped"},
-    {"goal_instance_id": "ginst_" + "b" * 32, "activation_state": "invalid"},
+    {"goal_instance_id": "ginst_" + "b" * 32, "activation": build_goal_activation(state="stopped", updated_at="2026-01-01T00:00:00Z", reason="fixture stop")},
+    {"goal_instance_id": "ginst_" + "b" * 32, "activation": {"schema_version": "loopx_goal_activation_v1", "state": "invalid"}},
 ])
 def test_source_session_catalog_keeps_only_current_instantiated_recipients(
     fixture, strict_envelope, other_goal
@@ -239,7 +241,11 @@ def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     first = deliver(root, registry, session=session, turn=turn, request=request)
 
     data = json.loads(registry.read_text())
-    data["goals"][0]["activation_state"] = "stopped"
+    data["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(data))
     assert authority(root, registry, session, turn)["targets"] == [
         {"goal_id": "other", "agent_id": "peer"}
@@ -250,7 +256,11 @@ def test_stopped_goal_is_not_a_context_recipient_and_revokes_replay(fixture):
     assert before == {path: path.read_bytes() for path in _root(root).rglob("*.json")}
     assert len(pending(root, "research", "worker")["items"]) == 1
 
-    data["goals"][0]["activation_state"] = "active"
+    data["goals"][0]["activation"] = build_goal_activation(
+        state="active",
+        updated_at="2026-01-01T00:01:00Z",
+        reason="fixture resume",
+    )
     registry.write_text(json.dumps(data))
     assert deliver(root, registry, session=session, turn=turn, request=request) == {
         **first, "replayed": True
@@ -488,7 +498,11 @@ def test_operator_target_grant_fails_closed_without_audited_source_or_agent(fixt
     source["evidence_goal_ids"] = ["research"]
     _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {channel: source}})
     data = json.loads(registry.read_text())
-    data["goals"][0]["activation_state"] = "stopped"
+    data["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="active Goal"):
         configure_delivery_target(root, registry, channel=channel, **request, grant=True, execute=True)
@@ -557,7 +571,11 @@ def test_goal_delivery_grant_inherits_agents_and_rechecks_specific_revocation(fi
     assert deliver(root, registry, session=session, turn=turn, request=future)["request_id"] == receipt["request_id"]
     with pytest.raises(ValueError, match="not authorized"):
         deliver(root, registry, session=session, turn=turn, request={"goal_id": "other", "agent_id": "peer"})
-    data["goals"][0]["activation_state"] = "stopped"
+    data["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(data))
     assert authority(root, registry, session, turn)["targets"] == []
 
@@ -672,7 +690,8 @@ def test_hook_keeps_decided_requests_open_until_receiver_returns_conclusion(
     )
     assert not dispatch["failures"]
     assert dispatch["required_reads"][0]["ordering"] == "before_work"
-    assert "manager-inbox read" in dispatch["required_reads"][0]["command"]
+    argv = shlex.split(dispatch["required_reads"][0]["command"])
+    assert argv[argv.index("manager-inbox") + 1] == "read"
     assert turn["message"] not in json.dumps(dispatch["results"])
     assert dispatch["results"][0]["agent_read_required"]
     acknowledge(

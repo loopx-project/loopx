@@ -24,18 +24,6 @@ from ..demo import (
 )
 from .starter_bootstrap import handle_starter_bootstrap_command
 from .starter_bootstrap_registration import register_starter_bootstrap_commands
-from .starter_scheduler import (
-    handle_starter_scheduler_command,
-    register_starter_scheduler_commands,
-)
-from .starter_session_runtime import (
-    handle_starter_session_runtime_command,
-    register_starter_session_runtime_commands,
-)
-from .starter_visible_driver import (
-    handle_starter_visible_driver_command,
-    register_starter_visible_driver_commands,
-)
 
 
 PrintPayload = Callable[
@@ -46,9 +34,6 @@ PrintPayload = Callable[
 
 def register_starter_commands(subparsers: argparse._SubParsersAction) -> None:
     register_starter_bootstrap_commands(subparsers)
-    register_starter_visible_driver_commands(subparsers)
-    register_starter_session_runtime_commands(subparsers)
-    register_starter_scheduler_commands(subparsers)
 
     demo_parser = subparsers.add_parser(
         "demo",
@@ -161,15 +146,6 @@ def handle_starter_command(
     bootstrap_result = handle_starter_bootstrap_command(args, print_payload)
     if bootstrap_result is not None:
         return bootstrap_result
-    visible_driver_result = handle_starter_visible_driver_command(args, print_payload)
-    if visible_driver_result is not None:
-        return visible_driver_result
-    session_runtime_result = handle_starter_session_runtime_command(args, print_payload)
-    if session_runtime_result is not None:
-        return session_runtime_result
-    scheduler_result = handle_starter_scheduler_command(args, print_payload)
-    if scheduler_result is not None:
-        return scheduler_result
     if str(getattr(args, "command", "")) == "demo":
         return handle_demo_command(args, print_payload)
     return None

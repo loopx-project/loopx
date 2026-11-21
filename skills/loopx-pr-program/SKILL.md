@@ -23,10 +23,21 @@ ordinary status question remains read-only.
 
 ## Start From LoopX State
 
-Start or join the project goal before material work. Represent the program with
-one advancement todo for the current reconciliation and one
+For a one-off assessment, read the relevant existing Goal/work and request
+context without creating a Goal, Todo or monitor just to answer. For an
+authorized durable program, start or join its project Goal before material
+work. Represent the program with one advancement todo for reconciliation and,
+when recurring observation was requested, one
 `continuous_monitor` todo for recurring observation. Do not create one monitor
 todo per change request.
+
+Resolve requirement shorthand, dates and aliases from the owner's accepted
+request and relevant Goal requirements, current Todos and recent deliveries.
+Then reconcile with the current implementation and source-control evidence.
+A title search is a discovery lead, not the requirement definition; an old
+Goal record is not proof that a PR remains open or its blocker still applies.
+If multiple plausible requirement sources would change the ranking, state the
+uncertainty and ask only for that unresolved choice while assessing known work.
 
 Use a stable monitor identity:
 
@@ -66,6 +77,22 @@ as `.local/loopx/pr-program/<program-id>/`. Verify the path with
 `git check-ignore` before writing. If no ignored path is available, use a
 temporary directory and keep only a redacted evidence summary in LoopX state.
 
+Acquire a compact complete inventory first: identity, title, head/base revision,
+lifecycle, requirement/dependency references and check/review summaries. Read
+the bodies, relevant reviews, changed-file evidence and failure details of
+candidates that could affect the decision. Do not fetch every full comment,
+check log or trajectory in the inventory call. A short row is not evidence that
+the underlying implementation was reviewed.
+
+Retain each response once with its exact revision, query scope, observation time
+and completeness; select further details from that capture instead of querying
+the same long body again. Batch independent reads within the combined output
+budget. Preserve running-command handles and collect their completion rather
+than repeating the command. If output is truncated, recover the original
+capture or read the missing bounded section before relying on it. Refresh a
+candidate when its head or relevant external state changes, and recheck current
+authority before effects; retained evidence is not a durable authorization cache.
+
 ## Reconcile Material Changes
 
 Run the bundled delta helper before manually comparing rows:
@@ -90,6 +117,23 @@ merge gates determine order within a priority. Record a requirement gap
 explicitly when no change request implements part of the requested behavior;
 do not call the requirement complete because a neighboring parameter or feature
 landed.
+
+For each leading candidate, explain requirement coverage, prerequisites, the
+next useful action and its responsible owner separately from merge readiness.
+A blocked high-value change can remain the highest priority while an
+independent ready change proceeds. Do not rank by check color or imply merge
+permission from priority.
+
+Before recommending a CI repair work item, inspect the relevant failing check
+at the candidate's current head and compare the same failure on its target
+base/main when needed for attribution. Distinguish a code regression, shared
+baseline/infrastructure failure, cancellation and a still-running check.
+Reuse a matching existing issue or work item; recommend a new one only for a
+remaining gap with a concrete owner, reproduction and acceptance condition.
+Link shared blockers to all affected candidates instead of creating a duplicate
+per PR. Creating a tracker neither repairs CI nor proves checks will pass.
+An assessment may propose follow-through, but performs writes only under the
+owner's existing authorization for that operation.
 
 ## Compose With An Integration Branch
 

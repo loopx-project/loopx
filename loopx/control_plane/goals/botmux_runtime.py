@@ -1161,7 +1161,30 @@ def _status_botmux_runtime(
     session = dict(binding.get("session") or {})
     session_id = str(session.get("session_id") or "").strip()
     dispatch_key = str(session.get("active_dispatch_key") or "").strip()
-    if not session_id or not dispatch_key:
+    # A reused session's trigger-result describes its latest *accepted* turn.
+    # A dispatch the provider never accepted cannot be vouched for by it:
+    # ATTEMPTING and REJECTED never became one, and an UNKNOWN that was never
+    # QUEUED (an interrupted attempt, a transport failure or an unverifiable
+    # receipt) is not one either, so a repeated status must not adopt the
+    # previous turn's result for it. Resolve these from the local receipt alone.
+    # An UNKNOWN that was QUEUED and only lost its status read still recovers
+    # through the provider.
+    local_receipts = binding.get("receipts")
+    local_receipt = (
+        local_receipts.get(dispatch_key) if isinstance(local_receipts, Mapping) else None
+    )
+    local_state = _dispatch_state(
+        local_receipt.get("state") if isinstance(local_receipt, Mapping) else None
+    )
+    unaccepted_dispatch = bool(dispatch_key) and (
+        local_state in {BotmuxDispatchState.ATTEMPTING, BotmuxDispatchState.REJECTED}
+        or (
+            local_state == BotmuxDispatchState.UNKNOWN
+            and isinstance(local_receipt, Mapping)
+            and not local_receipt.get("queued_at")
+        )
+    )
+    if not session_id or not dispatch_key or unaccepted_dispatch:
         active = _active_dispatch_receipt(binding)
         if active is not None:
             active_key, receipt = active
@@ -1220,16 +1243,32 @@ def _status_botmux_runtime(
             public_summary="no botmux runtime turn has been dispatched for this goal",
             details={"dispatch_state": "idle", "output_available": False},
         )
+    # The session's trigger-result without a trigger id is its latest turn,
+    # which another client may have started. Ask for the id this receipt was
+    # queued under, and promote nothing the provider does not attribute to it.
+    stored_trigger_id = (
+        str(local_receipt.get("trigger_id") or "").strip()
+        if isinstance(local_receipt, Mapping)
+        else ""
+    )
     try:
-        result = requester(
-            endpoint=_validated_endpoint(str(binding.get("endpoint") or "")),
-            path=(
-                "/api/sessions/"
-                f"{quote(_validated_private_id(session_id, 'session id'), safe='')}"
-                "/trigger-result"
-            ),
-            dashboard_auth=_dashboard_auth_for_binding(binding),
-        )
+        pinned_trigger_id: str | None = _validated_private_id(stored_trigger_id, "trigger id")
+    except ValueError:
+        pinned_trigger_id = None
+    session_level_missing = False
+    try:
+        if pinned_trigger_id is None:
+            result = {"state": BotmuxDispatchState.UNKNOWN.value}
+        else:
+            result = requester(
+                endpoint=_validated_endpoint(str(binding.get("endpoint") or "")),
+                path=(
+                    "/api/sessions/"
+                    f"{quote(_validated_private_id(session_id, 'session id'), safe='')}"
+                    f"/trigger-result?triggerId={quote(pinned_trigger_id, safe='')}"
+                ),
+                dashboard_auth=_dashboard_auth_for_binding(binding),
+            )
     except ValueError:
         return _operation_packet(
             ok=False,
@@ -1246,6 +1285,15 @@ def _status_botmux_runtime(
             or exc.payload.get("state") == "not_found"
         ):
             result = {"state": "not_found"}
+            echoed_trigger_id = str(exc.payload.get("triggerId") or "").strip()
+            if echoed_trigger_id:
+                result["triggerId"] = echoed_trigger_id
+            # Only an explicit "this session is gone" that names no turn cannot
+            # be attributed to another one. A generic 404, or one that names a
+            # turn, is checked like any other response.
+            session_level_missing = (
+                exc.payload.get("error") == "unknown_session" and not echoed_trigger_id
+            )
         else:
             return _operation_packet(
                 ok=False,
@@ -1297,6 +1345,15 @@ def _status_botmux_runtime(
         BotmuxDispatchState.NOT_FOUND,
     }:
         provider_state = BotmuxDispatchState.UNKNOWN
+    identity_unverified = pinned_trigger_id is None
+    if (
+        pinned_trigger_id is not None
+        and not session_level_missing
+        and str(result.get("triggerId") or "").strip() != pinned_trigger_id
+    ):
+        # The provider answered for a different turn, or did not say which.
+        provider_state = BotmuxDispatchState.UNKNOWN
+        identity_unverified = True
     latest_payload = read_botmux_runtime_binding(binding_path)
     latest_binding = botmux_binding_for_goal(latest_payload, goal_id) or binding
     latest_receipts = latest_binding.get("receipts")
@@ -1315,12 +1372,14 @@ def _status_botmux_runtime(
     )
     state = local_state if provider_observation_ignored else provider_state
     output = result.get("output")
-    output_available = bool(
+    output_available = not identity_unverified and bool(
         isinstance(output, Mapping) and str(output.get("content") or "").strip()
     )
     local_receipt_updated = execute
     if execute:
         updates = None
+        if identity_unverified and state == BotmuxDispatchState.UNKNOWN:
+            updates = {"unknown_reason": "trigger_identity_unverified"}
         if provider_observation_ignored:
             updates = {
                 "provider_observation": provider_state.value,

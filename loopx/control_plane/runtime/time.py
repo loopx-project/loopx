@@ -107,8 +107,8 @@ def now_utc_iso() -> str:
     return utc_isoformat(now_utc())
 
 
-def now_local_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
+def now_local_iso(*, timespec: str = "seconds") -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec=timespec)
 
 
 def utc_isoformat(value: datetime) -> str:

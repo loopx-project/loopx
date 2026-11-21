@@ -294,6 +294,7 @@ def test_export_uses_canonical_todos_and_never_returns_owner_private_continuatio
         limit=8,
         offset=0,
         days=1,
+        query="",
         context_todo_id=todo_id,
     )
     packet = export_page(registry, str(tmp_path), args)
@@ -928,7 +929,7 @@ def test_remote_agent_search_keeps_source_and_audience_scope(remote):
     assert result["ok"]
     argv = shlex.split(calls[0][0][-1])
     assert argv[argv.index("--manager-view") + 1] == "agents"
-    assert argv[argv.index("--query") + 1] == "review; $(noop)"
+    assert "--query=review; $(noop)" in argv
     assert argv[argv.index("--goal-id") + 1] == "remote-goal"
     assert argv[argv.index("--offset") + 1] == "12"
     assert records[-1]["source_id"] == "ssh:research-host"

@@ -3,13 +3,18 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
-import html
 import json
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ...chat_action_store import ActionConflictError, ChatActionStore
+from ...chat_action_store import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    HUMAN_ACTOR_CLASS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...file_lock import exclusive_file_lock
 from ...extensions.runtime import (
@@ -51,20 +56,36 @@ def _digest(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+# One scan decides every entity, so no escape rule can consume another rule's
+# output: the previous sequential form re-escaped the ``#`` inside entities it
+# had just produced (``*`` -> ``&&#35;42;``) and inside ``html.escape``'s
+# ``&#x27;``. Named entities keep the ``html.escape(quote=True)`` spelling;
+# Lark markdown metacharacters use single-pass numeric references. Output for
+# the reachable identifier charset (no metacharacter except ``_``) stays
+# byte-identical to the sequential form (#9108).
+_CARD_TEXT_ENTITIES = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#x27;",
+    "*": "&#42;",
+    "~": "&#126;",
+    "[": "&#91;",
+    "]": "&#93;",
+    "(": "&#40;",
+    ")": "&#41;",
+    "#": "&#35;",
+    "_": "&#95;",
+}
+_CARD_TEXT_ESCAPE_PATTERN = re.compile(r"[&<>\"'*~\[\]()#_]")
+
+
 def _card_text(value: object) -> str:
-    text = html.escape(str(value or "").strip(), quote=True)
-    for character, entity in {
-        "*": "&#42;",
-        "~": "&#126;",
-        "[": "&#91;",
-        "]": "&#93;",
-        "(": "&#40;",
-        ")": "&#41;",
-        "#": "&#35;",
-        "_": "&#95;",
-    }.items():
-        text = text.replace(character, entity)
-    return text
+    text = str(value or "").strip()
+    return _CARD_TEXT_ESCAPE_PATTERN.sub(
+        lambda match: _CARD_TEXT_ENTITIES[match.group()], text
+    )
 
 
 def _proposal_operation(
@@ -1058,6 +1079,8 @@ def handle_goal_channel_operation_callback(
             "confirmation_digest": action["confirmation_digest"],
             "card_digest": str(delivery["card_digest"]),
             "confirmed_at": _callback_timestamp(event.get("timestamp")),
+            "actor_class": HUMAN_ACTOR_CLASS,
+            "verification_kind": AUTHENTICATED_LARK_CARD_CALLBACK,
         },
     )
     dispatch_lock = store.root / f"{action['operation_id']}.dispatch.lock"

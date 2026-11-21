@@ -200,6 +200,31 @@ def test_chat_idempotency_keys_reject_different_requests(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize("damage", ['{"schema_version": ', "[]", '{"schema_version": "other"}'])
+def test_unreadable_ingress_receipt_is_not_recreated_as_absent(tmp_path: Path, damage: str) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    request = {"client_ingress_id": "ingress-key", "mode": "live_steering", "message": "first"}
+    store.create_ingress_receipt(session_id, **request)
+    store.update_ingress_receipt(session_id, "ingress-key", status="delivered", active_turn_id="turn-one")
+    path = store._ingress_path(session_id, "ingress-key")
+    path.write_text(damage, encoding="utf-8")
+
+    with pytest.raises(OSError, match="unreadable"):
+        store.create_ingress_receipt(session_id, **request)
+
+    assert path.read_text(encoding="utf-8") == damage
+
+
 def test_generated_message_id_skips_transcript_deduplication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2215,3 +2240,186 @@ def test_managed_close_clears_terminal_active_turn_left_by_crash(
     assert current["status"] == "closed"
     assert current["active_turn_id"] is None
     assert adapter.closed is True
+
+
+def test_dangling_ingress_receipt_link_is_not_recreated_as_absent(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    request = {"client_ingress_id": "ingress-key", "mode": "live_steering", "message": "first"}
+    store.create_ingress_receipt(session_id, **request)
+    path = store._ingress_path(session_id, "ingress-key")
+    target = path.with_name("moved-away.json")
+    path.rename(target)
+    path.symlink_to(target.name)
+    target.unlink()
+
+    with pytest.raises(OSError, match="unreadable"):
+        store.create_ingress_receipt(session_id, **request)
+
+    assert path.is_symlink(), "the existing entry is preserved"
+
+
+def test_padded_ingress_id_replays_against_the_normalized_receipt(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    request = {"client_ingress_id": " ingress-key ", "mode": "live_steering", "message": "first"}
+
+    first, created = store.create_ingress_receipt(session_id, **request)
+    replay, created_again = store.create_ingress_receipt(session_id, **request)
+
+    assert created is True and created_again is False
+    assert replay["client_ingress_id"] == first["client_ingress_id"] == "ingress-key"
+
+
+def test_thread_start_failure_drops_done_event_before_notifying_concurrent_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ChatSessionStore(tmp_path)
+    session_id = str(
+        store.create_session(
+            goal_id="goal-one",
+            agent_id="codex",
+            executor_endpoint_id="codex",
+            adapter_kind="codex_app_server",
+            upstream_thread_id="thread-one",
+            upstream_mode="chat",
+        )["session_id"]
+    )
+    runtime = ChatRuntimeController(store=store, codex_bin="missing-codex")
+
+    class _CountingTransportAdapter:
+        upstream_thread_id = "thread-one"
+
+        def __init__(self) -> None:
+            self.closed = False
+            self.start_calls = 0
+            self.lock = threading.Lock()
+            self.transport_entered = threading.Event()
+            self.release_transport = threading.Event()
+
+        def capabilities(self) -> dict[str, object]:
+            return {}
+
+        def healthcheck(self) -> bool:
+            return not self.closed
+
+        def close_session(self) -> None:
+            self.closed = True
+            self.release_transport.set()
+
+        def start_turn(self, message: str, event_sink) -> dict[str, object]:
+            del message, event_sink
+            with self.lock:
+                assert not self.closed
+                self.start_calls += 1
+            self.transport_entered.set()
+            assert self.release_transport.wait(timeout=5)
+            return {"message": "recovered after start failure"}
+
+    adapter = _CountingTransportAdapter()
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **_kwargs: adapter)
+
+    original_thread_start = threading.Thread.start
+    worker_start_attempts = 0
+    attempt_lock = threading.Lock()
+
+    def fail_first_turn_worker_start(thread_self: threading.Thread) -> None:
+        nonlocal worker_start_attempts
+        if getattr(thread_self, "_target", None) == runtime._run_turn:
+            with attempt_lock:
+                worker_start_attempts += 1
+                attempt = worker_start_attempts
+            if attempt == 1:
+                raise RuntimeError("can't start new thread")
+        original_thread_start(thread_self)
+
+    monkeypatch.setattr(threading.Thread, "start", fail_first_turn_worker_start)
+
+    notified = threading.Event()
+    retry_submitted = threading.Event()
+    original_notify = runtime.turn_release_wakeup.notify
+
+    def pause_after_first_notify() -> None:
+        original_notify()
+        if not notified.is_set():
+            notified.set()
+            assert retry_submitted.wait(timeout=5)
+
+    monkeypatch.setattr(runtime.turn_release_wakeup, "notify", pause_after_first_notify)
+
+    first_errors: list[Exception] = []
+
+    def submit_initial() -> None:
+        try:
+            runtime.submit_turn(
+                session_id=session_id,
+                client_turn_id="start-failure-same-key",
+                message="complete once",
+                work_dir=tmp_path,
+                objective="sample objective",
+            )
+        except Exception as exc:  # noqa: BLE001
+            first_errors.append(exc)
+
+    initial_thread = threading.Thread(target=submit_initial)
+    initial_thread.start()
+    try:
+        assert notified.wait(timeout=5)
+        replay, replay_created = runtime.submit_turn(
+            session_id=session_id,
+            client_turn_id="start-failure-same-key",
+            message="complete once",
+            work_dir=tmp_path,
+            objective="sample objective",
+        )
+        assert replay_created is False
+        assert adapter.transport_entered.wait(timeout=5)
+    finally:
+        retry_submitted.set()
+
+    initial_thread.join(timeout=5)
+    assert not initial_thread.is_alive()
+    assert len(first_errors) == 1
+    assert isinstance(first_errors[0], RuntimeError)
+    assert adapter.closed is False
+
+    dedup, dedup_created = runtime.submit_turn(
+        session_id=session_id,
+        client_turn_id="start-failure-same-key",
+        message="complete once",
+        work_dir=tmp_path,
+        objective="sample objective",
+    )
+    assert dedup_created is False
+    assert dedup["turn_id"] == replay["turn_id"]
+
+    adapter.release_transport.set()
+    completed = runtime.wait_for_turn(
+        session_id=session_id,
+        turn_id=str(replay["turn_id"]),
+        timeout_sec=5,
+    )
+    assert completed["status"] == "completed"
+    assert completed["response"] == {"message": "recovered after start failure"}
+    assert adapter.start_calls == 1
+    assert worker_start_attempts == 2
+    runtime.close()

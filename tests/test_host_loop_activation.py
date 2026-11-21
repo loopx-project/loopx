@@ -779,6 +779,7 @@ def test_traex_cli_is_an_exact_visible_goal_host_on_the_generic_cli_loop() -> No
     assert packet["activation_method"] == "set_visible_goal"
     assert packet["host_mutation"]["owner"] == "TraeX CLI TUI"
     assert packet["host_mutation"]["host_command"] == "/goal <task_body>"
+    assert packet["host_mutation"]["preferred_tool"] == "create_goal"
     assert packet["host_mutation"]["requires_host_feature_flag"] == (
         "[features] goals = true in ~/.trae/traecli.toml"
     )

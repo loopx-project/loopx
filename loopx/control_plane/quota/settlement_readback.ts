@@ -1,7 +1,9 @@
-import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
+import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
+import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import {
+  committedGoalRolloutEvents,
   heartbeatReceiptsFromEvents,
   readGoalRolloutEventSnapshot,
   strictGoalRolloutEvents,
@@ -21,7 +23,9 @@ import {
   type SettlementResult,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { hasMonitorPollTransaction } from "./monitor_poll_commit.ts";
+import { readQuotaSpendEventFromRun } from "./accounting_artifact_transaction.ts";
 import {
   jsonObject,
   requireJsonObject,
@@ -42,6 +46,7 @@ import {
   isCapabilityRetirementWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
+  type ReceiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
 import {
@@ -51,13 +56,17 @@ import {
   type RefreshRetryRequest,
 } from "./refresh_recovery.ts";
 import {
+  admitsAutonomousReplan,
   heartbeatReceiptDetails as details,
   heartbeatReceiptFactFromEvent,
   normalizeHeartbeatReplanObligationId as normalizeReplanObligationId,
   normalizeHeartbeatTodoId as normalizeTodoId,
   optionalHeartbeatString as optionalString,
+  selectAdmissionHeartbeatReceipt,
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
+  heartbeatPreparedLease,
+  isHeartbeatLeaseReadiness,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -70,6 +79,11 @@ import {
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
 import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
+import {
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+} from "../work_items/replan_semantics.ts";
 import {
   parseQuotaAccountingOwner,
   quotaOwnerOwnsProjection,
@@ -108,8 +122,10 @@ interface ReadbackRequest {
   infer_turn_instance_id: boolean;
   allow_unbound_binding: boolean;
   resolve_original_binding: boolean;
+  pending_closeout: boolean;
   borrow_source_admission: boolean;
   include_record_bodies: boolean;
+  tolerate_malformed_history: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
@@ -130,6 +146,19 @@ interface ResultBundle extends JsonObject {
   result: SettlementResult;
   payload: JsonObject;
 }
+
+interface MatchedSpendRecords {
+  run: JsonObject | null;
+  receipt: JsonObject | null;
+  admissionSource?: unknown;
+}
+
+interface SpendTerms {
+  slots: unknown;
+  source: unknown;
+}
+
+const ORIGINAL_TURN_SPEND_SLOTS = 1;
 
 type SettlementProgressState = "identity_required" | "writeback_required" |
   "writeback_receipt_required" | "spend_required" | "spend_receipt_required" | "settled";
@@ -224,8 +253,23 @@ function decodeRequest(
   if (request.include_record_bodies !== undefined && typeof request.include_record_bodies !== "boolean") {
     throw new EffectRuntimeRequestError("include_record_bodies must be a boolean");
   }
+  if (
+    request.tolerate_malformed_history !== undefined &&
+    typeof request.tolerate_malformed_history !== "boolean"
+  ) {
+    throw new EffectRuntimeRequestError(
+      "tolerate_malformed_history must be a boolean",
+    );
+  }
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
+  }
+  if (request.pending_closeout !== undefined && typeof request.pending_closeout !== "boolean") {
+    throw new EffectRuntimeRequestError("pending_closeout must be a boolean");
+  }
+  if (request.pending_closeout === true && (request.infer_turn_instance_id || request.allow_unbound_binding
+      || request.refresh_retry != null || request.heartbeat_reentry_guard != null || request.spend_precheck === true)) {
+    throw new EffectRuntimeRequestError("pending closeout is a read-only receipt recovery, not inference or settlement admission");
   }
   if (
     request.borrow_source_admission !== undefined
@@ -281,8 +325,10 @@ function decodeRequest(
     infer_turn_instance_id: request.infer_turn_instance_id,
     allow_unbound_binding: request.allow_unbound_binding,
     resolve_original_binding: request.resolve_original_binding === true,
+    pending_closeout: request.pending_closeout === true,
     borrow_source_admission: request.borrow_source_admission === true,
     include_record_bodies: request.include_record_bodies !== false,
+    tolerate_malformed_history: request.tolerate_malformed_history === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
@@ -290,9 +336,12 @@ function decodeRequest(
   };
 }
 
-async function readRunReceipts(path: string): Promise<readonly JsonObject[]> {
+async function readRunReceipts(
+  path: string,
+  tolerateMalformedHistory: boolean = false,
+): Promise<readonly JsonObject[]> {
   const snapshot = await readReceiptLogSnapshot(path);
-  if (snapshot?.firstErrorLine != null) {
+  if (!tolerateMalformedHistory && snapshot?.firstErrorLine != null) {
     throw new EffectRuntimeRequestError(
       `settlement readback line ${snapshot.firstErrorLine} is malformed`,
       "malformed_settlement_state",
@@ -373,6 +422,7 @@ export async function readQuotaSettlementSnapshot(
   runtimeRoot: string,
   goalId: string,
   rolloutSnapshot?: GoalRolloutEventSnapshot | null,
+  tolerateMalformedHistory: boolean = false,
 ): Promise<QuotaSettlementReadbackSnapshot> {
   settlementScope(runtimeRoot, goalId);
   if (
@@ -393,12 +443,19 @@ export async function readQuotaSettlementSnapshot(
     rolloutSnapshot === undefined
       ? readGoalRolloutEventSnapshot(runtimeRoot, goalId)
       : Promise.resolve(rolloutSnapshot),
-    readRunReceipts(join(goalRoot, "runs", "index.jsonl")),
+    readRunReceipts(join(goalRoot, "runs", "index.jsonl"), tolerateMalformedHistory),
   ]);
+  // Settlement-authority callers keep failing closed on the first damaged row.
+  // The scheduler follow-up route only needs the receipts it can actually read,
+  // so it opts into the same tolerant view the heartbeat reader already uses.
+  // Both views still ignore an unterminated row: the append owner will drop it
+  // before writing the next record.
   return indexSettlementSnapshot(
     runtimeRoot,
     goalId,
-    strictGoalRolloutEvents(snapshot),
+    tolerateMalformedHistory
+      ? committedGoalRolloutEvents(snapshot)
+      : strictGoalRolloutEvents(snapshot),
     runs,
   );
 }
@@ -503,7 +560,8 @@ export function projectSemanticReplanGuard(
 ): JsonObject {
   const hasCapability = ["semantic_replan_capability_id", "semantic_replan_gap_id", "semantic_replan_frontier_revision"]
     .some(field => Object.hasOwn(receiptDetails, field));
-  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition"]
+  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition",
+    "semantic_replan_review_stop_condition_sha256", "semantic_replan_review_stop_contract_id"]
     .some(field => Object.hasOwn(receiptDetails, field));
   if (hasCapability && hasReview) throw new EffectRuntimeRequestError(
     "a review source cannot replace a capability guard", "malformed_settlement_state");
@@ -534,20 +592,88 @@ export function projectSemanticReplanGuard(
     );
   }
   const reviewKind = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_kind, "receipt review kind") : null;
-  const stop = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
+  const stop = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition")
+    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
+  const stopDigest = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition_sha256")
+    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition_sha256,
+      "receipt review stop condition digest") : null;
+  const stopContractId = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_contract_id")
+    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_contract_id,
+      "receipt review stop contract id") : null;
+  if (hasReview && stop === null && stopDigest === null) throw new EffectRuntimeRequestError(
+    "a receipt review requires a stop condition or digest", "malformed_settlement_state");
   if (stop && stop.length > 240) throw new EffectRuntimeRequestError(
     "receipt review stop condition exceeds scalar metadata bounds", "malformed_settlement_state");
+  if (stopDigest !== null && !BARE_SHA256_PATTERN.test(stopDigest)) throw new EffectRuntimeRequestError(
+    "receipt review stop condition digest is malformed", "malformed_settlement_state");
+  if (stopContractId !== null &&
+      (stopContractId !== AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID || stopDigest === null ||
+       createHash("sha256").update(AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex") !== stopDigest)) {
+    throw new EffectRuntimeRequestError(
+      "receipt review stop contract does not match its digest", "malformed_settlement_state");
+  }
+  if (stop !== null && stopDigest !== null &&
+      stop !== AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION &&
+      createHash("sha256").update(stop, "utf8").digest("hex") !== stopDigest) {
+    throw new EffectRuntimeRequestError(
+      "receipt review stop condition digest does not match its value", "malformed_settlement_state");
+  }
   return {
     schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
     scope: "turn_guard",
     selected_obligation_id: selectedObligationId,
-    ...(hasReview ? {selected_review_source: {kind: reviewKind, stop_condition: stop}} : {}),
+    ...(hasReview ? {selected_review_source: {kind: reviewKind,
+      ...(stop === null ? {} : {stop_condition: stop}),
+      ...(stopDigest === null ? {} : {stop_condition_sha256: stopDigest}),
+      ...(stopContractId === null ? {} : {stop_contract_id: stopContractId})}} : {}),
     ...(hasCapability ? {
       selected_capability_guard: decodeCapabilityGuard({schema_version: "semantic_replan_capability_guard_v0",
         capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,
         frontier_revision: receiptDetails.semantic_replan_frontier_revision}),
     } : {}),
   };
+}
+
+/** Upgrade a legacy bound review receipt without changing its Turn identity.
+ *
+ * Older receipts retained the selected replan obligation but not the review
+ * source that proves a regenerated frontier still represents the same duty.
+ * The correction is append-only: the caller serializes the returned details
+ * under the receipt-log lock.  It is admitted only while closeout has not
+ * started and both the old and current guards select this exact binding.
+ */
+function requalifyHeartbeatReceipt(
+  heartbeatReceipt: JsonObject,
+  currentDetails: JsonObject,
+  identity: SettlementIdentity,
+  replayPhase: ReceiptBoundReplayPhase,
+  closeoutStarted: boolean,
+): JsonObject {
+  const work = heartbeatWorkRequalification(
+    heartbeatReceipt,
+    currentDetails,
+    identity,
+    replayPhase,
+    closeoutStarted,
+  );
+  if (work.append === true || replayPhase !== "open" || closeoutStarted ||
+      identity.binding_kind !== "autonomous_replan") return work;
+
+  const originalDetails = details(heartbeatReceipt);
+  const originalGuard = projectSemanticReplanGuard(originalDetails);
+  const currentGuard = projectSemanticReplanGuard(currentDetails);
+  if (originalGuard.selected_obligation_id !== identity.replan_obligation_id ||
+      currentGuard.selected_obligation_id !== identity.replan_obligation_id ||
+      originalGuard.selected_review_source != null ||
+      currentGuard.selected_review_source == null) return work;
+
+  const upgraded = {...originalDetails};
+  for (const field of ["semantic_replan_review_kind", "semantic_replan_review_stop_condition",
+    "semantic_replan_review_stop_condition_sha256", "semantic_replan_review_stop_contract_id"]) {
+    if (currentDetails[field] !== undefined) upgraded[field] = currentDetails[field]!;
+  }
+  upgraded.settlement_receipt_revision = "review_guard_upgrade";
+  return {append: true, details: upgraded};
 }
 
 function decodeCapabilityGuard(value: unknown): JsonObject {
@@ -641,6 +767,50 @@ function effectiveHeartbeatReceipt(
   return entries.length === 0
     ? null
     : selectEffectiveHeartbeatReceipt(identity.goal_id, identity.agent_id, entries);
+}
+
+/** First bound receipt in the same already filtered Turn list. */
+function admissionHeartbeatReceipt(
+  events: readonly JsonObject[],
+  identity: Pick<SettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id">,
+): JsonObject | null {
+  const entries: { fact: HeartbeatReceiptFact; value: JsonObject }[] = [];
+  for (const event of events) {
+    if (event.event_kind !== "quota_should_run") continue;
+    if (optionalString(event.goal_id) !== identity.goal_id) continue;
+    if (optionalString(event.agent_id) !== identity.agent_id) continue;
+    if (optionalString(event.run_id) !== identity.turn_instance_id) continue;
+    entries.push({ fact: heartbeatReceiptFactFromEvent(event), value: event });
+  }
+  return entries.length === 0
+    ? null
+    : selectAdmissionHeartbeatReceipt(identity.goal_id, identity.agent_id, entries);
+}
+
+function heartbeatValidationEvent(
+  events: readonly JsonObject[],
+  receipt: JsonObject,
+  identity: SettlementIdentity,
+): JsonObject | null {
+  if (!isHeartbeatLeaseReadiness(receipt)) return receipt;
+  // Readiness appends to the same Turn; only its original positive work
+  // admission can serve as validation. Follow durable links toward that root.
+  let validation = receipt;
+  for (let index = events.lastIndexOf(receipt) - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    const lineage = jsonObject(validation.causality);
+    const parentId = optionalString(lineage?.source_event_id);
+    if (parentId === null || lineage?.caused_by !== parentId) return null;
+    if (event.event_id !== parentId) continue;
+    const fact = heartbeatReceiptFactFromEvent(event);
+    if (event.event_kind !== "quota_should_run" ||
+        event.goal_id !== identity.goal_id || event.agent_id !== identity.agent_id ||
+        fact.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id ||
+        !effectIdsMatch(fact.settlement_effect_id, identity.effect_id)) return null;
+    if (!isHeartbeatLeaseReadiness(event)) return event;
+    validation = event;
+  }
+  return null;
 }
 
 function writebackResult(
@@ -909,16 +1079,30 @@ function resolveIdentity(
     const fact = heartbeatReceiptFactFromEvent(guard);
     const originalTodoId = normalizeTodoId(fact.todo_id);
     const originalReplanId = normalizeReplanObligationId(fact.replan_obligation_id);
+    const retainedTodoId = normalizeTodoId(
+      details(guard).pending_action_selection_todo_id,
+    );
     if (!originalTodoId && !originalReplanId && !requestSubject) {
-      return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
+      if (todoId === null && replanObligationId === null) {
+        return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
+      }
+    } else {
+      const requestedTodoMatchesOriginal = request.todo_id === null ||
+        (todoId !== null && (
+          todoId === originalTodoId ||
+          (originalReplanId !== null && todoId === retainedTodoId)
+        ));
+      if (!requestedTodoMatchesOriginal ||
+          (request.replan_obligation_id !== null &&
+            (replanObligationId === null || replanObligationId !== originalReplanId))) {
+        return failedIdentity(
+          "settlement binding does not match: requested binding differs from the original Turn guard",
+          "identity_mismatch",
+        );
+      }
+      todoId = originalTodoId;
+      replanObligationId = originalReplanId;
     }
-    if ((request.todo_id !== null && (todoId === null || todoId !== originalTodoId)) ||
-        (request.replan_obligation_id !== null &&
-          (replanObligationId === null || replanObligationId !== originalReplanId))) {
-      return failedIdentity("requested binding differs from the original Turn guard", "identity_mismatch");
-    }
-    todoId = originalTodoId;
-    replanObligationId = originalReplanId;
   }
   if (!agentId || !turnInstanceId || [todoId, replanObligationId, requestSubject].filter(Boolean).length !== 1) {
     return failedIdentity(
@@ -1031,7 +1215,11 @@ function resolveIdentity(
       "identity_mismatch",
     );
   }
-  const eventId = optionalString(receiptEvent.event_id);
+  const validationEvent = heartbeatValidationEvent(events, receiptEvent, identity);
+  if (validationEvent === null) {
+    return failedIdentity("matching work admission is missing for Turn readiness", "receipt_missing");
+  }
+  const eventId = optionalString(validationEvent.event_id);
   return settlementPure(
     settlementIdentityPayload(identity),
     [settlementReceipt(identity, "validation", eventId ? `rollout_event:${eventId}` : null)],
@@ -1100,7 +1288,8 @@ function owedPriorTurnFromSnapshot(
   request: ReadbackRequest,
   snapshot: QuotaSettlementReadbackSnapshot,
   agentId: string,
-  turnInstanceId: string,
+  turnInstanceId: string | null,
+  options?: { includeUnwrittenReplans: boolean },
 ): OwedPriorTurn | null {
   const receipts = heartbeatReceiptsFromEvents(snapshot.events, request.goal_id, agentId)
     .filter((event) => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
@@ -1109,8 +1298,9 @@ function owedPriorTurnFromSnapshot(
     request.goal_id,
     agentId,
     turnInstanceId,
+    options,
   );
-  for (const selected of candidates) {
+  for (const {candidate: selected, requireWritebackForRecovery} of candidates) {
     // A committed monitor poll is its own exact no-spend closeout. This is the
     // same acceptance rule the next-Turn preflight applies; using only the
     // advancement writeback/spend chain here incorrectly made every later
@@ -1132,24 +1322,68 @@ function owedPriorTurnFromSnapshot(
           infer_turn_instance_id: false,
           allow_unbound_binding: false,
           resolve_original_binding: false,
+          pending_closeout: false,
           refresh_retry: null,
           heartbeat_reentry_guard: null,
         },
         snapshot,
         false,
-      ))
+      ), requireWritebackForRecovery)
       : null;
-    if (missingReceipts !== null) {
+    if (missingReceipts != null) {
       return { ...selected, missing_receipts: missingReceipts };
     }
   }
   return null;
 }
 
+/** Resolve pending recovery without another provider read or a latest-Run heuristic. */
+function readPendingCloseoutFromRequest(
+  request: ReadbackRequest,
+  snapshot: QuotaSettlementReadbackSnapshot,
+): JsonObject {
+  const explicitAgentId = normalizeAgentId(request.agent_id);
+  if (explicitAgentId === null) {
+    throw new EffectRuntimeRequestError("pending closeout requires an explicit Agent");
+  }
+  const notFound = {schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA, found: false};
+  const turn = request.turn_instance_id ?? owedPriorTurnFromSnapshot(
+    request, snapshot, explicitAgentId, null, { includeUnwrittenReplans: true },
+  )?.prior_turn_instance_id;
+  if (!turn) return notFound;
+  // Selection, original binding validation and receipt progress share this
+  // immutable snapshot and admitted owner. Maintenance Run classifications
+  // cannot conceal the guard's debt or select another Agent's work.
+  const result = readQuotaSettlementFromRequest({...request, turn_instance_id: turn,
+    pending_closeout: false, resolve_original_binding: true}, snapshot, request.turn_instance_id !== null);
+  const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
+  const admission = jsonObject(result.native_child_admission);
+  const originalReceipt = jsonObject(result.heartbeat_receipt);
+  const workAdmitted = originalReceipt !== null &&
+    heartbeatReceiptFactFromEvent(originalReceipt).settlement_effect_id !== null &&
+    (admission?.report_permission === "new_operation" ||
+    admission?.report_permission === "existing_operation_only") &&
+    (!identity?.replan_obligation_id ||
+      jsonObject(result.semantic_replan_guard)?.selected_obligation_id === identity.replan_obligation_id);
+  const partialSettlement = [result.writeback, result.spend].some(step =>
+    jsonObject(jsonObject(step)?.payload)?.ok === true);
+  // Binding a candidate is not work admission. Reuse the receipt owner's
+  // qualified work facts, while retaining verified partial commits even if
+  // the original guard did not admit new work. Identity failures stay visible.
+  if (identity !== null && !workAdmitted && !partialSettlement) return notFound;
+  if (jsonObject(jsonObject(result.settlement)?.payload)?.ok === true ||
+      (identity?.todo_id && committedMonitorPollFromSnapshot(snapshot, {
+        goal_id: request.goal_id, agent_id: explicitAgentId, turn_instance_id: turn,
+        todo_id: String(identity.todo_id),
+      }, request.owner) !== null)) return notFound;
+  return result;
+}
+
 function readQuotaSettlementFromRequest(
   request: ReadbackRequest,
   snapshot: QuotaSettlementReadbackSnapshot,
   nameOwedPriorTurn = true,
+  matchedSpend?: MatchedSpendRecords,
 ): JsonObject {
   if (
     snapshot.runtimeRoot !== request.runtime_root ||
@@ -1161,6 +1395,7 @@ function readQuotaSettlementFromRequest(
     );
   }
   const explicitAgentId = normalizeAgentId(request.agent_id);
+  if (request.pending_closeout) return readPendingCloseoutFromRequest(request, snapshot);
   // Only latest-Turn inference needs the full run history. Explicit readback
   // must use the existing Turn indexes before applying the Goal owner fence;
   // otherwise a batch over N Turns repeatedly scans all N receipts.
@@ -1217,6 +1452,7 @@ function readQuotaSettlementFromRequest(
     quotaOwnerOwnsProjection(request.owner, run.goal_ref)
   );
   const heartbeatReceipt = effectiveHeartbeatReceipt(events, identity);
+  const admissionReceipt = admissionHeartbeatReceipt(events, identity);
   if (heartbeatReceipt === null) {
     return failedReadback(
       failedIdentity(
@@ -1226,6 +1462,10 @@ function readQuotaSettlementFromRequest(
     );
   }
   const receiptDetails = details(heartbeatReceipt);
+  const preparedLease = heartbeatPreparedLease(receiptDetails);
+  if (Object.hasOwn(receiptDetails, "prepared_lease_required") && receiptDetails.prepared_lease_required !== true) {
+    throw new EffectRuntimeRequestError("Turn readiness requirement is malformed", "malformed_settlement_state");
+  }
   const writebackRun = findWriteback(runs, identity);
   const writebackEvent = findStepEvent(events, identity, "refresh_state");
   const spendRun = findSpend(
@@ -1235,6 +1475,11 @@ function readQuotaSettlementFromRequest(
     identity,
   );
   const spendEvent = findStepEvent(events, identity, "quota_spend");
+  if (matchedSpend) {
+    matchedSpend.run = spendRun;
+    matchedSpend.receipt = spendEvent;
+    matchedSpend.admissionSource = receiptDetails.quota_spend_source;
+  }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
   const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
@@ -1369,11 +1614,20 @@ function readQuotaSettlementFromRequest(
     ),
     spend_run: includeRecords ? spendRun : null,
     heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    ...(preparedLease === null ? {} : {prepared_lease: preparedLease}),
+    ...(receiptDetails.prepared_lease_required === true ? {prepared_lease_required: true} : {}),
+    admission_recorded_at: typeof admissionReceipt?.recorded_at === "string"
+      && admissionReceipt.recorded_at.trim() ? admissionReceipt.recorded_at : null,
+    admission_event_id: typeof admissionReceipt?.event_id === "string"
+      && admissionReceipt.event_id.trim() ? admissionReceipt.event_id : null,
     writeback_event: includeRecords ? writebackEvent : null,
     spend_event: includeRecords ? spendEvent : null,
     completion_event: includeRecords ? completionEvent : null,
+    ...(includeRecords && supersedeEvent ? {supersede_event: supersedeEvent} : {}),
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
+    replan_execution_pending: replayPhase === "open" &&
+      admitsAutonomousReplan(heartbeatReceipt, heartbeatReceiptFactFromEvent(heartbeatReceipt)),
     successor_replan_pending: replayPhase === "open" &&
       heartbeatReceipt.status === "successor_replan_required" &&
       receiptDetails.should_run === true && receiptDetails.delivery_allowed === false,
@@ -1382,7 +1636,7 @@ function readQuotaSettlementFromRequest(
       closeoutStarted, normalizeReplanObligationId(semanticReplanGuard.selected_obligation_id),
     ),
     ...(request.heartbeat_reentry_guard === null ? {} : {
-      heartbeat_reentry_qualification: heartbeatWorkRequalification(heartbeatReceipt,
+      heartbeat_reentry_qualification: requalifyHeartbeatReceipt(heartbeatReceipt,
         request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted),
     }),
   };
@@ -1434,9 +1688,16 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     return prepareBlockedWait(value);
   }
   const request = decodeRequest(value);
-  const spendPrecheck = jsonObject(value)?.spend_precheck;
+  const input = requireJsonObject(value, "quota settlement readback request");
+  const spendPrecheck = input.spend_precheck;
   if (spendPrecheck !== undefined && typeof spendPrecheck !== "boolean") {
     throw new EffectRuntimeRequestError("spend_precheck must be a boolean");
+  }
+  const spendRequest = input.spend_request === undefined ? null
+    : requireJsonObject(input.spend_request, "spend_request");
+  if (spendRequest !== null && (!spendPrecheck ||
+      !Number.isSafeInteger(spendRequest.slots) || typeof spendRequest.source !== "string")) {
+    throw new EffectRuntimeRequestError("spend_request requires spend_precheck, integer slots and a source");
   }
   if (spendPrecheck) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
@@ -1445,9 +1706,38 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
   return await withOwner(
     request.owner,
     async () => {
+      const matchedSpend: MatchedSpendRecords = {run: null, receipt: null};
       const result = readQuotaSettlementFromRequest(request,
-        await readQuotaSettlementSnapshot(request.runtime_root, request.goal_id));
+        await readQuotaSettlementSnapshot(
+          request.runtime_root,
+          request.goal_id,
+          undefined,
+          request.tolerate_malformed_history,
+        ), true, matchedSpend);
       const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
+      const receipt = spendReceiptTerms(matchedSpend.receipt);
+      // Only exact readback opens its matched debit artifact. Check its
+      // identity even when the receipt is missing or omits billing terms.
+      // Snapshot readers for history and guard discovery use the bounded index.
+      const retained = matchedSpend.run !== null
+        ? await readQuotaSpendEventFromRun(join(request.runtime_root, "goals", request.goal_id, "runs"),
+          matchedSpend.run, request.goal_id)
+        : null;
+      const ledger = {slots: retained?.slots ?? undefined, source: retained?.source ?? undefined};
+      let conflict = spendTermsConflict(ledger, receipt);
+      if (retained === null && matchedSpend.run !== null && matchedSpend.receipt !== null) {
+        // An index row identifies the original debit, but does not provide its
+        // terms. Check explicit receipt terms against the matching admission.
+        const source = matchedSpend.admissionSource ?? undefined;
+        conflict = spendTermsConflict(
+          {slots: ORIGINAL_TURN_SPEND_SLOTS, source}, receipt, "the original Turn admission",
+        ) ?? (source === undefined && receipt.source !== undefined
+          ? "the original Turn admission has no verifiable billing source for the quota spend receipt"
+          : null);
+      }
+      if (conflict !== null && spendRequest === null) {
+        throw new EffectRuntimeRequestError(conflict, "malformed_settlement_state");
+      }
       if (identity && request.refresh_retry &&
           jsonObject(result.refresh_recovery)?.decision !== "reject" &&
           isTurnScopedSettlementOutcome(request.refresh_retry.delivery_outcome,
@@ -1463,14 +1753,76 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       // only its receipts and whether a spend Run already needs receipt repair.
       const settlement = requireJsonObject(result.settlement, "quota settlement bundle");
       const outcome = requireJsonObject(settlement.result, "quota settlement result");
+      const rejection = conflict === null
+        ? spendRequest && identity ? originalSpendRejection(result, spendRequest, ledger, receipt) : null
+        : rejectedSpend(conflict);
       return {
         schema_version: result.schema_version,
         found: true,
         identity: result.identity,
         settlement: {...settlement, result: {...outcome, value: null}},
         progress: result.progress,
-        spend_run_present: jsonObject(result.spend_run) !== null,
+        spend_run_present: matchedSpend.run !== null,
+        ...(rejection === null ? {} : {spend_request_rejection: bundle(rejection)}),
       };
     },
   );
+}
+
+function spendReceiptTerms(event: JsonObject | null): SpendTerms {
+  const {slots, source} = event === null ? {} : details(event);
+  // Older rollout envelopes and repaired receipts can omit billing terms.
+  return {
+    slots: slots == null || slots === "" ? undefined : slots,
+    source: source == null || source === "" ? undefined : source,
+  };
+}
+
+function spendTermsConflict(
+  recorded: SpendTerms,
+  receipt: SpendTerms,
+  description = "the recorded debit",
+): string | null {
+  for (const field of ["slots", "source"] as const) {
+    if (recorded[field] !== undefined && receipt[field] !== undefined && recorded[field] !== receipt[field]) {
+      return `${description} and quota spend receipt disagree on ${field}`;
+    }
+  }
+  return null;
+}
+
+function rejectedSpend(reason: string): SettlementResult<JsonObject> {
+  return settlementFailed({kind: "quota_spend_rejected", step_kind: "quota_spend", reason});
+}
+
+function originalSpendRejection(
+  readback: JsonObject, proposed: JsonObject,
+  ledger: SpendTerms, receipt: SpendTerms,
+): SettlementResult<JsonObject> | null {
+  const progress = requireJsonObject(readback.progress, "quota settlement progress");
+  const guard = jsonObject(readback.heartbeat_receipt);
+  const authorizedSource = guard ? details(guard).quota_spend_source : null;
+  // Older ledgers can have a rollout receipt but no readable artifact. Keep
+  // their receipt facts available and never repair an already mismatched debit.
+  const spendEvent = jsonObject(readback.spend_event);
+  const spendRun = jsonObject(readback.spend_run);
+  const recordedSlots = ledger.slots ?? receipt.slots;
+  const recordedSource = ledger.source ?? receipt.source;
+  const fallbackSource = recordedSource === "heartbeat" || recordedSource === "visible-goal"
+    ? recordedSource : progress.quota_spend_source;
+  const source = authorizedSource ?? fallbackSource;
+  // Every admitted CLI settlement plan authorizes one slot and the original
+  // source. The same check gates initial spend, receipt repair, and replay.
+  if (proposed.slots !== ORIGINAL_TURN_SPEND_SLOTS || proposed.source !== source) {
+    return rejectedSpend(`original Turn settlement requires --slots ${ORIGINAL_TURN_SPEND_SLOTS} --source ${String(source)}`);
+  }
+  const slotsConflict = recordedSlots !== undefined && recordedSlots !== proposed.slots;
+  const sourceConflict = recordedSource !== undefined && recordedSource !== source;
+  // Historical complete receipts may lack the amount projection. A partial
+  // debit needs the original charge facts before we can certify its receipt.
+  const unverifiableRepair = spendRun !== null && spendEvent === null &&
+    (recordedSlots === undefined || recordedSource === undefined);
+  return slotsConflict || sourceConflict || unverifiableRepair ? rejectedSpend(unverifiableRepair
+      ? "the recorded debit has no verifiable billing terms for receipt repair"
+      : "the recorded debit differs from the original Turn settlement plan") : null;
 }

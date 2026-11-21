@@ -13,11 +13,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..command_invocation import loopx_cli_argv
 from ..control_plane.effect_program import (
     SETTLEMENT_RECEIPT_SCHEMA_VERSION, SettlementStepKind, decode_settlement_receipt_payload,
 )
 from ..control_plane.quota.settlement import (
-    SettlementIdentity, attach_settlement_progress, read_heartbeat_settlement, settlement_result_payload,
+    SettlementIdentity, attach_settlement_progress, read_heartbeat_settlement, render_owed_host_command,
+    settlement_result_payload,
 )
 
 
@@ -25,7 +27,7 @@ def settle_requested_refresh(payload, args, registry_path, goal_ref):
     """Keep refresh's optional settlement composition with its existing owner."""
     if not getattr(args, "settle_turn", False):
         return
-    from ..history import load_registry
+    from ..control_plane.projects.registry_codec import load_registry
     from ..paths import resolve_runtime_root
 
     runtime_root = resolve_runtime_root(load_registry(registry_path), args.runtime_root)
@@ -130,11 +132,26 @@ def settle_refreshed_turn(
     if not settled_replay:
         try:
             workspace = delivery_workspace_path.expanduser().resolve() if delivery_workspace_path else None
-            command = shlex.split(owed["command"])
+            if "command_argv" in owed:
+                command = owed["command_argv"]
+                if (not isinstance(command, list) or not command or
+                        not all(isinstance(arg, str) for arg in command) or
+                        render_owed_host_command(command) != owed["command"]):
+                    raise ValueError("owed quota command does not match its argument vector")
+            else:
+                command = shlex.split(owed["command"])
+            route = loopx_cli_argv()
+            if command[:len(route)] != route:
+                raise ValueError("owed quota command does not match the current CLI route")
+            command_args = command[len(route):]
             # Validate the owner-rendered argv through the actual CLI parser too:
             # a projector bug must not debit a different valid Turn before readback.
-            from ..cli import build_parser
-            args = build_parser().parse_args(["--format", "json", *command[1:]])
+            from ..cli_runtime import build_cli_parser
+            from .quota_registration import register_quota_command
+
+            parser, subparsers = build_cli_parser()
+            register_quota_command(subparsers)
+            args = parser.parse_args(["--format", "json", *command_args])
             if (args.command != "quota" or args.quota_command != "spend-slot"
                     or not args.execute or args.slots != 1
                     or Path(args.registry).expanduser().resolve() != registry_path.resolve()
@@ -148,15 +165,15 @@ def settle_refreshed_turn(
             # Keep the validated producing cwd for accounting, but pin imports to
             # this CLI's package: the delivered worktree may contain another LoopX.
             # -P excludes the child cwd from Python's initial module search path.
-            # Retain the complete CLI guards, hooks and rollout receipts; neither
-            # ambient PATH nor a lower-level debit may replace that adapter.
+            # Retain the complete CLI guards, hooks and rollout receipts.
+
             entry = (
                 "import sys; sys.path.insert(0, sys.argv.pop(1)); "
-                "import runpy; runpy.run_module('loopx.cli', run_name='__main__')"
+                "import runpy; runpy.run_module('loopx.entrypoint', run_name='__main__')"
             )
             result = subprocess.run(
                 [sys.executable, "-P", "-c", entry, str(Path(__file__).resolve().parents[2]),
-                 "--format", "json", *command[1:]],
+                 "--format", "json", *command_args],
                 cwd=workspace,
                 capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
             )

@@ -14,8 +14,7 @@ is retained as a superseded discovery and evidence entrypoint.
 An owner promises a draft, receives a deadline correction, and asks for supporting
 material. The manager retains one commitment, prepares authorized material, and
 returns a sourced brief in the original private desktop conversation. The owner
-can inspect, correct, dismiss and pause it. A prepared draft or sent message alone
-does not prove that the personal commitment has been fulfilled.
+can inspect, correct, dismiss and pause it.
 
 The first profile covers one owner, a private local workspace, selected authorized
 bot-visible Lark conversations and an existing or explicitly created private Goal.

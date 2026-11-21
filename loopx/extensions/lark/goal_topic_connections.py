@@ -1152,7 +1152,7 @@ def list_lark_connections(
                     "health_error_code": health_error_code,
                     "history_permission_guidance": history_permission_guidance,
                     "listener_status": listener_status or None,
-                    "listener_error_code": listener.get("error_code"),
+                    "listener_error_code": listener.get("error_code") or listener.get("callback_error_code"),
                     "last_event_status": last_event_status or None,
                     "last_event_reason": last_event_reason or None,
                     "event_count": event_count,

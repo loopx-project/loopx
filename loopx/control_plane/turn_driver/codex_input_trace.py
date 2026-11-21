@@ -127,8 +127,8 @@ def codex_context_in_active_input(observation: dict[str, Any], *, baseline: dict
     """Cross-check a host's retention claim against a native in-flight tool call.
 
     Native trace v1 is an optional, provider-specific IO boundary. Only an
-    already enabled trace is read; this neither enables tracing nor modifies a
-    session. A saved history, an earlier inference or a completed tool is not
+    already enabled trace is read.
+    A saved history, an earlier inference or a completed tool is not
     current-input evidence. Missing/partial/unknown data returns false.
 
     This observes the input that produced this tool call, not a future model

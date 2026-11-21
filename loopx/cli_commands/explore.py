@@ -573,17 +573,13 @@ def handle_explore_command(
         config_path = (
             Path(args.config_path).expanduser()
             if getattr(args, "config_path", None)
-            else default_lark_explore_config_path(
-                Path(str(source_runtime_route["source_registry"]))
-                if source_runtime_route is not None
-                else registry_path
-            )
+            else default_lark_explore_config_path(source_registry)
         )
         if args.explore_command == "schema":
             payload = lark_explore_schema_payload()
         elif args.explore_command == "turn-context":
             from ..capabilities.explore.turn_context import explore_turn_context
-            payload = explore_turn_context(registry_path=Path(str(source_runtime_route["source_registry"])), runtime_root=runtime_root,
+            payload = explore_turn_context(registry_path=source_registry, runtime_root=runtime_root,
                                            goal_id=args.goal_id, agent_id=args.agent_id,
                                            todo_id=args.todo_id,
                                            result_limit=args.result_limit, result_offset=args.result_offset,
@@ -654,7 +650,7 @@ def handle_explore_command(
             payload = append_research_observation(
                 explore_result_log_path(runtime_root, args.goal_id), goal_id=args.goal_id,
                 observation=observation, agent_id=args.agent_id,
-                registry_path=Path(str(source_runtime_route["source_registry"])) if source_runtime_route else registry_path,
+                registry_path=source_registry,
                 runtime_root=runtime_root,
             )
         elif args.explore_command == "summary":

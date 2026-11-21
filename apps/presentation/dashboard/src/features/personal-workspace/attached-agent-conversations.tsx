@@ -403,11 +403,36 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     if (draggingScroll.current && Math.abs(delta) > 1) scrollIntent(Math.sign(delta));
     else if (scrollDirection.current) pageAtEdge(scrollDirection.current);
   }
-  async function loadContent(record: Message, offset: number): Promise<ContentPage> {
+  async function loadContent(record: Message, offset: number, signal: AbortSignal): Promise<ContentPage> {
+    const current = generation.current;
+    const source = history.current?.source;
+    const ensureCurrent = () => {
+      signal.throwIfAborted();
+      if (!source || rejectedRead.current || current !== generation.current || source !== history.current?.source) {
+        throw new Error(zh ? "原记录已变化，请重新打开这条记录。" : "The original record changed; reopen it to continue.");
+      }
+    };
     const params = new URLSearchParams(query);
     params.set("entry_id", record.id); params.set("content_offset", String(offset));
-    params.set("source_ref", history.current?.source ?? ""); params.set("content_ref", record.content_ref ?? "");
-    return request<ContentPage>(`/api/chat/codex-attached?${params}`);
+    params.set("source_ref", source ?? ""); params.set("content_ref", record.content_ref ?? "");
+    const read = async () => {
+      ensureCurrent();
+      const page = await request<ContentPage>(`/api/chat/codex-attached?${params}`, {signal});
+      ensureCurrent();
+      return page;
+    };
+    try {
+      return await read();
+    } catch (failure) {
+      if (!retryableRead(failure)) throw failure;
+      // Retry only this read: the binding, record fingerprint and offset stay fixed.
+      try {
+        return await read();
+      } catch (retryFailure) {
+        if (!retryableRead(retryFailure)) throw retryFailure;
+        throw new Error(zh ? "暂时无法继续读取，已读内容保留。" : "Could not read more of this record. Existing text is retained.");
+      }
+    }
   }
 
   async function send() {

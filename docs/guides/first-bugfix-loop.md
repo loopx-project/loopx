@@ -180,7 +180,7 @@ the correct remote and target branch, push the work branch only within your
 authorization, and create a PR with the actual cause, behavior change and test
 results. Read back its head and checks. A local commit, a pushed branch, an open
 PR and a merged PR are different outcomes; CI or review feedback may require
-another repair. Creation of a PR does not authorize merging it.
+another repair.
 
 <a id="4-turn-the-workflow-into-a-recurring-bug-hunt"></a>
 
@@ -205,7 +205,7 @@ and unresolved tests honestly. Keep merge and release for my explicit decision.
 
 Here, “infinite loop” means authorized work can continue or resume. Each repair
 still has a finish line. Quiet monitoring should wait for a meaningful event
-or its scheduled check; a higher wake frequency does not prove useful progress.
+or its scheduled check.
 Start with one module, a known test command, and a spending boundary you accept.
 
 To pause, ask the agent to pause this LoopX goal and its corresponding driver,
@@ -263,8 +263,7 @@ The creator's [reported uses](https://x.com/huangruiteng/status/2118539848235803
 include research supervision, PR review, product iteration and refactoring.
 These are use cases, not a controlled performance comparison. If your current
 Goal workflow already delivers what you need, keep it. LoopX adds state,
-validation and continuation work with their own costs; this small exercise
-does not establish a quality or efficiency advantage over native Goal.
+validation and continuation work with their own costs.
 
 ## Setup effort, ongoing cost, and limits
 

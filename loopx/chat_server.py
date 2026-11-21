@@ -20,12 +20,7 @@ if TYPE_CHECKING:
     from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
-from .chat import (
-    TodoReviewPreviewConflict,
-    apply_todo_review_preview,
-    build_todo_review_preview,
-    redact_local_paths,
-)
+from .chat import TodoReviewPreviewConflict, redact_local_paths
 from .chat_agent import CodexChatAgentError
 from .capabilities.native_chat.project_context import ChatProjectContexts
 from .chat_attachments import (
@@ -45,6 +40,7 @@ from .chat.result_files_api import ChatResultFilesRequestMixin
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
 from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
 from .chat.status_api import ChatStatusRequestMixin
+from .chat.todo_source import review_todo_create
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
@@ -67,6 +63,7 @@ from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
     parse_chat_history_selection,
+    prepare_chat_history_session,
     read_chat_history_selection,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
@@ -115,6 +112,7 @@ from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
 from .control_plane.projects.registry_codec import load_registry
 from .registry import registry_goals, resolve_state_file
+from .thread_agent_binding import list_attached_session_bindings
 from .state_projection import build_active_state_structured_projection
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
@@ -925,25 +923,27 @@ class ChatRequestHandler(
             }
         )
 
+    def _project_queue_reply_history(self, store: object, session: dict[str, object], rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        return project_private_reply_history(store, session, rows)
+
     @effect_runtime_request_scope()
     def _session_snapshot(self, session_id: str) -> None:
         try:
             selection = parse_chat_history_selection(parse_qs(urlparse(self.path).query, keep_blank_values=True))
-            # A historical Turn read must not recover an unrelated execution.
-            if selection["turn_id"] is None:
-                self.server.runtime_controller.recover_exited_turn(session_id)
             store = self.server.chat_store
-            session = store.load_session(session_id) or {}
+            session = prepare_chat_history_session(store, session_id, selection,
+                recover_turn=self.server.runtime_controller.recover_exited_turn)
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
-            markers = [] if selection["turn_id"] is not None else media.read(store, bindings, session)
+            scoped = selection["turn_id"] is not None or selection["report_message_id"] is not None
+            markers = [] if scoped else media.read(store, bindings, session)
             payload = read_chat_history_selection(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,
                 project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
-                project_provider=lambda rows: project_private_reply_history(
-                    store, session, rows))
+                project_provider=lambda rows: self._link_history_images(
+                    session_id, session, selection, project_private_reply_history(store, session, rows)))
             if markers and "session" in payload:
                 payload["session"] = media.summary(payload["session"], markers)
             self._send_json(payload)
@@ -953,31 +953,6 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=400)
         except OSError:
             self._send_error("Chat history is temporarily unavailable", status=503)
-
-    def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
-        from .capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
-        service = ManagedSessionTurn(self.server.runtime_controller)
-        try:
-            if execute:
-                body = self._read_json()
-                if set(body) - {"agent_id", "operation_id", "todo_id"}:
-                    raise ValueError("unsupported managed Turn arguments")
-                turn, created = service.submit(session_id, **body)
-                return self._send_json({"ok": True, "session_id": session_id, "turn": turn, "created": created}, status=202)
-            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            sources = query.get("calendar_task_sources", ["false"])
-            if sources not in (["true"], ["false"]):
-                raise ValueError("calendar_task_sources must be one true or false value")
-            include_sources = sources == ["true"]
-            if include_sources and (set(query) - {"calendar_task_sources", "agent_id", "operation_id"}
-                    or any(len(values) != 1 for values in query.values())):
-                raise ValueError("select one original managed Session and Agent for Task sources")
-            self._send_json(service.inspect(session_id, agent_id=query.get("agent_id", [None])[0],
-                operation_id=query.get("operation_id", [None])[0], include_calendar_task_sources=include_sources))
-        except KeyError:
-            self._send_error("chat session was not found", status=404)
-        except (TypeError, ValueError, RuntimeError) as exc:
-            self._send_error(str(exc), status=409, error_code="managed_turn_unavailable")
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
@@ -1200,19 +1175,10 @@ class ChatRequestHandler(
             if not goal_id:
                 raise ValueError("goal_id is required")
             self._registry_and_goal(goal_id)
-            if apply:
-                payload = apply_todo_review_preview(
-                    registry_path=self.server.registry_path,
-                    goal_id=goal_id,
-                    text=text,
-                    preview_id=str(body.get("preview_id") or ""),
-                )
-            else:
-                payload = build_todo_review_preview(
-                    registry_path=self.server.registry_path,
-                    goal_id=goal_id,
-                    text=text,
-                )
+            payload = review_todo_create(
+                self.server, goal_id=goal_id, text=text,
+                preview_id=str(body.get("preview_id") or "") if apply else None,
+            )
         except TodoReviewPreviewConflict as exc:
             self._send_error(str(exc), status=409, todo_receipt=exc.receipt)
             return
@@ -1433,7 +1399,7 @@ class ChatRequestHandler(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_action_v1",
-                "proposal": proposal,
+                "proposal": self.server.action_service.project_task_dispatch(proposal),
             }
         )
 
@@ -1457,7 +1423,7 @@ class ChatRequestHandler(
             {
                 "ok": True,
                 "schema_version": "loopx_chat_action_list_v1",
-                "proposals": proposals,
+                "proposals": [self.server.action_service.project_task_dispatch(item) for item in proposals],
             }
         )
 
@@ -1663,6 +1629,15 @@ class ChatRequestHandler(
             return
         if path == "/healthz":
             self._send_json({"ok": True})
+            return
+        if path == "/api/attached-sessions":
+            # Read-only list of the external-session bindings the registry
+            # accepts (host, session id, Goal, Agent); it opens nothing.
+            try:
+                goals = registry_goals(load_registry(self.server.registry_path))
+            except (OSError, ValueError):
+                goals = []
+            self._send_json({"ok": True, "bindings": list_attached_session_bindings(goals)})
             return
         if path == CHAT_READINESS_PATH:
             # Readiness pairs the frontend with this loaded service artifact.
@@ -1893,8 +1868,11 @@ def serve_chat(
         raise ValueError("loopx chat requires a loopback --host such as 127.0.0.1")
     resolved_assets = (assets_dir or default_chat_assets_dir()).expanduser().resolve()
     if assets_dir is None:
-        from .presentation.chat_bundle import validate_bundle
-        validate_bundle(resolved_assets, source_root=Path(__file__).resolve().parents[1])
+        from .presentation.chat_bundle import runtime_source_root, validate_bundle
+        validate_bundle(
+            resolved_assets,
+            source_root=runtime_source_root(Path(__file__).resolve().parents[1]),
+        )
     if not (resolved_assets / "index.html").is_file():
         raise FileNotFoundError("LoopX Chat web assets are unavailable; reinstall LoopX or rebuild the chat bundle")
     resolved_registry_path = registry_path or (Path.home() / ".loopx" / "registry.json")
@@ -2033,6 +2011,9 @@ def serve_chat(
     server.delegation_wake_service = DelegationWakeService(
         server.runtime_controller, goal_context=_wake_goal_context
     ).start()
+    # Resume only retained, explicitly confirmed creation requests through the
+    # existing Session queue. Its owner rechecks source, native work and gates.
+    server.runtime_controller.resume_creation_requests()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
     print(f"Agent boundary: local adapters, project grant {project_workspace_grant}, approval policy never", flush=True)

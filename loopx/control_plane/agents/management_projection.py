@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ..todos.todo_semantics import todo_priority_rank
 
-from typing import Any, Iterable
+from typing import Iterable, Mapping
 
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import now_utc, now_utc_iso, parse_timestamp
@@ -20,6 +20,10 @@ from .material_handoff import (
 )
 
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
+
+
 AGENT_MANAGEMENT_PROJECTION_SCHEMA_VERSION = "agent_management_projection_v0"
 TODO_ROW_SCHEMA_VERSION = "todo_row_v0"
 AGENT_MANAGEMENT_MODE = "read_only"
@@ -32,21 +36,13 @@ STALE_CLAIM_THRESHOLD_HOURS = 36
 MATERIAL_LIFECYCLE_CAPABILITY = "material_lifecycle"
 LEASE_STATUS_UNAVAILABLE = "unavailable"
 
-_TODO_GROUP_LIST_KEYS = tuple(
-    dict.fromkeys(
-        (
-            "items",
-            *TODO_SUMMARY_SOURCE_KEYS,
-            "executable_backlog_items",
-            "deferred_items",
-            "deferred_resume_candidates",
-        )
-    )
-)
+_TODO_GROUP_LIST_KEYS = tuple(dict.fromkeys((
+    "items", *TODO_SUMMARY_SOURCE_KEYS,
+    "executable_backlog_items", "deferred_items", "deferred_resume_candidates",
+)))
 
 
-
-def _compact(value: Any, *, limit: int = 220) -> str | None:
+def _compact(value: object, *, limit: int = 220) -> str | None:
     return public_safe_compact_text(value, limit=limit)
 
 
@@ -54,61 +50,67 @@ def _now_iso() -> str:
     return now_utc_iso()
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+def _as_dict(value: object) -> PayloadView:
+    return {str(k): v for k, v in value.items()} if isinstance(value, Mapping) else {}
 
 
-def _as_list(value: Any) -> list[Any]:
+def _as_list(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
 
 
-def _string_list(value: Any, *, limit: int = MAX_WORKSPACE_SCOPES) -> list[str]:
+def _append_unique(target: list[str], value: str | None) -> None:
+    if value and value not in target:
+        target.append(value)
+
+
+def _nonempty_dict(values: PayloadView) -> Payload:
+    return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+
+def _string_list(value: object, *, limit: int = MAX_WORKSPACE_SCOPES) -> list[str]:
     items = value if isinstance(value, list) else [value] if value not in (None, "") else []
     compact: list[str] = []
     for item in items:
-        text = _compact(item, limit=140)
-        if text and text not in compact:
-            compact.append(text)
+        _append_unique(compact, _compact(item, limit=140))
         if len(compact) >= limit:
             break
     return compact
 
 
-def _todo_status(todo: dict[str, Any]) -> str:
+def _todo_status(todo: PayloadView) -> str:
     status = str(todo.get("status") or "").strip().lower()
-    if status:
-        return status
-    return "done" if todo.get("done") else "open"
+    return status or ("done" if todo.get("done") else "open")
 
 
-def _is_done(todo: dict[str, Any]) -> bool:
+def _is_done(todo: PayloadView) -> bool:
     # A deferred Todo can carry a checked legacy display flag. Explicit state
     # wins; the checkbox fallback belongs only to rows without a status.
     return _todo_status(todo) in {"done", "archive", "archived"}
 
 
+def _index_rank(todo: PayloadView) -> int:
+    raw = todo.get("index")
+    if isinstance(raw, (bool, int, float, str)):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return 999_999
 
 
-def _index_rank(todo: dict[str, Any]) -> int:
-    try:
-        return int(todo.get("index"))
-    except (TypeError, ValueError):
-        return 999_999
-
-
-def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, int, str]:
+def _todo_sort_key(todo: PayloadView) -> tuple[int, int, int, str]:
     done_rank = 1 if _is_done(todo) else 0
     return (done_rank, todo_priority_rank(todo), _index_rank(todo), str(todo.get("todo_id") or ""))
 
 
-def _is_monitor_todo(todo: dict[str, Any]) -> bool:
+def _is_monitor_todo(todo: PayloadView) -> bool:
     return (
         todo.get("task_class") == "continuous_monitor"
         or "monitor" in str(todo.get("action_kind") or "").lower()
     )
 
 
-def _is_agent_lane_next_action(todo: dict[str, Any]) -> bool:
+def _is_agent_lane_next_action(todo: PayloadView) -> bool:
     return (
         todo.get("schema_version") == "agent_lane_next_action_v0"
         or str(todo.get("source") or "").endswith("agent_lane_next_action")
@@ -116,7 +118,7 @@ def _is_agent_lane_next_action(todo: dict[str, Any]) -> bool:
     )
 
 
-def _is_runnable_advancement_todo(todo: dict[str, Any]) -> bool:
+def _is_runnable_advancement_todo(todo: PayloadView) -> bool:
     return (
         _todo_status(todo) == "open"
         and todo.get("task_class") != "blocker"
@@ -124,22 +126,18 @@ def _is_runnable_advancement_todo(todo: dict[str, Any]) -> bool:
     )
 
 
-def _current_todo_execution_rank(todo: dict[str, Any]) -> int:
+def _current_todo_execution_rank(todo: PayloadView) -> int:
     if todo.get("task_class") == "blocker":
         return 0
     if _todo_status(todo) == "blocked":
         return 2
-    if _is_monitor_todo(todo):
-        return 3
-    return 1
+    return 3 if _is_monitor_todo(todo) else 1
 
 
-def _current_todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, int, int, int, str]:
-    runnable_advancement_rank = 0 if _is_runnable_advancement_todo(todo) else 1
-    selected_rank = 0 if _is_agent_lane_next_action(todo) else 1
+def _current_todo_sort_key(todo: PayloadView) -> tuple[int, int, int, int, int, str]:
     return (
-        runnable_advancement_rank,
-        selected_rank,
+        0 if _is_runnable_advancement_todo(todo) else 1,
+        0 if _is_agent_lane_next_action(todo) else 1,
         _current_todo_execution_rank(todo),
         todo_priority_rank(todo),
         _index_rank(todo),
@@ -147,53 +145,42 @@ def _current_todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, int, int, in
     )
 
 
-def _select_current_todo(todos: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _select_current_todo(todos: list[Payload]) -> Payload | None:
     open_todos = [todo for todo in todos if not _is_done(todo)]
-    if not open_todos:
-        return None
-    return sorted(open_todos, key=_current_todo_sort_key)[0]
+    return sorted(open_todos, key=_current_todo_sort_key)[0] if open_todos else None
 
 
-def _select_blocked_todo(todos: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _select_blocked_todo(todos: list[Payload]) -> Payload | None:
     blocked_todos = [
-        todo
-        for todo in todos
-        if not _is_done(todo)
-        and (_todo_status(todo) == "blocked" or todo.get("task_class") == "blocker")
+        todo for todo in todos
+        if not _is_done(todo) and (_todo_status(todo) == "blocked" or todo.get("task_class") == "blocker")
     ]
-    if not blocked_todos:
-        return None
-    return sorted(blocked_todos, key=_todo_sort_key)[0]
+    return sorted(blocked_todos, key=_todo_sort_key)[0] if blocked_todos else None
 
 
-def _registered_agents(status_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
+def _registered_agents(status_payload: PayloadView) -> dict[str, Payload]:
+    rows: dict[str, Payload] = {}
     run_history = _as_dict(status_payload.get("run_history"))
     for goal in _as_list(run_history.get("goals")):
         if not isinstance(goal, dict):
             continue
         goal_id = _compact(goal.get("id"), limit=180)
-        coordination = _as_dict(goal.get("coordination"))
-        for raw_agent in _as_list(coordination.get("registered_agents")):
+        for raw_agent in _as_list(_as_dict(goal.get("coordination")).get("registered_agents")):
             agent_id = normalize_todo_claimed_by(raw_agent)
             if not agent_id:
                 continue
             row = rows.setdefault(
                 agent_id,
-                {
-                    "agent_id": agent_id,
-                    "agent_model": "peer_v1",
-                    "_goal_ids": [],
-                    "_todos": [],
-                },
+                {"agent_id": agent_id, "agent_model": "peer_v1", "_goal_ids": [], "_todos": []},
             )
-            if goal_id and goal_id not in row["_goal_ids"]:
-                row["_goal_ids"].append(goal_id)
+            goal_ids = row["_goal_ids"]
+            if isinstance(goal_ids, list):
+                _append_unique(goal_ids, goal_id)
     return rows
 
 
 def projected_agent_goals(
-    status_payload: dict[str, Any],
+    status_payload: PayloadView,
 ) -> dict[str, dict[str, dict[str, list[str]]]]:
     """Return ``goal_id -> agent_id -> {spellings, open_todo_ids}`` for this view's agents.
 
@@ -206,7 +193,7 @@ def projected_agent_goals(
 
     goals: dict[str, dict[str, dict[str, list[str]]]] = {}
 
-    def add(goal_id: Any, raw_agent: Any, *, todo_id: str | None = None) -> None:
+    def add(goal_id: object, raw_agent: object, *, todo_id: str | None = None) -> None:
         goal = str(goal_id or "").strip()
         agent_id = normalize_todo_claimed_by(raw_agent)
         if not goal or not agent_id:
@@ -214,11 +201,8 @@ def projected_agent_goals(
         work = goals.setdefault(goal, {}).setdefault(
             agent_id, {"spellings": [agent_id], "open_todo_ids": []}
         )
-        raw = str(raw_agent or "").strip()
-        if raw and raw not in work["spellings"]:
-            work["spellings"].append(raw)
-        if todo_id and todo_id not in work["open_todo_ids"]:
-            work["open_todo_ids"].append(todo_id)
+        _append_unique(work["spellings"], str(raw_agent or "").strip() or None)
+        _append_unique(work["open_todo_ids"], todo_id)
 
     run_history = _as_dict(status_payload.get("run_history"))
     for goal in _as_list(run_history.get("goals")):
@@ -228,15 +212,11 @@ def projected_agent_goals(
             add(goal.get("id"), raw_agent)
     for todo in _iter_status_todos(status_payload):
         if not _is_done(todo):
-            add(
-                todo.get("goal_id"),
-                _todo_agent_id(todo),
-                todo_id=normalize_todo_id(todo.get("todo_id")),
-            )
+            add(todo.get("goal_id"), _todo_agent_id(todo), todo_id=normalize_todo_id(todo.get("todo_id")))
     return goals
 
 
-def registered_agent_ids(status_payload: dict[str, Any]) -> set[str]:
+def registered_agent_ids(status_payload: PayloadView) -> set[str]:
     """Return the registered Agent ids, ignoring the display cap.
 
     ``MAX_AGENT_ROWS`` bounds the published ``agents`` list; a scope question
@@ -250,16 +230,11 @@ def registered_agent_ids(status_payload: dict[str, Any]) -> set[str]:
     return set(_registered_agents(status_payload))
 
 
-def _agent_material_frontiers(
-    status_payload: dict[str, Any],
-) -> dict[tuple[str, str], dict[str, Any]]:
+def _agent_material_frontiers(status_payload: PayloadView) -> dict[tuple[str, str], Payload]:
     raw_frontiers = status_payload.get("agent_material_frontiers")
-    if isinstance(raw_frontiers, dict):
-        candidates = list(raw_frontiers.values())
-    else:
-        candidates = _as_list(raw_frontiers)
+    candidates = list(raw_frontiers.values()) if isinstance(raw_frontiers, dict) else _as_list(raw_frontiers)
 
-    frontiers: dict[tuple[str, str], dict[str, Any]] = {}
+    frontiers: dict[tuple[str, str], Payload] = {}
     for raw in candidates:
         if not isinstance(raw, dict):
             continue
@@ -268,69 +243,47 @@ def _agent_material_frontiers(
         goal_id = _compact(raw.get("goal_id"), limit=180)
         agent_id = normalize_todo_claimed_by(raw.get("agent_id"))
         if goal_id and agent_id:
-            frontiers[(goal_id, agent_id)] = raw
+            frontiers[(goal_id, agent_id)] = {str(k): v for k, v in raw.items()}
     return frontiers
 
 
 def _agent_material_frontier_key(
-    *,
-    raw_row: dict[str, Any],
-    current: dict[str, Any] | None,
-    agent_id: str,
-    goal_filter: str | None,
+    *, raw_row: PayloadView, current: PayloadView | None, agent_id: str, goal_filter: str | None,
 ) -> tuple[str, str] | None:
     row_goal_ids: list[str] = []
     for raw_goal_id in _as_list(raw_row.get("_goal_ids")):
-        row_goal_id = _compact(raw_goal_id, limit=180)
-        if row_goal_id and row_goal_id not in row_goal_ids:
-            row_goal_ids.append(row_goal_id)
+        _append_unique(row_goal_ids, _compact(raw_goal_id, limit=180))
     current_goal_id = _compact(current.get("goal_id"), limit=180) if current else None
 
     if goal_filter:
-        if current_goal_id and current_goal_id != goal_filter:
-            return None
-        if row_goal_ids and goal_filter not in row_goal_ids:
+        if (current_goal_id and current_goal_id != goal_filter) or (row_goal_ids and goal_filter not in row_goal_ids):
             return None
         return (goal_filter, agent_id)
     if current_goal_id:
-        if row_goal_ids and current_goal_id not in row_goal_ids:
-            return None
-        return (current_goal_id, agent_id)
-    if len(row_goal_ids) == 1:
-        return (row_goal_ids[0], agent_id)
-    return None
+        return None if (row_goal_ids and current_goal_id not in row_goal_ids) else (current_goal_id, agent_id)
+    return (row_goal_ids[0], agent_id) if len(row_goal_ids) == 1 else None
 
 
-def _iter_todo_group_items(
-    group: dict[str, Any],
-    *,
-    goal_id: str | None,
-    source: str,
-) -> Iterable[dict[str, Any]]:
+def _iter_todo_group_items(group: PayloadView, *, goal_id: str | None, source: str) -> Iterable[Payload]:
     for key in _TODO_GROUP_LIST_KEYS:
         for todo in _as_list(group.get(key)):
             if isinstance(todo, dict):
-                row = dict(todo)
+                row: Payload = {str(k): v for k, v in todo.items()}
                 row.setdefault("goal_id", goal_id)
                 row.setdefault("source", source if key == "items" else f"{source}.{key}")
                 yield row
 
 
-def _iter_next_action_todo(
-    owner: dict[str, Any],
-    *,
-    goal_id: str | None,
-    source: str,
-) -> Iterable[dict[str, Any]]:
+def _iter_next_action_todo(owner: PayloadView, *, goal_id: str | None, source: str) -> Iterable[Payload]:
     todo = owner.get("agent_lane_next_action")
     if isinstance(todo, dict):
-        row = dict(todo)
+        row: Payload = {str(k): v for k, v in todo.items()}
         row.setdefault("goal_id", goal_id)
         row.setdefault("source", source)
         yield row
 
 
-def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
+def _iter_status_todos(status_payload: PayloadView) -> Iterable[Payload]:
     queue = _as_dict(status_payload.get("attention_queue"))
     todo_index = _as_dict(status_payload.get("todo_index"))
     unavailable_goals = set(_as_list(todo_index.get("unavailable_goal_ids")))
@@ -338,35 +291,22 @@ def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any
         item.get("goal_id") for item in _as_list(queue.get("items"))
         if isinstance(item, dict) and item.get("todo_source") == "unavailable"
     )
-    candidates: list[dict[str, Any]] = []
-    hints: list[dict[str, Any]] = []
+    candidates: list[Payload] = []
+    hints: list[Payload] = []
     for item in _as_list(queue.get("items")):
         if not isinstance(item, dict):
             continue
         goal_id = _compact(item.get("goal_id"), limit=180)
-        hints.extend(_iter_next_action_todo(
-            item,
-            goal_id=goal_id,
-            source="attention_queue.agent_lane_next_action",
-        ))
-        group = _as_dict(item.get("agent_todos"))
-        candidates.extend(_iter_todo_group_items(
-            group,
-            goal_id=goal_id,
-            source="attention_queue.agent_todos",
-        ))
-        project_asset = _as_dict(item.get("project_asset"))
-        hints.extend(_iter_next_action_todo(
-            project_asset,
-            goal_id=goal_id,
-            source="project_asset.agent_lane_next_action",
-        ))
-        group = _as_dict(project_asset.get("agent_todos"))
-        candidates.extend(_iter_todo_group_items(
-            group,
-            goal_id=goal_id,
-            source="project_asset.agent_todos",
-        ))
+        for source_prefix, container in (
+            ("attention_queue", item),
+            ("project_asset", _as_dict(item.get("project_asset"))),
+        ):
+            hints.extend(_iter_next_action_todo(
+                container, goal_id=goal_id, source=f"{source_prefix}.agent_lane_next_action",
+            ))
+            candidates.extend(_iter_todo_group_items(
+                _as_dict(container.get("agent_todos")), goal_id=goal_id, source=f"{source_prefix}.agent_todos",
+            ))
 
     for todo in _as_list(todo_index.get("items")):
         if (
@@ -374,7 +314,7 @@ def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any
             and str(todo.get("role") or "") == "agent"
             and str(todo.get("source") or "") != "rollout_event_log"
         ):
-            row = dict(todo)
+            row: Payload = {str(k): v for k, v in todo.items()}
             row.setdefault("source", "todo_index")
             candidates.append(row)
 
@@ -397,14 +337,14 @@ def _iter_status_todos(status_payload: dict[str, Any]) -> Iterable[dict[str, Any
         yield row
 
 
-def _todo_agent_id(todo: dict[str, Any]) -> str | None:
+def _todo_agent_id(todo: PayloadView) -> str | None:
     return (
         normalize_todo_claimed_by(todo.get("claimed_by"))
         or normalize_todo_claimed_by(todo.get("agent_id"))
     )
 
 
-def _todo_identity(todo: dict[str, Any]) -> tuple[str, str, str, str]:
+def _todo_identity(todo: PayloadView) -> tuple[str, str, str, str]:
     todo_id = str(todo.get("todo_id") or "").strip()
     return (
         str(todo.get("goal_id") or ""),
@@ -414,11 +354,10 @@ def _todo_identity(todo: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def _todo_row(todo: dict[str, Any]) -> dict[str, Any]:
-    todo_id = normalize_todo_id(todo.get("todo_id"))
-    row: dict[str, Any] = {
+def _todo_row(todo: PayloadView) -> Payload:
+    row: Payload = {
         "schema_version": TODO_ROW_SCHEMA_VERSION,
-        "todo_id": todo_id,
+        "todo_id": normalize_todo_id(todo.get("todo_id")),
         "goal_id": _compact(todo.get("goal_id"), limit=180),
         "role": "agent",
         "status": _todo_status(todo),
@@ -430,138 +369,103 @@ def _todo_row(todo: dict[str, Any]) -> dict[str, Any]:
         "claimed_by": normalize_todo_claimed_by(todo.get("claimed_by")),
     }
     for key in (
-        "required_capabilities",
-        "required_write_scopes",
-        "target_capabilities",
-        "blocks_agent",
-        "excluded_agents",
-        "unblocks_todo_id",
-        "successor_todo_ids",
-        "resume_when",
-        "updated_at",
+        "required_capabilities", "required_write_scopes", "target_capabilities",
+        "blocks_agent", "excluded_agents", "unblocks_todo_id", "successor_todo_ids",
+        "resume_when", "updated_at",
     ):
-        value = todo.get(key)
-        if value not in (None, "", [], {}):
+        if (value := todo.get(key)) not in (None, "", [], {}):
             row[key] = value
-    return {key: value for key, value in row.items() if value not in (None, "", [], {})}
+    return _nonempty_dict(row)
 
 
-def _workspace_ref_from_todo(todo: dict[str, Any] | None) -> dict[str, Any] | None:
+def _workspace_ref_from_todo(todo: PayloadView | None) -> Payload | None:
     if not todo:
         return None
     raw = _as_dict(todo.get("workspace_ref"))
     scopes = _string_list(
-        raw.get("write_scope")
-        or todo.get("required_write_scopes")
-        or todo.get("required_write_scope")
+        raw.get("write_scope") or todo.get("required_write_scopes") or todo.get("required_write_scope")
     )
     if raw:
-        workspace: dict[str, Any] = {
+        workspace: Payload = {
             "kind": _compact(raw.get("kind") or "unknown", limit=80),
             "label": _compact(raw.get("label") or raw.get("branch") or raw.get("kind"), limit=140),
             "path_safe": raw.get("path_safe") is True,
         }
-        branch = _compact(raw.get("branch"), limit=120)
-        if branch:
+        if branch := _compact(raw.get("branch"), limit=120):
             workspace["branch"] = branch
         if scopes:
             workspace["write_scope"] = scopes
-        return {key: value for key, value in workspace.items() if value not in (None, "", [], {})}
+        return _nonempty_dict(workspace)
 
     policy = _compact(
-        todo.get("worktree_policy")
-        or todo.get("workspace_policy")
-        or todo.get("workspace_kind"),
+        todo.get("worktree_policy") or todo.get("workspace_policy") or todo.get("workspace_kind"),
         limit=120,
     )
     if not (policy or scopes):
         return None
-    policy_lower = (policy or "").lower()
-    kind = "worktree" if "worktree" in policy_lower else "unknown"
-    workspace = {
-        "kind": kind,
-        "label": policy or "workspace not projected",
-        "path_safe": False,
-        "write_scope": scopes,
-    }
-    return {key: value for key, value in workspace.items() if value not in (None, "", [], {})}
+    kind = "worktree" if "worktree" in (policy or "").lower() else "unknown"
+    return _nonempty_dict({
+        "kind": kind, "label": policy or "workspace not projected",
+        "path_safe": False, "write_scope": scopes,
+    })
 
 
-def _stale_claim_hint(todo: dict[str, Any] | None, *, agent_id: str) -> dict[str, Any] | None:
-    if not todo or _is_done(todo):
+def _stale_claim_hint(todo: PayloadView | None, *, agent_id: str) -> Payload | None:
+    if not todo or _is_done(todo) or todo.get("task_class") == "continuous_monitor":
         return None
-    if todo.get("task_class") == "continuous_monitor":
-        return None
-    claimed_by = (
-        normalize_todo_claimed_by(todo.get("claimed_by"))
-        or normalize_todo_claimed_by(todo.get("agent_id"))
-        or agent_id
-    )
+    claimed_by = _todo_agent_id(todo) or agent_id
     if not claimed_by:
         return None
     last_activity = _compact(todo.get("updated_at") or todo.get("latest_event_at"), limit=80)
     if not last_activity:
         return {
-            "state": "activity_missing",
-            "claimed_by": claimed_by,
+            "state": "activity_missing", "claimed_by": claimed_by,
             "reason": "claimed open todo has no projected activity timestamp",
             "recommended_operator_action": "inspect evidence before considering reassignment",
         }
     parsed = parse_timestamp(last_activity)
     if not parsed:
         return {
-            "state": "activity_unparsed",
-            "claimed_by": claimed_by,
-            "last_activity_at": last_activity,
+            "state": "activity_unparsed", "claimed_by": claimed_by, "last_activity_at": last_activity,
             "reason": "projected activity timestamp could not be parsed",
             "recommended_operator_action": "inspect status/evidence before considering reassignment",
         }
-    age_hours = (now_utc() - parsed).total_seconds() / 3600
-    if age_hours <= STALE_CLAIM_THRESHOLD_HOURS:
+    if (now_utc() - parsed).total_seconds() / 3600 <= STALE_CLAIM_THRESHOLD_HOURS:
         return None
     return {
-        "state": "suspected_stale",
-        "claimed_by": claimed_by,
-        "last_activity_at": last_activity,
+        "state": "suspected_stale", "claimed_by": claimed_by, "last_activity_at": last_activity,
         "threshold_hours": STALE_CLAIM_THRESHOLD_HOURS,
         "reason": "last projected activity is older than the stale-claim warning threshold",
         "recommended_operator_action": "ask the same agent to resume or inspect evidence before manual handoff",
     }
 
 
-def _refs_from_todo(todo: dict[str, Any]) -> tuple[list[str], list[str]]:
+def _refs_from_todo(todo: PayloadView) -> tuple[list[str], list[str]]:
     evidence_refs: list[str] = []
     handoff_refs: list[str] = []
     handoff = _as_dict(todo.get("handoff_note"))
-    handoff_id = _compact(handoff.get("handoff_id"), limit=140)
-    if handoff_id:
-        handoff_refs.append(handoff_id)
+    _append_unique(handoff_refs, _compact(handoff.get("handoff_id"), limit=140))
     for raw_ref in _as_list(handoff.get("evidence_refs")):
-        ref = _compact(raw_ref, limit=180)
-        if ref and ref not in evidence_refs:
-            evidence_refs.append(ref)
+        _append_unique(evidence_refs, _compact(raw_ref, limit=180))
     todo_id = normalize_todo_id(todo.get("todo_id"))
     if todo.get("evidence") and todo_id:
         evidence_refs.append(f"todo:{todo_id}:evidence")
     if todo.get("note") and todo_id:
         evidence_refs.append(f"todo:{todo_id}:note")
-    latest_event_kind = _compact(todo.get("latest_event_kind"), limit=80)
-    if latest_event_kind and todo_id:
+    if (latest_event_kind := _compact(todo.get("latest_event_kind"), limit=80)) and todo_id:
         evidence_refs.append(f"rollout_event:{latest_event_kind}:{todo_id}")
     for material in _as_list(todo.get("review_materials")):
-        if isinstance(material, dict):
-            ref = _compact(material.get("label") or material.get("path"), limit=180)
-            if ref:
-                evidence_refs.append(ref)
+        if isinstance(material, dict) and (ref := _compact(material.get("label") or material.get("path"), limit=180)):
+            evidence_refs.append(ref)
     return evidence_refs[:MAX_REFS], handoff_refs[:MAX_REFS]
 
 
 def _agent_state(
-    todos: list[dict[str, Any]],
+    todos: list[Payload],
     *,
-    current: dict[str, Any] | None = None,
+    current: PayloadView | None = None,
     has_session_binding: bool = False,
-    execution: dict[str, Any] | None = None,
+    execution: PayloadView | None = None,
 ) -> str:
     """Derive the worker lifecycle state from existing facts only.
 
@@ -594,8 +498,6 @@ def _agent_state(
     if current and not _is_done(current):
         if _todo_status(current) == "blocked" or current.get("task_class") == "blocker":
             return WORKER_LIFECYCLE_STATE_BLOCKED
-
-    if current and not _is_done(current):
         if _is_monitor_todo(current):
             return "monitoring"
         if _todo_status(current) != "open":
@@ -648,17 +550,15 @@ EXECUTION_LANE_LIVE = "live"
 EXECUTION_LANE_UNKNOWN_STATES = frozenset({"foreign_host", "unreadable"})
 
 
-def _execution_row(facts: Any) -> dict[str, Any] | None:
+def _execution_row(facts: object) -> Payload | None:
     """Project one agent's execution facts as read-only evidence for its state."""
 
     if not isinstance(facts, dict):
         return None
-    row: dict[str, Any] = {}
-    lane = _compact(facts.get("lane"), limit=40)
-    if lane:
+    row: Payload = {}
+    if lane := _compact(facts.get("lane"), limit=40):
         row["lane"] = lane
-    holder = _as_dict(facts.get("lane_holder"))
-    if holder:
+    if holder := _as_dict(facts.get("lane_holder")):
         row["lane_holder"] = {
             key: holder[key]
             for key in ("host", "pid", "acquired_at")
@@ -667,34 +567,32 @@ def _execution_row(facts: Any) -> dict[str, Any] | None:
     if facts.get("delegation_worker_active") is True:
         row["delegation_worker_active"] = True
     lease = _as_dict(facts.get("lease"))
-    lease_status = _compact(lease.get("status"), limit=40)
-    if lease_status:
-        row["lease"] = {"status": lease_status}
+    if lease_status := _compact(lease.get("status"), limit=40):
+        lease_row: Payload = {"status": lease_status}
         if isinstance(lease.get("expired"), bool):
-            row["lease"]["expired"] = lease["expired"]
+            lease_row["expired"] = lease["expired"]
+        row["lease"] = lease_row
     return row or None
 
 
-def _last_activity(todos: list[dict[str, Any]]) -> str | None:
+def _last_activity(todos: list[Payload]) -> str | None:
     candidates = [
-        _compact(todo.get("updated_at") or todo.get("latest_event_at"), limit=80)
-        for todo in todos
+        item for todo in todos
+        if (item := _compact(todo.get("updated_at") or todo.get("latest_event_at"), limit=80))
     ]
-    return sorted([item for item in candidates if item], reverse=True)[0] if any(candidates) else None
+    return max(candidates) if candidates else None
 
 
-def _safe_next_action(todo: dict[str, Any] | None) -> str:
+def _safe_next_action(todo: PayloadView | None) -> str:
     if not todo:
         return "Inspect status projection before taking work."
     todo_id = normalize_todo_id(todo.get("todo_id"))
-    if todo_id:
-        return f"Continue projected todo {todo_id}."
-    return "Inspect projected todo."
+    return f"Continue projected todo {todo_id}." if todo_id else "Inspect projected todo."
 
 
 def _collect_session_binding_candidates(
-    status_payload: dict[str, Any],
-) -> dict[str, list[dict[str, str]]]:
+    status_payload: PayloadView,
+) -> dict[str, list[dict[str, str | None]]]:
     """Group one Agent's accepted session bindings by the owner's agent identity.
 
     Session bindings come from run_history.coordination.thread_agent_bindings
@@ -709,25 +607,87 @@ def _collect_session_binding_candidates(
     Identity stays whole, and `_compact` only renders it.
     """
 
-    candidates: dict[str, list[dict[str, str]]] = {}
+    candidates: dict[str, list[dict[str, str | None]]] = {}
     run_history = _as_dict(status_payload.get("run_history"))
     for binding in collect_accepted_bindings(_as_list(run_history.get("goals"))):
-        candidates.setdefault(binding["agent_id"], []).append(
-            {
-                "thread_id": _compact(binding["thread_id"], limit=120),
-                "host_surface": _compact(binding["host_surface"], limit=60),
-            }
-        )
+        candidates.setdefault(binding["agent_id"], []).append({
+            "thread_id": _compact(binding["thread_id"], limit=120),
+            "host_surface": _compact(binding["host_surface"], limit=60),
+        })
     return candidates
 
 
-def build_agent_management_projection(
-    status_payload: dict[str, Any],
+def _build_agent_row(
     *,
-    available_capabilities: Any = None,
-    execution_facts: Any = None,
+    agent_id: str,
+    raw_row: PayloadView,
+    session_binding_candidates: dict[str, list[dict[str, str | None]]],
+    facts_by_agent: PayloadView,
+    material_frontiers: dict[tuple[str, str], Payload],
+    goal_filter: str | None,
+) -> Payload:
+    all_todos: list[Payload] = [
+        {str(k): v for k, v in todo.items()}
+        for todo in _as_list(raw_row.get("_todos"))
+        if isinstance(todo, dict)
+    ]
+    current = _select_current_todo(all_todos)
+    blocked = _select_blocked_todo(all_todos)
+    todos = sorted(all_todos, key=_todo_sort_key)
+    if current:
+        current_identity = _todo_identity(current)
+        todos = [current, *[todo for todo in todos if _todo_identity(todo) != current_identity]]
+    todos = todos[:MAX_AGENT_TODOS]
+    evidence_refs: list[str] = []
+    handoff_refs: list[str] = []
+    for todo in todos:
+        todo_evidence, todo_handoffs = _refs_from_todo(todo)
+        for ref in todo_evidence:
+            _append_unique(evidence_refs, ref)
+        for ref in todo_handoffs:
+            _append_unique(handoff_refs, ref)
+    execution = _execution_row(facts_by_agent.get(agent_id))
+    binding_candidates = session_binding_candidates.get(agent_id)
+    agent_row: Payload = {
+        "agent_id": agent_id,
+        "agent_model": raw_row.get("agent_model") or "unregistered",
+        "state": _agent_state(
+            all_todos, current=current, has_session_binding=bool(binding_candidates), execution=execution,
+        ),
+        "current_todo": _todo_row(current) if current else None,
+        "next_action": _safe_next_action(current),
+        "last_activity_at": _last_activity(todos),
+        "execution": execution,
+        "evidence_refs": evidence_refs[:MAX_REFS],
+        "handoff_refs": handoff_refs[:MAX_REFS],
+        "goal_ids": _as_list(raw_row.get("_goal_ids"))[:MAX_REFS],
+    }
+    if binding_candidates:
+        agent_row["session_binding_candidates"] = binding_candidates[:MAX_SESSION_BINDING_CANDIDATES]
+        agent_row["session_binding_count"] = len(binding_candidates)
+    frontier_key = _agent_material_frontier_key(
+        raw_row=raw_row, current=current, agent_id=agent_id, goal_filter=goal_filter,
+    )
+    if material_frontier := (material_frontiers.get(frontier_key) if frontier_key else None):
+        agent_row["material_frontier"] = project_material_frontier_for_handoff(material_frontier)
+        if handoff_note := (_as_dict(current.get("handoff_note")) if current else {}):
+            agent_row["handoff_note"] = build_material_handoff_note_v1(handoff_note, material_frontier)
+    if workspace_ref := _workspace_ref_from_todo(current):
+        agent_row["workspace_ref"] = workspace_ref
+    if blocked and (not current or _todo_identity(blocked) != _todo_identity(current)):
+        agent_row["blocked_on"] = _todo_row(blocked)
+    if stale_claim_hint := _stale_claim_hint(current, agent_id=agent_id):
+        agent_row["stale_claim_hint"] = stale_claim_hint
+    return _nonempty_dict(agent_row)
+
+
+def build_agent_management_projection(
+    status_payload: PayloadView,
+    *,
+    available_capabilities: object = None,
+    execution_facts: object = None,
     after_agent_id: str | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Build a read-only agent management view from a status payload.
 
     This is a projection over existing LoopX status/todo/history state. It does
@@ -761,9 +721,7 @@ def build_agent_management_projection(
         normalize_required_capabilities(available_capabilities)
     )
     material_frontiers = (
-        _agent_material_frontiers(status_payload)
-        if material_projection_enabled
-        else {}
+        _agent_material_frontiers(status_payload) if material_projection_enabled else {}
     )
     goal_filter = _compact(status_payload.get("goal_filter"), limit=180)
 
@@ -773,29 +731,25 @@ def build_agent_management_projection(
     # keep a bounded candidate summary plus the full count, so no consumer can
     # read the surviving row as the only route to that peer.
     session_binding_candidates = _collect_session_binding_candidates(status_payload)
-    facts_by_agent = execution_facts if isinstance(execution_facts, dict) else {}
+    facts_by_agent: PayloadView = (
+        {str(k): v for k, v in execution_facts.items()} if isinstance(execution_facts, Mapping) else {}
+    )
 
     for todo in _iter_status_todos(status_payload):
-        agent_id = _todo_agent_id(todo)
-        if not agent_id:
+        if not (agent_id := _todo_agent_id(todo)):
             continue
         row = rows_by_agent.setdefault(
-            agent_id,
-            {
-                "agent_id": agent_id,
-                "role": "agent",
-                "_goal_ids": [],
-                "_todos": [],
-            },
+            agent_id, {"agent_id": agent_id, "role": "agent", "_goal_ids": [], "_todos": []},
         )
-        goal_id = _compact(todo.get("goal_id"), limit=180)
-        if goal_id and goal_id not in row["_goal_ids"]:
-            row["_goal_ids"].append(goal_id)
-        row["_todos"].append(todo)
+        goal_ids = row["_goal_ids"]
+        if isinstance(goal_ids, list):
+            _append_unique(goal_ids, _compact(todo.get("goal_id"), limit=180))
+        row_todos = row["_todos"]
+        if isinstance(row_todos, list):
+            row_todos.append(todo)
 
     page_cursor = str(after_agent_id).strip() if after_agent_id else None
-
-    agents: list[dict[str, Any]] = []
+    agents: list[Payload] = []
     selected_agent_count = 0
     for agent_id, raw_row in sorted(rows_by_agent.items()):
         if page_cursor is not None and agent_id <= page_cursor:
@@ -807,91 +761,16 @@ def build_agent_management_projection(
             if page_cursor is None:
                 break
             continue
-        all_todos = _as_list(raw_row.get("_todos"))
-        current = _select_current_todo(all_todos)
-        blocked = _select_blocked_todo(all_todos)
-        todos = sorted(all_todos, key=_todo_sort_key)
-        if current:
-            current_identity = _todo_identity(current)
-            todos = [
-                current,
-                *[todo for todo in todos if _todo_identity(todo) != current_identity],
-            ]
-        todos = todos[:MAX_AGENT_TODOS]
-        evidence_refs: list[str] = []
-        handoff_refs: list[str] = []
-        for todo in todos:
-            todo_evidence, todo_handoffs = _refs_from_todo(todo)
-            for ref in todo_evidence:
-                if ref not in evidence_refs:
-                    evidence_refs.append(ref)
-            for ref in todo_handoffs:
-                if ref not in handoff_refs:
-                    handoff_refs.append(ref)
-        last_activity = _last_activity(todos)
-        execution = _execution_row(facts_by_agent.get(agent_id))
-        agent_state = _agent_state(
-            all_todos,
-            current=current,
-            has_session_binding=agent_id in session_binding_candidates,
-            execution=execution,
-        )
-        agent_row: dict[str, Any] = {
-            "agent_id": agent_id,
-            "agent_model": raw_row.get("agent_model") or "unregistered",
-            "state": agent_state,
-            "current_todo": _todo_row(current) if current else None,
-            "next_action": _safe_next_action(current),
-            "last_activity_at": last_activity,
-            "execution": execution,
-            "evidence_refs": evidence_refs[:MAX_REFS],
-            "handoff_refs": handoff_refs[:MAX_REFS],
-            "goal_ids": _as_list(raw_row.get("_goal_ids"))[:MAX_REFS],
-        }
-        binding_candidates = session_binding_candidates.get(agent_id)
-        if binding_candidates:
-            agent_row["session_binding_candidates"] = binding_candidates[
-                :MAX_SESSION_BINDING_CANDIDATES
-            ]
-            agent_row["session_binding_count"] = len(binding_candidates)
-        material_frontier_key = _agent_material_frontier_key(
-            raw_row=raw_row,
-            current=current,
+        agents.append(_build_agent_row(
             agent_id=agent_id,
+            raw_row=raw_row,
+            session_binding_candidates=session_binding_candidates,
+            facts_by_agent=facts_by_agent,
+            material_frontiers=material_frontiers,
             goal_filter=goal_filter,
-        )
-        material_frontier = (
-            material_frontiers.get(material_frontier_key)
-            if material_frontier_key
-            else None
-        )
-        if material_frontier:
-            agent_row["material_frontier"] = project_material_frontier_for_handoff(
-                material_frontier
-            )
-            handoff_note = _as_dict(current.get("handoff_note")) if current else {}
-            if handoff_note:
-                agent_row["handoff_note"] = build_material_handoff_note_v1(
-                    handoff_note,
-                    material_frontier,
-                )
-        workspace_ref = _workspace_ref_from_todo(current)
-        if workspace_ref:
-            agent_row["workspace_ref"] = workspace_ref
-        if blocked and (not current or _todo_identity(blocked) != _todo_identity(current)):
-            agent_row["blocked_on"] = _todo_row(blocked)
-        stale_claim_hint = _stale_claim_hint(current, agent_id=agent_id)
-        if stale_claim_hint:
-            agent_row["stale_claim_hint"] = stale_claim_hint
-        agents.append(
-            {
-                key: value
-                for key, value in agent_row.items()
-                if value not in (None, "", [], {})
-            }
-        )
+        ))
 
-    source_summary: dict[str, Any] = {
+    source_summary: Payload = {
         "registered_agent_count": len(registered_ids),
         "projected_agent_count": len(agents),
         "todo_source": (
@@ -916,7 +795,7 @@ def build_agent_management_projection(
         # from "no facts collected"; each row carries its own evidence.
         source_summary["execution_facts_collected"] = True
 
-    projection: dict[str, Any] = {
+    return _nonempty_dict({
         "schema_version": AGENT_MANAGEMENT_PROJECTION_SCHEMA_VERSION,
         "mode": AGENT_MANAGEMENT_MODE,
         "goal_id": goal_filter,
@@ -929,9 +808,4 @@ def build_agent_management_projection(
         },
         "source_summary": source_summary,
         "agents": agents,
-    }
-    return {
-        key: value
-        for key, value in projection.items()
-        if value not in (None, "", [], {})
-    }
+    })

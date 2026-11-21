@@ -61,7 +61,7 @@ function digest(value: unknown): string {
   return "sha256:" + createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 
-/** Evolve the existing recommendation receipt, not a second task/route store.
+/** Evolve the existing recommendation receipt.
  * The caller supplies an already selected candidate and its authoritative task
  * facts. A step cannot select work, grant a claim/lease or settle a replan. */
 export function resolveLaneRecommendation(value: unknown): JsonObject {

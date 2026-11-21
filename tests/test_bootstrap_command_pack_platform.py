@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -13,11 +14,163 @@ import pytest
 
 import loopx.project_prompt as project_prompt
 from loopx.bootstrap_command_pack import build_start_goal_guided_packet
+from host_surface_cli_probes import connected_project, run_cli
 
 
 PWSH = shutil.which("pwsh")
 GOAL_ID = "windows-guided-connect"
 GOAL_TEXT = "Verify native PowerShell guided connection"
+
+
+@pytest.mark.parametrize("surface", ["antigravity-app", "codex-app"])
+@pytest.mark.parametrize("entry, surface_option", [
+    ("bootstrap-command-pack", "--host-surface"),
+    ("agent-onboard", "--agent-type"),
+])
+def test_activation_uses_explicit_runtime_for_linked_project_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str, surface_option: str, surface: str,
+) -> None:
+    from loopx import paths
+    from loopx.capabilities.change_quality.machine_defaults import (
+        CHANGE_QUALITY_MACHINE_DEFAULTS_SCHEMA,
+    )
+    from loopx.capabilities.machine_configuration.contract import MACHINE_CONFIGURATION_SCHEMA
+    from loopx.capabilities.machine_configuration.store import machine_configuration_store_path
+
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
+    markers = {}
+    for root in (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT):
+        marker = root / "owned-state" / "marker.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"preserved":true}\n', encoding="utf-8")
+        markers[marker] = marker.read_bytes()
+    assert paths.default_runtime_route()["status"] == "conflict"
+
+    primary = connected_project(tmp_path / "canonical")
+    registry = primary / ".loopx" / "registry.json"
+    state = primary / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\nVerify the selected activation route.\n", encoding="utf-8")
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    document["common_runtime_root"] = str(tmp_path / "other runtime")
+    goal = document["goals"][0]
+    goal["state_file"] = state.name
+    goal["coordination"] = {"registered_agents": ["probe-agent"], "agent_model": "peer_v1"}
+    registry.write_text(json.dumps(document), encoding="utf-8")
+    for argv in (
+        ["init"],
+        ["-c", "user.name=LoopX Test", "-c", "user.email=loopx@example.invalid",
+         "commit", "--allow-empty", "-m", "test fixture"],
+    ):
+        subprocess.run(["git", *argv], cwd=primary, check=True, capture_output=True)
+    linked = tmp_path / "linked project"
+    subprocess.run(["git", "worktree", "add", "--detach", str(linked)], cwd=primary,
+                   check=True, capture_output=True)
+    selected = primary / "selected runtime"
+    linked_runtime = linked / selected.name
+    foreign_project = connected_project(tmp_path / "foreign")
+    foreign_registry = foreign_project / ".loopx" / "registry.json"
+    foreign_runtime = foreign_project / selected.name
+    for runtime in (selected, linked_runtime, foreign_runtime):
+        runtime.mkdir()
+        global_registry = paths.global_registry_path(runtime)
+        global_registry.write_text(json.dumps({
+            "goals": [{**goal, "source_registry": str(registry)}],
+        }), encoding="utf-8")
+        markers[global_registry] = global_registry.read_bytes()
+    foreign_configuration = machine_configuration_store_path(foreign_runtime)
+    foreign_configuration.parent.mkdir()
+    foreign_configuration.write_text(json.dumps({
+        "schema_version": MACHINE_CONFIGURATION_SCHEMA,
+        "namespaces": {"change_quality_qualification": {
+            "schema_version": CHANGE_QUALITY_MACHINE_DEFAULTS_SCHEMA,
+            "enabled": True, "safe_fix": False, "strict_receipt": False,
+        }},
+    }), encoding="utf-8")
+    markers[foreign_configuration] = foreign_configuration.read_bytes()
+    monkeypatch.setenv("LOOPX_REGISTRY", str(foreign_registry))
+
+    markers.update({path: path.read_bytes() for path in (registry, foreign_registry, state)})
+    args = (
+        "--registry", str(registry), entry, surface_option, surface, "--project", str(linked),
+        "--goal-id", "surface-goal", "--agent-id", "probe-agent",
+    )
+    for route, registry_args, expected_runtime in (
+        (selected.name, args, selected),
+        (str(selected), args[2:], selected),
+        (str(selected), ("--registry", "@host-global", *args[2:]), selected),
+        (linked_runtime.name, args[2:], linked_runtime),
+    ):
+        explicit = run_cli("--runtime-root", route, *registry_args, cwd=tmp_path)
+        assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+        packet = json.loads(explicit.stdout)
+        alias = packet["project_connection"]["canonical_project_alias"]
+        assert alias["applied"]
+        assert Path(alias["global_registry"]) == paths.global_registry_path(expected_runtime)
+        assert Path(packet["project_connection"]["registry"]) == registry
+        activation = packet["host_loop_activation"]
+        assert activation["activation_allowed"]
+        commands = [activation["activation_input_command"]]
+        activation_args = shlex.split(commands[0], posix=os.name != "nt")
+        if os.name != "nt":
+            assert activation_args[0] == "loopx"
+            launched = run_cli(*activation_args[1:], cwd=tmp_path)
+            assert launched.returncode == 0, launched.stdout + launched.stderr
+            launched_packet = json.loads(launched.stdout)
+            assert launched_packet["ok"] and launched_packet["goal_id"] == "surface-goal"
+            assert launched_packet["agent_id"] == "probe-agent"
+        assert Path(activation_args[activation_args.index("--registry") + 1].strip("'")) == registry
+        if surface == "codex-app":
+            for command in (packet["commands"]["quota_guard"], activation["commands"]["automation_cadence_json"]):
+                argv = shlex.split(command, posix=os.name != "nt")
+                assert Path(argv[argv.index("--registry") + 1].strip("'")) == registry
+                assert Path(argv[argv.index("--runtime-root") + 1].strip("'")) == expected_runtime
+        if entry == "agent-onboard":
+            assert "loopx-change-quality" not in packet["skill_delivery"]["active_project_skill_ids"]
+            commands += [packet["commands"][key] for key in (
+                "bootstrap_command_pack", "agent_onboard_recheck", "quota_guard",
+            )]
+        for command in commands:
+            argv = shlex.split(command, posix=os.name != "nt")
+            assert Path(argv[argv.index("--runtime-root") + 1].strip("'")) == expected_runtime
+
+    implicit = run_cli(*args, cwd=tmp_path)
+    assert implicit.returncode != 0
+    assert "Both default LoopX runtime roots contain state" in implicit.stdout + implicit.stderr
+    assert all(path.read_bytes() == data for path, data in markers.items())
+
+    if surface == "codex-app":
+        # A concrete project registry can name the runtime itself. The generated
+        # commands must keep that route even when the next shell has a foreign registry.
+        document["common_runtime_root"] = selected.name
+        registry.write_text(json.dumps(document), encoding="utf-8")
+        markers[registry] = registry.read_bytes()
+        for project in (primary, linked):
+            request = (
+                "--registry", str(registry), entry, surface_option, surface,
+                "--project", str(project), "--goal-id", "surface-goal", "--agent-id", "probe-agent",
+            )
+            declared = run_cli(*request, cwd=tmp_path)
+            assert declared.returncode == 0, declared.stdout + declared.stderr
+            packet = json.loads(declared.stdout)
+            connection = packet["project_connection"]
+            assert Path(connection["registry"]) == registry
+            if project == linked:
+                assert connection["canonical_project_alias"]["applied"]
+            activation = packet["host_loop_activation"]
+            assert activation["activation_allowed"]
+            for command in (
+                activation["activation_input_command"],
+                activation["commands"]["automation_cadence_json"],
+                packet["commands"]["quota_guard"],
+            ):
+                argv = shlex.split(command, posix=os.name != "nt")
+                assert Path(argv[argv.index("--registry") + 1].strip("'")) == registry
+                assert Path(argv[argv.index("--runtime-root") + 1].strip("'")) == selected
+        implicit = run_cli(*args[2:], cwd=tmp_path)
+        assert implicit.returncode != 0
+        assert "Both default LoopX runtime roots contain state" in implicit.stdout + implicit.stderr
+        assert all(path.read_bytes() == data for path, data in markers.items())
 
 
 def guided_packet(
@@ -61,6 +214,7 @@ def test_guided_bootstrap_commands_do_not_require_posix_continuations(
     assert len(lines) == 2
     assert lines[0].startswith("cd ")
     assert lines[1].startswith("loopx bootstrap --project .")
+    assert "`bootstrap --force`: `forbidden_in_guided_flow`" in str(packet["message"])
 
     recommended = packet["recommended_next_step"]
     assert isinstance(recommended, dict)
@@ -98,17 +252,20 @@ def test_guided_bootstrap_commands_do_not_require_posix_continuations(
     ]
 
 
+@pytest.mark.parametrize("quote", ["'", "\u2018", "\u2019", "\u201a", "\u201b"])
 def test_host_shell_arg_escapes_powershell_apostrophes(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, quote: str,
 ) -> None:
     monkeypatch.setattr(project_prompt, "_is_windows_host", lambda: True)
+    monkeypatch.setattr(project_prompt.install_contract, "_is_windows_host", lambda: True)
 
     assert project_prompt.shell_arg_for_host("read_only_project_map_v0") == (
         "read_only_project_map_v0"
     )
-    assert project_prompt.shell_arg_for_host("Fix user's login") == (
-        "'Fix user''s login'"
-    )
+    path = f"C:\\O{quote}Neil\\loopx.ps1"
+    literal = f"'C:\\O{quote}{quote}Neil\\loopx.ps1'"
+    assert project_prompt.shell_arg_for_host(path) == literal
+    assert project_prompt.host_command(path) == f"& {literal}"
 
 
 def test_windows_guided_packet_quotes_every_executable_command(

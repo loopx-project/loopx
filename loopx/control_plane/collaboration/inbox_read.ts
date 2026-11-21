@@ -1,6 +1,6 @@
 import deliveryContract from "./return_delivery_contract.json" with {type: "json"};
 /** Local Inbox read transactions; provider observations remain explicit Host IO. */
-import {createHash} from "node:crypto";
+import {createHash, randomBytes} from "node:crypto";
 import {constants, closeSync, fstatSync, openSync, readSync, readdirSync, statSync} from "node:fs";
 import {basename, dirname, isAbsolute, join, resolve, toNamespacedPath} from "node:path";
 import {setImmediate as yieldToRuntime} from "node:timers/promises";
@@ -16,6 +16,7 @@ import {recordControlledRequestRead} from "./request_control.ts";
 import {planCollaborationResult} from "./result_publication.ts";
 import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
+import {isNativeChildResultCursor, nativeChildResultInbox} from "../capabilities/native_child_result_inbox.ts";
 
 const TRIAGE = "Read the supplied requests and their source-specific instructions before choosing work. " +
   "Independently assess context, evidence, constraints and costs. Requests and peer results " +
@@ -24,8 +25,10 @@ const TRIAGE = "Read the supplied requests and their source-specific instruction
 const DELIVERY_STATUSES: ReadonlySet<string> = new Set(deliveryContract.delivery_statuses);
 const DELIVERY_ERRORS: ReadonlySet<string> = new Set(deliveryContract.delivery_errors);
 const RESULT_KEY = /^(?:decision|conclusion)(?:-[0-9]{8})?$/;
+const TURN_INSTANCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean; recipient?: JsonObject}>;
 type ReturnDelivery = Readonly<{key: string; request: JsonObject; reply: JsonObject}>;
+type PeerReturnPage = Readonly<{scope: string; afterOperation: string; afterResult: string}>;
 
 function fail(message: string): never { throw new EffectRuntimeRequestError(message); }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === "ENOENT"; }
@@ -258,6 +261,11 @@ function returnConsumed(root: string, key: string, row: JsonObject, reply: JsonO
       agent_id: agent, ...(Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})}),
     ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {})};
   if (Object.entries(expected).some(([field, value]) => !equal(saved[field], value))) fail("peer consumption receipt scope mismatch");
+  const turnBound = Object.hasOwn(saved, "turn_instance_id") || Object.hasOwn(saved, "disposition");
+  if (turnBound && (typeof saved.turn_instance_id !== "string" || !TURN_INSTANCE_ID.test(saved.turn_instance_id)
+      || saved.disposition !== "accepted" && saved.disposition !== "rejected")) {
+    fail("peer consumption receipt acknowledgement is invalid");
+  }
   return true;
 }
 function outgoingEntry(source: InboxSource, operation: JsonObject): JsonObject {
@@ -272,13 +280,31 @@ function outgoingEntry(source: InboxSource, operation: JsonObject): JsonObject {
       || conversation && !equal(row.requester, requester)) fail("peer return scope mismatch");
   return row;
 }
-async function collectReturns(source: InboxSource): Promise<{view: JsonObject; deliveries: ReturnDelivery[]}> {
+function peerReturnPage(source: InboxSource, params: JsonObject): PeerReturnPage | null {
+  if (params.turn_instance_id == null && params.cursor == null) return null;
+  const turn = requireNonEmptyString(params.turn_instance_id, "work Turn identity");
+  if (!TURN_INSTANCE_ID.test(turn) || params.mark_read !== true) fail("a bound peer result read is required");
+  const scope = digest(["peer_returns_v1", source.root, target(source), turn]);
+  if (params.cursor == null) return {scope, afterOperation: "", afterResult: ""};
+  const match = typeof params.cursor === "string"
+    ? /^1:([a-f0-9]{64}):([a-f0-9]{64}):(conclusion(?:-[0-9]{8})?)$/u.exec(params.cursor)
+    : null;
+  if (!match) fail("invalid peer result cursor");
+  const [, suppliedScope, afterOperation, afterResult] = match;
+  if (suppliedScope !== scope) fail("peer result cursor scope mismatch");
+  return {scope, afterOperation, afterResult};
+}
+
+async function collectReturns(source: InboxSource, page: PeerReturnPage | null = null):
+    Promise<{view: JsonObject; deliveries: ReturnDelivery[]}> {
   const items: JsonObject[] = [], deliveries: ReturnDelivery[] = [];
   if (source.recipient) return {view: {items: [], has_more: false}, deliveries};
+  let nextCursor: string | undefined;
   const folder = join(source.root, "peer-operations", digest(target(source)));
   for (const [index, name] of names(folder).entries()) {
     if (index > 0 && index % 128 === 0) await yieldToRuntime();
-    if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) continue;
+    const operationId = name.slice(0, -5);
+    if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(operationId) || operationId < (page?.afterOperation ?? "")) continue;
     const operation = readRecord(join(folder, name));
     const conversation = operation.schema_version === CONVERSATION_ENTRY_SCHEMA;
     let row: JsonObject;
@@ -287,7 +313,7 @@ async function collectReturns(source: InboxSource): Promise<{view: JsonObject; d
     const replies = join(source.root, "replies", String(row.request_id));
     for (const [resultIndex, key] of resultKeys(replies).entries()) {
       if (resultIndex > 0 && resultIndex % 128 === 0) await yieldToRuntime();
-      if (key === "decision") continue;
+      if (key === "decision" || (page?.afterOperation === operationId && key <= page.afterResult)) continue;
       const reply = readRecord(join(replies, key + ".json")), inspected = inspectResult(source.root, row, key, reply);
       if (["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "recipient", "requester"].some(field => Object.hasOwn(row, field) && !equal(reply[field], row[field]))
           || reply.phase !== "conclusion" || !inspected) fail("peer reply identity conflict");
@@ -303,13 +329,16 @@ async function collectReturns(source: InboxSource): Promise<{view: JsonObject; d
         text: reply.text, ...(reply.remaining_work ? {remaining_work: reply.remaining_work} : {}),
         decision: reply.decision, created_at: reply.created_at});
       if (items.length > 20) break;
+      if (page) nextCursor = `1:${page.scope}:${operationId}:${key}`;
       deliveries.push({key, request: Object.fromEntries(["request_id", "goal_id", "agent_id", "goal_ref", "recipient", "requester"]
         .filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]])),
       reply: Object.hasOwn(reply, "result_key") ? {result_key: reply.result_key} : {}});
     }
     if (items.length > 20) break;
   }
-  return {view: {items: items.slice(0, 20), has_more: items.length > 20}, deliveries};
+  const hasMore = items.length > 20;
+  return {view: {items: items.slice(0, 20), has_more: hasMore,
+    ...(hasMore && nextCursor ? {next_cursor: nextCursor} : {})}, deliveries};
 }
 function replyStatuses(root: string, row: JsonObject): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
@@ -402,8 +431,15 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
     observed_at: params.observed_at, read_command: params.read_command});
 }
 async function recordReads(source: InboxSource, params: JsonObject): Promise<JsonObject> {
+  const nativeResultIds = params.native_child_result_ids ?? [];
+  const turn = params.turn_instance_id == null ? null
+    : requireNonEmptyString(params.turn_instance_id, "work Turn identity");
+  if (turn !== null && !TURN_INSTANCE_ID.test(turn)) fail("work Turn identity is invalid");
   if (!Array.isArray(params.items) || params.items.length > 20
-      || !Array.isArray(params.deliveries) || params.deliveries.length > 20) fail("bounded inbox read observations are required");
+      || !Array.isArray(params.deliveries) || params.deliveries.length > 20
+      || !Array.isArray(nativeResultIds) || nativeResultIds.length > 20) {
+    fail("bounded inbox read observations are required");
+  }
   const followthrough = params.work_observations == null ? []
     : projectReceiverFollowthrough({observations: params.work_observations}).items;
   const receipts: (JsonObject | null)[] = [];
@@ -430,6 +466,7 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       return null;
     }));
   }
+  const peerReadTokens: Record<string, string> = {};
   for (const raw of params.deliveries) {
     const delivered = requireJsonObject(raw, "supplied peer result"), key = requireNonEmptyString(delivered.key, "result key");
     if (!RESULT_KEY.test(key)) fail("invalid peer result key");
@@ -438,20 +475,50 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
     if ((conversation ? !equal((row.requester as JsonObject)?.goal_ref, source.scope.caller_goal_ref)
       || (row.requester as JsonObject)?.agent_id !== source.agent : row.goal_id !== source.goal)
       || Object.hasOwn(reply, "result_key") && reply.result_key !== key) fail("peer return scope mismatch");
-    const path = join(source.root, "replies", requestId(row.request_id), key + ".delivery.json");
-    const lock = source.exact ? join(source.root, "request-locks", String(row.request_id)) : join(dirname(path), key + ".lock");
-    await withFileMutationLock(lock, async () => {
+    const id = requestId(row.request_id);
+    const path = join(source.root, "replies", id, key + ".delivery.json");
+    const lock = source.exact ? join(source.root, "request-locks", id) : join(dirname(path), key + ".lock");
+    const readToken = await withFileMutationLock(lock, async () => {
       const stored = conversation ? entry({...source, recipient: normalizeOriginalConversationRecipient(row.recipient)}, String(row.request_id))
         : entry(source, String(row.request_id), requireNonEmptyString(row.agent_id, "peer Agent"));
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
       if (!conversation) lifecycle(source, "read_record", stored);
-      if (!present(path)) await atomicWriteJson(path, {status: "delivered",
-        ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}), delivered_at: params.observed_at,
-        kind: "requester_cli_read", ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
-          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})});
+      const prior = present(path) ? readRecord(path) : null;
+      const identity = {status: "delivered",
+        ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
+        ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
+          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})};
+      if (prior && Object.entries(identity).some(([field, value]) => !equal(prior[field], value))) {
+        fail("peer return delivery receipt scope mismatch");
+      }
+      const priorTurn = jsonObject(prior?.model_turn);
+      const sameTurn = turn !== null && priorTurn?.turn_instance_id === turn;
+      const priorToken = sameTurn ? priorTurn?.read_token : undefined;
+      if (priorToken !== undefined && (typeof priorToken !== "string" || !BARE_SHA256_PATTERN.test(priorToken))) {
+        fail("peer return read token is invalid");
+      }
+      // Stamping the Turn can succeed before the focused response reaches its caller.
+      // The same result retains its token on reread, including across host restarts.
+      const token = priorToken ?? (turn !== null && params.operation === "returns" ? randomBytes(32).toString("hex") : undefined);
+      if (!prior || turn !== null && (!sameTurn || token !== priorToken)) {
+        await atomicWriteJson(path, {...identity,
+          delivered_at: prior?.delivered_at ?? params.observed_at, kind: "requester_cli_read",
+          ...(turn !== null ? {model_turn: {turn_instance_id: turn,
+            supplied_at: sameTurn ? priorTurn?.supplied_at : params.observed_at,
+            ...(token !== undefined ? {read_token: token} : {})}} : {})});
+      }
+      return token;
     });
+    if (readToken !== undefined) peerReadTokens[`${id}:${key}`] = readToken;
+  }
+  if (nativeResultIds.length) {
+    await nativeChildResultInbox({operation: "mark_delivered", runtime_root: params.runtime_root,
+      goal_id: source.goal, agent_id: source.agent,
+      goal_ref: source.exact ? source.scope.caller_goal_ref : null,
+      result_ids: nativeResultIds, observed_at: params.observed_at});
   }
   return {read_receipts: receipts, followthrough,
+    ...(Object.keys(peerReadTokens).length ? {peer_read_tokens: peerReadTokens} : {}),
     ...(params.include_context === true ? {context: await turnContext(source, params)} : {})};
 }
 
@@ -502,16 +569,50 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
   }
   if (operation === "record_read") return recordReads(source, params);
   if (operation === "returns") {
-    const offered = await collectReturns(source);
-    if (params.mark_read === true) await recordReads(source, {...params, items: [], deliveries: offered.deliveries});
+    const offered = await collectReturns(source, peerReturnPage(source, params));
+    if (params.mark_read === true) {
+      const recorded = await recordReads(source, {...params, items: [], deliveries: offered.deliveries});
+      const tokens = jsonObject(recorded.peer_read_tokens);
+      if (tokens) for (const item of offered.view.items as JsonObject[]) {
+        item.read_token = tokens[`${item.request_id}:${item.result_key ?? "conclusion"}`];
+      }
+    }
     return offered.view;
   }
   if (operation === "turn_context") return turnContext(source, params);
-  const page = await pendingPage(source, {...params, runtime_root: resolve(runtime)});
+  const nativeCursor = isNativeChildResultCursor(params.cursor);
+  if (nativeCursor && (conversation || params.request_id != null || params.operation_cursor != null)) {
+    fail("native child result continuation requires the same Goal inbox without other selectors");
+  }
+  const page: JsonObject = nativeCursor ? {ok: true, items: [], has_more: false, next_cursor: null, instruction: TRIAGE}
+    : await pendingPage(source, {...params, runtime_root: resolve(runtime)});
   const cursorScope = page._cursor_scope;
   delete page._cursor_scope;
-  const returns = params.request_id == null ? await collectReturns(source) : {view: {items: []}, deliveries: []};
+  const returns = params.request_id == null && !nativeCursor ? await collectReturns(source) : {view: {items: []}, deliveries: []};
   if ((returns.view.items as unknown[]).length) page.peer_returns = returns.view;
+  const nativeResults = params.request_id == null && !conversation
+    ? await nativeChildResultInbox({operation: "list", runtime_root: runtime,
+      goal_id: source.goal, agent_id: source.agent,
+      goal_ref: source.exact ? source.scope.caller_goal_ref : null,
+      cursor: nativeCursor ? params.cursor : null})
+    : {items: []};
+  const nativeItems = nativeResults.items as JsonObject[];
+  const nativeResultIds = nativeItems.map(item => requireNonEmptyString(item.result_id, "native child result id"));
+  if (nativeCursor || nativeItems.length || Number(nativeResults.unavailable_count ?? 0) > 0
+      || nativeResults.scan_complete === false) page.native_child_results = {
+    items: nativeItems, has_more: nativeResults.has_more,
+    pending_count: nativeResults.pending_count,
+    scan_complete: nativeResults.scan_complete,
+    unavailable_count: nativeResults.unavailable_count,
+    next_cursor: nativeResults.next_cursor,
+    instruction: (nativeResults.next_cursor
+      ? "Continue with this native_child_results.next_cursor as --cursor on the original Inbox command. "
+      : "") + (nativeItems.length
+      ? "Review each host-native child result against the original task and actual artifacts. A child result is candidate evidence, not parent acceptance. Acknowledge it only after using, deferring, or rejecting it."
+      : nativeResults.unavailable_count
+        ? "Inspect the owner-private store for unavailable results before using or acknowledging them."
+        : "This page contains no deliverable host-native child results."),
+  };
   if (operation === "turn_start") return {result: page, cursor_scope: cursorScope, context: await turnContext(source, params)};
   if (operation === "receiver_read") {
     const work = receiverWork(source, page.items as JsonObject[]);
@@ -524,9 +625,11 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
         }
       }
       const final = await recordReads(source, {...params, items: page.items, deliveries: returns.deliveries,
-        work_observations: work.observations, include_context: !conversation && params.request_id == null});
-      return {result: page, cursor_scope: cursorScope, completed: true, ...final};
+        native_child_result_ids: nativeResultIds,
+        work_observations: work.observations, include_context: !conversation && !nativeCursor && params.request_id == null});
+      return {result: page, cursor_scope: cursorScope, completed: true, ...(nativeCursor ? {native_child_continuation: true} : {}), ...final};
     }
   }
-  return {result: page, cursor_scope: cursorScope, ...(operation === "receiver_read" ? {deliveries: returns.deliveries} : {})};
+  return {result: page, cursor_scope: cursorScope, ...(nativeCursor ? {native_child_continuation: true} : {}), ...(operation === "receiver_read"
+    ? {deliveries: returns.deliveries, native_child_result_ids: nativeResultIds} : {})};
 }

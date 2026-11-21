@@ -69,12 +69,12 @@ test("captured runtime bindings are optional data and must name included inert r
   }
 });
 
-test("native capture metadata cannot change its Goal/configuration dependency or exceed the historical capacity", () => {
+test("native capture metadata binds its dependencies and accepts a large claimed history", () => {
   const original = request();
   const path = `${authorityBackupDirectory("goal-a")}/authority.jsonl`;
   const capture = {goal_id: "goal-a", state: "readable", runtime_archive_path: "runtime-root",
     configuration_sha256: "d".repeat(64), started_at: "2026-10-15T00:00:00.000Z", completed_at: "2026-10-15T00:00:01.000Z",
-    archive_path: path, archive: {goal_id: "goal-a", commits: "1", archive_sha256: "e".repeat(64)},
+    archive_path: path, archive: {goal_id: "goal-a", commits: "20001", archive_sha256: "e".repeat(64)},
     dependencies: {selector_sha256: null, writer_fence_sha256: null}};
   const artifact = {...member, archive_path: path};
   original.files = [artifact];
@@ -84,12 +84,13 @@ test("native capture metadata cannot change its Goal/configuration dependency or
     Object.assign(manifest.execution, {authority_captures: [capture], file_members: [artifact],
       configuration_backup: {sha256: "d".repeat(64)}});
   }
-  // The logical archive seal is deliberately different from the member byte
-  // digest: each has its own verifier and must never be substituted for the other.
+  // This validates the manifest claim. The archive reader verifies the actual
+  // cursor and seal, independently of the member byte digest.
   assert.equal(verifyStateRecoveryManifest(original).ok, true);
   for (const delta of [{runtime_archive_path: null}, {runtime_archive_path: "other"},
     {configuration_sha256: "f".repeat(64)}, {completed_at: "2026-10-14T00:00:00.000Z"},
-    {archive_path: "../outside"}, {archive: {...capture.archive, commits: "20001"}}]) {
+    {archive_path: "../outside"}, {archive: {...capture.archive, commits: "0"}},
+    {archive: {...capture.archive, commits: "020001"}}, {archive: {...capture.archive, commits: 20001}}]) {
     const input = structuredClone(original);
     for (const manifest of [input.external_manifest, input.embedded_manifest]) {
       Object.assign((manifest.execution as any).authority_captures[0], delta);

@@ -41,6 +41,13 @@ requires a new registration and preserves the prior version. It does not change
 the model prompt, analysis key or scoring owner. Source changes preserve the
 registered reading and cited snapshot with a historical warning. Language
 switches show the saved original with a notice, without inventing a translation.
+Each citation in a case study has a direct link to that occurrence in its saved
+version. Opening it uses the same source reader as a citation selected on the
+page. Closing returns to the citation and restores its chapter address.
+If a chapter is absent, the reader keeps the linked version and offers its
+contents. If that version has no study, readers can choose another saved
+version explicitly. If the link cannot be read, retry keeps the same address
+and **Browse saved studies** opens the current Goal's saved readings.
 Rendering uses the existing Markdown renderer and host-owned components, with
 no executable HTML. Porthole is not a runtime dependency of this reader.
 
@@ -713,6 +720,145 @@ readback. Present the key finding and uncertainty first, episode decisions next,
 and citations/method/cost on demand. CLI success alone does not complete that
 journey or qualify the model assessor.
 
+## Human attention in Research (optional)
+
+The Research view shows recorded human inputs separately from solver tokens and
+elapsed time. It reports clarifications, corrections, reviews, authorization
+decisions and status responses, plus active attention and response waiting where
+observed. Expand **Optimization points and input records** to inspect necessity,
+the associated research episode and original evidence. Opening this view or its
+citations starts no model call. Existing packs show **Not recorded** under
+**Sources and usage** until a human-observation capture is supplied.
+
+Without the optional capture, the native result reader retains its existing
+presentation; attention remains unrecorded in the source disclosure.
+
+![Research without a human-observation capture](../development/assets/research-analysis/attention-before-desktop.webp)
+
+With a supplied capture, the first screen uses a ring and category icons to show
+the share of each type among recorded completed inputs. Rounded percentages
+describe input counts, not cognitive effort. Active attention and response
+waiting have separate time tracks against the capture window; unfilled regions
+do not establish idle time, and the two durations are not added.
+
+This synthetic example has 16 distinct inputs, ten minutes of recorded active
+attention and nineteen minutes of response waiting after separate interval
+unions, within a 59-minute capture window. Timing coverage remains partial. The
+necessity bar shows eight inputs **Marked avoidable** (50%), six required and two
+unknown. These are recorder declarations to inspect through the original
+evidence, not measured savings or a reason to remove required review.
+
+![Recorded human inputs and separate active and waiting time](../development/assets/research-analysis/attention-after-desktop.webp)
+
+The narrow reader keeps optimization evidence in place, with eight inputs per
+page. These are packaged UI screenshots from the retained
+`smoke:research-human-attention` scenario, not live research measurements.
+
+![Narrow reader with source-linked optimization points](../development/assets/research-analysis/attention-optimization-narrow.webp)
+
+研究页将人工介入与求解 Token、经过时间分开展示。圆环和图标表示已记录完成介入
+的类型次数占比，不代表脑力权重；主动投入和等待分别对照记录窗口，不相加，未填色
+不能推断为空闲。必要性比例保留“标记可避免”的限定，不代表实际节省，也不把必要
+审查视为浪费。展开“优化点与介入记录”可核对必要性、关联研究片段与原始依据。
+浏览不调用模型；旧记录在“来源与用量”中显示“未采集”，未采集不能当作零。
+
+An Agent/provider prepares the capture from typed human receipts or explicit
+human observations within the already authorized source root. Add the complete
+capture to the existing input's `sources`, with its exact hash, `first_line: 1`
+and full JSON text; set `human_attention_source_id` to that source's ID. Register
+through the existing `benchmark trajectory-pack-register` command. No new
+permission, capability activation, scheduler or UI form is required.
+
+For existing LoopX receipts, pass both `--loopx-human-attention-start` and
+`--loopx-human-attention-end` as UTC `Z` timestamps to that registration command.
+This explicit bridge reads only authenticated Lark card decisions for
+`operation.execute` and `team.plan` in the input Goal, writes immutable
+digest-named receipt/capture artifacts inside the already authorized
+`--source-root`, and binds the copied registration input to them. Because Chat
+action receipts do not identify a benchmark case, run or revision, the target
+pack plus explicit window provides that binding; the original input and earlier
+packs remain unchanged. New receipts require `actor_class: human` and
+`verification_kind: lark_authenticated_card_callback_v1`. Pre-marker receipts
+are backfilled only when their complete historical authenticated-card shape and
+delivery/authority bindings match, and their evidence is labelled
+`legacy_lark_authenticated_card_callback_v0`.
+
+The generated capture is always partial: card delivery to confirmation supplies
+response waiting, while active attention and necessity remain unknown. Because
+the format is single-human, the bridge rejects a selected window containing
+decisions from more than one principal without publishing those principals.
+Dashboard/private-chat actions without an authenticated callback, pending or
+expired requests, and runtime-native DSH/Codex approvals are excluded. The
+bridge does not infer human action from a user role, text, pending state or
+automatic gate outcome.
+
+既有 LoopX 回执可在注册时同时传入 UTC `Z` 格式的
+`--loopx-human-attention-start` 与 `--loopx-human-attention-end`。该桥接仅投影
+目标 Goal 内经过认证的 Lark operation/team-plan 卡片决定，并在已授权
+`--source-root` 中生成不可变的摘要命名证据；目标 pack 与显式时间窗负责绑定
+case/run/revision，原输入和旧 pack 不会被改写。新回执必须显式声明人工 actor；旧回执
+仅在历史认证卡片字段、投递和权限绑定完整匹配时保守回填，并标注 legacy。生成记录
+始终是部分覆盖：只观测等待时间，主动投入和必要性保持未知；该格式只记录单一人员，
+窗口中出现多个 principal 时桥接拒绝生成 capture，且不会公开 principal。未认证动作、
+pending/expired 请求以及 DSH/Codex runtime-native approval 均不纳入，也不会从 user
+role、文本或 gate 状态推断人工介入。
+
+```json
+{
+  "schema_version": "trajectory_human_attention_v1",
+  "scope": {"goal_id": "study", "case_id": "case", "run_id": "run", "revision": "fixed", "window": "one hour"},
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T01:00:00Z",
+  "complete": false,
+  "events": [{
+    "event_id": "human-receipt-1",
+    "episode_id": "experiment-1",
+    "kind": "correction",
+    "necessity": "avoidable",
+    "occurred_at": "2026-01-01T00:10:00Z",
+    "active": null,
+    "request": {"start": "2026-01-01T00:05:00Z", "end": "2026-01-01T00:10:00Z"},
+    "citation": {"source_id": "human-receipts", "first_line": 2, "last_line": 2}
+  }]
+}
+```
+
+The five scope fields must match the registered input. `kind` is
+`clarification|correction|review|approval|status|other`; `necessity` is
+`required|avoidable|unknown`. Classifications are recorder declarations, not
+independently certified judgments. Use the receipt's stable ID: identical replay
+counts once; conflicting observations for one ID are rejected. Every event needs
+a citation to another registered source, within the assigned episode's evidence;
+`episode_id: null` retains an unassigned input. Preserve required authorization,
+valuable learning and careful final review rather than labelling them waste.
+
+`active` is either a recorded `{start, end}` UTC interval or `null`. `request`
+is a response-wait interval, `null` when unobserved, or `{start, end: null}` for
+a pending request. Pending requests are retained and counted separately; they do
+not count as completed human inputs, reviews or authorization decisions, and
+produce no completed-input optimization point. Intervals must lie inside the declared capture. Active and
+closed waiting intervals each use their own union, so concurrent observations
+are not charged twice. Pending requests have no inferred end. Missing timing
+stays unknown; recorded zero duration is valid. Time coverage and recorder-declared
+event completeness remain visible, including failed and abandoned work.
+This single-human capture does not aggregate different people's overlapping time.
+
+仅依据 typed 人工回执或明确人工观测准备记录；不能从消息的 user 角色、文本关键词、
+自动重规划或待审状态推断人工介入。缺失的来源、时间和必要性保留未知，重复回执只
+计一次。主动投入与已结束等待分别取时间并集，未响应请求不猜测结束时间，也不计入
+已完成介入或其优化点；本格式
+记录同一人的投入，不合并不同人的重叠时间。
+
+Optimization points group inputs explicitly marked avoidable and link each to
+its evidence. Their suggestions are checks to perform, not proven savings or
+permission to remove a gate. The existing explicit synthesis also receives the
+capture with guidance to ground any recommendation in episode evidence and
+subsequent accepted quality. Source changes keep the saved values historical;
+changed captures produce a new analysis identity and cannot reuse old judgments
+silently. Remove the optional binding in a newly registered pack to stop this
+projection; historical packs remain readable. This observer vocabulary belongs
+locally to `benchmark-toolkit`, not to Todo, quota or authorization state.
+
 ## Measured solver session cost (optional)
 
 ### Find expensive Turns and inspect their evidence
@@ -1280,6 +1426,9 @@ observed replies, not successful mutations or proved unnecessary recovery.
 Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
 `-m loopx.entrypoint`, and an exact
 single literal `const/await tools.exec_command/text` wrapper are recognized.
+For the quota guard, the parser can resolve a literal Turn assignment on the
+preceding line. It accepts both UTC Turn IDs and the benchmark worker's IDs.
+Duplicate Turn options, with either a separated value or `=value`, remain unassigned.
 Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
 file reads remain unassigned. Non-text content is counted as unmeasured parts.
 The byte share covers the recorded component only: injected LoopX instructions
@@ -1293,6 +1442,8 @@ estimate and provider counters; do not add their different units or denominators
 再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
 租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
 不证明状态写入成功或恢复操作可以省略。
+配额 guard 可识别前一行的 UTC 或 worker 字面量 Turn；重复 Turn 选项无论使用空格或
+等号传值，都保持未分类，不据此认领整次请求输入或返回字节。
 
 #### Whole requests issuing LoopX commands and capture comparison
 

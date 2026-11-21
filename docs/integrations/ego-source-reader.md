@@ -9,7 +9,7 @@ confirmation. If a successful, complete inventory confirms that the task's
 known Agent-created TaskSpace is absent, the same authorization permits one
 replacement and reuse of its initial Page. This covers unexpected loss without
 requiring a normal-closure receipt or another authorization question. Unknown
-cause stays unknown; failed inventory is not evidence of absence. An existing
+cause stays unknown. An existing
 space, a missing Page label, a refused claim or a stuck/blocked Page does not
 permit replacement. Keep one active space, record its identity and finish once
 per space lifetime.
@@ -25,8 +25,7 @@ before replaying an external effect whose outcome is unknown.
 Active user intervention, explicit pauses, reserved control,
 unknown task identity and browser-owned permission/login prompts retain their
 existing stops, even if the old space later disappears. This is Agent guidance;
-it neither changes Ego's native control checks nor gives the public-source
-reader a claim/takeover tool. That optional reader already bounds its own
+That optional reader already bounds its own
 confirmed-missing recovery; the host policy now admits the same known-missing
 case instead of making a normal-closure receipt a prerequisite.
 
@@ -76,9 +75,7 @@ LoopX does not intercept or promise to modify the browser's updater.
 
 The optional `loopx.extensions.ego_source_reader` stdio MCP adapter gives an
 existing Codex host narrow `read_public_url`, `read_public_image`, and `search_x` tools when its model shell cannot
-reach Ego's local bootstrap. It reuses an installed Ego browser with a reserved
-Page. It does not replace the Chat Session owner or create a browser,
-model thread, background service, material catalog or permission authority.
+reach Ego's local bootstrap. It reuses an installed Ego browser with a reserved Page.
 
 Operator setup is explicit. Choose `auto` to lazily create one TaskSpace and its
 initial `p1` per MCP process. Ego's named factory can reuse an existing space,
@@ -120,8 +117,7 @@ LOOPX_EGO_READ_ORIGINS = "*"
 All-origin mode removes per-site configuration for source links, including
 links discovered while reading another source. It changes this provider's origin
 policy only: URLs still require HTTPS with no credentials and only the default
-port, and navigation cannot read a redirected or raced Page. It does not grant
-login, browser control, filesystem writes, publishing or private-account access.
+port, and navigation cannot read a redirected or raced Page.
 The tools retain their existing `read_public_url` and `read_public_image` names;
 the host must still distinguish public sources from signed-in private pages.
 The adapter remains optional and disabled until configured on the execution host.
@@ -151,8 +147,7 @@ that boundary before publishing or admitting public evidence.
 Open the returned original URL with the existing reader or authorized Ego CLI,
 then inspect relevant media and trace technical claims to primary documentation
 or code. An excerpt, thumbnail or `media_present` flag is not full-post reading
-or video observation. Search ranking is neither exhaustive coverage nor a
-reliability score. Record sources through the existing
+or video observation. Record sources through the existing
 [external-evidence workflow](../../loopx/capabilities/external_research/README.md#egox-discovery--egox-发现)
 when using LoopX research; the tool never admits evidence itself.
 
@@ -210,8 +205,7 @@ stops the operation. Its hard-stop output sink can discard console sentinels;
 the adapter preserves only the stable user-control/inactive error code in a
 private temporary file and returns `source_reader_not_agent_owned`. It discards
 partial output, makes no replacement or takeover attempt, and removes that
-file after the call. Ordinary failures remain ordinary failures. This error
-transport does not grant control or prove a live human handoff was tested.
+file after the call. Ordinary failures remain ordinary failures.
 A source's actual login or verification requirement remains a
 separate boundary; follow the installed Ego skill and continue independent work.
 

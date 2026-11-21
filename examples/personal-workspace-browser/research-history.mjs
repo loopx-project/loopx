@@ -299,6 +299,9 @@ for question in range(4):
             finding_id=f'decision-{question}-{record}', title=f'Comparison {question}, decision {record}',
             summary=summary, status=['confirmed', 'refuted', 'tentative'][record % 3],
             recorded_at=f'2025-12-31T0{record}:00:00Z' if question == 3 else f'2026-01-0{question + 1}T0{record}:00:00Z'))
+events.append(build_explore_finding_event(goal_id=goal, node_id='question-3',
+    finding_id='undated-decision', title='Undated decision', status='tentative', recorded_at='unknown',
+    summary='Input revision: synthetic-v1 Applicability: current Observation: Time unavailable. Interpretation: Outcome: wait'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synthetic decision reading', 'events': events}, ensure_ascii=False))
 `, fixture], {cwd: repoRoot});
   let owner, page;
@@ -308,12 +311,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
     await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
     await page.goto(`${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
     const history = page.locator('.research-history');
-    await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+    await history.getByRole('status').filter({hasText: '25 / 25'}).waitFor();
     const readLatePhase = async (locale, size) => {
       const late = history.getByRole('button', {name: locale === 'zh-CN' ? /^后段 ·/ : /^Late ·/});
       await late.focus();
       await late.press('Enter');
       assert.equal(await late.getAttribute('aria-pressed'), 'true');
+      assert.equal(await history.locator('.research-decision-key .is-replan').evaluate(key => key.parentElement.textContent.trim()),
+        locale === 'zh-CN' ? '转向 19' : 'Replan 19', 'Selecting a period keeps the whole-history decision count');
       await page.screenshot({path: resolve(outputDir, 'recorded-phase-' + size + '-' + locale + '.png'), animations: 'disabled'});
       assert.equal(await history.locator('[data-research-nodes~="question-2"]:not(.is-dimmed)').count(), 1,
         'A question with a late record stays highlighted at its earlier first record');
@@ -322,6 +327,22 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       assert.match(await late.getAttribute('aria-label'), locale === 'zh-CN' ? /2 个有记录的研究项/ : /2 research items with records/);
       await late.press('Enter');
     };
+    const key = history.locator('.research-decision-key');
+    assert.equal(await key.locator('span').count(), 3, 'Dated outcomes and unknown times are accounted for separately');
+    assert.equal(await key.locator('.is-no_change').evaluate(mark => mark.parentElement.textContent.trim()), '无变化 1');
+    assert.match(await key.innerText(), /时间未知 1/);
+    assert.equal(await key.locator('.is-wait').count(), 0, 'An undated decision is not placed on the elapsed axis');
+    const marks = await history.locator('.research-decision-ticks span').evaluateAll(elements => elements.map(element => {
+      const style = getComputedStyle(element);
+      return {type: element.className, fill: style.backgroundColor, rotate: style.rotate};
+    }));
+    assert.equal(marks.length, 20);
+    assert.equal(marks.filter(mark => mark.type === 'is-replan').length, 19);
+    const replan = marks.find(mark => mark.type === 'is-replan');
+    assert.notEqual(replan.fill, 'rgba(0, 0, 0, 0)', 'Recorded changes of direction must be visible on the plot');
+    assert.notEqual(replan.rotate, marks.find(mark => mark.type === 'is-no_change').rotate);
+    assert.equal(await key.locator('.is-replan').evaluate(mark => getComputedStyle(mark).backgroundColor), replan.fill,
+      'The legend uses the same visible mark as the plot');
     await readLatePhase('zh-CN', 'desktop');
     const middle = history.getByRole('button', {name: /^中段 ·/});
     await middle.press('Enter');
@@ -365,7 +386,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
     for (const locale of ['zh-CN', 'en']) {
       await page.evaluate(value => localStorage.setItem('loopx-pw-locale', value), locale);
       await page.reload({waitUntil: 'domcontentloaded'});
-      await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await history.getByRole('status').filter({hasText: '25 / 25'}).waitFor();
       await readLatePhase(locale, 'phone');
       const row = group.locator('[data-research-decision]').first();
       assert.match(await row.innerText(), locale === 'zh-CN' ? /停止 2.*保留 3/s : /Stopped 2.*Retained 3/s);
@@ -398,7 +419,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       await oldest.click();
       assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0');
       await page.reload({waitUntil: 'domcontentloaded'});
-      await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await history.getByRole('status').filter({hasText: '25 / 25'}).waitFor();
       await detail.waitFor();
       assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0', 'Reload keeps the exact historical finding');
       await page.screenshot({path: resolve(outputDir, `decision-return-reader-${locale}.png`), animations: 'disabled'});
@@ -430,10 +451,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       await assertReturn(oldest);
       await trail.getByRole('button', {name: locale === 'zh-CN' ? '显示更多问题 · 1' : 'Show more questions · 1', exact: true}).click();
       const earlierQuestion = trail.locator('.research-trail-question').last();
-      await earlierQuestion.getByRole('button', {name: locale === 'zh-CN' ? '显示更早记录 · 2' : 'Show earlier records · 2', exact: true}).click();
-      const earlierDecision = earlierQuestion.locator('[data-research-decision]').last();
+      await earlierQuestion.getByRole('button', {name: locale === 'zh-CN' ? '显示更早记录 · 3' : 'Show earlier records · 3', exact: true}).click();
+      const earlierDecision = earlierQuestion.getByRole('button', {name: /Comparison 3, decision 0/});
       await earlierDecision.click(); await page.reload({waitUntil: 'domcontentloaded'});
-      await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await history.getByRole('status').filter({hasText: '25 / 25'}).waitFor();
       await detail.waitFor();
       assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-3-0');
       await detail.press('Escape');
@@ -448,9 +469,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     }
     await page.setViewportSize({width: 1280, height: 900});
-    const desktopOrigin = trail.locator('.research-trail-question').last().locator('[data-research-decision]').last();
+    const desktopOrigin = trail.locator('.research-trail-question').last().getByRole('button', {name: /Comparison 3, decision 0/});
     await desktopOrigin.click(); await page.reload({waitUntil: 'domcontentloaded'});
-    await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+    await history.getByRole('status').filter({hasText: '25 / 25'}).waitFor();
     const desktopReader = history.locator('.research-history-detail');
     await desktopReader.waitFor();
     assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-3-0');

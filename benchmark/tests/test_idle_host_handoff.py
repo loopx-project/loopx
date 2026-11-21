@@ -58,6 +58,79 @@ def _idle_return(declaration):
     return state, receipt
 
 
+
+def _completed_return(declaration):
+    state, receipt = _idle_return(declaration)
+    attempt = {
+        "goal_id": declaration["goal_id"], "agent_id": declaration["agent_id"],
+        "registry": declaration["registry"], "runtime_root": declaration["runtime_root"],
+        "obligation_id": "replan-0123456789abcdef", "status": "returned", "wake_rc": 0,
+    }
+    state.write_text(json.dumps({"last_wake_status": "wake_ok", "last_wake_rc": 0,
+                                 "replan_attempts": [attempt]}))
+    os.utime(state, (111, 111))
+    state.with_name(state.name + ".host-attempt").write_text('{"pending": false}')
+    value = json.loads(receipt.read_text())
+    for key in ("budget_exhausted", "error_kind", "error"):
+        value.pop(key, None)
+    value.update(
+        ok=True, return_code=0, timed_out=False,
+        goal_id=declaration["goal_id"], agent_id=declaration["agent_id"],
+        host_attempt_id="f" * 32, phase_deadline_epoch="200",
+        native_process={
+            "schema_version": "native_codex_process_observation_v1",
+            "pid": 23, "started_at_unix": 101.1, "cleanup_trigger": "scope_completed",
+            "before_cleanup": {"return_code": 0, "observed_at_unix": 108.9},
+            "after_cleanup": {"return_code": 0, "observed_at_unix": 109.1},
+        },
+    )
+    receipt.write_text(json.dumps(value))
+    os.utime(receipt, (110, 110))
+    Path(declaration["phase_clock"]).write_text("200.0")
+    return state, receipt
+
+
+@pytest.mark.parametrize("fault", [None, "default", "pending", "numeric_pending", "clock", "wrong_goal", "late_return", "later_wake"])
+def test_completed_host_source_requires_the_last_exact_return(tmp_path, monkeypatch, fault):
+    declaration = _source(tmp_path)
+    state, receipt = _completed_return(declaration)
+    box, client = _fake_container(monkeypatch)
+    if fault == "pending":
+        state.with_name(state.name + ".host-attempt").write_text('{"pending": true}')
+    elif fault == "numeric_pending":
+        state.with_name(state.name + ".host-attempt").write_text('{"pending": 0}')
+    elif fault == "clock":
+        Path(declaration["phase_clock"]).write_text("210")
+    elif fault in {"wrong_goal", "late_return"}:
+        value = json.loads(receipt.read_text())
+        if fault == "wrong_goal":
+            value["goal_id"] = "other-goal"
+        else:
+            value["native_process"]["after_cleanup"]["observed_at_unix"] = 111.5
+        receipt.write_text(json.dumps(value))
+        os.utime(receipt, (110, 110))
+    elif fault == "later_wake":
+        later = receipt.parent.with_name("later") / "receipt.json"
+        later.parent.mkdir()
+        later.write_bytes(receipt.read_bytes())
+        os.utime(later, (111, 111))
+    output = tmp_path / "proof.json"
+    before = state.read_bytes()
+    if fault:
+        with pytest.raises(ValueError):
+            prepare_stopped_recovery(client, container_id=box.id, declaration=declaration,
+                                     output=output, idle_host_handoff=fault != "default")
+        assert not output.exists()
+    else:
+        proof = prepare_stopped_recovery(client, container_id=box.id, declaration=declaration,
+                                        output=output, idle_host_handoff=True)
+        assert proof["completed_host"] is True
+        assert proof["execution_authority_granted"] is False
+        assert proof["process_started_at"] == 101.1
+        assert proof["process_stopped_at"] == 109.1
+        assert proof["source_phase_deadline_epoch"] == 200
+    assert state.read_bytes() == before
+
 def test_stopped_export_uses_output_created_by_the_real_worker(tmp_path, monkeypatch):
     from benchmark.runtime import worker
     from benchmark.tests.test_worker_phase_budget import _phase_worker
@@ -298,11 +371,13 @@ def test_native_idle_readback_requires_complete_stable_history_before_attempt(
         "exhausted",
         "new_native_work",
         "changed_wal",
+        "numeric_pending",
         "unrelated_lock",
     ],
 )
+@pytest.mark.parametrize("completed_host", [False, True], ids=["legacy-empty", "completed-host"])
 def test_real_sqlite_idle_handoff_keeps_source_and_runs_the_retained_session(
-    tmp_path, monkeypatch, fault
+    tmp_path, monkeypatch, fault, completed_host
 ):
     from benchmark.runtime import worker
     from benchmark.tests.test_worker_phase_budget import _phase_worker
@@ -344,7 +419,10 @@ if 'app-server' in sys.argv:
         elif method=='account/read': value={'account':{'type':'chatgpt'}}
         elif method=='account/rateLimits/read': value={'rateLimits':{'primary':{'usedPercent':100 if (markers/'exhausted').exists() else 40}}}
         elif method=='thread/read': value={'thread':{'id':'original-native','cwd':str(pathlib.Path.cwd())}}
-        elif method=='thread/turns/list': value={'data':[{'id':'last-completed','status':'completed','startedAt':80,'completedAt':int(time.time())+10 if (markers/'new-native-work').exists() else 90,'error':None,'items':[]}],'nextCursor':None}
+        elif method=='thread/turns/list':
+            started,completed=(102,108) if (markers/'completed-host').exists() else (80,90)
+            if (markers/'new-native-work').exists(): completed=int(time.time())+10
+            value={'data':[{'id':'last-completed','status':'completed','startedAt':started,'completedAt':completed,'error':None,'items':[]}],'nextCursor':None}
         else: raise AssertionError(method)
         print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':value}),flush=True)
     sys.exit(0)
@@ -389,17 +467,20 @@ print(json.dumps({'type':'turn.completed'}),flush=True)
     )
     state.write_text("{}")
     state.with_name(state.name + ".host-attempt").write_text('{"pending":true}')
-    state, returned = _idle_return(declaration)
+    if completed_host:
+        (control / "completed-host").touch()
+        state, returned = _completed_return(declaration)
+    else:
+        state, returned = _idle_return(declaration)
+        clock.write_text("105")
     receipt = json.loads(returned.read_text())
     receipt["session"]["session_id"] = "original-native"
     returned.write_text(json.dumps(receipt))
     os.utime(returned, (110, 110))
-    # The only latest source wake is the selected returned failure.
+    # The selected return must still be the latest source wake.
     for old in Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"):
         if old != returned:
             os.utime(old, (95, 95))
-    # Readback fixtures use historical seconds, as does the retained Host proof.
-    clock.write_text("105")
     original_uts = os.uname()
     unrelated_lock = project / "research.lock"
     unrelated_lock.write_text("retained work evidence")
@@ -450,6 +531,9 @@ print(json.dumps({'type':'turn.completed'}),flush=True)
         (control / "new-native-work").touch()
     elif fault == "changed_wal":
         (home / "state_5.sqlite-wal").write_bytes(b"changed WAL")
+    elif fault == "numeric_pending":
+        pending = state.with_name(state.name + ".host-attempt")
+        pending.write_text('{"pending": 0}' if completed_host else '{"pending": 1}')
     elif fault == "unrelated_lock":
         read_idle = native.native_idle_turn
 
@@ -482,8 +566,16 @@ print(json.dumps({'type':'turn.completed'}),flush=True)
     initial = phase.read_bytes()
     saved = json.loads(initial)
     assert saved["recovered_session_id"] == "original-native"
-    assert saved["idle_host_recovery"]["original_host_failure"]["kind"] == "unknown"
-    assert saved["idle_host_recovery"]["phase_deadline_epoch"] == deadline
+    recovery = saved["idle_host_recovery"]
+    if completed_host:
+        assert recovery["process_stopped_at"] == 109.1
+        assert recovery["native"]["started_at"] == 102
+        assert recovery["native"]["completed_at"] == 108
+        assert "original_host_failure" not in recovery
+        assert saved["replan_attempts"] == json.loads(original)["replan_attempts"]
+    else:
+        assert recovery["original_host_failure"]["kind"] == "unknown"
+    assert recovery["phase_deadline_epoch"] == deadline
     assert resume() == str(phase) and phase.read_bytes() == initial
     for key in ("allowance", "native", "receipt_sha256", "session_profile_digest"):
         changed = copy.deepcopy(saved)
@@ -492,6 +584,20 @@ print(json.dumps({'type':'turn.completed'}),flush=True)
         with pytest.raises(ValueError):
             resume()
     phase.write_bytes(initial)
+    if completed_host:
+        pending = state.with_name(state.name + ".host-attempt")
+        cleared = pending.read_bytes()
+        from scripts.external_scheduler_worker import _host_pending
+
+        for witness in ('{"pending": true}', '{"pending": 0}', '{"pending":false}'):
+            pending.write_text(witness)
+            if witness == '{"pending": 0}':
+                assert _host_pending(state) is None
+            with pytest.raises(ValueError, match="replay differs"):
+                resume()
+            assert phase.read_bytes() == initial
+        pending.write_bytes(cleared)
+        assert resume() == str(phase)
     assert worker.run_once(env)["ok"]
     assert (
         project / "continued-candidate"

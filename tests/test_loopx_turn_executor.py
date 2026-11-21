@@ -741,6 +741,100 @@ def test_new_material_host_result_requires_qualifying_settlement(kind: str, outc
     assert validation["result"]["delivery_outcome"] == outcome
 
 
+def _continued_vision(*, outcome: str = "continue") -> dict[str, object]:
+    return {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {
+            "acceptance_summary": "Independently validate the fixture result and recovery.",
+        },
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": outcome,
+            "prior_assumption": "The fixture result had not been independently checked.",
+            "observed_reality": "The fixture produced new checkable result evidence.",
+            "retained": ["Keep the original fixture acceptance and execution route."],
+            "evidence_refs": ["fixture:result-checkpoint"],
+        },
+    }
+
+
+@pytest.mark.parametrize("kind", ["validated_progress", "validated_completion"])
+@pytest.mark.parametrize("outcome", ["continue", "no_change"])
+@pytest.mark.parametrize("from_journal", [False, True])
+def test_unchanged_route_can_record_fresh_result_checkpoint(
+    kind: str, outcome: str, from_journal: bool,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan, kind=kind)
+    result.pop("vision_unchanged_reason")
+    result["path_delta_mode"] = "unchanged"
+    packet = _continued_vision(outcome=outcome)
+    result["agent_vision" if from_journal else "agent_vision_json"] = (
+        packet if from_journal else json.dumps(packet)
+    )
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, from_journal=from_journal, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is True, validation["errors"]
+    assert validation["result"]["result_kind"] == kind
+    assert validation["result"]["agent_vision"]["path_delta"] == packet["path_delta"]
+
+
+@pytest.mark.parametrize("outcome", ["replan", "wait", "ask_human", "stop"])
+@pytest.mark.parametrize("from_journal", [False, True])
+def test_unchanged_checkpoint_cannot_hide_route_or_stop_decisions(
+    outcome: str, from_journal: bool,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan)
+    result.pop("vision_unchanged_reason")
+    packet = _continued_vision(outcome=outcome)
+    result.update(path_delta_mode="unchanged")
+    result["agent_vision" if from_journal else "agent_vision_json"] = (
+        packet if from_journal else json.dumps(packet)
+    )
+
+    validation = validate_loopx_turn_host_result(plan, result, from_journal=from_journal)
+
+    assert validation["ok"] is False
+    assert "outcome must be continue or no_change" in " ".join(validation["errors"])
+
+
+@pytest.mark.parametrize("defect, expected_error", [
+    ("unchanged_reason", "fresh agent_vision cannot also declare"),
+    ("missing_path_delta", "unchanged agent_vision_json requires goal_path_delta_v0"),
+    ("implicit_mode", "outcome must be replan"),
+    ("completion_replan", "requires result_kind replan_required"),
+])
+def test_fresh_checkpoint_preserves_explicit_and_legacy_boundaries(
+    defect: str, expected_error: str,
+) -> None:
+    plan = _plan()
+    result = _host_result(plan, kind="validated_completion")
+    packet = _continued_vision()
+    result["path_delta_mode"] = "unchanged"
+    if defect != "unchanged_reason":
+        result.pop("vision_unchanged_reason")
+    if defect == "missing_path_delta":
+        packet.pop("path_delta")
+    elif defect == "implicit_mode":
+        result.pop("path_delta_mode")
+    elif defect == "completion_replan":
+        result["path_delta_mode"] = "material_replan"
+        packet = _continued_vision(outcome="replan")
+    result["agent_vision_json"] = json.dumps(packet)
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is False
+    assert expected_error in " ".join(validation["errors"])
+
+
 @pytest.mark.parametrize("packet, expected_error", [
     (None, "cached agent_vision must be a JSON object"),
     ([], "cached agent_vision must be a JSON object"),
@@ -3458,8 +3552,9 @@ def test_run_once_blocks_drifted_settlement_identity_before_any_provider(
     assert all(count == 0 for count in calls.values())
 
 
+@pytest.mark.parametrize("fresh_checkpoint", [False, True])
 def test_run_once_recovers_saved_host_result_from_validation_without_host_retry(
-    tmp_path: Path,
+    tmp_path: Path, fresh_checkpoint: bool,
 ) -> None:
     plan = _plan()
     calls = {"host": 0, "validation": 0, "writeback": 0, "spend": 0, "scheduler": 0}
@@ -3467,7 +3562,11 @@ def test_run_once_recovers_saved_host_result_from_validation_without_host_retry(
 
     def host(_request: dict[str, object]) -> dict[str, object]:
         calls["host"] += 1
-        return _host_result(plan)
+        result = _host_result(plan)
+        if fresh_checkpoint:
+            result.pop("vision_unchanged_reason")
+            result.update(path_delta_mode="unchanged", agent_vision_json=json.dumps(_continued_vision()))
+        return result
 
     def interrupted_validation(
         _plan: dict[str, object],
@@ -3506,6 +3605,12 @@ def test_run_once_recovers_saved_host_result_from_validation_without_host_retry(
     assert inspected["recovery_decision"]["can_continue"] is True
     assert inspected["recovery_decision"]["resume_from"] == "validation"
     assert inspected["recovery_decision"]["reinvoke_host"] is False
+    if fresh_checkpoint:
+        saved = json.loads(turn_journal_path(
+            tmp_path / "runtime", goal_id="fixture-goal",
+            turn_key=str(transaction["turn_key"]),
+        ).read_text())
+        assert saved["host_result"]["agent_vision"]["path_delta"]["outcome"] == "continue"
 
     recovered = run_loopx_turn_once(
         plan,

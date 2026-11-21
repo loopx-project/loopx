@@ -62,6 +62,17 @@ transport-neutral goal prompt and lets the goal runtime own inner iteration;
 see the host integration protocol instead of adapting this recurring
 automation contract.
 
+Antigravity App (`--runtime-profile antigravity_app` or `--antigravity_app`)
+keeps a fixed resident session patrolling in place rather than relying on
+Codex's `automation_update`: bind the conversation's `Conversation ID` /
+`ANTIGRAVITY_CONVERSATION_ID` with `bind-agent-thread --with-agy-hooks --execute`
+and `sync-global`, perform repository work and `quota should-run` in an isolated
+`.worktrees/` git worktree (leaving the primary checkout clean for
+`workspace_guard`), and suspend between wakes via in-session
+`schedule(DurationSeconds=max(180, interval * 60), TimerCondition="any", Prompt=...)`
+(`180`s minimum floor; `3 -> 6 -> 10` minute unchanged backoff; no shell `sleep`,
+and no `new-conversation` `sidecar.json` unless explicitly requested).
+
 ### Native Goal bootstrap and live execution instructions
 
 Full, compact and brief automation use the same fully qualified notification/execution rule
@@ -466,6 +477,11 @@ use the explicit original capture reference. If preparation fails before that
 can be established, or invalidation also fails, the CLI reports
 `quota_decision_transport_failed` with the saved decision and receipt. Do not
 rerun admission to recover a presentation failure.
+
+If the compact recovery reference cannot be written, a bounded failure reply can
+carry only the saved capture path and SHA-256. Use `quota context-read` with that
+identity in a larger output channel. When `decision.json` could not be saved,
+the fallback capture contains the original committed receipt and diagnostics.
 
 When the caller also selects `--record-host-poll`, the existing liveness owner
 records that observation once before the original capture. The saved decision,

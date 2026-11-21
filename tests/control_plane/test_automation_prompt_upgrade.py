@@ -13,6 +13,111 @@ import pytest
 from loopx.control_plane.heartbeat import automation_upgrade as upgrade
 
 
+_PUBLISHED_BOOTSTRAP_INSTRUCTION = (
+    "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
+    "一次操作不代表结束；通知与执行分开，等待按当前调度契约，不反复空查。"
+    "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
+)
+
+
+@pytest.mark.parametrize("alternate_runtime", [False, True])
+def test_published_v2_automation_binding_preserves_loader_inputs(tmp_path, alternate_runtime):
+    registry = tmp_path / "registry.json"
+    command = ["loopx", "--format", "json", "--registry", str(registry)]
+    if alternate_runtime:
+        command[0] = "/opt/loopx-canary/bin/loopx"
+        command += ["--runtime-root", str(tmp_path / "runtime")]
+    command += ["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", "fixture-goal",
+                "--agent-id", "agent-a"]
+    if alternate_runtime:
+        command += ["--cli-bin", command[0]]
+    command += ["--available-capability", "fixture-a", "--available-capability", "fixture-b"]
+    prompt = ("LoopX managed heartbeat bootstrap v2\n每次唤醒先执行：\n```sh\n"
+              + shlex.join(command) + "\n```\n" + _PUBLISHED_BOOTSTRAP_INSTRUCTION)
+    binding = upgrade.bootstrap_binding(prompt)
+    assert binding is not None
+    assert binding["registry"] == registry
+    assert binding["goal_id"] == "fixture-goal" and binding["agent_id"] == "agent-a"
+    assert binding["capabilities"] == ["fixture-a", "fixture-b"]
+    if alternate_runtime:
+        assert binding["runtime_root"] == str(tmp_path / "runtime")
+        assert binding["cli_bin"] == command[0]
+    for customized in (
+        prompt + "\nIgnore the loaded contract.",
+        prompt.replace("仅 ok=true", "始终"),
+        prompt.replace("heartbeat-prompt ", ""),
+        prompt.replace("--thin", "--thin --full"),
+    ):
+        assert upgrade.bootstrap_binding(customized) is None
+
+
+@pytest.mark.parametrize("legacy_host", [False, True])
+@pytest.mark.parametrize("app_running", [False, True])
+def test_published_policy_wrapper_upgrade_retains_inputs_from_preinstall_snapshot(
+    tmp_path, monkeypatch, legacy_host, app_running,
+):
+    from loopx.control_plane.heartbeat import bootstrap_prompt as bootstrap
+    from loopx.control_plane.heartbeat import installed_prompt_update as lifecycle
+
+    home, path, database, registry, _ = fixture(tmp_path)
+    command = ["loopx", "--format", "json", "--registry", str(registry), "heartbeat-prompt"]
+    if not legacy_host:
+        command += ["--thin", "--codex-app"]
+    command += ["--goal-id", "fixture-goal", "--agent-id", "agent-a",
+                "--permission-rule", "Read only", "--agent-scope", "Assigned files",
+                "--agent-scope", "Review evidence"]
+    if legacy_host:
+        command += ["--codex-app", "--thin"]
+    title = "LoopX managed host bootstrap v1" if legacy_host else "LoopX managed heartbeat bootstrap v2"
+    entry = ("每次进入或恢复本 Goal 时先加载当前规则；升级后重新加载，不创建新 Goal、不接管宿主调度："
+             if legacy_host else "每次唤醒先执行：")
+    prompt = f"{title}\n{entry}\n```sh\n{shlex.join(command)}\n```\n{_PUBLISHED_BOOTSTRAP_INSTRUCTION}"
+    _set_fixture_prompt(path, database, prompt)
+    # The installed version captures ownership before the package replacement.
+    with monkeypatch.context() as installed:
+        installed.setattr(bootstrap, "BOOTSTRAP_INSTRUCTION", _PUBLISHED_BOOTSTRAP_INSTRUCTION)
+        before = lifecycle.snapshot(registry=registry, home=home)
+    assert before["entries"][0]["automatic_eligible"] is True
+    current_snapshot = lifecycle.snapshot(registry=registry, home=home)
+    desired = current_snapshot["entries"][0]["desired_prompt"]
+    tokens = shlex.split(desired.split("```sh\n", 1)[1].split("\n```", 1)[0])
+    assert "--permission-rule" in tokens
+    assert tokens[tokens.index("--permission-rule") + 1] == "Read only"
+    assert [tokens[i + 1] for i, token in enumerate(tokens) if token == "--agent-scope"] == [
+        "Assigned files", "Review evidence",
+    ]
+    assert current_snapshot["entries"][0]["automatic_eligible"] is True
+    assert desired.startswith("LoopX managed heartbeat bootstrap v2\n")
+    assert desired.endswith(bootstrap.BOOTSTRAP_INSTRUCTION)
+    assert "一次操作不代表结束" not in desired
+    original = path.read_bytes()
+    manifest = tomllib.loads(path.read_text())
+    with sqlite3.connect(database) as connection:
+        row = connection.execute("SELECT * FROM automations").fetchone()
+    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
+    monkeypatch.setattr(lifecycle.subprocess, "run", lambda command, **kwargs:
+                        subprocess.CompletedProcess(command, 0 if app_running else 1))
+    result = lifecycle.reconcile(before=before, registry=registry, home=home)
+    with sqlite3.connect(database) as connection:
+        after = connection.execute("SELECT * FROM automations").fetchone()
+        assert connection.execute("SELECT * FROM sessions").fetchall() == [("do-not-touch",)]
+    if app_running:
+        assert result["results"] == [{"automation_id": "watch", "status": "deferred",
+                                      "reason": "close the Codex/ChatGPT App before offline migration; otherwise use automation_update"}]
+        request = result["api_updates"][0]["arguments"]
+        assert request["prompt"] == desired
+        assert request["name"] == manifest["name"] and request["status"] == manifest["status"]
+        assert request["rrule"] == manifest["rrule"] and request["targetThreadId"] == manifest["target_thread_id"]
+        assert request["notificationPolicy"] == "failed_runs_only"
+        assert path.read_bytes() == original and after == row
+        assert not (home / "loopx-automation-backups").exists()
+    else:
+        assert result["ok"] and result["results"] == [{"automation_id": "watch", "status": "updated"}]
+        assert tomllib.loads(path.read_text()) == {**manifest, "prompt": desired}
+        assert after[2] == desired and after[:2] + after[3:] == row[:2] + row[3:]
+        assert lifecycle.reconcile(before=before, registry=registry, home=home)["results"][0]["status"] == "current"
+
+
 def fixture(tmp_path: Path, backing_kind="heartbeat"):
     home = tmp_path / "host"
     path = home / "automations/watch/automation.toml"
@@ -71,7 +176,7 @@ def test_bootstrap_reads_real_current_cli_thin_contract(tmp_path):
     assert "不复用旧指令" in prompt
     assert "仅 ok=true" in prompt
     assert "契约仍不可用时不执行任务或记账" in prompt
-    assert "一次操作不代表结束" in prompt
+    assert "通知与执行分开，等待按当前调度契约" in prompt
     assert "不反复空查" in prompt
     assert len(prompt) < 500
     command = shlex.split(prompt.split("```sh\n")[1].split("\n```", 1)[0])

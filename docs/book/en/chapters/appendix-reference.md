@@ -1,6 +1,6 @@
 # Terms and command entrypoints
 
-Use this appendix with an actual problem; the source course is not a prerequisite. Current installed `--help` owns command arguments. This page gives entrypoints and judgment conditions, not a complete CLI reference or automatic mutation permission.
+Use this appendix with an actual problem. Current installed `--help` owns command arguments. This page gives entrypoints and judgment conditions, not a complete CLI reference or automatic mutation permission.
 
 ## Read before deciding to change state {#read-before-change}
 
@@ -49,7 +49,7 @@ Public feedback should retain minimal reproducible versions, error codes and pub
 | Evidence / Receipt | Support for a conclusion versus an accepted-operation record; both need correct binding |
 | Kernel | Generic transition owner, not the owner of every external system's reality |
 
-See [state](state-substrate.md). Information in a prompt alone does not prove durable lifecycle writeback. Persisted chat also does not automatically become current authority.
+See [state](state-substrate.md). Persisted chat also does not automatically become current authority.
 
 ## Requirement two: identify interrupted work {#requirement-two-interruption-stops-at-identifiable-points}
 
@@ -114,7 +114,7 @@ loopx update apply
 loopx doctor
 ```
 
-Confirm installation owner, target release and plan before authorizing apply. Ordinary users should not default to `--ref main`. Updating the CLI does not establish that every Host, Provider and existing Goal migrated. Recheck skills, state, Host readback and enabled Extension readiness for the surfaces actually used.
+Confirm installation owner, target release and plan before authorizing apply. Ordinary users should not default to `--ref main`. Recheck skills, state, Host readback and enabled Extension readiness for the surfaces actually used.
 
 For backup, preview before execution:
 

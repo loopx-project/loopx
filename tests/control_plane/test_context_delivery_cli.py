@@ -239,14 +239,24 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
+    assert guard["schema_version"] == "loopx_turn_envelope_v1"
     summary = guard["agent_todo_summary"]
-    assert [item["todo_id"] for item in summary["backlog_items"]] == ["todo_work_1"]
-    condition = summary["backlog_items"][0]["resume_condition"]
+    # The complete writer retains the original bounded source rows. It no
+    # longer emits the legacy display projection as its canonical decision.
+    assert [item["todo_id"] for item in summary["backlog_items"]] == [TODO_ID, "todo_work_1"]
+    condition = summary["backlog_items"][1]["resume_condition"]
     assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
     assert len(summary["first_executable_items"]) == 3
     candidates = guard["capability_gate"]["runnable_candidates"]
     assert {row["todo_id"] for row in candidates} == {row["todo_id"] for row in todos[:8]}
     assert all(row["title"].endswith("Final condition: stop before publication.") for row in candidates)
+    # The shared historical display owner still isolates the exceptional row;
+    # no resumed row expands known diagnostic siblings in that projection.
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+    displayed = compact_quota_should_run_cli_payload(deepcopy(guard))["agent_todo_summary"]
+    assert [item["todo_id"] for item in displayed["backlog_items"]] == ["todo_work_1"]
+    assert displayed["backlog_items"][0]["resume_condition"] == condition
+    assert len(displayed["first_executable_items"]) == 3
     assert state.read_bytes() == before and _spend_run_count(runtime) == 0
     code, detailed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", "todo_work_7", cwd=project)
@@ -645,16 +655,19 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
 
 @pytest.mark.parametrize("native_failure", [None, "projection", "directory", "reader_reference"])
 def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
+    from hashlib import sha256
+
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota, quota_context_reader
+    from loopx.cli_commands import quota, quota_context_reader, quota_result_delivery
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
-    monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
-    monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
+    monkeypatch.setattr(quota_result_delivery, "handoff_decision",
+        lambda *args, capture_sha256: ({"scope": "host-request"}, capture_sha256))
+    monkeypatch.setattr(quota_result_delivery, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
 
     def competing(*args, **kwargs):
         pytest.fail("explicit native observation must not compose two projection owners")
@@ -673,7 +686,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     def unavailable_reference(*args, **kwargs):
         raise OSError("synthetic reader metadata unavailable")
 
-    monkeypatch.setattr(quota, "project_captured_context", competing)
+    monkeypatch.setattr(quota_result_delivery, "project_captured_context", competing)
     monkeypatch.setattr(codex_context, "prepare_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
@@ -687,7 +700,9 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert len(printed) == 1 and printed[0]["ok"] is False
         assert printed[0]["error_code"] == "quota_decision_transport_failed"
         assert printed[0]["heartbeat_receipt"] == original["heartbeat_receipt"]
-        assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
+        saved = tmp_path / "decision.json"
+        assert printed[0]["captured_decision"]["path"] == str(saved)
+        assert printed[0]["captured_decision"]["sha256"] == sha256(saved.read_bytes()).hexdigest()
     else:
         assert len(printed) == 1 and "content" not in printed[0]
         reference = read_context_read_reference(printed[0]["reference_file"])[1]

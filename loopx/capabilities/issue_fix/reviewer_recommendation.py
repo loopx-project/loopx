@@ -13,6 +13,10 @@ from urllib.parse import urlsplit
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...public_safe_text import COMPACT_LABEL_PATTERN as REVIEWER_SOURCE_ID_PATTERN
+from .repository_context import (
+    FRESHNESS_STATES as REVIEWER_SOURCE_FRESHNESS_STATES,
+    TRUST_LEVELS as REVIEWER_SOURCE_TRUST_LEVELS,
+)
 
 
 ISSUE_FIX_REVIEWER_RECOMMENDATION_SCHEMA_VERSION = (
@@ -37,8 +41,6 @@ AUTOMATED_HISTORY_IDENTITY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 REVIEWER_SOURCE_KINDS = {"maintainer_map"}
-REVIEWER_SOURCE_TRUST_LEVELS = {"authoritative", "verified", "advisory"}
-REVIEWER_SOURCE_FRESHNESS_STATES = {"current", "stale", "unknown"}
 REVIEWER_SOURCE_MATCH_KINDS = {
     "path_prefix",
     "path_glob",

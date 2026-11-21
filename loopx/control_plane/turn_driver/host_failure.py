@@ -26,7 +26,7 @@ HOST_FAILURE_KINDS = frozenset(
 )
 HOST_RETRY_STRATEGY = "same_configuration"
 
-# These are scheduling hints, not an in-process sleep policy. The Turn journal
+# These are scheduling hints. The Turn journal
 # remains the authority for the attempt count and the outer controller decides
 # when to wake the exact same Turn again.
 _RETRY_POLICIES = {

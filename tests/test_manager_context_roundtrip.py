@@ -95,12 +95,16 @@ def private_snapshot(frozen_private_reply, tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def read(*, expected_status=200, **query):
+    def read(*, expected_status=200, session_id=session["session_id"], headers=None, path=None, raw=False, **query):
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
-            connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
+            connection.request("GET", path or f"/api/chat/sessions/{session_id}?{urlencode(query)}",
+                               headers=headers or {})
             response = connection.getresponse()
-            payload = json.loads(response.read())
+            body = response.read()
+            if raw:
+                return response.status, dict(response.getheaders()), body
+            payload = json.loads(body)
             assert response.status == expected_status, payload
             return payload
         finally:
@@ -132,11 +136,43 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
 
 
+def test_saved_answer_reads_only_its_original_question_and_exact_answer(frozen_private_reply, private_snapshot):
+    store, session, turn, _, _, _, source_text, _ = frozen_private_reply
+    sid, tid = session["session_id"], turn["turn_id"]
+    answer = store.append_message(sid, role="agent", text="The saved answer", turn_id=tid)
+    store.append_message(sid, role="agent", text="Later answer from the same Turn", turn_id=tid)
+    no_turn = store.append_message(sid, role="agent", text="An older saved answer without a Turn")
+    other_session = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                         upstream_thread_id="another-conversation")
+    foreign = store.append_message(other_session["session_id"], role="agent", text="An answer from another Session")
+    journal = store.sessions_root / sid / "messages.jsonl"
+    before = journal.read_bytes()
+
+    response = private_snapshot(report_message_id=answer["message_id"])
+    assert response["session"]["session_id"] == sid
+    assert response["report_message_id"] == answer["message_id"]
+    assert response["active_turn"] is None
+    question, saved = response["messages"]
+    assert question["reply_context"]["source_text"] == source_text
+    assert saved == answer
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id=tid) == response
+    assert private_snapshot(report_message_id=answer["message_id"], turn_id="unrelated-turn")["messages"] == []
+    assert private_snapshot(report_message_id=no_turn["message_id"])["messages"] == [no_turn]
+    for unavailable in (foreign["message_id"], question["message_id"]):
+        assert private_snapshot(report_message_id=unavailable)["messages"] == []
+    private_snapshot(report_message_id=answer["message_id"], message_limit=200, expected_status=400)
+    assert journal.read_bytes() == before
+
+
 def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
         frozen_private_reply, private_snapshot, monkeypatch):
     store, session, turn, request, *_ = frozen_private_reply
     sid = session["session_id"]
     answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    assistant = store.create_session(goal_id="notes", agent_id="codex", adapter_kind="codex_app_server",
+                                     upstream_thread_id="assistant")
+    other_id = assistant["session_id"]
+    other = store.append_message(other_id, role="agent", text="The second conversation")
     journal = store.sessions_root / sid / "messages.jsonl"
     original_row = journal.read_bytes().split(b"\n", 1)[0]
     decoded_original_rows = []
@@ -151,6 +187,9 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
     first = private_snapshot(message_limit=1)
     assert "reply_context" in first["messages"][0]
     cursor = first["message_page"]["next_cursor"]
+    # Reading the other Bot between pages must not force another decode of this
+    # unchanged journal or substitute the other Session's messages.
+    assert private_snapshot(session_id=other_id, message_limit=1)["messages"] == [other]
     assert private_snapshot(message_limit=1, message_cursor=cursor)["messages"] == [answer]
     # Cached parsing must not keep a deleted provider receipt visible.
     (store.root / "lark-private-deliveries" / f"{request}.json").unlink()
@@ -664,6 +703,50 @@ def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source
     assert len(sent) == len(returned) == 1
     assert returned[0]["turn_id"] == turn["turn_id"]
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_original_return_survives_transient_goal_marker_release_failure(flow, monkeypatch):
+    import errno
+
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.goals.source_session_registry_state import guard_path
+    from loopx.file_lock import _effect_mutation_lock_path
+
+    root, registry, _, create = flow
+    store = ChatSessionStore(root / "source-chat")
+    session, turn, receipt = create(external=True, source_store=store)
+    request_id = receipt["request_id"]
+    acknowledge(root, "research", "worker", request_id, "adopt", "Accepted the original request")
+    report(root, "research", "worker", request_id, "conclusion", "The original request is complete.")
+    marker = _effect_mutation_lock_path(guard_path(registry, "research"))
+    retire = Path.replace
+    failed = False
+
+    def fail_once(path, target):
+        nonlocal failed
+        if path == marker and not failed:
+            failed = True
+            raise OSError(errno.ENOSPC, "simulated transient failure retiring the goal marker")
+        return retire(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_once)
+    with collaboration_goal_scope(registry, goal_id="research", agents=("worker",)):
+        assert marker.exists()
+    assert failed
+
+    calls = []
+
+    def sender(route, original_session, original_turn, text):
+        calls.append((route["return_message_id"], original_session["session_id"], original_turn["turn_id"]))
+        return {"reply_verified": True, "idempotency_key": "fixture-confirmation"}
+
+    assert drain(root, registry, store, sender) == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert drain(root, registry, store, sender) == 0
+    messages = [item for item in store.messages(session["session_id"]) if item.get("origin") == "manager_followup"]
+    assert len(messages) == 1
+    assert calls == [(messages[0]["message_id"], session["session_id"], turn["turn_id"])]
+    assert not marker.exists()
 
 
 def test_exact_return_skips_other_host_before_admission(flow):
@@ -1349,6 +1432,57 @@ def test_returned_file_http_rechecks_original_source_and_snapshot(returned_file_
     status, _, raw = returned_file_http(url, {"Origin": "https://unrelated.example"} if drift == "origin" else None)
     assert status == (503 if drift == "snapshot" else 403 if drift == "origin" else 404)
     assert json.loads(raw)["ok"] is False
+
+
+def test_original_steward_history_links_images_but_preserves_bytes_and_cursor(
+        frozen_private_reply, private_snapshot):
+    from base64 import b64decode, b64encode
+
+    store, session, *_ = frozen_private_reply
+    session_id = session["session_id"]
+    encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jrWQAAAAASUVORK5CYII="
+    body = b64decode(encoded)
+    image = {"id": "one", "name": "original.png", "mime_type": "image/png",
+             "size": len(body), "data_url": f"data:image/png;base64,{encoded}"}
+    row = store.append_message(session_id, role="user", text="Keep my original image",
+                               origin="lark", attachments=[image])
+    headers = {"X-LoopX-History-Images": "linked"}
+
+    def message(payload):
+        return next(r for r in payload["messages"] if r["message_id"] == row["message_id"])
+
+    assert message(private_snapshot(message_limit=200))["attachments"] == [image]
+    snapshot = private_snapshot(message_limit=200, headers=headers)
+    projected = message(snapshot)["attachments"][0]
+    url = projected["data_url"]
+    assert url.startswith(f"/api/chat/sessions/{session_id}/messages/{row['message_id']}/images/0/")
+    assert projected == {**image, "data_url": url}
+    assert message(snapshot)["text"] == row["text"]
+    assert store.messages(session_id, strict=True)[-1] == row
+
+    code, image_headers, saved_bytes = private_snapshot(path=url, raw=True)
+    assert code == 200 and saved_bytes == body
+    assert image_headers["Content-Type"] == "image/png"
+    assert image_headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    assert private_snapshot(path=url, raw=True, headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert private_snapshot(path=url, raw=True, headers={"Origin": "https://unrelated.example"})[0] == 403
+    assert private_snapshot(path=url.replace(row["message_id"], "unknown-message"), raw=True)[0] == 404
+    assert private_snapshot(path=url.replace(session_id, "unknown-session"), raw=True)[0] == 404
+    assert private_snapshot(path=url.rsplit("/", 1)[0] + "/" + "0" * 64, raw=True)[0] == 404
+
+    page = snapshot["message_page"]
+    basis = f"{page['total']}:{page['visible_page_sha256']}"
+    resumed = private_snapshot(message_limit=200, known_history=basis, headers=headers)
+    assert resumed["history_resume"]["next"] == basis and resumed["messages"] == []
+    assert private_snapshot(message_limit=200, known_history=basis)["status"] == "restart"
+
+    journal = store.sessions_root / session_id / "messages.jsonl"
+    changed_bytes = body[:-1] + bytes([body[-1] ^ 1])
+    journal.write_bytes(journal.read_bytes().replace(encoded.encode(), b64encode(changed_bytes), 1))
+    assert private_snapshot(path=url, raw=True)[0] == 404
+    current_url = message(private_snapshot(message_limit=200, headers=headers))["attachments"][0]["data_url"]
+    assert current_url != url
+    assert private_snapshot(path=current_url, raw=True)[2] == changed_bytes
 
 
 def test_download_attachment_does_not_expand_chat_input_admission(returned_file_history):
@@ -2584,3 +2718,109 @@ def test_explicit_channel_return_completes_transcript_only_without_sender(flow):
     ]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
     assert reply_status(root, receipt)[0]["status"] == "delivered"
+
+
+def test_return_scan_cache_skips_unchanged_terminal_records_and_invalidates_on_change(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    root, registry, store, create = flow
+    _, _, r1 = create()
+    _, _, r2 = create()
+    for rid in (r1["request_id"], r2["request_id"]):
+        acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+        report(root, "research", "worker", rid, "conclusion", f"Conclusion for {rid[:8]}.")
+
+    cache = roundtrip._TerminalReturnScanCache()
+    assert drain(root, registry, store, None, scan_cache=cache) == 2
+
+    scan_batches = []
+    original_rpc = roundtrip.effect_runtime_result
+
+    def spy_rpc(name, payload, *args, **kwargs):
+        if name == "manager.return_delivery.transact" and payload.get("phase") == "scan":
+            scan_batches.append([(row["request_id"], row["result_key"]) for row in payload["candidates"]])
+        return original_rpc(name, payload, *args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "effect_runtime_result", spy_rpc)
+
+    # First scan with cache sees both terminal .delivery.json files once and caches them.
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert len(scan_batches) == 1 and len(scan_batches[0]) == 2
+
+    # Subsequent scan skips TS scan completely for unchanged terminal records.
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == []
+
+    # Direct drain() without scan_cache retains default-off full-scan parity.
+    assert drain(root, registry, store, None) == 0
+    assert len(scan_batches) == 1 and len(scan_batches[0]) == 2
+
+    # Modifying r1's delivery file invalidates only r1 while leaving r2 cached.
+    deliv1 = _root(root) / "replies" / r1["request_id"] / "conclusion.delivery.json"
+    saved1 = json.loads(deliv1.read_text())
+    deliv1.write_text(json.dumps({**saved1, "touched": True}))
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == [[(r1["request_id"], "conclusion")]]
+
+    # Re-warmed r1 is cached again; unlinking r1 invalidates only r1 immediately.
+    scan_batches.clear()
+    assert drain(root, registry, store, None, scan_cache=cache) == 0
+    assert scan_batches == []
+    deliv1.unlink()
+    assert drain(root, registry, store, None, scan_cache=cache) == 1
+    assert scan_batches == [[(r1["request_id"], "conclusion")]]
+
+
+def test_return_scan_gates_predecessor_blocked_followups_without_locking_or_caching(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    root, registry, store, create = flow
+    _, _, receipt = create(external=True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "Initial external conclusion.")
+    report(root, "research", "worker", rid, "conclusion", "Follow-up update.", update_id="u1")
+
+    t0 = datetime(2026, 11, 20, 2, 0, 0, tzinfo=timezone.utc)
+    cache = roundtrip._TerminalReturnScanCache()
+
+    deliver_calls = []
+    rpc_phases = []
+    orig_deliver = roundtrip._deliver_return
+    orig_rpc = roundtrip.effect_runtime_result
+
+    def spy_deliver(*args, **kwargs):
+        deliver_calls.append(args[1].name)
+        return orig_deliver(*args, **kwargs)
+
+    def spy_rpc(name, payload, *args, **kwargs):
+        if name == "manager.return_delivery.transact":
+            rpc_phases.append((payload.get("phase"), payload.get("result_key")))
+        return orig_rpc(name, payload, *args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "_deliver_return", spy_deliver)
+    monkeypatch.setattr(roundtrip, "effect_runtime_result", spy_rpc)
+
+    # Tick 1: conclusion fails without sender -> retry_pending; follow-up is gated before _deliver_return.
+    assert drain(root, registry, store, None, now=t0, scan_cache=cache) == 1
+    assert deliver_calls == ["conclusion.json"]
+
+    # Tick 2 during retry backoff: neither entry invokes _deliver_return or "prepare" RPC.
+    deliver_calls.clear()
+    rpc_phases.clear()
+    assert drain(root, registry, store, None, now=t0 + timedelta(seconds=2), scan_cache=cache) == 0
+    assert deliver_calls == []
+    assert rpc_phases == [("scan", None)]
+
+    # Tick 3 once backoff elapses: conclusion delivers; Tick 4 delivers follow-up; then both cache as terminal.
+    def sender(*_):
+        return {"reply_verified": True, "idempotency_key": "sha256:followup-proof"}
+    t2 = t0 + timedelta(seconds=15)
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 1
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 1
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 0
+    rpc_phases.clear()
+    assert drain(root, registry, store, sender, now=t2, scan_cache=cache) == 0
+    assert rpc_phases == []

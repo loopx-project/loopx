@@ -20,16 +20,65 @@ unbound request keeps its original readiness route without inventing a Turn.
 This is a bounded Host handoff repair, not C1 cutover, installed adoption or
 qualification of model cost and long-horizon benefit.
 
-The source already shares more than the output names suggest. `_emit_quota_result`
-captures the complete decision **before** `_project_quota_cli_payload` chooses
-ordinary CLI compaction or `buildTurnEnvelope`. The latter delegates to the
-TypeScript owner; its Python module is a transport adapter. Both quota capture
-and Turn journal capture call `write_decision_capture` in
+The ordinary CLI cutover composes every decided `quota should-run` through the
+existing TypeScript `composeCompleteTurnDecision` owner **before** capture.
+Default calls and the compatibility aliases `--turn-envelope` / `--complete-turn`
+share this source. Explicit context-delivery off returns that complete source
+inline; it does not choose an older format or enable progressive delivery.
+Full Goal material is collected independently of that presentation choice.
+The active CLI selection between its compactor and `buildTurnEnvelope` is
+removed. Status, plan and scheduler-observation retain their separate purposes;
+historical readers and other remaining callers are not retired by this slice.
+The current model-behavior portfolio also composes its should-run inputs through
+this complete-source owner; it no longer exercises the retired CLI compactor as
+the product default. Candidate context, planning relations, task continuation and
+diagnostics stay intact. The crowded regression's pretty JSON changes from
+86,172 compact bytes to 121,318 complete bytes (120,963 source bytes); its old
+90,000-byte compact-output allowance characterizes the historical fixture, not
+the new full carrier. Wire/page limits and the terminal actor's ten-call budget
+do not change. Frozen raw/v0 model comparison controls remain separate.
+
+The benchmark worker checks an explicit historical Short request before
+starting a planning or execution model. It previews the pinned CLI's quota
+response without admission and records the expected and observed source versions
+and eligibility in the wake receipt. A v1 or unavailable response refuses the
+Short treatment. A fresh-replan checkpoint preloads a different input and cannot
+qualify as direct Short. Current ordinary and Complete requests continue through
+the shared C1 producer. Historical experiments retain their recorded sources
+and receipts.
+
+Todo completion, replan-successor return and blocked-completion recovery use the
+existing TypeScript settlement composer for their current continuation plans.
+They retain the original identity, route and supplied lease proof. JSON and
+Markdown expose the runtime-owned debit with writeback, without a second model
+spend command. The current terminal qualifier verifies committed receipts for
+that original effect and rejects missing, foreign, unknown or uncommitted
+receipts and duplicate model spend. A post-effect command failure still stops
+the actor; independently committed writeback/debit receipts are not rolled back
+or reported as absent. Historical plan rendering/decoding remains supported;
+these engineering checks do not establish live-model adoption or cost benefit.
+Both quota capture and Turn journal capture call `write_decision_capture` in
 [`decision_capture.py`](../../../../loopx/control_plane/turn_driver/decision_capture.py).
 Native context delivery and explicit host handoff also reuse that module and
 the existing context-delivery owner. C1 must converge the remaining composition
 and consumer assumptions, rather than introduce another capture service or
-rewrite already shared delta/native-resume logic.
+rewrite already shared delta/native-resume logic. When an original capture is
+requested, its advertised `detail_ref.full_decision` uses the existing immutable
+reader sidecar. The route is signed before capture and its final byte digest is
+published afterward, avoiding a circular self-hash. Reader publication failure
+retains the committed source and receipt; reads never re-admit or settle work.
+
+The same frozen `ef099ae3` small/crowded/multi-agent quota fixtures measure
+JSON characters **23,289/42,965/25,514 → 24,984/53,441/29,574** and Markdown
+**7,476/8,143/6,441 → 25,083/53,543/29,674**. Full Goal bytes previously required
+a separate read, and the complete Markdown carrier preserves all source fields.
+These are stdout measurements, not model cost, latency or accepted-outcome
+results. Keep the original 25k/51k/26.5k JSON and 10k/17k/7k Markdown ceiling
+failures. The bounded new ceilings are 26k/55k/31k for either format; line limits
+stay unchanged. Crowded-minus-small JSON growth is 19,676 → 28,457 characters:
+the per-Todo allowance becomes 600 while the fixed 9,700 allowance is unchanged.
+This engineering calibration does not waive the independent matched single-session
+outcome/full-cost gate, other Hosts, packaging, installed adoption or native Windows.
 
 Optional host polling is part of that original observation. The source-fidelity
 slice records `--record-host-poll` once before capture and reuses its receipt in
@@ -530,6 +579,12 @@ design, not a claim that these paths have changed.
 | `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
 | `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
 
+The current heartbeat generator uses `interaction_contract` for target
+selection, required reads and exact Turn settlement. Saved bootstrap wrappers
+reload that generator on wake. All in-tree generation callers use this route,
+so the old envelope-specific instructions and their prompt budget allowance
+are retired. Previously captured work still uses its recorded recovery reader.
+
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and
 retirement condition. Relocation must include reference resolution; an omitted
@@ -573,6 +628,14 @@ and the original single-session outcome and complete-cost comparison. Review
 must include matched baseline/head real-provider outcomes, rejection sensitivity
 and packaged recovery. Adoption reduces the parent's diff only after the slice
 lands on main and main is integrated into the parent; opening a PR does not.
+
+Current v1 Host dispatch, model input and session-lineage reads validate the
+complete source and capture header directly. The same TypeScript rules still
+check selection, choose the primary action and interpret checkpointed write
+approval. Codex and the structured Host renderers keep the captured material
+references in the final input. The historical executor projection still proves
+transitional v0/v1 pairs and supports recorded recovery. Plan and effect
+consumers that still use that projection have separate retirement conditions.
 
 For each normal, selection, replan, wait, recovery and capability-off fixture,
 check independently authored obligations at **three boundaries**: composed

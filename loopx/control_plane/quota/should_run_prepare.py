@@ -149,6 +149,7 @@ class _QuotaDecisionPreparation:
     action_selection_qualification: dict[str, Any] | None
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None
+    receipt_bound_replan_execution_pending: bool
     user_todo_summary: dict[str, Any] | None
     agent_todo_summary: dict[str, Any] | None
     agent_todo_planning_source_items: list[dict[str, Any]]
@@ -260,6 +261,11 @@ def _prepare_quota_replan_context(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Project the current frontier and contextualize its receipt-bound review."""
+    # Once the settlement owner verifies writeback, an old review's sources
+    # cannot be prerequisites for spending its receipt (or replaying it).
+    reconstruct_review = receipt_bound_replay_phase not in (
+        ReceiptBoundReplayPhase.SETTLEMENT_PENDING, ReceiptBoundReplayPhase.SETTLED,
+    )
     goal_frontier_context = build_goal_frontier_projection_context_from_status(
         replan_explore_reader=replan_explore_reader,
         goal_id=safe_goal_id,
@@ -277,19 +283,23 @@ def _prepare_quota_replan_context(
         registered_agent_ids=registered_agent_ids,
         goal_status=str(registry_goal.get("status") or ""),
         agent_profile=_quota_agent_profile(agent_identity),
-        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_replan_obligation_id=(
+            receipt_bound_replan_obligation_id if reconstruct_review else None
+        ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
     )
     replan_obligation = (
         None
         if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
         else _preserve_receipt_bound_replan_obligation(
-            goal_frontier_context.get("replan_obligation"),
+            goal_frontier_context.get("replan_obligation") if reconstruct_review else None,
             receipt_bound_replan_obligation_id,
             guard_scoped=receipt_bound_replan_guard_scoped,
             agent_id=agent_frontier_id,
             replay_phase=receipt_bound_replay_phase,
-            transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
+            transition_candidates=(
+                goal_frontier_context.get("replan_transition_candidates") if reconstruct_review else None
+            ),
             stride_strategy=goal_frontier_context["stride_strategy"],
             receipt_review=receipt_bound_replan_review,
             goal_id=safe_goal_id,
@@ -741,6 +751,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_replan_obligation_id: str | None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
@@ -962,7 +973,7 @@ def _prepare_quota_should_run_item(
             active_next_action=(
                 item.get("active_state_next_action")
                 or (
-                    item.get("project_asset", {}).get("next_action")
+                    cast(dict[str, object], item.get("project_asset")).get("next_action")
                     if isinstance(item.get("project_asset"), dict)
                     else None
                 )
@@ -1100,6 +1111,7 @@ def _prepare_quota_should_run_item(
         action_selection_qualification=None,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
+        receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
         agent_todo_planning_source_items=agent_todo_planning_source_items,

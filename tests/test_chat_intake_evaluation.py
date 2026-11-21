@@ -316,6 +316,7 @@ def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_own
     assert "do not end at agreement or design advice" in turn
     assert "never resend merely because reading or adoption is unrecorded" in turn
     assert "A role alias or matching Agent id is a discovery lead" in turn
+    assert "Compare ALL plausible existing work items before selecting" in turn
     assert "no new delivery audience" in skill.read_text()
 
 

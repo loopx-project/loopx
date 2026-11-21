@@ -2,7 +2,8 @@
  * The declaration records a research method, not acceptance or execution authority.
  * Stride's replan-only v2 contract remains unchanged. */
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireStringArray, type JsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireStringArray, type JsonObject} from "../runtime_decode.ts";
+import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {
   matchesExploreMetricProfile,
   normalizeExploreMetricProfile,
@@ -15,7 +16,6 @@ import {
 import {
   committedInWorkWindow,
   evaluateMethodologyActivation,
-  latestCommittedScopedRecord,
   matchesWorkIdentity,
   normalizeCanonicalSourceSnapshot,
   projectBoundedMethodologyItems,
@@ -201,8 +201,30 @@ function belongsToWork(row: JsonObject, binding: JsonObject): boolean {
   return matchesWorkIdentity(row, binding, capture?.binding as unknown as JsonObject | undefined);
 }
 
+function newestFindingFirst(a: JsonObject, b: JsonObject): number {
+  // Across independent histories, late delivery keeps its original commit time.
+  const left = parseTodoTimestampMicros(String(a.last_updated_at ?? ""));
+  const right = parseTodoTimestampMicros(String(b.last_updated_at ?? ""));
+  if (left !== null && right !== null && left !== right) return left > right ? -1 : 1;
+  return Number(b.recorded_order ?? 0) - Number(a.recorded_order ?? 0);
+}
+
 export function currentWorkYardstickFinding(findings: JsonObject[], binding: JsonObject): JsonObject | undefined {
-  return latestCommittedScopedRecord(findings, row => row.work_yardstick !== undefined && belongsToWork(row, binding));
+  const ordered = findings.filter(row => row.work_yardstick !== undefined && belongsToWork(row, binding)).sort(newestFindingFirst);
+  const successors = new Map<unknown, JsonObject>();
+  for (const row of ordered) {
+    const prior = (row.work_yardstick as WorkYardstickCapture).decision?.prior_finding_id;
+    if (typeof prior === "string" && !successors.has(prior)) successors.set(prior, row);
+  }
+  // The recorded predecessor establishes the order even across clock rollback.
+  const visited = new Set<JsonObject>();
+  let current: JsonObject | undefined = ordered[0];
+  while (current && successors.has(current.finding_id)) {
+    if (visited.has(current)) throw new EffectRuntimeRequestError("cyclic work yardstick predecessors");
+    visited.add(current);
+    current = successors.get(current.finding_id);
+  }
+  return current;
 }
 
 function measuredPair(row: ExploreMeasurementFeedback | undefined) {
@@ -256,6 +278,47 @@ export function projectWorkMeasurementFacts(
   };
 }
 
+/** Ordinary execution and a revised choice share the existing finding history.
+ * A result need not repeat a decision; its attribution uses the same original
+ * commit/window rules as measurements, never merely matching method text. */
+function workYardstickFollowthrough(findings: JsonObject[], source: JsonObject, binding: JsonObject): JsonObject | null {
+  const current = source.work_yardstick as WorkYardstickCapture;
+  const prior = findings.find(row => row.finding_id === current.decision.prior_finding_id);
+  for (const choice of [source, prior]) {
+    if (!choice || !belongsToWork(choice, binding)) continue;
+    const capture = choice.work_yardstick as WorkYardstickCapture | undefined;
+    if (!capture?.decision) continue;
+    const decisionTime = parseTodoTimestampMicros(String(choice.last_updated_at ?? ""));
+    const startOrder = capture.source_snapshot?.event_count ?? Number(choice.recorded_order) + 1;
+    const endTime = parseTodoTimestampMicros(String(source.last_updated_at ?? ""));
+    let result: JsonObject | undefined;
+    for (const row of findings) {
+      const execution = jsonObject(row.execution_observation);
+      if (!execution || row.status !== "confirmed" || row.node_id !== choice.node_id || !belongsToWork(row, binding)
+        || execution.input_revision !== capture.decision.authoritative.input_revision
+        || !committedInWorkWindow(row, startOrder, decisionTime)) continue;
+      // A preceding choice cannot adopt evidence first visible after its
+      // successor, even if that evidence was originally committed earlier.
+      // A verified successor prefix owns this visibility bound when its
+      // clock rolls back; legacy captures still use the strict time bound.
+      if (choice !== source && (endTime === null || !Number.isSafeInteger(source.recorded_order)
+        || Number(row.recorded_order) > Number(source.recorded_order)
+        || row !== source && current.source_snapshot !== undefined && !recordedBeforePrefix(row, current.source_snapshot.event_count)
+        || current.source_snapshot === undefined
+          && parseTodoTimestampMicros(String(row.last_updated_at))! > endTime)) continue;
+      if (!result || newestFindingFirst(row, result) < 0) result = row;
+    }
+    if (!result) continue;
+    const execution = result.execution_observation as JsonObject;
+    const proposed = capture.decision.next_action.method_id;
+    return {source_finding_id: choice.finding_id, result_finding_id: result.finding_id,
+      proposed_method_id: proposed, executed_method_id: execution.executed_method_id,
+      change_reason: execution.change_reason, candidate_sha256: execution.candidate_sha256,
+      evidence_refs: execution.evidence_refs, recorded_planned_method_matches: execution.planned_method_id === proposed};
+  }
+  return null;
+}
+
 function measuredSearchComparison(
   scopedFindings: readonly JsonObject[],
   decision: WorkYardstickDecision,
@@ -304,25 +367,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   });
   const decision = capture.decision;
   const counter = decision.counterevidence_refs;
-  const previous = findings.find(row => row.finding_id === decision.prior_finding_id);
-  const priorCapture = previous?.work_yardstick as JsonObject | undefined;
-  const priorBinding = priorCapture?.binding as JsonObject | undefined;
-  const priorDecision = priorCapture?.decision as JsonObject | undefined;
-  const execution = source.execution_observation as JsonObject | undefined;
-  const followthrough =
-    priorBinding && execution && ["goal_id", "agent_id", "todo_id"].every(key => priorBinding[key] === params[key])
-      ? {
-          source_finding_id: previous!.finding_id,
-          result_finding_id: source.finding_id,
-          proposed_method_id: (priorDecision!.next_action as JsonObject).method_id,
-          executed_method_id: execution.executed_method_id,
-          change_reason: execution.change_reason,
-          candidate_sha256: execution.candidate_sha256,
-          evidence_refs: execution.evidence_refs,
-          recorded_planned_method_matches:
-            execution.planned_method_id === (priorDecision!.next_action as JsonObject).method_id,
-        }
-      : null;
+  const followthrough = workYardstickFollowthrough(findings, source, params);
   const profiles = decision.proxy ? [decision.authoritative, decision.proxy] : [decision.authoritative];
   const feedback = ((params.measurement_feedback ?? []) as ExploreMeasurementFeedback[]).filter(
     row => row.node_id === source.node_id && profiles.some(p => matchesExploreMetricProfile(row, p)),

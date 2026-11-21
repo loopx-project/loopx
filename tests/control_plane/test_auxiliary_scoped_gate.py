@@ -69,7 +69,7 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
     args = shlex.split(projection["command"])[1:]
     assert args[args.index("--registry") + 1] == str(registry)
     assert args[args.index("--target-key") + 1] == "due-monitor-fixture"
-    args = tuple("observed-target" if x == "${LOOPX_MONITOR_RESULT_HASH:?}" else x for x in args)
+    args[args.index("--result-hash") + 1] = "observed-target"
     def emitted():
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args, ],
             cwd=Path(__file__).resolve().parents[2], text=True, capture_output=True)
@@ -252,7 +252,7 @@ def test_no_gate_auxiliary_command_retains_commit_and_replay_parity(tmp_path, mo
     projection = guard["interaction_contract"]["cli_channel"]["auxiliary_monitor_poll"]
     assert projection["availability"] == "ready"
     args = shlex.split(projection["command"])[1:]
-    args = ["no-gate-observation" if part == "${LOOPX_MONITOR_RESULT_HASH:?}" else part for part in args]
+    args[args.index("--result-hash") + 1] = "no-gate-observation"
     for expected_replay in [False, True]:
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args,
             ], text=True, capture_output=True)

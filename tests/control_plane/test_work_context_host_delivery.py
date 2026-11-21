@@ -1,22 +1,79 @@
 """Authored requirements must reach the Host, not just agree after projection."""
 import copy
 import json
-import os
 import shlex
-import subprocess
 from urllib.parse import quote
 
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.turn_driver.codex_cli import _prompt
+from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
 )
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo,
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _configure_read_only_todo, _configure_selectable_alternative,
     _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
 )
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_policy_observer_reads_original_signed_capture_after_todo_references(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, compose_turn_decision
+    from loopx.control_plane.turn_driver.decision_capture import capture_progressive_context, write_decision_capture
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    initialize_canonical_source_fixture(runtime, GOAL_ID,
+        state_path=project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md', provider=provider)
+    capture = tmp_path / 'signed-capture'
+    code, view = _run_cli(registry, runtime, 'quota', 'should-run', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--begin-turn',
+        '--codex-app', '--complete-turn', '--context-delivery', 'auto', '--delta-delivery', 'off',
+        '--decision-output-dir', str(capture))
+    assert code == 0, view
+    saved = capture / 'decision.json'
+    original_bytes = saved.read_bytes()
+    original = json.loads(original_bytes)
+    # Exercise the same typed projection used by C1's inline CLI presentation.
+    (tmp_path / 'view').mkdir(mode=0o700)
+    view = capture_progressive_context(original, directory=tmp_path / 'view', surface='complete_turn')[0]
+    assert 'context_reference_instruction' in view and view != original
+    source = tmp_path / 'view' / 'projection.json'
+    observed = read_cli_policy_payload(json.dumps(view), returncode=code)
+    assert observed == original
+    assert_complete_turn_decision(observed)
+    assert _spend_run_count(runtime) == 0 and saved.read_bytes() == original_bytes
+    replacement = compose_turn_decision({
+        **{key: value for key, value in original.items() if key not in {'schema_version', 'contract_binding'}},
+        'reason': 'a separate valid captured observation',
+    })
+    assert_complete_turn_decision(replacement)
+    replacement_path = source.with_name('replacement.json')
+    replacement_digest = write_decision_capture(replacement_path, replacement)
+    replaced_view = copy.deepcopy(view)
+    argv = shlex.split(replaced_view['context_details']['command_template'])
+    argv[argv.index('--capture-file') + 1] = str(replacement_path)
+    argv[argv.index('--capture-sha256') + 1] = replacement_digest
+    replaced_view['context_details']['command_template'] = shlex.join(argv)
+    with pytest.raises(ValueError, match='original capture binding mismatch'):
+        read_cli_policy_payload(json.dumps(replaced_view), returncode=code)
+    # A copied presentation must not mask corruption of its declared source.
+    source.write_text(json.dumps({**original, 'reason': 'changed after capture'}))
+    with pytest.raises(ValueError, match='capture digest mismatch'):
+        read_cli_policy_payload(json.dumps(view), returncode=code)
+    source.unlink()
+    with pytest.raises(FileNotFoundError):
+        read_cli_policy_payload(json.dumps(view), returncode=code)
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
@@ -48,15 +105,33 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-context'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
-                              '--decision-output-dir', str(capture))
-    assert code == 0, envelope
+    code, emitted = _run_cli(registry, runtime, *args, '--turn-envelope',
+                             '--decision-output-dir', str(capture))
+    assert code == 0, emitted
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
+    assert emitted == full
     source_context = full['interaction_contract']['agent_channel']['work_context']
     assert source_context['complete'] is True
     assert source_context['instruction']  # Non-vacuous instruction transport.
+
+    plan = build_loopx_turn_plan(full, host='codex-cli', execution_mode='isolated-headless')
+    request = build_loopx_turn_host_request(plan)
+    model = json.loads(_prompt(request).split('Turn request:\n', 1)[1])
+    model_context = assert_host_task_context(model, full)
+    model_channel = model_context['interaction_contract']['agent_channel']
+    model_task = next(source['content']['todo'] for source in model_channel['work_context']['sources']
+                      if source['source'] == 'selected_todo')
+    assert model_task.get('text', model_context['selected_todo']['text']) == source_task['text']
+    assert model_task['note'] == note
+    model_goal = next(source['content'] for source in model_channel['work_context']['sources']
+                      if source['source'] == 'goal_state')
+    assert model_goal['full_source'] is True and goal in model_goal['text']
+    assert all(item['source'] != 'goal_state' for item in model_channel['required_reads'])
+
+    # Keep the historical reader exercised with an explicit legacy projection.
+    envelope = build_turn_envelope(full, captured_decision_path=str(saved))
     authority = extract_turn_authority({'turn_envelope': envelope})
     # The raw heartbeat and the structured Host have different effect owners,
     # but ordinary execution must not lose notification, bypass or scheduler
@@ -86,16 +161,8 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert task_detail['note'] == note
     delivered_task = task_detail.get('text', authority['selected_todo']['text'])
     assert delivered_task == source_task['text']
-    # This fixture has an unregistered Goal narrative: pending read must remain
-    # explicit even when all available inline sources were loaded successfully.
-    goal_read = next(item for item in authority['required_reads'] if item['source'] == 'goal_state')
-    assert goal_read['ordering'] == 'before_work'
-    if os.name != 'nt':
-        readback = subprocess.run(shlex.split(goal_read['command']), capture_output=True,
-                                  text=True, check=True)
-        assert goal in readback.stdout
-    else:
-        assert goal in state.read_text(encoding='utf-8')
+    assert goal in source_by_kind['goal_state']['text']
+    assert all(item['source'] != 'goal_state' for item in authority['required_reads'])
     # The actual Host prompt must contain the independent source requirements,
     # not merely match an action signature computed by the same projector.
     prompt = render_prompt(authority)
@@ -120,9 +187,6 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             extract_turn_authority({'turn_envelope': altered})
     # A matching v0 digest does not authorize interpreting a future wire version.
     # Version declarations are outside the historical action digest document.
-    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
-    from loopx.control_plane.turn_driver.codex_cli import _prompt
-    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     for path in (('schema_version',), ('action_signature', 'schema_version'),
                  ('action_signature', 'coverage')):
         for unsupported in ('future_required_semantics', None):

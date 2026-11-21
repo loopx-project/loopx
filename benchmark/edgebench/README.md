@@ -290,15 +290,14 @@ An Official worker without a checkpoint must retain its existing session and
 use its authorized runtime owner's idle credential handoff; this preparation
 helper does not provide a live credential-replacement transaction.
 
-An unchanged stopped heartbeat worker with an empty-output legacy Host failure
-can use the explicit [idle-host handoff](../runtime/RUNTIME.md) after independent
+An unchanged stopped heartbeat worker with a completed Host or an empty-output
+legacy failure can use the explicit [idle-host handoff](../runtime/RUNTIME.md) after independent
 native-history, source, current Goal and account qualification. Seal with
 `python -m benchmark.edgebench.stopped_recovery --idle-host-handoff` using the
 original source declaration; then select the original scheduler digest with
 `benchmark.runtime.scheduler --idle-host-state-sha256`. Both options are off by
-default. The original failure remains recorded. This route preserves the
-existing completed session and source rather than manufacturing an interrupted
-Turn. Native judge restoration, opportunity/cooldown conservation, the audited
+default. The original return, session, and source remain recorded.
+Native judge restoration, opportunity/cooldown conservation, the audited
 remaining allowance and a finite owner cutoff remain separate requirements.
 It does not apply to Official or native-Goal workers.
 
@@ -896,6 +895,16 @@ requires a running container; latest files remain in the stopped source and, on
 successful export, the terminal point. Native graded history/results remain
 independent and are not discarded with that optional archive.
 
+If the joint export failed, a confirmed stopped worker with a completed grading
+drain gets one independent native scorer capture before the original scorer
+exits. The receipt links this separate checkpoint, including the released results,
+incumbent and consumed rounds. It carries no worker clock or resume qualification;
+a receiver still needs to prove the original workspace, session and remaining
+allowance together. An unknown grading outcome or unconfirmed stop does not
+trigger this capture.
+If the native runner raises after writing its drain receipt, the runner
+checks the matching run history before attempting the same capture.
+
 If the optional preservation receipt cannot be written, a redacted warning reports
 that gap; observer shutdown, one capture attempt and verified source stopping
 still proceed. The known solver exit and native grading remain authoritative.
@@ -994,30 +1003,28 @@ budget or submissions. Freeze it with exact sources under a new run ID; do not
 change live workers. Receipts qualify requested configuration, while actual
 review, proposal adoption and task gains require trajectory evidence.
 
-## Optional short-context treatment
+## Quota input and historical Short
 
-Add `--turn-envelope` to an otherwise identical `heartbeat-resume` or
-`heartbeat-explore` command to use the product's short normal packet and local
-same-invocation full detail. Other workers reject the option before creating a
-trial. The default remains off; the runtime and worker-profile receipts record
-it explicitly. Use a new run ID and freeze this as a separate context treatment,
-keeping objective guidance, task/scorer version, model and budgets matched.
-Omit the flag on the next run to disable it. No active experiment is changed by
-installing this code. Inspect wake receipts and the saved decisions before
-claiming adoption; score countability still requires the usual integrity review.
+Current C1 sources give both heartbeat profiles the complete v1 input by
+default. `--complete-turn` explicitly requests the complete contract, including
+on supported historical product revisions. Context delivery remains a separate
+setting. The [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
+documents original captures, readback and settlement.
 
-For an explicitly complete v1 Host contract, choose `--complete-turn` instead
-on either heartbeat profile. The shared worker forwards that choice through
-the real heartbeat renderer and guard; it retains the original ready claim,
-receipt and single-command settlement. It cannot be combined with the legacy
-short-envelope option. Context delivery remains independent, and unselected
-runs keep their existing behavior. See the [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
-for source readback, failure recovery and rollback. User task time requirements
-remain readable; private Host deadlines stay outside model context.
+For a historical Short benchmark arm, use its recorded product and runner
+revisions. With `--turn-envelope`, the current worker verifies the selected CLI's
+actual v0 response using a read-only preview before starting a model. C1 or an
+unavailable preview rejects the request. A `fresh_replan` checkpoint preloads a
+different view and is incompatible with Short. Inspect the wake's
+`quota_input_contract` eligibility and the actual saved decision before using
+a result in a comparison. Include startup and wake costs under the same study
+protocol.
 
-中文：heartbeat profile 可显式选择 `--complete-turn` 以消费完整 v1，不能与旧短包
-选项同时启用；共用原 ready claim、回执和单条结算 owner，不改变未选择的运行。
-按原 source reader 核实采用与恢复；该开关不新增模型、子 worker、时钟或权限。
+中文：当前 C1 的两种 heartbeat profile 默认交付完整 v1，`--complete-turn`
+也可在支持的历史产品版本中显式选择完整输入。旧 Short 组应按记录的产品和 runner
+版本复现。当前 worker 在启动模型前用只读预演核实 v0，回执
+`quota_input_contract` 记录预期、实测版本与资格。C1 或无法核实的来源会拒绝请求。
+`fresh_replan` 会预载另一种输入，因此不能与 Short 合用。
 
 ## Close a managed native attempt
 

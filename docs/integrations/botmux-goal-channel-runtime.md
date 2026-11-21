@@ -6,7 +6,6 @@ persistent agent sessions, streaming cards, and terminal access. LoopX remains
 the only authority for goal state, todos, gates, quota, evidence, and accepted
 transitions.
 
-This integration does not replace the existing Lark Goal Channel projection.
 The two surfaces are complementary:
 
 ```text

@@ -310,6 +310,261 @@ def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path, monke
     assert len(json.dumps(result)) < 2000
 
 
+def test_oversized_portfolio_preserves_redaction_and_unavailable_lifecycle(tmp_path, monkeypatch):
+    tool, _ = inspector(tmp_path)
+    row = {"goal_id": "alpha", "quality": "stale", "progress": "unknown",
+           "source": {"revision": "original-source"}, "warnings": ["current_progress_unknown_stale_source"],
+           "goal_lifecycle": {"status": "unavailable", "reason": "goal_read_incomplete"},
+           "attention": {"status": "unavailable", "reason": "content_redacted", "items": []},
+           "current_todos": {"body": "excluded" * 5000}}
+    original = json.dumps(row, sort_keys=True)
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": [row], "coverage": {"complete": False},
+    })
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    index = result["rows"][0]
+    assert result["unknown"] is True and result["oversized_rows"] == [0]
+    assert index["attention"]["status"] == "unavailable"
+    assert index["attention"]["reason"] == "content_redacted"
+    assert index["goal_lifecycle"] == row["goal_lifecycle"]
+    assert index["source"] == row["source"] and index["warnings"] == row["warnings"]
+    assert index["read_reference"] == {"view": "todos", "goal_id": "alpha"}
+    assert "excluded" not in json.dumps(result)
+    assert json.dumps(row, sort_keys=True) == original
+
+
+def test_oversized_portfolio_metadata_still_obeys_the_record_budget(tmp_path, monkeypatch):
+    tool, _ = inspector(tmp_path)
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": [{"goal_id": "alpha", "source": {"metadata": "x" * 40000}}],
+        "coverage": {"complete": True},
+    })
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert result["unknown"] is True and result["oversized_rows"] == [0]
+    assert result["rows"][0]["status"] == "oversized_record"
+    assert result["rows"][0]["read_reference"] == {"view": "todos", "goal_id": "alpha"}
+    assert result["rows"][0]["goal_lifecycle"] == {
+        "schema_version": "goal_lifecycle_readback_v0", "goal_id": "alpha",
+        "status": "unavailable", "reason": "omitted_due_to_size",
+    }
+    assert result["rows"][0]["attention"] == {
+        "status": "unavailable", "items": [], "reason": "omitted_due_to_size",
+    }
+    assert len(json.dumps(result)) < 2000
+
+
+def test_revocation_during_oversized_portfolio_index_suppresses_result(tmp_path, monkeypatch):
+    from loopx.capabilities.manager_context import inspection
+
+    grants = {"current": True}
+    tool, records = inspector(tmp_path, lambda: grants["current"])
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": [{"goal_id": "alpha", "current_todos": {"body": "x" * 40000}}],
+        "coverage": {"complete": True},
+    })
+    native = inspection.effect_runtime_result
+
+    def revoke_during_projection(method, arguments):
+        result = native(method, arguments)
+        if arguments.get("preview") is True:
+            grants["current"] = False
+        return result
+
+    monkeypatch.setattr(inspection, "effect_runtime_result", revoke_during_projection)
+    assert tool.read(TOOL_NAME, {"view": "portfolio"}) == {
+        "ok": False, "error": "authorization_changed",
+    }
+    assert not records
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_oversized_portfolio_retains_recoverable_owner_decisions(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.chat_manager_context import manager_turn_context
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    expected = {}
+    for i in range(4):
+        text = f"[P0] Review proposal {i}. " + "Compare the evidence. " * 280 + "Only proceed after owner acceptance."
+        note = ("Preserve the original audience and stop condition. " * 12).strip()
+        created = add_goal_todo(
+            registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+            role="user", text=text, note=note, task_class="user_gate",
+            operation_id=f"large-portfolio-owner-request-{i}",
+        )
+        assert created["ok"], created
+        expected[text] = note
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    context = manager_turn_context(
+        registry, {"channel_id": "manager"}, runtime, include_details=False,
+    )
+    assert context["goals"][0]["attention"]["status"] == "read", context
+    # Freeze a real provider's decision projection beside oversized associated
+    # history. The history payload is synthetic; exact decision recovery below
+    # still uses the original File/SQLite records through the production reader.
+    context["goals"][0]["deliveries"] = [{"recorded_details": "Evidence. " * 4000}]
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: context)
+    original = json.dumps(context, sort_keys=True)
+    grants = {"current": True}
+    tool = ManagerInspection(
+        context=context, registry_path=registry, runtime_root=runtime, owner_scope=True,
+        scope_valid=lambda: grants["current"], record=lambda _: None,
+    )
+    result = tool.read(TOOL_NAME, {"view": "portfolio", "goal_id": "goal-a"})
+    assert result["oversized_rows"] == [0], result
+    assert result["unknown"] is True
+    row = result["rows"][0]
+    assert row["status"] == "oversized_record" and row["details_omitted"] is True
+    assert row["quality"] == context["goals"][0]["quality"]
+    assert row["source"] == context["goals"][0]["source"]
+    assert row["goal_lifecycle"] == context["goals"][0]["goal_lifecycle"]
+    assert row["attention"]["coverage"] == {"known": 4, "included": 4, "omitted": 0}
+    assert len(json.dumps(row, ensure_ascii=False)) <= 24000
+    recovered = {}
+    for item in row["attention"]["items"]:
+        assert item["details_omitted"] is True and item["owner_must_act"] is True
+        reference = item["read_reference"]
+        assert reference["goal_id"] == "goal-a" and reference["todo_id"]
+        full = tool.read(TOOL_NAME, reference)
+        assert full["ok"] and full["rows"][0]["content_truncated"] is False
+        recovered[full["rows"][0]["title"]] = full["rows"][0]["continuation"]
+    assert recovered == expected
+    assert json.dumps(context, sort_keys=True) == original
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+    grants["current"] = False
+    assert tool.read(TOOL_NAME, reference) == {"ok": False, "error": "authorization_changed"}
+    grants["current"] = True
+    assert tool.read(TOOL_NAME, reference)["rows"][0]["title"] in expected
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_oversized_exact_todo_is_unknown_without_exposing_private_detail(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import (
+        isolate_sqlite_runtime, promoted_create_fixture,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    text = "[P0] Review the proposal before proceeding."
+    note = 'Preserve "accepted" decisions. 中文🧭\n\\ Stop. ' * 900 + "Final stop condition."
+    created = add_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+        role="user", text=text, note=note, task_class="user_gate",
+        operation_id="oversized-exact-decision-fixture",
+    )
+    assert created["ok"], created
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+    todo_id = before["todos"][0]["todo_id"]
+    records = []
+    tool = ManagerInspection(
+        context={"goals": [{"goal_id": "goal-a"}]}, registry_path=registry,
+        runtime_root=runtime, owner_scope=True, scope_valid=lambda: True,
+        record=records.append,
+    )
+    overview = tool.read(TOOL_NAME, {"view": "todos", "goal_id": "goal-a"})
+    assert overview["unknown"] is False and overview["rows"][0]["content_truncated"] is True
+    exact = {"view": "todos", "goal_id": "goal-a", "todo_id": todo_id}
+    result = tool.read(TOOL_NAME, exact)
+    assert result["ok"] and result["matched"] == 1
+    assert result["rows"][0]["status"] == "oversized_record"
+    assert result["oversized_rows"] == [0] and result["next_offset"] is None
+    assert result["unknown"] is True
+    assert note not in json.dumps(result) and len(json.dumps(result)) < 24000
+    # The transport must expose every permitted character, including escaping,
+    # without raising its encoded page budget or requiring cached state.
+    expected = details.read_manager_goal_details(
+        registry, runtime, "goal-a", owner_scope=True, todo_id=todo_id,
+    )["todos"][0]
+    reference = result["rows"][0]["read_reference"]
+    revision = reference["expected_source_revision"]
+    fragments = []
+    cursor = 0
+    while reference:
+        fresh = ManagerInspection(
+            context=tool.context, registry_path=registry, runtime_root=runtime,
+            owner_scope=True, scope_valid=lambda: True, record=lambda _: None,
+        )
+        part = fresh.read(CONTEXT_TOOL_NAME, reference)
+        assert part["ok"], part
+        fragment = part["detail_page"]
+        assert fragment["offset"] == cursor
+        assert fragment["source_revision"] == revision
+        assert len(json.dumps(fragment, ensure_ascii=False)) <= 24000
+        fragments.append(fragment["text"])
+        cursor += len(fragment["text"])
+        reference = fragment["next_read"]
+        assert fragment["next_offset"] == (cursor if reference else None)
+        assert fragment["eof"] == (reference is None)
+    assert len(fragments) > 1
+    assert cursor == fragment["total_characters"]
+    assert json.loads("".join(fragments)) == expected
+    assert expected["continuation"].endswith("Final stop condition.")
+    tool.owner_scope = False
+    external = tool.read(CONTEXT_TOOL_NAME, exact)
+    assert external["unknown"] is False and external["rows"][0]["title"] == text
+    assert "continuation" not in external["rows"][0]
+    assert external["oversized_rows"] == []
+    assert tool.read(CONTEXT_TOOL_NAME, result["rows"][0]["read_reference"]) == {
+        "ok": False, "error": "todo_detail_revision_mismatch"}
+    assert len(records) == 3
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
+
+
+def test_todo_detail_rechecks_revision_scope_and_encoded_bounds(tmp_path, monkeypatch):
+    row = {"todo_id": "todo_report", "status": "open", "text": "Review",
+           "note": "A decision. " * 3000}
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([row]))
+    tool, records = inspector(tmp_path)
+    tool.owner_scope = True
+    exact = {"view": "todos", "goal_id": "alpha", "todo_id": "todo_report"}
+    reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
+    first = tool.read(TOOL_NAME, reference)["detail_page"]
+    following = first["next_read"]
+    assert following
+    row["note"] += " Do not publish."
+    count = len(records)
+    assert tool.read(TOOL_NAME, following) == {"ok": False, "error": "todo_detail_revision_mismatch"}
+    assert len(records) == count
+    reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
+    assert tool.read(TOOL_NAME, reference)["ok"]
+    assert tool.read(TOOL_NAME, {**reference, "offset": 10**9}) == {
+        "ok": False, "error": "todo_detail_offset_out_of_range"}
+    # Revocation during the canonical read withholds all fragments and logs.
+    grants = iter([True, False])
+    tool.scope_valid = lambda: next(grants)
+    count = len(records)
+    assert tool.read(TOOL_NAME, reference) == {"ok": False, "error": "authorization_changed"}
+    assert len(records) == count
+    tool.scope_valid = lambda: True
+    row["status"] = "done"
+    reference = tool.read(TOOL_NAME, exact)["rows"][0]["read_reference"]
+    assert tool.read(TOOL_NAME, reference)["ok"]  # Read, never resume completed work.
+    monkeypatch.setattr(details, "list_goal_todos", lambda **_: {"ok": False})
+    assert tool.read(TOOL_NAME, reference) == {"ok": False, "error": "todo_detail_unavailable"}
+
+
+@pytest.mark.parametrize("changes", [
+    {"offset": True}, {"offset": -1}, {"offset": 0.5},
+    {"query": "other"}, {"source_id": "ssh:other"}, {"view": "portfolio"},
+    {"todo_id": None}, {"expected_source_revision": "bad"},
+    {"expected_source_revision": None},
+])
+def test_invalid_todo_detail_does_not_read_core(tmp_path, monkeypatch, changes):
+    monkeypatch.setattr(details, "list_goal_todos", lambda **_: pytest.fail("No source read"))
+    tool, records = inspector(tmp_path)
+    args = {"view": "todos", "goal_id": "alpha", "todo_id": "todo_report",
+            "offset": 0, "expected_source_revision": "sha256:" + "a" * 64, **changes}
+    assert tool.read(TOOL_NAME, args)["error"] == "invalid_arguments"
+    assert not records
+
+
 def test_agent_work_summary_bounds_content_without_inventing_execution():
     summary = agent_work_summary({"agent_id": "worker", "source_verified": True,
                                   "todos": [{"todo_id": "todo_1", "title": "x" * 25000,
@@ -331,6 +586,97 @@ def test_current_work_portfolio_keeps_authorization_fence(tmp_path):
     result = tool.read(TOOL_NAME, {"view": "portfolio"})
     assert result == {"ok": False, "error": "authorization_changed"}
     assert not records and "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("body_size, first_page", [(100, 8), (8000, 2), (26000, 1)])
+def test_portfolio_bounds_collection_and_keeps_every_page(monkeypatch, tmp_path, body_size, first_page):
+    tool, _ = inspector(tmp_path)
+    ids = [f"goal-{i}" for i in range(8)]
+    tool.registry_path.write_text(json.dumps({"goals": [{"id": gid} for gid in ids]}))
+    tool.discovery_scope = lambda: ids
+    collected = []
+
+    def collect(*args, requested_goal_ids, **kwargs):
+        collected.extend(requested_goal_ids)
+        return {"snapshot_id": "fixture:" + ",".join(requested_goal_ids),
+                "goals": [{"goal_id": gid, "description": "证据😀" * (body_size // 3)}
+                          for gid in requested_goal_ids],
+                "coverage": {"discovered": len(requested_goal_ids),
+                             "attempted": len(requested_goal_ids),
+                             "verified": len(requested_goal_ids),
+                             "invalid_registry_entries": 0, "complete": True}}
+
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", collect)
+    seen, offset = [], 0
+    while offset is not None:
+        collected.clear()
+        page = tool.read(TOOL_NAME, {"view": "portfolio", "limit": 8, "offset": offset})
+        assert page["ok"] and page["unknown"] is (body_size > 24000)
+        assert len(page["rows"]) == min(first_page, len(ids) - offset)
+        # One lookahead can establish the existing page budget, but later
+        # projects must not be read and discarded on every page.
+        assert len(collected) <= len(page["rows"]) + (body_size < 24000)
+        assert collected == ids[offset:offset + len(collected)]
+        assert page["matched"] == len(ids)
+        if body_size > 24000:
+            assert page["oversized_rows"] == [offset]
+        else:
+            assert [row["description"] for row in page["rows"]] == [
+                "证据😀" * (body_size // 3)] * len(page["rows"])
+        seen.extend(row["goal_id"] for row in page["rows"])
+        offset = page["next_offset"]
+    assert seen == ids
+
+
+@pytest.mark.parametrize("change", ["revocation", "registry"])
+def test_portfolio_does_not_publish_a_torn_page(monkeypatch, tmp_path, change):
+    allowed = {"current": True}
+    tool, records = inspector(tmp_path, lambda: allowed["current"])
+    ids = ["alpha", "beta"]
+    tool.registry_path.write_text(json.dumps({"goals": [{"id": gid} for gid in ids]}))
+    tool.discovery_scope = lambda: ids
+
+    def collect(*args, requested_goal_ids, **kwargs):
+        if change == "revocation":
+            allowed["current"] = False
+        else:
+            tool.registry_path.write_text(json.dumps({"goals": [{"id": "replacement"}]}))
+        return {"goals": [{"goal_id": gid, "description": "private evidence"}
+                          for gid in requested_goal_ids], "coverage": {"complete": True}}
+
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", collect)
+    result = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert result["ok"] is False
+    assert result["error"] == ("authorization_changed" if change == "revocation"
+                               else "goal_inventory_unavailable")
+    assert not records and "private evidence" not in json.dumps(result)
+
+
+def test_portfolio_keeps_the_shared_attention_budget_and_rejected_lookahead(monkeypatch, tmp_path):
+    tool, _ = inspector(tmp_path)
+    ids = ["alpha", "beta", "gamma", "omega"]
+    tool.registry_path.write_text(json.dumps({"goals": [{"id": gid} for gid in ids]}))
+    tool.discovery_scope = lambda: ids
+
+    def collect(*args, requested_goal_ids, **kwargs):
+        return {"goals": [{"goal_id": gid, "description": "x" * 8000,
+            "attention": {"status": "read", "coverage": {"known": 8}, "items": [
+                {"todo_id": f"{gid}-{i}", "owner_must_act": gid == "gamma"}
+                for i in range(8)]}} for gid in requested_goal_ids],
+            "coverage": {"complete": True}}
+
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", collect)
+    page = tool.read(TOOL_NAME, {"view": "portfolio"})
+    assert [row["goal_id"] for row in page["rows"]] == ids[:2]
+    # The existing typed owner permits twelve attention items across the page,
+    # rather than twelve per Goal. The rejected high-priority lookahead cannot
+    # consume the returned rows' allowance.
+    assert [[item["todo_id"] for item in row["attention"]["items"]] for row in page["rows"]] == [
+        [f"alpha-{i}" for i in range(8)], [f"beta-{i}" for i in range(4)]]
+    assert page["rows"][1]["attention"]["coverage"] == {"known": 8, "included": 4, "omitted": 4}
+    following = tool.read(TOOL_NAME, {"view": "portfolio", "offset": page["next_offset"]})
+    assert [row["goal_id"] for row in following["rows"]] == ids[2:]
+    assert following["next_offset"] is None
 
 
 def test_directory_attention_preview_keeps_all_workers_and_exact_scoped_read(monkeypatch, tmp_path):
@@ -603,7 +949,7 @@ def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
         )
 
 
-@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents", "agent_route", "deliveries_window", "report_source"])
+@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "todos_paged", "agents", "agent_route", "deliveries_window", "report_source"])
 def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
     monkeypatch, tmp_path, read_view
 ):
@@ -667,6 +1013,30 @@ for line in sys.stdin:
             "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
             "evidence['rows'][0]['title'] == 'Check the sample result'",
             "evidence['rows'][0]['continuation'].endswith('Keep this a draft; do not publish.')"))
+    if read_view == "todos_paged":
+        fake.write_text(fake.read_text().replace(
+            "import json, sys", "import json, sys\nfragments = []\nrevision = None").replace(
+            "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
+            "        assert evidence['rows'][0]['title'] == 'Check the sample result'",
+            """        if 'detail_page' in evidence:
+            part = evidence['detail_page']
+            assert part['offset'] == sum(map(len, fragments))
+            assert revision == part['source_revision']
+            fragments.append(part['text'])
+            reference = part['next_read']
+        else:
+            assert evidence['unknown']
+            reference = evidence['rows'][0]['read_reference']
+            revision = reference['expected_source_revision']
+        if reference:
+            print(json.dumps({'id':900,'method':'item/tool/call','params':{
+                'threadId':'fixture-thread','turnId':'fixture-turn','tool':'loopx_manager_read',
+                'arguments':reference}}), flush=True)
+            continue
+        assert len(fragments) > 1
+        task = json.loads(''.join(fragments))
+        assert task['continuation'].endswith('Keep this a draft; do not publish.')
+        assert len(task['continuation']) > 30000"""))
     if read_view == "deliveries_window":
         fake.write_text(fake.read_text().replace(
             "'view':'todos','goal_id':'alpha'",
@@ -698,7 +1068,7 @@ for line in sys.stdin:
                     "todo_id": "todo_sample",
                     "text": "Check the sample result",
                     "status": "open",
-                    "note": "Public background. " * 30 + "Keep this a draft; do not publish.",
+                    "note": "Public background. " * (1800 if read_view == "todos_paged" else 30) + "Keep this a draft; do not publish.",
                 },
             ]),
     )
@@ -753,6 +1123,10 @@ for line in sys.stdin:
             assert len(reads) == 1
             assert reads[0]["payload"]["reason"] == "no_binding"
             assert reads[0]["payload"]["authority"] == "locator_only"
+        elif read_view == "todos_paged":
+            assert reads[0]["payload"]["rows"][0]["status"] == "oversized_record"
+            assert len(reads) > 2
+            assert reads[-1]["payload"]["detail_page"]["eof"] is True
         else:
             assert len(reads) == 1
             assert reads[0]["payload"]["rows"][0]["agent_id" if read_view == "agents" else "todo_id"] == ("review-worker" if read_view == "agents" else "todo_sample")
@@ -783,3 +1157,48 @@ def test_stopped_goals_are_opt_in_but_stale_active_remains_visible(tmp_path):
     assert history['matched'] == 3
     explicit = tool.read(TOOL_NAME, {'view': 'portfolio', 'goal_id': 'old'})
     assert explicit['rows'][0]['activation_state'] == 'stopped'
+
+
+def _torn_delivery_index(root, goal_id="alpha"):
+    path = root / "goals" / goal_id / "runs" / "index.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    intact = json.dumps(
+        {"generated_at": "2026-01-02T00:30:00+00:00", "delivery_outcome": "outcome_progress",
+         "goal_id": goal_id, "todo_id": "todo_intact", "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    path.write_bytes(intact + b"\n")
+    return path, intact
+
+
+@pytest.mark.parametrize("window", [{}, _FIXED_WINDOW], ids=["rolling", "fixed"])
+def test_delivery_reads_stay_unavailable_when_a_row_cannot_be_decoded(tmp_path, window):
+    path, intact = _torn_delivery_index(tmp_path)
+    now = datetime(2026, 1, 2, 3, tzinfo=timezone.utc)
+    def read():
+        return read_manager_delivery_history(tmp_path, "alpha", now=now, **window)
+
+    assert read()["status"] == "read" and read()["coverage"]["matched"] == 1
+
+    # The only recent delivery is torn inside a multibyte character. It must not
+    # read as "no deliveries": the whole answer is unavailable, as it was before
+    # the shared index reader learned to skip such rows.
+    path.write_bytes(intact[: intact.index("进".encode("utf-8")) + 1])
+    damaged = read()
+    assert damaged["status"] == "unavailable"
+    assert damaged["coverage"]["matched"] is None and damaged["deliveries"] == []
+
+    path.write_bytes(intact + b"\n")
+    assert read()["coverage"]["matched"] == 1
+
+
+def test_rolling_delivery_view_reports_unknown_for_an_undecodable_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([]))
+    path, intact = _torn_delivery_index(tmp_path)
+    tool, _ = inspector(tmp_path)
+    request = {"view": "deliveries", "goal_id": "alpha"}
+    assert tool.read(TOOL_NAME, request)["unknown"] is False
+
+    path.write_bytes(intact[: intact.index("进".encode("utf-8")) + 1])
+    result = tool.read(TOOL_NAME, request)
+    assert result["unknown"] is True and result["matched"] is None

@@ -144,8 +144,7 @@ the protocol.
 
 Third, LoopX's architectural position is an upper-layer combination of the
 first two patterns: Letta-like durable state plus Mastra-like managed
-operations, generalized across heterogeneous runtimes. The differentiated
-product is not a larger framework. It is the semantic control plane that keeps
+operations, generalized across heterogeneous runtimes. It is the semantic control plane that keeps
 goal, authority, planning, supervision, evidence, recovery, and handoff
 coherent across agents and runs. The comparison validates the monetization
 shape; LoopX still has to validate repeat demand for this distinct layer.
@@ -378,8 +377,7 @@ bounded work. It provides authoritative, conflict-aware state; Supervisor
 scheduling; stalled-loop detection; recovery, handoff, and governed replan;
 and cross-runtime identity, claim, quota, evidence, and acceptance continuity.
 
-The Supervisor is not a hidden autonomous manager. Hosting does not grant it
-human authority. BYOC and managed private deployment are the lower-risk first
+The Supervisor is not a hidden autonomous manager. BYOC and managed private deployment are the lower-risk first
 forms; full multi-tenant hosting follows only after isolation, deletion,
 backup, support, and on-call economics are proven.
 

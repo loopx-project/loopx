@@ -21,7 +21,7 @@ def prepare(components, tmp_path, monkeypatch, *, goal_id=GOAL_ID):
         "proposals": [{"kind": "todo", "goal_id": goal_id, "text": "Add reader comments later",
                        "priority": "P2", "rationale": "Record the request without starting implementation."}],
         "protected_action": None, "gate": None}
-    monkeypatch.setattr("loopx.chat_runtime.CodexAppServerAdapter.start_turn", lambda *_args: response)
+    monkeypatch.setattr("loopx.chat_runtime.CodexAppServerAdapter.start_turn", lambda *_args, **_kwargs: response)
     transport.admit("steward-app", provider.event("steward-app", "record", "Record reader comments for later."))
     original = transport.core.pending()[0]
     assert finish(runtime, original)["status"] == "completed"

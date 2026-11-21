@@ -111,6 +111,85 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, chan
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
 
 
+@pytest.mark.skipif(os.name != "posix", reason="benchmark uses the POSIX source launcher")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("complete", [False, True])
+def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, provider, complete):
+    import shlex
+    import subprocess
+    import sys
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    state = project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
+    turn = "wake-bounded-off-context"
+    wake = tmp_path / "wakes" / turn
+    wake.mkdir(parents=True)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(tmp_path / "checkpoints"),
+        "components": [{"id": "fixture", "source_path": str(state)}], "point_metadata": {}}))
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(cli_path),
+        "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wake.parent),
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "off",
+        "LOOPX_COMPLETE_TURN": str(int(complete))}
+
+    receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+    def start_read():
+        body = capture_before_replan(env, receipt, "original work")
+        return next(line for line in body.splitlines() if " quota context-read " in line)
+
+    def capture_file(command):
+        argv = shlex.split(command)
+        assert argv[:3] == [str(cli_path), "--cli-bin", str(cli_path)]
+        assert "should-run" not in argv and "context-project" not in argv
+        return Path(argv[argv.index("--capture-file") + 1])
+
+    def read_page(command):
+        result = subprocess.run(shlex.split(command), cwd=project, env=env, capture_output=True, timeout=30)
+        assert len(result.stdout) <= 8000
+        assert result.returncode == 0, result.stdout
+        return json.loads(result.stdout)
+
+    def read_all(page, expected):
+        digest = hashlib.sha256(expected).hexdigest()
+        received = bytearray()
+        pages = 0
+        while True:
+            assert page["ok"] and page["offset"] == len(received) and page["sha256"] == digest
+            received.extend(page["content"].encode("utf-8"))
+            pages += 1
+            assert len(received) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+            if page["eof"]:
+                break
+            page = read_page(page["next_command"])
+        assert pages > 1 and received == expected
+        assert json.loads(received)["heartbeat_receipt"]["turn_instance_id"] == turn
+
+    initial = start_read()
+    original_view = capture_file(initial)
+    original_bytes = original_view.read_bytes()
+    first_page = read_page(initial)
+    assert first_page["next_command"]
+    with state.open("a", encoding="utf-8") as state_file:
+        state_file.write("\n## New checkpoint context\nRead the later source independently.\n")
+    resumed = start_read()
+    resumed_view = capture_file(resumed)
+    resumed_bytes = resumed_view.read_bytes()
+    assert resumed_bytes != original_bytes
+    read_all(first_page, original_bytes)
+    assert original_view != resumed_view and original_view.read_bytes() == original_bytes
+    assert original_view.is_relative_to(wake) and resumed_view.is_relative_to(wake)
+    read_all(read_page(resumed), resumed_bytes)
+    resumed_view.write_bytes(resumed_bytes + b" ")
+    invalid = subprocess.run(shlex.split(resumed), cwd=project, env=env, capture_output=True, timeout=30)
+    assert invalid.returncode != 0 and not json.loads(invalid.stdout)["ok"]
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+    assert cli._spend_run_count(runtime) == 0
+
+
 def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("closed budget must not read sources")
@@ -164,7 +243,15 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
         "MODEL_NAME": "fixture", "REASONING_EFFORT": "high", "OPENAI_BASE_URL": "http://localhost:8123/v1",
         "OPENAI_API_KEY": "fixture-key", "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_REGISTRY": str(registry), "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID}
-    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "original work contract")
+    from benchmark.runtime import worker
+    real_heartbeat_body = worker.heartbeat_body
+
+    def checked_heartbeat_body(*args, **kwargs):
+        # Keep the real admission owner; only the synthetic model text is fixed.
+        real_heartbeat_body(*args, **kwargs)
+        return "original work contract"
+
+    monkeypatch.setattr(worker, "heartbeat_body", checked_heartbeat_body)
     off = run_once(env)
     assert off["ok"] and "checkpoint" not in off
     (project / "host-input.txt").unlink()
@@ -220,6 +307,9 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
         tmp_path, monkeypatch, opportunity, corrupt, collisions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args)
@@ -352,6 +442,9 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args, cwd=project)
@@ -504,6 +597,9 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     source_turn_id = "wake-100-prior"
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", source_turn_id)
 
@@ -654,7 +750,10 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
             'observed_reality':'Isolated source work was verified.', 'retained':['Participant capture'],
             'evidence_refs':['evidence:controller-fixture']}}))
     run('refresh-state', '--goal-id', cli.GOAL_ID, *binding, '--classification','controller_fixture_verified',
-        '--delivery-batch-scale','multi_surface','--delivery-outcome','outcome_progress','--agent-vision-json',str(vision))
+        '--delivery-batch-scale','multi_surface','--delivery-outcome','outcome_progress',
+        '--task-lease-idempotency-key', lease['lease']['idempotency_key'],
+        '--task-lease-expected-version', str(lease['lease']['version']),
+        '--agent-vision-json',str(vision))
     run('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--source','heartbeat','--execute')
     before = run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
     from loopx.capabilities.explore.result_log import (
@@ -817,6 +916,9 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
         pytest.skip("Real POSIX permission denial requires an unprivileged test user")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"

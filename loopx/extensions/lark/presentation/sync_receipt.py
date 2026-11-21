@@ -35,8 +35,10 @@ def compact_lark_kanban_sync_receipt(
     *,
     include_command_details: bool = False,
 ) -> dict[str, Any]:
-    records = [item for item in payload.get("records", []) if isinstance(item, dict)]
-    commands = [item for item in payload.get("commands", []) if isinstance(item, dict)]
+    raw_records = payload.get("records")
+    raw_commands = payload.get("commands")
+    records = [item for item in (raw_records if isinstance(raw_records, list) else []) if isinstance(item, dict)]
+    commands = [item for item in (raw_commands if isinstance(raw_commands, list) else []) if isinstance(item, dict)]
     result = dict(payload)
     result.update(
         {
@@ -65,8 +67,10 @@ def compact_lark_kanban_sync_receipt(
 
     compact_records: list[dict[str, Any]] = []
     for item in records:
-        command = item.get("command") if isinstance(item.get("command"), dict) else {}
-        values = item.get("values") if isinstance(item.get("values"), dict) else {}
+        raw_command = item.get("command")
+        raw_values = item.get("values")
+        command = raw_command if isinstance(raw_command, dict) else {}
+        values = raw_values if isinstance(raw_values, dict) else {}
         compact_records.append(
             {
                 "todo_id": item.get("todo_id"),

@@ -59,8 +59,8 @@ def test_direct_wrapper_rejects_mixed_or_dynamic_work(script):
     assert _literal_exec_argv(script) is None
 
 
-def test_managed_heartbeat_guard_binding_is_observed_as_one_literal_invocation():
-    turn = "2026-01-02T03:04:05.006Z"
+@pytest.mark.parametrize("turn", ["2026-01-02T03:04:05.006Z", "wake-1234567890123456789-deadbeef0001"])
+def test_managed_heartbeat_guard_binding_is_observed_as_one_literal_invocation(turn):
     assignment = f"LOOPX_TURN={turn}"
     guard = ('/venv/bin/loopx --registry /synthetic/registry.json --format json quota should-run '
              '--goal-id fixture-goal --agent-id fixture-agent --codex-app --turn-instance-id "${LOOPX_TURN:?}"')
@@ -80,8 +80,13 @@ def test_managed_heartbeat_guard_binding_is_observed_as_one_literal_invocation()
     ])] == [expected, expected]
     for invalid in (
         f"LOOPX_TURN=$(date -u)\n{guard}", f"{assignment}\n{guard} && pytest",
+        f"LOOPX_TURN=wake-123-invalid\n{guard}", f"LOOPX_TURN={turn}$EXTRA\n{guard}",
         f"{assignment}\n{guard}\npytest", f"{assignment}\n{guard} --agent-id $OTHER",
         f"{assignment}\n{guard} --turn-instance-id {turn}", f"{assignment}\n{guard} foo#bar; pytest",
+        f"{assignment}\n{guard} --turn-instance-id=other-turn",
+        f"{assignment}\n{guard} --turn-instance-id={turn}",
+        f"{assignment}\n{guard} --turn-instance-id=",
+        f"{assignment}\n{guard.replace('--turn-instance-id ', '--turn-instance-id=other-turn --turn-instance-id ')}",
         command.replace('"${LOOPX_TURN:?}"', "'${LOOPX_TURN:?}'"), command.replace("LOOPX_TURN:?", "OTHER:?"),
     ):
         assert _argv(invalid) is None

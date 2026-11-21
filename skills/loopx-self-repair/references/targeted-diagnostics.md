@@ -25,8 +25,7 @@ For an already repaired defect, keep the original receipt and binding intact.
 Qualify the installed runtime after an authorized upgrade and add missing
 composition coverage instead of duplicating the fix or marking the Todo blocked
 merely to escape a receipt conflict. Upgrading and resetting task state are
-different actions; neither a successful installation nor a fresh Turn proves
-recovery of the original operation.
+different actions.
 
 ## Read one response more than once, not one command
 
@@ -38,8 +37,10 @@ available content; it does not prove that content was read. Avoid selecting both
 a parent and its children, which repeats the same evidence.
 
 For captured LoopX context, repeat `--select` on the original capture/hash.
-Use `--list` only for unknown pointers and `--list-depth 2` for useful nested
-discovery. A missing pointer rejects the entire selection: inspect its parent in
+Use `--list --select /parent --list-depth 2` for unknown nested pointers;
+current readers also accept `--list /parent --list-depth 2`. For the root, omit
+the pointer or pass `''`; `/` selects an empty-name property. A missing pointer
+rejects the entire selection: inspect its parent in
 that same capture before retrying, rather than guessing another batch or rerunning
 admission. For large arrays, prefer the known record selector or a focused item
 over recursively listing every record.
@@ -56,8 +57,7 @@ private file with restricted permissions, or in the tool runtime's value store.
 Keep the command exit status and validate that the capture is complete JSON.
 Select fields from that saved response; if you need additional fields, read
 the same capture. Do not rerun a costly or stateful command just to increase
-`max_output_tokens`. A tool's truncated display does not mean the command
-failed or did not commit.
+`max_output_tokens`.
 
 Use server-side selectors where they exist: `todo list --todo-id` for a known
 Todo and a bounded `pr-review --limit` for queue selection. A shell `jq` filter
@@ -155,5 +155,4 @@ do not apply retired File-v0 whole-history-write assumptions to File-v1.
 Prove a shared optimization through
 the common read/transaction contract, then qualify each affected real backend.
 Preserve original-receipt recovery, stale-revision rejection and missing-state
-fail-closed behavior. A successful promotion establishes authority ownership;
-it does not establish latency or capacity equivalence to the previous path.
+fail-closed behavior. A successful promotion establishes authority ownership.

@@ -89,6 +89,7 @@ from .inbox_reactions import (
     ensure_lark_event_inbox_received_reaction,
 )
 from .team_plan_confirmation import (
+    TeamPlanReviewCallbackStream,
     proposal_ids_after_turn,
     settle_team_plan_proposal_delivery,
     start_team_plan_review_callback_stream,
@@ -615,6 +616,7 @@ def stream_lark_goal_topic_profile(
     private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
     capture_mention: MentionCapture | None = None,
     review_callback_handler: ReviewCallbackHandler | None = None,
+    callback_availability_sink: Callable[[TeamPlanReviewCallbackStream], None] | None = None,
 ) -> dict[str, Any]:
     """Keep one bounded long-lived CLI consumer attached between messages."""
 
@@ -655,13 +657,13 @@ def stream_lark_goal_topic_profile(
             process_factory=process_factory,
             parent_stop=stop,
             handler=review_callback_handler,
+            availability_sink=callback_availability_sink,
         )
         if review_callback_handler is not None
         else None
     )
     if health_sink is not None:
-        # A live child process is not proof that lark-cli registered a consumer
-        # with its local event bus.  Keep the connection non-ready until the
+                #   Keep the connection non-ready until the
         # provider emits its explicit ready marker (or a real event arrives).
         health_sink({"status": "starting", "error_code": None})
     watcher_done = threading.Event()

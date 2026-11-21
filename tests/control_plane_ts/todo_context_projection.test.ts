@@ -7,6 +7,17 @@ const page = (records: JsonObject[], options: JsonObject = {}) => projectTodoCon
   records, owner_scope: true, offset: 0, limit: 48, ...options,
 });
 
+test("task search reaches text beyond the excerpt and filters before paging", () => {
+  const records = Array.from({length: 30}, (_, i) => ({todo_id: `task-${i}`, status: "open",
+    title: "Short title", text: "Context. ".repeat(90) + (i >= 28 ? "Release violet" : "Routine work")}));
+  const result = page(records, {query: "VIOLET", offset: 1, limit: 1});
+  assert.deepEqual(result.coverage, {active: 30, matched: 2, included: 1, omitted: 1});
+  assert.equal((result.todos as JsonObject[])[0].todo_id, "task-29");
+  const privateNote = [{todo_id: "private-note", status: "open", text: "Public summary", note: "violet"}];
+  assert.equal((page(privateNote, {query: "violet", owner_scope: false}).todos as unknown[]).length, 0);
+  assert.equal((page(privateNote, {query: "violet"}).todos as unknown[]).length, 1);
+});
+
 // Independent consumer oracle: follow response-local JSON pointers, never ids.
 function expandReferences(value: unknown, root: unknown): unknown {
   if (Array.isArray(value)) return value.map(child => expandReferences(child, root));

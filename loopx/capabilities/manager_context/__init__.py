@@ -5,10 +5,10 @@ from __future__ import annotations
 from contextlib import nullcontext
 from pathlib import Path
 import re
-import shlex
 
 from ...command_invocation import loopx_cli_argv
 from ...file_lock import exclusive_file_lock
+from ...install_contract import render_host_cli_command
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
@@ -82,7 +82,7 @@ def register_ingress(
         source_message=normalize_source_context(message if source_message is None else source_message),
     )
     if origin is not None:
-        if origin != "web":
+        if origin not in {"web", "native_loopx"}:
             raise ValueError("unsupported local ingress origin")
         value["origin"] = origin
     path = (
@@ -257,6 +257,9 @@ def turn_start_hook(
             count = (
                 max(len(inbox["items"]), agenda["incoming_count"])
                 + max(len(inbox.get("peer_returns", {}).get("items", [])), agenda["outgoing_count"])
+                + len(inbox.get("native_child_results", {}).get("items", []))
+                + int(inbox.get("native_child_results", {}).get("unavailable_count", 0))
+                + int(inbox.get("native_child_results", {}).get("scan_complete") is False)
                 + len(inbox.get("operation_handoffs", []))
             )
             incomplete = not agenda["scan_complete"]
@@ -280,7 +283,7 @@ def turn_start_hook(
             "error_code": error,
         }
 
-    command = shlex.join(
+    command = render_host_cli_command(
         [
             *loopx_cli_argv(),
             "--registry",

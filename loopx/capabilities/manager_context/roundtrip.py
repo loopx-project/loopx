@@ -14,6 +14,7 @@ from hashlib import sha256
 import threading
 from itertools import islice
 from os import scandir
+from pathlib import Path
 from contextlib import contextmanager, ExitStack, nullcontext
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -49,7 +50,9 @@ from ...control_plane.collaboration.inbox import (
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
+from ..native_chat.file_discovery import file_change_fingerprint
 from ...chat import ChatMessagePayloadConflictError
+from ...chat_store import TERMINAL_TURN_STATES
 
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
@@ -426,20 +429,53 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
     ]
 
 
+def _saved_answer_rows(messages, message_id, expected_turn_id):
+    matches = [row for row in messages if row.get("message_id") == message_id]
+    if len(matches) > 1:
+        raise ValueError("saved answer has conflicting message identities")
+    if not matches or matches[0].get("role") not in {"agent", "assistant"}:
+        return [], []
+    answer = matches[0]
+    turn_id = answer.get("turn_id")
+    if expected_turn_id is not None and turn_id != expected_turn_id:
+        return [], []
+    if not turn_id:
+        return [answer], [answer]
+    original = [row for row in messages if row.get("turn_id") == turn_id]
+    question = next((row for row in original if row.get("role") == "user"), None)
+    return ([question, answer] if question else [answer]), original
+
+
 def project_chat_session_snapshot(root, store, session_id, *, registry,
-                                  message_limit=None, message_cursor=None, turn_id=None,
-                                  resume_from=None, project_history_messages=None):
+                                  message_limit=None, message_cursor=None, turn_id=None, report_message_id=None,
+                                  resume_from=None, project_history_messages=None, include_turn_error=False):
     """Project return delivery state into one existing Chat snapshot."""
 
-    strict = message_limit is not None or resume_from is not None
-    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
-                else store.session_snapshot(session_id))
-    if turn_id is not None:
+    turn = None
+    if turn_id is not None and report_message_id is None:
         if message_limit is None:
             raise ValueError("a selected original Turn requires paged history")
         turn = store.load_turn(session_id, turn_id)
         if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
             raise ValueError("original Turn is unavailable from this Session")
+    strict = message_limit is not None or resume_from is not None or report_message_id is not None
+    # Read the status first: terminal completion persists its answer before
+    # publishing completed. An older message prefix must not appear final.
+    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
+                else store.session_snapshot(session_id))
+    report_context = None
+    if report_message_id is not None:
+        snapshot["messages"], report_context = _saved_answer_rows(snapshot["messages"], report_message_id, turn_id)
+        snapshot["report_message_id"] = report_message_id
+        snapshot["active_turn"] = None
+    elif turn is not None:
+        status = turn["status"]
+        snapshot["selected_turn"] = {"turn_id": turn_id, "status": status, "terminal": status in TERMINAL_TURN_STATES}
+        # Failure records persist the reason with the status, before appending the message.
+        error = turn.get("error")
+        if include_turn_error and status in {"failed", "timed_out"} and isinstance(error, str) and error.strip():
+            snapshot["selected_turn"]["error"] = error
+        snapshot["active_turn"] = None
         # OriginalRequest already displays only this Turn. Select it before
         # paging/projection, retaining every message and the strict journal read.
         snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
@@ -452,7 +488,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
                               cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)
-    context_messages = snapshot["messages"]
+    context_messages = snapshot["messages"] if report_context is None else report_context
     if page is not None:
         context_messages = context_messages[:page["message_page"]["total"]]
         snapshot["messages"] = page["messages"]
@@ -463,8 +499,14 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     # Use the frozen context to choose the carrier, projecting only this page.
     # A question and answer can straddle pages without duplicating a commitment
     # or re-reading every off-page Turn for each page.
-    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
+    projected = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
+    if report_message_id is not None:
+        # Collaboration may include the original receipt carrier. The saved
+        # answer only exposes its precise answer and the question it displays.
+        visible_ids = {row.get("message_id") for row in snapshot["messages"]}
+        projected = [row for row in projected if row.get("message_id") in visible_ids]
+    snapshot["messages"] = projected
     # Provider-owned history joins the selected page at the composition root.
     # Core capabilities never import an extension projection sink.
     if page is not None:
@@ -475,13 +517,22 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
 
 def parse_chat_history_selection(query):
     """Validate one HTTP history selection before any recovery observation."""
-    if (set(query) - {"message_limit", "message_cursor", "turn_id", "known_history"}
+    keys = set(query)
+    report = "report_message_id" in keys
+    if (keys - {"message_limit", "message_cursor", "turn_id", "known_history",
+                      "task_goal_id", "task_todo_id", "report_message_id"}
             or any(len(values) != 1 or not values[0] for values in query.values())
-            or ("message_limit" not in query and set(query) & {"message_cursor", "turn_id", "known_history"})):
+            or (report and keys - {"report_message_id", "turn_id"})
+            or (not report and "message_limit" not in keys and keys & {"message_cursor", "turn_id", "known_history"})):
         raise ValueError("invalid history page arguments")
     limit = int(query["message_limit"][0]) if "message_limit" in query else None
     if limit is not None and not 1 <= limit <= 200:
         raise ValueError("message_limit must be between 1 and 200")
+    task_scope = None
+    if "task_goal_id" in query or "task_todo_id" in query:
+        if not {"turn_id", "message_limit", "task_goal_id", "task_todo_id"} <= query.keys():
+            raise ValueError("a Task receipt requires its Goal, Task and original Turn")
+        task_scope = (query["task_goal_id"][0], query["task_todo_id"][0])
     basis = query.get("known_history", [None])[0]
     parsed_basis = None
     if basis is not None:
@@ -495,7 +546,31 @@ def parse_chat_history_selection(query):
             raise ValueError("invalid known history proof")
         parsed_basis = (basis, count, proof)
     return {"message_limit": limit, "message_cursor": query.get("message_cursor", [None])[0],
-            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis}
+            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis, "task_scope": task_scope,
+            "report_message_id": query.get("report_message_id", [None])[0]}
+
+
+def prepare_chat_history_session(store, session_id, selection, *, recover_turn):
+    """Use the existing lifecycle owner only for the execution this read owns."""
+    task_scope = selection["task_scope"]
+    turn_id = selection["turn_id"]
+    if task_scope is None:
+        if turn_id is None and selection["report_message_id"] is None:
+            recover_turn(session_id)
+        return store.load_session(session_id) or {}
+
+    session = store.load_session(session_id) or {}
+    goal_id, todo_id = task_scope
+    if session.get("goal_id") != goal_id or session.get("channel_id") != f"task.{todo_id}":
+        raise ValueError("the original Task Session could not be verified")
+    if selection["message_cursor"] is not None or session.get("active_turn_id") != turn_id:
+        return session
+
+    turn = store.load_turn(session_id, turn_id)
+    if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+        raise ValueError("the original Task Turn could not be verified")
+    recover_turn(session_id, turn_id)
+    return store.load_session(session_id) or {}
 
 
 def _visible_history_page_digest(session_id, offset, messages):
@@ -511,8 +586,10 @@ def read_chat_history_selection(root, store, session_id, *, registry, selection,
     basis = selection["known_history"]
     if basis is None:
         snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
-            project_history_messages=project_history_messages,
-            **{key: value for key, value in selection.items() if key != "known_history"})
+            message_limit=selection["message_limit"], message_cursor=selection["message_cursor"],
+            turn_id=selection["turn_id"], project_history_messages=project_history_messages,
+            report_message_id=selection["report_message_id"],
+            include_turn_error=selection["task_scope"] is not None)
         snapshot["messages"] = project_provider(snapshot["messages"])
         if selection["message_limit"] == 200 and selection["turn_id"] is None:
             page = snapshot["message_page"]
@@ -720,26 +797,87 @@ def _belongs_to_chat_host(root, store, path):
         return False
 
 
-def _pending_return_paths(host, paths):
-    root, scan_at, exact, cancelled = (host[key] for key in ("root", "scan_at", "exact", "cancelled"))
-    paths = iter(paths)
-    while not cancelled() and (batch := list(islice(paths, 128))):
-        candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
-        selected = effect_runtime_result("manager.return_delivery.transact", {
-            "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
-            "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
-            "candidates": candidates,
-        })
-        if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
-            raise RuntimeError("return delivery scan result shape mismatch")
-        if selected.get("unavailable_count"):
-            logging.getLogger(__name__).warning("Unreadable manager return receipt")
-        ready = {(row["request_id"], row["result_key"]) for row in selected["candidates"]}
-        yield from (path for path in batch if (path.parent.name, path.stem) in ready)
+def _delivery_fingerprint(path: Path) -> tuple[int, ...] | None:
+    try:
+        return file_change_fingerprint(path)
+    except OSError:
+        return None
+
+
+class _TerminalReturnScanCache:
+    """Skip already-verified terminal `.delivery.json` records while their stat fingerprint holds."""
+
+    def __init__(self) -> None:
+        self._terminal: dict[tuple[bool, Path], tuple[int, ...]] = {}
+
+    def matches(self, key: tuple[bool, Path], fp: tuple[int, ...]) -> bool:
+        return self._terminal.get(key) == fp
+
+    def remember(self, key: tuple[bool, Path], fp: tuple[int, ...]) -> None:
+        self._terminal[key] = fp
+
+    def drop(self, key: tuple[bool, Path]) -> None:
+        self._terminal.pop(key, None)
+
+    def prune(self, exact: bool, seen: set[tuple[bool, Path]]) -> None:
+        stale = [key for key in self._terminal if key[0] == exact and key not in seen]
+        for key in stale:
+            del self._terminal[key]
+
+
+def _scan_batch(host, batch, scan_cache):
+    root, scan_at, exact = (host[key] for key in ("root", "scan_at", "exact"))
+    candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path, _, _ in batch]
+    selected = effect_runtime_result("manager.return_delivery.transact", {
+        "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
+        "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
+        "candidates": candidates,
+    })
+    if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
+        raise RuntimeError("return delivery scan result shape mismatch")
+    if selected.get("unavailable_count"):
+        logging.getLogger(__name__).warning("Unreadable manager return receipt")
+    ready = {(row["request_id"], row["result_key"]) for row in selected["candidates"]}
+    if scan_cache is not None:
+        terminal = {(row["request_id"], row["result_key"]) for row in (selected.get("terminal_candidates") or ())}
+        for path, delivery_path, before_fp in batch:
+            if (path.parent.name, path.stem) in terminal and before_fp is not None:
+                if _delivery_fingerprint(delivery_path) == before_fp:
+                    scan_cache.remember((exact, path), before_fp)
+    return [path for path, _, _ in batch if (path.parent.name, path.stem) in ready]
+
+
+def _pending_return_paths(host, paths, *, scan_cache=None):
+    exact, cancelled = host["exact"], host["cancelled"]
+    if scan_cache is None:
+        paths_iter = iter(paths)
+        while not cancelled() and (batch := list(islice(paths_iter, 128))):
+            yield from _scan_batch(host, [(path, path, None) for path in batch], None)
+        return
+    seen_keys: set[tuple[bool, Path]] = set()
+    batch: list[tuple[Path, Path, tuple[int, ...] | None]] = []
+    for path in paths:
+        if cancelled():
+            return
+        key = (exact, path)
+        seen_keys.add(key)
+        delivery_path = path.with_name(path.stem + ".delivery.json")
+        before_fp = _delivery_fingerprint(delivery_path)
+        if before_fp is not None and scan_cache.matches(key, before_fp):
+            continue
+        scan_cache.drop(key)
+        batch.append((path, delivery_path, before_fp))
+        if len(batch) == 128:
+            yield from _scan_batch(host, batch, scan_cache)
+            batch = []
+    if batch and not cancelled():
+        yield from _scan_batch(host, batch, scan_cache)
+    if not cancelled():
+        scan_cache.prune(exact, seen_keys)
 
 
 @effect_runtime_request_scope()
-def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None):
+def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None, scan_cache=None):
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
@@ -753,17 +891,16 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     # Keep one eligibility instant for the scan. The per-return transaction
     # observes its own time after acquiring the route and source guards.
     scan_at = clock()
-    try:
-        exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
-    except (OSError, ValueError, TypeError):
-        exact = False
+    # An unreadable registry cannot authorize legacy delivery. Let the hosted
+    # worker retry the scan without advancing any of its receipts.
+    exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
     processed = 0
     host = {
         "root": root, "registry": registry, "store": store,
         "scan_at": scan_at, "clock": clock, "exact": exact, "cancelled": cancelled,
     }
     paths = iter_result_paths(_root(root) / "replies")
-    for path in _pending_return_paths(host, paths):
+    for path in _pending_return_paths(host, paths, scan_cache=scan_cache):
         progress()
         if cancelled():
             break
@@ -807,7 +944,7 @@ def recover_source_chat_provenance(root, registry, store, *, cancelled=lambda: F
             if path.stem != route.get("request_id"):
                 continue
             # Reject other hosts before taking a Goal lifetime lock or loading
-            # its registry. This is one startup pass, not a polling-time scan.
+            # its registry. This is one startup pass.
             session, turn = observe_source_chat(store.root.parent, route)
             with collaboration_goal_scope(
                 registry, goal_id=route["goal_id"], agents=(route["agent_id"],),
@@ -844,6 +981,7 @@ class ReturnService:
     def __init__(self, root, registry, store, external_sender):
         self.args = (root, registry, store, external_sender)
         self.stop = threading.Event()
+        self._scan_cache = _TerminalReturnScanCache()
         self._execution_pump = None
         self._return_worker = HostedWorker(target=self.run, stop=self.stop,
                                           name="loopx-manager-returns", retry_seconds=3)
@@ -870,7 +1008,12 @@ class ReturnService:
         )
 
     def _return_step(self) -> None:
-        drain(*self.args, cancelled=self.stop.is_set, progress=self._return_worker.checkpoint)
+        drain(
+            *self.args,
+            cancelled=self.stop.is_set,
+            progress=self._return_worker.checkpoint,
+            scan_cache=self._scan_cache,
+        )
 
     def run_executions(self) -> None:
         # Native previews may wait on a subprocess. Keep result publication

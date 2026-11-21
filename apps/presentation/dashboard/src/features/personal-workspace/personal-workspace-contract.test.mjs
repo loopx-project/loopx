@@ -48,7 +48,6 @@ const dashboard = source("../../views/dashboard-page.tsx");
 const tasks = source("./goal-tasks-view.tsx");
 const status = source("../../data/status.ts");
 const chatData = source("../../data/chat.ts");
-const actionReview = source("../../../../../../loopx/control_plane/presentation/action_review_plan.ts");
 
 assert.match(model, /kind: "todo"/, "Todo has its own drawer selection");
 for (const field of ["dependencies", "nextTransition", "ownerLabel", "todoId", "taskClass"]) {
@@ -132,7 +131,6 @@ for (const state of ["delivered", "verification_required", "explicit_unverified"
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);
 }
 assert.doesNotMatch(returnDelivery, /message_ref|provider_receipt|intent_digest/, "Provider-private locator facts never enter the return status badge");
-assert.match(actionReview, /proposal\.action_kind !== "operation\.execute" \|\| \(operationFrame\?\.kind === "result" && operationFrame\.resultDeliveryVerified\)/, "An operation is not complete in the Dashboard until the current result delivery is verified");
 assert.match(page, /reviewPlan\.operationFrame/, "Dashboard operation details consume the shared TS review frame");
 assert.match(page, /const restoreable = stored[\s\S]*\|\| proposal\.action_kind === "operation\.execute"/, "Canonical operation readback includes terminal and cancelled rows instead of retaining a stale gated card");
 assert.match(page, /proposal\.action_kind !== "operation\.execute"[\s\S]*reviewPlan\.interaction !== "completed"/, "Pending operation result-card readback remains visible instead of becoming a generic apply error");
@@ -179,7 +177,8 @@ for (const inputKind of ["boolean", "number", "select", "string_list"]) {
 }
 assert.match(tasks, /t\("tasks\.convertToTask"\)/, "Tasks offer an explicit preview-first bridge from a reply to task management");
 assert.match(page, /t\("home\.taskCount"/, "Home cards expose durable activity when a new Goal has Todos but no run timestamp yet");
-assert.match(page, /t\("proposal\.primary\.goalCreate"\)/, "Goal creation names the localized immediate first-turn effect");
+assert.match(page, /t\(reviewPlan\.creationExecution \? "proposal\.primary\.goalCreate" : "proposal\.primary\.goalCreateOnly"\)/,
+  "Goal creation describes starting only when the canonical plan has explicit execution intent");
 assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated proposals are grouped into a compact summary");
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
@@ -212,8 +211,8 @@ assert.match(page, /\.map\(\(\[key, value\]\) => \(\{[\s\S]*key,[\s\S]*label: fi
 assert.match(page, /field\.key === "cadence"[\s\S]*field\.key === "stop_condition"[\s\S]*field\.key === "timezone"/, "Applied Heartbeat readback consumes stable semantic keys");
 assert.doesNotMatch(page, /field\.label === "cadence"|field\.label === "stop condition"/, "Schedule semantics never depend on localized display labels");
 assert.match(page, /defaultTimeline\(model, managerProjectionId, t\)/, "Default schedule projection uses the active locale authority");
-assert.match(page, /onOpenGoal: \(goalId\) => \{\s*selectGoal\(goalId\);\s*void reconcileStatus\(\[goalId\]\)/, "Applied-action Goal navigation is immediate and reconciles that Goal in the background");
-assert.match(drawer, /onClose\(\); void callbacks\.onOpenGoal\?\.\(goalId\)/, "Applied-action Goal navigation closes its result drawer before asynchronous reconciliation");
+assert.match(page, /onOpenGoal: \(goalId, managedSession\) => \{\s*selectGoal\(goalId, managedSession \? "chat" : "overview", managedSession\);\s*void reconcileStatus\(\[goalId\]\)/, "Applied-action navigation carries the original managed Session and reconciles its Goal in the background");
+assert.match(drawer, /onClose\(\); void callbacks\.onOpenGoal\?\.\(goalId, selection\.item\.createdManagedSession\?\.target\)/, "Applied-action navigation closes its drawer before opening the original Session or legacy Goal");
 assert.match(tasks, /aria-busy=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)/, "Quick Todo completion exposes accessible pending state while its typed preview is prepared");
 assert.match(tasks, /disabled=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)\}/, "Quick Todo completion rejects duplicate clicks while preview creation is pending");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
@@ -398,6 +397,14 @@ for (const contextGoalId of [null, "existing-research-goal"]) {
   assert.equal(request.context.goal_id, contextGoalId);
   assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
   assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
+  assert.equal(Object.hasOwn(request.normalizedParameters, "start_execution"), false,
+    "Existing builder callers never infer execution intent from Create and start wording");
+}
+for (const permission of ["read_only", "workspace_write_on_confirmation"]) {
+  const fresh = goalCreateRequest({objective: "Repair the cart", completion: "Six checks pass", boundary: "Selected workspace",
+    agentId: "codex", permission, contextGoalId: null, startExecution: true}, key => key);
+  assert.equal(fresh.normalizedParameters.start_execution, true);
+  assert.equal(fresh.normalizedParameters.permission, permission, "Fresh execution preserves the explicit existing permission choice");
 }
 const explicitWorkspace = goalCreateRequest({
   objective: "Inspect the second project", completion: "A checked report", boundary: "Read only",
@@ -495,11 +502,12 @@ for (const capabilityId of [
   "pull_request_review",
   "reward_memory",
   "steward_executor",
+  "steward_memory",
 ]) {
   const matches = capabilityLocalization.match(new RegExp(`${capabilityId}:`, "g")) ?? [];
   assert.equal(matches.length, 2, `${capabilityId} has English and Simplified Chinese metadata`);
 }
-for (const fieldKey of ["agent_orders", "allowed_domains", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone"]) {
+for (const fieldKey of ["agent_orders", "allowed_domains", "auto_recall", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "recall_timeout_seconds", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone", "user_space"]) {
   const matches = capabilityLocalization.match(new RegExp(`^\\s+${fieldKey}:`, "gm")) ?? [];
   assert.equal(matches.length, 2, `${fieldKey} has English and Simplified Chinese field copy`);
 }

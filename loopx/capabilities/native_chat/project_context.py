@@ -1,7 +1,7 @@
 """Filesystem observations for the shared project conversation owner.
 
-Only explicitly configured Chat workspace roots are eligible. This is neither
-a Goal registry nor a transport-owned Session authority. Each use observes the
+Only explicitly configured Chat workspace roots are eligible.
+Each use observes the
 roots again, so a missing root or retargeted symlink cannot retain a Session's grant.
 """
 

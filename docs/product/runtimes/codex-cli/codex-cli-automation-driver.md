@@ -41,9 +41,10 @@ The remaining parity gaps are narrower:
   and scheduler hint without overlapping a live host turn; and
 - benchmark promotion still requires matched, countable comparative evidence.
 
-The older `codex-cli-local-scheduler-*` commands remain diagnostics and
-compatibility probes. They are not the default orchestration narrative and must
-not be composed manually as a second control plane.
+The older pre-Turn `codex-cli-local-scheduler-*` and pilot probe commands
+have been retired in favor of `loopx turn` (`turn_driver/codex_cli.py`).
+Callers should use `loopx turn plan` and `loopx turn run-once` rather than
+composing manual probe chains.
 
 ## Codex App Parity Matrix
 
@@ -62,8 +63,7 @@ not be composed manually as a second control plane.
 | Repair/replan | Typed control state can preserve, repair, or replace the current route | Host and validation failures route to typed repair/replan; two stalls require a todo or vision delta | Expand real-host negative-path qualification |
 | Privacy | Raw host material stays outside LoopX state | Existing boundaries are strong | Preserve current boundary and add a typed result channel |
 
-This matrix is an implementation checklist, not evidence that the capabilities
-already match.
+This matrix is an implementation checklist.
 
 ## Product Shape
 
@@ -92,6 +92,32 @@ check. Use `--host generic-cli --host-adapter-request-schema loopx_turn_host_req
 and `--host-adapter-command-json ...` for a compatible Trae or
 another CLI after its wrapper implements the typed stdin/stdout contract in the
 host-neutral protocol.
+
+The built-in Codex result schema accepts `validated_completion` for a fully
+delivered selected Todo. After independent validation, the adapter invokes the
+existing Todo lifecycle, including its controller-declared validator, before
+accountable refresh and one quota debit. It retains the original launch lease
+generation in the Turn journal for completion and cached-result recovery;
+lease loss or a newer same-Agent generation cannot authorize the old result.
+`validated_progress` remains partial progress and never silently completes work.
+For a predeclared terminal Todo, closeout after debit uses the original
+completion receipt and closes the same Turn.
+Goal acceptance remains a separate owner check.
+
+After independent validation, the adapter checks the original Goal's running
+authority before settling either result. When the owner stops the Goal during
+that validation, the Turn retains its validation checkpoint and leaves the
+Todo and quota untouched.
+
+内置 Codex 的结果格式支持 `validated_completion`，用于已满足全部要求的已选 Todo。
+独立验证通过后，adapter 先调用现有 Todo 生命周期及 controller 声明的完成验证器，
+再写回可核算进展并扣额一次。Turn journal 保留启动时的原租约代次，完成和缓存结果
+恢复都使用该代次；租约丢失或同 Agent 的新代次不能授权旧结果。`validated_progress`
+仍表示部分进展，不会被静默升级为完成。对于预声明的终态 Todo，扣额后按原完成回执
+收尾同一轮 Turn。Goal 验收仍由原 owner 单独检查。
+
+独立验证结束后，adapter 会在结算前重新检查原 Goal 的运行权限。验证期间若 owner
+停止 Goal，Turn 保留验证记录，Todo 和额度不变。
 
 That wrapper is deliberately thin: it translates one Turn request into one
 bounded Agent CLI invocation, preserves only an opaque local resume handle, and
@@ -174,9 +200,7 @@ or local artifact paths.
 ## Rollback And Non-goals
 
 The adapter must be disableable without changing LoopX goal state, normal CLI
-commands, or Codex App heartbeat operation. Old probe commands may remain as
-diagnostics until the consolidated driver covers their durable boundaries; they
-must not be the default product narrative.
+commands, or Codex App heartbeat operation.
 
 This route does not:
 

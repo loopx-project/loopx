@@ -5,7 +5,7 @@ import shlex
 from collections.abc import Iterable
 from pathlib import Path
 
-from ..command_invocation import loopx_cli_argv
+from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 
 TODO_OPTION_FIELDS = (
@@ -148,7 +148,7 @@ _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 # field owner; other lifecycle commands retain full help until centralized.
 TODO_ACTION_FIELDS = {
     "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "todo_summary", "include_archived", "state_file", "project", "dry_run"}),
-    "receipt": frozenset({"operation_id"}),
+    "receipt": frozenset({"operation_id", "todo_thin"}),
     "result-read": frozenset({"todo_id"}),
     "plan": frozenset({"text", "agent_id", "project"}),
     "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
@@ -324,7 +324,7 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
 def validate_todo_receipt_options(args: argparse.Namespace) -> None:
     _validate_todo_option_subset(
         args, TODO_ACTION_FIELDS["receipt"],
-        "todo receipt only accepts --goal-id, --operation-id, and --format; unsupported: ",
+        "todo receipt only accepts --goal-id, --operation-id, --thin, and --format; unsupported: ",
     )
     if not args.operation_id:
         raise ValueError("todo receipt requires --operation-id")
@@ -388,17 +388,24 @@ class TodoClaimArgumentError(ValueError):
         if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
             missing.append("--task-lease-idempotency-key")
         route = loopx_cli_argv()
-        cli_args = [*route[1:], "--registry", str(registry_path), "--format", "json"]
+        cli_args = [*route[1:], *cli_option_args("--registry", registry_path), "--format", "json"]
         if runtime_root_arg is not None:
-            cli_args.extend(["--runtime-root", runtime_root_arg])
-        cli_args.extend(["todo", "claim", "--goal-id", args.goal_id])
-        # Reuse the grammar owner; preserve identities and zero-valued CAS versions.
+            cli_args.extend(cli_option_args("--runtime-root", runtime_root_arg))
+        cli_args.extend(["todo", "claim", *cli_option_args("--goal-id", args.goal_id)])
+        # Omit inputs the caller must supply. Preserve other explicit values for
+        # the authority owner to validate, including an empty operation ID.
         for flag, field in TODO_OPTION_FIELDS:
+            if field not in _TODO_CLAIM_FIELDS or flag in missing:
+                continue
             value = getattr(args, field, None)
-            if field in _TODO_CLAIM_FIELDS and value is not None and value != "":
-                cli_args.extend([flag, str(value)])
-        if args.project:
-            cli_args.extend(["--project", args.project])
+            if value is None or value is False:
+                continue
+            if value is True:
+                cli_args.append(flag)
+            else:
+                cli_args.extend(cli_option_args(flag, value))
+        if args.project is not None:
+            cli_args.extend(cli_option_args("--project", args.project))
         if args.dry_run:
             cli_args.append("--dry-run")
         return {
@@ -759,8 +766,11 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError(
             "--limit is supported only by todo list"
         )
-    if args.todo_thin and args.todo_command not in {"list", "claim"}:
-        raise ValueError("--thin is supported only by todo list and todo claim")
+    if args.todo_thin and "todo_thin" not in TODO_ACTION_FIELDS.get(args.todo_command, ()):
+        supported = ", ".join(
+            f"todo {action}" for action, fields in TODO_ACTION_FIELDS.items() if "todo_thin" in fields
+        )
+        raise ValueError(f"--thin is supported only by {supported}")
     if getattr(args, "todo_summary", False):
         if args.todo_command != "list":
             raise ValueError("--summary is supported only by todo list")

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.zcode_goal_mode import bridge
 from loopx.zcode_goal_mode.api import ZCodeGoalRequestMixin, public_zcode_goal_readback
 
@@ -55,7 +56,11 @@ def test_invalid_authority_cannot_launch_provider(authority, monkeypatch, mutati
     elif mutation == "invalid_instance":
         goal["goal_instance_id"] = 123
     elif mutation == "stopped":
-        goal["activation_state"] = "stopped"
+        goal["activation"] = build_goal_activation(
+            state="stopped",
+            updated_at="2026-01-01T00:00:00Z",
+            reason="fixture stop",
+        )
     elif mutation == "archived":
         goal["status"] = "archived"
     else:
@@ -490,7 +495,11 @@ def test_real_provider_status_is_read_only_with_exact_identity(authority):
 @pytest.mark.parametrize("action", ["status", "pause", "stop"])
 def test_same_exact_inactive_binding_can_be_read_or_cleaned(authority, monkeypatch, action):
     registry, _, payload = authority
-    payload["goals"][0]["activation_state"] = "stopped"
+    payload["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(payload), encoding="utf-8")
     requests = _stub_operation(monkeypatch)
     result = bridge.zcode_goal_operation(action=action, registry_path=registry, goal_id="delivery", agent_id="zcode-worker")
@@ -503,7 +512,11 @@ def test_same_exact_inactive_binding_can_be_read_or_cleaned(authority, monkeypat
 @pytest.mark.parametrize("action", ["bind", "start", "resume"])
 def test_inactive_binding_cannot_admit_execution(authority, monkeypatch, action):
     registry, _, payload = authority
-    payload["goals"][0]["activation_state"] = "stopped"
+    payload["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(bridge, "_node_command", lambda: pytest.fail("inactive Goal reached provider"))
     with pytest.raises(bridge.ZCodeGoalBridgeError, match="no longer active"):
@@ -512,7 +525,11 @@ def test_inactive_binding_cannot_admit_execution(authority, monkeypatch, action)
 
 def test_inactive_cleanup_still_rejects_changed_instance_or_unregistered_agent(authority, monkeypatch):
     registry, _, payload = authority
-    payload["goals"][0]["activation_state"] = "stopped"
+    payload["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(payload), encoding="utf-8")
     def replace(request):
         payload["goals"][0]["goal_instance_id"] = INSTANCE_B
@@ -598,7 +615,11 @@ def test_model_selection_forwards_existing_model_only(authority, monkeypatch):
 
 def test_internal_guard_requires_known_action_and_validates_inactive_cleanup(authority):
     registry, project, payload = authority
-    payload["goals"][0]["activation_state"] = "stopped"
+    payload["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry.write_text(json.dumps(payload), encoding="utf-8")
     request = {"registry": str(registry), "project": str(project), "goal_id": "delivery", "agent_id": "zcode-worker", "goal_ref": {"goal_id": "delivery", "goal_instance_id": INSTANCE_A}}
     command = [sys.executable, "-X", "utf8", "-B", "-m", "loopx.zcode_goal_mode.bridge", "--validate-binding"]

@@ -1,0 +1,35 @@
+{
+  "id": "memory",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "name": {
+    "zh": "记忆",
+    "en": "Memory",
+    "ja": "メモリ"
+  },
+  "description": {
+    "zh": "查看 agent 已有的记忆，了解它记住了什么。",
+    "en": "Explore what your agent has remembered.",
+    "ja": "エージェントが記憶している内容を確認します。"
+  },
+  "permissions": [
+    "memory.read"
+  ],
+  "contributes": {
+    "views": [
+      {
+        "id": "memory",
+        "title": {
+          "zh": "记忆",
+          "en": "Memory",
+          "ja": "メモリ"
+        },
+        "icon": "sparkle",
+        "route": "#/memory",
+        "sidebar": {
+          "pinned": false
+        }
+      }
+    ]
+  }
+}

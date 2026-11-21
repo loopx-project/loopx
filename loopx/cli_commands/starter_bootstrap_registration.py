@@ -5,7 +5,6 @@ import argparse
 from ..bootstrap_command_pack import (
     START_GOAL_HOST_SURFACES,
 )
-from ..codex_cli_probe import DEFAULT_CODEX_BIN
 from ..project_prompt import (
     DEFAULT_HANDOFF_ADAPTER_KIND,
     DEFAULT_HANDOFF_ADAPTER_STATUS,
@@ -151,48 +150,4 @@ def register_starter_bootstrap_commands(subparsers: argparse._SubParsersAction) 
         dest="message_only",
         action="store_true",
         help="Print only the Codex CLI TUI paste message, without the Markdown review packet.",
-    )
-
-    codex_cli_tui_bootstrap_smoke_parser = subparsers.add_parser(
-        "codex-cli-tui-bootstrap-smoke-bundle",
-        help="Generate a transcript-free first-run smoke packet for the Codex CLI TUI bootstrap path.",
-    )
-    codex_cli_tui_bootstrap_smoke_parser.add_argument(
-        "--project",
-        default=".",
-        help="Project directory to model as the fresh repo.",
-    )
-    codex_cli_tui_bootstrap_smoke_parser.add_argument(
-        "--goal-id",
-        help="Goal id. Defaults to <project-name>-goal.",
-    )
-    codex_cli_tui_bootstrap_smoke_parser.add_argument(
-        "--agent-id",
-        help="Registered LoopX agent id to include in quota/claim instructions.",
-    )
-    codex_cli_tui_bootstrap_smoke_parser.add_argument(
-        "--cli-bin",
-        default="loopx",
-        help="LoopX CLI binary name embedded in generated commands.",
-    )
-
-    codex_cli_exec_parser = subparsers.add_parser(
-        "codex-cli-exec-handoff",
-        help="Show the disabled headless handoff boundary and the TUI message-only bootstrap command.",
-    )
-    codex_cli_exec_parser.add_argument("--project", default=".", help="Project directory to start from.")
-    codex_cli_exec_parser.add_argument("--goal-id", help="Goal id. Defaults to <project-name>-goal.")
-    codex_cli_exec_parser.add_argument(
-        "--agent-id",
-        help="Registered LoopX agent id to include in quota/claim instructions.",
-    )
-    codex_cli_exec_parser.add_argument(
-        "--cli-bin",
-        default="loopx",
-        help="LoopX CLI binary name embedded in generated commands.",
-    )
-    codex_cli_exec_parser.add_argument(
-        "--codex-bin",
-        default=DEFAULT_CODEX_BIN,
-        help="Codex CLI executable name embedded in the generated handoff command.",
     )

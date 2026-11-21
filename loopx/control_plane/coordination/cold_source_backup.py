@@ -209,7 +209,7 @@ def _scan_archive(
             member_count = logical_bytes = 0
             archive.seek(0)
             # One disposable transaction avoids per-prefix durable writes.
-            # This scratch index is not a Goal authority or recovery store.
+
             with (
                 closing(sqlite3.connect(database_path)) as database,
                 (Path(temporary) / "archive.tar.gz").open("w+b") as snapshot,

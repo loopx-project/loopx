@@ -588,7 +588,6 @@ export function registerAuthorityStoreConformance(
     const goal = "goal-governance";
     const fixture = productionScaleCoordinationFixture(goal, native ? "native" : "legacy");
     const projection = structuredClone(fixture.projection);
-    const records = projection.todos as Record<string, unknown>[];
     const seeded = await store.commitAuthority({operation_id: "governance-fixture",
       expected_provider_revision: null, events: [], receipts: [], next_projection: projection});
     assert.equal(seeded.status, "applied");

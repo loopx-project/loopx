@@ -91,7 +91,7 @@ T1 的一次写回可留下回执 R1，但它不自动关闭 G1 或接受整个 
   [选择正确的放置位置](./08-extension-placement.md)。
 
 项目接入与开发者贡献共享基础模型，但没有先后依赖。Extension 是开发者贡献中的一种交付和
-lifecycle 选择，不是所有贡献的默认终点。
+lifecycle 选择。
 
 ## 这本书的主线
 
@@ -120,7 +120,7 @@ lifecycle 选择，不是所有贡献的默认终点。
 
 概念章解释因果和设计取舍；实践章给出前提、动作、读回和失败出口；贡献章沿协议与实现寻找
 第一处需要改变的边界。它们不必都写成同一张四列表，但不能把关键推理留给读者猜。
-状态机专题和附录供回查，不是要求第一次接入前全部背完的考试范围。
+状态机专题和附录供回查。
 
 [项目接入章](05-connect-existing-project.md#three-completions)区分安装、接入与工作交付，
 其[第一份交付](05-connect-existing-project.md#first-delivery)把 T1/T2、CI、决定与最终返回接在一起。
@@ -149,7 +149,7 @@ lifecycle 选择，不是所有贡献的默认终点。
 
 这四问是教学与修订标准，不新增 schema、运行时义务或审批门禁。资料不足时，应明确
 “尚不能判断什么、缺少哪项证据、由谁确认”；不能为了填满四格而猜测。
-拒绝也不是最终目标：条件补齐后要重新判断，保留已经发生的工作，并走向下一次合法行动。
+条件补齐后要重新判断，保留已经发生的工作，并走向下一次合法行动。
 
 ## 怎样理解书中的证据
 
@@ -180,7 +180,7 @@ lifecycle 选择，不是所有贡献的默认终点。
 
 ## 版本基线
 
-当前内容面向 LoopX release `v2.3.0`；本地命令示例已按 `loopx 2.3.0` 的
+当前内容面向 LoopX release `v2.4.0`；本地命令示例已按 `loopx 2.4.0` 的
 公开 CLI 与协议表面复核。该版本要求 Python 3.11+ 与 Node.js 22.22.3+。LoopX 会自动管理
 空闲后退出的 TypeScript Effect runtime，用户不需要手工维护 daemon。
 
@@ -221,7 +221,7 @@ node --version
   为进展单位，不继续堆 leaf helper 与 bridge。
 
 核对这一历史里程碑时，以 `v0.5.4` tag 和 release notes 为准。历史记录中的
-Stage 3/Stage 4 是阶段边界，不是当前支持矩阵；后续 cutover 与 CLI/App 收敛以
+Stage 3/Stage 4 是阶段边界；后续 cutover 与 CLI/App 收敛以
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
 的当前状态为准。`v0.5.4` 只交付了 Stage 3 的第一个 receipt-bound scheduler follow-up 切片；更广的
 CLI/App convergence 与 Stage 4 distribution cleanup 仍是后续方向。
@@ -233,18 +233,17 @@ CLI/App convergence 与 Stage 4 distribution cleanup 仍是后续方向。
 | 主题 | `v0.5.4` 已发布事实 | 深入入口 |
 | --- | --- | --- |
 | Control Plane | Turn/Host Todo settlement、quota commit、task-lease lifecycle、Vision refresh 与 scheduler heartbeat 等完整事务已迁入 typed TypeScript owner；Python facade 仍承担迁移期边界 | [迁移 RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/) |
-| Operator surface | Personal Workspace 已提供 Goal、Task、Chat 和 read-only status source 入口；界面不是新的事实源 | [Dashboard README](https://github.com/huangruiteng/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
+| Operator surface | Personal Workspace 已提供 Goal、Task、Chat 和 read-only status source 入口；界面不是新的事实源 | [Dashboard README](https://github.com/loopx-project/loopx/blob/v0.5.4/apps/presentation/dashboard/README.md) |
 | Host runtime | Codex、Claude Code、OpenCode、Pi、KunlunCode、DeepSeek Harness 与 custom runner 具有不同 activation/stop contract | [Runtime Connector Catalog](/loopx/docs/integrations/runtime-connector-catalog/) |
 | Capability / Provider | Capability 由 package-owned catalog entry、真实 command 和 durable validation 共同定义；Provider/Extension 不继承 Kernel authority | [Capability Catalog](/loopx/docs/capabilities/) |
 | Shared authority | file、NoKV 与 PostgreSQL provider 仍是 staged candidate；安装 Provider 不会改变默认本地 authority | [Shared Authority RFC](/loopx/docs/architecture/rfcs/shared-goal-authority-state-provider-v0/) |
 
-这张表是阅读导航，不是 release notes 的副本。某个 surface 是否可用，仍应从当前安装版本的
+这张表是阅读导航。某个 surface 是否可用，仍应从当前安装版本的
 `doctor`、`capability show`、对应 Host readback 和 versioned 文档判断。
 
 ### 从 `v0.5.4` 进入 `v1.0.0` Workspace
 
-`v1.0.0` 的产品里程碑是 Personal Workspace，而不是一次对所有 staged authority 或可选 Provider
-的整体提升。它把跨 Goal 总览、Agent lane、已完成任务、Capability 设置、verified reports、
+`v1.0.0` 的产品里程碑是 Personal Workspace。它把跨 Goal 总览、Agent lane、已完成任务、Capability 设置、verified reports、
 Goal Channel 与桌面恢复汇集到一个 operator surface，同时保留 CLI、typed Kernel 与项目状态的
 事实所有权。沿[1.0 Workspace 操作章](./workspace-v1.md)完成启动、readback、preview/apply/receipt、
 配置与停用验收，再进入项目接入或开发者贡献主线。
@@ -260,5 +259,5 @@ live operation 不进入当前主线。需要这些能力时，应回到官方�
 覆盖面更宽：`loopx/host_loop_activation.py` 的 `SUPPORTED_AGENT_TYPES` 列出 21 个类型，其中 9 个
 另有独立的 goal-mode 适配包（`claude_goal_mode`、`kunluncode_goal_mode`、`opencode_goal_mode`、
 `pi_goal_mode`、`zcode_goal_mode`、`agy_goal_mode`、`dsh_goal_mode`、`kiro_cli_goal_mode` 等）。
-路线选择是教学取舍，不是能力边界：其余 harness 的接入差异，以各自适配包和
+路线选择是教学取舍：其余 harness 的接入差异，以各自适配包和
 [协议文档](/loopx/docs/reference/protocols/) 为准。

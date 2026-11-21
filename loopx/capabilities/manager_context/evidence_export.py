@@ -44,6 +44,8 @@ def export_page(registry_path, runtime_root_arg, args):
         record=lambda _: None,
     )
     query = {"view": args.manager_view, "offset": args.offset, "limit": args.limit}
+    if args.query:
+        query["query"] = args.query
     if args.manager_view == "portfolio":
         query["include_stopped"] = args.include_stopped
     else:
@@ -53,6 +55,8 @@ def export_page(registry_path, runtime_root_arg, args):
     if getattr(args, "context_todo_id", None) is not None:
         query["todo_id"] = args.context_todo_id
     result = inspector.read(TOOL_NAME, query)
+    if args.manager_view == "todos" and args.query and result.get("ok"):
+        result["query"] = args.query
     for row in result.get("rows", []):
         row.setdefault("goal_id", query.get("goal_id"))
     result["schema_version"] = "manager_evidence_page_v1"

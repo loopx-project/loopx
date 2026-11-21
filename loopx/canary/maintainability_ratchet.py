@@ -6,9 +6,12 @@ import ast
 from collections import Counter
 from importlib.util import resolve_name
 import json
+import os
 from pathlib import Path
 import subprocess
 from typing import Any, Mapping, Sequence
+
+from ..paths import display_path_text
 
 
 MAINTAINABILITY_REPORT_SCHEMA_VERSION = "control_plane_maintainability_report_v0"
@@ -209,18 +212,24 @@ def tracked_python_paths(repository_root: Path) -> set[Path]:
     # `-z` frames each pathname on NUL, so a path carrying U+0085/U+2028/U+2029
     # stays one record even in a repository that sets `core.quotePath=false`,
     # where `git ls-files` emits it raw and `str.splitlines()` would tear it.
+    # The read stays in bytes so the record's own identity survives: a text
+    # read turns a CR inside a legal name into LF and an undecodable record
+    # into U+FFFD, and the rebuilt path would not name the tracked file, so
+    # that module would silently leave the ratchet.
     completed = subprocess.run(
         ["git", "ls-files", "-z", "*.py"],
         cwd=repository_root,
         check=True,
-        text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE,
     )
-    return {
-        repository_root / relative_path
-        for relative_path in completed.stdout.split("\0")
-        if relative_path and (repository_root / relative_path).is_file()
-    }
+    paths: set[Path] = set()
+    for record in completed.stdout.split(b"\0"):
+        if not record:
+            continue
+        path = repository_root / os.fsdecode(record)
+        if path.is_file():
+            paths.add(path)
+    return paths
 
 
 def _dependency_finding(
@@ -236,12 +245,14 @@ def _dependency_finding(
     if imported_name:
         identity += f":{imported_name}"
     return {
-        "id": _finding_id("dependency_debt", identity),
+        "id": _finding_id("dependency_debt", display_path_text(identity)),
         "category": "dependency_debt",
         "rule": rule,
-        "path": path.relative_to(repository_root).as_posix(),
-        "source": source,
-        "target": target,
+        # A name Git can hold but UTF-8 cannot encode would otherwise write
+        # bytes no JSON reader can parse; the label keeps the record locatable.
+        "path": display_path_text(path.relative_to(repository_root).as_posix()),
+        "source": display_path_text(source),
+        "target": display_path_text(target),
         **({"imported_name": imported_name} if imported_name else {}),
     }
 
@@ -459,10 +470,14 @@ def collect_oversized_decision_functions(
             identity = f"{module}:{qualified_name}"
             findings.append(
                 {
-                    "id": _finding_id("oversized_decision_function", identity),
+                    "id": _finding_id(
+                        "oversized_decision_function", display_path_text(identity)
+                    ),
                     "category": "oversized_decision_function",
-                    "path": path.relative_to(repository_root).as_posix(),
-                    "module": module,
+                    "path": display_path_text(
+                        path.relative_to(repository_root).as_posix()
+                    ),
+                    "module": display_path_text(module),
                     "symbol": qualified_name,
                     "line": function.lineno,
                     "metrics": {
@@ -615,10 +630,10 @@ def collect_module_metric_findings(
             continue
         findings.append(
             {
-                "id": _finding_id("module_metric_budget", relative),
+                "id": _finding_id("module_metric_budget", display_path_text(relative)),
                 "category": "module_metric_budget",
-                "path": relative,
-                "module": _module_name(path, package_root),
+                "path": display_path_text(relative),
+                "module": display_path_text(_module_name(path, package_root)),
                 "metrics": metrics,
                 "metric_ceilings": ceilings,
                 "regressions": regressions,
@@ -692,9 +707,11 @@ def diff_scoped_module_ceiling_violations(
         if crossed_inherited_ceiling and head_ceiling < head_lines:
             violations.append(
                 {
-                    "id": _finding_id("module_metric_budget", relative),
+                    "id": _finding_id(
+                        "module_metric_budget", display_path_text(relative)
+                    ),
                     "category": "module_metric_budget",
-                    "path": relative,
+                    "path": display_path_text(relative),
                     "base_lines": 0 if base_lines is None else len(base_lines.splitlines()),
                     "base_ceiling": base_ceiling,
                     "head_lines": head_lines,
@@ -825,7 +842,7 @@ def build_control_plane_maintainability_report(
     )
     return {
         "schema_version": MAINTAINABILITY_REPORT_SCHEMA_VERSION,
-        "repository_root": str(repository_root),
+        "repository_root": display_path_text(repository_root),
         "policy": {
             "decision_statement_limit": DECISION_STATEMENT_LIMIT,
             "decision_point_limit": DECISION_POINT_LIMIT,
@@ -848,6 +865,33 @@ def build_control_plane_maintainability_report(
         },
         **evaluation,
     }
+
+
+def completed_maintainability_failure_paths(report: Mapping[str, Any]) -> list[str]:
+    """Return attributable failed findings from a completed structured report."""
+
+    if report.get("schema_version") != MAINTAINABILITY_REPORT_SCHEMA_VERSION or report.get("ok") is not False:
+        return []
+    # Invalid or stale policy entries do not supply attributable finding paths.
+    if report.get("invalid_exceptions") != [] or report.get("stale_exceptions") != []:
+        return []
+
+    paths: set[str] = set()
+    for field, count_field in (
+        ("unreviewed_findings", "unreviewed_count"),
+        ("magnitude_regressions", "magnitude_regression_count"),
+    ):
+        findings = report.get(field)
+        if not isinstance(findings, list) or len(findings) != report.get(count_field):
+            return []
+        for finding in findings:
+            path = finding.get("path") if isinstance(finding, dict) else None
+            if not isinstance(path, str) or not path.strip():
+                return []
+            paths.add(path)
+            if finding.get("category") == "module_metric_budget":
+                paths.add(f"loopx/canary/{MODULE_METRIC_BASELINE_PATH.name}")
+    return sorted(paths)
 
 
 def render_control_plane_maintainability_report(payload: Mapping[str, Any]) -> str:

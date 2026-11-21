@@ -194,6 +194,85 @@ def test_multiple_future_waits_keep_the_original_unbound_turn_quiet(
     assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("scenario", ["before_due", "successor_due", "monitor_due", "unproven"])
+def test_watch_only_monitor_preserves_dated_successor_wait(
+    tmp_path, isolated_effect, monkeypatch, provider, scenario,
+):
+    past = "2026-01-01T00:00:00Z"
+    monitor = "todo_watch_only"
+    monitor_due = past if scenario == "monitor_due" else FUTURE.removeprefix("resume_at:")
+    resume = f"resume_at:{past}" if scenario == "successor_due" else FUTURE
+    if scenario == "unproven":
+        resume = "capacity_available:external_runner"
+    registry, runtime, state = fixture(tmp_path, resume)
+    review = "todo_independent_review"
+    with state.open("a", encoding="utf-8") as output:
+        output.write(
+            "\n- [ ] [P1] Keep the independent review at its own scheduled instant.\n"
+            f"  <!-- loopx:todo todo_id={review} status=deferred claimed_by={AGENT} "
+            "task_class=advancement_task action_kind=validate resume_when=resume_at:2099-01-02T00:00:00Z -->\n"
+            "\n- [ ] [P1] Observe feedback at its own scheduled instant.\n"
+            f"  <!-- loopx:todo todo_id={monitor} status=open claimed_by={AGENT} "
+            "task_class=continuous_monitor action_kind=external_evidence_poll "
+            f"target_key=synthetic-feedback cadence=24h next_due_at={monitor_due} "
+            f"watch_only=true unblocks_todo_id={TODO} -->\n"
+        )
+    vision = runtime / f"goals/{GOAL}/runs/vision.json"
+    run = json.loads(vision.read_text())
+    run["agent_vision"]["todo_delta"] = [f"retain:{TODO}", f"retain:{review}"]
+    vision.write_text(json.dumps(run), encoding="utf-8")
+    index = vision.parent / "index.jsonl"
+    index.write_text(json.dumps({**run, "json_path": str(vision)}) + "\n", encoding="utf-8")
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    original = state.read_bytes()
+    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--available-capability", "network", "--available-capability", "external_evidence_poll",
+            "--turn-instance-id")
+    details = ("--include-detail", "agent-todos") if scenario == "unproven" else ()
+    saved_alias = ("--turn-envelope",) if details else ()
+    rc, first = cli(registry, runtime, *args, "watch-first", *details, *saved_alias)
+    assert rc == 0, first
+    if scenario == "successor_due":
+        assert first["effective_action"] == "successor_replan_required"
+        assert first["selected_todo"]["todo_id"] == TODO
+    elif scenario == "monitor_due":
+        assert first["effective_action"] == "normal_run"
+        assert first["work_lane_contract"]["lane"] == "continuous_monitor"
+        assert first["selected_todo"]["todo_id"] == monitor
+    elif scenario == "before_due":
+        assert first["heartbeat_receipt"]["status"] == "committed"
+        rc, replay = cli(registry, runtime, *args, "watch-first")
+        assert rc == 0, replay
+        assert replay["heartbeat_receipt"]["status"] == "replayed"
+        rc, later = cli(registry, runtime, *args, "watch-second")
+        assert rc == 0, later
+        for guard in (first, replay, later):
+            assert guard["effective_action"] == "monitor_quiet_skip"
+            receipt = guard["heartbeat_receipt"]
+            assert receipt["stall_observation"] == "not_applicable"
+            assert "settlement_identity" not in receipt
+            assert guard["goal_frontier_projection"]["replan_required"] is False
+            assert guard["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] is True
+            assert guard["vision_wait_state"]["resume_when"] == FUTURE
+    else:
+        assert first["heartbeat_receipt"]["stall_observation"] == "appended"
+        rc, replay = cli(registry, runtime, *args, "watch-first", *details)
+        assert rc == 0, replay
+        assert replay["heartbeat_receipt"]["status"] == "replayed"
+        assert first["heartbeat_receipt"]["event_id"] == replay["heartbeat_receipt"]["event_id"]
+        for guard in (first, replay):
+            assert guard["effective_action"] == "monitor_quiet_skip"
+            assert guard["vision_wait_state"]["resume_when"] == resume
+            assert "settlement_identity" not in guard["heartbeat_receipt"]
+    assert state.read_bytes() == original
+    runs = [json.loads(line) for line in index.read_text().splitlines()]
+    assert not any(run.get("classification") == "quota_slot_spent" for run in runs)
+    assert sum(run.get("classification") == "quota_monitor_poll" for run in runs) == (scenario == "unproven")
+
+
 def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     registry, runtime, state = fixture(tmp_path, "resume_at:2026-01-01T00:00:00Z")
     initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
