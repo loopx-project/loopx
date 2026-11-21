@@ -51,16 +51,21 @@ activation, and enabled-extension readiness into one "installed" claim. The
 names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
-snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Before replacing the launcher, `loopx update --rollback
-previous` checks that the selected release can read the current authoritative
-Todos for registered local File and SQLite Goals. If it cannot verify the read,
-the running version and Goal state stay in place. Both the registry's configured
-runtime and an explicit runtime override participate in this check. Rollback
-holds the installer's existing promotion lock through Todo checks, activation,
-Doctor and recovery. Recovery restores only the launcher installed by that
-operation, preserving a later replacement. Use a release with a matching state
-backup if older code cannot read the current data. Use `loopx update plan
+snapshot, apply uses the public `stable` ref by default. Before replacing the
+launchers, `loopx update --rollback previous` checks that the selected release
+can read the current authoritative Todos for registered local File and SQLite
+Goals. Both the registry's configured runtime and an explicit runtime override
+participate in this check. Rollback switches `loopx` and an archive-managed
+`loopx-apply-rrule` to the selected release under the installer's promotion lock.
+A selected release must provide an executable scheduler helper if the helper
+is managed by that archive installation. The lock covers Todo checks, both
+replacements, Doctor and recovery. Rollback verifies each destination against
+its original inode immediately before replacing it. A changed destination,
+an interrupted or failed switch, or a failed core Doctor triggers recovery
+only for links still owned by the rollback. A failed extension Doctor leaves
+the selected release active so the extension can be repaired.
+Use a release with a matching state backup if older code cannot read the
+current data. Use `loopx update plan
 --ref main` and `loopx update apply --ref main` only for maintainer/dev archive
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.

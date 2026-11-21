@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import signal
 import subprocess
 import sys
 import threading
@@ -980,9 +981,10 @@ def test_update_preserves_selected_route_through_install_and_readback(tmp_path, 
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
+@pytest.mark.parametrize("with_helper", [False, True])
 @pytest.mark.parametrize("failed_stage", [None, "compatibility", "doctor", "extensions"])
 def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
-    tmp_path, monkeypatch, capsys, failed_stage,
+    tmp_path, monkeypatch, capsys, failed_stage, with_helper,
 ):
     from loopx.cli import main
     from loopx.self_update import render_update_plan_markdown
@@ -999,6 +1001,13 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
     launcher = tmp_path / "bin/loopx"
     launcher.parent.mkdir()
     launcher.symlink_to(current / "scripts/loopx")
+    helper = launcher.with_name("loopx-apply-rrule")
+    if with_helper:
+        for release in (current, target):
+            script = release / "scripts" / helper.name
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o755)
+        helper.symlink_to(current / "scripts" / helper.name)
     monkeypatch.setattr("loopx.self_update._user_loopx_bin", lambda *_: launcher)
     monkeypatch.setattr("loopx.self_update._user_releases_dir", lambda *_: releases)
     snapshot = doctor_payload()
@@ -1013,6 +1022,8 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
         stage = ("compatibility" if "authority-archive" in command else
                  "extensions" if "extension" in command else "doctor")
         calls.append((stage, command))
+        if with_helper and stage != "compatibility":
+            assert helper.resolve() == target / "scripts" / helper.name
         passed = stage != failed_stage
         return subprocess.CompletedProcess(
             command, 0 if passed else 1,
@@ -1053,6 +1064,171 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
         assert "cannot read current authority formats" not in rendered
     expected_release = current if failed_stage in {"compatibility", "doctor"} else target
     assert launcher.resolve() == expected_release / "scripts/loopx"
+    if with_helper:
+        assert helper.resolve() == expected_release / "scripts" / helper.name
+    else:
+        assert not os.path.lexists(helper)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
+@pytest.mark.parametrize(
+    "scenario", [
+        "missing_helper", "switch_failure", "switch_failure_without_cli",
+        "signal_after_cli", "signal_after_helper", "later_writer", "interrupted", "foreign", "split",
+    ],
+)
+def test_rollback_reconciles_only_managed_helpers(tmp_path, monkeypatch, scenario):
+    from loopx.self_update import execute_rollback_plan
+
+    releases = tmp_path / ".local/share/loopx/releases"
+    current, target, other = (releases / name for name in ("current", "target", "other"))
+    launcher = tmp_path / ".local/bin/loopx"
+    helper = launcher.with_name("loopx-apply-rrule")
+    launcher.parent.mkdir(parents=True)
+    for release in (current, target, other):
+        (release / "scripts").mkdir(parents=True)
+        for command in (launcher, helper):
+            script = release / "scripts" / command.name
+            if release == target and command == helper and scenario == "missing_helper":
+                continue
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o755)
+    first_helper = (
+        tmp_path / "custom-helper" if scenario == "foreign"
+        else (other if scenario == "split" else current) / "scripts" / helper.name
+    )
+    if scenario == "foreign":
+        first_helper.touch()
+    if scenario != "switch_failure_without_cli":
+        launcher.symlink_to(current / "scripts" / launcher.name)
+    helper.symlink_to(os.path.relpath(first_helper, helper.parent))
+    before = (os.readlink(launcher) if launcher.is_symlink() else None, os.readlink(helper))
+    fail_before = {"switch_failure": helper, "switch_failure_without_cli": launcher}.get(scenario)
+    interrupt_after = {"signal_after_cli": launcher, "signal_after_helper": helper}.get(scenario)
+    replace_file = os.replace
+
+    def replace(source, destination):
+        if destination == fail_before:
+            raise OSError("synthetic launcher switch failure")
+        replace_file(source, destination)
+        if destination == interrupt_after and destination.resolve() == target / "scripts" / destination.name:
+            signal.raise_signal(signal.SIGINT)
+
+    def run(command, **_kwargs):
+        if interrupt_after is not None:
+            assert "authority-archive" in command
+        if scenario == "interrupted" and command[-1] == "doctor":
+            raise KeyboardInterrupt
+        if scenario == "later_writer" and command[-1] == "doctor":
+            replacement = helper.with_name("newer-helper")
+            replacement.symlink_to(other / "scripts" / helper.name)
+            replace_file(replacement, helper)
+            return subprocess.CompletedProcess(command, 1, '{"ok":false}', "")
+        return subprocess.CompletedProcess(command, 0, '{"ok":true}', "")
+
+    monkeypatch.setattr("loopx.self_update.os.replace", replace)
+    monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    payload = {"ok": True, "plan": {"selected_release_root": str(target)}}
+    if scenario == "interrupted" or interrupt_after is not None:
+        with pytest.raises(KeyboardInterrupt):
+            execute_rollback_plan(payload, home=tmp_path)
+        assert (os.readlink(launcher), os.readlink(helper)) == before
+        return
+    result = execute_rollback_plan(payload, home=tmp_path)
+
+    if scenario == "switch_failure_without_cli":
+        assert not result["ok"]
+        assert not result["execution"]["restored_previous_on_failure"]
+        assert "restore_error" not in result["execution"]
+        assert not os.path.lexists(launcher)
+        assert os.readlink(helper) == before[1]
+    elif scenario in {"missing_helper", "switch_failure", "later_writer"}:
+        assert not result["ok"]
+        assert result["execution"]["restored_previous_on_failure"] is (scenario != "missing_helper")
+        assert os.readlink(launcher) == before[0]
+        if scenario == "later_writer":
+            assert helper.resolve() == other / "scripts" / helper.name
+        else:
+            assert os.readlink(helper) == before[1]
+    else:
+        assert result["ok"]
+        assert launcher.resolve() == target / "scripts" / launcher.name
+        if scenario == "foreign":
+            assert os.readlink(helper) == before[1]
+        else:
+            assert helper.resolve() == target / "scripts" / helper.name
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX archive rollback")
+@pytest.mark.parametrize("same_target", [False, True])
+@pytest.mark.parametrize("during_restore", [False, True], ids=["activation", "recovery"])
+def test_rollback_preserves_concurrent_helper_replacement(tmp_path, monkeypatch, same_target, during_restore):
+    from loopx.self_update import execute_rollback_plan
+
+    releases = tmp_path / ".local/share/loopx/releases"
+    current, target = releases / "current", releases / "target"
+    launcher = tmp_path / ".local/bin/loopx"
+    helper = launcher.with_name("loopx-apply-rrule")
+    launcher.parent.mkdir(parents=True)
+    for release in (current, target):
+        scripts = release / "scripts"
+        scripts.mkdir(parents=True)
+        for name in (launcher.name, helper.name):
+            script = scripts / name
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o755)
+    launcher.symlink_to(current / "scripts" / launcher.name)
+    helper.symlink_to(current / "scripts" / helper.name)
+    owner_release = target if during_restore else current
+    replacement_target = (
+        owner_release / "scripts" / helper.name if same_target else tmp_path / "independent-rrule"
+    )
+    replacement_stat = None
+    replace_file = os.replace
+    create_symlink = Path.symlink_to
+
+    def replace_helper():
+        nonlocal replacement_stat
+        new_helper = helper.with_name("newer-helper")
+        new_helper.symlink_to(replacement_target)
+        replace_file(new_helper, helper)
+        replacement_stat = helper.lstat()
+
+    def replace(source, destination):
+        replace_file(source, destination)
+        if during_restore:
+            return
+        if destination == launcher and launcher.resolve() == target / "scripts" / launcher.name:
+            replace_helper()
+        elif destination == helper and helper.resolve() == target / "scripts" / helper.name:
+            raise OSError("synthetic interruption after the helper rename")
+
+    def symlink_to(link, link_target, target_is_directory=False):
+        create_symlink(link, link_target, target_is_directory=target_is_directory)
+        if during_restore and link.name == helper.name and Path(link_target) == current / "scripts" / helper.name:
+            replace_helper()
+
+    def run(command, **_kwargs):
+        if "authority-archive" in command:
+            return subprocess.CompletedProcess(command, 0, '{"ok":true}', "")
+        assert during_restore and command[-1] == "doctor"
+        return subprocess.CompletedProcess(command, 1, '{"ok":false}', "")
+
+    monkeypatch.setattr("loopx.self_update.os.replace", replace)
+    monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    monkeypatch.setattr(Path, "symlink_to", symlink_to)
+    result = execute_rollback_plan(
+        {"ok": True, "plan": {"selected_release_root": str(target)}}, home=tmp_path,
+    )
+    assert not result["ok"] and result["execution"]["restored_previous_on_failure"]
+    assert launcher.resolve() == current / "scripts" / launcher.name
+    assert replacement_stat is not None and os.path.samestat(helper.lstat(), replacement_stat)
+    assert helper.resolve() == replacement_target
+    error = result["execution"]["error"]
+    if during_restore:
+        assert "failed runtime checks" in error
+    else:
+        assert f"launcher changed during rollback checks ({helper.name})" in error
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")

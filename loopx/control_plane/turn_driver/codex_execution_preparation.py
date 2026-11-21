@@ -1,4 +1,4 @@
-"""Codex lifecycle-hook executor for the typed execution-preparation action.
+"""Managed Host lease preparation and the Codex lifecycle-hook adapter.
 
 The TypeScript control plane remains the decision owner.  This adapter accepts
 only its exact ordinary claim, executes it through the public CLI, and proves

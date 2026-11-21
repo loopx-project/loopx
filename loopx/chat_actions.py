@@ -1265,6 +1265,12 @@ class ChatActionService(
             }), receipt={})
             return {"proposal": stale, "turn": None}
         todo_id = _opaque(result.get("todo_id"), field="todo_id")
+        if parameters.get("signal_scope") is not None:
+            from .capabilities.native_chat.steward_monitor import write_steward_monitor_scope
+            target_key = str(parameters.get("target_key") or "").strip()
+            if not target_key:
+                raise ValueError("signal_scope requires target_key")
+            write_steward_monitor_scope(source.runtime_root, goal_id, target_key, parameters["signal_scope"])
         receipt = {
             "receipt_id": _digest(
                 {"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}

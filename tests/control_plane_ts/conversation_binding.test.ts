@@ -2133,3 +2133,104 @@ test("antigravity and flexible-pool steward sessions recover pre-dispatch resume
       context_recovery: {...packet.context_recovery, failed_turn: {...failed, ...postDispatch}}}).recovery_candidate, false);
   }
 });
+
+for (const [kind, grant] of [["project", "workspace_write"], ["steward", "portfolio_read"]] as const) {
+  test(`${kind} loopback relay 401 failure (${grant}) recovers only while fresh relay readiness holds`, () => {
+    const selected = kind === "steward"
+      ? {...row, context_kind: "steward", grant, goal_ids: []}
+      : {...row, context_kind: "project", grant};
+    const availableProjects = [kind === "steward" ? project : {...project, grant}];
+    const configured = planConversationBinding({...request, binding: selected, available_projects: availableProjects}).state;
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: availableProjects, ...source}).context;
+    const session = {session_id: "original", goal_id: kind === "steward" ? "loopx-manager" : null,
+      agent_id: "codex", upstream_mode: "chat", status: "ready",
+      upstream_thread_id: "native", active_turn_id: null, manager_context_version: 23,
+      channel_id: `${kind === "steward" ? "manager.external.native" : "project.external"}.${row.binding_id}.${source.source_ref}`,
+      ...(kind === "steward" ? {steward_context: context} : {project_context: context})};
+    const failed = {session_id: "original", turn_id: "failed", status: "failed", delta_count: 0,
+      response: null, error_code: "upstream_transport_failure", upstream_turn_id: "native-failed",
+      completed_at: "2026-01-01T00:00:00Z"};
+    const observedAt = Date.parse("2026-01-01T00:10:00Z") / 1000;
+    const observed = {thread_id: "native", turn_id: "native-failed",
+      codex_error_info: {httpConnectionFailed: {httpStatusCode: 401}},
+      loopback_relay_auth_failure: true, only_pre_execution_items: true, only_original_user_item: true,
+      relay_transport_ready: true, relay_observed_at: observedAt};
+    const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
+      message: "Original synthetic request", origin: "lark",
+      binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+      binding: selected, current_session: session, context_recovery: {version: 23, failed_turn: failed,
+        observed_at: "2026-01-01T00:10:00Z", steering_observed: false, source_verified: true, native_observation: observed}};
+    const plan = planBoundConversationRequest(packet);
+    assert.equal(plan.recovery_eligible, true);
+    assert.equal(plan.routing_attempt, 1);
+    assert.equal(plan.client_turn_id, `external-${"f".repeat(24)}-recovery-23-routing-1`);
+    for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+      {later_equivalent_input_present: true},
+      {native_observation: {...observed, relay_transport_ready: false}},
+      {native_observation: {...observed, relay_observed_at: observedAt - 121}},
+      {native_observation: {...observed, relay_observed_at: observedAt + 1}},
+      {native_observation: {...observed, loopback_relay_auth_failure: false}},
+      {native_observation: {...observed, only_pre_execution_items: false}},
+      {native_observation: {...observed, codex_error_info: {httpConnectionFailed: {httpStatusCode: 403}}}},
+      {native_observation: {...observed, codex_error_info: {responseStreamDisconnected: {httpStatusCode: 401}}}},
+      {failed_turn: {...failed, error_code: "host_gate"}}]) {
+      assert.notEqual(planBoundConversationRequest({...packet,
+        context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+    }
+  });
+}
+
+test("antigravity steward pre-dispatch active-cascade resume_failed after manager context recovers when cascade is idle", () => {
+  const antigravityBinding = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
+  const configured = planConversationBinding({...request, binding: antigravityBinding}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity",
+    executor_endpoint_id: "antigravity", upstream_mode: "default", status: "ready",
+    upstream_thread_id: "antigravity-native", active_turn_id: null,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+  const ref = "d".repeat(24);
+  const activeError = "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.";
+  const failed = {session_id: "original", turn_id: "prep-failed", client_turn_id: `external-${ref}`,
+    message: "Daily report and monitor structure", origin: "lark", status: "failed", delta_count: 0, response: null,
+    upstream_turn_id: null, started_at: "2026-01-01T00:00:00Z", first_event_at: "2026-01-01T00:00:01Z",
+    error_code: "resume_failed", error: activeError, completed_at: "2026-01-01T00:00:30Z"};
+  const proof = {kind: "core_runtime_preparation_failure", session_id: "original", turn_id: failed.turn_id,
+    events: [
+      {event_id: "1", kind: "turn.queued", delivery_mode: "session_queue"},
+      {event_id: "2", kind: "agent.phase", phase: "manager_context"},
+      {event_id: "3", kind: "manager.context", schema_version: "manager_turn_context_v1"},
+      {event_id: "4", kind: "turn.failed", error_code: failed.error_code, message: activeError},
+    ]};
+  const packet = {
+    request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+      message: failed.message, origin: "lark", binding_id: row.binding_id, session_id: "original",
+      turn_id: failed.turn_id, source},
+    binding: antigravityBinding,
+    current_session: session,
+    context_recovery: {version: 23, failed_turn: failed, observed_at: "2026-01-01T00:02:30Z",
+      source_verified: true, steering_observed: false, stop_observed: false, attachments_present: false,
+      native_result_present: false, queued_input_present: false, later_equivalent_input_present: false,
+      preparation_scope_available: true, preparation_observation: proof},
+  };
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_candidate, true);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.preparation_attempt, 1);
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-23-preparation-1`);
+  assert.equal(planBoundConversationRequest({...packet,
+    context_recovery: {...packet.context_recovery, preparation_scope_available: false}}).recovery_eligible, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    binding: {...antigravityBinding, executor_endpoint_id: "codex"},
+    current_session: {...session, agent_id: "codex", executor_endpoint_id: "codex", upstream_mode: "chat"}}).recovery_candidate, false);
+  for (const mutation of [{execution_dispatch: "committed"}, {upstream_turn_id: "native-1"}, {delta_count: 1}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, failed_turn: {...failed, ...mutation}}}).recovery_candidate, false);
+  }
+  assert.equal(planBoundConversationRequest({...packet,
+    context_recovery: {...packet.context_recovery,
+      preparation_observation: {...proof, events: [proof.events[0], proof.events[1], proof.events[3]]}}}).recovery_candidate, false);
+});

@@ -585,6 +585,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                         model_auth_home=model_auth_home,
+                        runtime_root=self.controller.coordination_runtime_root,
+                        consumer="steward" if session.get("steward_context") else "worker",
                         read_only_review=bool(plan.get("read_only_review")) and not quota_answer,
                         thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                     if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
@@ -728,10 +730,27 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 # Preparation never starts a model request. Check the same
                 # optional transport owner before reserving a bounded retry.
                 if session.get("agent_id") == "antigravity":
-                    from .antigravity_adapter import discover_antigravity_language_server
+                    from .antigravity_adapter import _rpc_post, discover_antigravity_language_server
 
-                    if discover_antigravity_language_server(deadline=time.monotonic() + 3.0) is None:
+                    discovered = discover_antigravity_language_server(deadline=time.monotonic() + 3.0)
+                    if discovered is None:
                         return False
+                    cascade_id = str(session.get("upstream_thread_id") or "").strip()
+                    if cascade_id:
+                        from ...chat_agent import CodexChatAgentError
+
+                        try:
+                            trajectory = _rpc_post(
+                                str(discovered["url"]),
+                                str(discovered["csrf_token"]),
+                                "GetCascadeTrajectory",
+                                {"cascadeId": cascade_id},
+                                timeout=2.5,
+                            )
+                        except CodexChatAgentError:
+                            return False
+                        if not isinstance(trajectory, dict) or trajectory.get("status") != "CASCADE_RUN_STATUS_IDLE":
+                            return False
                 else:
                     from .codex_auth import native_api_transport
                     native_api_transport(self.controller.coordination_runtime_root,

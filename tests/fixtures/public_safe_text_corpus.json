@@ -122,6 +122,12 @@
       "template": "metrics published at https://example.com/run-7/metrics.json",
       "shape": "remote_location_undecided",
       "note": "The internal-state tier does not decide URLs: the rule these four owners enforced before never rejected one either, and per-face URL policy is the caller-migration work still open in #5136."
+    },
+    {
+      "id": "ordinary_public_url_home_directory_segment",
+      "template": "docs live at https://docs.example.test./Users/alice",
+      "shape": "remote_location_undecided",
+      "note": "A home-directory name inside an http(s) URL path is URL syntax; only a file:// or path: reference is a local path."
     }
   ],
   "private_looking": [
@@ -369,6 +375,48 @@
       "template": "{SECRET_LOWER} is {SHORT_LETTER_RUN}",
       "shape": "credential_word_only",
       "note": "The contract's stated limit, pinned rather than argued: a letter-only run of fifteen characters or fewer beside the label, with no quotes and no assignment punctuation, is prose to this owner. The publication tier still rejects the mention, and the tier documents itself as not a credential-storage exemption. Fifteen letters is one below the ceiling."
+    }
+  ],
+  "local_path_shapes": [
+    {
+      "id": "file_url_home",
+      "value": "see file:///Users/alice/goal.md",
+      "public_safe_local_path": true,
+      "publication_tier_path": true,
+      "classify_path": true,
+      "note": "Presentation accepted this before the migration; the shared owner and the public-output guard already rejected it."
+    },
+    {
+      "id": "path_prefixed_home",
+      "value": "path:/Users/alice/goal.md",
+      "public_safe_local_path": true,
+      "publication_tier_path": true,
+      "classify_path": true,
+      "note": "The direction-3 prefixed form; presentation accepted it before the migration."
+    },
+    {
+      "id": "slash_run_tmp",
+      "value": "///tmp/a.log",
+      "public_safe_local_path": true,
+      "publication_tier_path": false,
+      "classify_path": true,
+      "note": "Presentation rejected this before the migration while the owner did not recognize it; the shared multi-slash arm closes that gap."
+    },
+    {
+      "id": "slash_run_home",
+      "value": "//Users/alex/x",
+      "public_safe_local_path": true,
+      "publication_tier_path": true,
+      "classify_path": true,
+      "note": "The publication tier already recognized /Users/ inside the run; the local-path owner did not."
+    },
+    {
+      "id": "boundary_assignment_private",
+      "value": "x=/private/a",
+      "public_safe_local_path": true,
+      "publication_tier_path": false,
+      "classify_path": true,
+      "note": "The text-owner publication helper does not carry the boundary-assignment shape; the public-output guard and presentation do, and classify_private_text names it."
     }
   ]
 }

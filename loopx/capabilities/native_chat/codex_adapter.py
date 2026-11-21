@@ -18,6 +18,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Callable, Mapping, TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ...chat_agent import (
     CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError,
@@ -446,6 +447,63 @@ def compact_native_history(
             return import_headroom
 
 
+def _loopback_api_fallback_auth_failure(error: Any) -> dict[str, Any] | None:
+    """Return the typed error payload only for local OpenAI relay 401 failures."""
+    info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+    if not isinstance(info, dict) or len(info) != 1:
+        return None
+    variant, detail = next(iter(info.items()))
+    if (variant not in {"httpConnectionFailed", "responseStreamConnectionFailed"}
+            or not isinstance(detail, dict) or type(detail.get("httpStatusCode")) is not int
+            or detail.get("httpStatusCode") != 401):
+        return None
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str) or "OpenAI API fallback request could not complete., url: " not in message:
+        return None
+    _, url_part = message.rsplit(", url: ", 1)
+    url_token = url_part.split()[0] if url_part.split() else ""
+    parsed = urlsplit(url_token)
+    if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+            or parsed.port is None or not 1024 <= parsed.port <= 65535
+            or parsed.path not in {"/v1/responses", "/steward/v1/responses"}):
+        return None
+    return info
+
+
+def _loopback_relay_transport_ready(runtime_root: Path, codex_home: Path, consumer: str) -> tuple[bool, float]:
+    """Verify current native-account or relay health for recovering a relay-401 Turn."""
+    from loopx_codex_provider_routing import openai_relay
+    from loopx_codex_provider_routing.native import NativeAccounts
+    from loopx_codex_provider_routing.native_host import HostError
+
+    owner = NativeAccounts(runtime_root)
+    now = float(int(time.time()))
+    try:
+        state = owner._load()
+        adapter = state.get("adapter")
+        profile_home = adapter.get("profile", {}).get("home") if isinstance(adapter, dict) else None
+        if not isinstance(profile_home, str) or not profile_home:
+            return False, now
+        if Path(profile_home).expanduser().resolve() != codex_home.expanduser().resolve():
+            return False, now
+        transport = owner.model_transport(codex_home=codex_home, consumer=consumer)
+        if transport is not None:
+            relay = openai_relay.route(owner)
+            return bool(openai_relay.healthy(relay, consumer=consumer) and owner.api_keys().candidates("")), now
+        status = owner.status()
+        if status.get("available") is not True or status.get("recovery_required") is not False or status.get("login_matches") is not True:
+            return False, now
+        if status.get("api_active") is True:
+            relay = openai_relay.route(owner)
+            return bool(openai_relay.healthy(relay, consumer=consumer) and owner.api_keys().candidates("")), now
+        active_slot = status.get("active_slot")
+        accounts = {row.get("slot"): row for row in (status.get("accounts") or []) if isinstance(row, dict)}
+        return (isinstance(active_slot, str) and bool(active_slot)
+                and accounts.get(active_slot, {}).get("availability") == "available"), now
+    except (HostError, ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return False, now
+
+
 def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
     """Observe a historical pre-execution failure without resuming it.
 
@@ -483,6 +541,10 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             # can use the compaction exception to that inventory.
             return {"codex_error_info": "other", "pre_execution_routing_timeout": True,
                     "latest_routing_failure": ids[0] == turn_id}
+        loopback_auth_info = _loopback_api_fallback_auth_failure(selected.get("error"))
+        if loopback_auth_info is not None:
+            return {"codex_error_info": loopback_auth_info, "loopback_relay_auth_failure": True,
+                    "latest_routing_failure": ids[0] == turn_id}
         info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
         # `other` is evidence of a failed native request, not permission to
         # retry it. The typed admission owner separately decides whether
@@ -503,7 +565,8 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         if proof is None:
             return None
         items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
-        routing = proof.get("pre_execution_routing_timeout") is True
+        routing = (proof.get("pre_execution_routing_timeout") is True
+                   or proof.get("loopback_relay_auth_failure") is True)
         allowed = ({"userMessage", "contextCompaction"}
             if routing and proof["latest_routing_failure"] else {"userMessage"})
         ids: set[str] = set()
@@ -801,7 +864,9 @@ class CodexAppServerAdapter:
                                    allow_untyped_result_review: bool = False,
                                    known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
-                                   model_auth_home: Path | None = None) -> dict[str, Any] | None:
+                                   model_auth_home: Path | None = None,
+                                   runtime_root: Path | None = None,
+                                   consumer: str = "worker") -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
         The initialized stdio client is not a listener or a model runner. It
@@ -858,6 +923,14 @@ class CodexAppServerAdapter:
                                 quota_observed_at=now)
                         except (ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                             proof["quota_available"] = False
+                    elif proof.get("loopback_relay_auth_failure") is True:
+                        proof["relay_transport_ready"] = False
+                        if runtime_root is not None:
+                            try:
+                                ready, observed_at = _loopback_relay_transport_ready(runtime_root, codex_home, consumer)
+                                proof.update(relay_transport_ready=ready, relay_observed_at=observed_at)
+                            except (ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                                proof["relay_transport_ready"] = False
                     return proof
                 if time.monotonic() >= deadline:
                     break
