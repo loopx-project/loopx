@@ -49,12 +49,12 @@ from .capabilities.steward_executor import (
     load_effective_steward_executor_defaults,
     normalize_manager_executor_allocation,
 )
-from .chat_agent import (
+from .chat import (
     CONVERSATION_INTENT_RESOLUTION_INSTRUCTION,
     TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION,
     WORK_RESULT_VERIFICATION_INSTRUCTION,
-    CodexChatAgentError,
 )
+from .chat_agent import CodexChatAgentError
 from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     CHAT_SESSION_MODE_MANAGED,
