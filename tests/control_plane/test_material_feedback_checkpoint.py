@@ -56,7 +56,9 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     def read_stage(command):
         argv = shlex.split(command)
         assert argv[:3] == [sys.executable, "-m", "loopx.entrypoint"]
-        assert argv[3:8] == ["--format", "json", "quota", "replan-view", "--decision-file"]
+        assert argv[3:6] == ["--format", "json", "quota"]
+        assert argv[6] in {"replan-view", "context-read"}
+        assert argv[7] == ("--decision-file" if argv[6] == "replan-view" else "--reference-file")
         result = subprocess.run(argv, cwd=project, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 

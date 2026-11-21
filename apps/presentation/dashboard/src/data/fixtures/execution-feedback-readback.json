@@ -1,0 +1,331 @@
+{
+  "goal_id": "feedback-readback",
+  "display_name": "Method feedback",
+  "events": [
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "node",
+      "recorded_at": "2026-01-01T00:00:00Z",
+      "title": "Compare a method and its actual execution",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "Read the recorded method, deviation and result; acceptance stays independent.",
+      "result_id": "method-choice",
+      "node_kind": "area",
+      "status": "open",
+      "event_id": "8b0bf5d2d23f9d6f"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:01:00Z",
+      "title": "Observation 0",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-0",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "fe63a49692bf13ca"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:02:00Z",
+      "title": "Observation 1",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-1",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "4a83ea109c7241d1"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:03:00Z",
+      "title": "Observation 2",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-2",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "28ab31ca7421ba95"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:04:00Z",
+      "title": "Observation 3",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-3",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "42dd1e21cfdfd704"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:05:00Z",
+      "title": "Observation 4",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-4",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "f6e4e52febefe975"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:06:00Z",
+      "title": "Observation 5",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-5",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "437d3b06c356a3e4"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:07:00Z",
+      "title": "Observation 6",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-6",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "e351ef2cb007f74e"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:08:00Z",
+      "title": "Observation 7",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-7",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "8517c1d3e3b15aea"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:09:00Z",
+      "title": "Observation 8",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-8",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "bf7613aaa94c7698"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:10:00Z",
+      "title": "Observation 9",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-9",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "e2e4af3af1a5b077"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:11:00Z",
+      "title": "Observation 10",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-10",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "event_id": "9025be02e1a9ab01"
+    },
+    {
+      "schema_version": "loopx_explore_result_event_v0",
+      "goal_id": "feedback-readback",
+      "event_kind": "finding",
+      "recorded_at": "2026-01-01T00:12:00Z",
+      "title": "Recorded method change",
+      "boundary": {
+        "raw_task_text_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_trajectory_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "credential_values_recorded": false,
+        "absolute_paths_recorded": false
+      },
+      "summary": "A negative result remains negative. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable. The same long scope boundary remains readable.",
+      "agent_id": "reader-agent",
+      "evidence_refs": [
+        "artifact:negative-result"
+      ],
+      "result_id": "result-11",
+      "node_id": "method-choice",
+      "status": "refuted",
+      "execution_observation": {
+        "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "change_reason": "The counterexample ruled out the planned search.",
+        "elapsed_seconds": 12.5,
+        "evidence_refs": [
+          "artifact:negative-result"
+        ],
+        "executed_method_id": "targeted-check",
+        "input_revision": "input-v1",
+        "limit_seconds": 60,
+        "planned_method_id": "broad-search",
+        "result_candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_ref": "artifact:negative-result",
+        "schema_version": "explore_execution_observation_v0",
+        "search_iterations": null,
+        "stop_reason": null
+      },
+      "event_id": "686464f745c278cf"
+    }
+  ]
+}

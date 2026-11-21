@@ -393,6 +393,12 @@ def guard_first_writeback_execution(
         yield
         return
 
+    # The typed receipt owner positively admits a non-delivery planning review.
+    # A selected Todo supplies context; it is not business execution. Explicit
+    # or previously prepared execution proofs retain the original lease gate.
+    planning_only = (getattr(settlement, "replan_execution_pending", False)
+                     and not prepared_required and requested_proof is None)
+
     # Legacy spend acquires maintenance before the run index. Try maintenance
     # once here so this order cannot block a competing accounting process.
     with ExitStack() as locks:
@@ -402,33 +408,36 @@ def guard_first_writeback_execution(
             operation="refresh-state-execution",
         ))
         require_shadow_primary_write_allowed(runtime_root, goal_id)
-        snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
-        if snapshot is None:
-            raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
-        if prepared_required and snapshot.get("handoff_mode") != "hard_lease":
-            raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")
-        if snapshot.get("handoff_mode") == "hard_lease":
-            if not _hard_lease_execution_bound(
-                snapshot=snapshot,
-                goal_id=goal_id,
-                todo_id=todo_id,
-                agent_id=agent_id,
-                requested_proof=requested_proof,
-                settlement=settlement,
-                allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
-                validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
-            ):
-                raise RefreshTaskLeaseUnavailable(
-                    "The original writeback needs a current task lease recorded for this Turn. "
-                    "Read the same Todo and Turn through its current guard before retrying."
-                )
-            if (
-                snapshot["todo"].get("status") == "done"
-                and prepared_required
-                and settlement.completion_event is None
-                and not _todo_superseded_for_turn(settlement, todo_id=todo_id, agent_id=agent_id)
-            ):
-                raise RefreshTaskLeaseUnavailable("The completed Todo is missing this Turn's completion receipt.")
+        snapshot = None
+        if not planning_only:
+            snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+            if snapshot is None:
+                raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
+            if prepared_required and snapshot.get("handoff_mode") != "hard_lease":
+                raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")
+            if snapshot.get("handoff_mode") == "hard_lease":
+                if not _hard_lease_execution_bound(
+                    snapshot=snapshot,
+                    goal_id=goal_id,
+                    todo_id=todo_id,
+                    agent_id=agent_id,
+                    requested_proof=requested_proof,
+                    settlement=settlement,
+                    allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                    validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
+                ):
+                    raise RefreshTaskLeaseUnavailable(
+                        "The original writeback needs a current task lease recorded for this Turn. "
+                        "Read the same Todo and Turn through its current guard before retrying."
+                    )
+                if (
+                    snapshot["todo"].get("status") == "done"
+                    and prepared_required
+                    and settlement.completion_event is None
+                    and not _todo_superseded_for_turn(settlement, todo_id=todo_id, agent_id=agent_id)
+                ):
+                    raise RefreshTaskLeaseUnavailable("The completed Todo is missing this Turn's completion receipt.")
+        if planning_only or (snapshot is not None and snapshot.get("handoff_mode") == "hard_lease"):
             goal = locked_goal
             if goal is None:
                 source, _ = load_recommendation_source_goal(registry_path, goal_id)
