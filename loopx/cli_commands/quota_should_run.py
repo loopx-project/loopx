@@ -21,7 +21,6 @@ from ..control_plane.quota.heartbeat_receipt import (
 )
 from ..file_lock import LockAcquireTimeoutError
 from ..rollout_event_log import RolloutAppendPreconditionChanged
-from .quota_presentation import is_undeclared_json_quota_caller
 
 if TYPE_CHECKING:
     from .quota_action_selection import RequestedQuotaActionSelection
@@ -54,9 +53,7 @@ def dispatch_quota_turn_start_hooks(
     runtime_root_arg: str | None,
     lark_turn_start_hook_dispatcher: Callable[..., dict[str, object]] | None = None,
 ) -> tuple[dict[str, object] | None, bool]:
-    _, scheduler_context, _ = quota_module._export(
-        "validate_quota_command_context_request"
-    )(args)
+    quota_module._export("validate_quota_command_context_request")(args)
     if args.quota_command != "should-run":
         return None, False
     preview = bool(getattr(args, "dry_run", False))
@@ -99,10 +96,7 @@ def dispatch_quota_turn_start_hooks(
             )
         # A preview still needs the current local Inbox and preferences. These
         # hooks observe existing context without recording reads or delivery.
-        model_read = (
-            not getattr(args, "scheduler_observation", False)
-            and not is_undeclared_json_quota_caller(args, scheduler_context)
-        )
+        model_read = not getattr(args, "scheduler_observation", False)
         context_dispatch = dispatch_turn_start_hooks(
             (
                 turn_start_hook(
@@ -373,10 +367,7 @@ def execute_quota_should_run(
         agent_id=args.agent_id,
         todo_id=args.todo_id,
     )
-    complete_context = (
-        not getattr(args, "scheduler_observation", False)
-        and not is_undeclared_json_quota_caller(args, scheduler_context)
-    )
+    complete_context = not getattr(args, "scheduler_observation", False)
     payload = export("build_live_quota_should_run_decision")(
         status_payload,
         goal_id=args.goal_id,

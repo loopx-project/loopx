@@ -21,6 +21,10 @@ TypeScript `composeCompleteTurnDecision` owner。默认调用及兼容别名
 此展示选择分开。CLI 中选择 compactor 或 `buildTurnEnvelope` 的活跃分支删除。
 Status、plan 与 scheduler-observation 保留各自用途；本切片不退役历史 reader 或
 其他剩余调用方。
+普通 CLI 切换同时删除准入上下文收集和捕获前组合里仅为 JSON 调用保留的格式例外。
+调度观察继续使用独立的只读展示。公开运行时包独立核对已通过资格验收的默认契约。
+以 C1 为默认的发行包仍须通过受支持配置及匹配单会话的成果与全成本验收，才能采用。
+
 当前 model-behavior portfolio 的 should-run 输入也复用该完整来源 owner，不再把
 已退役 CLI compactor 当作产品默认路径。候选上下文、规划关系、任务续接与诊断事实
 保留。Crowded 回归的 pretty JSON 从压缩后的 86,172 字节变为完整的 121,318 字节

@@ -29,6 +29,13 @@ Full Goal material is collected independently of that presentation choice.
 The active CLI selection between its compactor and `buildTurnEnvelope` is
 removed. Status, plan and scheduler-observation retain their separate purposes;
 historical readers and other remaining callers are not retired by this slice.
+The ordinary CLI cutover removes the JSON-only format exception from guard
+context collection and from composition before capture. Scheduler observation
+continues to use its separate read-only projection. The public runtime artifact
+still checks its qualified default independently. An archive that exposes C1 as
+its default must pass the existing supported-profile and matched single-session
+outcome and full-cost qualification before adoption.
+
 The current model-behavior portfolio also composes its should-run inputs through
 this complete-source owner; it no longer exercises the retired CLI compactor as
 the product default. Candidate context, planning relations, task continuation and
