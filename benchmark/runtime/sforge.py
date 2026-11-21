@@ -20,7 +20,14 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
+from .codex import (
+    DEFAULT_REPLAN_AFTER_TURNS,
+    Execution,
+    codex_settings,
+    native_child_instructions,
+    normalize_epoch_prefetch_json,
+    prepare_codex_home,
+)
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .codex_readiness import native_readiness_budget
 from .harbor import (
@@ -46,13 +53,17 @@ _RUNTIME_CREDENTIAL_PLACEHOLDER = "runtime-managed-credential"
 
 def profile_execution(profile, *, task_entry=None, context_delivery=None,
                       turn_envelope=False, complete_turn=False,
-                      validation_command=None, native_child_limit=None):
+                      validation_command=None, native_child_limit=None,
+                      compact_direct_read=False, quiet_turn=False,
+                      epoch_prefetch_json=None):
     """Resolve the native experiment arm through the shared runtime contract."""
     if profile not in PROFILE_MODES:
         raise ValueError("Unknown benchmark worker profile")
     return Execution(
         mode=PROFILE_MODES[profile], task_entry=task_entry, context_delivery=context_delivery,
         turn_envelope=turn_envelope, complete_turn=complete_turn, native_child_limit=native_child_limit,
+        compact_direct_read=compact_direct_read, quiet_turn=quiet_turn,
+        epoch_prefetch_json=normalize_epoch_prefetch_json(epoch_prefetch_json),
         validation_command=() if validation_command is None else validation_command,
     )
 
@@ -130,13 +141,19 @@ class SForgeWorker(CodexAgent):
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
                  warm_start=None, research_sidecar: bool = False,
-                 native_result_scope: dict | None = None, complete_turn: bool = False):
+                 native_result_scope: dict | None = None, complete_turn: bool = False,
+                 compact_direct_read: bool = False, quiet_turn: bool = False,
+                 epoch_prefetch_json: str | dict | None = None,
+                 execution_yardstick_enabled: bool | None = None):
         super().__init__(config)
         self.execution = profile_execution(
             profile, task_entry=task_entry,
             context_delivery=context_delivery, turn_envelope=turn_envelope,
             complete_turn=complete_turn, validation_command=validation_command,
             native_child_limit=native_child_limit,
+            compact_direct_read=compact_direct_read,
+            quiet_turn=quiet_turn,
+            epoch_prefetch_json=epoch_prefetch_json,
         )
         self.turn_envelope = self.execution.turn_envelope
         self.context_delivery = self.execution.context_delivery
@@ -207,6 +224,12 @@ class SForgeWorker(CodexAgent):
             DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
             else planning_horizon_goal
         )
+        if execution_yardstick_enabled is not None:
+            if type(execution_yardstick_enabled) is not bool:
+                raise ValueError("execution_yardstick_enabled must be a boolean")
+            if not self.execution.uses_loopx:
+                raise ValueError("execution_yardstick_enabled requires a heartbeat profile or turn-resume")
+        self.execution_yardstick_enabled = execution_yardstick_enabled
         self.stride_strategy = stride_strategy
         self.checkpoint_request_path = None
         self.checkpoint_request = checkpoint_request
@@ -423,6 +446,12 @@ class SForgeWorker(CodexAgent):
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 **({"complete_turn": True} if self.execution.complete_turn else {}),
+                **({"compact_direct_read": True} if self.execution.compact_direct_read else {}),
+                **({"quiet_turn": True} if self.execution.quiet_turn else {}),
+                **({"epoch_prefetch_json": self.execution.epoch_prefetch_json}
+                   if self.execution.epoch_prefetch_json is not None else {}),
+                **({"execution_yardstick_enabled": self.execution_yardstick_enabled}
+                   if self.execution_yardstick_enabled is not None else {}),
                 context_delivery=self.context_delivery,
                 **({"execution_observation": self.execution_observation}
                    if self.execution_observation is not None else {}),
@@ -590,11 +619,23 @@ class SForgeWorker(CodexAgent):
                     # The sealed Goal, task graph, review counters and strategy
                     # are the continuing state. Do not bootstrap, seed another
                     # task, or reset an existing configuration during restore.
-                    if self.native_child_limit is not None:
+                    if self.execution_yardstick_enabled is not None:
+                        if self.native_child_limit is not None:
+                            retained = asyncio.run(self.runtime._loopx(
+                                self.environment, ["configure-goal", "--goal-id", self.runtime.goal_id], cwd=self.cwd,
+                            ))
+                            self.runtime._verify_native_child_configuration(
+                                retained.get("after") or retained.get("before") or {}
+                            )
+                        asyncio.run(self.runtime._apply_warm_start_yardstick(self.environment, cwd=self.cwd))
+                        asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
                         asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
-                    asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
-                    if self.native_child_limit is None:
-                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                    else:
+                        if self.native_child_limit is not None:
+                            asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                        asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
+                        if self.native_child_limit is None:
+                            asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                 else:
                     asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
                 if self.profile == "heartbeat-explore" and self.warm_start is None:

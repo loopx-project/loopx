@@ -16,6 +16,7 @@ from pathlib import Path
 
 from benchmark.runtime.codex import (
     Execution,
+    explicit_context_opt_ins,
     explicit_turn_display,
     prepare_codex_home,
     process_environment,
@@ -352,6 +353,9 @@ def turn_command(
           if execution.timeout_seconds is not None else []),
         "--validation-command-json",
         json.dumps(execution.validation_command),
+        *(["--epoch-prefetch-json", execution.epoch_prefetch_json]
+          if execution.epoch_prefetch_json is not None else []),
+        *(["--quiet-turn"] if execution.quiet_turn else []),
         "--available-capability",
         "shell",
         "--available-capability",
@@ -585,6 +589,7 @@ def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
     display = explicit_turn_display(env)
+    context_opt_ins = explicit_context_opt_ins(env)
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT"),
@@ -598,6 +603,7 @@ def run_once(env: dict[str, str]) -> dict:
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
         complete_turn=display.complete_turn,
+        **context_opt_ins,
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -645,6 +651,9 @@ def run_once(env: dict[str, str]) -> dict:
            if observation_producer is not None else {}),
         **turn_envelope_receipt(explicit=False, complete=execution.complete_turn),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
+        **({"compact_direct_read": True} if execution.compact_direct_read else {}),
+        **({"quiet_turn": True} if execution.quiet_turn else {}),
+        **({"epoch_prefetch": True} if execution.epoch_prefetch_json is not None else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),
@@ -710,14 +719,23 @@ def run_once(env: dict[str, str]) -> dict:
         else:
             checkpoint_wake = _InertCheckpointWake()
         if execution.context_delivery != "off":
-            from benchmark.runtime.context_delivery import prepare_context_delivery
+            from benchmark.runtime.context_delivery import ContextOptInConfigurationError, prepare_context_delivery
 
+            explicit_h1_opt_in = (
+                execution.compact_direct_read
+                or execution.quiet_turn
+                or execution.epoch_prefetch_json is not None
+            )
             try:
                 context_env = dict(env)
                 prepare_context_delivery(context_env, home)
                 env.update(context_env)
                 receipt["context_transport"] = {"available": True}
+            except ContextOptInConfigurationError:
+                raise
             except Exception as exc:
+                if explicit_h1_opt_in:
+                    raise
                 # Optional presentation cannot block an otherwise admitted
                 # trial. Unavailable native hooks keep ordinary full IO.
                 env.pop("LOOPX_CODEX_CONTEXT_DIR", None)

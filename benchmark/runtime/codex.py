@@ -6,8 +6,10 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 # New benchmark runs and the product both default to six settled work Turns.
@@ -18,6 +20,25 @@ MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
 CONTEXTS = ("fresh", "resume")
 TASK_ENTRIES = ("seeded-todo", "loopx-planned")
 SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
+
+
+def normalize_epoch_prefetch_json(value: Any) -> str | None:
+    """Normalize optional Stage-then-Swap EpochReset config to canonical compact JSON."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, Mapping):
+        parsed = dict(value)
+    elif isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("epoch_prefetch_json must be valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("epoch_prefetch_json must decode to a JSON object")
+        parsed = decoded
+    else:
+        raise ValueError("epoch_prefetch_json must be a JSON string or mapping")
+    return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -32,6 +53,9 @@ class Execution:
     context_delivery: str | None = None
     native_child_limit: int | None = None
     complete_turn: bool = False
+    compact_direct_read: bool = False
+    quiet_turn: bool = False
+    epoch_prefetch_json: str | None = None
 
     def __post_init__(self) -> None:
         if self.native_child_limit is not None and (
@@ -48,6 +72,22 @@ class Execution:
             raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
         if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
             raise ValueError("complete_turn requires heartbeat execution without legacy turn_envelope")
+        if type(self.compact_direct_read) is not bool or (
+            self.compact_direct_read and (self.mode != "heartbeat" or self.context_delivery != "on")
+        ):
+            raise ValueError("compact_direct_read requires heartbeat execution with context_delivery=on")
+        if type(self.quiet_turn) is not bool or (
+            self.quiet_turn and self.mode not in {"heartbeat", "turn"}
+        ):
+            raise ValueError("quiet_turn requires heartbeat or turn execution and a boolean opt-in")
+        if self.quiet_turn and self.mode == "heartbeat" and self.context_delivery != "on":
+            raise ValueError("quiet_turn in heartbeat mode requires context_delivery=on")
+        normalized_prefetch = normalize_epoch_prefetch_json(self.epoch_prefetch_json)
+        object.__setattr__(self, "epoch_prefetch_json", normalized_prefetch)
+        if normalized_prefetch is not None and self.mode not in {"heartbeat", "turn"}:
+            raise ValueError("epoch_prefetch_json requires heartbeat or turn execution")
+        if normalized_prefetch is not None and self.mode == "heartbeat" and self.context_delivery != "on":
+            raise ValueError("epoch_prefetch_json in heartbeat mode requires context_delivery=on")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -89,22 +129,40 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
-def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
+def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict[str, Any]:
     """Record only the explicit display opt-in; checkpoint capture is independent."""
     return {**({"turn_envelope": True, "turn_envelope_source": "explicit"} if explicit else {}),
         **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
 
 
-def explicit_turn_display(env: dict[str, str]) -> Execution:
+def explicit_turn_display(env: Mapping[str, str]) -> Execution:
     """Decode the shared explicit display request through its Execution owner."""
-    selected = {}
+    selected: dict[str, bool] = {}
     for variable, field in (("LOOPX_TURN_ENVELOPE", "turn_envelope"),
                             ("LOOPX_COMPLETE_TURN", "complete_turn")):
         value = env.get(variable, "0")
         if value not in {"0", "1"}:
             raise ValueError(f"{variable} must be 0 or 1")
         selected[field] = value == "1"
-    return Execution(**selected)
+    return Execution(
+        turn_envelope=selected["turn_envelope"],
+        complete_turn=selected["complete_turn"],
+    )
+
+
+def explicit_context_opt_ins(env: Mapping[str, str]) -> dict[str, Any]:
+    """Decode strictly default-off hook/Turn optimization opt-ins from worker env."""
+    parsed: dict[str, Any] = {}
+    for variable, field in (("LOOPX_COMPACT_DIRECT_READ", "compact_direct_read"),
+                            ("LOOPX_QUIET_TURN", "quiet_turn")):
+        value = env.get(variable, "0")
+        if value not in {"0", "1"}:
+            raise ValueError(f"{variable} must be 0 or 1")
+        parsed[field] = value == "1"
+    parsed["epoch_prefetch_json"] = normalize_epoch_prefetch_json(
+        env.get("LOOPX_EPOCH_PREFETCH_JSON")
+    )
+    return parsed
 
 
 def native_child_instructions(limit: int | None) -> str:
@@ -126,7 +184,7 @@ def native_child_instructions(limit: int | None) -> str:
         "and close child work before the parent finishes.\n"
     )
 
-def validate_model_catalog(model_catalog: Path, model: str) -> dict:
+def validate_model_catalog(model_catalog: Path, model: str) -> dict[str, Any]:
     """Admit only catalog entries that keep Codex's function-tool surface.
 
     Real catalog entries are not capability-only. ``tool_mode`` selects how

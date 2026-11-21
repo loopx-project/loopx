@@ -327,7 +327,9 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
                                  cli_argv: list[str], scenario: str, session_root: bool = False,
                                  inherit_machine: bool = False, progressive_enabled: bool = True,
-                                 compact_direct_read: bool = False) -> dict[str, Any]:
+                                 compact_direct_read: bool = False,
+                                 quiet_turn: bool = False,
+                                 epoch_prefetch: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Native configuration data shared by the worker and CLI setup journey.
 
     This renders no trust hashes and writes no host configuration. The native
@@ -340,6 +342,15 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         raise ValueError("unsupported native context configuration scenario")
     if not goal_id or not agent_id:
         raise ValueError("context configuration requires exact goal-id and agent-id")
+    if type(compact_direct_read) is not bool or type(quiet_turn) is not bool:
+        raise ValueError("compact_direct_read and quiet_turn require explicit booleans")
+    canonical_epoch_prefetch: str | None = None
+    if epoch_prefetch is not None:
+        if not isinstance(epoch_prefetch, Mapping):
+            raise ValueError("epoch_prefetch must be a JSON object")
+        canonical_epoch_prefetch = json.dumps(
+            dict(epoch_prefetch), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
     directory = str(_private_root(directory))
     option = "--codex-context-root" if session_root else "--codex-context-dir"
     activation_args = ["--context-delivery", "on"] if progressive_enabled else [
@@ -348,6 +359,9 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         *cli_argv, "--format", "json", "quota", "context-hook",
         *([] if inherit_machine else activation_args),
         *(["--compact-direct-read"] if compact_direct_read else []),
+        *(["--quiet-turn"] if quiet_turn else []),
+        *(["--epoch-prefetch-json", canonical_epoch_prefetch]
+          if canonical_epoch_prefetch is not None else []),
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}

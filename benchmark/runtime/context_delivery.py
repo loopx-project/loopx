@@ -5,11 +5,19 @@ and trusts only their native hashes; quota owns projection and full recovery.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import stat
 import shlex
 from pathlib import Path
+from typing import Any
+
+from .codex import explicit_context_opt_ins
+
+
+class ContextOptInConfigurationError(ValueError):
+    """Explicit opt-in hook parameter failed validation or product compatibility."""
 
 
 def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str, *,
@@ -52,8 +60,33 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError("context delivery requires a private, physical trial directory")
     env["LOOPX_CODEX_CONTEXT_DIR"] = str(root)
+    try:
+        opt_ins = explicit_context_opt_ins(env)
+    except ValueError as exc:
+        raise ContextOptInConfigurationError(str(exc)) from exc
+    params = inspect.signature(codex_context_configuration).parameters
+    extra_config: dict[str, Any] = {}
+    if opt_ins["compact_direct_read"]:
+        if "compact_direct_read" not in params:
+            raise ContextOptInConfigurationError(
+                "compact_direct_read requires a LoopX product release supporting --compact-direct-read"
+            )
+        extra_config["compact_direct_read"] = True
+    if opt_ins["quiet_turn"]:
+        if "quiet_turn" not in params:
+            raise ContextOptInConfigurationError(
+                "quiet_turn requires a LoopX product release supporting --quiet-turn on context-config/hook"
+            )
+        extra_config["quiet_turn"] = True
+    if opt_ins["epoch_prefetch_json"] is not None:
+        if "epoch_prefetch" not in params:
+            raise ContextOptInConfigurationError(
+                "epoch_prefetch_json requires a LoopX product release supporting --epoch-prefetch-json on context-config/hook"
+            )
+        extra_config["epoch_prefetch"] = json.loads(opt_ins["epoch_prefetch_json"])
     configuration = codex_context_configuration(str(root), goal_id=env["LOOPX_GOAL_ID"],
-        agent_id=env["LOOPX_AGENT_ID"], scenario="codex_benchmark_heartbeat", cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
+        agent_id=env["LOOPX_AGENT_ID"], scenario="codex_benchmark_heartbeat", cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]],
+        **extra_config)
     content = json.dumps({"hooks": configuration["hooks"]})
     path = home / "hooks.json"
     if path.is_symlink() or (path.exists() and path.read_text() != content):

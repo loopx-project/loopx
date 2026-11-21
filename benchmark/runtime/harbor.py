@@ -21,7 +21,12 @@ from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
+from .codex import (
+    DEFAULT_REPLAN_AFTER_TURNS,
+    Execution,
+    normalize_epoch_prefetch_json,
+    turn_envelope_receipt,
+)
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 from .scheduler import phase_work_reserve
 
@@ -84,6 +89,10 @@ class BenchmarkCodex(CodexOffline):
         agent_id=_AGENT_ID,
         defer_codex_home=False,
         complete_turn=False,
+        compact_direct_read=False,
+        quiet_turn=False,
+        epoch_prefetch_json=None,
+        execution_yardstick_enabled=None,
         **kwargs,
     ):
         if "research_loop" in kwargs:
@@ -105,6 +114,9 @@ class BenchmarkCodex(CodexOffline):
             context_delivery,
             native_child_limit,
             complete_turn=complete_turn,
+            compact_direct_read=compact_direct_read,
+            quiet_turn=quiet_turn,
+            epoch_prefetch_json=normalize_epoch_prefetch_json(epoch_prefetch_json),
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -149,6 +161,12 @@ class BenchmarkCodex(CodexOffline):
             DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
             else planning_horizon_goal
         )
+        if execution_yardstick_enabled is not None:
+            if type(execution_yardstick_enabled) is not bool:
+                raise ValueError("execution_yardstick_enabled must be a boolean")
+            if not self.execution.uses_loopx:
+                raise ValueError("execution_yardstick_enabled requires a LoopX execution mode")
+        self.execution_yardstick_enabled = execution_yardstick_enabled
         from .research_probe import resolve_execution_observation
 
         self.execution_observation = resolve_execution_observation(execution_observation)
@@ -197,7 +215,10 @@ class BenchmarkCodex(CodexOffline):
         return {**turn_envelope_receipt(explicit=self.execution.turn_envelope, complete=self.execution.complete_turn),
                 **({"native_child_limit": self.execution.native_child_limit}
                    if self.execution.native_child_limit is not None else {}),
-                **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
+                **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {}),
+                **({"compact_direct_read": True} if self.execution.compact_direct_read else {}),
+                **({"quiet_turn": True} if self.execution.quiet_turn else {}),
+                **({"epoch_prefetch": True} if self.execution.epoch_prefetch_json is not None else {})}
 
     def _planning_receipt(self) -> dict:
         return {"native_goal_continue": True} if self.native_goal_continue else {}
@@ -210,12 +231,33 @@ class BenchmarkCodex(CodexOffline):
         return ("replan_after_completed_todos", "--execution-replan-after-todos",
                 self.replan_after_todos)
 
-    def _replan_receipt(self) -> dict[str, int | str]:
+    def _replan_receipt(self) -> dict[str, int | str | bool]:
         key, _, value = self._replan_configuration()
         return {key: value, **({"stride_strategy": self.stride_strategy}
                              if self.stride_strategy is not None else {}),
                 **({"planning_horizon_goal": self.planning_horizon_goal}
-                   if self.planning_horizon_goal is not None else {})}
+                   if self.planning_horizon_goal is not None else {}),
+                **({"yardstick_enabled": self.execution_yardstick_enabled}
+                   if self.execution_yardstick_enabled is not None else {})}
+
+    def _yardstick_args(self) -> list[str]:
+        if self.execution_yardstick_enabled is None:
+            return []
+        return [
+            "--execution-yardstick-enabled"
+            if self.execution_yardstick_enabled
+            else "--no-execution-yardstick-enabled"
+        ]
+
+    async def _apply_warm_start_yardstick(self, environment: BaseEnvironment, *, cwd: str) -> None:
+        args = self._yardstick_args()
+        if not args:
+            return
+        await self._loopx(
+            environment,
+            ["configure-goal", "--goal-id", self.goal_id, *args, "--execute"],
+            cwd=cwd,
+        )
 
     @staticmethod
     def name() -> str:
@@ -504,6 +546,7 @@ class BenchmarkCodex(CodexOffline):
         if self.planning_horizon_goal is not None:
             stride_args.append("--execution-planning-horizon-goal" if self.planning_horizon_goal
                                else "--no-execution-planning-horizon-goal")
+        stride_args.extend(self._yardstick_args())
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
         )
@@ -611,6 +654,10 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
             )
+        if self.execution_yardstick_enabled is not None:
+            actual_yardstick = configured_state.get("execution_profile", {}).get("yardstick_enabled")
+            if type(actual_yardstick) is not bool or actual_yardstick != self.execution_yardstick_enabled:
+                raise RuntimeError("execution_yardstick_enabled readback mismatch")
 
     def _verify_native_child_configuration(self, configured_state: dict) -> None:
         if self.execution.native_child_limit is None:
@@ -695,6 +742,9 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 "LOOPX_COMPLETE_TURN": "1" if self.execution.complete_turn else "0",
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                "LOOPX_COMPACT_DIRECT_READ": "1" if self.execution.compact_direct_read else "0",
+                "LOOPX_QUIET_TURN": "1" if self.execution.quiet_turn else "0",
+                "LOOPX_EPOCH_PREFETCH_JSON": self.execution.epoch_prefetch_json or "",
                 # A trial's explicit None must not inherit a container opt-in.
                 "LOOPX_NATIVE_CHILD_LIMIT": (
                     str(self.execution.native_child_limit)

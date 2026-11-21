@@ -131,6 +131,14 @@ def main(argv=None):
                         help="Explicit complete v1 Turn contract with shared exact-Turn settlement; heartbeat workers only")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--compact-direct-read", action="store_true",
+                        help="Opt-in Phase-2 lock-free compact hook direct-read (--compact-direct-read in hooks.json)")
+    parser.add_argument("--quiet-turn", action="store_true",
+                        help="Opt-in Quiet-Turn skip metadata evaluation for supported heartbeat/turn workers")
+    parser.add_argument("--epoch-prefetch-json", type=json.loads, default=None,
+                        help="Opt-in Stage-then-Swap EpochReset JSON configuration for supported heartbeat/turn workers")
+    parser.add_argument("--execution-yardstick-enabled", action=argparse.BooleanOptionalAction, default=None,
+                        help="Opt-in Yardstick measurement review toggle for configure-goal (including WarmStart)")
     parser.add_argument("--execution-observation", choices=("local_probe",),
                         help="Optional local execution probe for heartbeat workers")
     parser.add_argument("--native-result-comparison", action="store_true",
@@ -216,6 +224,9 @@ def main(argv=None):
             context_delivery=args.context_delivery, turn_envelope=args.turn_envelope,
             complete_turn=args.complete_turn, validation_command=args.validation_command_json,
             native_child_limit=args.native_child_limit,
+            compact_direct_read=args.compact_direct_read,
+            quiet_turn=args.quiet_turn,
+            epoch_prefetch_json=args.epoch_prefetch_json,
         )
     except ValueError as error:
         parser.error(str(error))
@@ -275,6 +286,8 @@ def main(argv=None):
         parser.error("--stride-strategy requires a heartbeat worker or turn-resume")
     if args.planning_horizon_goal is not None and not execution.uses_loopx:
         parser.error("--planning-horizon-goal requires a heartbeat worker or turn-resume")
+    if args.execution_yardstick_enabled is not None and not execution.uses_loopx:
+        parser.error("--execution-yardstick-enabled requires a heartbeat worker or turn-resume")
     checkpoint_request = None
     if args.checkpoint_request is not None:
         if not args.worker.startswith("heartbeat-"):
@@ -464,6 +477,12 @@ def main(argv=None):
                          validation_command=execution.validation_command,
                          turn_envelope=args.turn_envelope,
                          **({"complete_turn": True} if args.complete_turn else {}),
+                         **({"compact_direct_read": True} if args.compact_direct_read else {}),
+                         **({"quiet_turn": True} if args.quiet_turn else {}),
+                         **({"epoch_prefetch_json": execution.epoch_prefetch_json}
+                            if execution.epoch_prefetch_json is not None else {}),
+                         **({"execution_yardstick_enabled": args.execution_yardstick_enabled}
+                            if args.execution_yardstick_enabled is not None else {}),
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
                             if args.execution_observation is not None else {}),

@@ -475,3 +475,130 @@ def test_default_off_parity_and_zero_post_tool_friction_and_cli_opt_in(
     assert cli_out["compactDirectRead"]["source_sha256"] == digest
     assert "todo_off" in cli_out["additionalContext"]
     assert not registry.exists() and not runtime.exists()
+
+
+def test_quota_context_config_and_hook_opt_ins_quiet_turn_and_epoch_prefetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify --quiet-turn & --epoch-prefetch-json stay off by default and activate cleanly."""
+    import os
+    from loopx.cli import main
+
+    journal_dir = tmp_path / "ctx"
+    journal_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+
+    def _run_cli(argv: list[str]) -> tuple[int, dict]:
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["--format", "json", "--registry", str(tmp_path / "r.json"), "--runtime-root", str(tmp_path / "rt"), *argv])
+        return code, json.loads(buf.getvalue())
+
+    c_default, p_default = _run_cli([
+        "quota", "context-config",
+        "--goal-id", "g1", "--agent-id", "a1",
+        "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(journal_dir),
+    ])
+    assert c_default == 0 and p_default["ok"] is True, p_default
+    default_cmd = p_default["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert "--compact-direct-read" not in default_cmd
+    assert "--quiet-turn" not in default_cmd
+    assert "--epoch-prefetch-json" not in default_cmd
+
+    prefetch_cfg = {"enabled": True, "prefetch_command": ["git", "status", "--short"]}
+    c_opt, p_opt = _run_cli([
+        "quota", "context-config",
+        "--goal-id", "g1", "--agent-id", "a1",
+        "--context-delivery", "on", "--codex-app",
+        "--compact-direct-read", "--quiet-turn",
+        "--epoch-prefetch-json", json.dumps(prefetch_cfg),
+        "--codex-context-dir", str(journal_dir),
+    ])
+    assert c_opt == 0 and p_opt["ok"] is True, p_opt
+    opt_cmd = p_opt["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    assert "--compact-direct-read" in opt_cmd
+    assert "--quiet-turn" in opt_cmd
+    assert "--epoch-prefetch-json" in opt_cmd
+
+    # Reject context-hook flags on unrelated quota subcommands cleanly.
+    c_bad, p_bad = _run_cli(["quota", "should-run", "--goal-id", "g1", "--quiet-turn"])
+    assert c_bad == 1 and "context-config or context-hook" in p_bad["reason"]
+    c_bad2, p_bad2 = _run_cli(["quota", "should-run", "--goal-id", "g1", "--epoch-prefetch-json", '{"enabled":true}'])
+    assert c_bad2 == 1 and "context-config or context-hook" in p_bad2["reason"]
+
+    # Real CLI subprocess quota context-hook with --quiet-turn on unchanged digest.
+    capture = tmp_path / "capture.json"
+    capture.write_bytes(b'{"goal_id":"g1","selected_todo":{"todo_id":"todo_1","status":"open"}}')
+    digest = hashlib.sha256(capture.read_bytes()).hexdigest()
+    from loopx.control_plane.turn_driver import codex_context as ctx
+    ctx._save(journal_dir, {
+        "session_id": "s-qt",
+        "cwd": str(tmp_path),
+        "context_epoch": "epoch-1",
+        "candidate": {"epoch": "epoch-1"},
+        "recovery": {"path": str(capture), "sha256": digest, "command": "loopx quota context-read"},
+    })
+    worktree_root = str(Path(__file__).resolve().parents[2])
+    env_clean = {k: v for k, v in os.environ.items() if k != "LOOPX_CODEX_HOOK_DIRECT_READ"}
+    env_clean["HOME"] = str(tmp_path)
+    env_clean["PYTHONPATH"] = worktree_root
+    hook_cmd = [
+        sys.executable, "-m", "loopx.entrypoint",
+        "--registry", str(tmp_path / "absent.json"),
+        "--runtime-root", str(tmp_path / "absent-rt"),
+        "--format", "json", "quota", "context-hook",
+        "--context-delivery", "on", "--codex-app", "--quiet-turn",
+        "--codex-context-dir", str(journal_dir),
+    ]
+    evt_hook = {"session_id": "s-qt", "cwd": str(tmp_path), "hook_event_name": "PostCompact"}
+    subprocess.run(hook_cmd, input=json.dumps(evt_hook), capture_output=True, text=True, env=env_clean, check=True)
+    r2 = subprocess.run(hook_cmd, input=json.dumps(evt_hook), capture_output=True, text=True, env=env_clean, check=True)
+    second_out = json.loads(r2.stdout)
+    assert second_out.get("hookSpecificOutput", {}).get("quietTurn", {}).get("skipped") is True
+
+    # Real CLI subprocess quota context-hook with --epoch-prefetch-json on compact recovery.
+    prefetch_repo = tmp_path / "prefetch-repo"
+    prefetch_repo.mkdir()
+    subprocess.run(["git", "init"], cwd=prefetch_repo, capture_output=True, check=True)
+    large_capture = tmp_path / "large-capture.json"
+    large_capture.write_text(json.dumps({
+        "goal_id": "g1",
+        "selected_todo": {"todo_id": "todo_1", "status": "open"},
+        "padding": "x" * 2048,
+    }))
+    large_digest = hashlib.sha256(large_capture.read_bytes()).hexdigest()
+    prefetch_dir = tmp_path / "ctx-prefetch"
+    prefetch_dir.mkdir(mode=0o700)
+    ctx._save(prefetch_dir, {
+        "session_id": "s-ep",
+        "cwd": str(prefetch_repo),
+        "context_epoch": "epoch-9",
+        "recovery": {"path": str(large_capture), "sha256": large_digest, "command": "loopx quota context-read"},
+    })
+    ep_cfg = {
+        "enabled": True,
+        "prefetch_command": ["git", "status", "--short"],
+        "baseline_bytes": large_capture.stat().st_size,
+        "min_net_savings_bytes": 1,
+    }
+    ep_cmd = [
+        sys.executable, "-m", "loopx.entrypoint",
+        "--registry", str(tmp_path / "absent2.json"),
+        "--runtime-root", str(tmp_path / "absent2-rt"),
+        "--format", "json", "quota", "context-hook",
+        "--context-delivery", "on", "--codex-app",
+        "--epoch-prefetch-json", json.dumps(ep_cfg),
+        "--codex-context-dir", str(prefetch_dir),
+    ]
+    ep_evt = {"session_id": "s-ep", "cwd": str(prefetch_repo), "hook_event_name": "SessionStart", "source": "compact"}
+    r_ep = subprocess.run(
+        ep_cmd, input=json.dumps(ep_evt), capture_output=True, text=True,
+        env=env_clean, cwd=prefetch_repo, check=True,
+    )
+    ep_out = json.loads(r_ep.stdout)["hookSpecificOutput"]
+    assert ep_out["epochPrefetch"]["operator"] == "EpochReset"
+    assert ep_out["epochPrefetch"]["bytes_saved"] > 0

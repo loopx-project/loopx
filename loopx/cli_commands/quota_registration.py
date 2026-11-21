@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from ..control_plane.quota.spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
@@ -275,6 +276,10 @@ def register_quota_command(
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--compact-direct-read", action="store_true",
         help="Opt-in Phase-2 lock-free in-process JSON pointer read, wake deduplication, and automatic failure/obligation extraction for native compact hooks.")
+    quota_parser.add_argument("--quiet-turn", action="store_true",
+        help="Opt-in Quiet-Turn zero-tax skip metadata evaluation for native context-config/context-hook (default-off).")
+    quota_parser.add_argument("--epoch-prefetch-json", type=json.loads, default=None,
+        help="Opt-in Stage-then-Swap EpochReset prefetch configuration JSON for native context-config/context-hook (default-off).")
     quota_parser.add_argument("--capture-sha256",
         help="For context-read, context-project or replan-view: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--initial-read", action="store_true",

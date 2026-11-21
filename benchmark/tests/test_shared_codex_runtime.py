@@ -1572,3 +1572,268 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
 def test_context_benchmark_setting_rejects_broad_or_other_host_activation(value):
     with pytest.raises(ValueError, match="context_delivery"):
         Execution(context_delivery=value)
+
+
+def test_h1_opt_in_execution_guardrails_and_codex_settings_parity(tmp_path):
+    from benchmark.runtime.codex import codex_settings
+
+    default_exec = Execution()
+    assert default_exec.compact_direct_read is False
+    assert default_exec.quiet_turn is False
+    assert default_exec.epoch_prefetch_json is None
+
+    opt_in_exec = Execution(
+        mode="heartbeat",
+        context_delivery="on",
+        compact_direct_read=True,
+        quiet_turn=True,
+        epoch_prefetch_json='{"b": 2, "a": 1}',
+    )
+    assert opt_in_exec.epoch_prefetch_json == '{"a":1,"b":2}'
+    base_cfg = codex_settings(execution=default_exec, workspace=tmp_path, model="fixture", effort="low",
+                              base_url="", wire_api="responses")
+    opt_cfg = codex_settings(execution=opt_in_exec, workspace=tmp_path, model="fixture", effort="low",
+                             base_url="", wire_api="responses")
+    # WarmStart seals restore-config.toml digest; opt-ins never mutate config.toml.
+    assert base_cfg == opt_cfg
+
+    for kwargs in (
+        {"mode": "plain", "compact_direct_read": True},
+        {"mode": "heartbeat", "context_delivery": "off", "compact_direct_read": True},
+        {"mode": "heartbeat", "context_delivery": "off", "quiet_turn": True},
+        {"mode": "heartbeat", "context_delivery": "off", "epoch_prefetch_json": '{"enabled":true}'},
+        {"mode": "native-goal", "quiet_turn": True},
+        {"mode": "loopx-goal", "epoch_prefetch_json": '{"enabled":true}'},
+        {"mode": "turn", "validation_command": ("true",), "epoch_prefetch_json": "[1,2]"},
+        {"mode": "heartbeat", "compact_direct_read": "1"},
+        {"mode": "heartbeat", "quiet_turn": 1},
+    ):
+        with pytest.raises(ValueError):
+            Execution(**kwargs)
+
+
+def test_prepare_context_delivery_opt_ins_default_off_split_pin_and_hooks_json(tmp_path, monkeypatch):
+    from benchmark.runtime.context_delivery import ContextOptInConfigurationError, prepare_context_delivery
+    from loopx.control_plane.turn_driver import codex_context
+    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+
+    captured_calls = []
+    real_config = codex_context.codex_context_configuration
+
+    @contextmanager
+    def fake_discovery(argv, **kwargs):
+        def request(method, params):
+            if method == "initialize":
+                return {}
+            assert method == "hooks/list"
+            path = Path(kwargs["env"]["LOOPX_CODEX_HOME"]) / "hooks.json" if "LOOPX_CODEX_HOME" in kwargs.get("env", {}) else home_ref["path"]
+            configured = json.loads(path.read_text())["hooks"]
+            return {"data": [{"hooks": [
+                {"sourcePath": str(path.resolve()), "eventName": event[0].lower() + event[1:],
+                 "handlerType": h["type"], "command": h["command"], "timeoutSec": h["timeout"],
+                 "matcher": g.get("matcher"), "async": False, "enabled": True,
+                 "key": f"{event}-{i}", "currentHash": f"h-{event}-{i}"}
+                for event, groups in configured.items() for g in groups for i, h in enumerate(g["hooks"])
+            ]}]}
+        yield SimpleNamespace(request=request, notify=lambda *args: None)
+
+    monkeypatch.setattr(StdioNativeGoalTransport, "spawn", fake_discovery)
+
+    # Simulate split-pinned origin/main codex_context_configuration lacking new kwargs:
+    # default-off must succeed without passing any new kwargs.
+    def legacy_config(directory, *, goal_id, agent_id, cli_argv, scenario, session_root=False,
+                      inherit_machine=False, progressive_enabled=True):
+        captured_calls.append("legacy")
+        return real_config(directory, goal_id=goal_id, agent_id=agent_id, cli_argv=cli_argv,
+                           scenario=scenario, session_root=session_root,
+                           inherit_machine=inherit_machine, progressive_enabled=progressive_enabled)
+
+    monkeypatch.setattr(codex_context, "codex_context_configuration", legacy_config)
+    home_off = tmp_path / "home-off"
+    home_off.mkdir()
+    home_ref = {"path": home_off / "hooks.json"}
+    env_off = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": "g", "LOOPX_AGENT_ID": "a",
+               "CODEX_BIN": "codex", "LOOPX_PROJECT": str(tmp_path)}
+    prepare_context_delivery(env_off, home_off)
+    assert captured_calls == ["legacy"]
+    off_hooks = (home_off / "hooks.json").read_text()
+    assert "--compact-direct-read" not in off_hooks
+    assert "--quiet-turn" not in off_hooks
+    assert "--epoch-prefetch-json" not in off_hooks
+
+    # Explicit H1 opt-in fails closed against legacy signature lacking support.
+    home_fail = tmp_path / "home-fail"
+    home_fail.mkdir()
+    with pytest.raises(ContextOptInConfigurationError, match="compact_direct_read"):
+        prepare_context_delivery({**env_off, "LOOPX_COMPACT_DIRECT_READ": "1"}, home_fail)
+
+    # Restore real codex_context_configuration -> verifies all 3 opt-in flags reach hooks.json.
+    monkeypatch.setattr(codex_context, "codex_context_configuration", real_config)
+    home_on = tmp_path / "home-on"
+    home_on.mkdir()
+    home_ref["path"] = home_on / "hooks.json"
+    env_on = {
+        **env_off,
+        "LOOPX_COMPACT_DIRECT_READ": "1",
+        "LOOPX_QUIET_TURN": "1",
+        "LOOPX_EPOCH_PREFETCH_JSON": '{"prefetch_command": ["git", "status", "--short"], "enabled": true}',
+    }
+    prepare_context_delivery(env_on, home_on)
+    hooks_json = json.loads((home_on / "hooks.json").read_text())["hooks"]
+    start_cmd = hooks_json["SessionStart"][0]["hooks"][0]["command"]
+    assert "--compact-direct-read" in start_cmd
+    assert "--quiet-turn" in start_cmd
+    assert "--epoch-prefetch-json" in start_cmd
+    assert '{"enabled":true,"prefetch_command":["git","status","--short"]}' in start_cmd
+
+
+def test_worker_turn_command_and_run_once_forward_h1_opt_ins_default_off(tmp_path, monkeypatch):
+    from benchmark.tests.test_resume_sessions import resume_env
+    from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+
+    env_turn = {"LOOPX_CLI": "loopx", "LOOPX_REGISTRY": "/r", "LOOPX_RUNTIME_ROOT": "/rt",
+                "LOOPX_PROJECT": "/p", "LOOPX_GOAL_ID": "g", "LOOPX_AGENT_ID": "a",
+                "REASONING_EFFORT": "low", "CODEX_BIN": "codex", "MODEL_NAME": "m"}
+    cmd_off = turn_command(env_turn, Execution(mode="turn", validation_command=("true",)), "w1")
+    assert "--quiet-turn" not in cmd_off
+    assert "--epoch-prefetch-json" not in cmd_off
+
+    cmd_on = turn_command(
+        env_turn,
+        Execution(mode="turn", validation_command=("true",), quiet_turn=True,
+                  epoch_prefetch_json={"enabled": True, "timeout_ms": 500}),
+        "w2",
+    )
+    assert "--quiet-turn" in cmd_on
+    assert cmd_on[cmd_on.index("--epoch-prefetch-json") + 1] == '{"enabled":true,"timeout_ms":500}'
+
+    # Real run_once(heartbeat) end-to-end verification (default-off vs opt-in hooks.json + receipt).
+    @contextmanager
+    def fake_spawn(argv, **kwargs):
+        home_p = Path(kwargs["env"]["LOOPX_CODEX_HOME"])
+        def req(method, params):
+            if method == "initialize":
+                return {}
+            path = home_p / "hooks.json"
+            configured = json.loads(path.read_text())["hooks"]
+            return {"data": [{"hooks": [
+                {"sourcePath": str(path.resolve()), "eventName": e[0].lower() + e[1:],
+                 "handlerType": h["type"], "command": h["command"], "timeoutSec": h["timeout"],
+                 "matcher": g.get("matcher"), "async": False, "enabled": True,
+                 "key": f"{e}-{i}", "currentHash": f"h-{e}-{i}"}
+                for e, groups in configured.items() for g in groups for i, h in enumerate(g["hooks"])
+            ]}]}
+        yield SimpleNamespace(request=req, notify=lambda *args: None)
+
+    monkeypatch.setattr(StdioNativeGoalTransport, "spawn", fake_spawn)
+    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "Task body.")
+
+    off_tmp = tmp_path / "off"
+    off_tmp.mkdir()
+    e_off = resume_env(off_tmp, monkeypatch)
+    e_off["LOOPX_CONTEXT_DELIVERY"] = "on"
+    res_off = run_once(e_off)
+    assert res_off["ok"]
+    assert "compact_direct_read" not in res_off
+    assert "quiet_turn" not in res_off
+    assert "epoch_prefetch" not in res_off
+    assert "--compact-direct-read" not in (Path(e_off["LOOPX_CODEX_HOME"]) / "hooks.json").read_text()
+
+    on_tmp = tmp_path / "on"
+    on_tmp.mkdir()
+    e_on = resume_env(on_tmp, monkeypatch)
+    e_on.update({
+        "LOOPX_CONTEXT_DELIVERY": "on",
+        "LOOPX_COMPACT_DIRECT_READ": "1",
+        "LOOPX_QUIET_TURN": "1",
+        "LOOPX_EPOCH_PREFETCH_JSON": '{"enabled": true}',
+    })
+    res_on = run_once(e_on)
+    assert res_on["ok"]
+    assert res_on["compact_direct_read"] is True
+    assert res_on["quiet_turn"] is True
+    assert res_on["epoch_prefetch"] is True
+    hooks_text = (Path(e_on["LOOPX_CODEX_HOME"]) / "hooks.json").read_text()
+    assert "--compact-direct-read" in hooks_text
+    assert "--quiet-turn" in hooks_text
+    assert "--epoch-prefetch-json" in hooks_text
+
+
+def test_harbor_h1_h2_opt_in_worker_env_and_warm_start_yardstick(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from loopx.cli import main
+
+    monkeypatch.setenv("LOOPX_COMPACT_DIRECT_READ", "1")
+    monkeypatch.setenv("LOOPX_QUIET_TURN", "1")
+    monkeypatch.setenv("LOOPX_EPOCH_PREFETCH_JSON", '{"enabled":true}')
+    implicit = BenchmarkCodex(logs_dir=tmp_path / "imp", model_name="openai/fixture")
+    explicit = BenchmarkCodex(logs_dir=tmp_path / "exp", model_name="openai/fixture",
+                              compact_direct_read=False, quiet_turn=False,
+                              epoch_prefetch_json=None, execution_yardstick_enabled=None)
+    assert implicit._worker_env(cwd="/task") == explicit._worker_env(cwd="/task")
+    assert implicit._worker_env(cwd="/task")["LOOPX_COMPACT_DIRECT_READ"] == "0"
+    assert implicit._worker_env(cwd="/task")["LOOPX_QUIET_TURN"] == "0"
+    assert implicit._worker_env(cwd="/task")["LOOPX_EPOCH_PREFETCH_JSON"] == ""
+    assert "yardstick_enabled" not in implicit._replan_receipt()
+
+    # Invalid execution_yardstick_enabled rejections.
+    for bad in ({"execution_yardstick_enabled": "yes"},
+                {"execution_mode": "plain", "execution_yardstick_enabled": True}):
+        with pytest.raises(ValueError, match="execution_yardstick_enabled"):
+            BenchmarkCodex(logs_dir=tmp_path / "bad", model_name="openai/fixture", **bad)
+
+    # Cold + WarmStart existing-registry configure-goal forwards --execution-yardstick-enabled cleanly.
+    reg = tmp_path / "reg.json"
+    rt = tmp_path / "rt"
+    agent = BenchmarkCodex(
+        logs_dir=tmp_path / "h2", model_name="openai/fixture",
+        task_entry="seeded-todo", compact_direct_read=True, quiet_turn=True,
+        epoch_prefetch_json={"enabled": True}, execution_yardstick_enabled=True,
+    )
+    assert agent._replan_receipt()["yardstick_enabled"] is True
+    assert agent._turn_envelope_receipt()["compact_direct_read"] is True
+    assert agent._turn_envelope_receipt()["quiet_turn"] is True
+    assert agent._turn_envelope_receipt()["epoch_prefetch"] is True
+
+    calls = []
+    async def cli(environment, args, **kwargs):
+        import contextlib
+        import io
+        calls.append(args)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["--format", "json", "--registry", str(reg), "--runtime-root", str(rt), *args])
+        assert code == 0, buf.getvalue()
+        return json.loads(buf.getvalue())
+
+    async def no_pending(**kwargs):
+        return SimpleNamespace(return_code=1)
+
+    async def noop(*a, **kw):
+        return None
+
+    async def reg_missing(*a, **kw):
+        return reg.is_file() and reg.stat().st_size > 0
+
+    monkeypatch.setattr(agent, "_loopx", cli)
+    monkeypatch.setattr(agent, "_write_task_document", noop)
+    monkeypatch.setattr(agent, "_registry_exists", reg_missing)
+    # Phase 1 cold bootstrap -> sets yardstick_enabled=True.
+    asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Task 1", cwd=str(tmp_path)))
+    # Reset yardstick externally, then simulate WarmStart / existing registry Phase 2 -> must re-apply!
+    asyncio.run(cli(None, ["configure-goal", "--goal-id", agent.goal_id, "--no-execution-yardstick-enabled", "--execute"]))
+    asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Task 2", cwd=str(tmp_path)))
+    readback = asyncio.run(cli(None, ["configure-goal", "--goal-id", agent.goal_id]))
+    assert readback["after"]["execution_profile"]["yardstick_enabled"] is True
+    assert any("--execution-yardstick-enabled" in c for c in calls)
+
+    # Readback mismatch must fail closed.
+    async def stale_cli(environment, args, **kwargs):
+        return {"after": {"execution_profile": {
+            "replan_after_effective_turns": 6, "planning_horizon_goal": True,
+            "stride_strategy": "off", "yardstick_enabled": False,
+        }}}
+    monkeypatch.setattr(agent, "_loopx", stale_cli)
+    with pytest.raises(RuntimeError, match="execution_yardstick_enabled readback mismatch"):
+        asyncio.run(agent._verify_phase_configuration(SimpleNamespace(), cwd=str(tmp_path)))

@@ -7,7 +7,7 @@ import os
 import stat
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from functools import partial
 from pathlib import Path
@@ -373,7 +373,9 @@ def _handle_context_config(
         config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
             cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
             inherit_machine=bool(machine_runtime), progressive_enabled=activation["progressive_enabled"],
-            compact_direct_read=bool(getattr(args, "compact_direct_read", False)))
+            compact_direct_read=bool(getattr(args, "compact_direct_read", False)),
+            quiet_turn=bool(getattr(args, "quiet_turn", False)),
+            epoch_prefetch=getattr(args, "epoch_prefetch_json", None))
         explicit_options = "--context-delivery on" if activation["progressive_enabled"] else "--context-delivery off --delta-delivery auto"
         payload = {"ok": True, "context_delivery": activation, "native_config": config,
             "activation": "Apply config_overrides, merge hooks and append developer_instructions to the existing native configuration; "
@@ -429,8 +431,7 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                 raise ValueError("context directory unavailable")
             scenario = activation["scenario"]
             progressive_enabled = activation["progressive_enabled"]
-            if getattr(args, "compact_direct_read", False) and "compact_direct_read" not in event:
-                event = {**event, "compact_direct_read": True}
+            event = _inject_context_hook_opt_ins(args, event)
             payload = codex_context_hook(directory, event)
             request = None
             preparation_context = ""
@@ -528,6 +529,43 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
     return 0
 
 
+def _inject_context_hook_opt_ins(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]:
+    """Attach explicit default-off CLI hook flags absent from stdin event JSON."""
+    updated = dict(event)
+    if getattr(args, "compact_direct_read", False) and "compact_direct_read" not in updated:
+        updated["compact_direct_read"] = True
+    if getattr(args, "quiet_turn", False) and "quiet_turn" not in updated:
+        updated["quiet_turn"] = True
+    epoch_prefetch = getattr(args, "epoch_prefetch_json", None)
+    if isinstance(epoch_prefetch, Mapping) and "epoch_prefetch" not in updated:
+        updated["epoch_prefetch"] = dict(epoch_prefetch)
+    return updated
+
+
+def _validate_context_hook_opt_ins(args: argparse.Namespace, print_payload: Callable[..., None]) -> int | None:
+    """Enforce closed subcommand & shape validation for explicit context hook opt-ins."""
+    hook_cmd = args.quota_command in ("context-config", "context-hook")
+    for flag, attr in (
+        ("--compact-direct-read", "compact_direct_read"),
+        ("--quiet-turn", "quiet_turn"),
+    ):
+        if getattr(args, attr, False) and not hook_cmd:
+            print_payload({"ok": False, "reason": f"{flag} is only supported by context-config or context-hook"},
+                          args.format, str)
+            return 1
+    epoch_prefetch = getattr(args, "epoch_prefetch_json", None)
+    if epoch_prefetch is not None:
+        if not hook_cmd:
+            print_payload({"ok": False, "reason": "--epoch-prefetch-json is only supported by context-config or context-hook"},
+                          args.format, str)
+            return 1
+        if not isinstance(epoch_prefetch, dict):
+            print_payload({"ok": False, "reason": "--epoch-prefetch-json must decode to a JSON object"},
+                          args.format, str)
+            return 1
+    return None
+
+
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch captured reads and native lifecycle IO before quota authority access."""
@@ -537,10 +575,9 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         print_payload({"ok": False, "reason": "--prepared-claim-operation-id requires quota context-project"},
                       args.format, str)
         return 1
-    if getattr(args, "compact_direct_read", False) and args.quota_command not in ("context-config", "context-hook"):
-        print_payload({"ok": False, "reason": "--compact-direct-read is only supported by context-config or context-hook"},
-                      args.format, str)
-        return 1
+    opt_in_rc = _validate_context_hook_opt_ins(args, print_payload)
+    if opt_in_rc is not None:
+        return opt_in_rc
     if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):
         print_payload({"ok": False, "reason": "--complete-turn requires JSON quota should-run"}, args.format, str)
         return 1
