@@ -11,7 +11,6 @@ from .control_plane.todos.mutation_api import add_goal_todo
 from .control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
-from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
 from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
 )
@@ -53,6 +52,18 @@ CHAT_PROTECTED_ACTION_OPERATIONS = frozenset(
 # Keep the existing action-admission contract separate from display redaction.
 _ABSOLUTE_LOCAL_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:/(?:Users|home|private|tmp|var)/[^\s`'\"<>]+|[A-Za-z]:[\\/][^\s`'\"<>]+)"
+)
+# Display redaction only hides paths that carry a descendant segment, so inline
+# code examples such as ``C:\`` or ``/Users/`` stay readable while the public-safe
+# validator keeps using ``public_safe_text.LOCAL_PATH_SURFACE_PATTERN``.
+_CHAT_LOCAL_PATH_SURFACE_PATTERN = re.compile(
+    r"(?<![:/A-Za-z0-9])(?:"
+    r"/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/"
+    r"[^\s`'\"<>]+|"
+    r"[A-Za-z]:[\\/][^\s`'\"<>]+|"
+    r"\\\\[A-Za-z0-9_.-]+\\[^\s`'\"<>]+"
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -112,7 +123,7 @@ def _root_character_atoms(
 
 def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
     if not replacements:
-        return LOCAL_PATH_SURFACE_PATTERN
+        return _CHAT_LOCAL_PATH_SURFACE_PATTERN
     separator = r"(?:[/\\]|%2[fF]|%5[cC])"
 
     def component_pattern(component: str, *, is_windows: bool) -> str:
@@ -141,7 +152,7 @@ def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
         + r"[^\s`'\"<>()\[\]{}，。！？]*)?"
         + r"|(?<![:/A-Za-z0-9_.\\])/(?:[^\s`'\"<>()\[\]{}，。！？]+)"
         + "|(?i:"
-        + LOCAL_PATH_SURFACE_PATTERN.pattern
+        + _CHAT_LOCAL_PATH_SURFACE_PATTERN.pattern
         + ")"
     )
 
@@ -327,7 +338,7 @@ def redact_local_paths(
         # The broad absolute-path candidate lets a protected root be recognized
         # after harmless dot-segment aliases. Preserve unrelated custom paths;
         # the shared classifier still redacts its canonical machine-local set.
-        if LOCAL_PATH_SURFACE_PATTERN.fullmatch(candidate):
+        if _CHAT_LOCAL_PATH_SURFACE_PATTERN.fullmatch(candidate):
             return f"[local-path]{suffix}"
         return matched
 
