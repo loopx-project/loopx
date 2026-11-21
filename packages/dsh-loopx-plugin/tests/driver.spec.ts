@@ -676,6 +676,95 @@ describe('driver diagnostic records', () => {
 })
 
 describe('pre-step authority diagnostics', () => {
+  it.each(['human input', 'verified Start'])(
+    'retains a typed admission failure across Driver replacement until %s', async recovery => {
+      const fixture = runnerFixture()
+      const denied = runnerFixture({ typedQuotaFailure: true })
+      const host = fakeAgent()
+      const capture = { agent: host.agent, session: host.agent.session }
+      const failed = { state: 'failed', category: 'admission_rejected' }
+      const onAdmissionChange = vi.fn()
+      let reject = false
+      const createDriver = () => new LoopXContinuationDriver({ isLiveAgent: () => true,
+        retryDelaysMs: [0, 0], onAdmissionChange,
+        runner: (file, args, options) => (reject ? denied : fixture).runner(file, args, options),
+      })
+      let driver = createDriver()
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift()!
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        reject = true
+        const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [queued] }))
+        expect(await driver.onPreStep(host.agent, [queued], new AbortController().signal, next))
+          .toEqual({ kind: 'reject' })
+        expect(next).not.toHaveBeenCalled()
+        expect(driver.readContinuationAdmission(capture)).toEqual(failed)
+        await driver.dispose('replacement')
+
+        driver = createDriver()
+        host.setStatus('idle')
+        driver.observeAgent(host.agent)
+        driver.onAgentStatus(host.agent, 'idle')
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(denied.quotaCalls).toHaveLength(1)
+        expect(host.nextTurn).toEqual([])
+        expect(driver.readContinuationAdmission(capture)).toEqual(failed)
+
+        reject = false
+        onAdmissionChange.mockClear()
+        if (recovery === 'human input') {
+          driver.onInboxInserted(host.agent, userMessage('Resume'))
+          expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+          driver.onAgentStatus(host.agent, 'idle')
+          await waitFor(() => host.nextTurn.length === 1)
+        } else {
+          await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+          expect(host.nextTurn).toHaveLength(1)
+        }
+        expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+        expect(onAdmissionChange).toHaveBeenCalledExactlyOnceWith(capture.session)
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it('surfaces a typed quota rejection at pre-step and waits for explicit Start', async () => {
+    const fixture = runnerFixture()
+    const denied = runnerFixture({ typedQuotaFailure: true })
+    const host = fakeAgent()
+    const capture = { agent: host.agent, session: host.agent.session }
+    const onAdmissionChange = vi.fn()
+    let reject = false
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, retryDelaysMs: [0, 0], onAdmissionChange,
+      runner: (file, args, options) => (reject ? denied : fixture).runner(file, args, options),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      reject = true
+      const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [submitted] }))
+      await expect(driver.onPreStep(host.agent, [submitted], new AbortController().signal, next))
+        .resolves.toEqual({ kind: 'reject' })
+      expect(next).not.toHaveBeenCalled()
+      expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'failed', category: 'admission_rejected' })
+      expect(onAdmissionChange).toHaveBeenCalledWith(capture.session)
+      host.setStatus('idle')
+      driver.onAgentStatus(host.agent, 'idle')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(denied.quotaCalls).toHaveLength(1)
+      reject = false
+      await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+      expect(host.nextTurn).toHaveLength(1)
+      expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+    } finally { await driver.dispose() }
+  })
+
   it('records a failed recheck before rejecting its continuation', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
@@ -3102,11 +3191,14 @@ describe('GoalBar exact-Session Driver bridge', () => {
     await driver.dispose()
   })
 
-  it('Pause preserves the exact claimed turn after Goal stop without opening new work', async () => {
+  it('Pause drains the exact claimed Turn without probing, then Start admits under a fresh identity', async () => {
     let shouldRun = true
     const fixture = runnerFixture({ shouldRun: () => shouldRun })
     const host = fakeAgent()
-    const driver = makeDriver(fixture)
+    let turn = 0
+    const newDriver = () => new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true,
+      makeTurnInstanceId: () => `pause-turn-${++turn}`, retryDelaysMs: [0, 0] })
+    const driver = newDriver()
     observeActivated(driver, host)
     await waitFor(() => host.nextTurn.length === 1)
     const queued = host.nextTurn.shift() as UserMessage
@@ -3140,10 +3232,23 @@ describe('GoalBar exact-Session Driver bridge', () => {
 
     host.setStatus('idle')
     driver.onAgentStatus(host.agent, 'idle')
-    await waitFor(() => fixture.quotaCalls.length === 2)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fixture.quotaCalls).toHaveLength(1)
     expect(host.nextTurn).toHaveLength(0)
-    await driver.dispose()
+    await driver.dispose('replacement')
     expect(host.cancelCalls).toBe(0)
+
+    const replacement = newDriver()
+    try {
+      replacement.observeAgent(host.agent)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fixture.quotaCalls).toHaveLength(1)
+      shouldRun = true
+      await expect(replacement.evaluateActivatedSession({ agent: host.agent, session: host.agent.session }))
+        .resolves.toEqual({ kind: 'applied' })
+      expect(host.nextTurn[0]?.source).toMatchObject({ turnInstanceId: 'pause-turn-2' })
+      expect(fixture.quotaCalls).toHaveLength(2)
+    } finally { await replacement.dispose() }
   })
 
   it('Pause preserves a claimed turn when stop lands during its quota recheck', async () => {
