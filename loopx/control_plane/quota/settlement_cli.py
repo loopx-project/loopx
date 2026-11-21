@@ -551,7 +551,7 @@ def quota_rollout_details(
         todo_id=todo_id,
         selected_todo_id=details["selected_todo_id"],
         agent_id=getattr(args, "agent_id", None),
-        delivery_admitted=closeout_required and payload.get("normal_delivery_allowed") is True,
+        delivery_admitted=closeout_required,
     ))
     return details
 

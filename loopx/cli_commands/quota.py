@@ -259,6 +259,7 @@ def _prepare_quota_result_context(
     *,
     registry_path: Path,
     heartbeat_turn_id: str | None,
+    attach_recall: bool = True,
 ) -> tuple[dict[str, object], dict[str, Any]]:
     from .quota_result_delivery import prepare_quota_result_context
 
@@ -267,6 +268,7 @@ def _prepare_quota_result_context(
         args,
         registry_path=registry_path,
         heartbeat_turn_id=heartbeat_turn_id,
+        attach_recall=attach_recall,
     )
 
 

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tarfile
 import time
 

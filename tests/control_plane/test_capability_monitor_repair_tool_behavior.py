@@ -138,9 +138,19 @@ def test_real_quota_capability_repair_executes_before_monitor_fallback(
     assert CAPABILITY_REPAIR_TARGET_CAPABILITY in quota_result[
         "capability_gate"
     ]["repair_missing"]
-    assert quota_result["agent_todo_summary"]["monitor_schedule_gap_items"][0][
-        "todo_id"
-    ] == CAPABILITY_REPAIR_MONITOR_TODO_ID
+    from loopx.control_plane.todos.todo_semantics import (
+        todo_summary_monitor_schedule_gap_items,
+    )
+
+    summary = quota_result["agent_todo_summary"]
+    gap_items = summary.get("monitor_schedule_gap_items")
+    if gap_items is None:
+        assert (
+            summary["monitor_schedule_gap_items_ref"]
+            == "$.agent_todo_summary.monitor_open_items"
+        )
+        gap_items = todo_summary_monitor_schedule_gap_items(summary)
+    assert gap_items[0]["todo_id"] == CAPABILITY_REPAIR_MONITOR_TODO_ID
 
 
 def test_actor_rejects_capability_repair_before_quota(tmp_path: Path) -> None:

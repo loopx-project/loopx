@@ -17,7 +17,10 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.runtime.time import now_utc, utc_isoformat
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 from loopx.control_plane.quota.execution_preparation import (
+    RefreshTaskLeaseUnavailable,
     apply_selected_todo_execution_preparation,
+    guard_first_writeback_execution,
+    prepared_lease_receipt_fields,
 )
 
 
@@ -576,9 +579,13 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
     claim = invoke(*first["execution_preparation"]["claim"]["cli_args"], "--thin")
     ready = invoke("quota", "should-run", *scope, "--runtime-profile", scenario, "--context-delivery", "off")
     assert ready["execution_preparation"]["state"] == "ready"
+    proof = ready["execution_preparation"]["lease_proof"]
     identity = ready["heartbeat_receipt"]["settlement_identity"]
     assert identity == first["heartbeat_receipt"]["settlement_identity"]
-    refresh = ["refresh-state", *scope, "--classification", "fixture_manual_result",
+    refresh = ["refresh-state", *scope,
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"]),
+        "--classification", "fixture_manual_result",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
         "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:manual-result",
@@ -1306,3 +1313,405 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         timeout=15,
     )
     assert repeated.returncode == 0 and json.loads(repeated.stdout) == {}
+
+
+def _writeback_guard_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    todo_status: str = "open",
+    leases: list[dict[str, object]] | None = None,
+):
+    from types import SimpleNamespace
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "project"
+    project.mkdir(parents=True, exist_ok=True)
+    state_path = project / "ACTIVE_GOAL_STATE.md"
+    state_path.write_text("# Fixture\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    write_fixture_registry(
+        project=project,
+        runtime_root=runtime,
+        registry_path=registry,
+        goal_id=GOAL,
+        domain="fixture",
+        adapter_kind="read_only_project_map_v0",
+        state_file="ACTIVE_GOAL_STATE.md",
+        registered_agents=(AGENT,),
+    )
+    todo = {**_todo(), "status": todo_status, "done": todo_status == "done"}
+    initialize_canonical_authority(
+        runtime,
+        GOAL,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL,
+            handoff_mode="hard_lease",
+            todos=[todo],
+            leases=list(leases or ()),
+        ),
+        state_path=state_path,
+        provider="sqlite",
+    )
+
+    def make_settlement(**overrides):
+        defaults = {
+            "prepared_lease": None,
+            "prepared_lease_required": True,
+            "completion_event": None,
+            "native_child_admission": None,
+            "semantic_replan_guard": None,
+            "heartbeat_receipt": None,
+            "supersede_event": None,
+            "identity": SimpleNamespace(
+                value=SimpleNamespace(turn_instance_id="turn-1"),
+            ),
+        }
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def run_guard(**kwargs):
+        with guard_first_writeback_execution(
+            runtime_root=runtime,
+            registry_path=registry,
+            goal_id=GOAL,
+            todo_id=TODO,
+            agent_id=AGENT,
+            locked_goal=None,
+            **kwargs,
+        ):
+            return True
+
+    return make_settlement, run_guard
+
+
+def test_same_generation_lease_renewal_admits_open_todo_writeback_and_rejects_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-epoch lease renewals pass when explicitly enabled, never across epochs or keys."""
+    current = {**_lease(), "idempotency_key": f"{AGENT}-execution", "version": 3, "lease_epoch": 1}
+    make_settlement, run_guard = _writeback_guard_fixture(
+        tmp_path, monkeypatch, todo_status="open", leases=[current],
+    )
+    prepared = prepared_lease_receipt_fields(
+        {"idempotency_key": f"{AGENT}-execution", "expected_version": 1},
+        lease_epoch=1,
+    )
+    settlement = make_settlement(prepared_lease=prepared, prepared_lease_required=True)
+    stale_proof = {"idempotency_key": f"{AGENT}-execution", "expected_version": 1}
+    renewed_proof = {"idempotency_key": f"{AGENT}-execution", "expected_version": 3}
+
+    assert run_guard(
+        requested_proof=stale_proof,
+        settlement=settlement,
+        allow_same_generation_lease_renewal=True,
+    )
+    assert run_guard(
+        requested_proof=renewed_proof,
+        settlement=settlement,
+        allow_same_generation_lease_renewal=False,
+    )
+    with pytest.raises(RefreshTaskLeaseUnavailable):
+        run_guard(
+            requested_proof=stale_proof,
+            settlement=settlement,
+            allow_same_generation_lease_renewal=False,
+        )
+
+    for bad_settlement, bad_proof in (
+        # Cross-epoch renewal must fail closed even for the same key.
+        (
+            make_settlement(
+                prepared_lease={**prepared, "prepared_lease_epoch": 2},
+                prepared_lease_required=True,
+            ),
+            renewed_proof,
+        ),
+        # Cross-key proof must fail closed.
+        (
+            make_settlement(
+                prepared_lease={**prepared, "prepared_lease_idempotency_key": "other-key"},
+                prepared_lease_required=True,
+            ),
+            renewed_proof,
+        ),
+        # Legacy prepared receipt without lease_epoch must not advance versions.
+        (
+            make_settlement(
+                prepared_lease={"prepared_lease_idempotency_key": f"{AGENT}-execution", "prepared_lease_version": 1},
+                prepared_lease_required=True,
+            ),
+            renewed_proof,
+        ),
+        # Version regression in requested_proof must fail closed.
+        (
+            settlement,
+            {"idempotency_key": f"{AGENT}-execution", "expected_version": 4},
+        ),
+    ):
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            run_guard(
+                requested_proof=bad_proof,
+                settlement=bad_settlement,
+                allow_same_generation_lease_renewal=True,
+            )
+
+
+def test_validation_recovery_turn_accepts_only_matching_retired_recovery_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resumed recovery matches exact `.validation-recovery.` or `.admission-retry` retired leases."""
+    for index, suffix in enumerate((".validation-recovery.1", ".admission-retry", ".admission-retry.turn-2")):
+        retired_recovery = {
+            **_lease(status="released"),
+            "idempotency_key": f"turn-1{suffix}",
+            "version": 1,
+            "lease_epoch": 2,
+        }
+        make_settlement, run_guard = _writeback_guard_fixture(
+            tmp_path / f"recovery-{index}", monkeypatch, todo_status="done", leases=[retired_recovery],
+        )
+        prepared = prepared_lease_receipt_fields(
+            {"idempotency_key": "turn-1", "expected_version": 1},
+            lease_epoch=1,
+        )
+        completion = {
+            "event_kind": "todo_complete",
+            "todo_id": TODO,
+            "agent_id": AGENT,
+            "run_id": "turn-1",
+        }
+        valid_proof = {"idempotency_key": "turn-1", "expected_version": 1}
+        assert run_guard(
+            requested_proof=valid_proof,
+            settlement=make_settlement(
+                prepared_lease=prepared,
+                prepared_lease_required=True,
+                completion_event=completion,
+            ),
+            validation_recovery_turn_instance_id="turn-1",
+        )
+        for bad_completion, bad_recovery_turn in (
+            (None, "turn-1"),
+            ({**completion, "run_id": "other-turn"}, "turn-1"),
+            ({**completion, "agent_id": "other-agent"}, "turn-1"),
+            (completion, None),
+            (completion, "other-turn"),
+        ):
+            with pytest.raises(RefreshTaskLeaseUnavailable):
+                run_guard(
+                    requested_proof=valid_proof,
+                    settlement=make_settlement(
+                        prepared_lease=prepared,
+                        prepared_lease_required=True,
+                        completion_event=bad_completion,
+                    ),
+                    validation_recovery_turn_instance_id=bad_recovery_turn,
+                )
+
+
+def test_validation_recovery_rejects_unrelated_retired_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated retired lease without recovery/retry suffix never satisfies recovery."""
+    for index, bad_key in enumerate(("unrelated-key", "turn-1.admission-retry2")):
+        foreign_retired = {
+            **_lease(status="released"),
+            "idempotency_key": bad_key,
+            "version": 1,
+            "lease_epoch": 2,
+        }
+        make_settlement, run_guard = _writeback_guard_fixture(
+            tmp_path / f"reject-{index}", monkeypatch, todo_status="done", leases=[foreign_retired],
+        )
+        prepared = prepared_lease_receipt_fields(
+            {"idempotency_key": "turn-1", "expected_version": 1},
+            lease_epoch=1,
+        )
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            run_guard(
+                requested_proof={"idempotency_key": "turn-1", "expected_version": 1},
+                settlement=make_settlement(
+                    prepared_lease=prepared,
+                    prepared_lease_required=True,
+                    completion_event={
+                        "event_kind": "todo_complete",
+                        "todo_id": TODO,
+                        "agent_id": AGENT,
+                        "run_id": "turn-1",
+                    },
+                ),
+                validation_recovery_turn_instance_id="turn-1",
+            )
+
+
+def test_supersede_event_admits_done_todo_only_for_exact_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Superseded done Todos satisfy completion receipt checks only for their exact Turn."""
+    retired = {**_lease(status="released"), "idempotency_key": "turn-1", "version": 1, "lease_epoch": 1}
+    make_settlement, run_guard = _writeback_guard_fixture(
+        tmp_path, monkeypatch, todo_status="done", leases=[retired],
+    )
+    prepared = prepared_lease_receipt_fields(
+        {"idempotency_key": "turn-1", "expected_version": 1},
+        lease_epoch=1,
+    )
+    supersede = {
+        "event_kind": "todo_supersede",
+        "status": "done",
+        "todo_id": TODO,
+        "agent_id": AGENT,
+        "run_id": "turn-1",
+    }
+    assert run_guard(
+        requested_proof={"idempotency_key": "turn-1", "expected_version": 1},
+        settlement=make_settlement(
+            prepared_lease=prepared,
+            prepared_lease_required=True,
+            supersede_event=supersede,
+        ),
+    )
+    for bad_supersede in (
+        None,
+        {**supersede, "run_id": "foreign-turn"},
+        {**supersede, "todo_id": "other-todo"},
+        {**supersede, "status": "open"},
+    ):
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            run_guard(
+                requested_proof={"idempotency_key": "turn-1", "expected_version": 1},
+                settlement=make_settlement(
+                    prepared_lease=prepared,
+                    prepared_lease_required=True,
+                    supersede_event=bad_supersede,
+                ),
+            )
+
+
+def test_todo_bound_autonomous_replan_admits_without_prepared_lease_only_on_replan_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Todo-bound autonomous replan Turns pass without prepared_lease but stay lease-fenced."""
+    active = {**_lease(), "idempotency_key": f"{AGENT}-execution", "version": 1, "lease_epoch": 1}
+    make_settlement, run_guard = _writeback_guard_fixture(
+        tmp_path, monkeypatch, todo_status="open", leases=[active],
+    )
+    valid_proof = {"idempotency_key": f"{AGENT}-execution", "expected_version": 1}
+    replan_settlement = make_settlement(
+        prepared_lease=None,
+        prepared_lease_required=False,
+        semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": "replan-1"},
+        heartbeat_receipt={"status": "autonomous_replan_required", "details": {"delivery_allowed": False}},
+    )
+    assert run_guard(requested_proof=valid_proof, settlement=replan_settlement)
+    assert run_guard(requested_proof=None, settlement=replan_settlement)
+
+    for bad_settlement, proof in (
+        (replan_settlement, {"idempotency_key": f"{AGENT}-execution", "expected_version": 99}),
+        (
+            make_settlement(
+                prepared_lease=None,
+                prepared_lease_required=False,
+                semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": "replan-1"},
+                heartbeat_receipt={"status": "normal_run", "details": {"delivery_allowed": True}},
+            ),
+            valid_proof,
+        ),
+        (
+            make_settlement(
+                prepared_lease=None,
+                prepared_lease_required=False,
+                semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": ""},
+                heartbeat_receipt={"status": "autonomous_replan_required", "details": {"delivery_allowed": False}},
+            ),
+            valid_proof,
+        ),
+    ):
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            run_guard(requested_proof=proof, settlement=bad_settlement)
+
+    # Foreign active lease must reject even on a todo-bound replan guard.
+    foreign_dir = tmp_path / "foreign"
+    make_foreign, run_foreign = _writeback_guard_fixture(
+        foreign_dir,
+        monkeypatch,
+        todo_status="open",
+        leases=[{**_lease(owner="other-agent"), "idempotency_key": "other-exec", "version": 1}],
+    )
+    with pytest.raises(RefreshTaskLeaseUnavailable):
+        run_foreign(
+            requested_proof=None,
+            settlement=make_foreign(
+                prepared_lease=None,
+                prepared_lease_required=False,
+                semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": "replan-1"},
+                heartbeat_receipt={"status": "autonomous_replan_required", "details": {"delivery_allowed": False}},
+            ),
+        )
+
+
+def test_scoped_user_gate_fallback_execution_preparation_excludes_deferred_replan(monkeypatch):
+    from loopx.control_plane.quota import execution_preparation
+
+    replan_payload = {
+        "should_run": True,
+        "normal_delivery_allowed": False,
+        "effective_action": "successor_replan_required",
+        "selected_todo": {"todo_id": TODO, "status": "deferred", "resume_ready": True},
+        "scoped_user_gate_fallback": {
+            "selected_executable": {"todo_id": TODO, "fallback_kind": "deferred_successor_replan"}
+        },
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": True},
+    }
+
+    def unexpected_read(**_):
+        pytest.fail("deferred_successor_replan fallback must not consult execution-lease preparation")
+
+    monkeypatch.setattr(execution_preparation, "project_selected_todo_execution_preparation", unexpected_read)
+    apply_selected_todo_execution_preparation(
+        replan_payload,
+        runtime_root=None,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        obligation=replan_payload["execution_obligation"],
+    )
+    assert "execution_preparation" not in replan_payload
+    assert replan_payload["should_run"] is True
+    assert replan_payload["execution_obligation"]["delivery_allowed"] is True
+
+    monkeypatch.setattr(
+        execution_preparation,
+        "project_selected_todo_execution_preparation",
+        lambda **_: {
+            "schema_version": "execution_preparation_v0",
+            "todo_id": TODO,
+            "agent_id": AGENT,
+            "handoff_mode": "hard_lease",
+            "state": "claim_required",
+            "delivery_allowed": False,
+            "reason": "Acquire an atomic lease before advancing the open fallback.",
+            "claim": {"cli_args": ["todo", "claim", "--goal-id", GOAL, "--todo-id", TODO], "command_line": f"loopx todo claim --goal-id {GOAL} --todo-id {TODO} --thin"},
+        },
+    )
+    open_fallback_payload = {
+        "should_run": True,
+        "normal_delivery_allowed": False,
+        "effective_action": "scoped_user_gate_fallback",
+        "selected_todo": {"todo_id": TODO, "status": "open"},
+        "scoped_user_gate_fallback": {
+            "selected_executable": {"todo_id": TODO}
+        },
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": True},
+    }
+    apply_selected_todo_execution_preparation(
+        open_fallback_payload,
+        runtime_root=None,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        obligation=open_fallback_payload["execution_obligation"],
+    )
+    assert open_fallback_payload["execution_preparation"]["state"] == "claim_required"
+    assert open_fallback_payload["should_run"] is True
+    assert open_fallback_payload["execution_obligation"]["delivery_allowed"] is False

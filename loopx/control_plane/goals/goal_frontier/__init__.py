@@ -80,7 +80,7 @@ from .fallback_source import (
     declared_fallback_gap_from_agent_vision,
     parse_fallback_declarations,  # noqa: F401
 )
-from .long_todo_chain import LONG_TODO_CHAIN_TRIGGER, evaluate_long_todo_chain
+from .long_todo_chain import LONG_TODO_CHAIN_TRIGGER, LongTodoChainAckDecision, evaluate_long_todo_chain  # noqa: E501
 from .replan_rules import (
     GoalFrontierReplanFacts,
     GoalFrontierReplanRule,
@@ -90,6 +90,8 @@ from .semantic_history import (
     _latest_runs_for_goal,
     latest_agent_vision_from_runs as latest_agent_vision_from_runs,
     latest_agent_vision_from_status_payload,
+    latest_autonomous_replan_ack_from_status_payload,
+    receipt_bound_replan_source_acks,
     receipt_bound_replan_ack_history,
     latest_missing_vision_checkpoint_from_status_payload,
     latest_replan_ack_feedback_from_status_payload,
@@ -900,6 +902,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
     existing_replan_obligation: dict[str, Any] | None,
     agent_todo_source_items: list[dict[str, Any]] | None = None,
     latest_replan_ack: dict[str, Any] | None = None,
+    prior_rearm_ack: dict[str, Any] | None = None,
     current_transition_replan_ack: dict[str, Any] | None = None,
     acceptance_gaps: list[dict[str, Any]] | None = None,
     monitor_lane_semantically_valid: bool = True,
@@ -972,6 +975,16 @@ def derive_goal_frontier_replan_obligation_from_summaries(
         agent_todo_source_items=agent_todo_source_items,
         latest_replan_ack=current_transition_replan_ack or latest_replan_ack,
     )
+    if (long_chain_ack_decision and not long_chain_ack_decision.acknowledged
+            and long_chain_ack_decision.rearmed_after_obligation_id is None and prior_rearm_ack is not None):
+        _, prior_decision = evaluate_long_todo_chain(
+            agent_todo_summary=agent_todo_summary, agent_counts=agent_counts, frontier_counts=frontier_counts,
+            agent_id=agent_id, agent_todo_source_items=agent_todo_source_items, latest_replan_ack=prior_rearm_ack,
+        )
+        if prior_decision and not prior_decision.acknowledged and prior_decision.rearmed_after_obligation_id is not None:
+            long_chain_ack_decision = LongTodoChainAckDecision(
+                acknowledged=False, rearmed_after_obligation_id=prior_decision.rearmed_after_obligation_id,
+            )
     replan_rule = select_goal_frontier_replan_rule(
         GoalFrontierReplanFacts(
             existing_replan_required=autonomous_replan_is_required(
@@ -1126,7 +1139,7 @@ def derive_goal_frontier_replan_obligation_from_summaries(
         if outcome_gap is not None and outcome_gap not in trigger_gaps:
             trigger_gaps.append(outcome_gap)
         rearmed_after_obligation_id = _acknowledged_replan_obligation_id(
-            latest_replan_ack
+            latest_replan_ack or prior_rearm_ack
         )
         return build_autonomous_replan_obligation_payload(
             schema_version=AUTONOMOUS_REPLAN_OBLIGATION_SCHEMA_VERSION,
@@ -1634,6 +1647,14 @@ def build_goal_frontier_projection_context_from_status(
             agent_id=agent_id,
             registered_agent_ids=registered_agent_ids,
         )
+    prior_rearm_ack = None
+    if receipt_bound_replan_obligation_id and latest_agent_replan_ack is None:
+        candidate_prior_ack = latest_autonomous_replan_ack_from_status_payload(
+            status_payload, goal_id=goal_id, agent_id=agent_id,
+            neutral_classifications=neutral_replan_ack_classifications,
+        )
+        if _acknowledged_replan_obligation_id(candidate_prior_ack) != receipt_bound_replan_obligation_id:
+            prior_rearm_ack = candidate_prior_ack
     frontier_replan_obligation = derive_goal_frontier_replan_obligation_from_summaries(
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
@@ -1642,6 +1663,7 @@ def build_goal_frontier_projection_context_from_status(
         existing_replan_obligation=replan_obligation,
         agent_todo_source_items=agent_todo_source_items,
         latest_replan_ack=effective_replan_ack,
+        prior_rearm_ack=prior_rearm_ack,
         current_transition_replan_ack=replan_transition_ack,
         _frontier_counts=frontier_counts,
         acceptance_gaps=acceptance_gaps,
@@ -1683,24 +1705,34 @@ def build_goal_frontier_projection_context_from_status(
             {"historical_ack": latest_agent_replan_ack}
         )
     if frontier_replan_obligation is None and receipt_bound_replan_obligation_id:
-        source = derive_goal_frontier_replan_obligation_from_summaries(
-            user_todo_summary=user_todo_summary, agent_todo_summary=agent_todo_summary,
-            work_lane_contract=work_lane_contract, agent_id=agent_id,
-            existing_replan_obligation=None, agent_todo_source_items=agent_todo_source_items,
-            latest_replan_ack=effective_replan_ack, acceptance_gaps=acceptance_gaps,
-            vision_settlement_query=True, _frontier_counts=frontier_counts,
-        )
-        if (source or {}).get("obligation_id") == receipt_bound_replan_obligation_id:
-            source_ack = replan_successor_transition_ack(
-                agent_todo_summary, agent_id=agent_id, replan_obligation=source,
-                agent_todo_items=agent_todo_source_items,
-                stride_strategy=stride_strategy,
+        # Timestamp order cannot identify a predecessor within one writer second.
+        # Reuse the original builder and exact receipt digest to choose a source;
+        # the live successor and shared settlement qualifier still govern effects.
+        for source_ack_candidate in receipt_bound_replan_source_acks(
+            status_payload, goal_id=goal_id, agent_id=agent_id,
+            recorded_before=receipt_bound_guard_recorded_at,
+        ):
+            source = derive_goal_frontier_replan_obligation_from_summaries(
+                user_todo_summary=user_todo_summary, agent_todo_summary=agent_todo_summary,
+                work_lane_contract=work_lane_contract, agent_id=agent_id,
+                existing_replan_obligation=None, agent_todo_source_items=agent_todo_source_items,
+                latest_replan_ack=source_ack_candidate,
+                acceptance_gaps=acceptance_gaps,
+                vision_settlement_query=True, _frontier_counts=frontier_counts,
             )
-            frontier_transition_candidate = {
-                "obligation": source,
-                "ack": source_ack,
-                "reconstructed_vision_review": True,
-            }
+            if (source or {}).get("obligation_id") == receipt_bound_replan_obligation_id:
+                source_ack = replan_successor_transition_ack(
+                    agent_todo_summary, agent_id=agent_id, replan_obligation=source,
+                    agent_todo_items=agent_todo_source_items,
+                    stride_strategy=stride_strategy,
+                )
+                frontier_transition_candidate = {
+                    "obligation": source,
+                    "ack": source_ack,
+                    "reconstructed_vision_review": True,
+                }
+
+                break
 
     lifecycle_candidate = None
     if receipt_bound_replan_obligation_id and receipt_bound_guard_recorded_at:

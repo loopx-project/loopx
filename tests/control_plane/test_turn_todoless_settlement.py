@@ -23,7 +23,7 @@ from test_quota_settlement_cli import (
 )
 
 
-def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
+def _fixture(tmp_path, monkeypatch, provider, *, replan=True, capture_dir=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     if replan:
@@ -47,9 +47,10 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
     assert code == 0, listed
     original = listed["todos"]
     turn = "empty-frontier-planning-turn"
+    capture_args = ("--decision-output-dir", str(capture_dir)) if capture_dir is not None else ()
     code, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-        cwd=project)
+        *capture_args, cwd=project)
     assert code == 0 and guard["decision"] == ("autonomous_replan_required" if replan else "run"), guard
     assert guard.get("selected_todo") is None
     return project, runtime, registry, turn, guard, original
@@ -183,9 +184,21 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("captured", [False, True])
 def test_no_todo_requires_the_original_signed_scoped_binding(tmp_path, monkeypatch, provider, captured):
-    _project, runtime, _registry, turn, guard, _original = _fixture(tmp_path, monkeypatch, provider)
-    if captured:
-        guard["replan_read_path"] = str(tmp_path / "original-decision.json")
+    capture_dir = tmp_path / "decision-capture" if captured else None
+    _project, runtime, _registry, turn, guard, _original = _fixture(
+        tmp_path, monkeypatch, provider, capture_dir=capture_dir,
+    )
+    if capture_dir is not None:
+        capture_path = capture_dir / "decision.json"
+        assert guard["replan_read_path"] == str(capture_path)
+        assert json.loads(capture_path.read_bytes()) == guard
+
+    plan = build_loopx_turn_plan(guard, host="codex-cli", execution_mode="isolated-headless")
+    assert plan["route"]["would_invoke_host"] is True
+    assert plan["work_contract"] == guard
+    assert plan["transaction"]["settlement_plan"]["identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+
+    # The historical adapter must preserve the same binding and reject mismatches.
     envelope = build_turn_envelope(guard)
     binding = (lambda value: value["writeback"]["settlement_identity"]) if captured else (
         lambda value: value["writeback"]["settlement_plan"]["identity"])

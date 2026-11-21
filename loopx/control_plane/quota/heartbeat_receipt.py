@@ -269,6 +269,15 @@ def ensure_turn_heartbeat_settlement_receipt(
             # identity before transport-specific start admission. Its owner may
             # refuse admission without writing a receipt or claiming work.
             before_bind()
+        if task_lease_proof is not None and identity.todo_id is not None:
+            from .execution_preparation import prepared_lease_receipt_fields
+
+            rebound_lease_fields = prepared_lease_receipt_fields(
+                task_lease_proof, lease_epoch=task_lease_epoch,
+            )
+        else:
+            rebound_lease_fields = None
+        preserved_details: dict[str, object] = {}
         if effective is not None:
             if observed is not None:
                 effective_details = effective.get("details")
@@ -277,9 +286,15 @@ def ensure_turn_heartbeat_settlement_receipt(
                     if isinstance(effective_details, Mapping)
                     else {}
                 )
+                preserved_details = dict(effective_details)
+                lease_unchanged = rebound_lease_fields is None or (
+                    all(effective_details.get(k) == v for k, v in rebound_lease_fields.items())
+                    and (task_lease_epoch is not None or "prepared_lease_epoch" not in effective_details)
+                )
                 if not semantic_replan_guard_scoped:
-                    return effective
-                if "semantic_replan_obligation_id" in effective_details:
+                    if lease_unchanged:
+                        return effective
+                elif "semantic_replan_obligation_id" in effective_details:
                     raw_existing_guard = effective_details.get(
                         "semantic_replan_obligation_id"
                     )
@@ -308,9 +323,11 @@ def ensure_turn_heartbeat_settlement_receipt(
                         raise HeartbeatReceiptIdentityConflictError(
                             "Turn heartbeat receipt belongs to another capability guard"
                         )
-                    return effective
+                    if lease_unchanged:
+                        return effective
 
         details = {
+            **preserved_details,
             "turn_instance_id": identity.turn_instance_id,
             "todo_id": str(identity.todo_id or ""),
             "replan_obligation_id": str(identity.replan_obligation_id or ""),
@@ -321,10 +338,10 @@ def ensure_turn_heartbeat_settlement_receipt(
         }
         if identity.todo_id is not None and (prepared_lease_required or task_lease_proof is not None):
             details["prepared_lease_required"] = True
-        if task_lease_proof is not None and identity.todo_id is not None:
-            from .execution_preparation import prepared_lease_receipt_fields
-
-            details.update(prepared_lease_receipt_fields(task_lease_proof, lease_epoch=task_lease_epoch))
+        if rebound_lease_fields is not None:
+            details.update(rebound_lease_fields)
+            if task_lease_epoch is None:
+                details.pop("prepared_lease_epoch", None)
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""

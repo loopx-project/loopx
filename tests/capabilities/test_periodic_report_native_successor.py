@@ -78,13 +78,19 @@ def _native_successor(
     selected = first_guard["selected_todo"]["todo_id"]
     bound_guard = _run_cli([*guard, "--todo-id", selected])
     assert bound_guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == selected
-    review = json.loads(subprocess.check_output(
-        shlex.split(bound_guard["replan_action_packet"]["review"]), text=True,
-    ))
-    writeback = json.loads(subprocess.check_output(
-        shlex.split(review["next"]["writeback"]), text=True,
-    ))
-    assert writeback["obligation_id"] == bound_guard["replan_action_packet"]["obligation_id"]
+    packet = bound_guard["replan_action_packet"]
+    if "review" in packet:
+        review = json.loads(subprocess.check_output(
+            shlex.split(packet["review"]), text=True,
+        ))
+        writeback = json.loads(subprocess.check_output(
+            shlex.split(review["next"]["writeback"]), text=True,
+        ))
+        assert writeback["obligation_id"] == packet["obligation_id"]
+        stride_decision = writeback["stride_control"]["minimal_example"]
+    else:
+        stride_decision = packet["stride_control"]["minimal_example"]
+        assert stride_decision["reference_obligation_id"] == packet["obligation_id"]
 
     successor_vision = {
         "schema_version": "goal_vision_replan_contract_v0",
@@ -101,7 +107,7 @@ def _native_successor(
             "evidence_refs": ["fixture:accepted-stage-boundary"],
             "changed": ["Advance the successor fixture check."],
         },
-        "stride_decision": writeback["stride_control"]["minimal_example"],
+        "stride_decision": stride_decision,
     }
     vision_path = project / "successor-vision.json"
     vision_path.write_text(json.dumps(successor_vision), encoding="utf-8")

@@ -632,15 +632,16 @@ evidence and do not pad. Invoking review uses the installed capability policy.
 
 ### Reviewer provenance and specification basis
 
-Policy revision 14 makes two publication requirements mandatory for every new
-result.
+Policy revision 14 requires reviewer attribution and a specification basis for
+every new result.
 
 - `result.reviewer` (`reviewer_declaration`) names `actor_kind`
   (`model_agent` or `human_operator`) and `declaration_source`
   (`runtime_reported` or `self_reported`); an agent adds `declared_model` and
-  `declared_provider` in product-family wording. The body repeats them on
-  exactly one visible `Reviewer:` line, each value as a whole token. This is
-  provenance, not a credential: it authenticates nothing and adds no weight.
+  `declared_provider` in product-family wording. Use one visible line such as
+  `Reviewer: model_agent · MODEL · PROVIDER · self_reported`. Publication and
+  queue readback share the declaration parser. Model coverage requires an
+  explicit source. The declaration adds no weight or account authority.
 - `problem_context.spec_basis` (`spec_basis_assessment`) is `mapped`,
   `no_spec` or `not_yet_proven`. `mapped` gives text `spec_ref`,
   `spec_revision` (a full commit id for `accepted_rfc` and
@@ -652,6 +653,26 @@ result.
 `--check-result` reports a missing or inconsistent declaration or unpublished
 reference as an error, and a spec-basis gap as an approval blocker. Regenerate
 results made under revision 13 rather than adding these fields to them.
+
+In a Goal-bound GitHub queue, a recognized model family from the invoking
+runtime can reopen an open, non-draft exact head with a declared review from
+another family. The queue uses complete provider history. An independent
+review from the same family suppresses repeat work even when another account
+submitted a later review. If different models share an independent GitHub
+account, each valid, attributable formal review on the current head supplies
+coverage while that account maintains the same formal opinion. The latest
+qualified `COMMENTED` review from each known family in that history can also
+supply coverage. A comment with unknown model provenance can record account
+activity and preserves existing family coverage. A dismissal, a different head
+or a changed formal opinion resets the account's coverage history.
+A qualifying review published under the shared author
+login with a matching runtime declaration also suppresses repeat work for that
+model. GitHub independence still requires independent account evidence.
+
+Missing model identity or incomplete history retains the existing queue
+behavior. A review with unknown provenance supplies no model-family coverage.
+The review action leaves the formal conclusion, dissent, CI policy, approval
+and merge-readiness rules in their existing owners.
 
 ### Semantic alignment and CI constraint recovery
 

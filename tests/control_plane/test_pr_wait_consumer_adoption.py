@@ -80,13 +80,13 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
             assert observation["checks"]["pr_dependencies"]["external_read_count"] == (2 if number == 0 else 0)
 
     captured = []
-    project_envelope = turn.build_turn_envelope
+    project_decision = turn.compose_turn_decision
 
     def capture(decision, **kwargs):
         captured.append(copy.deepcopy(decision))
-        return project_envelope(decision, **kwargs)
+        return project_decision(decision, **kwargs)
 
-    monkeypatch.setattr(turn, "build_turn_envelope", capture)
+    monkeypatch.setattr(turn, "compose_turn_decision", capture)
     runner = tmp_path / "consumer.py"
     runner.write_text(
         "import json\nfrom pathlib import Path\n"
@@ -95,7 +95,7 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "    prompt = kwargs['prompt']\n"
         "    (root / 'consumer-input.txt').write_text(prompt)\n"
         "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])[0]\n"
-        "    authority = request['work_contract']\n"
+        "    authority = request.get('work_contract') or request['task_context']\n"
         "    selected = authority['selected_todo']\n"
         f"    assert selected['todo_id'] == {todo_id!r}\n"
         "    assert selected['resume_when'] == 'pr_merged:owner/repo#42'\n"
@@ -139,7 +139,8 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     assert expected["resume_condition"]["matched_event_at"] == "2026-10-01T00:00:00Z"
     assert envelope["action_signature"]["matches"] is True
     prompt = (project / "consumer-input.txt").read_text()
-    consumed = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]["work_contract"]
+    raw_request = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]
+    consumed = raw_request.get("work_contract") or raw_request["task_context"]
     assert consumed["selected_todo"]["resume_condition"] == expected["resume_condition"]
     assert "Require the terminal independent artifact marker." in prompt
 

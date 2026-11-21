@@ -193,8 +193,8 @@ def main() -> int:
         repair_patterns,
         [
             "vision_replan_writeback_gap",
-            "use the matching outcome",
-            "retain unaffected requirements",
+            "refine the matching outcome",
+            "Retain unaffected requirements",
             "fresh guard required by changed acceptance",
             "without replacing the admitted Turn or replaying effects",
         ],

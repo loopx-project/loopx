@@ -547,6 +547,7 @@ def _mode_variant_commands(
     registry_path: Path,
     state_file: Path,
     output_format: str,
+    complete_quota: bool = True,
 ) -> dict[str, list[str]]:
     common = [
         "--registry",
@@ -574,6 +575,7 @@ def _mode_variant_commands(
     quota = _surface_commands(
         project=project, runtime=runtime, registry_path=registry_path,
         state_file=state_file, output_format=output_format,
+        complete_quota=complete_quota,
     )["quota_should_run"]
     return {
         "start_goal_guided_command_pack_detail": [
@@ -923,8 +925,8 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
-    work_context = payload["work_context"]
+    assert payload["selected_todo"]["text"]
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     assert work_context["selected_todo_ref"] == "selected_todo"
     source = next(row for row in work_context["sources"] if row["source"] == "selected_todo")
     authority = source["content"]["authority_read"]
@@ -983,11 +985,7 @@ def test_compact_selected_todo_markdown_preserves_work_context_instruction(
     assert json_exit_code == 0, json_text
     assert markdown_exit_code == 0, markdown_text
     payload = _json_payload(json_text)
-    work_context = (
-        payload["interaction_contract"]["agent_channel"]["work_context"]
-        if surface_id == "quota_should_run"
-        else payload["work_context"]
-    )
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     instruction = work_context["instruction"]
     assert instruction
     assert markdown_text.count(instruction) == 1
@@ -1042,7 +1040,7 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
     assert no_format_exit_code == 0, no_format_text
     assert _json_payload(no_format_text)["goal_id"] == GOAL_ID
     assert markdown_exit_code == 0, markdown_text
-    assert markdown_text.startswith("# LoopX Quota Should Run")
+    assert markdown_text.startswith("# LoopX Turn Envelope")
     assert not markdown_text.lstrip().startswith("{")
 
 
@@ -1089,6 +1087,7 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1096,6 +1095,7 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_todo_summary_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1193,6 +1193,7 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1200,6 +1201,7 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_vision_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1474,6 +1476,7 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1481,6 +1484,7 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_user_todo_summary_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1530,6 +1534,7 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1537,6 +1542,7 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_goal_boundary_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1596,6 +1602,7 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         canonical_exit_code, canonical_text = _invoke_cli(
             default_command + ["--include-detail", "scheduler"],
@@ -1636,6 +1643,7 @@ def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         repeated_command = list(default_command)
         for section in ("scheduler", "agent-todos", "user-todos", "goal-boundary"):
@@ -2262,16 +2270,21 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    full_decision = shlex.split(payload["detail_ref"]["full_decision"])
-    # A cold read must preserve the complete originating source and host profile.
-    assert full_decision == [
-        "loopx", "--registry", str(registry_path), "--runtime-root", str(runtime),
-        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_IDS[0], "--codex-app",
-    ]
-    read_rc, read_text = _invoke_cli(full_decision[1:], read_context=True)
+    assert shlex.split(payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
+    assert payload["scheduler_hint"]["app_automation"]["host_surface"] == "codex_app"
+    # A fresh codex-app read without --turn-envelope preserves the same host profile.
+    read_rc, read_text = _invoke_cli(
+        [
+            "--registry", str(registry_path), "--runtime-root", str(runtime),
+            "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_IDS[0], "--codex-app",
+        ],
+        read_context=True,
+    )
     assert read_rc == 0, read_text
-    assert _json_payload(read_text)["goal_id"] == GOAL_ID
+    read_payload = _json_payload(read_text)
+    assert read_payload["goal_id"] == GOAL_ID
+    assert shlex.split(read_payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(

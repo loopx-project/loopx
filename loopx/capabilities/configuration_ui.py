@@ -242,7 +242,10 @@ def capability_configuration_editor(
                     "string_list",
                     description=(
                         "One authorized executor id per line. Required only for "
-                        "flexible selection; include the primary executor."
+                        "flexible selection; include the primary executor. "
+                        "Optional per-endpoint model and reasoning effort overrides "
+                        "(endpoint_models) are authored in JSON mode and preserved "
+                        "by guided saves."
                     ),
                 ),
                 _field(
@@ -252,7 +255,9 @@ def capability_configuration_editor(
                     nullable=True,
                     description=(
                         "Optional model for the selected executor. Leave blank to keep "
-                        "the executor's own default."
+                        "the executor's own default. Configure per-endpoint overrides "
+                        "(endpoint_models: {\"<endpoint>\": {\"model\": ..., "
+                        "\"reasoning_effort\": ...}}) in JSON mode."
                     ),
                 ),
                 _field(

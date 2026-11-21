@@ -7,6 +7,7 @@ import re
 from typing import Any, Mapping
 
 from .agent_registry import registered_agent_ids_for_goal
+from .capabilities.issue_fix.repository_snapshot import _REPO_PATTERN
 from .control_plane.content_digest import BARE_SHA256_PATTERN
 from .control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
 from .control_plane.todos.contract import require_supported_todo_resume_when
@@ -786,7 +787,7 @@ class ChatActionNormalizationMixin:
             }
             if values.get("task_repository"):
                 raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
-                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                if _REPO_PATTERN.fullmatch(raw_repo):
                     raw_repo = f"git:github.com/{raw_repo}"
                 result["task_repository"] = raw_repo
             stop_cond_raw = values.get("stop_condition")
@@ -843,7 +844,7 @@ class ChatActionNormalizationMixin:
                 result["target_key"] = _opaque(values["target_key"], field="target_key")
             if values.get("task_repository"):
                 raw_repo = _text(values["task_repository"], field="task_repository", limit=200)
-                if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", raw_repo):
+                if _REPO_PATTERN.fullmatch(raw_repo):
                     raw_repo = f"git:github.com/{raw_repo}"
                 result["task_repository"] = raw_repo
             if values.get("cadence"):
@@ -881,7 +882,7 @@ class ChatActionNormalizationMixin:
                 },
             )
             repository = str(values.get("repository") or "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            if not _REPO_PATTERN.fullmatch(repository):
                 raise ValueError("pr.merge repository must be <owner>/<repo>")
             raw_num = values.get("pr_number")
             if isinstance(raw_num, bool) or not isinstance(raw_num, int) or raw_num < 1:

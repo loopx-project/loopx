@@ -167,7 +167,7 @@ def assert_parseable_agent_todos(agent_todos: dict, *, hot_path: bool = False) -
     if hot_path:
         assert "first_open_items" not in agent_todos, agent_todos
         assert agent_todos["payload_compaction"]["schema_version"] == (
-            "quota_cli_todo_summary_compaction_v0"
+            "quota_todo_summary_payload_compaction_v0"
         ), agent_todos
         return
 

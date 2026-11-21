@@ -134,7 +134,8 @@ def test_review_capacity_diagnosis_and_lossless_review_recovery(acceptance_goal,
     assert "outcome review capacity exceeded" in detail
     assert "declaration and review budgets are independent" in detail
     assert "all outcomes in the Goal, not the source count" in detail
-    assert "report the capacity blocker" in detail
+    assert "storage_format: records" in detail
+    assert "recover ambiguous operations unchanged" in detail
     assert declaration["source"]["summary"] not in json.dumps(rejected)
     assert "保留证据" not in json.dumps(rejected, ensure_ascii=False)
     assert cli("inspect")[1] == before
