@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from enum import Enum
@@ -19,7 +18,7 @@ from ..effect_runtime import effect_runtime_result
 from ...paths import (
     GLOBAL_REGISTRY_FILENAME,
     global_registry_path,
-    registry_project_root,
+    goal_state_file_from_record,
     resolve_runtime_root,
     select_default_runtime_root,
 )
@@ -568,10 +567,10 @@ def set_goal_activation_state(
 def _stop_closeout_payload(
     *,
     source_registry: Path,
-    registry_snapshot: Mapping[str, Any],
+    registry_snapshot: dict[str, Any],
     runtime_root_override: str | None,
     goal_id: str,
-    closeout_goal: Mapping[str, Any],
+    closeout_goal: dict[str, Any],
 ) -> dict[str, Any]:
     """Run the terminal hook after a committed stop transition.
 
@@ -589,19 +588,18 @@ def _stop_closeout_payload(
             runtime_root_override,
             registry_path=source_registry,
         )
-        state_file = closeout_goal.get("state_file")
-        if not state_file:
-            state_file = (
+        declared = goal_state_file_from_record(
+            closeout_goal,
+            registry_path=source_registry,
+        )
+        if declared is None:
+            declared = (
                 source_registry.parent
                 / "goals"
                 / goal_id
                 / "ACTIVE_GOAL_STATE.md"
             )
-        else:
-            declared = Path(str(state_file)).expanduser()
-            if not declared.is_absolute():
-                declared = registry_project_root(source_registry) / declared
-            state_file = declared
+        state_file = declared
         return run_goal_closeout(
             runtime_root=closeout_runtime_root,
             goal_id=goal_id,

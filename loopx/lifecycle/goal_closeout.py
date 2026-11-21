@@ -48,6 +48,19 @@ def _read_configuration(runtime_root: Path) -> tuple[dict[str, Any] | None, str 
         return None, f"{type(exc).__name__}: {exc}"
 
 
+def goal_closeout_configuration(
+    runtime_root: Path,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Report the configured terminal hook without running it.
+
+    Callers use this to skip hook-only argument preparation when no command is
+    configured, so an operator's stale path can never fail a committed
+    terminal transition.
+    """
+
+    return _read_configuration(runtime_root)
+
+
 def _write_ledger(
     ledger_dir: Path,
     record: dict[str, Any],
