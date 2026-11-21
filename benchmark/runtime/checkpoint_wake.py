@@ -135,9 +135,8 @@ class CheckpointWake:
                          "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
                          "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
                          "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
-                         # Generated guards use the default complete v1 contract without emitting
-                         # --complete-turn; bind the CLI flag explicitly so retired aliases are rejected.
-                         "turn_envelope": self.receipt.get("turn_envelope", False),
+                         # Pin the current command grammar against the recorded invocation.
+                         "turn_envelope": False,
                          "complete_turn": False,
                          "capture_root": str(self.capture_root), "socket_path": self.socket_path,
                          "decision_sha256": held["sha256"]}

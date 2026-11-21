@@ -422,8 +422,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
                         "--turn-instance-id", "host-context-delivery",
                         "--context-delivery", setting,
                         "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint),
-                        *(["--codex-context-dir", str(native_directory)] if native_context else []),
-                        *(["--turn-envelope"] if surface == "turn_envelope" else []), cwd=project)
+                        *(["--codex-context-dir", str(native_directory)] if native_context else []), cwd=project)
                     path, raw = future.result(timeout=30)
         assert code == 0, wire
         assert path.read_bytes() == raw

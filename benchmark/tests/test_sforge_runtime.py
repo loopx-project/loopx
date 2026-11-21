@@ -691,9 +691,8 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert profile["task_entry"] == entry
     assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
-@pytest.mark.parametrize('enabled,complete', [(False, False), (True, False), (False, True)])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
-def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, complete, cadence):
+def test_default_context_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
@@ -703,28 +702,19 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
         pass  # Transport only; the real renderer/guard test runs without a solver.
     monkeypatch.setattr(BenchmarkCodex, 'install', installed)
     worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
-                          profile=profile, cwd='/task', turn_envelope=enabled, complete_turn=complete,
+                          profile=profile, cwd='/task',
                           replan_after_turns=cadence)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd='/task')
-    assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
-    assert worker.runtime.execution.turn_envelope is enabled
-    assert env['LOOPX_COMPLETE_TURN'] == ('1' if complete else '0')
-    assert worker.runtime.execution.complete_turn is complete
+    assert 'LOOPX_TURN_ENVELOPE' not in env and 'LOOPX_COMPLETE_TURN' not in env
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
-    assert receipt.get('complete_turn') is (True if complete else None)
-    assert receipt.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in receipt
+    assert 'complete_turn' not in receipt and 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
-    assert context.metadata.get('complete_turn') is (True if complete else None)
-    assert context.metadata.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in context.metadata
+    assert 'complete_turn' not in context.metadata and 'turn_envelope' not in context.metadata
     # The opt-in only changes context transport, not resume or model settings.
     assert env['LOOPX_ITERATION_CONTEXT'] == 'resume'
     assert env['REASONING_EFFORT'] == 'xhigh'
@@ -776,10 +766,10 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         pass  # No provider login, install, native session or model is requested.
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
     agent = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile=profile, cwd=str(project), complete_turn=True, context_delivery=delivery)
+        profile=profile, cwd=str(project), context_delivery=delivery)
     agent.install_stop_hook(None, None, tmp_path, None)
     env = agent.runtime._worker_env(cwd=str(project))
-    assert env["LOOPX_COMPLETE_TURN"] == "1" and env["LOOPX_CONTEXT_DELIVERY"] == delivery
+    assert env["LOOPX_CONTEXT_DELIVERY"] == delivery
     source = Path(__file__).resolve().parents[2]
     turn = "original-complete-turn"
     wake = tmp_path / "wakes" / turn
@@ -824,7 +814,10 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
                 capture_output=True, text=True, check=True).stdout)
             assert "content" in packet
     else:
-        result = subprocess.run(["bash", "-c", block + " --todo-id " + TODO_ID], cwd=project,
+        suffix = ["--todo-id", TODO_ID]
+        if delivery == "off":
+            suffix += ["--decision-output-dir", str(wake / "decisions")]
+        result = subprocess.run(["bash", "-c", block + " " + shlex.join(suffix)], cwd=project,
             env=env, capture_output=True, text=True, check=True)
         packet = json.loads(result.stdout)
         original, = (wake / "decisions").rglob("decision.json")
@@ -1045,7 +1038,6 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
     (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
 ])
-@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 0),
@@ -1053,7 +1045,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     ("lean_analysis_proofs", [], 43200, 0),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
-def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
+def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -1098,7 +1090,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     if entry:
         args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
-        run.main(args + timeout_args + cadence_args + (["--turn-envelope"] if enabled else []))
+        run.main(args + timeout_args + cadence_args)
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
     assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
@@ -1110,9 +1102,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
-    assert ("turn_envelope" in receipt) is enabled
-    if enabled:
-        assert receipt["turn_envelope"] is True
+    assert "turn_envelope" not in receipt
     assert receipt["status"] == "runner_failed"
 
 

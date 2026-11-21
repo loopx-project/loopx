@@ -442,7 +442,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     for turn_id in ("agenda-turn-one", "agenda-turn-two"):
         # This branch consumes machine JSON; the model-facing branch below must
         # exercise the real capture transport even under an inline parent.
-        presentation = ["--turn-envelope", "--context-delivery", "off"] if delivery == "host_envelope" else [
+        presentation = ["--context-delivery", "off"] if delivery == "host_envelope" else [
             "--codex-app", "--context-delivery", "on", "--decision-output-root", str(tmp_path / "captures"),
             "--codex-context-root", str(tmp_path / "context")]
         code, packet = run(*prefix, "quota", "should-run", "--goal-id", "research",

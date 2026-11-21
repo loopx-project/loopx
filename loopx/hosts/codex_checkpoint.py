@@ -364,11 +364,24 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
             item.get("cwd") != guard["workspace"]):
         raise ValueError("native checkpoint has output or work beyond its pending guard")
     parser = build_parser()
+    retired_flags = {"--turn-envelope": "turn_envelope", "--complete-turn": "complete_turn"}
+
     def arguments(command):
         argv = _guard_cli_arguments(command, guard)
         try:
+            # Old sealed checkpoints attest these exact flags. The reader
+            # compares their historical values without invoking the old CLI.
+            historical = [word for word in argv if word in retired_flags]
+            if len(historical) > 1:
+                raise ValueError("native pending guard has ambiguous retired flags")
+            if historical:
+                index = argv.index(historical[0])
+                if index <= argv.index("quota") or "--" in argv[:index]:
+                    raise ValueError("native pending guard has a misplaced retired flag")
+                del argv[index]
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 parsed = vars(parser.parse_args(argv))
+            parsed.update({field: flag in historical for flag, field in retired_flags.items()})
             # A sealed command is independent of today's machine preference.
             # Legacy omitted transport flags mean off; explicit on stays distinct.
             if parsed.get("context_delivery") is None:

@@ -70,7 +70,7 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     writeback = plan["ordered_steps"][1]
     assert writeback["optional_attachments"][0]["required"] is False
     assert "--explore-result-json" not in writeback["command_template"]
-    rc, compact = _run_cli(path, runtime, *command, "--turn-envelope", cwd=project)
+    rc, compact = _run_cli(path, runtime, *command, cwd=project)
     assert rc == 0, compact
     assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     rc, completed = _run_cli(path, runtime, "todo", "complete", *binding,

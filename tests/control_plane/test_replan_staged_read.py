@@ -433,8 +433,7 @@ def test_review_retains_scoped_dependencies_and_unknown_outcomes():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("envelope", [False, True])
-def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider, envelope):
+def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
@@ -448,13 +447,10 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         pinned_cli = str(Path(sys.executable).with_name("loopx"))
         guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
-            "--todo-id", TODO, "--decision-output-dir", str(capture),
-            *(["--turn-envelope"] if envelope else []))
+            "--todo-id", TODO, "--decision-output-dir", str(capture))
         guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
         packet = guard["replan_action_packet"]
-        if not envelope:
-            assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
-            assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
+        assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
         # Unknown old/custom prose, different templates, ambiguous/missing
@@ -509,9 +505,8 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
         assert review["core_goal"] == expected_goal
         assert review["action_portfolio"] == source.get("action_portfolio")
-        if not envelope:
-            assert "core_goal" not in guard and "planning_horizon" not in guard
-            assert guard.get("action_portfolio") == source.get("action_portfolio")
+        assert "core_goal" not in guard and "planning_horizon" not in guard
+        assert guard.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
         assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])

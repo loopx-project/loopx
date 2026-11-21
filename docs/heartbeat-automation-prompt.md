@@ -548,8 +548,8 @@ native blocked/resume rules; it does not become a hosted heartbeat.
 
 Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
 --bootstrap`, its existing Goal/Agent/registry arguments, and
-`--context-delivery on`; optionally add `--turn-envelope` or explicit private paths. The loader preserves
-these options without freezing a Turn ID. Each wake loads current instructions
+`--context-delivery on` and explicit private paths when needed. The loader
+preserves these options and binds a fresh Turn ID on each wake. Each wake loads current instructions
 and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
 the same transport. An unset wake identity fails in the shell before admission.
 

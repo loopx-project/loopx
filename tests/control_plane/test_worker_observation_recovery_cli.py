@@ -68,7 +68,7 @@ def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("wire", ["quota", "envelope", "native"])
+@pytest.mark.parametrize("wire", ["inline", "native"])
 @pytest.mark.parametrize("observation", ["recorded", "unreadable", "off"])
 def test_original_capture_retains_the_emitted_poll_observation(
     tmp_path, monkeypatch, provider, wire, observation,
@@ -85,8 +85,6 @@ def test_original_capture_retains_the_emitted_poll_observation(
     capture = tmp_path / "original-capture"
     options = ["--turn-instance-id", "capture-poll", "--decision-output-dir", str(capture),
                "--context-delivery", "on" if wire == "native" else "off"]
-    if wire == "envelope":
-        options.append("--turn-envelope")
     if wire == "native":
         native = tmp_path / "native-context"
         native.mkdir(mode=0o700)
@@ -117,7 +115,7 @@ def test_original_capture_retains_the_emitted_poll_observation(
     if wire == "native":
         # Read precisely the immutable recovery view published to this caller.
         reader = shlex.split(emitted["recovery"]["command"])
-    elif wire == "envelope":
+    elif wire == "inline":
         from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
         # Complete v1 turn envelope carriers preserve the full decision while
@@ -158,7 +156,7 @@ def test_original_capture_retains_the_emitted_poll_observation(
         reader = [sys.executable, "-m", "loopx.cli", "--format", "json", "quota", "context-read",
                   "--capture-file", str(capture / "decision.json"),
                   "--capture-sha256", hashlib.sha256(original).hexdigest()]
-    if wire == "envelope":
+    if wire == "inline":
         def read_paged_json(page: dict) -> dict:
             digest = page["sha256"]
             raw = bytearray()

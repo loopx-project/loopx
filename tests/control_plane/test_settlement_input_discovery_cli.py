@@ -186,7 +186,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     rc, detail = run("quota", "should-run", "--codex-app", *current, "--include-detail", "vision")
     assert rc == 0 and detail["replan_action_packet"]["writeback_contract"] == writeback, detail
     assert build_turn_envelope(guard)["replan_action_packet"]["writeback_contract"] == writeback
-    rc, envelope = run("quota", "should-run", "--codex-app", *current, "--turn-envelope")
+    rc, envelope = run("quota", "should-run", "--codex-app", *current)
     assert rc == 0 and envelope["replan_action_packet"]["writeback_contract"] == writeback, envelope
     vision = deepcopy(authoring["minimal_example"])
     vision["path_delta"].update(

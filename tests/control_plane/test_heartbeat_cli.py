@@ -16,6 +16,8 @@ PARSER_CASES = [
     (["heartbeat-prompt", "--goal-id"], 2),
     (["heartbeat-prompt", "--goal", "fixture"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--unknown"], 2),
+    (["heartbeat-prompt", "--goal-id=fixture", "--turn-envelope"], 2),
+    (["heartbeat-prompt", "--goal-id=fixture", "--complete-turn"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--full", "--thin"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--runtime-profile=unknown"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--context-delivery=invalid"], 2),
@@ -69,7 +71,6 @@ def test_heartbeat_semantic_errors_keep_recovery_and_exit_status(tmp_path):
         ["--agent-id=unregistered"],
         ["--goal-id=missing"],
         ["--context-delivery=on", "--trae_app"],
-        ["--turn-envelope"],
         ["--decision-handoff-socket=missing"],
     )]
     full = run_cli_batch("loopx.cli", cases)

@@ -436,7 +436,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert all("--replan-obligation-id " + obligation_id in command for command in actions)
     assert all("--turn-instance-id " + TURN in command for command in actions)
     envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-                    "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
+                    "--agent-id", AGENT, "--turn-instance-id", TURN)
     assert envelope["replan_action_packet"]["settlement_only"] is True
     assert envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == actions
     assert envelope["contract_binding"]["source_decision_hash"]
@@ -464,7 +464,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert pending_plan["identity"] == identity
     assert pending_plan["ordered_steps"] == [cli["settlement_plan"]["ordered_steps"][-1]]
     pending_envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-        "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
+        "--agent-id", AGENT, "--turn-instance-id", TURN)
     assert pending_envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == spend_actions
     assert pending_envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == pending_plan
     assert pending_envelope["contract_binding"]["source_decision_hash"]

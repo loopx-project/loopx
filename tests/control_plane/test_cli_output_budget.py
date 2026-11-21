@@ -618,7 +618,7 @@ def _mode_variant_commands(
         "quota_should_run_goal_boundary_detail": quota + ["--include-detail", "goal-boundary"],
         "quota_should_run_vision_detail": quota + ["--include-detail", "vision"],
         "quota_should_run_all_detail": quota + ["--include-detail", "all"],
-        "quota_should_run_turn_envelope": quota + ["--turn-envelope"],
+        "quota_should_run_turn_envelope": quota,
         "loopx_turn_plan_transaction_detail": common
         + [
             "turn",
@@ -2248,7 +2248,7 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
     payload = _json_payload(text)
     assert shlex.split(payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
     assert payload["scheduler_hint"]["app_automation"]["host_surface"] == "codex_app"
-    # A fresh codex-app read without --turn-envelope preserves the same host profile.
+    # A fresh codex-app read preserves the same host profile.
     read_rc, read_text = _invoke_cli(
         [
             "--registry", str(registry_path), "--runtime-root", str(runtime),

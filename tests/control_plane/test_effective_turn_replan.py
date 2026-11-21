@@ -333,7 +333,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     assert authoring["schema_version"] == "goal_vision_replan_contract_v0"
     if threshold_override is None and device_count is None:
         rc, envelope = _run_cli(
-            registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
+            registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", "effective-turn-next",
         )
