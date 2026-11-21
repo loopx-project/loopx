@@ -562,3 +562,156 @@ def test_steward_protected_merge_head_drift_and_crash_recovery(steward, tmp_path
     assert recovered["status"] == "applied"
     assert recovered["receipt"]["outcome"] == "pr_merged_recovered"
     assert recovered["receipt"]["resource_ids"]["merge_commit_oid"] == "9" * 40
+
+
+def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> None:
+    head = "e" * 40
+    old = "0" * 40
+    gpt_decl = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+
+    # Mergify bot comment bumps updatedAt without resetting stalled_since or flagging author reply.
+    bot_bumped = summarize_github_pr_signal(
+        {
+            **_sample_pr(
+                number=301,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[
+                    {
+                        "id": "PRR_rc1",
+                        "author": {"login": "maintainer"},
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T08:00:00Z",
+                        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                    }
+                ],
+            ),
+            "updatedAt": "2030-01-02T00:00:00Z",
+            "comments": [
+                {"createdAt": "2030-01-01T09:00:00Z", "author": {"login": "mergify[bot]"}},
+            ],
+        }
+    )
+    assert bot_bumped["stalled_since"] == "2030-01-01T08:00:00Z"
+    assert bot_bumped["author_replied_after_request_changes"] is False
+    assert bot_bumped["review_summary"]["latest_request_changes_review_id"] == "PRR_rc1"
+
+    # External author replies after REQUEST_CHANGES -> awaiting maintainer reply; maintainer reply resets it.
+    author_replied = summarize_github_pr_signal(
+        {
+            **_sample_pr(
+                number=302,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[
+                    {
+                        "id": "PRR_rc2",
+                        "author": {"login": "maintainer"},
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T08:00:00Z",
+                        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                    }
+                ],
+            ),
+            "comments": [
+                {"createdAt": "2030-01-01T10:00:00Z", "author": {"login": "ext-contributor"}},
+                {"createdAt": "2030-01-01T10:30:00Z", "author": {"login": "mergify[bot]"}},
+            ],
+        }
+    )
+    assert author_replied["author_replied_after_request_changes"] is True
+
+    maintainer_replied = summarize_github_pr_signal(
+        {
+            **_sample_pr(
+                number=302,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[
+                    {
+                        "id": "PRR_rc2",
+                        "author": {"login": "maintainer"},
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T08:00:00Z",
+                        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                    },
+                    {
+                        "id": "PRR_reply",
+                        "author": {"login": "maintainer"},
+                        "state": "COMMENTED",
+                        "commit": {"oid": head},
+                        "submittedAt": "2030-01-01T11:00:00Z",
+                        "body": "Please keep the existing state field unchanged.",
+                    },
+                ],
+            ),
+            "comments": [
+                {"createdAt": "2030-01-01T10:00:00Z", "author": {"login": "ext-contributor"}},
+            ],
+        }
+    )
+    assert maintainer_replied["author_replied_after_request_changes"] is False
+
+    # Stale-commit CHANGES_REQUESTED after new head commit push leaves stalled_since as None.
+    stale_after_push = summarize_github_pr_signal(
+        _sample_pr(
+            number=303,
+            head_oid=head,
+            author="ext-contributor",
+            review_decision="CHANGES_REQUESTED",
+            reviews=[
+                {
+                    "id": "PRR_stale_rc",
+                    "author": {"login": "maintainer"},
+                    "state": "CHANGES_REQUESTED",
+                    "commit": {"oid": old},
+                    "submittedAt": "2030-01-01T08:00:00Z",
+                    "body": _valid_bilingual_body(head_oid=old, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                }
+            ],
+        )
+    )
+    assert stale_after_push["stalled_since"] is None
+    assert stale_after_push["review_summary"]["latest_request_changes_review_id"] is None
+    assert stale_after_push["author_replied_after_request_changes"] is False
+
+    # GraphQL page normalization retains comments and head commit pushedDate.
+    gql_node = _graphql_node(
+        _sample_pr(
+            number=304,
+            head_oid=head,
+            author="ext-contributor",
+            review_decision="CHANGES_REQUESTED",
+            reviews=[
+                {
+                    "id": "PRR_rc4",
+                    "author": {"login": "maintainer"},
+                    "state": "CHANGES_REQUESTED",
+                    "commit": {"oid": head},
+                    "submittedAt": "2030-01-01T08:00:00Z",
+                    "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+                }
+            ],
+        )
+    )
+    gql_node["comments"] = {"nodes": [{"createdAt": "2030-01-01T12:00:00Z", "author": {"login": "ext-contributor"}}]}
+    gql_node["commits"]["nodes"][0]["commit"]["oid"] = head
+    gql_node["commits"]["nodes"][0]["commit"]["committedDate"] = "2030-01-01T07:00:00Z"
+    gql_node["commits"]["nodes"][0]["commit"]["pushedDate"] = "2030-01-01T09:00:00Z"
+
+    def fake_gql(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([gql_node])), stderr="")
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_gql)
+    observed = _observe_github_repository_prs("org/repo")
+    assert observed["status"] == "ok"
+    item = observed["items"][0]
+    assert item["stalled_since"] == "2030-01-01T09:00:00Z"
+    assert item["author_replied_after_request_changes"] is True
+    assert item["review_summary"]["latest_request_changes_review_id"] == "PRR_rc4"

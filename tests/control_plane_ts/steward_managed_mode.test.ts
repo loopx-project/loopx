@@ -671,3 +671,158 @@ test("observeStewardSignalMonitor preserves feature-off parity and isolates scop
     repository_snapshot: sampleRepo,
   }));
 });
+
+test("observeStewardSignalMonitor uses stalled_since, author-reply bypass, and stalled_bucket wakeups", () => {
+  const stalledInternalScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const stalledExternalScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+
+  const makeRepo = (botUpdatedAt: string) => ({
+    status: "ok",
+    repository: "acme/widgets",
+    items: [
+      {
+        number: 201,
+        title: "Internal RC with Mergify bot ping",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "alice"},
+        updatedAt: botUpdatedAt,
+        stalled_since: "2026-11-20T09:00:00Z",
+        author_replied_after_request_changes: false,
+        review_summary: {
+          effective_verdict: "REQUEST_CHANGES",
+          has_review_conflict: false,
+          latest_request_changes_review_id: "PRR_201",
+          stalled_since: "2026-11-20T09:00:00Z",
+          author_replied_after_request_changes: false,
+          exact_head_reviews: [],
+        },
+      },
+      {
+        number: 202,
+        title: "External author replied right after RC",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "ext-user"},
+        updatedAt: "2026-11-21T08:30:00Z",
+        stalled_since: "2026-11-21T07:00:00Z",
+        author_replied_after_request_changes: true,
+        review_summary: {
+          effective_verdict: "REQUEST_CHANGES",
+          has_review_conflict: false,
+          latest_request_changes_review_id: "PRR_202",
+          stalled_since: "2026-11-21T07:00:00Z",
+          author_replied_after_request_changes: true,
+          exact_head_reviews: [],
+        },
+      },
+      {
+        number: 203,
+        title: "Stale RC on previous commit after new head push",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "ext-user"},
+        updatedAt: "2026-11-18T00:00:00Z",
+        stalled_since: null,
+        author_replied_after_request_changes: false,
+        review_summary: {
+          effective_verdict: "REQUEST_CHANGES",
+          has_review_conflict: false,
+          latest_request_changes_review_id: null,
+          stalled_since: null,
+          author_replied_after_request_changes: false,
+          exact_head_reviews: [],
+        },
+      },
+    ],
+  });
+
+  // At 23h since stalled_since (2026-11-20T09:00 -> 2026-11-21T08:00), PR #201 is excluded even with newer updatedAt.
+  const before24h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  assert.deepEqual(before24h.scoped_repository_items, []);
+
+  // At 24h exact (2026-11-21T09:00), PR #201 enters 24h_to_72h bucket.
+  const at24h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: before24h.result_hash,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.equal(at24h.material_change, true);
+  assert.equal(at24h.scoped_repository_items[0].number, 201);
+  assert.equal(at24h.scoped_repository_items[0].stalled_threshold_met, true);
+  assert.equal(at24h.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
+
+  // Bot comment bumping updatedAt at 71h produces zero hash change in the same bucket.
+  const at71hBotBump = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at24h.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-23T08:00:00Z",
+  });
+  assert.equal(at71hBotBump.result_hash, at24h.result_hash);
+  assert.equal(at71hBotBump.material_change, false);
+
+  // Crossing into 72h_plus and 7d_plus wakes the monitor exactly at bucket boundaries.
+  const at72h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at71hBotBump.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-23T09:00:00Z",
+  });
+  assert.equal(at72h.material_change, true);
+  assert.equal(at72h.scoped_repository_items[0].stalled_bucket, "72h_plus");
+
+  const at73h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at72h.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-23T10:00:00Z",
+  });
+  assert.equal(at73h.material_change, false);
+
+  const at7d = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at73h.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-27T09:00:00Z",
+  });
+  assert.equal(at7d.material_change, true);
+  assert.equal(at7d.scoped_repository_items[0].stalled_bucket, "7d_plus");
+
+  // External monitor prioritizes awaiting_maintainer_reply immediately (<24h) and drops stale-commit RC (#203).
+  const externalObs = observeStewardSignalMonitor({
+    signal_scope: stalledExternalScope,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.deepEqual(externalObs.scoped_repository_items.map((row: {number: number}) => row.number), [202]);
+  assert.equal(externalObs.scoped_repository_items[0].stalled_threshold_met, false);
+  assert.equal(externalObs.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+});
