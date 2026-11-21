@@ -31,6 +31,13 @@ test('D8 safety admission enforces read-only allowlist and blocks passive plugin
 
   for (const unsafeCmd of [
     'git push origin main',
+    ['git', 'branch', 'evil-branch-created'],
+    ['git', 'branch', '--track', 'evil', 'main'],
+    ['git', 'branch', '-u', 'origin/main'],
+    ['git', 'log', '--output=/tmp/evil-log.txt', '-n', '1'],
+    ['git', 'diff', '--output', '/tmp/evil-diff.txt'],
+    ['git', 'show', '--output=/tmp/evil-show.txt', 'HEAD'],
+    ['git', 'diff', '--ext-diff'],
     'rm -rf /tmp/something',
     'bash -c "cat foo"',
     'cat a.txt && echo hi',
@@ -47,6 +54,9 @@ test('D8 safety admission enforces read-only allowlist and blocks passive plugin
   for (const safeCmd of [
     ['loopx', 'quota', 'context-read', '--capture-file', 'dec.json', '--capture-sha256', 'a'.repeat(64), '--select', '/summary'],
     ['git', 'status'],
+    ['git', 'branch'],
+    ['git', 'branch', '--list'],
+    ['git', 'branch', '--show-current'],
     ['cat', 'notes.md'],
     ['head', '-n', '20', 'notes.md'],
     ['find', '.', '-maxdepth', '2'],
@@ -165,6 +175,24 @@ test('failed, timed-out, policy-denied, truncated-strict, or negative-savings pr
   });
   assert.equal(negativeSavings.operator, 'KeepRaw');
   assert.equal(negativeSavings.fallback_reason, 'negative_net_savings');
+
+  const incompletePage = evaluateEpochPrefetchSwap({
+    ...base,
+    exit_code: 0,
+    truncated: false,
+    prefetched_output: JSON.stringify({
+      ok: true,
+      schema_version: 'context_capture_page_v1',
+      eof: false,
+      content: 'partial-page',
+    }),
+  });
+  assert.equal(incompletePage.operator, 'KeepRaw');
+  assert.equal(incompletePage.fallback_reason, 'incomplete_output');
+  assert.equal(incompletePage.truncated, true);
+  assert.equal(incompletePage.preserves_raw_state, true);
+  assert.equal(incompletePage.round_trips_saved, 0);
+  assert.equal(incompletePage.bytes_saved, 0);
 });
 
 test('native lifecycle keeps epoch_prefetch across idempotent PostCompact and clears on new epoch rotation', () => {
@@ -231,6 +259,8 @@ test('trajectory usage telemetry tracks operator counts, prefetch latency/bytes,
     {type: 'event_msg', payload: {type: 'task_started', turn_id: 't1'}},
     {type: 'event_msg', payload: {type: 'token_count', info: {total_token_usage: usage(100, 0, 10), last_token_usage: usage(100, 0, 10)}}},
     {type: 'event_msg', payload: {type: 'token_count', info: {total_token_usage: usage(220, 90, 20), last_token_usage: usage(120, 90, 10)}}},
+    {type: 'compacted', payload: {reason: 'epoch_reset'}},
+    {type: 'event_msg', payload: {type: 'token_count', info: {total_token_usage: usage(300, 130, 25), last_token_usage: usage(80, 40, 5)}}},
     {type: 'event_msg', payload: {type: 'task_complete', turn_id: 't1'}},
   ].map((item, idx) => ({...item, line: idx + 1, timestamp: `2026-11-21T00:00:0${idx}Z`}));
 
@@ -255,6 +285,7 @@ test('trajectory usage telemetry tracks operator counts, prefetch latency/bytes,
   assert.equal(tel.prefetch.output_bytes, 180);
   assert.equal(tel.prefetch.bytes_saved, 2400);
   assert.equal(tel.prefetch.round_trips_saved, 1);
-  assert.deepEqual(tel.prefix_kv?.cold, {requests: 1, uncached_prefix_kv_tokens: 100, cached_prefix_kv_tokens: 0});
+  // Request 1 (100/0) and post-compacted Request 3 (80/40) both bucket cold; Request 2 (120/90) buckets warm.
+  assert.deepEqual(tel.prefix_kv?.cold, {requests: 2, uncached_prefix_kv_tokens: 140, cached_prefix_kv_tokens: 40});
   assert.deepEqual(tel.prefix_kv?.warm, {requests: 1, uncached_prefix_kv_tokens: 30, cached_prefix_kv_tokens: 90});
 });

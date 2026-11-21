@@ -45,7 +45,8 @@ export interface NormalizedStageThenSwapPolicy {
 const DISALLOWED_SHELL_OPERATORS = new Set([";", "|", "&", "&&", "||", ">", ">>", "<", "<<", "<<<", "(", ")"]);
 const READ_ONLY_PROBES = new Set(["cat", "head", "tail", "wc", "ls", "stat", "pwd", "rg", "grep"]);
 const GIT_READ_ONLY_SUBCOMMANDS = new Set(["status", "diff", "log", "show", "rev-parse", "ls-files", "grep", "branch"]);
-const GIT_MUTATING_BRANCH_FLAGS = new Set(["-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy"]);
+const GIT_READ_ONLY_BRANCH_FLAGS = new Set(["--list", "--show-current", "-a", "--all", "-r", "--remotes", "-v", "--verbose", "-vv"]);
+const GIT_FORBIDDEN_OUTPUT_FLAGS = new Set(["--output", "--ext-diff", "--open-files-in-pager", "-O", "--exec"]);
 const FIND_MUTATING_PREDICATES = new Set(["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf"]);
 const LOOPX_READ_ONLY_SUBCOMMANDS = new Set(["status", "doctor", "version"]);
 const LOOPX_QUOTA_READ_SUBCOMMANDS = new Set(["context-read", "receipt"]);
@@ -345,13 +346,37 @@ export function validatePrefetchCommandSafety(params: {
         command_sha256: cmdHash,
       };
     }
-    if (sub === "branch" && args.slice(idx + 1).some((flag) => GIT_MUTATING_BRANCH_FLAGS.has(flag))) {
+    const gitSubArgs = args.slice(idx + 1);
+    if (
+      gitSubArgs.some(
+        (flag) =>
+          GIT_FORBIDDEN_OUTPUT_FLAGS.has(flag)
+          || flag.startsWith("--output=")
+          || flag.startsWith("--ext-diff=")
+          || flag.startsWith("--open-files-in-pager=")
+          || flag.startsWith("--exec="),
+      )
+    ) {
       return {
         allowed: false,
-        reason: "policy_violation:git_branch_mutation_forbidden",
+        reason: "policy_violation:git_output_or_external_diff_forbidden",
         argv,
         command_sha256: cmdHash,
       };
+    }
+    if (sub === "branch") {
+      const hasListFlag = gitSubArgs.includes("--list");
+      const branchAllowed = gitSubArgs.every((arg) =>
+        arg.startsWith("-") ? GIT_READ_ONLY_BRANCH_FLAGS.has(arg) : hasListFlag
+      );
+      if (!branchAllowed) {
+        return {
+          allowed: false,
+          reason: "policy_violation:git_branch_mutation_forbidden",
+          argv,
+          command_sha256: cmdHash,
+        };
+      }
     }
     return {allowed: true, reason: null, argv, command_sha256: cmdHash};
   }
@@ -464,6 +489,30 @@ export function buildAntiWhitewashingReceiptHeader(params: {
   return {header, fields};
 }
 
+function inspectStructuredPrefetchOutput(output: string): {
+  failed: boolean;
+  incomplete: boolean;
+} {
+  const trimmed = output.trim();
+  if (!trimmed.startsWith("{")) return {failed: false, incomplete: false};
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {failed: false, incomplete: false};
+    }
+    const obj = parsed as Record<string, unknown>;
+    return {
+      failed: obj.ok === false,
+      incomplete: obj.eof === false || obj.truncated === true,
+    };
+  } catch {
+    if (trimmed.includes("context_capture_page_v1") && !trimmed.includes('"eof":true')) {
+      return {failed: false, incomplete: true};
+    }
+    return {failed: false, incomplete: false};
+  }
+}
+
 export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
   const config = normalizeStageThenSwapConfig(rawRequest.epoch_prefetch);
   const context_epoch = requireNonEmptyString(rawRequest.context_epoch, "context_epoch");
@@ -503,6 +552,8 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     prefetch_command: config.prefetch_command,
     initiator: config.initiator,
   });
+  const pageStatus = inspectStructuredPrefetchOutput(prefetched_output);
+  const effectiveTruncated = truncated || pageStatus.incomplete;
 
   const {header, fields} = buildAntiWhitewashingReceiptHeader({
     context_epoch,
@@ -511,7 +562,7 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     failure_facts,
     open_obligations,
     exit_code,
-    truncated,
+    truncated: effectiveTruncated,
     source_ref,
   });
   const hydrated_text = prefetched_output ? `${header}\n${prefetched_output}` : header;
@@ -524,9 +575,11 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     fallback_reason = safety.reason;
   } else if (timed_out) {
     fallback_reason = "timeout";
-  } else if (exit_code === null || exit_code !== 0) {
+  } else if (exit_code === null || exit_code !== 0 || pageStatus.failed) {
     fallback_reason = "command_failed";
-  } else if (config.reject_on_truncation && truncated) {
+  } else if (pageStatus.incomplete) {
+    fallback_reason = "incomplete_output";
+  } else if (config.reject_on_truncation && effectiveTruncated) {
     fallback_reason = "output_truncated";
   } else if (retained_bytes > config.max_output_bytes) {
     fallback_reason = "output_overflow";
@@ -552,7 +605,7 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
       dropped_failures: 0,
       exit_code,
       timed_out,
-      truncated,
+      truncated: effectiveTruncated,
       raw_bytes_read,
       retained_bytes: 0,
       baseline_bytes,
@@ -591,7 +644,7 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     dropped_failures,
     exit_code,
     timed_out: false,
-    truncated,
+    truncated: effectiveTruncated,
     raw_bytes_read,
     retained_bytes,
     baseline_bytes,

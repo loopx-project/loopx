@@ -207,14 +207,16 @@ def collect_context_policy_telemetry(
     """Collect {KeepRaw, FoldToReceipt, EpochReset}, prefetch, quiet-turn, and cold/warm KV telemetry."""
     operator_counts = {"KeepRaw": 0, "FoldToReceipt": 0, "EpochReset": 0}
     quiet_turn_skips = 0
+    prefetch_attempts = 0
     prefetch_latency_ms = 0
     prefetch_bytes = 0
     prefetch_bytes_saved = 0
     round_trips_saved = 0
     seen_receipts: set[str] = set()
+    seen_quiet_turns: set[str] = set()
 
     def _consume_prefetch(entry: object) -> None:
-        nonlocal prefetch_latency_ms, prefetch_bytes, prefetch_bytes_saved, round_trips_saved
+        nonlocal prefetch_attempts, prefetch_latency_ms, prefetch_bytes, prefetch_bytes_saved, round_trips_saved
         if not isinstance(entry, dict):
             return
         receipt_id = entry.get("receipt_sha256")
@@ -222,6 +224,7 @@ def collect_context_policy_telemetry(
             if receipt_id in seen_receipts:
                 return
             seen_receipts.add(receipt_id)
+        prefetch_attempts += 1
         op = entry.get("operator")
         if op in operator_counts:
             operator_counts[op] += 1
@@ -234,13 +237,19 @@ def collect_context_policy_telemetry(
         if isinstance(entry.get("round_trips_saved"), int) and entry["round_trips_saved"] >= 0:
             round_trips_saved += entry["round_trips_saved"]
 
-    def _consume_quiet(entry: object) -> None:
+    def _consume_quiet(entry: object, dedup_key: str | None = None) -> None:
         nonlocal quiet_turn_skips
-        if isinstance(entry, dict) and entry.get("skipped") is True:
-            quiet_turn_skips += 1
+        if not isinstance(entry, dict) or entry.get("skipped") is not True:
+            return
+        if dedup_key:
+            if dedup_key in seen_quiet_turns:
+                return
+            seen_quiet_turns.add(dedup_key)
+        quiet_turn_skips += 1
 
     if runtime_root is not None and goal_id:
-        turns_dir = Path(runtime_root) / "goals" / goal_id / "turns"
+        goal_root = Path(runtime_root) / "goals" / goal_id
+        turns_dir = goal_root / "turns"
         if turns_dir.is_dir():
             for path in sorted(turns_dir.glob("*.json")):
                 try:
@@ -249,7 +258,37 @@ def collect_context_policy_telemetry(
                     continue
                 if isinstance(journal, dict):
                     _consume_prefetch(journal.get("epoch_prefetch"))
-                    _consume_quiet(journal.get("quiet_turn"))
+                    turn_id = str(journal.get("turn_key") or path.stem)
+                    _consume_quiet(journal.get("quiet_turn"), turn_id)
+        quiet_skips_dir = goal_root / "quiet_turn" / "skips"
+        if quiet_skips_dir.is_dir():
+            for path in sorted(quiet_skips_dir.glob("*.json")):
+                try:
+                    receipt = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(receipt, dict):
+                    turn_id = str(receipt.get("turn_key") or path.stem)
+                    _consume_quiet(receipt.get("quiet_turn") or receipt, turn_id)
+        sqlite_path = goal_root / "turn_prefetch_state.sqlite"
+        if sqlite_path.is_file():
+            import sqlite3
+            from contextlib import closing
+
+            try:
+                with closing(sqlite3.connect(sqlite_path, timeout=2.0)) as conn:
+                    rows = conn.execute(
+                        "SELECT turn_key, receipt_json FROM quiet_turn_skips ORDER BY recorded_at"
+                    ).fetchall()
+                for row_key, row_json in rows:
+                    try:
+                        receipt = json.loads(row_json)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(receipt, dict):
+                        _consume_quiet(receipt.get("quiet_turn") or receipt, str(row_key))
+            except sqlite3.Error:
+                pass
 
     if context_dir is not None:
         session_file = Path(context_dir) / "session.json"
@@ -260,7 +299,7 @@ def collect_context_policy_telemetry(
                 session_data = {}
             if isinstance(session_data, dict):
                 _consume_prefetch(session_data.get("epoch_prefetch"))
-                _consume_quiet(session_data.get("quiet_turn"))
+                _consume_quiet(session_data.get("quiet_turn"), "__codex_session__")
 
     cold = {"requests": 0, "uncached_prefix_kv_tokens": 0, "cached_prefix_kv_tokens": 0}
     warm = {"requests": 0, "uncached_prefix_kv_tokens": 0, "cached_prefix_kv_tokens": 0}
@@ -296,6 +335,13 @@ def collect_context_policy_telemetry(
         "prefetch_bytes": prefetch_bytes,
         "prefetch_bytes_saved": prefetch_bytes_saved,
         "round_trips_saved": round_trips_saved,
+        "prefetch": {
+            "attempts": prefetch_attempts,
+            "latency_ms": prefetch_latency_ms,
+            "output_bytes": prefetch_bytes,
+            "bytes_saved": prefetch_bytes_saved,
+            "round_trips_saved": round_trips_saved,
+        },
         "prefix_kv": {"cold": cold, "warm": warm},
     }
 

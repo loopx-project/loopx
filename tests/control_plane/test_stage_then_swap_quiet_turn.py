@@ -747,3 +747,361 @@ def test_benchmark_cost_schema_and_token_capacity_record_telemetry_without_legac
     assert usage["context_policy"]["prefetch_latency_ms"] == 15
     assert usage["context_policy"]["prefetch_bytes"] == 240
     assert usage["context_policy"]["prefetch_bytes_saved"] == 2600
+
+
+def test_quiet_turn_failed_host_does_not_skip_next_turn_records_skip_telemetry_and_detects_conflict(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.turn_driver.epoch_prefetch import resolve_quiet_turn_metadata
+    from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    route = ["--registry", str(registry), "--runtime-root", str(runtime)]
+    digest = "9" * 64
+
+    def _plan(turn_id: str) -> dict:
+        c, p = _invoke_cli(
+            route,
+            [
+                "turn",
+                "plan",
+                "--goal-id",
+                "loopx-turn-fixture",
+                "--agent-id",
+                "codex-fixture",
+                "--turn-instance-id",
+                turn_id,
+                "--host",
+                "generic-cli",
+                "--execution-mode",
+                "isolated-headless",
+                "--scheduler-owner",
+                "outer_controller",
+                "--include-transaction-detail",
+            ],
+        )
+        assert c == 0, p
+        return p
+
+    admit_calls = {"n": 0}
+    host_calls = {"n": 0}
+    should_fail = {"flag": True}
+
+    def fake_admit(_payload: dict) -> dict:
+        admit_calls["n"] += 1
+        return {"admitted": True}
+
+    def fake_host(req: dict) -> dict:
+        host_calls["n"] += 1
+        if should_fail["flag"]:
+            raise RuntimeError("transient host failure")
+        return {
+            "schema_version": "loopx_turn_result_v0",
+            "turn_key": req["turn_key"],
+            "result_kind": "validated_progress",
+            "completed_phases": ["host_execute", "typed_result"],
+            "classification": "quiet_probe",
+            "recommended_action": "wait",
+            "next_action": "wait",
+            "delivery_batch_scale": "single_surface",
+            "delivery_outcome": "outcome_progress",
+            "vision_unchanged_reason": "Unchanged state.",
+            "summary": "Recovered turn completed.",
+            "work_evidence": ["artifact:recovered"],
+            "validation_evidence": ["check:recovered"],
+        }
+
+    def ok_noop(*_args, **_kwargs) -> dict:
+        return {"ok": True, "appended": True, "classification": "quiet_probe", "recommended_action": "wait"}
+
+    qt_cfg = {
+        "enabled": True,
+        "quiet_noop_allowed": True,
+        "current_state_digest": digest,
+        "skip_host_when_unchanged": True,
+    }
+
+    # Turn 1 fails inside host_runner: digest MUST NOT be committed prematurely.
+    r1 = run_loopx_turn_once(
+        _plan("qt-fail-1"),
+        host_runner=fake_host,
+        admit_start=fake_admit,
+        project=project,
+        runtime_root=runtime,
+        goal_id="loopx-turn-fixture",
+        timeout_seconds=10.0,
+        execute=True,
+        task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+        writeback=ok_noop,
+        spend=lambda *a, **k: {"ok": True, "appended": True, "receipt": {"status": "committed"}},
+        scheduler=lambda *a, **k: {"ok": True, "acknowledged": True},
+        quiet_turn=qt_cfg,
+    )
+    assert r1["status"] == "failed" and r1["ok"] is False
+    assert admit_calls["n"] == 1 and host_calls["n"] == 1
+
+    # Turn 2 with identical digest executes cleanly (NOT skipped) and commits digest on settlement.
+    should_fail["flag"] = False
+    r2 = run_loopx_turn_once(
+        _plan("qt-ok-2"),
+        host_runner=fake_host,
+        admit_start=fake_admit,
+        project=project,
+        runtime_root=runtime,
+        goal_id="loopx-turn-fixture",
+        timeout_seconds=10.0,
+        execute=True,
+        task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+        writeback=ok_noop,
+        spend=lambda *a, **k: {"ok": True, "appended": True, "receipt": {"status": "committed"}},
+        scheduler=lambda *a, **k: {"ok": True, "acknowledged": True},
+        quiet_turn=qt_cfg,
+    )
+    assert r2["ok"] is True
+    assert admit_calls["n"] == 2 and host_calls["n"] == 2
+
+    # Turn 3 with unchanged digest skips BEFORE admit_start() / host_runner and records durable skip receipt.
+    r3 = run_loopx_turn_once(
+        _plan("qt-skip-3"),
+        host_runner=fake_host,
+        admit_start=fake_admit,
+        project=project,
+        runtime_root=runtime,
+        goal_id="loopx-turn-fixture",
+        timeout_seconds=10.0,
+        execute=True,
+        task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+        writeback=ok_noop,
+        spend=lambda *a, **k: {"ok": True, "appended": True, "receipt": {"status": "committed"}},
+        scheduler=lambda *a, **k: {"ok": True, "acknowledged": True},
+        quiet_turn=qt_cfg,
+    )
+    assert r3["status"] == "skipped"
+    assert admit_calls["n"] == 2  # admit_start skipped!
+    assert host_calls["n"] == 2
+    tel = collect_context_policy_telemetry(runtime, goal_id="loopx-turn-fixture")
+    assert tel["quiet_turn_skips"] == 1
+
+    # Inject File vs SQLite conflict on quiet_turn_state -> must fail closed (state_changed=True, skipped=False).
+    goal_root = runtime / "goals" / "loopx-turn-fixture"
+    q_file = next((goal_root / "quiet_turn").glob("*.json"))
+    q_payload = json.loads(q_file.read_text(encoding="utf-8"))
+    q_payload["state_digest"] = "1" * 64
+    q_file.write_text(json.dumps(q_payload), encoding="utf-8")
+    conflict = resolve_quiet_turn_metadata(
+        scope_key=q_payload["scope_key"],
+        file_path=q_file,
+        sqlite_path=goal_root / "turn_prefetch_state.sqlite",
+        enabled=True,
+        quiet_noop_allowed=True,
+        current_state_digest=digest,
+        record_if_changed=False,
+    )
+    assert conflict["skipped"] is False
+    assert conflict["state_changed"] is True
+    assert conflict["reason"] == "state_conflict"
+    assert conflict["state_conflict"] is True
+
+
+def test_committed_turn_replay_with_altered_epoch_prefetch_never_reexecutes_and_partial_page_keeps_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loopx.control_plane.turn_driver.epoch_prefetch as ep_mod
+    from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    route = ["--registry", str(registry), "--runtime-root", str(runtime)]
+    probe_a = tmp_path / "probe_a.json"
+    probe_a.write_text(
+        json.dumps({"summary": "concise summary", "padding": "z" * 4000}), encoding="utf-8"
+    )
+    probe_b = tmp_path / "probe_b.txt"
+    probe_b.write_text("completely different command probe", encoding="utf-8")
+
+    # 1) Partial page (eof=false) via real context-read --page-bytes MUST fail closed to KeepRaw.
+    big_cap = tmp_path / "big_cap.json"
+    big_raw = json.dumps({"big": "b" * 16000})
+    big_cap.write_text(big_raw, encoding="utf-8")
+    big_sha = hashlib.sha256(big_raw.encode("utf-8")).hexdigest()
+    partial_receipt = resolve_or_execute_epoch_prefetch(
+        epoch_prefetch={
+            "enabled": True,
+            "prefetch_command": [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--format",
+                "json",
+                "quota",
+                "context-read",
+                "--capture-file",
+                str(big_cap),
+                "--capture-sha256",
+                big_sha,
+                "--select",
+                "/big",
+                "--page-bytes",
+                "1600",
+            ],
+            "timeout_ms": 10000,
+            "max_output_bytes": 16384,
+        },
+        scope_key="partial:eof:test",
+        context_epoch="epoch-partial-1",
+        file_store_dir=tmp_path / "ep_partial",
+        sqlite_path=tmp_path / "ep_partial.sqlite",
+        source_ref={"path": str(big_cap), "sha256": big_sha},
+        baseline_bytes=len(big_raw.encode("utf-8")),
+        cwd=Path.cwd(),
+    )
+    assert partial_receipt is not None
+    assert partial_receipt["operator"] == "KeepRaw"
+    assert partial_receipt["fallback_reason"] == "incomplete_output"
+    assert partial_receipt["truncated"] is True
+    assert partial_receipt["preserves_raw_state"] is True
+    assert partial_receipt["round_trips_saved"] == 0
+    assert partial_receipt["bytes_saved"] == 0
+
+    # 2) Replay of committed Turn with ALTERED --epoch-prefetch-json NEVER re-executes prefetch_command.
+    c, plan = _invoke_cli(
+        route,
+        [
+            "turn",
+            "plan",
+            "--goal-id",
+            "loopx-turn-fixture",
+            "--agent-id",
+            "codex-fixture",
+            "--turn-instance-id",
+            "replay-altered-1",
+            "--host",
+            "generic-cli",
+            "--execution-mode",
+            "isolated-headless",
+            "--scheduler-owner",
+            "outer_controller",
+            "--include-transaction-detail",
+        ],
+    )
+    assert c == 0, plan
+
+    calls = {"n": 0}
+    orig_runner = ep_mod.run_bounded_prefetch_subprocess
+
+    def spy_runner(argv, *, timeout_ms, max_output_bytes, cwd=None):
+        calls["n"] += 1
+        return orig_runner(argv, timeout_ms=timeout_ms, max_output_bytes=max_output_bytes, cwd=cwd)
+
+    monkeypatch.setattr(ep_mod, "run_bounded_prefetch_subprocess", spy_runner)
+
+    def ok_host(req: dict) -> dict:
+        return {
+            "schema_version": "loopx_turn_result_v0",
+            "turn_key": req["turn_key"],
+            "result_kind": "validated_progress",
+            "completed_phases": ["host_execute", "typed_result"],
+            "classification": "quiet_probe",
+            "recommended_action": "wait",
+            "next_action": "wait",
+            "delivery_batch_scale": "single_surface",
+            "delivery_outcome": "outcome_progress",
+            "vision_unchanged_reason": "Completed.",
+            "summary": "Committed.",
+            "work_evidence": ["artifact:committed"],
+            "validation_evidence": ["check:committed"],
+        }
+
+    def ok_noop(*_args, **_kwargs) -> dict:
+        return {"ok": True, "appended": True, "classification": "quiet_probe", "recommended_action": "wait"}
+
+    cfg_a = {
+        "enabled": True,
+        "context_epoch": "epoch-replay-lock",
+        "prefetch_command": ["cat", str(probe_a)],
+        "baseline_bytes": 16384,
+        "timeout_ms": 2000,
+        "max_output_bytes": 8192,
+    }
+    cfg_b = {
+        "enabled": True,
+        "context_epoch": "epoch-replay-lock",
+        "prefetch_command": ["cat", str(probe_b)],
+        "baseline_bytes": 16384,
+        "timeout_ms": 2000,
+        "max_output_bytes": 8192,
+    }
+    r1 = run_loopx_turn_once(
+        plan,
+        host_runner=ok_host,
+        project=project,
+        runtime_root=runtime,
+        goal_id="loopx-turn-fixture",
+        timeout_seconds=10.0,
+        execute=True,
+        task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+        writeback=ok_noop,
+        spend=lambda *a, **k: {"ok": True, "appended": True, "receipt": {"status": "committed"}},
+        scheduler=lambda *a, **k: {"ok": True, "acknowledged": True},
+        epoch_prefetch=cfg_a,
+    )
+    assert calls["n"] == 1
+    assert r1["epoch_prefetch"]["operator"] == "EpochReset"
+    r2 = run_loopx_turn_once(
+        plan,
+        host_runner=ok_host,
+        project=project,
+        runtime_root=runtime,
+        goal_id="loopx-turn-fixture",
+        timeout_seconds=10.0,
+        execute=True,
+        task_validator=lambda p, r: {"status": "passed", "validator_kind": "callback", "summary": "ok"},
+        writeback=ok_noop,
+        spend=lambda *a, **k: {"ok": True, "appended": True, "receipt": {"status": "committed"}},
+        scheduler=lambda *a, **k: {"ok": True, "acknowledged": True},
+        epoch_prefetch=cfg_b,
+    )
+    assert calls["n"] == 1
+    assert r2["epoch_prefetch"]["receipt_sha256"] == r1["epoch_prefetch"]["receipt_sha256"]
+
+    # Also prove CLI return_existing (--resume-turn-key on committed Turn) with altered --epoch-prefetch-json.
+    seen_log = tmp_path / "cli_seen.json"
+    runner, validator = _write_generic_host_and_validator(tmp_path, seen_log)
+    cli_args_a = [
+        "turn",
+        "run-once",
+        "--goal-id",
+        "loopx-turn-fixture",
+        "--agent-id",
+        "codex-fixture",
+        "--turn-instance-id",
+        "cli-replay-altered",
+        "--host",
+        "generic-cli",
+        "--project",
+        str(project),
+        "--host-adapter-request-schema",
+        "loopx_turn_host_request_v1",
+        "--host-adapter-command-json",
+        json.dumps([sys.executable, str(runner)]),
+        "--validation-command-json",
+        json.dumps([sys.executable, str(validator)]),
+        "--epoch-prefetch-json",
+        json.dumps(cfg_a),
+        "--no-global-sync",
+        "--execute",
+    ]
+    c_a, first_cli = _invoke_cli(route, cli_args_a)
+    assert c_a == 0 and first_cli["status"] == "committed"
+    assert calls["n"] == 2
+    cli_args_b = [
+        arg
+        for idx, arg in enumerate(cli_args_a)
+        if arg not in {"--turn-instance-id", "cli-replay-altered", "--epoch-prefetch-json", json.dumps(cfg_a)}
+        and not (idx > 0 and cli_args_a[idx - 1] in {"--turn-instance-id", "--epoch-prefetch-json"})
+    ] + ["--resume-turn-key", first_cli["resume_turn_key"], "--epoch-prefetch-json", json.dumps(cfg_b)]
+    c_b, replay_cli = _invoke_cli(route, cli_args_b)
+    assert c_b == 0 and replay_cli["replayed"] is True
+    assert calls["n"] == 2  # Altered cfg_b MUST NOT re-execute!
+    assert replay_cli["epoch_prefetch"]["executed"] is False
+    assert replay_cli["epoch_prefetch"]["replayed"] is True
+    assert replay_cli["epoch_prefetch"]["receipt_sha256"] == first_cli["epoch_prefetch"]["receipt_sha256"]

@@ -51,6 +51,8 @@ from .decision_capture import stage_turn_decision_capture
 from .epoch_prefetch import (
     attach_epoch_metadata_to_journal,
     attach_turn_replay_epoch_metadata,
+    commit_turn_quiet_state_after_success,
+    maybe_skip_quiet_turn_before_admission,
     prepare_turn_execution_epoch_context,
 )
 from .execution_readback import execution_payload
@@ -1800,6 +1802,13 @@ def run_loopx_turn_once(
                 plan, {"status": "unavailable", "host": host_projection, "reason": reason},
                 execute=True, replayed=False, effects=empty_effects,
             )
+        if (quiet_skip_payload := maybe_skip_quiet_turn_before_admission(
+            plan=plan, journal_path=journal_path, goal_id=goal_id, turn_key=turn_key,
+            settlement_lineage=settlement_lineage, host_projection=host_projection,
+            empty_effects=empty_effects, payload_builder=execution_payload,
+            options={"epoch_prefetch": epoch_prefetch, "quiet_turn": quiet_turn, "decision_capture_payload": decision_capture_payload},
+        )) is not None:
+            return quiet_skip_payload
         capture = stage_turn_decision_capture(
             journal["plan"] if journal is not None else plan, journal_path=journal_path,
             decision=decision_capture_payload, existing_journal=journal is not None,
@@ -1840,21 +1849,13 @@ def run_loopx_turn_once(
                 )
         if capture is not None:
             plan, request = capture.publish_for_host(request)
-        epoch_metadata, request, skip_host = prepare_turn_execution_epoch_context(
+        epoch_metadata, request = prepare_turn_execution_epoch_context(
             plan=plan, request=request, journal_path=journal_path,
             goal_id=goal_id, turn_key=turn_key, project=project,
             settlement_lineage=settlement_lineage,
             options={"epoch_prefetch": epoch_prefetch, "quiet_turn": quiet_turn, "decision_capture_payload": decision_capture_payload},
-            existing_journal=journal, capture=capture,
+            existing_journal=journal, capture=capture, needs_host=needs_host,
         )
-        if skip_host:
-            return {
-                **execution_payload(
-                    plan, {"status": "stopped", "host": host_projection, "reason": "quiet_turn_unchanged"},
-                    execute=True, replayed=False, effects=empty_effects,
-                ),
-                "status": "skipped", "quiet_turn": epoch_metadata.get("quiet_turn"),
-            }
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
                 recovery_decision, journal, status="started", host_invoked=None,
@@ -1973,4 +1974,9 @@ def run_loopx_turn_once(
                     else None
                 ),
             )
+        commit_turn_quiet_state_after_success(
+            settled=settled, epoch_metadata=epoch_metadata, plan=plan,
+            journal_path=journal_path, goal_id=goal_id, settlement_lineage=settlement_lineage,
+            options={"epoch_prefetch": epoch_prefetch, "quiet_turn": quiet_turn, "decision_capture_payload": decision_capture_payload},
+        )
         return finish_recovery(settled)

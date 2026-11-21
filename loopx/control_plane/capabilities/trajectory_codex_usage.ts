@@ -47,7 +47,8 @@ export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): 
   let active: ActiveTurn | null = null, interruptedSeconds = 0;
   const turns: TrajectorySolverUsage['turns'] = [];
   const interruptedTurns: TrajectoryPartialTurnUsage[] = [];
-  const tokenCountDeltas: Array<{input_tokens: number; cached_input_tokens: number}> = [];
+  const tokenCountDeltas: Array<{input_tokens: number; cached_input_tokens: number; compacted?: boolean}> = [];
+  let pendingCompaction = false;
   const started = new Set<string>();
   let previousLine = 0;
   for (const event of rows) {
@@ -61,6 +62,10 @@ export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): 
       continue;
     }
     if (!sessionSeen) return fail('session header missing');
+    if (event.type === 'compacted' || (event.type === 'event_msg' && p?.type === 'compacted')) {
+      pendingCompaction = true;
+      continue;
+    }
     if (event.type !== 'event_msg') continue;
     const interrupted = isIdentifiedTurnAbort(p);
     if (!interrupted && !['task_started', 'task_complete', 'token_count'].includes(p?.type)) continue;
@@ -90,7 +95,12 @@ export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): 
       // the newly observed request, including the first request after zero.
       if (counterKeys.some(k => delta[k] !== 0) && counterKeys.some(k => delta[k] !== last[k])) return fail('missing usage prefix or counter gap');
       if (counterKeys.some(k => delta[k] !== 0)) {
-        tokenCountDeltas.push({input_tokens: delta.input_tokens, cached_input_tokens: delta.cached_input_tokens});
+        tokenCountDeltas.push({
+          input_tokens: delta.input_tokens,
+          cached_input_tokens: delta.cached_input_tokens,
+          ...(pendingCompaction ? {compacted: true} : {}),
+        });
+        pendingCompaction = false;
       }
       previous = total; samples++; active.samples++;
     } else if (p.type === 'task_complete') {
@@ -147,7 +157,7 @@ export function summarizeContextPolicyTelemetry(params: {
   policy_events?: unknown;
   rows?: ReadonlyArray<{type?: unknown; payload?: any}>;
   request_coverage?: TrajectorySolverUsage['request_coverage'];
-  token_count_deltas?: ReadonlyArray<{input_tokens: number; cached_input_tokens: number}>;
+  token_count_deltas?: ReadonlyArray<{input_tokens: number; cached_input_tokens: number; compacted?: boolean}>;
 }): ContextPolicyTelemetry {
   const operator_counts: Record<ContextPolicyOperatorName, number> = {
     KeepRaw: 0,
@@ -219,7 +229,7 @@ export function summarizeContextPolicyTelemetry(params: {
       const inp = nonNegativeInt(delta.input_tokens);
       const cached = Math.min(inp, nonNegativeInt(delta.cached_input_tokens));
       const uncached = Math.max(0, inp - cached);
-      const target = index === 0 || cached === 0 ? cold : warm;
+      const target = index === 0 || delta.compacted === true || cached === 0 ? cold : warm;
       target.requests += 1;
       target.uncached_prefix_kv_tokens += uncached;
       target.cached_prefix_kv_tokens += cached;
@@ -254,7 +264,7 @@ function summarizeContextPolicyTelemetryIfRequested(
   rows: ReadonlyArray<{type?: unknown; payload?: any}>,
   params: Record<string, unknown>,
   requestCoverage: TrajectorySolverUsage['request_coverage'],
-  tokenCountDeltas: ReadonlyArray<{input_tokens: number; cached_input_tokens: number}>,
+  tokenCountDeltas: ReadonlyArray<{input_tokens: number; cached_input_tokens: number; compacted?: boolean}>,
 ): ContextPolicyTelemetry | undefined {
   const inlineEvents = rows
     .filter(r => r?.type === 'loopx_context_policy' && r.payload && typeof r.payload === 'object')

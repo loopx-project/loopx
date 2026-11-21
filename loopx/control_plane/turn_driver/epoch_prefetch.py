@@ -244,6 +244,17 @@ def _init_sqlite_db(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quiet_turn_skips (
+          turn_key TEXT PRIMARY KEY,
+          scope_key TEXT NOT NULL,
+          state_digest TEXT,
+          receipt_json TEXT NOT NULL,
+          recorded_at TEXT NOT NULL
+        )
+        """
+    )
 
 
 def _read_sqlite_record(
@@ -448,6 +459,7 @@ def resolve_or_execute_epoch_prefetch(
     cwd: str | Path | None = None,
     existing_inline_record: Mapping[str, Any] | None = None,
     runner: Callable[..., dict[str, Any]] | None = None,
+    allow_execute: bool = True,
 ) -> dict[str, Any] | None:
     """Resolve once-only Stage-then-Swap EpochReset prefetch or fail closed to KeepRaw.
 
@@ -550,6 +562,9 @@ def resolve_or_execute_epoch_prefetch(
                 },
             }
 
+        if not allow_execute:
+            return None
+
         if not plan.get("eligible"):
             evaluated = evaluate_epoch_prefetch_swap(
                 epoch_prefetch=epoch_prefetch,
@@ -626,6 +641,79 @@ def resolve_or_execute_epoch_prefetch(
         }
 
 
+def _persist_quiet_turn_state(
+    *,
+    scope_key: str,
+    file_path: Path | None,
+    sqlite_path: Path | None,
+    state_digest: str,
+    metadata: Mapping[str, Any],
+) -> None:
+    state_payload = {
+        "schema_version": QUIET_TURN_STATE_SCHEMA_VERSION,
+        "scope_key": scope_key,
+        "state_digest": state_digest,
+        "metadata": dict(metadata),
+        "updated_at": _now_iso(),
+    }
+    if file_path is not None:
+        _atomic_write_json(file_path, state_payload)
+    if sqlite_path is not None:
+        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(sqlite_path, timeout=5.0, isolation_level=None)) as connection:
+            _init_sqlite_db(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO quiet_turn_state (scope_key, state_digest, metadata_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(scope_key) DO UPDATE SET
+                      state_digest = excluded.state_digest,
+                      metadata_json = excluded.metadata_json,
+                      updated_at = excluded.updated_at
+                    """,
+                    (
+                        scope_key,
+                        state_digest,
+                        json.dumps(dict(metadata), ensure_ascii=False, sort_keys=True),
+                        _now_iso(),
+                    ),
+                )
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+
+
+def commit_quiet_turn_state(
+    *,
+    scope_key: str,
+    file_path: Path | None = None,
+    sqlite_path: Path | None = None,
+    state_digest: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    """Persist Quiet-Turn state digest in BOTH File and SQLite after Turn settlement."""
+    if not state_digest:
+        return
+    meta = dict(metadata) if isinstance(metadata, Mapping) else evaluate_quiet_turn(
+        enabled=True,
+        quiet_noop_allowed=True,
+        state_changed=True,
+        current_state_digest=state_digest,
+        previous_state_digest=None,
+    )
+    _persist_quiet_turn_state(
+        scope_key=scope_key,
+        file_path=file_path,
+        sqlite_path=sqlite_path,
+        state_digest=state_digest,
+        metadata=meta,
+    )
+
+
 def resolve_quiet_turn_metadata(
     *,
     scope_key: str,
@@ -638,13 +726,14 @@ def resolve_quiet_turn_metadata(
     record_if_changed: bool = True,
 ) -> dict[str, Any]:
     """Compute and optionally persist Quiet-Turn zero-tax skip metadata in File & SQLite."""
-    previous_digest: str | None = None
+    file_digest: str | None = None
+    sqlite_digest: str | None = None
     if current_state_digest is not None:
         if file_path is not None and file_path.is_file():
             try:
                 saved = json.loads(file_path.read_text(encoding="utf-8"))
                 if isinstance(saved, dict) and saved.get("scope_key") == scope_key:
-                    previous_digest = str(saved.get("state_digest") or "") or None
+                    file_digest = str(saved.get("state_digest") or "") or None
             except (OSError, ValueError):
                 pass
         if sqlite_path is not None and sqlite_path.exists():
@@ -655,8 +744,25 @@ def resolve_quiet_turn_metadata(
                     (scope_key,),
                 ).fetchone()
                 if row is not None and isinstance(row[0], str) and row[0]:
-                    previous_digest = row[0]
+                    sqlite_digest = row[0]
 
+    if file_digest is not None and sqlite_digest is not None and file_digest != sqlite_digest:
+        conflict_meta = evaluate_quiet_turn(
+            enabled=enabled,
+            quiet_noop_allowed=quiet_noop_allowed,
+            state_changed=True,
+            current_state_digest=current_state_digest,
+            previous_state_digest=None,
+        )
+        return {
+            **conflict_meta,
+            "reason": "state_conflict",
+            "state_conflict": True,
+            "file_digest": file_digest,
+            "sqlite_digest": sqlite_digest,
+        }
+
+    previous_digest = file_digest if file_digest is not None else sqlite_digest
     metadata = evaluate_quiet_turn(
         enabled=enabled,
         quiet_noop_allowed=quiet_noop_allowed,
@@ -665,42 +771,13 @@ def resolve_quiet_turn_metadata(
         previous_state_digest=previous_digest,
     )
     if record_if_changed and enabled and current_state_digest and not metadata.get("skipped"):
-        state_payload = {
-            "schema_version": QUIET_TURN_STATE_SCHEMA_VERSION,
-            "scope_key": scope_key,
-            "state_digest": current_state_digest,
-            "metadata": metadata,
-            "updated_at": _now_iso(),
-        }
-        if file_path is not None:
-            _atomic_write_json(file_path, state_payload)
-        if sqlite_path is not None:
-            sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(sqlite3.connect(sqlite_path, timeout=5.0, isolation_level=None)) as connection:
-                _init_sqlite_db(connection)
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    connection.execute(
-                        """
-                        INSERT INTO quiet_turn_state (scope_key, state_digest, metadata_json, updated_at)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(scope_key) DO UPDATE SET
-                          state_digest = excluded.state_digest,
-                          metadata_json = excluded.metadata_json,
-                          updated_at = excluded.updated_at
-                        """,
-                        (
-                            scope_key,
-                            current_state_digest,
-                            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                            _now_iso(),
-                        ),
-                    )
-                    connection.execute("COMMIT")
-                except BaseException:
-                    if connection.in_transaction:
-                        connection.execute("ROLLBACK")
-                    raise
+        _persist_quiet_turn_state(
+            scope_key=scope_key,
+            file_path=file_path,
+            sqlite_path=sqlite_path,
+            state_digest=current_state_digest,
+            metadata=metadata,
+        )
     return metadata
 
 
@@ -812,6 +889,106 @@ def apply_turn_epoch_prefetch_to_request(
     return updated
 
 
+def _quiet_turn_target_params(
+    *,
+    plan: Mapping[str, Any],
+    goal_id: str,
+    agent_id: str,
+    goal_state_root: Path,
+    effective_quiet: Any,
+) -> tuple[str, Path, Path, dict[str, Any], bool, Any, str]:
+    qt_cfg = effective_quiet if isinstance(effective_quiet, Mapping) else {}
+    envelope = plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), Mapping) else {}
+    interaction = (
+        envelope.get("interaction_contract")
+        if isinstance(envelope.get("interaction_contract"), Mapping)
+        else {}
+    )
+    agent_channel = (
+        interaction.get("agent_channel")
+        if isinstance(interaction.get("agent_channel"), Mapping)
+        else {}
+    )
+    quiet_allowed = bool(
+        qt_cfg.get("quiet_noop_allowed", agent_channel.get("quiet_noop_allowed", True))
+    )
+    scope_key = f"turn_quiet:{goal_id}:{agent_id}"
+    state_digest = (
+        str(qt_cfg["current_state_digest"])
+        if isinstance(qt_cfg.get("current_state_digest"), str)
+        else _sha256_text(
+            json.dumps(
+                {
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "route": plan.get("route"),
+                    "work_contract": plan.get("work_contract") or envelope,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+    )
+    return (
+        scope_key,
+        goal_state_root / "quiet_turn" / f"{_sha256_text(scope_key)}.json",
+        goal_state_root / "turn_prefetch_state.sqlite",
+        qt_cfg,
+        quiet_allowed,
+        qt_cfg.get("state_changed"),
+        state_digest,
+    )
+
+
+def _record_quiet_turn_skip_receipt(
+    *,
+    goal_state_root: Path,
+    sqlite_path: Path,
+    turn_key: str,
+    scope_key: str,
+    quiet_meta: Mapping[str, Any],
+) -> None:
+    skip_payload = {
+        "schema_version": "loopx_quiet_turn_skip_receipt_v0",
+        "turn_key": turn_key,
+        "scope_key": scope_key,
+        "state_digest": quiet_meta.get("state_digest"),
+        "quiet_turn": dict(quiet_meta),
+        "recorded_at": _now_iso(),
+    }
+    turn_digest = _sha256_text(turn_key)
+    skip_file = goal_state_root / "quiet_turn" / "skips" / f"{turn_digest}.json"
+    _atomic_write_json(skip_file, skip_payload)
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(sqlite_path, timeout=5.0, isolation_level=None)) as connection:
+        _init_sqlite_db(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                """
+                INSERT INTO quiet_turn_skips (turn_key, scope_key, state_digest, receipt_json, recorded_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(turn_key) DO UPDATE SET
+                  scope_key = excluded.scope_key,
+                  state_digest = excluded.state_digest,
+                  receipt_json = excluded.receipt_json,
+                  recorded_at = excluded.recorded_at
+                """,
+                (
+                    turn_key,
+                    scope_key,
+                    str(quiet_meta.get("state_digest") or "") or None,
+                    json.dumps(skip_payload, ensure_ascii=False, sort_keys=True),
+                    skip_payload["recorded_at"],
+                ),
+            )
+            connection.execute("COMMIT")
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+
+
 def prepare_turn_epoch_context(
     *,
     plan: Mapping[str, Any],
@@ -849,78 +1026,53 @@ def prepare_turn_epoch_context(
     )
 
     quiet_meta: dict[str, Any] | None = None
-    if effective_quiet is True or (
+    if not allow_execute and isinstance(existing_journal, Mapping) and isinstance(existing_journal.get("quiet_turn"), Mapping):
+        quiet_meta = dict(existing_journal["quiet_turn"])
+    elif effective_quiet is True or (
         isinstance(effective_quiet, Mapping) and effective_quiet.get("enabled") is True
     ):
-        qt_cfg = effective_quiet if isinstance(effective_quiet, Mapping) else {}
-        envelope = (
-            plan.get("turn_envelope")
-            if isinstance(plan.get("turn_envelope"), Mapping)
-            else {}
-        )
-        interaction = (
-            envelope.get("interaction_contract")
-            if isinstance(envelope.get("interaction_contract"), Mapping)
-            else {}
-        )
-        agent_channel = (
-            interaction.get("agent_channel")
-            if isinstance(interaction.get("agent_channel"), Mapping)
-            else {}
-        )
-        quiet_allowed = bool(
-            qt_cfg.get(
-                "quiet_noop_allowed",
-                agent_channel.get("quiet_noop_allowed", True),
+        scope_key, q_file, q_sqlite, _qt_cfg, quiet_allowed, state_changed_opt, state_digest = (
+            _quiet_turn_target_params(
+                plan=plan,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                goal_state_root=goal_state_root,
+                effective_quiet=effective_quiet,
             )
         )
-        scope_key = f"turn_quiet:{goal_id}:{agent_id}"
-        state_digest = (
-            str(qt_cfg["current_state_digest"])
-            if isinstance(qt_cfg.get("current_state_digest"), str)
-            else _sha256_text(
-                json.dumps(
-                    {
-                        "goal_id": goal_id,
-                        "agent_id": agent_id,
-                        "route": plan.get("route"),
-                        "work_contract": plan.get("work_contract") or envelope,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-            )
-        )
+        # Never commit digest before Turn settlement succeeds; inspect read-only here.
         quiet_meta = resolve_quiet_turn_metadata(
             scope_key=scope_key,
-            file_path=goal_state_root / "quiet_turn" / f"{_sha256_text(scope_key)}.json",
-            sqlite_path=sqlite_path,
+            file_path=q_file,
+            sqlite_path=q_sqlite,
             enabled=True,
             quiet_noop_allowed=quiet_allowed,
-            state_changed=qt_cfg.get("state_changed"),
+            state_changed=state_changed_opt,
             current_state_digest=state_digest,
-            record_if_changed=allow_execute,
+            record_if_changed=False,
         )
 
     prefetch_receipt: dict[str, Any] | None = None
     updated_request = dict(request)
-    if (
-        isinstance(effective_epoch_prefetch, Mapping)
-        and effective_epoch_prefetch.get("enabled") is True
-        and not (quiet_meta and quiet_meta.get("skipped"))
-    ):
-        inputs = _turn_epoch_inputs(
-            plan=plan,
-            request=updated_request,
-            epoch_prefetch=effective_epoch_prefetch,
-            capture=capture,
-        )
-        existing_inline = (
-            existing_journal.get("epoch_prefetch")
-            if isinstance(existing_journal, Mapping)
-            else None
-        )
-        if allow_execute or isinstance(existing_inline, Mapping):
+    existing_inline = (
+        existing_journal.get("epoch_prefetch")
+        if isinstance(existing_journal, Mapping)
+        else None
+    )
+    if not allow_execute:
+        if isinstance(existing_inline, Mapping):
+            prefetch_receipt = {
+                **dict(existing_inline),
+                "replayed": True,
+                "executed": False,
+            }
+        elif isinstance(effective_epoch_prefetch, Mapping) and effective_epoch_prefetch.get("enabled") is True:
+            inputs = _turn_epoch_inputs(
+                plan=plan,
+                request=updated_request,
+                epoch_prefetch=effective_epoch_prefetch,
+                capture=capture,
+            )
             prefetch_receipt = resolve_or_execute_epoch_prefetch(
                 epoch_prefetch=effective_epoch_prefetch,
                 scope_key=f"turn_driver:{goal_id}:{turn_key}",
@@ -934,16 +1086,46 @@ def prepare_turn_epoch_context(
                 source_ref=inputs["source_ref"],
                 baseline_bytes=inputs["baseline_bytes"],
                 cwd=effective_epoch_prefetch.get("cwd") or project,
-                existing_inline_record=existing_inline,
+                existing_inline_record=None,
+                allow_execute=False,
             )
-            if prefetch_receipt is not None:
-                updated_request = apply_turn_epoch_prefetch_to_request(
-                    updated_request,
-                    prefetch_receipt,
-                    replace_exploratory_context=bool(
-                        effective_epoch_prefetch.get("replace_exploratory_context")
-                    ),
-                )
+        return prefetch_receipt, quiet_meta, updated_request
+
+    if (
+        isinstance(effective_epoch_prefetch, Mapping)
+        and effective_epoch_prefetch.get("enabled") is True
+        and not (quiet_meta and quiet_meta.get("skipped"))
+    ):
+        inputs = _turn_epoch_inputs(
+            plan=plan,
+            request=updated_request,
+            epoch_prefetch=effective_epoch_prefetch,
+            capture=capture,
+        )
+        prefetch_receipt = resolve_or_execute_epoch_prefetch(
+            epoch_prefetch=effective_epoch_prefetch,
+            scope_key=f"turn_driver:{goal_id}:{turn_key}",
+            context_epoch=inputs["context_epoch"],
+            file_store_dir=goal_state_root / "turn_prefetch",
+            sqlite_path=sqlite_path,
+            reclaimed_turns=inputs["reclaimed_turns"],
+            dropped_failures=inputs["dropped_failures"],
+            failure_facts=inputs["failure_facts"],
+            open_obligations=inputs["open_obligations"],
+            source_ref=inputs["source_ref"],
+            baseline_bytes=inputs["baseline_bytes"],
+            cwd=effective_epoch_prefetch.get("cwd") or project,
+            existing_inline_record=existing_inline,
+            allow_execute=True,
+        )
+        if prefetch_receipt is not None:
+            updated_request = apply_turn_epoch_prefetch_to_request(
+                updated_request,
+                prefetch_receipt,
+                replace_exploratory_context=bool(
+                    effective_epoch_prefetch.get("replace_exploratory_context")
+                ),
+            )
     return prefetch_receipt, quiet_meta, updated_request
 
 
@@ -1001,6 +1183,93 @@ def _is_turn_option_enabled(
     )
 
 
+def _effective_agent_id(
+    plan: Mapping[str, Any], settlement_lineage: Mapping[str, Any] | None,
+) -> str:
+    if settlement_lineage is not None:
+        return str(settlement_lineage["agent_id"])
+    container = (
+        (plan.get("work_contract") if isinstance(plan.get("work_contract"), Mapping) else {}).get(
+            "agent_identity", {}
+        )
+        if plan.get("schema_version") == "loopx_turn_plan_v1"
+        else (plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), Mapping) else {})
+    )
+    return str(container.get("agent_id") or "") if isinstance(container, Mapping) else ""
+
+
+def maybe_skip_quiet_turn_before_admission(
+    *,
+    plan: Mapping[str, Any],
+    journal_path: Path,
+    goal_id: str,
+    turn_key: str,
+    settlement_lineage: Mapping[str, Any] | None,
+    host_projection: Mapping[str, Any],
+    empty_effects: Mapping[str, bool],
+    options: Mapping[str, Any],
+    payload_builder: Callable[..., dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Evaluate Quiet-Turn BEFORE quota admission/capture publish and record durable skip receipt."""
+    quiet_turn = options.get("quiet_turn", False)
+    decision_capture_payload = options.get("decision_capture_payload")
+    if not _is_turn_option_enabled(
+        quiet_turn, decision_capture_payload, "quiet_turn", allow_bool_true=True,
+    ):
+        return None
+    effective_quiet = (
+        quiet_turn
+        if quiet_turn
+        else decision_capture_payload.get("quiet_turn")
+        if isinstance(decision_capture_payload, Mapping)
+        else False
+    )
+    skip_host_cfg = effective_quiet if isinstance(effective_quiet, Mapping) else {}
+    if not skip_host_cfg.get("skip_host_when_unchanged"):
+        return None
+    goal_state_root = journal_path.parent.parent
+    agent_id = _effective_agent_id(plan, settlement_lineage)
+    scope_key, q_file, q_sqlite, _qt_cfg, quiet_allowed, state_changed_opt, state_digest = (
+        _quiet_turn_target_params(
+            plan=plan,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            goal_state_root=goal_state_root,
+            effective_quiet=effective_quiet,
+        )
+    )
+    quiet_meta = resolve_quiet_turn_metadata(
+        scope_key=scope_key,
+        file_path=q_file,
+        sqlite_path=q_sqlite,
+        enabled=True,
+        quiet_noop_allowed=quiet_allowed,
+        state_changed=state_changed_opt,
+        current_state_digest=state_digest,
+        record_if_changed=False,
+    )
+    if not quiet_meta.get("skipped"):
+        return None
+    _record_quiet_turn_skip_receipt(
+        goal_state_root=goal_state_root,
+        sqlite_path=q_sqlite,
+        turn_key=turn_key,
+        scope_key=scope_key,
+        quiet_meta=quiet_meta,
+    )
+    return {
+        **payload_builder(
+            plan,
+            {"status": "stopped", "host": host_projection, "reason": "quiet_turn_unchanged"},
+            execute=True,
+            replayed=False,
+            effects=empty_effects,
+        ),
+        "status": "skipped",
+        "quiet_turn": quiet_meta,
+    }
+
+
 def prepare_turn_execution_epoch_context(
     *,
     plan: Mapping[str, Any],
@@ -1013,7 +1282,8 @@ def prepare_turn_execution_epoch_context(
     options: Mapping[str, Any],
     existing_journal: Mapping[str, Any] | None,
     capture: Any,
-) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    needs_host: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prepare opt-in Stage-then-Swap prefetch & Quiet-Turn state before Turn launch."""
     epoch_prefetch = options.get("epoch_prefetch")
     quiet_turn = options.get("quiet_turn", False)
@@ -1025,20 +1295,16 @@ def prepare_turn_execution_epoch_context(
         quiet_turn, decision_capture_payload, "quiet_turn", allow_bool_true=True,
     )
     if not (epoch_opted_in or quiet_opted_in):
-        return {}, dict(request), False
+        return {}, dict(request)
 
-    if settlement_lineage is not None:
-        effective_agent_id = str(settlement_lineage["agent_id"])
-    else:
-        container = (
-            (plan.get("work_contract") if isinstance(plan.get("work_contract"), Mapping) else {}).get(
-                "agent_identity", {}
-            )
-            if plan.get("schema_version") == "loopx_turn_plan_v1"
-            else (plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), Mapping) else {})
+    allow_execute = bool(
+        needs_host
+        and not (
+            isinstance(existing_journal, Mapping)
+            and isinstance(existing_journal.get("epoch_prefetch"), Mapping)
         )
-        effective_agent_id = str(container.get("agent_id") or "") if isinstance(container, Mapping) else ""
-
+    )
+    effective_agent_id = _effective_agent_id(plan, settlement_lineage)
     prefetch_receipt, quiet_meta, updated_request = prepare_turn_epoch_context(
         plan=plan,
         request=request,
@@ -1052,20 +1318,62 @@ def prepare_turn_execution_epoch_context(
         decision_capture_payload=decision_capture_payload,
         existing_journal=existing_journal,
         capture=capture,
-        allow_execute=True,
+        allow_execute=allow_execute,
     )
-    skip_host_cfg = (
+    return {"epoch_prefetch": prefetch_receipt, "quiet_turn": quiet_meta}, updated_request
+
+
+def commit_turn_quiet_state_after_success(
+    *,
+    settled: Mapping[str, Any],
+    epoch_metadata: Mapping[str, Any] | None,
+    plan: Mapping[str, Any],
+    journal_path: Path,
+    goal_id: str,
+    settlement_lineage: Mapping[str, Any] | None,
+    options: Mapping[str, Any],
+) -> None:
+    """Commit Quiet-Turn state_digest ONLY after the Turn has settled cleanly."""
+    if not epoch_metadata:
+        return
+    if settled.get("ok") is not True or settled.get("status") not in {
+        "committed",
+        "stopped",
+        "scheduler_action_required",
+    }:
+        return
+    quiet_meta = epoch_metadata.get("quiet_turn")
+    if not isinstance(quiet_meta, Mapping) or quiet_meta.get("enabled") is not True:
+        return
+    if quiet_meta.get("skipped") is True:
+        return
+    quiet_turn = options.get("quiet_turn", False)
+    decision_capture_payload = options.get("decision_capture_payload")
+    effective_quiet = (
         quiet_turn
-        if isinstance(quiet_turn, Mapping)
+        if quiet_turn
         else decision_capture_payload.get("quiet_turn")
         if isinstance(decision_capture_payload, Mapping)
-        and isinstance(decision_capture_payload.get("quiet_turn"), Mapping)
-        else {}
+        else False
     )
-    skip_host = bool(
-        quiet_meta and quiet_meta.get("skipped") and skip_host_cfg.get("skip_host_when_unchanged")
+    agent_id = _effective_agent_id(plan, settlement_lineage)
+    goal_state_root = journal_path.parent.parent
+    scope_key, q_file, q_sqlite, _qt_cfg, _quiet_allowed, _state_changed, state_digest = (
+        _quiet_turn_target_params(
+            plan=plan,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            goal_state_root=goal_state_root,
+            effective_quiet=effective_quiet,
+        )
     )
-    return {"epoch_prefetch": prefetch_receipt, "quiet_turn": quiet_meta}, updated_request, skip_host
+    commit_quiet_turn_state(
+        scope_key=scope_key,
+        file_path=q_file,
+        sqlite_path=q_sqlite,
+        state_digest=state_digest,
+        metadata=quiet_meta,
+    )
 
 
 def attach_epoch_metadata_to_journal(
@@ -1214,5 +1522,3 @@ def resolve_codex_context_quiet_turn_hook(
     if quiet_meta.get("skipped"):
         return {"hookSpecificOutput": {"hookEventName": hook_name, "quietTurn": quiet_meta}}
     return None
-
-
