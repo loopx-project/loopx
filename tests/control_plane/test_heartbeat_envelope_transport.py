@@ -351,9 +351,9 @@ def test_native_worker_and_stable_bootstrap_cannot_use_capture(tmp_path):
     env = dict(os.environ, LOOPX_CLI='unused', LOOPX_REGISTRY=str(registry),
                LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_PROJECT=str(project),
                LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
-               LOOPX_WAKE_LOG_DIR=str(tmp_path / 'absent'), LOOPX_TURN_ENVELOPE='1')
+               LOOPX_WAKE_LOG_DIR=str(tmp_path / 'absent'))
     with pytest.raises(ValueError, match='host-owned'):
-        heartbeat_body(env, TURN_ID, native_goal=True)
+        heartbeat_body(env, TURN_ID, native_goal=True, decision_handoff_socket=str(tmp_path / 'socket'))
     assert not (tmp_path / 'absent').exists()
     rc, rejected = _run_cli(
         registry, runtime, 'heartbeat-prompt', '--bootstrap', '--thin',
