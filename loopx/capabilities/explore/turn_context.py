@@ -121,7 +121,8 @@ def explore_turn_context(
     )
     from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
     yardstick = work_yardstick_enabled(goal, runtime_root)
-    projection, plan, focus, todos = {}, {}, {}, {}
+    projection: Mapping[str, object] = {}
+    plan, focus, todos = {}, {}, {}
     page_tasks = {row["todo_id"] for row in review_pages
                   if isinstance(row, Mapping) and isinstance(row.get("todo_id"), str)} if isinstance(review_pages, list) else set()
     if graph or gate["enabled"]:
