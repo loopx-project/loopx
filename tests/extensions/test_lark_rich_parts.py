@@ -285,6 +285,45 @@ def test_attachments_stay_on_last_concrete_post(tmp_path):
     assert part.endswith("测")
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda state: state.update(delivery_parts=[]),
+        lambda state: state.pop("delivery_parts", None),
+        lambda state: state.pop("delivery_part_attempts", None),
+        lambda state: state["delivery_part_attempts"].pop(
+            str(len(state["delivery_parts"]) - 1), None
+        ),
+    ],
+    ids=["empty-parts", "missing-parts", "missing-attempts", "missing-last-attempt"],
+)
+def test_attachment_reply_rejects_empty_or_missing_part_attempts(tmp_path, mutation):
+    provider = RichProvider()
+    attempts = []
+    args, result = send(
+        tmp_path,
+        provider,
+        "测" * 20000,
+        delivery_attempt_recorder=attempts.append,
+    )
+    assert result["reply_verified"]
+    journal = next(
+        Path(args["project"]).glob(
+            ".loopx/inbox/feedback/manager-delivery/parts/*.json"
+        )
+    )
+    state = json.loads(journal.read_text())
+    mutation(state)
+    journal.write_text(json.dumps(state))
+    with pytest.raises(ValueError, match="unavailable"):
+        attachment_reply(
+            project=args["project"],
+            config_path=args["config_path"],
+            attempt=attempts[-1],
+            text=args["text"],
+        )
+
+
 def test_preview_and_denied_review_do_not_write_or_record_an_attempt(tmp_path):
     provider = RichProvider()
     config, _, project = _fixture(tmp_path, lifecycle=False)

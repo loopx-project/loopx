@@ -437,8 +437,8 @@ class PrivateWebProjectionMixin:
                         return name, pending in self._web_projection_messages(row)
                     except (OSError, ValueError, KeyError):
                         return None, False
-                who = "你" if pending["role"] == "user" else "LoopX"
-                text = f"**{who}（App）**\n\n{pending['text']}"
+                from .manager_returns import prepare_app_mirror_text
+                text = prepare_app_mirror_text(self, path, row, messages, pending)
                 phase_key = "web." + pending["message_id"]
                 if self.reaction_feedback and pending["role"] == "user":
                     # Persist feedback intent before a mirror write/recovery;
