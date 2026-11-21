@@ -476,13 +476,22 @@ def run_native_goal(
                 receipt["native_goal"] = compact_native_goal_receipt(observed[-1])
 
 
+def _normalize_runtime_root(runtime_root: str, project: str) -> str:
+    """Bind LOOPX_RUNTIME_ROOT to LOOPX_PROJECT regardless of the launcher's CWD."""
+    root = Path(runtime_root)
+    if root.is_absolute():
+        return os.path.abspath(root)
+    return os.path.abspath(os.path.join(os.path.abspath(project), root))
+
+
 def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) -> list[str]:
     if stage != "plan" or execution.sandbox != "workspace-write":
         return []
     runtime_root = env.get("LOOPX_RUNTIME_ROOT")
     if not runtime_root:
         return []
-    roots = list(dict.fromkeys([str(Path(runtime_root)), str(Path(runtime_root).resolve())]))
+    normalized = _normalize_runtime_root(runtime_root, env["LOOPX_PROJECT"])
+    roots = list(dict.fromkeys([normalized, str(Path(normalized).resolve())]))
     return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps(roots)}"]
 
 
@@ -630,6 +639,10 @@ def run_once(env: dict[str, str]) -> dict:
     stdout_path, stderr_path = host_output_paths(wake)
     home = Path(env["LOOPX_CODEX_HOME"])
     env = process_environment(home, base=env)
+    if env.get("LOOPX_RUNTIME_ROOT"):
+        env["LOOPX_RUNTIME_ROOT"] = _normalize_runtime_root(
+            env["LOOPX_RUNTIME_ROOT"], env["LOOPX_PROJECT"]
+        )
     # Preserve this trial's resolved off/on choice in both preflight and solver
     # subprocesses; an explicit off must not inherit a machine-wide default.
     env["LOOPX_CONTEXT_DELIVERY"] = execution.context_delivery

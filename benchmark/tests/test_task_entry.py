@@ -1288,3 +1288,142 @@ def test_plan_native_command_exposes_runtime_root_only_during_workspace_write_pl
     assert not any("writable_roots" in arg for arg in native_command(env, ro_exec, "plan", wake, None))
     dfa_exec = Execution(mode="heartbeat", context="resume", sandbox="danger-full-access")
     assert not any("writable_roots" in arg for arg in native_command(env, dfa_exec, "plan", wake, None))
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, monkeypatch, context):
+    from types import SimpleNamespace
+    from benchmark.runtime.codex import Execution
+    from benchmark.runtime.worker import native_command, run_once
+
+    launcher = tmp_path / "launcher"
+    project = tmp_path / "project"
+    wake = tmp_path / "wake"
+    home = tmp_path / "home"
+    logs = tmp_path / "logs"
+    task_doc = tmp_path / "task.md"
+    codex_bin = tmp_path / "codex"
+    loopx_cli = tmp_path / "loopx"
+    skills = tmp_path / "skills"
+    registry = tmp_path / "registry.json"
+    for d in (launcher, project, wake, home, logs, skills):
+        d.mkdir(parents=True, exist_ok=True)
+    task_doc.write_text("# Task\n", encoding="utf-8")
+    registry.write_text("{}", encoding="utf-8")
+    rel_rt = "rel-runtime"
+    (project / rel_rt).mkdir()
+    (launcher / rel_rt).mkdir()
+
+    monkeypatch.chdir(launcher)
+    expected_abs = os.path.abspath(project / rel_rt)
+    expected_roots = list(dict.fromkeys([expected_abs, str(Path(expected_abs).resolve())]))
+    expected_flag = f"sandbox_workspace_write.writable_roots={json.dumps(expected_roots)}"
+
+    ws_exec = Execution(mode="turn", context=context, sandbox="workspace-write", validation_command=("true",))
+    session = None if context == "fresh" else SimpleNamespace(session_id="sess-1")
+    cmd = native_command(
+        {
+            "CODEX_BIN": str(codex_bin),
+            "LOOPX_PROJECT": str(project),
+            "LOOPX_RUNTIME_ROOT": rel_rt,
+            "MODEL_NAME": "gpt-5.4",
+            "REASONING_EFFORT": "low",
+        },
+        ws_exec,
+        "plan",
+        wake,
+        session,
+    )
+    assert expected_flag in cmd
+    assert str(launcher / rel_rt) not in json.dumps(cmd)
+
+    observed = {}
+    codex_bin.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        f"pathlib.Path({json.dumps(str(tmp_path / 'codex-observed.json'))}).write_text("
+        "json.dumps({'argv': sys.argv[1:], 'runtime_root': os.environ.get('LOOPX_RUNTIME_ROOT')}))\n"
+        "if '--output-last-message' in sys.argv:\n"
+        "    out = sys.argv[sys.argv.index('--output-last-message') + 1]\n"
+        "    pathlib.Path(out).write_text('{\"input_digest\":\"d1\",\"status\":\"ready\",\"todo_ids\":[\"t1\"]}')\n",
+        encoding="utf-8",
+    )
+    codex_bin.chmod(0o755)
+    loopx_cli.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    loopx_cli.chmod(0o755)
+
+    monkeypatch.setattr("benchmark.runtime.worker.prepare_codex_home", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "benchmark.runtime.planning.task_plan_packet",
+        lambda env, cli: observed.setdefault("packets", []).append(
+            {"env_rt": env["LOOPX_RUNTIME_ROOT"], "cli": list(cli)}
+        )
+        or {
+            "input_digest": "d1",
+            "existing_todos": [{"todo_id": "t1", "status": "pending"}],
+            "runnable_todo_ids": ["t1"],
+            "blocking_todo_ids": [],
+            "goal_acceptance": {"planning_requirements": {"agent_id": "a1", "declaration_current": True, "linked_todo_ids": ["t1"]}},
+            "goal_id": "g1",
+            "agent_id": "a1",
+            "result_schema": {},
+            "goal_acceptance_prompt": "",
+        },
+    )
+    monkeypatch.setattr(
+        "benchmark.runtime.planning.render_planning_prompt",
+        lambda packet, env: "plan prompt",
+    )
+    monkeypatch.setattr(
+        "benchmark.runtime.planning.validate_plan_readback",
+        lambda result, before, after: {"status": "ready", "todo_ids": ["t1"], "state_readback_verified": True},
+    )
+    def _fake_session_wake(wake_env, *a, **kw):
+        observed["wake_rt"] = wake_env["LOOPX_RUNTIME_ROOT"]
+        return SimpleNamespace(
+            session_id="sess-" + context,
+            receipt={"action": "start_new" if context == "fresh" else "resume", "session_id": "sess-" + context},
+            goal_ref=None,
+            admission=None,
+            observe=lambda *_: None,
+            host_launch_decision=lambda *_: None,
+        )
+    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", _fake_session_wake)
+    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_launch_check", lambda *a, **kw: None)
+
+    plan_result = tmp_path / "plan-result.json"
+    receipt = run_once(
+        {
+            "CODEX_BIN": str(codex_bin),
+            "LOOPX_CLI": str(loopx_cli),
+            "LOOPX_REGISTRY": str(registry),
+            "LOOPX_RUNTIME_ROOT": rel_rt,
+            "LOOPX_PROJECT": str(project),
+            "LOOPX_CODEX_HOME": str(home),
+            "LOOPX_WAKE_LOG_DIR": str(logs),
+            "LOOPX_SHARED_SKILLS": str(skills),
+            "LOOPX_TASK_DOC": str(task_doc),
+            "LOOPX_GOAL_ID": "g1",
+            "LOOPX_AGENT_ID": "a1",
+            "LOOPX_EXECUTION_MODE": "turn",
+            "LOOPX_ITERATION_CONTEXT": context,
+            "LOOPX_VALIDATION_COMMAND_JSON": '["true"]',
+            "LOOPX_TASK_ENTRY": "loopx-planned",
+            "LOOPX_TASK_STAGE": "plan",
+            "LOOPX_PLANNING_RESULT": str(plan_result),
+            "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 120),
+            "LOOPX_CODEX_SANDBOX": "workspace-write",
+            "LOOPX_CONTEXT_DELIVERY": "off",
+            "MODEL_NAME": "gpt-5.4",
+            "REASONING_EFFORT": "low",
+        }
+    )
+    assert receipt["ok"] is True
+    for packet in observed["packets"]:
+        assert packet["env_rt"] == expected_abs
+        assert packet["cli"][packet["cli"].index("--runtime-root") + 1] == expected_abs
+    assert observed["wake_rt"] == expected_abs
+    codex_seen = json.loads((tmp_path / "codex-observed.json").read_text(encoding="utf-8"))
+    assert codex_seen["runtime_root"] == expected_abs
+    assert expected_flag in codex_seen["argv"]
+    assert str(launcher / rel_rt) not in json.dumps(codex_seen)
