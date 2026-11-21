@@ -1,18 +1,21 @@
 """Disposable pytest namespaces must not retain managed runtime processes."""
 from __future__ import annotations
 
-import json
 import errno
+import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
+from managed_effect_runtime_fixture import (
+    capture_disposable_effect_runtimes,
+    stop_disposable_effect_runtimes,
+)
 
-from managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
 from loopx.control_plane import effect_runtime
 
 
@@ -127,6 +130,38 @@ def test_pytest_reclaims_finished_cases_and_keeps_failed_phases(tmp_path, nested
     assert set(artifacts) == {"test_failed_setup", "test_failed_call", "test_failed_teardown"}
     for name, paths in artifacts.items():
         assert all((Path(path) / "witness").read_text() == name for path in paths)
+
+
+def test_pytest_reclaims_read_only_trees_without_warning_errors(tmp_path, nested_pytest_environment):
+    probe = tmp_path / "test_read_only_tree.py"
+    evidence_file = tmp_path / "read-only.json"
+    probe.write_text(textwrap.dedent(f'''
+        import json
+        import os
+        from pathlib import Path
+
+        import pytest
+
+        @pytest.mark.filterwarnings("error")
+        def test_read_only(tmp_path):
+            read_only = tmp_path / "read-only"
+            read_only.mkdir()
+            target = read_only / "git-object"
+            target.write_text("synthetic")
+            os.chmod(target, 0o444)
+            os.chmod(read_only, 0o555)
+            Path({str(evidence_file)!r}).write_text(json.dumps({{
+                "root": str(tmp_path), "target": str(target)
+            }}))
+    '''), encoding="utf-8")
+    result = subprocess.run([
+        sys.executable, "-m", "pytest", "-q", "-W", "error", "-p", "conftest",
+        "--basetemp", str(tmp_path / "cases"), str(probe),
+    ], cwd=tmp_path, env=nested_pytest_environment, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+    assert not Path(evidence["root"]).exists()
+    assert not Path(evidence["target"]).exists()
 
 
 @pytest.mark.parametrize("workers", [0, 2], ids=["serial", "xdist"])

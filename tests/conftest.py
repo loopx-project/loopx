@@ -4,11 +4,11 @@ import importlib
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import warnings
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # Suppress collection before imports and in inherited test subprocesses.
@@ -18,7 +18,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import pytest  # noqa: E402
-
 from managed_effect_runtime_fixture import (  # noqa: E402
     capture_disposable_effect_runtimes,
     stop_disposable_effect_runtimes,
@@ -27,7 +26,6 @@ from managed_effect_runtime_fixture import (  # noqa: E402
 from loopx import paths  # noqa: E402
 from loopx.canary.runner import SMOKE_SUITE_CHOICES  # noqa: E402
 from loopx.semantics.production import NPM_DEV_DEPENDENCIES_MISSING  # noqa: E402
-
 
 # Default runtime routes resolve from HOME at import time. A test that writes
 # either one leaves state behind, and once both hold state every later implicit
@@ -48,6 +46,7 @@ _CASE_FAILED = pytest.StashKey[bool]()
 _CASE_SEQUENCE = pytest.StashKey[dict[str, int]]()
 _WORKER_TEMP = pytest.StashKey[Path]()
 _TEMP_RETENTION = pytest.StashKey[str]()
+_CLEANUP_FAILURES = pytest.StashKey[list[str]]()
 _TEMP_RETENTION_INI = "tmp_path_retention_policy"
 _MIB = 1024 * 1024
 
@@ -64,6 +63,7 @@ def pytest_configure(config):
         )
     config.stash[_TEMP_RETENTION] = config.getini(_TEMP_RETENTION_INI) if explicit_policy else "failed"
     config.stash[_CASE_SEQUENCE] = {}
+    config.stash[_CLEANUP_FAILURES] = []
 
 
 @pytest.fixture
@@ -89,17 +89,58 @@ def tmp_path(request, case_mktemp):
     return case_mktemp(name)
 
 
+def _is_link_or_junction(path):
+    is_junction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(is_junction and is_junction(path))
+
+
+def _make_owned_tree_removable(root):
+    """Restore owner access inside a test-owned tree without following links."""
+    user_access = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+    root_stat = os.lstat(root)
+    if not stat.S_ISDIR(root_stat.st_mode):
+        return
+    os.chmod(root, stat.S_IMODE(root_stat.st_mode) | user_access)
+    for directory, subdirectories, files in os.walk(root, topdown=True, followlinks=False):
+        subdirectories[:] = [
+            name for name in subdirectories
+            if not _is_link_or_junction(os.path.join(directory, name))
+        ]
+        for name in [directory, *(os.path.join(directory, item) for item in subdirectories)]:
+            try:
+                status = os.lstat(name)
+                if stat.S_ISDIR(status.st_mode):
+                    os.chmod(name, stat.S_IMODE(status.st_mode) | user_access)
+            except FileNotFoundError:
+                continue
+        for name in files:
+            target = os.path.join(directory, name)
+            if _is_link_or_junction(target):
+                continue
+            try:
+                status = os.lstat(target)
+                # A hard link shares attributes with an entry outside this tree.
+                if stat.S_ISREG(status.st_mode) and status.st_nlink == 1:
+                    os.chmod(target, stat.S_IMODE(status.st_mode) | stat.S_IWUSR)
+            except FileNotFoundError:
+                continue
+
+
 def _remove_temp_dir(temporary):
     try:
-        if temporary.is_symlink():
+        if _is_link_or_junction(temporary):
             temporary.unlink()
         else:
-            shutil.rmtree(temporary)
+            try:
+                shutil.rmtree(temporary)
+            except OSError:
+                _make_owned_tree_removable(temporary)
+                shutil.rmtree(temporary)
     except FileNotFoundError:
-        pass
+        return None
     except OSError as exc:
-        warnings.warn(pytest.PytestWarning(f"Could not clean pytest temporary directory {temporary}: {exc}"),
-                      stacklevel=2)
+        return f"Could not clean pytest temporary directory {temporary}: {exc}"
+    return None
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -111,7 +152,8 @@ def pytest_runtest_makereport(item, call):
         policy = item.config.stash[_TEMP_RETENTION]
         if policy == "none" or (policy == "failed" and not item.stash.get(_CASE_FAILED, False)):
             for temporary in item.stash.get(_CASE_TEMP_DIRS, []):
-                _remove_temp_dir(temporary)
+                if failure := _remove_temp_dir(temporary):
+                    item.config.stash[_CLEANUP_FAILURES].append(failure)
         for key in (_CASE_TEMP_DIRS, _CASE_FAILED):
             if key in item.stash:
                 del item.stash[key]
@@ -210,9 +252,13 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     ]
     if not created:
         temporary = session.config.stash.get(_WORKER_TEMP, None)
-        if (temporary is not None and exitstatus == pytest.ExitCode.OK
-                and session.config.stash[_TEMP_RETENTION] != "all"):
-            _remove_temp_dir(temporary)
+        should_remove = (
+            temporary is not None
+            and exitstatus == pytest.ExitCode.OK
+            and session.config.stash[_TEMP_RETENTION] != "all"
+        )
+        if should_remove and (failure := _remove_temp_dir(temporary)):
+            session.config.stash[_CLEANUP_FAILURES].append(failure)
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
@@ -222,6 +268,15 @@ def pytest_sessionfinish(session, exitstatus) -> None:
             "isolate the writer."
         )
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    failures = config.stash.get(_CLEANUP_FAILURES, [])
+    if not failures:
+        return
+    terminalreporter.write_sep("=", "LoopX pytest temporary cleanup", yellow=True)
+    for failure in failures:
+        terminalreporter.write_line(failure)
 
 
 def pytest_addoption(parser) -> None:
