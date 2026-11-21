@@ -7,7 +7,7 @@ read-only native control client. Chat retains its own execution fence.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
@@ -517,7 +517,8 @@ class StewardTurnHost:
         actor = request["actor"]
         # The admitted actor retains its original Goal lifetime. Current
         # admission can check that reference, never supply a replacement.
-        goal_ref = (exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
+        goal_ref = (request["goal_ref"] if "goal_ref" in request else
+            exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
             if actor.get("goal_instance_id") is not None else None)
         admission = FirstPartyHostGoalAdmission.for_plan(
             registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
@@ -548,7 +549,7 @@ class StewardTurnHost:
                 turn_instance_id=request["turn_instance_id"], registry_path=self.controller.registry_path,
                 goal_ref=goal_ref, source_admission=source_admission,
                 borrow_source_admission=source_admission is not None,
-                native_task_lease_cleanup={"schema_version": "native_task_lease_cleanup_request_v0",
+                native_task_lease_cleanup={"schema_version": "native_task_lease_request_v0",
                     "recovery": recovery, "admission_retry": admission_retry,
                     "resume_turn_key_present": request.get("resume_turn_key") is not None,
                     "original_journal_present": journal is not None})
@@ -828,7 +829,8 @@ class StewardTurnHost:
         ) is not None)
 
     @staticmethod
-    def _build_replay_runner(normalized_candidate: Mapping[str, Any]):
+    def _build_replay_runner(normalized_candidate: Mapping[str, Any], *,
+                             before_replay: Callable[[Mapping[str, Any]], None] | None = None):
         from ...control_plane.turn_driver.host_candidate import build_result
 
         replayed = False
@@ -838,9 +840,87 @@ class StewardTurnHost:
             if replayed:
                 raise ValueError("frozen report candidate replay may execute at most once")
             replayed = True
+            if before_replay is not None:
+                before_replay(native_request)
             return build_result(native_request, dict(normalized_candidate), host_name="Codex app-server", allow_completion=True)
 
         return replay_frozen_candidate
+
+    def _retain_report_recovery_refusal(
+        self, rejected: Exception, *, request: dict[str, Any], window: Mapping[str, Any],
+        original: Mapping[str, Any], reports: Any, recovery_key: str | None,
+    ) -> None:
+        """Retain the refused native Run while keeping its original Chat audience."""
+        from ...cli_commands.turn_rendering import build_turn_error_payload, render_readonly_settlement_recovery
+        from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+        from ...control_plane.quota.effect_program import SettlementIdentity
+        from ...control_plane.quota.settlement import read_heartbeat_settlement
+        from ...control_plane.turn_driver import inspect_loopx_turn_journal
+        from ...control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal
+
+        if not isinstance(rejected, RefreshTaskLeaseUnavailable):
+            raise TypeError("report recovery requires the original typed lease refusal")
+        actor = request["actor"]
+        # This invocation stopped before freeze and the native executor.
+        # Historical effects belong to the verified journal of the refused Run.
+        effects = {name: False for name in
+            ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")}
+        failure = build_turn_error_payload({"transaction": {"turn_key": recovery_key},
+            "effects": effects}, rejected, turn_command="run-once")
+        try:
+            if recovery_key is None:
+                raise ValueError("the original report journal is unavailable")
+            inspection = inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], turn_key=recovery_key, retry_failed=True)
+            failure = build_turn_error_payload({"transaction": {"turn_key": recovery_key},
+                "effects": effects}, rejected, turn_command="run-once", journal_readback=inspection)
+            recovery_plan = load_loopx_turn_plan_from_journal(reports.root,
+                goal_id=actor["goal_id"], agent_id=actor["agent_id"], turn_key=recovery_key)
+            failure = build_turn_error_payload({**recovery_plan, "effects": effects}, rejected,
+                turn_command="run-once", journal_readback=inspection)
+            identity = SettlementIdentity.from_runtime_payload(
+                recovery_plan["transaction"]["settlement_plan"]["identity"])
+            readback = read_heartbeat_settlement(reports.root,
+                goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+                turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
+                registry_path=self.controller.registry_path,
+                goal_ref=recovery_plan.get("goal_ref"), include_readonly_recovery=True)
+            recovery = readback.settlement_recovery if readback is not None else None
+            if not isinstance(recovery, Mapping):
+                raise ValueError("the original read-only settlement recovery could not be read")
+            failure["settlement_recovery"] = render_readonly_settlement_recovery(recovery,
+                registry_path=self.controller.registry_path, runtime_root=reports.root)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as read_error:
+            # Missing recovery evidence grants no guessed command or permission.
+            failure["settlement_recovery_error"] = str(read_error)
+        failure["status"] = "failed"
+        rejected.payload = failure
+        rejected.report_recovery_context = {"request": request, "window": window,
+            "original_turn_id": original["turn_id"]}
+        if not any(row.get("kind") == "native_loopx.result" and row.get("payload") == failure
+                for row in self.store.events_after(actor["session_id"], original["turn_id"], None)):
+            self.store.append_event(actor["session_id"], original["turn_id"],
+                kind="native_loopx.result", payload=failure)
+
+    @contextmanager
+    def _report_recovery_lease(
+        self, *, request: dict[str, Any], window: Mapping[str, Any], original: Mapping[str, Any],
+        reports: Any, recovery_key: str | None, lease_request: Mapping[str, Any] | None = None,
+    ):
+        """A resumed Run qualifies only its own recorded execution identity."""
+        from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+
+        with ExitStack() as recovery_leases:
+            try:
+                lease = recovery_leases.enter_context(self._task_execution_lease(
+                    lease_request if lease_request is not None else request,
+                    original["turn_id"], recovery=True))
+            except RefreshTaskLeaseUnavailable as rejected:
+                self._retain_report_recovery_refusal(rejected, request=request, window=window,
+                    original=original, reports=reports, recovery_key=recovery_key)
+                raise
+            # Later executor errors must retain their actual effect evidence.
+            yield lease
 
     def _settle_stopped_report_candidate(
         self,
@@ -859,8 +939,13 @@ class StewardTurnHost:
         raw_candidate: dict[str, Any],
     ) -> dict[str, Any]:
         from ...cli import build_parser
+        from ...cli_commands.quota_should_run import check_fresh_native_heartbeat_prior_closeout
         from ...cli_commands.turn import handle_turn_command
+        from ...control_plane.goals.goal_ref_validation import exact_goal_ref
+        from ...control_plane.quota.effect_program import SettlementIdentity
+        from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
+        from ...control_plane.turn_driver.codex_execution_preparation import compact_execution_preparation_request
         from ..periodic_report.private_generation import validate_private_generation
 
         inspection = inspect_loopx_turn_journal(
@@ -871,14 +956,23 @@ class StewardTurnHost:
             request, observed=observed, settlement_recovery=inspection,
             frozen_contract_recovery=stopped_proof,
         )
-        if not (folder / "private-generation.json").exists():
-            reports.freeze(request, dict(raw_candidate))
-        generation = validate_private_generation(folder)
-        if raw_candidate["editorial_response"]["request_digest"] != generation["request_digest"]:
-            raise ValueError("the recovered candidate digest does not match the frozen report")
         if not reports.delivery_current(owner_key, window):
             raise ValueError("the original report authorization changed before settlement recovery")
         saved_instance_id = request["turn_instance_id"] + ".saved-candidate"
+        saved_request = {**request, "turn_instance_id": saved_instance_id}
+        goal_ref = (exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
+            if actor.get("goal_instance_id") is not None else None)
+        # Saved content is evidence, not a grant from the original Run. The
+        # common owner must close prior debt before any fresh preparation.
+        try:
+            check_fresh_native_heartbeat_prior_closeout(
+                identity=SettlementIdentity(goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+                    todo_id=todo["todo_id"], turn_instance_id=saved_instance_id),
+                runtime_root=reports.root, registry_path=self.controller.registry_path, goal_ref=goal_ref)
+        except RefreshTaskLeaseUnavailable as rejected:
+            self._retain_report_recovery_refusal(rejected, request=request, window=window,
+                original=original, reports=reports, recovery_key=original_key)
+            raise
         argv = ["turn", "run-once", "--goal-id", actor["goal_id"], "--agent-id", actor["agent_id"],
                 "--project", admitted["workspace_path"], "--host", "generic-cli",
                 "--turn-instance-id", saved_instance_id, "--todo-id", todo["todo_id"], "--execute"]
@@ -887,8 +981,34 @@ class StewardTurnHost:
         args = build_parser().parse_args(argv)
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
-        host_runner = self._build_replay_runner(_normalize_report_kernel_candidate(raw_candidate))
-        with self._task_execution_lease(request, original["turn_id"], recovery=True) as lease:
+        def freeze_saved_candidate(_native_request: Mapping[str, Any]) -> None:
+            # The driver enters this callback only after fresh C1 admission,
+            # its own modern receipt and the actual Host launch lifetime.
+            if not reports.delivery_current(owner_key, window):
+                raise ValueError("the original report authorization changed before candidate replay")
+            if not (folder / "private-generation.json").exists():
+                reports.freeze(request, dict(raw_candidate))
+            generation = validate_private_generation(folder)
+            if raw_candidate["editorial_response"]["request_digest"] != generation["request_digest"]:
+                raise ValueError("the recovered candidate digest does not match the frozen report")
+            if not reports.delivery_current(owner_key, window):
+                raise ValueError("the original report authorization changed before settlement recovery")
+
+        host_runner = self._build_replay_runner(_normalize_report_kernel_candidate(raw_candidate),
+            before_replay=freeze_saved_candidate)
+        with ExitStack() as saved_leases:
+            def prepare_saved_task(decision: Mapping[str, Any]) -> str | None:
+                preparation = compact_execution_preparation_request(decision)
+                if preparation is None:
+                    return None
+                if (preparation["goal_id"] != actor["goal_id"] or preparation["agent_id"] != actor["agent_id"]
+                        or preparation["todo_id"] != todo["todo_id"]
+                        or preparation.get("turn_instance_id", saved_instance_id) != saved_instance_id):
+                    raise ValueError("saved report preparation belongs to another Turn or Todo")
+                saved_leases.enter_context(self._task_execution_lease(
+                    saved_request, original["turn_id"], claim_args=preparation["claim_args"]))
+                return preparation["todo_id"]
+
             handle_turn_command(
                 args, registry_path=self.controller.registry_path,
                 runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
@@ -897,8 +1017,8 @@ class StewardTurnHost:
                     "schema_version": "loopx_turn_session_binding_v0",
                     "goal_id": actor["goal_id"], "agent_id": actor["agent_id"],
                 },
-                native_task_validator=self._report_validator(request),
-                native_completion_lease_resolver=lambda: self._task_lease_proof(request, lease),
+                native_execution_preparer=prepare_saved_task,
+                native_task_validator=self._report_validator(saved_request), native_goal_ref=goal_ref,
             )
         return result
 
@@ -912,7 +1032,9 @@ class StewardTurnHost:
         from ...cli import build_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
-        from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
+        from ...control_plane.turn_driver.journal_store import (
+            find_loopx_turn_key_by_settlement_identity, load_loopx_turn_plan_from_journal,
+        )
         from ..periodic_report.private_generation import attempt_directory, validate_private_generation
         from .steward_reports import report_service
         observed = self._observe(actor)
@@ -933,10 +1055,11 @@ class StewardTurnHost:
                 reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
                 todo_id=todo["todo_id"], turn_instance_id=request["turn_instance_id"] + ".saved-candidate",
             )
-            key = saved_key or find_loopx_turn_key_by_settlement_identity(
+            original_key = find_loopx_turn_key_by_settlement_identity(
                 reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
                 todo_id=todo["todo_id"], turn_instance_id=request["turn_instance_id"],
             )
+            key = saved_key or original_key
             if key is None:
                 return
             if saved_key is None:
@@ -981,64 +1104,27 @@ class StewardTurnHost:
                 "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
             args.host, args.session_scope = "codex-app-server", "agent"
             result: dict[str, Any] = {}
-            from ...cli_commands.turn_rendering import build_turn_error_payload, render_readonly_settlement_recovery
-            from ...control_plane.goals.goal_ref_validation import exact_goal_ref
-            from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
-            from ...control_plane.quota.effect_program import SettlementIdentity
-            from ...control_plane.quota.settlement import read_heartbeat_settlement
-            from ...control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal
-
-            with ExitStack() as recovery_leases:
-                try:
-                    lease = (recovery_leases.enter_context(self._task_execution_lease(
-                        request, original["turn_id"], recovery=True)) if todo["status"] == "open" else None)
-                except RefreshTaskLeaseUnavailable as rejected:
-                    planned = {"transaction": {"turn_key": key}}
-                    # This invocation stopped before the native executor. Historical
-                    # effects are carried separately by the original journal.
-                    planned = {**planned, "effects": {name: False for name in
-                        ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")}}
-                    failure = build_turn_error_payload(planned, rejected,
-                        turn_command="run-once", journal_readback=inspection)
-                    goal_ref = (exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
-                        if actor.get("goal_instance_id") is not None else None)
-                    try:
-                        original_plan = load_loopx_turn_plan_from_journal(reports.root,
-                            goal_id=actor["goal_id"], agent_id=actor["agent_id"], turn_key=key)
-                        failure = build_turn_error_payload({**original_plan, "effects": planned["effects"]}, rejected,
-                            turn_command="run-once", journal_readback=inspection)
-                        identity = SettlementIdentity.from_runtime_payload(
-                            original_plan["transaction"]["settlement_plan"]["identity"])
-                        readback = read_heartbeat_settlement(reports.root,
-                            goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
-                            turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
-                            registry_path=self.controller.registry_path,
-                            goal_ref=goal_ref, include_readonly_recovery=True)
-                        recovery = readback.settlement_recovery if readback is not None else None
-                        if not isinstance(recovery, Mapping):
-                            raise ValueError("the original read-only settlement recovery could not be read")
-                        failure["settlement_recovery"] = render_readonly_settlement_recovery(recovery,
-                            registry_path=self.controller.registry_path, runtime_root=reports.root)
-                    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as read_error:
-                        # Keep the original typed refusal authoritative. Missing
-                        # recovery evidence grants no guessed command or permission.
-                        failure["settlement_recovery_error"] = str(read_error)
-                    failure["status"] = "failed"
-                    rejected.payload = failure
-                    rejected.report_recovery_context = {"request": request, "window": window,
-                        "original_turn_id": original["turn_id"]}
-                    if not any(row.get("kind") == "native_loopx.result" and row.get("payload") == failure
-                            for row in self.store.events_after(actor["session_id"], original["turn_id"], None)):
-                        self.store.append_event(actor["session_id"], original["turn_id"],
-                            kind="native_loopx.result", payload=failure)
-                    raise
+            lease_request = request
+            if saved_key is not None:
+                from ...control_plane.quota.effect_program import SettlementIdentity
+                saved_plan = load_loopx_turn_plan_from_journal(reports.root,
+                    goal_id=actor["goal_id"], agent_id=actor["agent_id"], turn_key=saved_key)
+                saved_identity = SettlementIdentity.from_runtime_payload(
+                    saved_plan["transaction"]["settlement_plan"]["identity"])
+                lease_request = {**request, "turn_instance_id": saved_identity.turn_instance_id,
+                    "todo_id": saved_identity.todo_id, "resume_turn_key": saved_key,
+                    "goal_ref": saved_plan.get("goal_ref")}
+            lease_context = (self._report_recovery_lease(request=request, window=window, original=original,
+                reports=reports, recovery_key=key, lease_request=lease_request)
+                if todo["status"] == "open" else nullcontext(None))
+            with lease_context as lease:
                 handle_turn_command(args, registry_path=self.controller.registry_path,
                     runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
                     print_payload=lambda value, *_a: result.update(value), native_host_runner=host_runner,
                     native_session_binding_resolver=lambda _envelope: {"schema_version": "loopx_turn_session_binding_v0",
                         "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]},
-                    native_task_validator=self._report_validator(request),
-                    **({"native_completion_lease_resolver": lambda: self._task_lease_proof(request, lease)} if lease else {}))
+                    native_task_validator=self._report_validator(lease_request),
+                    **({"native_completion_lease_resolver": lambda: self._task_lease_proof(lease_request, lease)} if lease else {}))
 
             # Retain the historical outer failure. The actual native owner
             # supplies the new event; no status or publication proof is forged.
@@ -1370,12 +1456,15 @@ class StewardTurnHost:
         """Run in the original Chat worker, through all native settlement owners."""
         from ...cli import build_parser
         from ...cli_commands.turn import handle_turn_command
+        from ...control_plane.goals.goal_ref_validation import exact_goal_ref
         from ...control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt, parse_model_json, build_result
         from .antigravity_adapter import AntigravityAdapter
         from .codex_adapter import CodexAppServerAdapter
 
         turn = self.store.load_turn(session_id, turn_id)
         request = turn["loopx_request"]
+        native_goal_ref = (exact_goal_ref(request["actor"]["goal_id"], request["actor"]["goal_instance_id"])
+            if request["actor"].get("goal_instance_id") is not None else None)
         original_client = ("managed." + request["turn_instance_id"].removeprefix("managed-session.")
             if request["actor"].get("schema_version") == "loopx_managed_session_actor_v0"
             else native_steward_client_id(request["actor"], request["turn_instance_id"]))
@@ -1640,7 +1729,8 @@ class StewardTurnHost:
                     handle_turn_command(governance_args, registry_path=self.controller.registry_path,
                         runtime_root_arg=str(self.controller.coordination_runtime_root),
                         output_format=lambda *_a, **_kw: "json", print_payload=lambda value, *_a: observed.update(value),
-                        native_host_runner=run, native_session_binding_resolver=session_binding)
+                        native_host_runner=run, native_session_binding_resolver=session_binding,
+                        native_goal_ref=native_goal_ref)
                     return observed
 
                 # Probe the original report first. Unbound selection can
@@ -1695,6 +1785,7 @@ class StewardTurnHost:
                 output_format=lambda *_a, **_kw: "json",
                 print_payload=lambda value, *_a: result.update(value),
                 native_host_runner=run, native_session_binding_resolver=session_binding,
+                native_goal_ref=native_goal_ref,
                 native_execution_preparer=prepare_native_task if not report_work else None,
                 **({"native_completion_lease_resolver": report_lease_proof,
                     "native_task_validator": self._report_validator(request)} if report_work else

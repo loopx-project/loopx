@@ -52,6 +52,7 @@ import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts
 import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "./execution_loss_closeout_record.ts";
 import {isDeepStrictEqual} from "node:util";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {
   decodeRefreshRetry,
   isMaterialMonitorPoll,
@@ -74,6 +75,7 @@ import {
   heartbeatSemanticAdmissionEvent,
   qualifyHeartbeatPreparedGeneration,
   qualifyHeartbeatResumeLease,
+  qualifyHeartbeatNativeWorkAdmission,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -92,6 +94,7 @@ import {
   parseQuotaAccountingOwner,
   quotaGoalRef,
   quotaOwnerOwnsProjection,
+  requireNativeQuotaWorkAgent,
   withBorrowedQuotaAccountingOwner,
   withQuotaAccountingOwner,
   type QuotaAccountingOwner,
@@ -153,6 +156,25 @@ export function projectNativeTaskLeaseCleanup(readback: JsonObject, value: unkno
   if (["work_admission", "lease_readiness", "identity_upgrade"].includes(String(revision)) && required === true) {
     return disposition("retain", "original_turn_owes_closeout");
   }
+  // Primary positive receipts predate revision markers. Their explicit work
+  // facts and verified original prepared admission carry the debt themselves;
+  // status-only ensure and partial projections still remain unconfirmed.
+  const original = jsonObject(readback.original_prepared_receipt);
+  const identityValue = jsonObject(identity?.value);
+  if (!Object.hasOwn(receiptDetails, "settlement_receipt_revision") && required === true
+      && original !== null && identityValue !== null && typeof identityValue.goal_id === "string"
+      && typeof identityValue.agent_id === "string" && typeof identityValue.todo_id === "string"
+      && typeof identityValue.turn_instance_id === "string") {
+    const exactIdentity = settlementIdentity({goal_id: identityValue.goal_id, agent_id: identityValue.agent_id,
+      todo_id: identityValue.todo_id, turn_instance_id: identityValue.turn_instance_id});
+    if (heartbeatPreparedWorkAdmission(original, exactIdentity, false) !== null
+        && nativeChildReportAdmission(details(original), null, exactIdentity.effect_id, "open", false)
+          .report_permission === "new_operation"
+        && nativeChildReportAdmission(receiptDetails, null, exactIdentity.effect_id, "open", false)
+          .report_permission === "new_operation") {
+      return disposition("retain", "original_turn_owes_closeout");
+    }
+  }
   return disposition("unconfirmed", "original_closeout_requirement_unconfirmed");
 }
 
@@ -205,6 +227,7 @@ interface ReadbackRequest {
   tolerate_malformed_history: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
+  native_work_admission: JsonObject | null;
   resume_lease_candidate: ResumeLeaseCandidate | null;
   writeback_candidate: WritebackCandidate | null;
   native_task_lease_cleanup: NativeTaskLeaseCleanupRequest | null;
@@ -452,19 +475,38 @@ function decodeRequest(
       "quota_source_admission_invalid",
     );
   }
+  if (admittedOwner?.admission?.kind === "native_runtime" && admittedOwner.admission.goalId !== goalId) {
+    throw new EffectRuntimeRequestError("Native admitted owner does not match settlement goal_id", "quota_source_admission_invalid");
+  }
   const owner = admittedOwner ?? parseQuotaAccountingOwner({
     goalRefValue: request.goal_ref,
     sourceAdmissionValue: request.source_admission,
     runtimeRoot,
     goalId,
   });
-  if (request.borrow_source_admission === true && owner.kind !== "exact_source") {
+  if (request.borrow_source_admission === true && owner.kind !== "exact_source"
+      && owner.admission?.kind !== "native_runtime") {
     throw new EffectRuntimeRequestError(
       "borrow_source_admission requires exact source admission",
       "quota_source_admission_invalid",
     );
   }
   const resumeCandidate = decodeResumeLeaseCandidate(request.resume_lease_candidate);
+  const nativeAdmission = request.native_work_admission === undefined ? null
+    : requireJsonObject(request.native_work_admission, "native_work_admission");
+  if (nativeAdmission !== null && (Object.keys(nativeAdmission).length !== 1
+      || (jsonObject(nativeAdmission.details) === null && nativeAdmission.check_prior_closeout_only !== true)
+      || resumeCandidate !== null
+      || request.writeback_candidate != null || request.native_task_lease_cleanup != null
+      || request.include_readonly_recovery === true || request.infer_turn_instance_id || request.allow_unbound_binding
+      || request.resolve_original_binding === true || request.pending_closeout === true
+      || request.refresh_retry != null || request.heartbeat_reentry_guard != null || request.spend_precheck === true
+      || request.spend_request != null || request.tolerate_malformed_history === true
+      || !optionalRequestString(request.agent_id, "agent_id") || !optionalRequestString(request.todo_id, "todo_id")
+      || !optionalRequestString(request.turn_instance_id, "turn_instance_id")
+      || optionalRequestString(request.replan_obligation_id, "replan_obligation_id") !== null)) {
+    throw new EffectRuntimeRequestError("native work admission requires only its exact fresh Agent/Todo/Turn decision");
+  }
   if (resumeCandidate !== null && (request.infer_turn_instance_id
       || request.allow_unbound_binding || request.pending_closeout === true
       || optionalRequestString(request.agent_id, "agent_id") === null
@@ -540,6 +582,7 @@ function decodeRequest(
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
+    native_work_admission: nativeAdmission,
     resume_lease_candidate: resumeCandidate,
     writeback_candidate: writebackCandidate,
     native_task_lease_cleanup: nativeCleanup,
@@ -1796,9 +1839,9 @@ export function readQuotaSettlementFromSnapshot(
 ): JsonObject {
   const request = decodeRequest(value);
   if (request.include_readonly_recovery) throw new EffectRuntimeRequestError("read-only recovery requires a live journal read");
-  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) throw new EffectRuntimeRequestError(
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) throw new EffectRuntimeRequestError(
     "resume lease qualification requires a live canonical authority read");
-  if (request.owner.kind !== "alias") {
+  if (request.owner.kind !== "alias" || request.owner.admission !== undefined) {
     throw new EffectRuntimeRequestError(
       "exact source settlement readback requires live owner admission",
       "quota_source_admission_invalid",
@@ -1814,7 +1857,7 @@ export function readAdmittedQuotaSettlementFromSnapshot(
 ): JsonObject {
   const request = decodeRequest(value);
   if (request.include_readonly_recovery) throw new EffectRuntimeRequestError("read-only recovery requires a live journal read");
-  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) throw new EffectRuntimeRequestError(
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) throw new EffectRuntimeRequestError(
     "resume lease qualification requires a live canonical authority read");
   return readQuotaSettlementFromRequest(request, snapshot);
 }
@@ -1827,7 +1870,7 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
 ): JsonObject {
   const request = decodeRequest(value, owner);
   if (request.include_readonly_recovery) throw new EffectRuntimeRequestError("read-only recovery requires a live journal read");
-  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) throw new EffectRuntimeRequestError(
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) throw new EffectRuntimeRequestError(
     "resume lease qualification requires a live canonical authority read");
   return readQuotaSettlementFromRequest(request, snapshot);
 }
@@ -1853,6 +1896,16 @@ async function readSettlementExecutionAuthority(request: ReadbackRequest, result
   if (hint?.validation_recovery_turn_instance_id != null
       && hint.validation_recovery_turn_instance_id !== identity.turn_instance_id) {
     reject("Recovery Turn hint differs from the original settlement identity.");
+  }
+  return await readCanonicalExecutionAuthority(request, identity);
+}
+
+async function readCanonicalExecutionAuthority(request: ReadbackRequest, identity: SettlementIdentity): Promise<{
+  identity: SettlementIdentity; todo: JsonObject; todos: JsonObject[];
+  lease: JsonObject | undefined; handoffMode: unknown;
+}> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
   }
   // The ordinary reader does not load lease decision owners. Only this
   // explicitly requested ephemeral branch reads the real provider authority,
@@ -1880,6 +1933,67 @@ async function readSettlementExecutionAuthority(request: ReadbackRequest, result
   }
   return {identity, todo, todos: collection.projection.todo_ids.map(id => collection.projection.todos.get(id)!),
     lease, handoffMode: authority.head.handoff_mode};
+}
+
+async function readNativeWorkAdmission(request: ReadbackRequest, result: JsonObject,
+  snapshot: QuotaSettlementReadbackSnapshot): Promise<JsonObject> {
+  requireNativeQuotaWorkAgent(request.owner, request.agent_id!, request.native_work_admission!.check_prior_closeout_only !== true);
+  const identity = settlementIdentity({goal_id: request.goal_id, agent_id: request.agent_id!,
+    todo_id: request.todo_id, turn_instance_id: request.turn_instance_id!});
+  const events = indexedEvents(snapshot, identity.goal_id, identity.agent_id, identity.turn_instance_id);
+  if (events.some(event => event.event_kind === "quota_should_run"
+      && !quotaOwnerOwnsProjection(request.owner, event.goal_ref))) {
+    throw new EffectRuntimeRequestError("Fresh native admission cannot upgrade another receipt owner or Goal instance.",
+      "heartbeat_receipt_identity_conflict");
+  }
+  for (const event of snapshot.events) {
+    if (event.event_kind !== "quota_should_run") continue;
+    const fact = heartbeatReceiptFactFromEvent(event);
+    if (fact.todo_id !== identity.todo_id || !fact.closeout_required) continue;
+    const invalidOwner = event.goal_ref === undefined ? request.owner.kind === "exact_source"
+      : parseExactGoalRef(event.goal_ref).kind !== "parsed";
+    if (invalidOwner || (quotaOwnerOwnsProjection(request.owner, event.goal_ref)
+        && (optionalString(event.agent_id) === null || fact.run_id === null))) {
+      throw new EffectRuntimeRequestError("The original Todo's admitted closeout subject or owner is unconfirmed.",
+        "heartbeat_receipt_identity_conflict");
+    }
+  }
+  // The same prior-Turn owner fences publication as fresh selection. Restrict
+  // discovery to this Todo but retain its complete indexed settlement evidence.
+  const scoped = {...snapshot, events: snapshot.events.filter(event =>
+    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
+      && heartbeatReceiptFactFromEvent(event).todo_id === identity.todo_id)};
+  const agents = new Set(scoped.events.map(event => optionalString(event.agent_id))
+    .filter((agent): agent is string => agent !== null));
+  for (const agent of agents) {
+    const debt = owedPriorTurnFromSnapshot({...request, native_work_admission: null}, scoped, agent,
+      agent === identity.agent_id ? identity.turn_instance_id : null);
+    if (debt !== null) {
+      throw new EffectRuntimeRequestError("The original Todo Turn must close its own admitted settlement before fresh native work.",
+        "refresh_task_lease_unavailable");
+    }
+  }
+  const {todo, lease, handoffMode} = await readCanonicalExecutionAuthority(request, identity);
+  if (request.native_work_admission!.check_prior_closeout_only === true) {
+    return {prior_closeout_checked: true, append: false, details: null, source_event_id: null,
+      original_prepared: null, current_task_lease_proof: null};
+  }
+  const existing = effectiveHeartbeatReceipt(events, identity);
+  const runs = indexedRuns(snapshot, identity).filter(run => quotaOwnerOwnsProjection(request.owner, run.goal_ref));
+  if ((existing === null && runs.length !== 0) || (existing !== null && (result.found !== true
+      || jsonObject(jsonObject(result.identity)?.result)?.failure != null))) {
+    throw new EffectRuntimeRequestError("Fresh native work cannot replace an existing or unconfirmed Turn transaction.",
+      "refresh_task_lease_unavailable");
+  }
+  if (lease === undefined) throw new EffectRuntimeRequestError("Fresh native work requires its current canonical task lease.",
+    "refresh_task_lease_unavailable");
+  return qualifyHeartbeatNativeWorkAdmission({identity, currentDetails: requireJsonObject(
+    request.native_work_admission!.details, "native admission details"), existingReceipt: existing,
+    receiptHistory: events, todo, lease, handoffMode,
+    replayPhase: existing === null ? "open" : result.replay_phase as ReceiptBoundReplayPhase,
+    closeoutStarted: existing !== null && [result.writeback_run, result.writeback_event,
+      result.spend_run, result.spend_event, result.completion_event].some(record => record != null),
+    observedAt: new Date()});
 }
 
 async function readResumeLeaseQualification(request: ReadbackRequest, result: JsonObject): Promise<JsonObject> {
@@ -2252,7 +2366,7 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     throw new EffectRuntimeRequestError("spend_request requires spend_precheck, integer slots and a source");
   }
   if (spendPrecheck || request.include_readonly_recovery) request.include_record_bodies = true;
-  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) request.include_record_bodies = true;
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
     ? withBorrowedQuotaAccountingOwner
     : withQuotaAccountingOwner;
@@ -2267,6 +2381,9 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
           request.tolerate_malformed_history,
         );
       const result = readQuotaSettlementFromRequest(request, snapshot, true, matchedSpend);
+      if (request.native_work_admission !== null) {
+        result.native_work_admission = await readNativeWorkAdmission(request, result, snapshot);
+      }
       if (request.resume_lease_candidate !== null) {
         result.resume_lease_qualification = await readResumeLeaseQualification(request, result);
       }

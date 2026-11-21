@@ -13,6 +13,7 @@ import {
   HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA,
   qualifyHeartbeatPreparedPublication,
   qualifyHeartbeatResumeLease,
+  qualifyHeartbeatNativeWorkAdmission,
   heartbeatPreparedWorkAdmission,
   heartbeatValidationEvent,
 } from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
@@ -59,6 +60,68 @@ function resume(overrides: Partial<Parameters<typeof qualifyHeartbeatResumeLease
     closeoutStarted: false, writebackPending: true, otherTerminalStarted: false,
     exactSource: true, observedAt: new Date("2026-01-01T00:01:00Z"), ...overrides});
 }
+
+function nativeAdmission(overrides: Partial<Parameters<typeof qualifyHeartbeatNativeWorkAdmission>[0]> = {}) {
+  return qualifyHeartbeatNativeWorkAdmission({identity, currentDetails: {...preparedReceipt.details as JsonObject,
+    turn_instance_id: identity.turn_instance_id, prepared_lease_version: currentLease.version},
+    existingReceipt: null, receiptHistory: [], todo: {...todo(identity.todo_id!), claimed_by: identity.agent_id},
+    lease: currentLease, handoffMode: "hard_lease", replayPhase: "open", closeoutStarted: false,
+    observedAt: new Date("2026-01-01T00:01:00Z"), ...overrides});
+}
+
+test("fresh native admission has its own primary proof and preserves the original proof on replay", () => {
+  const before = structuredClone(preparedReceipt);
+  const initial = nativeAdmission();
+  assert.equal(initial.state, "ready");
+  assert.equal(initial.append, true);
+  assert.equal(initial.source_event_id, null);
+  assert.equal(Object.hasOwn(initial.details as JsonObject, "settlement_receipt_revision"), false);
+  assert.deepEqual(initial.original_prepared, {...originalPrepared, prepared_lease_version: 120});
+  const replay = nativeAdmission({existingReceipt: preparedReceipt, receiptHistory: [preparedReceipt]});
+  assert.deepEqual(replay, {state: "ready", append: false, details: null, source_event_id: null,
+    original_prepared: originalPrepared, current_task_lease_proof: {idempotency_key: originalKey, expected_version: 120}});
+  assert.deepEqual(preparedReceipt, before);
+});
+
+test("fresh native admission rejects stale CAS, foreign preparation, closed work and partial or legacy precursors", () => {
+  const realDetails = nativeAdmission().details as JsonObject;
+  for (const patch of [{prepared_lease_version: 119}, {prepared_lease_epoch: 51},
+    {prepared_lease_epoch: undefined}, {prepared_lease_key_sha256: "b".repeat(64)},
+    {selected_todo_id: "todo_other"}, {turn_instance_id: "other-turn"},
+    {settlement_effect_id: "other-effect"}, {closeout_required: false},
+    {prepared_lease_required: false}, {delivery_allowed: false}, {quiet_noop_allowed: true},
+    {must_attempt_work: undefined}, {settlement_receipt_revision: "work_admission"}]) {
+    assert.throws(() => nativeAdmission({currentDetails: {...realDetails, ...patch}}),
+      {code: "refresh_task_lease_unavailable"});
+  }
+  for (const patch of [{status: "released"}, {expires_at: "2025-01-01T00:00:00Z"},
+    {owner: "other-agent"}, {version: 121}]) {
+    assert.throws(() => nativeAdmission({lease: {...currentLease, ...patch}}), {code: "refresh_task_lease_unavailable"});
+  }
+  assert.throws(() => nativeAdmission({todo: {...todo(identity.todo_id!, "done"), claimed_by: identity.agent_id}}),
+    {code: "refresh_task_lease_unavailable"});
+  assert.throws(() => nativeAdmission({closeoutStarted: true}), {code: "refresh_task_lease_unavailable"});
+  for (const previous of [{todo_id: identity.todo_id, settlement_effect_id: identity.effect_id,
+      prepared_lease_required: true, ...originalPrepared},
+    {...realDetails, closeout_required: false, must_attempt_work: undefined}]) {
+    const existing: JsonObject = {...preparedReceipt, status: "turn_run_once", details: previous};
+    assert.throws(() => nativeAdmission({existingReceipt: existing, receiptHistory: [existing]}),
+      {code: "refresh_task_lease_unavailable"});
+  }
+});
+
+test("fresh native admission reuses causal qualification only for a genuine complete negative precursor", () => {
+  const existing: JsonObject = {...preparedReceipt, event_id: "preparation-wait", status: "repair_required",
+    details: {...preparedReceipt.details as JsonObject, closeout_required: false, delivery_allowed: false,
+      prepared_lease_key_sha256: undefined, prepared_lease_version: undefined, prepared_lease_epoch: undefined}};
+  const qualified = nativeAdmission({existingReceipt: existing, receiptHistory: [existing]});
+  assert.equal(qualified.append, true);
+  assert.equal(qualified.source_event_id, existing.event_id);
+  assert.equal((qualified.details as JsonObject).settlement_receipt_revision, "work_admission");
+  const carrier: JsonObject = {...preparedReceipt, event_id: "fresh-prepared", details: qualified.details,
+    causality: {source_event_id: existing.event_id, caused_by: existing.event_id}};
+  assert.deepEqual(heartbeatValidationEvent([existing, carrier], carrier, identity, false), carrier);
+});
 
 test("resume distinguishes current CAS from frozen prepared generation", () => {
   const before = structuredClone({preparedReceipt, currentLease});

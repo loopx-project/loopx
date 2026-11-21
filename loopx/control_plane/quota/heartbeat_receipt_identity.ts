@@ -612,6 +612,92 @@ export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {
   return heartbeatReceiptDetails(event).settlement_receipt_revision === "lease_readiness";
 }
 
+/** A runtime-owned fresh native Turn publishes its real prepared decision.
+ * Current CAS is checked here; an existing admission keeps its immutable proof.
+ * Status compatibility and another Turn's resume grant are never inputs. */
+export function qualifyHeartbeatNativeWorkAdmission(input: {
+  identity: SettlementIdentity; currentDetails: JsonObject;
+  existingReceipt: JsonObject | null; receiptHistory: readonly JsonObject[];
+  todo: JsonObject; lease: JsonObject; handoffMode: unknown;
+  replayPhase: ReceiptBoundReplayPhase; closeoutStarted: boolean; observedAt: Date;
+}): JsonObject {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const {identity, currentDetails, lease} = input;
+  if (identity.todo_id == null || identity.replan_obligation_id != null || identity.request_subject != null
+      || input.todo.role !== "agent" || lease.goal_id !== identity.goal_id
+      || currentDetails.todo_id !== identity.todo_id || currentDetails.selected_todo_id !== identity.todo_id
+      || currentDetails.turn_instance_id !== identity.turn_instance_id
+      || currentDetails.settlement_effect_id !== identity.effect_id
+      || currentDetails.closeout_required !== true || currentDetails.prepared_lease_required !== true
+      || currentDetails.delivery_allowed !== true
+      || Object.hasOwn(currentDetails, "settlement_receipt_revision")
+      || nativeChildReportAdmission(currentDetails, null, identity.effect_id, "open", false)
+        .report_permission !== "new_operation") {
+    reject("Fresh native admission requires the same Turn's complete explicit prepared work decision.");
+  }
+  const candidatePrepared = heartbeatPreparedLease(currentDetails);
+  if (candidatePrepared === null || candidatePrepared.prepared_lease_epoch === undefined
+      || candidatePrepared.prepared_lease_version !== lease.version) {
+    reject("Fresh native preparation must match the current canonical lease CAS and epoch.");
+  }
+  const candidate: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+    goal_id: identity.goal_id, agent_id: identity.agent_id, run_id: identity.turn_instance_id,
+    details: currentDetails};
+  const currentProof = {idempotency_key: lease.idempotency_key, expected_version: lease.version};
+  qualifyHeartbeatResumeLease({originalReceipt: candidate, identity, requestedProof: currentProof,
+    todo: input.todo, lease, handoffMode: input.handoffMode, exactSource: true,
+    completionEvent: null, replayPhase: input.replayPhase, closeoutStarted: input.closeoutStarted,
+    writebackPending: false, otherTerminalStarted: input.closeoutStarted, observedAt: input.observedAt});
+  const existing = input.existingReceipt;
+  if (existing === null) {
+    qualifyHeartbeatPreparedPublication({schema_version: HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA,
+      existing_receipt: null, original_prepared: null, receipt_history: [],
+      settlement_identity: settlementIdentityPayload(identity),
+      proposed_prepared_fields: {prepared_lease_required: true, ...candidatePrepared}});
+    return {state: "ready", append: true, details: structuredClone(currentDetails), source_event_id: null,
+      original_prepared: {...candidatePrepared}, current_task_lease_proof: currentProof};
+  }
+  const validation = heartbeatValidationEvent(input.receiptHistory, existing, identity, false);
+  if (validation === null) reject("The existing native Turn's receipt lineage is incomplete.");
+  const original = heartbeatPreparedWorkAdmission(validation, identity, false);
+  if (original !== null) {
+    const originalDetails = heartbeatReceiptDetails(validation);
+    if (!isDeepStrictEqual(projectSemanticReplanGuard(originalDetails), projectSemanticReplanGuard(currentDetails))
+        || (originalDetails.quota_spend_source != null && originalDetails.quota_spend_source !== currentDetails.quota_spend_source)) {
+      reject("Fresh native replay cannot replace the original admission's semantic or spend source.");
+    }
+    qualifyHeartbeatResumeLease({originalReceipt: validation, identity, requestedProof: currentProof,
+      todo: input.todo, lease, handoffMode: input.handoffMode, exactSource: true,
+      completionEvent: null, replayPhase: input.replayPhase, closeoutStarted: input.closeoutStarted,
+      writebackPending: false, otherTerminalStarted: input.closeoutStarted, observedAt: input.observedAt});
+    return {state: "ready", append: false, details: null, source_event_id: null,
+      original_prepared: {...original}, current_task_lease_proof: currentProof};
+  }
+  // The existing reentry owner alone may qualify a genuine negative precursor.
+  // In particular, an ensure-only legacy-positive receipt is not promoted.
+  const previousDetails = heartbeatReceiptDetails(existing);
+  if (["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]
+      .some(field => typeof previousDetails[field] !== "boolean")
+      || previousDetails.closeout_required !== false || previousDetails.prepared_lease_required !== true) {
+    reject("Only a complete explicit negative work receipt can precede native admission.");
+  }
+  qualifyHeartbeatPreparedPublication({schema_version: HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA,
+    existing_receipt: existing, original_prepared: null, receipt_history: [...input.receiptHistory],
+    settlement_identity: settlementIdentityPayload(identity),
+    proposed_prepared_fields: {prepared_lease_required: true, ...candidatePrepared}});
+  const qualified = heartbeatWorkRequalification(existing, currentDetails, identity,
+    input.replayPhase, input.closeoutStarted);
+  const qualifiedDetails = jsonObject(qualified.details);
+  if (qualified.append !== true || qualifiedDetails?.settlement_receipt_revision !== "work_admission"
+      || !optionalHeartbeatString(existing.event_id)) {
+    reject("The existing receipt does not admit a fresh native work qualification.");
+  }
+  return {state: "ready", append: true, details: qualifiedDetails, source_event_id: existing.event_id!,
+    original_prepared: {...candidatePrepared}, current_task_lease_proof: currentProof};
+}
+
 /** Reentry can qualify work on the original binding, never replace its authority.
  * The caller commits this append-only projection under the receipt-log lock. */
 export function heartbeatWorkRequalification(

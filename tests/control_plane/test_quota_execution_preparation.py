@@ -1536,8 +1536,12 @@ def test_writeback_requires_current_same_generation_cas(
 def test_validation_recovery_cannot_execute_replaced_epoch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, provider: str,
 ) -> None:
+    from loopx.control_plane.quota.accounting_admission import quota_accounting_admission
+    from loopx.control_plane.quota.execution_preparation import (
+        read_turn_execution_lease_qualification,
+    )
     from tests.control_plane.test_execution_loss_closeout_cli import (
-        OWNER, TURN, _fixture as execution_loss_fixture,
+        OWNER, TURN, _fixture as execution_loss_fixture, _readback,
     )
 
     context = execution_loss_fixture(
@@ -1548,17 +1552,30 @@ def test_validation_recovery_cannot_execute_replaced_epoch(
     current = context["current_lease"]
     assert current["lease_epoch"] > original["lease_epoch"]
     assert current["idempotency_key"] != original["idempotency_key"]
+    settlement = _readback(context)
+    assert settlement is not None and settlement.identity.value is not None
     writeback = {
         **context, "turn": TURN, "agent_id": OWNER,
         "proof": {"idempotency_key": original["idempotency_key"],
                   "expected_version": original["version"]},
     }
     before = _writeback_side_effect_snapshot(writeback)
-    with pytest.raises(RefreshTaskLeaseUnavailable):
-        _run_real_semantic_writeback(
-            writeback, proof=writeback["proof"],
-            validation_recovery_turn_instance_id=TURN,
-        )
+    with quota_accounting_admission(
+        runtime_root=context["runtime"], registry_path=context["registry"],
+        goal_id=context["goal_id"], goal_ref=context["goal_ref"],
+        operation="validation-recovery-replaced-epoch",
+    ) as source_admission:
+        assert source_admission is not None
+        assert source_admission["schema_version"] == "loopx_quota_source_admission_v0"
+        assert source_admission["profile_id"] == "source_session_v1"
+        assert source_admission["planned_goal_ref"] == context["goal_ref"]
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            read_turn_execution_lease_qualification(
+                runtime_root=context["runtime"], registry_path=context["registry"],
+                identity=settlement.identity.value, requested_proof=writeback["proof"],
+                goal_ref=context["goal_ref"], source_admission=source_admission,
+                validation_recovery_turn_instance_id=TURN,
+            )
     assert _writeback_side_effect_snapshot(writeback) == before
 
 
@@ -1607,23 +1624,26 @@ def test_legacy_prepared_receipt_is_exact_version_only(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_exact_source_supersede_admits_only_its_original_turn_writeback(
+def test_supersede_admits_only_its_original_turn_writeback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, provider: str,
 ) -> None:
+    from loopx.state_refresh import refresh_state_run
     from tests.control_plane.test_execution_loss_closeout_cli import (
         OWNER, TURN, _binding, _fixture as execution_loss_fixture, _proof, _readback,
     )
 
     context = execution_loss_fixture(
         tmp_path, monkeypatch, capsys, provider,
-        source_profile=True, replace=False,
+        source_profile=False, replace=False,
     )
     expected_todo = "todo_" + hashlib.sha256(b"execution-loss-task").hexdigest()[:24]
     expected_effect = (
-        f"execution-loss-closeout:original-worker:{expected_todo}:original-prepared-turn"
+        f"{context['goal_id']}:original-worker:{expected_todo}:original-prepared-turn"
     )
-    admission_identity = _readback(context).identity.value.as_dict()
-    assert admission_identity["goal_id"] == "execution-loss-closeout"
+    original_settlement = _readback(context)
+    assert original_settlement is not None and original_settlement.identity.value is not None
+    admission_identity = original_settlement.identity.value.as_dict()
+    assert admission_identity["goal_id"] == context["goal_id"]
     assert admission_identity["agent_id"] == "original-worker"
     assert admission_identity["todo_id"] == expected_todo
     assert admission_identity["turn_instance_id"] == "original-prepared-turn"
@@ -1642,19 +1662,79 @@ def test_exact_source_supersede_admits_only_its_original_turn_writeback(
     }
     assert retired["settlement_identity"] == admission_identity
     before_wrong_turn = _writeback_side_effect_snapshot(writeback)
-    with pytest.raises(RuntimeError, match="exact settlement readback unexpectedly returned not-found"):
+    with pytest.raises(ValueError, match="matching Turn guard is missing"):
         _run_real_semantic_writeback(
             {**writeback, "turn": "foreign-prepared-turn"}, proof=writeback["proof"],
         )
     assert _writeback_side_effect_snapshot(writeback) == before_wrong_turn
-    result = _run_real_semantic_writeback(writeback, proof=writeback["proof"])
+    original_prepared = original_settlement.original_prepared_receipt
+    original_event_id = original_settlement.original_prepared_event_id
+    original_receipt_sha256 = original_settlement.original_prepared_receipt_sha256
+    expected_prepared_lease = {
+        "prepared_lease_key_sha256": hashlib.sha256(
+            lease["idempotency_key"].encode("utf-8")
+        ).hexdigest(),
+        "prepared_lease_version": lease["version"],
+        "prepared_lease_epoch": lease["lease_epoch"],
+    }
+    assert original_settlement.prepared_lease == expected_prepared_lease
+    result = refresh_state_run(
+        registry_path=context["registry"],
+        runtime_root_override=str(context["runtime"]),
+        goal_id=context["goal_id"], project=context["project"], state_file=None,
+        classification="receipt_bound_supersede_writeback",
+        recommended_action="Review the remaining Goal after recording the retired task Turn.",
+        delivery_batch_scale="single_surface", delivery_outcome="outcome_progress",
+        delivery_boundary="semantic_closeout", todo_id=context["todo"],
+        turn_instance_id=TURN, agent_id=OWNER,
+        progress_observation={
+            "schema_version": "typed_progress_observation_v0",
+            "result_class": "advanced", "work_item_id": context["todo"],
+            "evidence_ids": ["evidence:original-task-superseded"],
+        },
+        agent_vision_packet={
+            "schema_version": "goal_vision_replan_contract_v0", "state": "active",
+            "vision_patch": {
+                "vision_summary": "Retain the Goal after retiring the original bounded task.",
+                "acceptance_summary": "The retired task records only its admitted original Turn.",
+                "advancement_policy": "as_needed",
+            },
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0", "outcome": "continue",
+                "prior_assumption": "The original task remained the active execution route.",
+                "observed_reality": "The task was superseded after its original Turn was admitted.",
+                "retained": ["The original Turn identity and prepared lease proof."],
+                "changed": ["Retire the original task and continue from the remaining Goal."],
+                "evidence_refs": ["evidence:original-task-superseded"],
+            },
+        },
+        autonomous_replan_recorded=True,
+        task_lease_proof=writeback["proof"], dry_run=False, sync_global=False,
+    )
     assert result["ok"] is True
     run = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
     assert run["settlement_identity"] == admission_identity
     assert run["todo_id"] == expected_todo
-    index = context["runtime"] / "goals" / "execution-loss-closeout" / "runs" / "index.jsonl"
+    assert run["vision_checkpoint"]["decision"] == "patched"
+    assert run["vision_checkpoint"]["satisfied"] is True
+    assert run["agent_vision"]["state"] == "active"
+    assert run["agent_vision"]["path_delta"]["changed"] == [
+        "Retire the original task and continue from the remaining Goal."
+    ]
+    markdown = Path(result["markdown_path"])
+    assert markdown.exists() and TURN in markdown.read_text(encoding="utf-8")
+    index = context["runtime"] / "goals" / context["goal_id"] / "runs" / "index.jsonl"
     [index_row] = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
     assert index_row["settlement_identity"] == admission_identity
+    assert Path(index_row["json_path"]) == Path(result["json_path"])
+    assert Path(index_row["markdown_path"]) == markdown
+    final = _readback(context)
+    assert final is not None
+    assert final.original_prepared_receipt == original_prepared
+    assert final.original_prepared_event_id == original_event_id
+    assert final.original_prepared_receipt_sha256 == original_receipt_sha256
+    assert final.prepared_lease == expected_prepared_lease
+    assert final.writeback_run == index_row
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -1793,7 +1873,11 @@ except LockAcquireTimeoutError:
             "turn-same-generation-writeback#durable_writeback"
         ),
         "delivery_boundary": "semantic_closeout",
-        "original_prepared": original_receipt,
+        "original_prepared": {
+            "prepared_lease_key_sha256": hashlib.sha256(b"same-generation-writeback").hexdigest(),
+            "prepared_lease_version": 1,
+            "prepared_lease_epoch": 1,
+        },
         "selected_obligation_id": None,
     }]
     released = probe_marker()
@@ -1823,14 +1907,41 @@ except LockAcquireTimeoutError:
     runs = list((context["runtime"] / "goals" / GOAL / "runs").glob("*.json"))
     assert len(runs) == 1
     run = json.loads(runs[0].read_text(encoding="utf-8"))
-    assert final.writeback_run == run
-    assert run["settlement_identity"]["turn_instance_id"] == context["turn"]
     markdown = runs[0].with_suffix(".md")
+    state_bytes = (context["project"] / "ACTIVE_GOAL_STATE.md").read_bytes()
+    state_digest = hashlib.sha256(state_bytes).hexdigest()[:16]
+    assert run["state"]["sha256_16"] == state_digest
+    assert run["settlement_identity"]["turn_instance_id"] == context["turn"]
     assert markdown.exists() and context["turn"] in markdown.read_text(encoding="utf-8")
     index = context["runtime"] / "goals" / GOAL / "runs" / "index.jsonl"
     index_rows = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
     assert len(index_rows) == 1
-    assert index_rows[0]["settlement_identity"] == run["settlement_identity"]
+    # Settlement readback owns the exact canonical index row; the physical
+    # JSON also retains adapter presentation that is outside that projection.
+    assert final.writeback_run == index_rows[0]
+    assert index_rows[0]["state"] == {
+        "sha256_16": state_digest, "frontmatter": {"updated_at": None},
+    }
+    expected_identity = {
+        "schema_version": "quota_settlement_identity_v0",
+        "effect_id": (
+            "goal-execution-preparation:agent-a:todo_execution_preparation:"
+            "turn-same-generation-writeback"
+        ),
+        "goal_id": GOAL, "agent_id": AGENT, "todo_id": TODO,
+        "turn_instance_id": "turn-same-generation-writeback",
+    }
+    for record in (run, index_rows[0]):
+        assert record["settlement_identity"] == expected_identity
+        assert record["goal_id"] == GOAL and record["agent_id"] == AGENT
+        assert record["todo_id"] == TODO and record["turn_instance_id"] == context["turn"]
+        assert record["delivery_outcome"] == "outcome_gap"
+        progress = record["progress_observation"]
+        assert progress["schema_version"] == "typed_progress_observation_v0"
+        assert progress["result_class"] == "blocked" and progress["work_item_id"] == TODO
+        assert progress["blocker_id"] == "synthetic-writeback-fence"
+        assert progress["evidence_ids"] == ["evidence:synthetic-writeback-fence"]
+    assert index_rows[0]["progress_observation"] == run["progress_observation"]
     assert Path(index_rows[0]["json_path"]) == runs[0]
     assert Path(index_rows[0]["markdown_path"]) == markdown
 

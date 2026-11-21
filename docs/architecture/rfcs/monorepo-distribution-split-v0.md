@@ -4791,6 +4791,7 @@ view shows its independently checked result in the same conversation.
 
 ### 2026-11-20 — Close a lost execution attempt without replacement delivery
 
+- **Proposal:** [#9153](https://github.com/loopx-project/loopx/pull/9153).
 - **Gap:** a replacement task lease cannot authorize the original prepared
   Turn's business writeback. Repeating the same work guard can therefore leave
   the original receipt open without a legal recovery operation.
@@ -4848,6 +4849,24 @@ view shows its independently checked result in the same conversation.
   positive prepared admission may explain the existing explicit administrative
   closeout and its separate current-control-writer requirement; bounded legacy
   evidence supports inspection only.
+- **Fresh native admission:** a new native Turn records its own genuine typed
+  work admission before Host execution. The shared owner checks prior debt
+  before preparation and rereads it with current CAS at publication. A saved
+  candidate supplies content evidence; it cannot borrow the original Turn's
+  execution proof or clear its debt. Freeze and replay follow the new Turn's
+  admission, and later recovery and cleanup retain that Turn's identity.
+  An ordinary registry's exact GoalRef requires its actual persisted instance
+  and registry/resource witnesses; a nonempty ref does not activate the
+  SourceSession runtime. Callers without a ref retain their bounded alias
+  ownership. Historical readback preserves the original journal/receipt owner
+  rather than substituting the current actor's ref.
+  Ordinary exact journal checkpoints reuse the same typed native registry
+  witnesses, bound to the original settlement identity and canonical journal
+  path. Checkpoint persistence does not grant Host execution authority.
+  Nested read-only replan projections reuse held native metadata while retaining
+  original receipt and journal identities. Native writeback verifies the actual
+  borrowed registry/index scope inside the existing maintenance guard before
+  avoiding duplicate lock acquisition; source reread and Stop checks remain.
 - **Source evidence:** CLI tests cover both local providers, stale/foreign
   proofs, ordinary parity and zero completion/debit. Recovery tests inject
   interruption after JSON, Markdown, index and receipt durability. SourceSession

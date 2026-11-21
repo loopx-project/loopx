@@ -542,6 +542,11 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
         f"- state_updated_at: `{frontmatter.get('updated_at')}`",
         f"- health_check: `{payload.get('health_check')}`",
     ]
+    lines.extend(
+        f"- {field}: `{payload[field]}`"
+        for field in ("todo_id", "turn_instance_id", "replan_obligation_id")
+        if payload.get(field)
+    )
     lines.extend(delivery_lines)
     lines.extend(render_settlement_progress_markdown(payload))
     if "external_sink_delivery_authorized" in payload:
@@ -1523,9 +1528,13 @@ def refresh_state_run(
         # two deltas from one stale basis; the appended row advances the basis.
         with ExitStack() as usage_booking_guard:
             if normalized_next_action:
+                native_resources = ({"runtime_root": runtime_root, "goal_ref": goal_ref,
+                    "source_admission": source_admission, "agent_id": normalized_agent_id or None}
+                    if source_admission is not None
+                    and source_admission.get("schema_version") == "loopx_quota_native_admission_v0" else {})
                 current_goal, current_text = usage_booking_guard.enter_context(
                     recommendation_source_guard(registry_path, resolved_state_file, safe_goal_id,
-                        source_registry=next_action_source_registry))
+                        source_registry=next_action_source_registry, **native_resources))
                 if current_goal is None:
                     raise ValueError("Next Action source Goal disappeared; reread status")
                 current_planning = load_refresh_planning_source(

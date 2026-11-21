@@ -137,6 +137,10 @@ def project_agent_next_actions(goal: dict[str, Any], todo_fields: dict[str, Any]
 def recommendation_source_guard(
     registry_path: Path, state_path: Path, goal_id: str,
     *, source_registry: Path,
+    runtime_root: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
+    agent_id: str | None = None,
 ) -> Iterator[tuple[dict[str, Any] | None, str]]:
     # Registration/configuration use the same registry lock. Quota's outer
     # index/source guard precedes this short registry -> state critical section.
@@ -144,9 +148,25 @@ def recommendation_source_guard(
     # Configuration locks source before its shared projection. Keep that order,
     # and revalidate the projection's route under both locks before using it.
     with ExitStack() as stack:
-        stack.enter_context(exclusive_cross_runtime_file_lock(source_registry, operation="recommendation-writeback"))
-        if registry_path.resolve() != source_registry.resolve():
-            stack.enter_context(exclusive_cross_runtime_file_lock(registry_path, operation="recommendation-writeback"))
+        if source_admission is not None and source_admission.get("schema_version") == "loopx_quota_native_admission_v0":
+            from ..quota.accounting_admission import _require_held_native_registry_resources
+
+            if runtime_root is None:
+                raise ValueError("Next Action native resources require their explicit runtime root")
+            # Reuse the enclosing accounting resource lifetime, without
+            # granting Next Action write authority or deriving its GoalRef.
+            try:
+                _require_held_native_registry_resources(
+                    runtime_root=runtime_root, registry_path=registry_path, goal_id=goal_id,
+                    goal_ref=goal_ref, source_admission=source_admission,
+                    source_registry=source_registry, agent_id=agent_id,
+                )
+            except RuntimeError as exc:
+                raise ValueError("Next Action native resources no longer match their enclosing scope") from exc
+        else:
+            stack.enter_context(exclusive_cross_runtime_file_lock(source_registry, operation="recommendation-writeback"))
+            if registry_path.resolve() != source_registry.resolve():
+                stack.enter_context(exclusive_cross_runtime_file_lock(registry_path, operation="recommendation-writeback"))
         current_source, goal = load_recommendation_source_goal(registry_path, goal_id)
         if current_source != source_registry.resolve():
             raise ValueError("Next Action source registry changed; read current status and rejudge before retrying")

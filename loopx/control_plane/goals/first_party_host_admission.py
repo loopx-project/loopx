@@ -357,15 +357,12 @@ class FirstPartyHostGoalAdmission:
         requested_registry = registry_path.expanduser().resolve()
         require_goal_id(goal_id)
         agent_id = normalize_todo_claimed_by(agent_id)
-        source_profile = planned_goal_ref is not None
+        source_profile = (requested_registry.is_file()
+            and load_project_registry(requested_registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID)
         legacy_registry_witness = None
         legacy_source_admission = None
         legacy_running_authority_sha256 = None
         if not source_profile and requested_registry.is_file():
-            source_profile = (
-                load_project_registry(requested_registry).get("profile_id")
-                == SOURCE_SESSION_PROFILE_ID
-            )
             if not source_profile and capture_launch_authority:
                 with project_registry_transaction(
                     requested_registry, operation="first_party_host_launch_capture",
@@ -610,10 +607,26 @@ class FirstPartyHostGoalAdmission:
         *,
         runtime_root: Path,
     ) -> Iterator[dict[str, Any] | None]:
-        """Hand one journal mutation to the TS owner under the source guard."""
+        """Hand one journal mutation to TS under its actual registry profile."""
 
         if not self.source_profile:
-            yield None
+            if self.planned_goal_ref is None:
+                yield None
+                return
+            from ..quota.accounting_admission import quota_accounting_admission
+
+            # Ordinary exact journals retain their native registry resources;
+            # an already-held launch scope is borrowed without another index.
+            with quota_accounting_admission(
+                runtime_root=runtime_root, registry_path=self.registry_path,
+                goal_id=self.goal_id, goal_ref=self.planned_goal_ref,
+                native_agent_id=self.agent_id, operation="first_party_host_journal_commit",
+            ) as admission:
+                with exclusive_cross_runtime_file_lock(
+                    runtime_artifact_lock_target(runtime_root.expanduser().resolve(), self.goal_id),
+                    operation="first_party_host_journal_runtime_artifact_guard",
+                ):
+                    yield admission
             return
         target = guard_path(self.registry_path, self.goal_id)
         with exclusive_cross_runtime_file_lock(

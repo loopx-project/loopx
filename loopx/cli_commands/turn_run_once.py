@@ -782,11 +782,41 @@ def execute_turn_run_once(
         if args.host == "codex-app-server":
             native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
+                agent_id=args.agent_id,
             )).with_launch_decision(current_launch_decision)
 
+            @contextmanager
+            def native_launch_lifetime():
+                if native_admission.source_profile:
+                    with native_admission.launch_lifetime(operation="native_conversation_turn_launch"):
+                        yield
+                    return
+                from ..control_plane.goals.first_party_host_admission import _legacy_goal_authority
+                from ..control_plane.projects.registry_codec import load_project_registry
+                from ..control_plane.quota.accounting_admission import QUOTA_NATIVE_ADMISSION_SCHEMA, quota_accounting_admission
+
+                # Enter index -> registry first. Nested live reads borrow this
+                # same resource envelope instead of taking an index under a
+                # held registry. Both current decision and Goal witness are
+                # consumed by the existing typed launch owner before dispatch.
+                with quota_accounting_admission(runtime_root=runtime_root, registry_path=registry_path,
+                        goal_id=args.goal_id, goal_ref=goal_ref, native_agent_id=args.agent_id,
+                        operation="native_conversation_turn_launch") as admission:
+                    if admission is None or admission.get("schema_version") != QUOTA_NATIVE_ADMISSION_SCHEMA:
+                        raise RefreshTaskLeaseUnavailable("Native launch resource ownership changed before dispatch.")
+                    witnesses = {Path(witness["path"]): witness for witness in admission["registry_sources"]}
+                    source = native_admission
+                    while source is not None:
+                        source._decision("launch",
+                            legacy_authority=_legacy_goal_authority(load_project_registry(source.registry_path),
+                                source.goal_id, source.agent_id),
+                            registry_witness=witnesses[source.registry_path],
+                            launch_decision=current_launch_decision(source.registry_path))
+                        source = source.legacy_source_admission
+                    yield
+
             def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
-                return native_host_runner(request, lambda: native_admission.launch_lifetime(
-                    operation="native_conversation_turn_launch"))
+                return native_host_runner(request, native_launch_lifetime)
 
             host_runner = run_native_host
             session_binding_resolver = native_session_binding_resolver
@@ -878,16 +908,25 @@ def execute_turn_run_once(
                     else None
                 ),
                 goal_ref=goal_ref,
-                task_lease_proof=None if resume_execution else task_lease_proof,
-                task_lease_epoch=None if resume_execution else task_lease_epoch,
+                task_lease_proof=None if resume_execution or fresh_native_start else task_lease_proof,
+                task_lease_epoch=None if resume_execution or fresh_native_start else task_lease_epoch,
             )
 
         def on_managed_start_admitted() -> None:
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+            if fresh_native_start:
+                from .quota_should_run import record_fresh_native_heartbeat_receipt
+
+                current = current_launch_decision(registry_path)["current"]
+                record_fresh_native_heartbeat_receipt(current,
+                    identity=settlement_identity, runtime_root=runtime_root,
+                    registry_path=registry_path, goal_ref=goal_ref, goal_admission=native_admission)
             bind_heartbeat_settlement_receipt()
 
+        fresh_native_start = (args.host == "codex-app-server" and native_host_runner is not None
+            and not getattr(args, "resume_turn_key", None) and settlement_identity.todo_id is not None)
         managed_cadence = managed_cadence_start(
             runtime_root=runtime_root,
             goal_id=args.goal_id,

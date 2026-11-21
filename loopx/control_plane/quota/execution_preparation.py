@@ -440,10 +440,25 @@ def guard_first_writeback_execution(
             if goal is None:
                 source, _ = load_recommendation_source_goal(registry_path, goal_id)
                 invoked = registry_path.resolve()
-                for registry in dict.fromkeys((source, invoked)):
-                    locks.enter_context(exclusive_cross_runtime_file_lock(
-                        registry, timeout_seconds=0, operation="refresh-state-execution",
-                    ))
+                registries = list(dict.fromkeys((source, invoked)))
+                if source_admission is not None and source_admission.get("schema_version") == "loopx_quota_native_admission_v0":
+                    from .accounting_admission import _require_held_native_registry_resources
+
+                    # This is resource reuse only. Business authority remains
+                    # the original Turn's inside-M TS qualification above.
+                    try:
+                        _require_held_native_registry_resources(
+                            runtime_root=runtime_root, registry_path=registry_path, goal_id=goal_id,
+                            goal_ref=goal_ref, source_admission=source_admission,
+                            source_registry=source, agent_id=agent_id,
+                        )
+                    except RuntimeError as exc:
+                        raise RefreshTaskLeaseUnavailable("The native writeback resources are no longer held.") from exc
+                else:
+                    for registry in registries:
+                        locks.enter_context(exclusive_cross_runtime_file_lock(
+                            registry, timeout_seconds=0, operation="refresh-state-execution",
+                        ))
                 current_source, goal = load_recommendation_source_goal(registry_path, goal_id)
                 if current_source != source or goal is None:
                     raise RefreshTaskLeaseUnavailable("The Goal source changed before this writeback committed.")

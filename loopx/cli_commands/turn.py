@@ -52,6 +52,7 @@ def handle_turn_command(
     native_execution_preparer: Callable[[Mapping[str, Any]], str | None] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    native_goal_ref: Mapping[str, object] | None = None,
 ) -> int | None:
     if args.command != "turn":
         return None
@@ -90,6 +91,8 @@ def handle_turn_command(
             raise ValueError("a native task validator requires its original host connection")
         if native_execution_preparer is not None and native_host_runner is None:
             raise ValueError("native task preparation requires its original host connection")
+        if native_goal_ref is not None and native_host_runner is None:
+            raise ValueError("native GoalRef requires its original host connection")
         runtime_root = resolve_status_projection_cache_runtime_root(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
@@ -182,6 +185,10 @@ def handle_turn_command(
             registry_path=registry_path,
             goal_id=args.goal_id,
         )
+        if native_goal_ref is not None and not getattr(args, "resume_turn_key", None):
+            # This is caller transport, not a Goal identity inference. The
+            # native receipt owner verifies it against the locked registry.
+            goal_ref = dict(native_goal_ref)
         goal_admission = FirstPartyHostGoalAdmission.for_plan(
             registry_path=registry_path,
             goal_id=args.goal_id,
@@ -192,6 +199,13 @@ def handle_turn_command(
             capture_launch_authority=False,
         )
         strict_goal_admission = goal_admission if goal_admission.enabled else None
+        fresh_native_start = (native_host_runner is not None and args.host == "codex-app-server"
+            and args.turn_command == "run-once" and args.execute and not getattr(args, "resume_turn_key", None))
+        if fresh_native_start and args.turn_instance_id is None:
+            from ..turn_identity import mint_turn_instance_id
+
+            args.turn_instance_id = mint_turn_instance_id(prefix="turn")
+        prior_native_closeout_checked = False
         if getattr(args, "codex_operation_tools", False) and args.host != "codex-cli":
             raise ValueError("--codex-operation-tools requires the codex-cli host")
         dsh_operation_module = getattr(args, "dsh_operation_module", None)
@@ -329,9 +343,28 @@ def handle_turn_command(
                 )
 
             decision_owner = read_decision_owner()
+            if fresh_native_start and getattr(args, "todo_id", None) and args.turn_instance_id:
+                from ..control_plane.quota.settlement import SettlementIdentity
+                from .quota_should_run import check_fresh_native_heartbeat_prior_closeout
+
+                check_fresh_native_heartbeat_prior_closeout(
+                    identity=SettlementIdentity(goal_id=args.goal_id, agent_id=args.agent_id,
+                        todo_id=args.todo_id, turn_instance_id=args.turn_instance_id),
+                    runtime_root=runtime_root, registry_path=registry_path, goal_ref=goal_ref)
+                prior_native_closeout_checked = True
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
             decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
+            if fresh_native_start and not prior_native_closeout_checked and args.turn_instance_id:
+                from ..control_plane.quota.settlement import SettlementIdentity
+                from .quota_should_run import check_fresh_native_heartbeat_prior_closeout
+
+                selected = decision.get("selected_todo")
+                if isinstance(selected, Mapping) and selected.get("todo_id"):
+                    check_fresh_native_heartbeat_prior_closeout(
+                        identity=SettlementIdentity(goal_id=args.goal_id, agent_id=args.agent_id,
+                            todo_id=selected["todo_id"], turn_instance_id=args.turn_instance_id),
+                        runtime_root=runtime_root, registry_path=registry_path, goal_ref=goal_ref)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
             if execution_preparer is not None and args.turn_command == "run-once" and args.execute:
                 prepared_todo = execution_preparer(decision)

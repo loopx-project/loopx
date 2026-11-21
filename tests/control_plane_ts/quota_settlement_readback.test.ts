@@ -38,6 +38,8 @@ import {
   preflightPriorHostTurnCloseout,
 } from "../../loopx/control_plane/quota/unsettled_host_turn_recovery.ts";
 import {heartbeatSemanticAdmissionEvent} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
+import {QUOTA_NATIVE_ADMISSION_SCHEMA} from "../../loopx/control_plane/quota/source_admission.ts";
+import {shadowMaintenanceLockPath} from "../../loopx/control_plane/coordination/shadow_management.ts";
 import {buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA, visionAuthoringContract}
   from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {decodeRefreshRetry, refreshRecovery} from "../../loopx/control_plane/quota/refresh_recovery.ts";
@@ -2948,6 +2950,233 @@ async function todoSemanticFixture(provider: "file" | "sqlite", seedTodo?: JsonO
       .publishLocalAuthoritySelection(root, goalId, "sqlite", observed.store_identity);
   }
   return {root, log, store, admission};
+}
+
+async function withNativeAdmission<T>(root: string, run: (binding: JsonObject, registry: string) => Promise<T>,
+  agent: string | null = agentId, options: {exact?: boolean; publication?: boolean;
+    registryPath?: string; declaredRuntimeRoot?: string; registryRole?: string} = {}): Promise<T> {
+  const registry = options.registryPath ?? join(root, "native-project", ".loopx", "registry.json");
+  await mkdir(dirname(registry), {recursive: true});
+  await writeFile(registry, JSON.stringify({schema_version: "0.1", registry_role: options.registryRole ?? "project-local",
+    common_runtime_root: options.declaredRuntimeRoot ?? root, goals: [{id: goalId, ...(options.exact === false ? {} : {goal_instance_id: instanceA}), status: "active",
+      coordination: {registered_agents: [agentId]}}]}));
+  const targets = [join(root, "goals", goalId, "runs", "index.jsonl"), registry,
+    ...(options.publication === false ? [] : [shadowMaintenanceLockPath(root, goalId),
+      join(root, "goals", goalId, "rollout-event-log.jsonl")])];
+  const roles = ["run_index", "registry_source", "authority_maintenance", "heartbeat_receipt"];
+  const locks: Awaited<ReturnType<typeof acquireFileMutationLock>>[] = [];
+  for (const target of targets) locks.push(await acquireFileMutationLock(target));
+  try {
+    const ref = options.exact === false ? null : {goal_id: goalId, goal_instance_id: instanceA};
+    return await run({...(ref === null ? {} : {goal_ref: ref}), borrow_source_admission: true, source_admission: {
+      schema_version: QUOTA_NATIVE_ADMISSION_SCHEMA, registry_path: registry, planned_goal_ref: ref,
+      runtime_root: root, ...(agent === null ? {} : {agent_id: agent}),
+      registry_sources: [{path: registry, sha256: createHash("sha256").update(await readFile(registry)).digest("hex")}],
+      locks: targets.map((target, index) => ({role: roles[index], target, pid: process.pid, token: locks[index]!.token})),
+    }}, registry);
+  } finally {
+    for (const index of [...targets.keys()].reverse()) {
+      await releaseFileMutationLock(targets[index]!, locks[index]!.token, null, true);
+    }
+  }
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: native relative runtime registration follows project, plain and global registry locations`, async () => {
+    const f = await todoSemanticFixture(provider);
+    await writeFile(f.log, "");
+    try {
+      // Native join exercises the host's real path flavor, including Win32 in
+      // Windows CI. All locations declare the parent of native-project as the
+      // runtime; a project .loopx registry must first leave its .loopx folder.
+      const project = join(f.root, "native-project");
+      const locations = [
+        {path: join(project, ".loopx", "registry.json"), role: "project-local"},
+        {path: join(project, "registry.json"), role: "project-local"},
+        {path: join(project, "registry.global.json"), role: "global-local"},
+      ];
+      const logBefore = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      for (const location of locations) {
+        await withNativeAdmission(f.root, async binding => {
+          const result = await readQuotaSettlement(request(f.root, {...binding,
+            native_work_admission: {check_prior_closeout_only: true}}));
+          assert.equal((result.native_work_admission as JsonObject).prior_closeout_checked, true, location.path);
+          assert.equal((result.native_work_admission as JsonObject).current_task_lease_proof, null);
+          assert.deepEqual(await readFile(f.log), logBefore);
+          assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+        }, agentId, {exact: false, publication: false, registryPath: location.path,
+          declaredRuntimeRoot: "..", registryRole: location.role});
+      }
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+}
+
+function nativeWorkDetails(work = identity, version = 120): JsonObject {
+  return {todo_id: work.todo_id, selected_todo_id: work.todo_id, turn_instance_id: work.turn_instance_id,
+    settlement_effect_id: work.effect_id, ok: true, should_run: true, must_attempt_work: true,
+    delivery_allowed: true, quiet_noop_allowed: false, closeout_required: true, prepared_lease_required: true,
+    prepared_lease_key_sha256: createHash("sha256").update("native-execution").digest("hex"),
+    prepared_lease_version: version, prepared_lease_epoch: 50};
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: native primary positive admission uses current CAS and proves its own closeout debt`, async () => {
+    const lease: JsonObject = {schema_version: "task_lease_v0", goal_id: goalId, todo_id: todoId,
+      owner: agentId, status: "active", idempotency_key: "native-execution", version: 120, lease_epoch: 50,
+      acquired_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:01Z", expires_at: "2099-01-01T00:00:00Z"};
+    const f = await todoSemanticFixture(provider, undefined, [lease]);
+    await writeFile(f.log, "");
+    try {
+      await withNativeAdmission(f.root, async binding => {
+        const readRequest = {...request(f.root), ...binding};
+        const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+        const checked = await readQuotaSettlement({...readRequest,
+          native_work_admission: {check_prior_closeout_only: true}});
+        assert.deepEqual(checked.native_work_admission, {prior_closeout_checked: true, append: false, details: null,
+          source_event_id: null, original_prepared: null, current_task_lease_proof: null});
+        const first = await readQuotaSettlement({...readRequest, native_work_admission: {details: nativeWorkDetails()}});
+        const admitted = requireJsonObject(first.native_work_admission, "native admission");
+        assert.equal(admitted.append, true);
+        assert.equal(admitted.source_event_id, null);
+        assert.equal(Object.hasOwn(admitted.details as JsonObject, "settlement_receipt_revision"), false);
+        assert.deepEqual(await readFile(f.log), before);
+        assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+        const event: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+          event_id: "native-primary", goal_id: goalId, agent_id: agentId, run_id: turnId, status: "normal_run",
+          recorded_at: "2026-01-01T00:00:00Z", goal_ref: binding.goal_ref, details: admitted.details};
+        await appendFile(f.log, JSON.stringify(event) + "\n");
+        const replay = await readQuotaSettlement({...readRequest, native_work_admission: {details: nativeWorkDetails()}});
+        assert.equal((replay.native_work_admission as JsonObject).append, false);
+        assert.deepEqual(replay.original_prepared_receipt, event);
+        const cleanup = await readQuotaSettlement({...readRequest, native_task_lease_cleanup: cleanupRequest});
+        assert.deepEqual(cleanup.native_task_lease_cleanup, {schema_version: NATIVE_TASK_LEASE_CLEANUP_SCHEMA,
+          disposition: "retain", reason: "original_turn_owes_closeout"});
+        const saved = settlementIdentity({goal_id: goalId, agent_id: agentId, todo_id: todoId,
+          turn_instance_id: turnId + ".saved-candidate"});
+        for (const candidate of [{check_prior_closeout_only: true}, {details: nativeWorkDetails(saved)}]) {
+          await assert.rejects(readQuotaSettlement({...readRequest, turn_instance_id: saved.turn_instance_id,
+            native_work_admission: candidate}), {code: "refresh_task_lease_unavailable"});
+        }
+        const after = await readFile(f.log);
+        for (const changed of [nativeWorkDetails(identity, 119), {...nativeWorkDetails(), delivery_allowed: false}]) {
+          await assert.rejects(readQuotaSettlement({...readRequest, native_work_admission: {details: changed}}),
+            {code: "refresh_task_lease_unavailable"});
+        }
+        assert.deepEqual(await readFile(f.log), after);
+        assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+      });
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+  test(`${provider}: native admission preserves exact registry role, Agent, store root and retained resource fences`, async () => {
+    const f = await todoSemanticFixture(provider);
+    await writeFile(f.log, "");
+    try {
+      await withNativeAdmission(f.root, async (binding, registry) => {
+        const native = requireJsonObject(binding.source_admission, "native owner");
+        const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+        const originalRegistry = await readFile(registry);
+        for (const patch of [{goal_instance_id: instanceB}, {status: "complete"},
+          {coordination: {registered_agents: ["other-agent"]}}]) {
+          const document = JSON.parse(originalRegistry.toString("utf8"));
+          document.goals[0] = {...document.goals[0], ...patch};
+          const bytes = JSON.stringify(document);
+          await writeFile(registry, bytes);
+          const changed = {...native, registry_sources: [{path: registry,
+            sha256: createHash("sha256").update(bytes).digest("hex")}]};
+          await assert.rejects(readQuotaSettlement(request(f.root, {...binding, source_admission: changed,
+            native_work_admission: {check_prior_closeout_only: true}})), {code: "goal_instance_conflict"});
+        }
+        for (const patch of [{registry_role: "public-safe-projection"}, {profile_id: "source_session_v1"},
+          {common_runtime_root: join(f.root, "different-store")}, {common_runtime_root: undefined}]) {
+          const bytes = JSON.stringify({...JSON.parse(originalRegistry.toString("utf8")), ...patch});
+          await writeFile(registry, bytes);
+          await assert.rejects(readQuotaSettlement(request(f.root, {...binding, source_admission: {...native,
+            registry_sources: [{path: registry, sha256: createHash("sha256").update(bytes).digest("hex")}]},
+          native_work_admission: {check_prior_closeout_only: true}})), {code: "goal_instance_conflict"});
+        }
+        await writeFile(registry, originalRegistry);
+        for (const patch of [{locks: (native.locks as JsonObject[]).slice(0, -1)},
+          {locks: (native.locks as JsonObject[]).map((lock, index) => index === 2 ? {...lock, role: "source_guard"} : lock)},
+          {planned_goal_ref: {goal_id: goalId, goal_instance_id: instanceB}}, {runtime_root: join(f.root, "other-root")}]) {
+          await assert.rejects(readQuotaSettlement(request(f.root, {...binding, source_admission: {...native, ...patch},
+            native_work_admission: {check_prior_closeout_only: true}})), {code: "quota_source_admission_invalid"});
+        }
+        await assert.rejects(readQuotaSettlement(request(f.root, {...binding, agent_id: "other-agent",
+          native_work_admission: {check_prior_closeout_only: true}})), {code: "quota_source_admission_invalid"});
+        for (const candidate of [{check_prior_closeout_only: false}, {check_prior_closeout_only: true, details: {}},
+          {details: {}, resume_lease_candidate: {requested_proof: null}}]) {
+          await assert.rejects(readQuotaSettlement(request(f.root, {...binding, native_work_admission: candidate})));
+        }
+        assert.deepEqual(await readFile(f.log), before);
+        assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+      });
+      await withNativeAdmission(f.root, async binding => {
+        const pure = await readQuotaSettlement(request(f.root, binding));
+        assert.equal(Object.hasOwn(pure, "native_work_admission"), false);
+        await assert.rejects(readQuotaSettlement(request(f.root, {...binding,
+          native_work_admission: {check_prior_closeout_only: true}})), {code: "quota_source_admission_invalid"});
+      }, null);
+      await assert.rejects(readQuotaSettlement(request(f.root, {native_work_admission: {check_prior_closeout_only: true}})),
+        {code: "quota_source_admission_invalid"});
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+  test(`${provider}: alias native primary keeps absent GoalRef and general reads need no publication locks`, async () => {
+    const lease: JsonObject = {schema_version: "task_lease_v0", goal_id: goalId, todo_id: todoId,
+      owner: agentId, status: "active", idempotency_key: "native-execution", version: 120, lease_epoch: 50,
+      acquired_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:01Z", expires_at: "2099-01-01T00:00:00Z"};
+    const f = await todoSemanticFixture(provider, undefined, [lease]);
+    await writeFile(f.log, "");
+    try {
+      await withNativeAdmission(f.root, async binding => {
+        const admission = await readQuotaSettlement(request(f.root, {...binding,
+          native_work_admission: {details: nativeWorkDetails()}}));
+        assert.equal((admission.native_work_admission as JsonObject).append, true);
+        assert.equal(Object.hasOwn(binding, "goal_ref"), false);
+        assert.equal(Object.hasOwn(admission, "goal_ref"), false);
+        assert.equal(Object.hasOwn((admission.native_work_admission as JsonObject).details as JsonObject, "goal_ref"), false);
+      }, agentId, {exact: false});
+      await withNativeAdmission(f.root, async binding => {
+        const pure = await readQuotaSettlement(request(f.root, binding));
+        assert.equal(Object.hasOwn(pure, "native_work_admission"), false);
+        const checked = await readQuotaSettlement(request(f.root, {...binding,
+          native_work_admission: {check_prior_closeout_only: true}}));
+        assert.equal((checked.native_work_admission as JsonObject).current_task_lease_proof, null);
+        await assert.rejects(readQuotaSettlement(request(f.root, {...binding,
+          native_work_admission: {details: nativeWorkDetails()}})), {code: "quota_source_admission_invalid"});
+      }, agentId, {publication: false});
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+  test(`${provider}: prior native debt blocks its Todo while independent work keeps its own admission`, async () => {
+    const {todo} = await import("./shadow_file_fixture.ts");
+    const otherId = "todo_independent";
+    const f = await todoSemanticFixture(provider, undefined, [], [{...todo(otherId), claimed_by: agentId}]);
+    const original: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+      event_id: "original-debt", goal_id: goalId, agent_id: agentId, run_id: turnId, status: "normal_run",
+      recorded_at: "2026-01-01T00:00:00Z", goal_ref: {goal_id: goalId, goal_instance_id: instanceA}, details: nativeWorkDetails()};
+    await writeFile(f.log, JSON.stringify(original) + "\n");
+    try {
+      await withNativeAdmission(f.root, async binding => {
+        const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+        await assert.rejects(readQuotaSettlement(request(f.root, {...binding, turn_instance_id: turnId + ".saved-candidate",
+          native_work_admission: {check_prior_closeout_only: true}})), {code: "refresh_task_lease_unavailable"});
+        const independent = await readQuotaSettlement(request(f.root, {...binding, todo_id: otherId,
+          turn_instance_id: "independent-new-turn", native_work_admission: {check_prior_closeout_only: true}}));
+        assert.equal((independent.native_work_admission as JsonObject).prior_closeout_checked, true);
+        assert.equal((independent.native_work_admission as JsonObject).current_task_lease_proof, null);
+        assert.deepEqual(await readFile(f.log), before);
+        assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+        for (const patch of [{agent_id: null}, {run_id: null}, {goal_ref: undefined},
+          {goal_ref: {goal_id: goalId, goal_instance_id: "malformed-instance"}}]) {
+          const malformed = JSON.stringify({...original, ...patch}) + "\n";
+          await writeFile(f.log, malformed);
+          await assert.rejects(readQuotaSettlement(request(f.root, {...binding,
+            turn_instance_id: turnId + ".saved-candidate",
+            native_work_admission: {check_prior_closeout_only: true}})), {code: "heartbeat_receipt_identity_conflict"});
+          assert.equal(await readFile(f.log, "utf8"), malformed);
+        }
+      }, agentId, {publication: false});
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
 }
 
 for (const provider of ["file", "sqlite"] as const) {

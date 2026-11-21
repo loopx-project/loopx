@@ -151,6 +151,20 @@ only. A frozen-report receiver retains its typed lease refusal, publishes an
 idempotent local notice and exposes the same failure packet in health. Reading
 the attachment or repeating the notice performs no business or accounting work.
 
+A fresh runtime-owned native Turn must publish its own genuine typed work
+admission before Host execution. The shared owner checks prior debt before
+preparation and rereads current CAS and debt at publication. A saved candidate
+provides content evidence, never the original Turn's execution authority;
+freeze and replay follow the new admission. That new Turn's receipt and journal
+own completion, subsequent recovery and cleanup. Ordinary registries may carry
+an exact GoalRef only with a matching persisted instance and real registry and
+resource witnesses. This does not activate generic SourceSession execution.
+No-ref callers retain bounded alias ownership; historical readback and resume
+retain the original journal/receipt ref without a current-actor substitution.
+Ordinary exact journal writes reuse the same typed native registry witnesses
+and bind them to the original settlement identity and canonical journal path;
+persisting a checkpoint grants no Host execution authority.
+
 `refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
 执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
 semantic_closeout 证据及当前 control writer 的确切租约 key/version。TS owner 在真实
@@ -218,6 +232,17 @@ binding。`settlement_recovery` attachment 保留原结算回读，仅提供
 control-writer 要求；legacy 证据仅支持检查。frozen-report receiver 保留 typed
 租约拒绝，记录幂等本地提示，并在 health 暴露同一 failure packet。读取 attachment
 或重复提示不执行任何业务或记账。
+
+fresh runtime-owned native Turn 必须在 Host 执行前发布自己的真实 typed work
+admission。共享 owner 在 preparation 前检查原债务，在 publication 时复读当前
+CAS 与债务。saved candidate 只提供内容证据，不成为原 Turn 的执行权限；
+freeze、replay 沿新准入。完成、后续恢复及 cleanup 由新 Turn 的 receipt/journal
+负责。普通 registry 的 exact GoalRef 必须匹配真实持久 instance，并具有实际
+registry/resource witness；这不激活通用 SourceSession 执行。无 ref 的 caller
+保留有限 alias ownership；历史回读与 resume 沿原 journal/receipt ref，不以
+当前 actor 替换。
+普通 exact journal 写入复用同一 typed native registry witness，绑定原 settlement
+identity 与 canonical journal 路径；checkpoint 持久化不授予 Host 执行权限。
 
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.

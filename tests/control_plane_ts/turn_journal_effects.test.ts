@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import test from "node:test";
 import { EffectRuntimeConflictError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import {
   acquireFileMutationLock,
+  mutationLockOwner,
   releaseFileMutationLock,
 } from "../../loopx/control_plane/effect_runtime_io.ts";
 import { commitTurnJournal } from "../../loopx/control_plane/turn_driver/turn_journal_effects.ts";
@@ -71,8 +72,9 @@ function sourceJournal(
   goalInstanceId: string,
   key: string,
   completedPhases: readonly string[] = [],
+  agentId = "fixture-agent",
 ): Record<string, unknown> {
-  const snapshot = journal("in_progress", completedPhases, "fixture-agent", key);
+  const snapshot = journal("in_progress", completedPhases, agentId, key);
   const plan = snapshot.plan as Record<string, unknown>;
   const goalRef = {
     goal_id: "fixture-goal",
@@ -459,6 +461,191 @@ test("legacy journals reject source admission without changing their wire", asyn
     assert.equal(committed.appended, true);
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), snapshot);
   });
+});
+
+interface NativeJournalFixture {
+  runtimeRoot: string;
+  path: string;
+  registries: string[];
+  admission: Record<string, unknown>;
+  locks: Record<string, unknown>[];
+}
+
+async function withNativeJournal(
+  run: (fixture: NativeJournalFixture) => Promise<void>,
+  sourceRoute = false,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-ts-native-journal-"));
+  const runtimeRoot = join(directory, "runtime");
+  const invoked = join(directory, "project", ".loopx", "registry.json");
+  const registries = sourceRoute ? [join(directory, "source", ".loopx", "registry.json"), invoked] : [invoked];
+  const targets = [join(runtimeRoot, "goals", "fixture-goal", "runs", "index.jsonl"), ...registries];
+  const locks: Record<string, unknown>[] = [];
+  try {
+    for (const [index, path] of registries.entries()) {
+      await mkdir(dirname(path), {recursive: true});
+      await writeFile(path, JSON.stringify({schema_version: "0.1", registry_role: "project-local",
+        common_runtime_root: runtimeRoot, goals: [{id: "fixture-goal", goal_instance_id: instanceA,
+          status: "active", coordination: {registered_agents: ["fixture-agent", "other-registered-agent"]},
+          ...(sourceRoute && index === 1 ? {source_registry: registries[0]} : {})}]}));
+    }
+    for (const [index, target] of targets.entries()) {
+      const lock = await acquireFileMutationLock(target);
+      locks.push({role: index === 0 ? "run_index" : "registry_source", target, pid: process.pid, token: lock.token});
+    }
+    await run({runtimeRoot, path: join(runtimeRoot, "goals", "fixture-goal", "turns", `${"a".repeat(64)}.json`),
+      registries, locks, admission: {schema_version: "loopx_quota_native_admission_v0", registry_path: invoked,
+        runtime_root: runtimeRoot, planned_goal_ref: {goal_id: "fixture-goal", goal_instance_id: instanceA},
+        agent_id: "fixture-agent", registry_sources: await Promise.all(registries.map(async path => ({path,
+          sha256: createHash("sha256").update(await readFile(path)).digest("hex")}))), locks}});
+  } finally {
+    for (const lock of [...locks].reverse()) {
+      await releaseFileMutationLock(String(lock.target), String(lock.token), null, true);
+    }
+    await rm(directory, {recursive: true, force: true});
+  }
+}
+
+function nativeJournalRequest(fixture: NativeJournalFixture, snapshot = sourceJournal(instanceA, turnKey)) {
+  return {path: fixture.path, journal: snapshot, expected_effect_id: effectId(), source_admission: fixture.admission};
+}
+
+for (const sourceRoute of [false, true]) {
+  test(`native exact journal ${sourceRoute ? "source and invoked registries" : "project registry"} preserves numbers and borrowed locks`, async () => {
+    await withNativeJournal(async fixture => {
+      // Only metadata resources are held: no Todo lease, prepared receipt,
+      // maintenance fence or heartbeat publication grants this journal write.
+      const snapshot: Record<string, unknown> = {...sourceJournal(instanceA, turnKey), values: [1, -0, 2 ** 60]};
+      (snapshot.plan as Record<string, unknown>).measurement = 1;
+      const request = {...nativeJournalRequest(fixture, snapshot), source_number_tokens: [
+        [["values", 0], "1.0"], [["values", 1], "-0.0"], [["values", 2], "1152921504606846977"],
+        [["plan", "measurement"], "1.0"],
+      ]};
+      const written = await commitTurnJournal(request);
+      const encoded = await readFile(fixture.path, "utf8");
+      assert.equal(written.appended, true);
+      assert.match(encoded, /1\.0,\n\s+-0\.0,\n\s+1152921504606846977/);
+      assert.match(encoded, /"measurement": 1\.0/);
+      assert.ok(!encoded.includes("source_number_tokens"));
+      const replay = await commitTurnJournal(request);
+      assert.equal(replay.replayed, true);
+      assert.equal(replay.operation_id, written.operation_id);
+      await assert.rejects(commitTurnJournal(nativeJournalRequest(fixture, snapshot)), /plan is immutable/);
+      assert.equal(await readFile(fixture.path, "utf8"), encoded);
+      for (const witness of fixture.locks) {
+        const owner = await mutationLockOwner(String(witness.target));
+        assert.equal(owner?.pid, witness.pid);
+        assert.equal(owner?.token, witness.token);
+      }
+    }, sourceRoute);
+  });
+}
+
+test("native exact journals retain plan, checkpoint and terminal guards", async () => {
+  await withNativeJournal(async fixture => {
+    const initial = nativeJournalRequest(fixture);
+    await commitTurnJournal(initial);
+    const encoded = await readFile(fixture.path, "utf8");
+    const changedPlan = sourceJournal(instanceA, turnKey);
+    (changedPlan.plan as Record<string, unknown>).host = {kind: "changed-after-start"};
+    await assert.rejects(commitTurnJournal(nativeJournalRequest(fixture, changedPlan)), /transaction plan is immutable/);
+    await assert.rejects(commitTurnJournal(nativeJournalRequest(fixture,
+      {...sourceJournal(instanceA, turnKey, phases), status: "committed"})), /skip transaction checkpoints/);
+    assert.equal(await readFile(fixture.path, "utf8"), encoded);
+    for (const count of [2, 3, 4, 5]) {
+      await commitTurnJournal(nativeJournalRequest(fixture, sourceJournal(instanceA, turnKey, phases.slice(0, count))));
+      if (count === 3) {
+        const checkpoint = await readFile(fixture.path, "utf8");
+        await assert.rejects(commitTurnJournal(nativeJournalRequest(fixture,
+          sourceJournal(instanceA, turnKey, phases.slice(0, 2)))), /completed phases cannot regress or fork/);
+        assert.equal(await readFile(fixture.path, "utf8"), checkpoint);
+      }
+    }
+    const committed = {...sourceJournal(instanceA, turnKey, phases), status: "committed"};
+    await commitTurnJournal(nativeJournalRequest(fixture, committed));
+    const terminal = await readFile(fixture.path, "utf8");
+    assert.equal((await commitTurnJournal(nativeJournalRequest(fixture, committed))).replayed, true);
+    await assert.rejects(commitTurnJournal(nativeJournalRequest(fixture, {...committed, reason: "late mutation"})),
+      /tombstones are immutable/);
+    assert.equal(await readFile(fixture.path, "utf8"), terminal);
+  });
+});
+
+const nativeJournalRejections: {
+  name: string;
+  request: (fixture: NativeJournalFixture) => Record<string, unknown>;
+  code: string;
+}[] = [
+  {name: "foreign planned GoalRef", request: f => ({source_admission: {...f.admission,
+    planned_goal_ref: {goal_id: "fixture-goal", goal_instance_id: instanceB}}}), code: "quota_source_admission_invalid"},
+  {name: "foreign journal GoalRef", request: () => ({journal: sourceJournal(instanceB, turnKey)}), code: "quota_source_admission_invalid"},
+  {name: "foreign registered admission Agent", request: f => ({source_admission: {...f.admission,
+    agent_id: "other-registered-agent"}}), code: "quota_source_admission_invalid"},
+  {name: "foreign registered journal Agent", request: () => ({expected_effect_id: effectId("other-registered-agent"),
+    journal: sourceJournal(instanceA, turnKey, [], "other-registered-agent")}), code: "quota_source_admission_invalid"},
+  {name: "missing admission Agent", request: f => ({source_admission: {...f.admission, agent_id: undefined}}), code: "quota_source_admission_invalid"},
+  {name: "unregistered admission Agent", request: f => ({source_admission: {...f.admission, agent_id: "unregistered-agent"}}), code: "goal_instance_conflict"},
+  {name: "foreign runtime", request: f => ({source_admission: {...f.admission, runtime_root: join(f.runtimeRoot, "foreign")}}), code: "journal_source_admission_invalid"},
+  {name: "relative runtime", request: f => ({source_admission: {...f.admission, runtime_root: "runtime"}}), code: "journal_source_admission_invalid"},
+  {name: "foreign physical Goal path", request: f => ({path: join(f.runtimeRoot, "goals", "other-goal", "turns", `${"a".repeat(64)}.json`)}), code: "journal_source_admission_invalid"},
+  {name: "foreign Turn path", request: f => ({path: join(dirname(f.path), `${"b".repeat(64)}.json`)}), code: "journal_source_admission_invalid"},
+  {name: "unstripped Turn filename", request: f => ({path: join(dirname(f.path), `${turnKey}.json`)}), code: "journal_source_admission_invalid"},
+  {name: "malformed Turn key", request: () => ({expected_effect_id: effectId("fixture-agent", "ordinary-turn"),
+    journal: sourceJournal(instanceA, "ordinary-turn")}), code: "journal_source_admission_invalid"},
+  {name: "alias journal admission upgrade", request: () => ({journal: journal()}), code: "journal_source_admission_invalid"},
+  {name: "foreign run-index lock", request: f => ({source_admission: {...f.admission,
+    locks: f.locks.map((lock, index) => index === 0 ? {...lock, target: join(f.runtimeRoot, "other-index.jsonl")} : lock)}}), code: "quota_source_admission_invalid"},
+  {name: "foreign registry lock token", request: f => ({source_admission: {...f.admission,
+    locks: f.locks.map((lock, index) => index === 1 ? {...lock, token: "foreign-lock-token"} : lock)}}), code: "quota_source_admission_expired"},
+  {name: "foreign lock host", request: f => ({source_admission: {...f.admission,
+    locks: f.locks.map(lock => ({...lock, pid: process.pid + 1}))}}), code: "quota_source_admission_expired"},
+  {name: "missing registry lock", request: f => ({source_admission: {...f.admission, locks: f.locks.slice(0, 1)}}), code: "quota_source_admission_invalid"},
+  {name: "changed registry byte witness", request: f => ({source_admission: {...f.admission,
+    registry_sources: [{path: f.registries[0], sha256: "0".repeat(64)}]}}), code: "goal_instance_conflict"},
+];
+
+for (const rejection of nativeJournalRejections) {
+  test(`native exact journal rejects ${rejection.name} before creation and replacement`, async () => {
+    for (const existing of [false, true]) {
+      await withNativeJournal(async fixture => {
+        if (existing) await commitTurnJournal(nativeJournalRequest(fixture));
+        const before = existing ? await readFile(fixture.path, "utf8") : null;
+        const request = {...nativeJournalRequest(fixture), ...rejection.request(fixture)};
+        await assert.rejects(commitTurnJournal(request), {code: rejection.code});
+        if (before === null) await assert.rejects(readFile(fixture.path), {code: "ENOENT"});
+        else assert.equal(await readFile(fixture.path, "utf8"), before);
+        if (request.path !== fixture.path && rejection.name !== "unstripped Turn filename") {
+          await assert.rejects(readFile(String(request.path)), {code: "ENOENT"});
+        }
+      });
+    }
+  });
+}
+
+test("native exact journal rejects expired resources and changed persisted identity without replacing bytes", async () => {
+  for (const changed of ["run_index", "registry_source", "registry_bytes", "GoalRef", "Source profile"]) {
+    await withNativeJournal(async fixture => {
+      await commitTurnJournal(nativeJournalRequest(fixture));
+      const encoded = await readFile(fixture.path, "utf8");
+      if (changed === "run_index" || changed === "registry_source") {
+        const lock = fixture.locks.find(witness => witness.role === changed)!;
+        await releaseFileMutationLock(String(lock.target), String(lock.token));
+      } else {
+        const registry = fixture.registries[0]!;
+        const document = JSON.parse(await readFile(registry, "utf8"));
+        if (changed === "GoalRef") document.goals[0].goal_instance_id = instanceB;
+        else if (changed === "Source profile") document.profile_id = "source_session_v1";
+        else document.description = "changed bytes";
+        await writeFile(registry, JSON.stringify(document));
+        if (changed !== "registry_bytes") fixture.admission.registry_sources = [{path: registry,
+          sha256: createHash("sha256").update(await readFile(registry)).digest("hex")}];
+      }
+      await assert.rejects(commitTurnJournal(nativeJournalRequest(fixture)), {
+        code: changed === "run_index" || changed === "registry_source" ? "quota_source_admission_expired" : "goal_instance_conflict",
+      });
+      assert.equal(await readFile(fixture.path, "utf8"), encoded);
+    });
+  }
 });
 
 test("TS journal owner accepts the complete monotonic transaction", async () => {

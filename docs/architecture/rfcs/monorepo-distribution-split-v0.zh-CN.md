@@ -3701,6 +3701,7 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 
 ### 2026-11-20 — 收尾失去的执行尝试，不借用替代执行交付
 
+- **提案：**[#9153](https://github.com/loopx-project/loopx/pull/9153)。
 - **缺口：**替代 task lease 不能授权原 prepared Turn 的业务写回。重复同一个
   work guard 会让原收据持续开放，却没有合法的恢复操作。
 - **增量：**显式行政收尾复用 TS settlement、Goal lifetime 与 File/SQLite
@@ -3743,6 +3744,20 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   health packet；检查不授予 execution 或行政写权限。现代 positive prepared
   admission 可以说明既有显式行政收尾及其独立的当前 control-writer 要求；
   有限 legacy 证据仅支持检查。
+- **首次 native 准入：**新 native Turn 在 Host 执行前记录自己的真实 typed
+  work admission。共享 owner 在 preparation 前检查原债务，并在 publication
+  时连同当前 CAS 复读。saved candidate 仅提供内容证据，不能借原 Turn 的
+  执行证明或消除原债务。freeze、replay 发生在新 Turn 准入后，后续恢复与
+  cleanup 保持该 Turn 的身份。普通 registry 的 exact GoalRef 必须由真实
+  持久 instance 及 registry/resource witness 证明；非空 ref 不意味着激活
+  SourceSession runtime。没有 ref 的 caller 保留有限 alias ownership。
+  历史回读沿原 journal/receipt owner，不以当前 actor 的 ref 替换。
+  普通 exact journal checkpoint 复用同一 typed native registry witness，绑定
+  原 settlement identity 与 canonical journal 路径；checkpoint 持久化不授予
+  Host 执行权限。
+  嵌套的只读 replan projection 复用已持有的 native metadata，保留原 receipt
+  与 journal 身份。native writeback 在既有 maintenance guard 内验证实际借用的
+  registry/index scope 后，避免重复获取同一锁；source 重读和 Stop 检查保留。
 - **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
   parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
   持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，
