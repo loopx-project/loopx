@@ -33,6 +33,11 @@ Antigravity account isolation and native OAuth login (`packages/daemon/src/adapt
 (`maxliux5/calli`, account flow at `d2a6d6f1dc524dd0ce36a73f6674bd74967c950c`,
 inline/resumable login at `c9802662b5219395b14e65ba30dfff21230df91b`).
 
+Quote-paste handling is adapted from Calli `b456a10716221f06baee5d62a02f87dd626df460`;
+quoted side-chat model selection from `80eb16edbd3e2cc3e2a3c887a2560fe39b6ab209`,
+including the current local SideChat preference/catalog refinements. Existing Loochat
+message-draft protections and machine-scoped provenance are retained.
+
 MIT License
 
 Copyright (c) 2026 Calli contributors

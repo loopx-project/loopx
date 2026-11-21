@@ -2038,6 +2038,7 @@ export const en: Messages = {
   'pickers.noModels': 'No models available',
   'pickers.noModelsHint': 'No models have been read from this instance yet. Check its model configuration and login, then reload the page.',
   'pickers.diagnose': 'Check instance',
+  'pickers.modelsLoadFailed': 'Could not load models',
   'pickers.preferenceFailed': 'Could not load model preferences',
   'pickers.modelAndEffort': 'Model and thinking effort',
   'pickers.modelAndEffortFor': (name: string) => `Model and thinking effort for ${name}`,
