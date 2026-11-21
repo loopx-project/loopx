@@ -18,7 +18,7 @@ from ...runtime.time import parse_timestamp
 from ...todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_MONITOR,
-    normalize_todo_replan_obligation_id,
+    normalize_todo_replan_obligation_id as normalize_todo_replan_obligation_id,
 )
 from ...todos.todo_semantics import (
     todo_advancement_frontier_counts,
@@ -88,13 +88,15 @@ from .replan_rules import (
 )
 from .semantic_history import (
     _latest_runs_for_goal,
+    acknowledged_replan_obligation_id as _acknowledged_replan_obligation_id,
     latest_agent_vision_from_runs as latest_agent_vision_from_runs,
     latest_agent_vision_from_status_payload,
-    latest_autonomous_replan_ack_from_status_payload,
+    latest_autonomous_replan_ack_from_status_payload as latest_autonomous_replan_ack_from_status_payload,
     receipt_bound_replan_source_acks,
-    receipt_bound_replan_ack_history,
+    receipt_bound_replan_ack_history as receipt_bound_replan_ack_history,
     latest_missing_vision_checkpoint_from_status_payload,
-    latest_replan_ack_feedback_from_status_payload,
+    latest_replan_ack_feedback_from_status_payload as latest_replan_ack_feedback_from_status_payload,
+    resolve_replan_ack_history_state,
 )
 from .terminal import (
     GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION,  # noqa: F401
@@ -877,22 +879,6 @@ def _vision_gap_acknowledged(
     })["acknowledged"] is True
 
 
-def _acknowledged_replan_obligation_id(
-    latest_replan_ack: dict[str, Any] | None,
-) -> str | None:
-    """Return the exact obligation generation closed by the latest ACK."""
-
-    semantic_delta = (
-        cast(dict[str, Any], latest_replan_ack.get("semantic_delta"))
-        if isinstance(latest_replan_ack, dict)
-        and isinstance(latest_replan_ack.get("semantic_delta"), dict)
-        else {}
-    )
-    return normalize_todo_replan_obligation_id(
-        semantic_delta.get("obligation_id")
-    )
-
-
 def derive_goal_frontier_replan_obligation_from_summaries(
     *,
     user_todo_summary: dict[str, Any] | None,
@@ -1464,24 +1450,18 @@ def build_goal_frontier_projection_context_from_status(
     if replan_scope.get("required") and not replan_scope.get("applies"):
         replan_obligation = None
 
-    latest_agent_replan_ack, scoped_ack_history = receipt_bound_replan_ack_history(
+    (
+        latest_agent_replan_ack,
+        scoped_ack_history,
+        latest_replan_ack_feedback,
+        prior_rearm_ack,
+    ) = resolve_replan_ack_history_state(
         status_payload,
         goal_id=goal_id,
         agent_id=agent_id,
         neutral_classifications=neutral_replan_ack_classifications,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
     )
-    latest_replan_ack_feedback = latest_replan_ack_feedback_from_status_payload(
-        status_payload,
-        goal_id=goal_id,
-        agent_id=agent_id,
-    )
-    ack_time = parse_timestamp((latest_agent_replan_ack or {}).get("generated_at"))
-    feedback_time = parse_timestamp(
-        (latest_replan_ack_feedback or {}).get("generated_at")
-    )
-    if ack_time is not None and feedback_time is not None and ack_time >= feedback_time:
-        latest_replan_ack_feedback = None
     latest_agent_vision = latest_agent_vision_from_status_payload(
         status_payload,
         goal_id=goal_id,
@@ -1647,14 +1627,6 @@ def build_goal_frontier_projection_context_from_status(
             agent_id=agent_id,
             registered_agent_ids=registered_agent_ids,
         )
-    prior_rearm_ack = None
-    if receipt_bound_replan_obligation_id and latest_agent_replan_ack is None:
-        candidate_prior_ack = latest_autonomous_replan_ack_from_status_payload(
-            status_payload, goal_id=goal_id, agent_id=agent_id,
-            neutral_classifications=neutral_replan_ack_classifications,
-        )
-        if _acknowledged_replan_obligation_id(candidate_prior_ack) != receipt_bound_replan_obligation_id:
-            prior_rearm_ack = candidate_prior_ack
     frontier_replan_obligation = derive_goal_frontier_replan_obligation_from_summaries(
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
