@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from ..capabilities.explore.result_log import explore_history_rows
 from ..control_plane.status.goal_source import GoalSource, GoalSourceReader, SourceScopeError
 from ..status_server import cors_response_headers, is_loopback_host, is_loopback_origin, parse_strict_json_object
-from .chat_bundle import validate_bundle
+from .chat_bundle import runtime_source_root, validate_bundle
 from .research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 
 
@@ -253,7 +253,10 @@ def main():
     assets = (args.assets_dir or Path(__file__).resolve().parents[1] / "web" / "chat").expanduser().resolve()
     if args.assets_dir is None:
         try:
-            validate_bundle(assets, source_root=Path(__file__).resolve().parents[2])
+            validate_bundle(
+                assets,
+                source_root=runtime_source_root(Path(__file__).resolve().parents[2]),
+            )
         except RuntimeError as exc:
             parser.error(str(exc))
     if not (assets / "index.html").is_file():

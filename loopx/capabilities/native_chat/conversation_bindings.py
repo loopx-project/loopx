@@ -843,7 +843,7 @@ class OriginalConversationRequests:
             with self._fenced(session_id, body["requester"], body["parent_request_id"]) as (facts, _):
                 return apply(facts)
         # An owner may revoke a retained grant even while its provider or source
-        # is unavailable. This does not authorize reading or starting its work.
+        # is unavailable.
         with source_policy_fence(_root(self.root) / "policy.json"):
             recipient = body["recipient"]
             if recipient.get("session_id") != session_id:

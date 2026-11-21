@@ -110,6 +110,8 @@ MessageConsumer = tuple[threading.Event, Popen[str], threading.Event]
 class LarkGoalTopicRuntimeService:
     """Own one event-consumer worker per reusable Lark App profile."""
 
+    _LISTENER_SNAPSHOT_TTL_SECONDS = 5.0
+
     def __init__(
         self,
         *,
@@ -129,8 +131,15 @@ class LarkGoalTopicRuntimeService:
         self._profile_poller = profile_poller or self._poll_profile
         self.manager_route_reconciler = manager_route_reconciler
         self._lock = threading.Lock()
+        self._listener_snapshot_cond = threading.Condition(threading.Lock())
+        self._listener_snapshot_in_flight = False
+        self._listener_snapshot_value: PayloadView | None = None
+        self._listener_snapshot_at = 0.0
+        self._listener_snapshot_generation = 0
         self._workers: dict[str, ProfileWorker] = {}
+        self._retiring_workers: set[threading.Thread] = set()
         self._message_consumers: dict[str, MessageConsumer] = {}
+        self._default_home = Path.home()
         self._health: dict[str, Payload] = {}
         self._closed = threading.Event()
         self._delivery_wakeup = threading.Event()
@@ -182,7 +191,7 @@ class LarkGoalTopicRuntimeService:
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
         # Older/custom controllers retain polling. One local hint wakes the
-        # existing scanner; it is neither a queue nor a delivery receipt.
+        # existing scanner.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def finish_job(
@@ -357,6 +366,44 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup.set()
         return result
 
+    def _invalidate_listener_snapshot(self) -> int:
+        with self._listener_snapshot_cond:
+            self._listener_snapshot_generation += 1
+            self._listener_snapshot_value = None
+            self._listener_snapshot_at = 0.0
+            self._listener_snapshot_cond.notify_all()
+            return self._listener_snapshot_generation
+
+    def _seed_listener_snapshot(self, generation: int, snapshot: PayloadView) -> None:
+        with self._listener_snapshot_cond:
+            if self._listener_snapshot_generation == generation and not self._closed.is_set():
+                self._listener_snapshot_value = snapshot
+                self._listener_snapshot_at = time.monotonic()
+
+    def _read_listener_snapshot(self) -> PayloadView:
+        with self._listener_snapshot_cond:
+            while self._listener_snapshot_in_flight:
+                self._listener_snapshot_cond.wait()
+            if (
+                not self._closed.is_set()
+                and self._listener_snapshot_value is not None
+                and time.monotonic() - self._listener_snapshot_at < self._LISTENER_SNAPSHOT_TTL_SECONDS
+            ):
+                return self._listener_snapshot_value
+            generation = self._listener_snapshot_generation
+            self._listener_snapshot_in_flight = True
+        try:
+            fresh = self.snapshot_provider()
+        finally:
+            with self._listener_snapshot_cond:
+                self._listener_snapshot_in_flight = False
+                self._listener_snapshot_cond.notify_all()
+        with self._listener_snapshot_cond:
+            if self._listener_snapshot_generation == generation and not self._closed.is_set():
+                self._listener_snapshot_value = fresh
+                self._listener_snapshot_at = time.monotonic()
+        return fresh
+
     def _refresh_on_start(self) -> None:
         while not self._closed.is_set():
             try:
@@ -451,6 +498,29 @@ class LarkGoalTopicRuntimeService:
     def _consumer_lease_key(profile: str, config: Mapping[str, str]) -> str:
         identity = config.get("bot_app_id") or profile
         return str(config.get("consumer_ref") or hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32])
+
+    def _consumer_lease_dir(self) -> Path:
+        """Keep unpatched consumer lease paths scoped to construction HOME."""
+        home_func = getattr(Path.home, "__func__", None)
+        unpatched = (
+            home_func is not None
+            and home_func.__module__.startswith("pathlib")
+            and home_func.__name__ == "home"
+        )
+        home = self._default_home if unpatched else Path.home()
+        return home / ".loopx" / "lark-consumers"
+
+    @staticmethod
+    def _stop_consumer_process(consumer: MessageConsumer | None) -> None:
+        if consumer is None:
+            return
+        consumer_stop, process, _requested = consumer
+        consumer_stop.set()
+        if process.poll() is None:
+            try:
+                process.terminate()
+            except OSError:
+                pass
 
     def _listener_configs(self, snapshot: PayloadView) -> tuple[dict[str, dict[str, str]], set[str]]:
         from . import goal_topic_runtime as runtime
@@ -711,8 +781,9 @@ class LarkGoalTopicRuntimeService:
                     # A legacy/shared consumer holds both identities: wait for
                     # the old process and fence new aliases on other servers.
                     with ExitStack() as leases:
+                        lease_dir = self._consumer_lease_dir()
                         acquired = [leases.enter_context(try_exclusive_file_lock(
-                            Path.home() / ".loopx" / "lark-consumers" / key,
+                            lease_dir / key,
                             operation="lark_event_consumer")) for key in sorted(digests)]
                         if any(lease is None for lease in acquired):
                             self._update_health(profile, status="standby", error_code="lark_event_consumer_owned_elsewhere")
@@ -720,7 +791,7 @@ class LarkGoalTopicRuntimeService:
                             continue
 
                         def listener_snapshot() -> PayloadView:
-                            current = self.snapshot_provider()
+                            current = self._read_listener_snapshot()
                             with self._lock:
                                 # Reuse the same observations used to admit
                                 # each worker. A successful refresh adds new
@@ -808,7 +879,8 @@ class LarkGoalTopicRuntimeService:
                 worker = self._workers.get(profile)
                 if worker is not None and worker[1] is current_thread:
                     self._workers.pop(profile, None)
-            if not self._closed.is_set():
+                self._retiring_workers.discard(current_thread)
+            if managed_worker and not self._closed.is_set():
                 try:
                     reconfigured = profile in runtime._active_profile_configs(
                         self.snapshot_provider()
@@ -830,7 +902,9 @@ class LarkGoalTopicRuntimeService:
                 return False
             self._profile_refresh_sequence += 1
             sequence = self._profile_refresh_sequence
+        snapshot_generation = self._invalidate_listener_snapshot()
         snapshot = self.snapshot_provider()
+        self._seed_listener_snapshot(snapshot_generation, snapshot)
         profile_configs, unavailable = self._listener_configs(snapshot)
         with self._lock:
             if self._closed.is_set():
@@ -891,7 +965,11 @@ class LarkGoalTopicRuntimeService:
                         self._workers[profile] = (stop, thread, next_fingerprint)
                     continue
                 self._workers.pop(profile)
+                if thread.is_alive():
+                    self._retiring_workers.add(thread)
                 stop.set()
+                if consumer is not None and consumer[0] is stop:
+                    self._stop_consumer_process(consumer)
             missing = set(desired) - set(self._workers)
             for profile in sorted(missing):
                 stop = threading.Event()
@@ -944,16 +1022,31 @@ class LarkGoalTopicRuntimeService:
 
     def close(self) -> None:
         self._closed.set()
+        self._invalidate_listener_snapshot()
         self._delivery_wakeup.set()
+        current_thread = threading.current_thread()
         with self._lock:
             if self._refresh_retry is not None:
                 self._refresh_retry.cancel()
                 self._refresh_retry = None
             workers = list(self._workers.values())
             self._workers.clear()
+            retiring = list(self._retiring_workers)
+            self._retiring_workers.clear()
+            consumers = list(self._message_consumers.values())
             for stop, _thread, _fingerprint in workers:
                 stop.set()
-        for _stop, thread, _fingerprint in workers:
+            for consumer in consumers:
+                self._stop_consumer_process(consumer)
+        threads = [
+            thread
+            for thread in (
+                *(thread for _stop, thread, _fingerprint in workers),
+                *retiring,
+            )
+            if thread is not None and thread is not current_thread
+        ]
+        for thread in threads:
             thread.join(timeout=3)
         self._delivery_worker.close(timeout=3)
 

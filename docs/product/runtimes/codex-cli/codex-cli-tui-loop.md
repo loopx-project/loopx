@@ -76,6 +76,14 @@ do not migrate existing automations. Existing authority and cadence floors remai
 LoopX should be the control plane. Codex CLI should remain the executor
 and the user's live console.
 
+When the Codex sandbox blocks loopback TCP on macOS or Linux, set
+`LOOPX_EFFECT_RUNTIME_TRANSPORT=stdio` in the shell that starts Codex.
+LoopX commands and their settlement subprocesses inherit the setting. Run
+`loopx doctor --deep` from that environment to verify the Node/SQLite runtime.
+The CLI uses the configured authority store and needs write access to the
+project state and its normal temporary directory for large snapshots.
+Launch Codex with the setting unset to use the default loopback bridge.
+
 ## Operating Modes
 
 ### 1. TUI Bootstrap

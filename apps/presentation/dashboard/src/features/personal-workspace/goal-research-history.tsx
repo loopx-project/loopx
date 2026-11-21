@@ -68,10 +68,11 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const requestedCase = caseMode.goalId === goalId ? caseMode.requested : null;
   const caseReading = requestedCase ?? !preferHistory;
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(pack => pack.case_study_summary);
-  // Preserve the saved reading during catalogue loading or failure. A
-  // successful catalogue without a study falls back to the original history.
+  // A link to a particular version stays in the case reader even when that
+  // version has no study. An unpinned visit can fall back to ordinary history.
   const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
-  const deferHistory = requestedCase === true && (hasCases || awaitingRequestedCase);
+  const caseViewAvailable = hasCases || awaitingRequestedCase || (requestedCase === true && analysis.location.packId !== null);
+  const deferHistory = requestedCase === true && caseViewAvailable;
   const historySource = JSON.stringify([goalId, originalGoalId, readSourceUrl]);
   const [openedHistorySource, setOpenedHistorySource] = useState<string | null>(null);
   const readHistory = active && (!deferHistory || openedHistorySource === historySource);
@@ -532,13 +533,13 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   </Fragment> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const selectedStrategy = hasNativeSource && !emptySourceHistory ? strategies.selection : null;
-  const readingCase = caseReading && (hasCases || awaitingRequestedCase) && (requestedCase === true || selectedStrategy === null);
+  const readingCase = caseReading && caseViewAvailable && (requestedCase === true || selectedStrategy === null);
   const alternateReading = readingCase ? <ResearchCaseReading analysis={analysis} active={active}/>
     : selectedStrategy !== null ? <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
       sourceUrl={readSourceUrl} zh={zh} selection={selectedStrategy}
       onSelect={strategies.choose} onClose={() => strategies.choose(null)}/> : null;
   return <>
-    {hasCases || awaitingRequestedCase ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
+    {caseViewAvailable ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
       <button type="button" aria-pressed={!readingCase} onClick={() => {
         if (readingCase) {analysis.closeCitation(); setCaseMode(false);}
       }}>{zh ? "研究历程" : "Research history"}</button>
@@ -726,7 +727,10 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     </ContextHelp> : null}
-    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
+    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => {
+      const open = event.currentTarget.open;
+      if (open !== recordsOpen) setRecordsOpen(open);
+    }}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} reading={recordReading} goalId={originalGoalId} events={history.canonical?.events ?? []}
         nodes={history.canonical?.nodes ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}

@@ -182,7 +182,7 @@ def validate_production(
 
     Unresolved sites are returned explicitly. Their unknown portion supplies
     no value evidence; known output alternatives still count for closedness
-    and liveness. This function does not claim whole-program closedness.
+    and liveness.
     """
     outputs = [row for row in rows if row.form != 'keyword_unproved']
     observed = set().union(*(row.values for row in outputs))

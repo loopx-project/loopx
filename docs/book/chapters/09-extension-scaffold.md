@@ -58,7 +58,7 @@ timeout_seconds = 30
 
 ## 用明确的度量定义结果
 
-`characters` 是 Python Unicode code point 数，`words` 是空白分隔片段数，`lines` 遵循 `str.splitlines()`。所以“你好世界”的 words 是 1，组合字符可能包含多个 code point。这是示例的语义，不是通用自然语言分词。
+`characters` 是 Python Unicode code point 数，`words` 是空白分隔片段数，`lines` 遵循 `str.splitlines()`。所以“你好世界”的 words 是 1，组合字符可能包含多个 code point。这是示例的语义。
 
 示例输入为：
 
@@ -75,13 +75,13 @@ timeout_seconds = 30
 {"characters": 51, "non_whitespace_characters": 44, "words": 8, "lines": 2}
 ```
 
-外层同时保留 `ok`、response schema、request schema 与 extension identity。完整输出结构见 `schemas/response.schema.json`；额外的 LoopX managed receipt 不是领域计算结果的一部分。
+外层同时保留 `ok`、response schema、request schema 与 extension identity。完整输出结构见 `schemas/response.schema.json`。
 
 ## Decoder 为什么还要自己校验
 
 请求要求 object、精确 schema、非空白 text，并拒绝额外字段。JSON Schema 用于描述 wire shape；decoder 实际执行字段约束，并检查编码、重复键、输入字节上限和 Python 空白语义。
 
-本例的输入上限是 65,536 字节，text 上限是 32,000 code point。这是教学包自己的限制，不代表 LoopX 全局默认值。
+本例的输入上限是 65,536 字节，text 上限是 32,000 code point。这是教学包自己的限制。
 
 长整数暴露了另一条边界：Python 的 `json.loads` 可能因整数转换限制抛出 `ValueError`，即使数据还没超过字节上限。只捕获 `JSONDecodeError` 会让这个输入越过统一错误结果。
 
@@ -97,7 +97,7 @@ timeout_seconds = 30
 | 5,000 位整数 | 错误 JSON，stderr 无 traceback | Python 3.11+ 整数解析回归 |
 | doctor、CLI 输出 | doctor 不处理业务请求，run 输出一个对象 | 真实 provider 子进程入口 |
 
-源码与测试放在同一个配套目录。测试不调用模型、外部服务或 live Goal，也不证明 managed runtime 的进程回收、权限隔离或升级路径。下一章将这些生命周期步骤单独验证。
+源码与测试放在同一个配套目录。测试不调用模型、外部服务或 live Goal。下一章将这些生命周期步骤单独验证。
 
 ## 怎样扩展这个例子
 

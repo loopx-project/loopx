@@ -86,9 +86,7 @@ reference format. The digest has 64 lowercase hexadecimal characters after
 
 A later independent candidate without feedback remains eligible. An enabled
 direct candidate wins before feedback validation; off skips feedback entirely.
-This deterministic advice consumer neither verifies receipts nor persists a
-retry gate. The digest identifies declarations, not their authenticity. Renaming
-a revision does not prove improvement; original admission and effect review
+The digest identifies declarations. Original admission and effect review
 remain required. Records, retirement and rollback stay with their existing owners.
 
 Scope refinement references

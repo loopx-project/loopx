@@ -1,7 +1,7 @@
 import {ResearchRecordComparison} from "./research-record-comparison";
 import {CircleHelp, TriangleAlert} from "lucide-react";
 import {ContextHelp} from "./context-help";
-import {useEffect, useMemo, useRef, useState, type ReactNode} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent, ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {readResearchRecordsLocation, writeResearchRecordsLocation, researchRecordGroups, searchResearchRecords, type ResearchRecordDisplay, type ResearchRecordsLocation} from "./research-record-search";
 import {exportResearchRecords} from "./research-record-export";
@@ -15,6 +15,13 @@ export function useResearchRecordsLocation(scope: string) {
   const [location, setLocation] = useState(() => ({scope, value: read(), navigation: 0}));
   const value = location.scope === scope ? location.value : read();
   const current = useRef(value);
+  // Focus restoration belongs to a history navigation, even if the drawer remounts.
+  const focusNavigation = useRef(-1);
+  const consumeFocusRestore = useCallback(() => {
+    if (focusNavigation.current === location.navigation) return false;
+    focusNavigation.current = location.navigation;
+    return true;
+  }, [location.navigation]);
   current.current = value;
   useEffect(() => {
     const changed = () => {current.current = read(); setLocation(previous => ({scope, value: current.current, navigation: previous.navigation + 1}));};
@@ -22,6 +29,7 @@ export function useResearchRecordsLocation(scope: string) {
     return () => window.removeEventListener("popstate", changed);
   }, [scope]);
   const update = (patch: Partial<ResearchRecordsLocation>) => {
+    consumeFocusRestore();
     const next = {...current.current, ...patch};
     if (JSON.stringify(next) === JSON.stringify(current.current)) return;
     current.current = next;
@@ -30,7 +38,7 @@ export function useResearchRecordsLocation(scope: string) {
     window.history.replaceState(window.history.state, "", url);
     setLocation(previous => ({scope, value: next, navigation: previous.navigation}));
   };
-  return {value, update, navigation: location.navigation};
+  return {value, update, consumeFocusRestore};
 }
 
 /** Local read controls over the existing validated history snapshot. */
@@ -44,8 +52,8 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   reading: ReturnType<typeof useResearchRecordsLocation>;
 }) {
   const {query, status, limit, expanded} = reading.value;
+  const {consumeFocusRestore} = reading;
   const root = useRef<HTMLDivElement>(null);
-  const focusNavigation = useRef(-1);
   const [downloadFailed, setDownloadFailed] = useState(false);
   const [format, setFormat] = useState("json");
   const displayed = useMemo(() => new Map(displayEvents?.map(event => [event.event_id, event])), [displayEvents]);
@@ -54,13 +62,12 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   const groups = useMemo(() => researchRecordGroups(matches, complete ? nodes : []), [matches, nodes, complete]);
   const allGroups = useMemo(() => researchRecordGroups(events, complete ? nodes : []), [events, nodes, complete]);
   useEffect(() => {
-    if (!complete || busy || focusNavigation.current === reading.navigation) return;
-    focusNavigation.current = reading.navigation;
+    if (!complete || busy || !consumeFocusRestore()) return;
     const row = [...(root.current?.querySelectorAll<HTMLElement>("[data-research-record]") ?? [])]
       .find(element => expanded.includes(element.dataset.researchRecord!));
     const target = row?.querySelector<HTMLElement>("summary");
     target?.focus({preventScroll: true}); target?.scrollIntoView({block: "nearest"});
-  }, [complete, busy, reading.navigation, groups, expanded]);
+  }, [complete, busy, consumeFocusRestore, groups, expanded]);
   const missing = complete && expanded.some(id => !allGroups.some(group => group.id === id));
   const statuses = [...new Set(events.map(event => event.status).filter(Boolean))].sort();
   const groupCount = zh ? `${groups.length} 个条目` : `${groups.length} ${groups.length === 1 ? "entry" : "entries"}`;

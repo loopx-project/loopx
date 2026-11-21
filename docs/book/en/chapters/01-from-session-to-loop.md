@@ -1,7 +1,5 @@
 # From one session to long-running work
 
-An Agent that can edit code, run tests, and explain results inside the current session has not thereby demonstrated that it can reliably own work spanning several days. This chapter explains where that gap comes from, and why closing it needs something that lives outside the session.
-
 ## An opening that looks fine
 
 Say you want to add `--format json` to an existing CLI:
@@ -58,7 +56,7 @@ It is a poor home for the *only* copy of these facts:
 | Which Agent owns the current task | After a restart or handoff, ownership cannot be recovered from memory |
 | The current state of the outside world | Yesterday's CI status may already be stale |
 
-A Host can persist transcripts, but old conversation alone does not establish current authority, acceptance, or recovery state. The test is whether the next executor can recheck those facts without depending on the original session's implicit understanding.
+The test is whether the next executor can recheck those facts without depending on the original session's implicit understanding.
 
 ## Execution plane and control plane
 
@@ -78,7 +76,7 @@ Observation / receipt: return verifiable results
 Control plane: accept, reject, or replan
 ```
 
-**The control plane does not replace the execution plane.** LoopX does not write code, host Git, or stand in for CI. It lets those systems' results be consumed by a work lifecycle that spans turns — exactly the link missing after 10:17.
+It lets those systems' results be consumed by a work lifecycle that spans turns — exactly the link missing after 10:17.
 
 ## Why three long-running workloads share one control plane
 
@@ -102,7 +100,7 @@ external fact
   → recompute continue | wait | ask | replan | repair | terminal
 ```
 
-What is reused is **lifecycle invariants** rather than a generic prompt. Issue-Fix understands `CHANGES_REQUESTED`; Auto ML understands a matched baseline; Auto Research understands holdout. Those domain meanings belong to Capability and Domain State. Who may claim, what is runnable, when to wake again, which evidence permits writeback, and whether the Goal can terminate all come from the same Kernel contract.
+What is reused is **lifecycle invariants**. Issue-Fix understands `CHANGES_REQUESTED`; Auto ML understands a matched baseline; Auto Research understands holdout. Those domain meanings belong to Capability and Domain State. Who may claim, what is runnable, when to wake again, which evidence permits writeback, and whether the Goal can terminate all come from the same Kernel contract.
 
 This boundary also explains why a new domain capability should not clone its own runner, queue, retry, and completion state machine. The domain layer supplies decidable facts and proposals, Providers make external calls, and the Kernel owns cross-domain lifecycle.
 
@@ -110,7 +108,7 @@ To enter architecture and source entry points through the three showcases, conti
 
 ## What minimal externalized state looks like
 
-For the running example, the minimal state is not the full transcript but a set of facts that answer the recovery questions:
+For the running example, the minimal state is a set of facts that answer the recovery questions:
 
 ```yaml
 # Simplified for explanation; not a LoopX file format
@@ -129,7 +127,7 @@ next_wake:
   when: maintainer decision arrives
 ```
 
-The value of these fields: **the next executor does not have to trust the previous Agent's account** and can instead re-derive the next step from the goal, the work queue, Gates, evidence, and a fresh environment. The example is an explanatory model, not LoopX's storage format.
+The value of these fields: **the next executor does not have to trust the previous Agent's account** and can instead re-derive the next step from the goal, the work queue, Gates, evidence, and a fresh environment. The example is an explanatory model.
 
 ## Cost and boundary: what this gives up
 
@@ -141,7 +139,7 @@ Externalized state carries costs. Naming them is what lets you judge when it pay
 
 **Cost three: external facts must be observable.** If CI results, maintainer replies, and external dependency state cannot be read by a program, the control plane can only wait — and waiting needs someone to re-trigger it.
 
-**Boundary one: this book is about long-running work, not every task.** Work that is closed in scope, finishable in the current context, free of waits on external events, and free of cross-Agent handoff is fine as a plain session — chapter 2 gives the qualification criteria.
+**Boundary one: this book is about long-running work.** Work that is closed in scope, finishable in the current context, free of waits on external events, and free of cross-Agent handoff is fine as a plain session — chapter 2 gives the qualification criteria.
 
 **Boundary two: the control plane does not own domain judgment.** It does not decide whether an issue is worth fixing or whether an experiment's metric is significant; that belongs to Capability.
 
@@ -149,7 +147,7 @@ Externalized state carries costs. Naming them is what lets you judge when it pay
 
 ## Invariants
 
-1. **Prompt content alone does not prove durable writeback.** Inspect addressable records, identity, and revision rather than whether a window is open.
+1. Inspect addressable records, identity, and revision rather than whether a window is open.
 2. **The execution plane and control plane cannot substitute for each other.** The control plane does not write code; the execution plane does not decide whether it is allowed.
 3. **What is reused is lifecycle invariants, not a prompt.** That is what lets three different domains share one control plane.
 4. **The next executor does not need to trust the previous one's account.** If it does, the state was not externalized far enough.

@@ -256,8 +256,8 @@ def normalize_machine_configuration(
 ) -> dict[str, Any]:
     """Validate a whole document, or its explicitly selected read-only owners.
 
-    Scoped readers still validate the envelope and every selected owner. They
-    neither interpret nor certify sibling settings. Mutation and full inspection
+    Scoped readers still validate the envelope and every selected owner.
+    Mutation and full inspection
     keep the default whole-document validation.
     """
     payload = _mapping(raw, "machine_configuration")

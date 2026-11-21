@@ -181,3 +181,32 @@ def test_quota_status_fallback_runs_when_no_quota_projection_exists() -> None:
     assert item["quota"]["reason"] == (
         "1 compute quota; eligible for the next automatic agent turn"
     )
+
+
+def test_quota_plan_preserves_explicit_empty_workspace_guard_policy_precedence() -> None:
+    goal_id = "explicit-empty-workspace-policy"
+    payload = _status_payload(
+        goal={
+            **_goal(goal_id),
+            "workspace_guard_policy": {},
+        },
+        attention={
+            "goal_id": goal_id,
+            "waiting_on": "codex",
+            "quota": {"state": "eligible"},
+        },
+    )
+    payload["goals"] = [
+        {
+            "id": goal_id,
+            "workspace_guard_policy": {"peer_independent_worktree_required": True},
+        }
+    ]
+
+    state, item = _only_plan_item(payload)
+
+    assert state == "eligible"
+    assert "workspace_guard_policy" not in item
+    plan = build_quota_plan(payload, mode="plan")
+    assert plan["next_automatic_turn"] is not None
+    assert "workspace_guard_policy" not in plan["next_automatic_turn"]

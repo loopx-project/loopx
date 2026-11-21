@@ -1,4 +1,4 @@
-"""Focused tests for Antigravity (Gemini 4 Argon) Steward & Chat adapter."""
+"""Focused tests for the Antigravity Steward & Chat adapter."""
 
 from __future__ import annotations
 
@@ -122,14 +122,15 @@ def language_server(monkeypatch):
                 self.end_headers()
                 return
             if method == "GetCascadeModelConfigData":
-                response = {"clientModelConfigs": [
+                response = {"clientModelConfigs": state.get("model_configs", [
                     {"modelId": f"gemini-4-argon-{tier}",
                      "modelOrAlias": {"model": f"MODEL_PLACEHOLDER_M{number}"}}
-                    for tier, number in (("high", 417), ("medium", 418), ("low", 419))]}
+                    for tier, number in (("high", 417), ("medium", 418), ("low", 419))])}
             elif method == "GetUserStatus":
                 from datetime import timedelta
                 reset = state.setdefault("quota_reset", (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
-                response = {"userStatus": {"email": state.get("quota_account", "synthetic@invalid.example"),
+                response = state["user_status_response"] if "user_status_response" in state else {
+                    "userStatus": {"email": state.get("quota_account", "synthetic@invalid.example"),
                     "cascadeModelConfigData": {"clientModelConfigs": [{
                     "modelId": "gemini-4-argon-high", "quotaInfo": {
                         "remainingFraction": state.get("quota_fraction", 1), "resetTime": reset}}]}}}
@@ -777,6 +778,115 @@ def test_canonical_model_and_effort_readback_agree(tmp_path, language_server):
     adapter = adapter_for(tmp_path, executor_model={"model": "argon", "reasoning_effort": "low"})
     assert adapter.current_model_id == "gemini-4-argon-low"
     assert observed_model_settings(adapter, "low", "argon")["agent_reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize("effort,placeholder", [
+    ("high", "MODEL_PLACEHOLDER_M427"),
+    ("medium", "MODEL_PLACEHOLDER_M437"),
+    ("low", "MODEL_PLACEHOLDER_M438"),
+])
+def test_carbon_native_request_and_same_conversation_resume(tmp_path, language_server, effort, placeholder):
+    from loopx.capabilities.native_chat.model_settings import observed_model_settings
+
+    model = f"gemini-4-carbon-{effort}"
+    language_server["model_configs"] = [{"modelId": model, "modelOrAlias": {"model": placeholder}}]
+    adapter = adapter_for(tmp_path, executor_model={"model": "carbon", "reasoning_effort": effort})
+    assert adapter.current_model_id == model
+    assert observed_model_settings(adapter, effort, "carbon")["agent_reasoning_effort"] == effort
+    adapter.start_turn("Synthetic Carbon request")
+    adapter.close_session()
+    resumed = adapter_for(tmp_path, resume_thread_id="synthetic-cascade",
+                          executor_model={"model": model, "reasoning_effort": effort})
+    resumed.start_turn("Continue the same synthetic conversation")
+    sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
+    assert len(sends) == 2
+    for body in sends:
+        assert body["cascadeId"] == "synthetic-cascade"
+        planner = body["cascadeConfig"]["plannerConfig"]
+        assert planner["planModel"] == placeholder
+        assert planner["requestedModel"] == {"model": placeholder}
+        assert planner["toolConfig"]["forceDisableToolCalling"] is True
+    assert sum(method == "StartCascade" for method, _ in language_server["calls"]) == 1
+
+
+@pytest.mark.parametrize("configs", [[], [
+    {"modelId": "another-model", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"}},
+], [{"modelId": "gemini-4-carbon-high", "modelOrAlias": "malformed"}]])
+def test_carbon_not_offered_by_account_cannot_create_or_resume(tmp_path, language_server, configs):
+    from loopx.chat_agent import CodexChatAgentError
+
+    language_server["model_configs"] = configs
+    with pytest.raises(CodexChatAgentError, match="did not offer"):
+        adapter_for(tmp_path, resume_thread_id="original",
+                    executor_model={"model": "gemini-4-carbon-high", "reasoning_effort": "high"})
+    assert {method for method, _ in language_server["calls"]} == {"GetCascadeModelConfigData"}
+
+
+@pytest.mark.parametrize("model,effort", [("carbon", "xhigh"), ("gemini-4-carbon-high", "low"),
+                                         ("gemini-4-carbon-unknown", None)])
+def test_invalid_carbon_selection_is_rejected_before_native_reads(tmp_path, language_server, model, effort):
+    from loopx.chat_agent import CodexChatAgentError
+
+    with pytest.raises(CodexChatAgentError) as error:
+        adapter_for(tmp_path, executor_model={"model": model, "reasoning_effort": effort})
+    assert error.value.error_code == "unsupported_configuration"
+    assert language_server["calls"] == []
+
+
+def test_model_discovery_http_reads_account_choices_without_execution_and_can_recover(
+    tmp_path, language_server, monkeypatch,
+):
+    import http.client
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    store = ChatSessionStore(tmp_path / "runtime")
+    runtime = ChatRuntimeController(store=store, codex_bin="unused")
+    monkeypatch.setattr(runtime, "capabilities", lambda: [{"agent_id": "antigravity", "available": True}])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.chat_store, server.runtime_controller = store, runtime
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read():
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        try:
+            connection.request("POST", "/api/chat/agent-model-options", body=json.dumps({"agent_id": "antigravity"}),
+                               headers={"Content-Type": "application/json",
+                                        "Origin": f"http://127.0.0.1:{server.server_port}"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        status, argon = read()
+        assert status == 200, argon
+        assert [row["value"] for row in argon["model"]["options"]] == [
+            "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low"]
+        assert argon["model"]["selected"] == "gemini-4-argon-high"
+        language_server["model_configs"] = []
+        status, failed = read()
+        assert status == 424 and failed["error_code"] == "unsupported_configuration"
+        language_server["model_configs"] = [
+            {"modelId": "gemini-4-carbon-medium", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M437"}},
+            {"modelId": "unknown-model", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M999"}},
+        ]
+        status, recovered = read()
+        assert status == 200, recovered
+        assert recovered["model"]["selected"] is None
+        assert recovered["model"]["options"] == [{"value": "gemini-4-carbon-medium",
+            "label": "Gemini 4 Carbon (Medium)", "description": "", "is_default": False,
+            "default_reasoning_effort": "medium", "reasoning_efforts": ["medium"]}]
+        assert [method for method, _ in language_server["calls"]] == ["GetCascadeModelConfigData"] * 3
+        assert store.list_sessions() == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        runtime.close()
 
 
 def test_failed_resume_does_not_create_a_hidden_new_conversation(tmp_path, language_server):
@@ -1512,3 +1622,241 @@ def test_antigravity_attachment_turn_sends_inline_media(tmp_path, language_serve
         "inlineData": base64.b64encode(png_bytes).decode("ascii"),
         "description": "screen.png",
     }]
+
+
+def test_carbon_and_argon_offered_together_with_argon_product_default(tmp_path, language_server, monkeypatch):
+    import http.client
+    from loopx.capabilities.native_chat.antigravity_adapter import (
+        ANTIGRAVITY_MODEL_OPTIONS,
+        ANTIGRAVITY_MODEL_PLACEHOLDERS,
+    )
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    ordered_ids = [item["id"] for item in ANTIGRAVITY_MODEL_OPTIONS]
+    assert ordered_ids[:3] == [
+        "gemini-4-argon-high",
+        "gemini-4-argon-medium",
+        "gemini-4-argon-low",
+    ]
+    assert ANTIGRAVITY_MODEL_PLACEHOLDERS["gemini-4-carbon-high"] == "MODEL_PLACEHOLDER_M427"
+
+    language_server["model_configs"] = [
+        {"modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}},
+        {"modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"}},
+    ]
+    store = ChatSessionStore(tmp_path / "runtime")
+    runtime = ChatRuntimeController(store=store, codex_bin="unused")
+    monkeypatch.setattr(runtime, "capabilities", lambda: [{"agent_id": "antigravity", "available": True}])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.verbose = False
+    server.chat_store, server.runtime_controller = store, runtime
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        try:
+            connection.request(
+                "POST",
+                "/api/chat/agent-model-options",
+                body=json.dumps({"agent_id": "antigravity"}),
+                headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{server.server_port}"},
+            )
+            response = connection.getresponse()
+            assert response.status == 200
+            payload = json.loads(response.read())
+        finally:
+            connection.close()
+        assert [row["value"] for row in payload["model"]["options"]] == [
+            "gemini-4-argon-high",
+            "gemini-4-carbon-high",
+        ]
+        assert payload["model"]["selected"] == "gemini-4-argon-high"
+        assert payload["model"]["options"][0]["is_default"] is True
+        assert payload["model"]["options"][1]["is_default"] is False
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        runtime.close()
+
+
+def test_capacity_observation_matches_model_or_alias_without_model_id(tmp_path, language_server):
+    from datetime import timedelta
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+
+    language_server["model_configs"] = [
+        {
+            "label": "Gemini 4 Carbon (High)",
+            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+        }
+    ]
+    language_server["steps"] = [
+        {
+            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}, "executionId": "exec-carbon"},
+            "userInput": {"items": [{"text": "probe"}]},
+        },
+        {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}, "executionId": "exec-carbon"},
+            "plannerResponse": {"response": "Carbon answer", "stopReason": "STOP_REASON_STOP_PATTERN"},
+        },
+    ]
+    reset = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    language_server["user_status_response"] = {
+        "userStatus": {
+            "email": "synthetic@invalid.example",
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "label": "Gemini 4 Carbon (High)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                        "quotaInfo": {"remainingFraction": 0.99, "resetTime": reset},
+                    }
+                ]
+            },
+        }
+    }
+    adapter = adapter_for(
+        tmp_path,
+        executor_model={"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+    )
+    adapter.start_turn("probe")
+    reviewed = AntigravityAdapter.metadata_review_capacity(
+        cascade_id="synthetic-cascade",
+        model_id="gemini-4-carbon-high",
+    )
+    assert reviewed is not None and reviewed["model_id"] == "gemini-4-carbon-high"
+    assert reviewed["remaining_fraction"] == 0.99
+    endpoint_cap = AntigravityAdapter.endpoint_model_capacity(model_id="gemini-4-carbon-high")
+    assert endpoint_cap is not None and endpoint_cap["model_id"] == "gemini-4-carbon-high"
+    assert endpoint_cap["remaining_fraction"] == 0.99 and endpoint_cap["normal_completion"] is True
+
+
+def test_antigravity_launch_guard_runs_pre_publication_once(tmp_path, language_server):
+    from contextlib import contextmanager
+
+    adapter = adapter_for(tmp_path)
+    events = []
+
+    @contextmanager
+    def guard():
+        events.append(("guard_enter", len([m for m, _ in language_server["calls"] if m == "SendUserCascadeMessage"])))
+        yield
+        events.append(("guard_exit", len([m for m, _ in language_server["calls"] if m == "SendUserCascadeMessage"])))
+
+    adapter._launch_guard = guard
+    result = adapter.start_turn("guarded turn")
+    assert result["message"] == "Argon answer 1"
+    assert events == [("guard_enter", 0), ("guard_exit", 1)]
+
+
+def test_antigravity_endpoint_model_capacity_resolves_short_aliases_and_rejects_mismatches(
+    language_server,
+) -> None:
+    from datetime import timedelta
+
+    reset = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    language_server["user_status_response"] = {
+        "userStatus": {
+            "email": "synthetic@invalid.example",
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "label": "Gemini 4 Argon (High)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"},
+                        "quotaInfo": {"remainingFraction": 0.42, "resetTime": reset},
+                    },
+                    {
+                        "label": "Gemini 4 Carbon (High)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                        "quotaInfo": {"remainingFraction": 0.85, "resetTime": reset},
+                    },
+                    {
+                        "label": "Gemini 4 Carbon (Medium)",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M437"},
+                        "quotaInfo": {"remainingFraction": 0.0, "resetTime": reset},
+                    },
+                ]
+            },
+        }
+    }
+
+    for alias, effort, expected_canonical, expected_fraction, expected_exhausted in [
+        ("carbon", None, "gemini-4-carbon-high", 0.85, False),
+        ("CARBON", None, "gemini-4-carbon-high", 0.85, False),
+        ("gemini-4-carbon", None, "gemini-4-carbon-high", 0.85, False),
+        ("argon", None, "gemini-4-argon-high", 0.42, False),
+        ("gemini-4-argon", None, "gemini-4-argon-high", 0.42, False),
+        ("carbon", "medium", "gemini-4-carbon-medium", 0.0, True),
+    ]:
+        observed = AntigravityAdapter.endpoint_model_capacity(
+            model_id=alias,
+            reasoning_effort=effort,
+        )
+        assert observed is not None, (alias, effort)
+        assert observed["model_id"] == expected_canonical
+        assert observed["remaining_fraction"] == expected_fraction
+        assert observed["quota_exhausted"] is expected_exhausted
+        assert observed["normal_completion"] is (not expected_exhausted)
+
+    calls_before = len(language_server["calls"])
+    assert AntigravityAdapter.endpoint_model_capacity(model_id="unknown-model") is None
+    assert AntigravityAdapter.endpoint_model_capacity(
+        model_id="gemini-4-carbon-high", reasoning_effort="medium",
+    ) is None
+    assert AntigravityAdapter.endpoint_model_capacity(
+        model_id="carbon", reasoning_effort="xhigh",
+    ) is None
+    assert len(language_server["calls"]) == calls_before
+
+
+def test_discover_antigravity_ls_address_with_explicit_token(language_server, monkeypatch) -> None:
+    from loopx.capabilities.native_chat.antigravity_adapter import discover_antigravity_language_server
+
+    monkeypatch.delenv("ANTIGRAVITY_LS_URL", raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", language_server["url"].removeprefix("http://"))
+    found = discover_antigravity_language_server()
+    assert found is not None
+    assert found["url"] == language_server["url"]
+    assert found["source"] == "environment"
+
+
+def test_repeated_native_error_plus_thinking_only_planner_retry_times_out_and_cancels(
+    tmp_path, language_server, monkeypatch
+) -> None:
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    frames = []
+    steps = [user]
+    step_idx = 1
+    for at in (1.0, 120.0, 240.0, 305.0):
+        steps = [
+            *steps,
+            {
+                "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": step_idx}},
+                "errorMessage": {"error": {"shortError": "The stream was interrupted."}},
+            },
+            {
+                "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": step_idx + 1}},
+                "plannerResponse": {"thinking": f"retrying thinking attempt {step_idx}"},
+            },
+        ]
+        step_idx += 2
+        frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
+    _native_clock(monkeypatch, language_server, frames)
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("original task")
+    assert raised.value.error_code == "response_timeout"
+    assert language_server["now"] == 305.0
+    assert language_server["cancelled"].is_set()

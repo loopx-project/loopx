@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -292,6 +293,8 @@ def main() -> int:
             cli_bin="loopx",
             host_surface="codex-cli-tui",
             goal_text="build a deterministic onboarding path",
+            resolve_linked_worktree_alias=False,
+            runtime_root_arg=str(Path(tmp) / "runtime"),
         )
     assert payload["agent_type"] == "codex-cli", payload
     activation = payload["host_loop_activation"]
@@ -313,7 +316,16 @@ def main() -> int:
     assert "register-agent" in message, message
     assert "explicit takeover" in message, message
 
-    with tempfile.TemporaryDirectory(prefix="loopx-agent-onboard-identity-") as tmp:
+    # Route the connected fixture's builders and CLI children through its legacy registry.
+    with (
+        tempfile.TemporaryDirectory(prefix="loopx-agent-onboard-identity-") as tmp,
+        patch.dict(os.environ, {"LOOPX_RUNTIME_ROOT": str(Path(tmp) / "home" / ".codex" / "loopx")}),
+        patch.multiple(
+            "loopx.paths",
+            DEFAULT_RUNTIME_ROOT=Path(tmp) / "home" / ".loopx",
+            LEGACY_RUNTIME_ROOT=Path(tmp) / "home" / ".codex" / "loopx",
+        ),
+    ):
         root = Path(tmp)
         project = root / "project"
         home = root / "home"

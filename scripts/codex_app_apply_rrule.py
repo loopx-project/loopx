@@ -4,7 +4,8 @@
 Fallback host bridge for hosts where the Codex App does not expose
 ``automation_update``. The script:
 
-1. reads ``loopx quota should-run`` and its ``scheduler_hint.codex_app``;
+1. replays the original registry, runtime and Turn through ``loopx quota
+   should-run`` and consumes ``scheduler_hint.app_automation``;
 2. when ``stateful_backoff.apply_needed=true`` and ``recommended_rrule`` is
    present, creates the automation TOML and ``automations`` row when they are
    missing, backs up the Codex App automation SQLite database, and updates
@@ -30,8 +31,9 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from loopx.turn_identity import normalize_turn_instance_id
+from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
 from loopx.paths import global_registry_path, select_default_runtime_root
+from loopx.turn_identity import normalize_turn_instance_id
 
 
 _FAILURE_OUTPUT_LIMIT = 2_000
@@ -100,19 +102,22 @@ def _load_registry_goal(registry: Path, goal_id: str) -> dict[str, Any]:
     return {}
 
 
+def _loopx_json_route(loopx: str, registry: Path, runtime_root: Path | None) -> list[str]:
+    command = [loopx, "--format", "json", "--registry", str(registry)]
+    if runtime_root is not None:
+        command.extend(["--runtime-root", str(runtime_root)])
+    return command
+
+
 def _heartbeat_task_body(
     *,
     loopx: str,
     registry: Path,
     goal_id: str,
     agent_id: str,
+    runtime_root: Path | None = None,
 ) -> str:
-    command = [
-        loopx,
-        "--format",
-        "json",
-        "--registry",
-        str(registry),
+    command = _loopx_json_route(loopx, registry, runtime_root) + [
         "heartbeat-prompt",
         "--thin",
         "--goal-id",
@@ -337,6 +342,7 @@ def _ensure_automation(
     agent_id: str,
     rrule: str,
     backup_path: Path | None,
+    runtime_root: Path | None = None,
 ) -> bool:
     toml_path = automations_root / automation_id / "automation.toml"
     if toml_path.exists() and _sqlite_row_exists(db_path, automation_id):
@@ -356,6 +362,7 @@ def _ensure_automation(
             registry=registry,
             goal_id=goal_id,
             agent_id=agent_id,
+            runtime_root=runtime_root,
         )
     else:
         prompt = _heartbeat_task_body(
@@ -363,6 +370,7 @@ def _ensure_automation(
             registry=registry,
             goal_id=goal_id,
             agent_id=agent_id,
+            runtime_root=runtime_root,
         )
         _write_automation_toml(
             toml_path,
@@ -392,14 +400,10 @@ def _load_scheduler_hint(
     agent_id: str,
     parent_turn_instance_id: str,
     capabilities: list[str],
+    runtime_root: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     turn_instance_id = _scheduler_hint_turn_instance_id(parent_turn_instance_id)
-    command = [
-        loopx,
-        "--format",
-        "json",
-        "--registry",
-        str(registry),
+    command = _loopx_json_route(loopx, registry, runtime_root) + [
         "quota",
         "should-run",
         "--goal-id",
@@ -434,14 +438,18 @@ def _load_scheduler_hint(
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"loopx should-run returned invalid JSON: {exc}") from exc
-    hint = payload.get("scheduler_hint", {})
-    codex_app = hint.get("codex_app", {})
-    if not isinstance(codex_app, dict):
-        codex_app = {}
-    stateful = codex_app.get("stateful_backoff", {})
+    hint = payload.get("scheduler_hint") if isinstance(payload, dict) else None
+    if not isinstance(hint, dict):
+        return {}, {}
+    app = hint.get("app_automation")
+    if "app_automation" not in hint and payload.get("schema_version") != COMPLETE_TURN_DECISION_VERSION:
+        app = hint.get("codex_app")
+    if not isinstance(app, dict):
+        return {}, {}
+    stateful = app.get("stateful_backoff", {})
     if not isinstance(stateful, dict):
         stateful = {}
-    return codex_app, stateful
+    return app, stateful
 
 
 def _update_toml(toml_path: Path, rrule: str) -> None:
@@ -522,6 +530,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="Global registry; defaults to the selected LoopX local state route.",
     )
+    parser.add_argument(
+        "--runtime-root",
+        type=Path,
+        help="Original runtime root of the parent Turn. Defaults to the registry route.",
+    )
     parser.add_argument("--automation-id", default="loopx")
     parser.add_argument(
         "--automations-root",
@@ -550,23 +563,24 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     if args.registry is None:
-        args.registry = global_registry_path(select_default_runtime_root())
+        args.registry = global_registry_path(args.runtime_root or select_default_runtime_root())
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
-    codex_app, stateful = _load_scheduler_hint(
+    app, stateful = _load_scheduler_hint(
         loopx=args.loopx,
         registry=args.registry,
         goal_id=args.goal_id,
         agent_id=args.agent_id,
         parent_turn_instance_id=args.turn_instance_id,
         capabilities=args.capability,
+        runtime_root=args.runtime_root,
     )
     apply_needed = stateful.get("apply_needed") is True
-    rrule = codex_app.get("recommended_rrule") or stateful.get("current_rrule")
-    ack_hint = codex_app.get("ack_hint", {})
+    rrule = app.get("recommended_rrule") or stateful.get("current_rrule")
+    ack_hint = app.get("ack_hint", {})
     ack_args = ack_hint.get("cli_args") if isinstance(ack_hint, dict) else None
     toml_path = args.automations_root / args.automation_id / "automation.toml"
     toml_missing = not toml_path.exists()
@@ -623,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
             agent_id=args.agent_id,
             rrule=rrule,
             backup_path=backup_path,
+            runtime_root=args.runtime_root,
         )
         print(f"created missing automation: {args.automation_id}")
     _update_toml(toml_path, rrule)

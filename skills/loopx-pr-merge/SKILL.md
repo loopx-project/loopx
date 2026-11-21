@@ -49,10 +49,18 @@ A rebase or head update restarts review and readiness qualification.
 
 ## Configured CI Waiting
 
-Pass `--goal-id GOAL` for managed merges and follow resolved `wait_for_ci`.
-The default is true. When false, do not query, poll, or wait for CI; complete
-required local validation and exact-head review/thread checks. GitHub `BLOCKED`
-then reports separately authorized admin bypass, never permission to merge.
+Pass `--registry` (when running outside the primary repo root, such as a
+worktree) and `--goal-id GOAL` for managed merges and follow resolved
+`wait_for_ci`. Omitting `--registry` or `--goal-id` silently falls back to the
+unconfigured default (`wait_for_ci=true`) and reports false CI waits. When
+`wait_for_ci=false` (`ci_policy=not_consulted`), never query, poll, or wait for
+CI; complete required local validation (`canary premerge`, targeted tests,
+`check_rfc_bilingual.py` when RFCs change) and exact-head review/thread checks,
+and run eligible self-merges or maintainer-authorized merges immediately with
+`--match-head-commit HEAD_OID --admin` when branch protection holds only on
+author-owned `COMMENTED` approvals or unconsulted status checks. GitHub
+`BLOCKED` alone never grants merge authority; it only documents why admin bypass
+applies once readiness and authorization both hold.
 
 ## Decision Workflow
 
@@ -99,8 +107,9 @@ metadata, test, example or narrow-cleanup PRs when all these conditions hold:
 - the diff is easy to review and required checks/focused smokes passed;
 - its exact head has the published review, and
   `uv run --extra test loopx pr-review --check-merge-readiness NUMBER@HEAD_OID`
-  returned ready for that unchanged head (add `--goal-id GOAL` for already
-  Goal-managed work; standalone delivery requires no Goal);
+  returned `ready=true` for that unchanged head (always pass `--registry` and
+  `--goal-id GOAL` for already Goal-managed work so `wait_for_ci=false` is
+  honored without waiting on remote CI; standalone delivery requires no Goal);
 - no private state, raw benchmark evidence, credentials, local paths or
   generated logs are included;
 - no runtime behavior, benchmark adapter, permission, destructive Git or public

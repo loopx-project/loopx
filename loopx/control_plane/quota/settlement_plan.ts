@@ -12,8 +12,9 @@ import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {decodeTaskLeaseProof} from "../coordination/task_lease_proof.ts";
+import {normalizeIdempotencyKey} from "../work_items/task_lease_acquire.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
-import {contextProjectionChanges} from "./diagnostic_projection.ts";
 import {EffectiveAction} from "./effective_action.generated.ts";
 
 export const COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v2";
@@ -37,7 +38,17 @@ export function composedCliSettlementChannel(cli: JsonObject): JsonObject {
   if (actions.filter(command => command === writebackCommand).length !== 1
       || actions.filter(command => command === spendCommand).length !== 1
       || actions.indexOf(writebackCommand) >= actions.indexOf(spendCommand)) return cli;
-  const composed = (command: string) => command + " --settle-turn --settlement-receipt";
+  const preparation = jsonObject(cli.execution_preparation);
+  const proof = preparation?.handoff_mode === "hard_lease"
+    ? decodeTaskLeaseProof(preparation.lease_proof) : null;
+  if (preparation?.handoff_mode === "hard_lease" && !proof) {
+    throw new Error("Prepared settlement requires the current task lease proof");
+  }
+  const fence = proof
+    ? " --task-lease-idempotency-key=" + normalizeIdempotencyKey(proof.idempotency_key) +
+       " --task-lease-expected-version " + proof.expected_version
+    : "";
+  const composed = (command: string) => command + " --settle-turn --settlement-receipt" + fence;
   const newWriteback = {...writeback, command_template: composed(writebackCommand),
     ...(typeof writeback.semantic_closeout_command_template === "string"
       ? {semantic_closeout_command_template: composed(writeback.semantic_closeout_command_template)} : {})};
@@ -51,45 +62,33 @@ export function composedCliSettlementChannel(cli: JsonObject): JsonObject {
     .map(command => command === writebackCommand ? newWriteback.command_template : command)};
 }
 
-/** The heartbeat publisher uses only its current admitted Todo and exact receipt. */
-function receiptBoundCliSettlement(params: JsonObject, requirePreparation: boolean): JsonObject | null {
-  const cli = jsonObject(params.cli), receipt = jsonObject(params.receipt);
-  const preparation = jsonObject(cli?.execution_preparation);
-  const identity = jsonObject(jsonObject(cli?.settlement_plan)?.identity);
-  if (!cli || (Object.hasOwn(cli, "execution_preparation") && !preparation)
-      || cli.selection_required === true || cli.spend_after_validation !== true
-      || ((preparation || requirePreparation) && (preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION
-        || preparation.state !== "ready" || preparation.delivery_allowed !== true))
-      || receipt?.closeout_required !== true
-      || receipt.settlement_binding_owed === true
-      // Claiming within the original Turn can requalify its receipt.
-      || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
-      || !identity || typeof params.todo_id !== "string" || !params.todo_id || params.todo_id !== identity.todo_id
-      || typeof identity.turn_instance_id !== "string" || receipt.turn_instance_id !== identity.turn_instance_id
-      || (preparation && (preparation.todo_id !== identity.todo_id || preparation.agent_id !== identity.agent_id))
-      || !isDeepStrictEqual(identity, receipt.settlement_identity)) return null;
-  return composedCliSettlementChannel(cli);
-}
-
-export function nativeCliSettlementProjection(params: JsonObject): JsonObject {
-  const cli = jsonObject(params.cli), composed = receiptBoundCliSettlement(params, true);
-  return !cli || !composed || composed === cli ? {} : contextProjectionChanges(cli, composed);
-}
-
-/** Explicit complete-contract consumers use the same decided plan and receipt.
- * A soft claim has no preparation record; an existing non-ready record never
- * disappears. The later writeback and spend still perform their own checks. */
+/** Compose the existing CLI plan for the exact admitted Turn. A soft claim
+ * has no preparation record. A present preparation must prove readiness. */
 export function completeCliSettlementChannel(payload: JsonObject): JsonObject {
-  const cli = jsonObject(jsonObject(payload.interaction_contract)?.cli_channel) ?? {};
+  const interaction = jsonObject(payload.interaction_contract);
+  const cli = jsonObject(interaction?.cli_channel) ?? {};
   const identity = jsonObject(jsonObject(cli.settlement_plan)?.identity);
   if (payload.should_run !== true || payload.effective_action !== EffectiveAction.NORMAL_RUN
       || payload.normal_delivery_allowed !== true
-      || jsonObject(jsonObject(payload.interaction_contract)?.agent_channel)?.delivery_allowed !== true
+      || jsonObject(interaction?.agent_channel)?.delivery_allowed !== true
       || !identity || identity.goal_id !== payload.goal_id
       || identity.agent_id !== jsonObject(payload.agent_identity)?.agent_id) return cli;
-  const composed = receiptBoundCliSettlement({cli, receipt: payload.heartbeat_receipt,
-    todo_id: jsonObject(payload.selected_todo)?.todo_id}, false);
-  return composed ?? cli;
+
+  const receipt = jsonObject(payload.heartbeat_receipt);
+  const preparation = jsonObject(cli.execution_preparation);
+  const todoId = jsonObject(payload.selected_todo)?.todo_id;
+  if ((Object.hasOwn(cli, "execution_preparation") && !preparation)
+      || cli.selection_required === true || cli.spend_after_validation !== true
+      || (preparation && (preparation.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION
+        || preparation.state !== "ready" || preparation.delivery_allowed !== true
+        || preparation.todo_id !== identity.todo_id || preparation.agent_id !== identity.agent_id))
+      || receipt?.closeout_required !== true || receipt.settlement_binding_owed === true
+      // Claiming within the original Turn can requalify its receipt.
+      || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
+      || typeof todoId !== "string" || !todoId || todoId !== identity.todo_id
+      || typeof identity.turn_instance_id !== "string" || receipt.turn_instance_id !== identity.turn_instance_id
+      || !isDeepStrictEqual(identity, receipt.settlement_identity)) return cli;
+  return composedCliSettlementChannel(cli);
 }
 
 /** Current continuation commands share the complete source's composition.

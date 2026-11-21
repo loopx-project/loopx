@@ -74,8 +74,7 @@ Goal and device configuration before downgrading to a version without this field
 The scheduling policy reads back the effective union. `owner_authored` is derived
 queue membership; the legacy `authenticated_developer_owned` lane id is retained.
 `author_owned` still means the author is the actual signed-in reviewer, including
-GitHub's formal self-review restriction. Neither list membership nor the repository
-namespace infers organization membership, trust, authentication or merge authority.
+GitHub's formal self-review restriction.
 Forward visits non-owners first; reverse inverts that same whole actionable queue.
 
 默认仅当前登录的审阅账号计入 owner。可在能力中心的设备默认值或单个 Goal 中填写
@@ -136,8 +135,7 @@ normalization; empty link labels and formatting alone do not count. Formatted
 visible wording remains accepted without imposing a new prose style.
 
 架构判断进入既有比例评估：逐项说明核心保证、可选策略、provider IO 和投影的
-owner、默认范围及失败恢复，再决定当前 PR 交付边界。关闭态兼容通过不代表
-默认策略合理，最新 bug 修好也不消除已声明的必要架构收敛。必须现在修复或仍有
+owner、默认范围及失败恢复，再决定当前 PR 交付边界。必须现在修复或仍有
 关键未知时不能批准；未经接受的偏好保留为非阻塞建议。公开正文须带出决定性理由
 和本阶段结果，允许可独立验证的前置阶段，不要求补完全部父级 roadmap。
 两个公开字段归一化后须有可见文字；空链接或格式符号不能代替说明，正常格式文字仍可通过。
@@ -235,8 +233,7 @@ configured preference or an invented exact build. This is a reviewer publication
 error, not a PR-author finding. Inventory-only and fixture scans do not read host
 metadata. Offline saved-packet checking proves consistency only. The bounded
 reader may retain recorded identity with `active_turn_verified=false` when the
-opening event is outside its window; neither metadata nor this marker proves
-backend weights, review independence, host delivery, liveness or merge authority.
+opening event is outside its window.
 
 The same body validator is used for published review readback and merge readiness.
 Behavior-bearing reviews also fill the existing
@@ -267,8 +264,7 @@ ordering and explicit post-merge audit selection remain unchanged.
 The [historical review corpus](../../../examples/fixtures/pr-review-history/README.md)
 exercises these checks with substantial public reviews and exact-commit source
 excerpts. Model probes receive code and bounded observations without the review
-or expected verdict. Historical validation reports stay explicitly historical;
-neither a long body nor a recorded approval supplies present-day evidence.
+or expected verdict. Historical validation reports stay explicitly historical.
 
 Codex agents should use the dedicated `loopx-pr-review` skill for this slash
 command. Do not route `/loopx-pr-review` through the broader `loopx-project`
@@ -344,8 +340,7 @@ additional closeout, publication or merge authority.
 GitHub 文件 API 达到 3000 项上限时，调用方当前 checkout 中已有的精确 Git 对象
 可用于恢复更大 PR 的文件清单。必须核对 origin 仓库、唯一 merge base 与精确 head，
 仅折叠 API 明确确认的 rename，并让文件数和全 diff 增删量与远端 metadata 一致。
-分页前及恢复后校验 head、base 和总量。保留 API 已知行的统计值；恢复行的 Git 来源
-不等于已完成 review。Git 二进制行不贡献文本行数，未被 API 观测的逐行统计保留 null，
+分页前及恢复后校验 head、base 和总量。保留 API 已知行的统计值；Git 二进制行不贡献文本行数，未被 API 观测的逐行统计保留 null，
 不会假定为 API 的 0/0。不会自动抓取对象、切分支或执行外部 diff/textconv；缺对象、
 统计格式损坏、rename 歧义、总量不符或版本变化继续明确返回 incomplete。没有精确快照
 的 approval closeout 仍要求完整 API 读回，不扩大撤回 review 或合并权限。
@@ -511,8 +506,7 @@ Follow [author submission](../../../AGENTS.md#author-submission-and-review-entry
 for completed proposals: missing review or held CI/merge qualification must not
 prevent an authorized author from marking the PR ready. Read back the unchanged
 head and regenerate the packet after that transition. Reviewer action authority
-and exact-head merge qualification remain separate; this rule grants neither a
-reviewer permission to change another author's Draft nor permission to merge.
+and exact-head merge qualification remain separate.
 
 It emits a
 `pull_request_review_todo_preview_v0` bound to its exact head. The preview may
@@ -622,8 +616,7 @@ require another repository to use LoopX's S/G/R identifiers.
 
 Reuse `problem_context.observable_outcome`, `walkthroughs` and
 `validation_matrix` instead of writing another evidence report. Small diffs are
-not fragmentation; a new field or sent message is not proof of a promised
-end-to-end user journey. For collaboration, follow the required dependency,
+not fragmentation. For collaboration, follow the required dependency,
 receiver adoption, artifact acceptance and return through real callers.
 Independent prerequisites and characterization remain valid when their boundary
 and real successor are justified. Do not reward larger diffs or fabricated
@@ -639,16 +632,16 @@ evidence and do not pad. Invoking review uses the installed capability policy.
 
 ### Reviewer provenance and specification basis
 
-Policy revision 14 makes two publication requirements mandatory for every new
-result; neither changes queue selection, merge authority or how already
-published GitHub reviews are recognized (`check_review_body` is unchanged).
+Policy revision 14 requires reviewer attribution and a specification basis for
+every new result.
 
 - `result.reviewer` (`reviewer_declaration`) names `actor_kind`
   (`model_agent` or `human_operator`) and `declaration_source`
   (`runtime_reported` or `self_reported`); an agent adds `declared_model` and
-  `declared_provider` in product-family wording. The body repeats them on
-  exactly one visible `Reviewer:` line, each value as a whole token. This is
-  provenance, not a credential: it authenticates nothing and adds no weight.
+  `declared_provider` in product-family wording. Use one visible line such as
+  `Reviewer: model_agent · MODEL · PROVIDER · self_reported`. Publication and
+  queue readback share the declaration parser. Model coverage requires an
+  explicit source. The declaration adds no weight or account authority.
 - `problem_context.spec_basis` (`spec_basis_assessment`) is `mapped`,
   `no_spec` or `not_yet_proven`. `mapped` gives text `spec_ref`,
   `spec_revision` (a full commit id for `accepted_rfc` and
@@ -660,6 +653,26 @@ published GitHub reviews are recognized (`check_review_body` is unchanged).
 `--check-result` reports a missing or inconsistent declaration or unpublished
 reference as an error, and a spec-basis gap as an approval blocker. Regenerate
 results made under revision 13 rather than adding these fields to them.
+
+In a Goal-bound GitHub queue, a recognized model family from the invoking
+runtime can reopen an open, non-draft exact head with a declared review from
+another family. The queue uses complete provider history. An independent
+review from the same family suppresses repeat work even when another account
+submitted a later review. If different models share an independent GitHub
+account, each valid, attributable formal review on the current head supplies
+coverage while that account maintains the same formal opinion. The latest
+qualified `COMMENTED` review from each known family in that history can also
+supply coverage. A comment with unknown model provenance can record account
+activity and preserves existing family coverage. A dismissal, a different head
+or a changed formal opinion resets the account's coverage history.
+A qualifying review published under the shared author
+login with a matching runtime declaration also suppresses repeat work for that
+model. GitHub independence still requires independent account evidence.
+
+Missing model identity or incomplete history retains the existing queue
+behavior. A review with unknown provenance supplies no model-family coverage.
+The review action leaves the formal conclusion, dissent, CI policy, approval
+and merge-readiness rules in their existing owners.
 
 ### Semantic alignment and CI constraint recovery
 
@@ -711,7 +724,7 @@ Use this repair map when a check fails:
 
 A blocker must connect the exact-head change to an existing obligation and a
 replayable failure or missing required validation. An untraceable dynamic value
-alone is an `advisory`, not `not_yet_proven` and not proof of safety. Removing a
+alone is an `advisory`. Removing a
 persisted value without required old-state readback is `not_yet_proven`; a failed
 required projection check is `violated`. Neither can be downgraded to advisory
 to bypass CI or a concrete blocking finding. Do not turn future or advisory RFC
@@ -743,7 +756,7 @@ being replaced by confident prose.
 `repository_reuse` starts unverified in every applicable plan. Its conclusions
 are `reused`, `separation_justified`, `no_existing_candidate`,
 `unjustified_duplication`, or `not_yet_proven`. A negative search must name its
-scope and limitations; an empty candidate list is not proof of absence.
+scope and limitations.
 Unjustified duplication or missing evidence requires a request-changes
 conclusion, including missing state derivation, producer/trigger or completeness
 proof in `state_model_assessment`. The same existing gate applies; there is no
@@ -843,12 +856,11 @@ state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 The saved-result check and published-review readback apply the same literal,
 visible title rule. A near match, the opposite verdict's title, a hidden comment
 or a fenced example cannot supply that conclusion. Independent reviews retain
-their formal-state requirements. These checks establish publication consistency,
-not evidence truth or merge authority.
+their formal-state requirements. These checks establish publication consistency.
 
 提交前的结果检查与发布后的读回使用同一条可见的精确标题规则。近似标题、
 相反结论的标题、隐藏注释或代码块示例均不能代替作者结论；独立评审仍遵循
-原正式状态要求。这只校验发布一致性，不证明证据真实或授予合并权限。
+原正式状态要求。这只校验发布一致性。
 
 The compact result is versioned as `pull_request_review_conclusion_v0` and
 reports a typed verdict and invalid-reason codes. Queue selection and approval
@@ -858,8 +870,7 @@ A reviewer's newer formal opinion retires their own previous opinion, including
 when it is dismissed or lacks the required body. Current-head requests for
 changes remain visible even without that format, and ordinary comments or
 pending reviews cannot restore a retired approval. A changed head still requires
-fresh evidence. This corrects default queue/readiness classification; it neither
-relaxes body qualification nor grants dismissal or merge authority.
+fresh evidence. This corrects default queue/readiness classification.
 
 队列与 closeout 复用同一 TypeScript 历史选择规则：另一评审者的简短批准不会
 遮住完整的精确 head 批准；同一评审者的新正式意见会替换自己的旧意见，撤回或
@@ -895,7 +906,7 @@ review（包括只有行内意见的评审），不包括普通 issue 评论。�
 撤回该账号的覆盖。身份未知、来源不完整或换头时不跳过，读取后还须核对 head/base。
 载荷的 `independent_review` 给出评审者、原记录链接、状态和精确提交；该行仍在
 inventory，但不生成可执行计划或证据命令。第三方无需使用本 agent 的双语格式。
-跳过重复工作不授予批准或合并资格，不清除阻塞意见；原批准正文、closeout、验证
+原批准正文、closeout、验证
 和 merge-readiness 门保留。明确要求重新取证时，沿原精确头 fresh-audit 入口执行。
 不新增人名白名单、配置或自动外部写入。
 
@@ -911,6 +922,9 @@ The read-only command paginates GitHub review history and uses the latest submit
 opinion per reviewer; a comment/pending review does not erase a blocker, and a
 dismissed review does not resurrect older history. Its typed TS read model reports
 `clear`, `verification_required`, or `hold`; these are not merge decisions.
+Closeout checks that the base commit and changed-file count are stable across
+the history read when the head is unchanged. If that comparison changes,
+retry closeout with the current PR snapshot.
 Review age or a different commit only identifies a finding to inspect, never proof
 of resolution. The host independently verifies every old finding and inline comment,
 checks owner authorization and GitHub/branch dismissal permissions, rechecks the
@@ -1379,9 +1393,7 @@ invariant. Record the red check and its owner; approval does not make a blocked
 merge ready. An unresolved required review validation still blocks approval.
 The matrix assesses the reviewed head. Keep relevant older failures in existing
 result/evidence text with their source and explain why current independent
-evidence covers the exposed invariant and conditions. An unknown historical
-cause alone is not a veto, nor does current passing evidence prove that cause
-was fixed. A selected green rerun cannot dismiss material intermittency or a
+evidence covers the exposed invariant and conditions. A selected green rerun cannot dismiss material intermittency or a
 missing negative case: record the current gap as failed/unverified and name
 the smallest discriminating check. An explicit accepted contract may still
 require causal attribution. No new result schema, review-dismissal authority or
@@ -1423,7 +1435,7 @@ its existing values, and a new namespace uses capability defaults.
 可确认生效；清除完整目标覆盖后恢复机器默认。目标覆盖是完整 namespace（包括
 审阅优先级），部分修改保留既有目标值，新覆盖使用 capability 默认值。关闭时不
 查询、轮询或等待 CI；本地必需验证、当前提交评审、评论及权限检查仍然适用。
-GitHub `BLOCKED` 只提示另需管理员授权，不授予合并权限。
+GitHub `BLOCKED` 只提示另需管理员授权。
 
 ## Repository experience for opted-in review Agents
 

@@ -119,10 +119,12 @@ def test_native_inbox_preserves_unconsumed_results_across_corrections(source_goa
     for update in ("independent-check", "review-complete"):
         newer.append(report(root, goal, "agent-a", rid, "conclusion", f"Corrected result: {update}",
             registry=registry, request_revision=2, update_id=update)["result_key"])
-    returned = read_inbox(root, registry, goal, "agent-b")["peer_returns"]["items"]
+    returned = read_inbox(root, registry, goal, "agent-b",
+        turn_instance_id="turn-corrected-results")["peer_returns"]["items"]
     assert {item.get("result_key", "conclusion") for item in returned} == {"conclusion", *newer}
     for key in newer:
-        consume_return(root, goal, "agent-b", rid, registry=registry, result_key=key)
+        consume_return(root, goal, "agent-b", rid, registry=registry, result_key=key,
+            turn_instance_id="turn-corrected-results", disposition="accepted")
     before = {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")}
     # Consecutive native Inbox reads must retain the same original result
     # obligation without executing, re-delivering or consuming anything.
@@ -145,7 +147,8 @@ def test_native_inbox_preserves_unconsumed_results_across_corrections(source_goa
         assert old["request_revision"] == 1 and old["consumed"] is False
         assert old in attention["items"][0]["returns"]
     assert {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")} == before
-    consume_return(root, goal, "agent-b", rid, registry=registry)
+    consume_return(root, goal, "agent-b", rid, registry=registry,
+        turn_instance_id="turn-corrected-results", disposition="accepted")
     for actor in ("agent-a", "agent-b"):
         agenda = read_delegation_turn_context(root, registry, goal, actor)["unfinished_delegations"]
         assert agenda["items"] == []

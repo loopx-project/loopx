@@ -49,10 +49,22 @@ Stride action. Continuing unchanged is a legal decision and needs no fabricated
 `grow` record on quiet Turns. A target can also use direct authoritative
 evaluation without a proxy.
 
-The new ordinary-Turn and yardstick treatment starts explicitly off. Existing
+For upward model–harness co-design along the same owner (`§5.9`), this RFC
+composes the downward receipt-gated context-stack primitives
+`{KeepRaw, FoldToReceipt, EpochReset}`
+([History working sets](history-working-set-context-policy-v0.md#51-one-projection-owner))
+with stride actions `{grow, switch, verify}` across a two-phase policy roadmap:
+**Phase 1** uses a frozen-model non-parametric meta-policy (`KL-UCB` arm
+selection, bounded batch-barrier `add/revise/retire` memory evolution,
+Semantic Duplicate Gate, and protected control/root-cause guards); **Phase 2**
+advances only when matched-budget evidence justifies learned allocation via
+Checkpoint-Forked `Segment Flow-GRPO` ($\Delta T$ single-stride rollouts over
+$O(1)$ deterministic state projections).
+
+The new ordinary-Turn, yardstick, and upward co-design treatments start explicitly off. Existing
 Stride defaults, configured periodic reviews, acceptance, budgets and host
 continuation retain their meaning. This RFC does not approve automatic tool
-execution, benchmark-protocol changes or autonomous acceptance changes.
+execution, benchmark-protocol changes, learned-policy deployment, or autonomous acceptance changes.
 
 ## 2. Problem and motivation
 
@@ -75,6 +87,23 @@ target with one per task. Reported validated shares are 58% versus 21% on its
 repository tasks and 73% versus 33% on kernels; corresponding yardstick costs
 are 4% versus 29% and 2% versus 18% of a true evaluation. These are results of
 that study, with different target/task denominators, not predicted LoopX gains.
+
+Joint research decisions also couple directly to context-stack retention and
+long-horizon learning stability. Folding unverified exploration before a
+deterministic receipt discards counterevidence needed for `verify` or `switch`,
+while unbounded raw retention or mid-epoch prefix rewriting erodes remaining
+budget $B$ and breaks prefix KV-cache reuse
+([History working sets §5.1](history-working-set-context-policy-v0.md#51-one-projection-owner)).
+At the policy-learning layer, [AgentFlow](https://arxiv.org/abs/2510.05592)
+shows that offline supervised fine-tuning (SFT) on static trajectories induces
+distribution collapse under compounding long-horizon shifts compared with
+in-the-loop segment optimization (`Flow-GRPO`), while naive outcome-only
+multi-turn RL suffers linear credit-assignment decay across long episodes;
+[HELIX](https://arxiv.org/abs/2608.13951) further motivates grouping verified
+sibling trajectories forked from shared states to isolate causal gains without
+confounding starting conditions. These motivate unifying
+`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` behind a
+two-phase policy roadmap under the same typed owner (`§5.9`).
 
 ### Invariants
 
@@ -576,9 +605,9 @@ promotion.
 
 | Stage | Useful next result | Retained boundary |
 | --- | --- | --- |
-| Current-model pilot | A revision-pinned bounded planning treatment changes actual work and improves the §8.7 comparison. | Existing Stride/Yardstick/Explore owners and ordinary responses; no second controller session or numerical fidelity engine prerequisite. |
-| Calibrated estimates | Pre-action predictions linked to actual method, duration, next state and terminal result improve forecast/calibration on held-out episodes. | The domain provider owns measurement meaning; supporting estimates are not acceptance, permission or fabricated counterfactual labels. |
-| Learned allocation | A learned policy beats the qualified current-model policy under matched full budgets and transfer tests. | Replace the policy implementation behind the same work decision boundary; Core retains admission, budget, identity and settlement. |
+| Current-model pilot (Phase 1 entry) | A revision-pinned bounded planning treatment changes actual work and improves the §8.7 comparison. | Existing Stride/Yardstick/Explore owners and ordinary responses; no second controller session or numerical fidelity engine prerequisite. |
+| Calibrated estimates (Phase 1 non-parametric meta-policy) | Pre-action predictions linked to actual method, duration, next state and terminal result improve forecast/calibration on held-out episodes. | The domain provider owns measurement meaning; supporting estimates are not acceptance, permission or fabricated counterfactual labels. |
+| Learned allocation (Phase 2 gated upgrade) | A learned policy beats the qualified Phase 1 frozen-model policy under matched full budgets and transfer tests. | Replace the policy implementation behind the same work decision boundary; Core retains admission, budget, identity and settlement. |
 
 Record state and evidence as they were available at decision time, action and
 actual method, resource use, next observation/state, and later outcomes through
@@ -631,6 +660,71 @@ location and equal path/byte content do not establish execution equivalence.
 Ordinary current-work evidence also keeps its original commit chronology and
 canonical-prefix boundary; a late old delivery cannot become a newer decision's
 uncited evidence. Explicitly cited verified history remains available.
+
+#### Upward model–harness co-design: joint `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` two-phase roadmap (proposed)
+
+To align context economics with research-horizon decisions without splitting
+ownership, upward co-design unifies the downward receipt-gated sampling-stack
+primitives (`{KeepRaw, FoldToReceipt, EpochReset}` in
+[History working sets §5.1](history-working-set-context-policy-v0.md#51-one-projection-owner))
+and research stride actions (`{grow, switch, verify}`) over the same typed
+`control_plane/work_items` decision boundary. Deterministic kernel guards reject
+illegal cross-layer combinations (for example, `FoldToReceipt` on an unverified
+active probe before settlement/verification receipt or silent mid-epoch prefix
+mutation). All co-design policy mechanisms below hold `Proposal` maturity,
+default off, and add no runtime/training loop to M1.
+
+1. **Phase 1 — Frozen-Model Non-Parametric Meta-Policy:** operates strictly
+   with frozen base-model weights while logging assignment probabilities and
+   receipts for counterfactual attribution:
+   - **`KL-UCB` arm selection:** selects among discrete `(target–yardstick,
+     stride, context-stack)` arms using bounded KL-upper-confidence indices over
+     matched counterfactual value estimates, respecting horizon-$B$
+     confirmation back-scheduling and multi-evidence Yardstick fidelity (`§5.4`,
+     `§5.8`).
+   - **Bounded batch-barrier `add / revise / retire` memory evolution:**
+     updates procedural/episodic guidance only at explicit batch barriers
+     (never mutating active intra-epoch prefixes), restricted to typed
+     `add` (verified new insight), `revise` (narrowed scope/counterevidence),
+     and `retire` (superseded or invalidated guidance) gated by
+     [post-outcome memory utility](post-outcome-memory-utility-attribution-v0.md).
+   - **Semantic Duplicate Gate:** normalizes action, probe, and gate
+     fingerprints (`actor + target/operation + resource/scope_key +
+     boundary_rules`) before admitting new candidates or user prompts, reusing
+     active incumbents, prior grants, or existing evidence trails rather than
+     spawning redundant probes or duplicate Todos.
+   - **Protected control and root-cause guards:** deterministic kernel checks
+     protect verified incumbents (`proxy_order_reversed` and suspect fences),
+     forbid `FoldToReceipt` promotion without independent deterministic
+     receipts, keep proxy gains strictly distinct from authoritative acceptance,
+     and enforce root-cause certification (requiring failing-to-passing or
+     differential invariant proof rather than test-relaxation shortcuts).
+2. **Phase 2 — Checkpoint-Forked `Segment Flow-GRPO`:** entered only after Phase
+   1 establishes a calibrated baseline and matched-budget evidence motivates a
+   learned allocator:
+   - **Avoids offline SFT collapse and linear credit-assignment decay:**
+     instead of offline behavioral cloning on static logs—which collapses under
+     compounding distribution shift as documented in
+     [AgentFlow](https://arxiv.org/abs/2510.05592)—or sparse outcome-only RL
+     over entire multi-hundred-turn trajectories, Phase 2 optimizes in-the-loop
+     over bounded **single-stride segments ($\Delta T$)** aligned with `KeepRaw` /
+     `EpochReset` boundaries.
+   - **Checkpoint-forked $\Delta T$ rollouts over $O(1)$ deterministic state
+     projections:** branches matched sibling continuations directly from
+     quiescent deterministic checkpoints (`AuthorityStore` + `decision_capture`
+     + frozen prefix state) using $O(1)$ deterministic projections of the active
+     Goal/Todo/incumbent/budget/yardstick frontier rather than replaying full
+     raw logs. Computes group-relative segment advantages (`Segment Flow-GRPO`)
+     across verified sibling rollouts sharing checkpoint $s$
+     ([HELIX](https://arxiv.org/abs/2608.13951); [Research §6.2](long-horizon-harness-benchmark-research-program-v0.md#62-efficiency)),
+     while preserving potential-based objective alignment (`[E7]`) and keeping
+     admission, budgets, and authoritative grading outside the learner's write
+     access.
+   - **Promotion gate:** Phase 2 remains research-only (`default-off`) and may
+     replace the Phase 1 policy behind the same Core boundary only after beating
+     the qualified Phase 1 meta-policy on held-out tasks under complete-cost
+     accounting ($\Delta J(B \mid s_0) > 0$, including cached vs. uncached prefix
+     tokens and checkpoint/evaluation compute).
 
 ## 6. Alternatives and design choices
 
@@ -795,6 +889,11 @@ capability. Disabling removes the extra ordinary-Turn cue and rejects new
 captures before primary commit, while historical findings and successful exact
 replays remain readable.
 
+An Explore context read loads the Yardstick projector when the graph is
+available and the setting is enabled. Ordinary C1 reads use the shared
+guidance and exact references for the captured context. Prior decisions stay
+bound to their original source when selected or replayed.
+
 The existing Research finding reader exposes the recorded target, outcome/proxy
 metrics, source, next action and cost bound. The ordinary task-scoped Explore
 context projects only that Todo's current target, a short next-choice cue and
@@ -882,6 +981,7 @@ followthrough do not close C13 or M2/M3.
 | E6 | [Multi-fidelity Bayesian Optimisation](https://proceedings.mlr.press/v70/kandasamy17a.html), §§1–3 | Distinguishes cheap approximations from the target outcome; GP/fidelity assumptions require qualification for program search. |
 | E7 | [Policy invariance under reward transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf), §3 | Potential-based shaping preserves the objective under its assumptions; arbitrary milestone bonuses do not. |
 | E8 | [EdgeBench adapter contract](../../../benchmark/edgebench/README.md), [feedback and memory analysis](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/), and §4 source owners | Native protocol, starting-state/continuation distinctions and current M1 seams; motivates the pilot, not a new measured gain. |
+| E9 | [AgentFlow](https://arxiv.org/abs/2510.05592) and [HELIX](https://arxiv.org/abs/2608.13951) | Motivates in-the-loop single-stride `Segment Flow-GRPO` over offline SFT (avoiding distribution collapse) and verified sibling trajectory grouping from shared checkpoints. Author-reported studies; neither implemented nor qualified in LoopX M1. |
 
 The paper's favorable fallback observations do not prove a no-regret guarantee:
 failed yardstick construction has already consumed budget. Per-target versus

@@ -739,13 +739,39 @@ def try_exclusive_file_lock(
 ) -> Iterator[Path | None]:
     """Try once to hold a sibling lock file for single-flight work.
 
-    ``None`` means another process already owns the lock. POSIX uses ``flock``;
-    Windows uses the standard-library ``msvcrt`` byte-range lock.
-    Non-executing recovery can preserve the previous holder record while
-    taking the same kernel fence, so a failed recovery does not consume proof
-    of the original executor's death. Other callers retain normal recording.
+    ``None`` means another process already owns the lock. Non-executing
+    recovery can take the fence without overwriting the prior holder record.
     """
+    with _try_exclusive_lock(
+        path, agent_id=agent_id, operation=operation, preserve_holder=preserve_holder,
+    ) as held:
+        yield None if held is None else held[0]
 
+
+@contextmanager
+def try_posix_child_retained_file_lock(
+    path: Path, *, operation: str,
+) -> Iterator[int | None]:
+    """Yield the POSIX lock descriptor for explicit inheritance by a supervisor.
+
+    Only closing all copies releases the flock. The descriptor is not generally
+    inheritable; pass it only to the child that owns this operation's cleanup.
+    """
+    if fcntl is None:
+        raise RuntimeError("child-retained file locks require POSIX flock")
+    with _try_exclusive_lock(path, operation=operation, release_by_close=True) as held:
+        yield None if held is None else held[1]
+
+
+@contextmanager
+def _try_exclusive_lock(
+    path: Path,
+    *,
+    agent_id: str | None = None,
+    operation: str | None = None,
+    preserve_holder: bool = False,
+    release_by_close: bool = False,
+) -> Iterator[tuple[Path, int] | None]:
     lock_path = _lock_path(path)
     holder_path = lock_holder_path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -771,7 +797,7 @@ def try_exclusive_file_lock(
                     holder_path=holder_path,
                     record=record,
                 )
-            yield lock_path
+            yield lock_path, lock_file.fileno()
         finally:
             if not preserve_holder:
                 _mark_released(
@@ -780,7 +806,8 @@ def try_exclusive_file_lock(
                     holder_path=holder_path,
                     record=record,
                 )
-            _release_kernel_lock(lock_file)
+            if not release_by_close:
+                _release_kernel_lock(lock_file)
 
 
 EFFECT_MUTATION_LOCK_SUFFIX = ".ts-effect.lock"
@@ -1244,14 +1271,12 @@ def exclusive_mutation_file_lock(
     try:
         yield effect_lock_path
     finally:
-        _release_effect_mutation_lock(
-            effect_lock_path,
-            token,
-            # Lock cleanup is secondary to the durable body result.  A cleanup
-            # failure must not replace either a successful result or its
-            # original exception; stale-owner recovery handles a later retry.
-            suppress_errors=True,
-        )
+        # A transient cleanup error can strand the marker while its process is
+        # still alive. Retry once for the marker this context created and let
+        # the release operation recheck its token and claim before retiring it.
+        released = _release_effect_mutation_lock(effect_lock_path, token, suppress_errors=True)
+        if not released and _same_effect_file_identity(identity, _effect_file_identity(effect_lock_path)):
+            _release_effect_mutation_lock(effect_lock_path, token, suppress_errors=True)
 
 
 @contextmanager

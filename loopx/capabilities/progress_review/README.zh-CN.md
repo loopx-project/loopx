@@ -63,7 +63,7 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 
 两道问题都针对检查点之间的变化而不是 after 状态整体：对已经满足验收的文件做改动是漂移，而服务验收条件或新增其证据的文档、负结果、前置测试不是。
 
-按 `turn_instance_id` 找到的回执必须具有相同且非空的 Agent，Todo 必须完全一致（未绑定工作允许双方都缺省）。缺失身份不是通配符。同一 Turn 在回执或保留的重试历史中具有冲突的 Agent/Todo 时，不予归属；时钟不能解决身份冲突，同身份的后续评估仍按时间排序。只有真正缺少 Turn 时才允许 `(generated_at, agent_id, todo_id)` 回退，且 run 与证据两侧都必须唯一。无效或相互冲突的 direct/settlement Turn 不能降级匹配。ACK 仅作用于具名 Agent 泳道；匿名行不能结清其义务或提供进展 baseline。同一泳道有效 ACK 在配额记账行中仍然有效。
+按 `turn_instance_id` 找到的回执必须具有相同且非空的 Agent，Todo 必须完全一致（未绑定工作允许双方都缺省）。同一 Turn 在回执或保留的重试历史中具有冲突的 Agent/Todo 时，不予归属；时钟不能解决身份冲突，同身份的后续评估仍按时间排序。只有真正缺少 Turn 时才允许 `(generated_at, agent_id, todo_id)` 回退，且 run 与证据两侧都必须唯一。无效或相互冲突的 direct/settlement Turn 不能降级匹配。ACK 仅作用于具名 Agent 泳道；匿名行不能结清其义务或提供进展 baseline。同一泳道有效 ACK 在配额记账行中仍然有效。
 
 这收紧了原 stage-0 `assist` 的兼容行为：身份不完整的历史回执仍可在 shadow/status 查看，但不能形成或解除义务。off 行为、模型请求、手动 revision pin 与类型化 replan 出口保持原契约。
 
@@ -81,7 +81,7 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 证据增量、criterion 来源、选中文件覆盖及缺失／过期／不可用状态。点
 **重新读取审查证据** 刷新，读取期间撤回旧判断。`off_goal` 与 `new_evidence` 可以
 同时成立且组合信号未触发，不能据此称为符合目标。回执存储读取失败保持不可用，
-不沿用缓存成功。模型分数不构成任务验收，也不授予停止、回滚或完成权限；`off` 不读取。
+不沿用缓存成功。`off` 不读取。
 
 ## 解除
 
@@ -95,7 +95,7 @@ loopx configure-goal --goal-id <goal-id> --clear-progress-review-configuration -
 
 ## 你会看到什么
 
-只要策略不是 `off`，`loopx status --format json` 会在 Goal 条目及其 `project_asset` 中增加 `external_progress_review`：按状态统计的回执数、按信号统计的漂移数，以及最新回执的类型化判断。`assist` 模式下，满足条件的连续段表现为一个 `autonomous_replan_obligation`，其 trigger 的 `kind` 为 `external_progress_review_drift`，`frontier_identity` 为 `progress_review:<evidence-id>`，附带一条 P1 todo 动作以及一贯的 `required: true`、`stop_condition` 和 ack 契约。心跳提示词已经要求 Agent 遵守该义务并用类型化重规划确认。
+`assist` 模式下，满足条件的连续段表现为一个 `autonomous_replan_obligation`，其 trigger 的 `kind` 为 `external_progress_review_drift`，`frontier_identity` 为 `progress_review:<evidence-id>`，附带一条 P1 todo 动作以及一贯的 `required: true`、`stop_condition` 和 ack 契约。心跳提示词已经要求 Agent 遵守该义务并用类型化重规划确认。
 
 ## 验证差异
 
@@ -152,4 +152,4 @@ loopx-jev sentinel compare \
 
 ## 边界
 
-升级（义务被忽略后打开 user gate）与暂停仍是未来工作，本能力不授予。观察器的预测质量与本集成是两个独立问题：已提交的对照展示的是一套问题在一个冻结矩阵上的表现，不是它在你的 Goal 上的表现。
+升级（义务被忽略后打开 user gate）与暂停仍是未来工作。观察器的预测质量与本集成是两个独立问题：已提交的对照展示的是一套问题在一个冻结矩阵上的表现。

@@ -351,3 +351,41 @@ def test_restored_executor_model_ignores_partial_pre_v0_and_validates_v0() -> No
         }
     ) == {"model": "legacy-model"}
     assert restored_executor_model({"loopx_tools": False, "loopx_executor": {"model": "x"}}) is None
+
+
+def test_flexible_endpoint_models_normalize_validate_and_project() -> None:
+    base = {
+        "schema_version": "steward_executor_machine_defaults_v1",
+        "selection_policy": "flexible",
+        "executor_endpoint": "codex",
+        "eligible_endpoints": ["codex", "antigravity"],
+        "executor_model": "gpt-6.2-sol",
+        "executor_reasoning_effort": "xhigh",
+    }
+    normalized = normalize_steward_executor_machine_defaults({
+        **base,
+        "endpoint_models": {
+            "antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+            "codex": {"model": None, "reasoning_effort": None},
+        },
+    })
+    assert normalized["endpoint_models"] == {
+        "antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+    }
+    effective = effective_steward_executor_defaults(_document({"steward_executor": normalized}))
+    assert effective["endpoint_models"] == {
+        "antigravity": {"model": "gemini-4-carbon-high", "reasoning_effort": "high"},
+    }
+    without = effective_steward_executor_defaults(_document({"steward_executor": {
+        **base,
+        "endpoint_models": {"antigravity": {"model": "", "reasoning_effort": None}},
+    }}))
+    assert "endpoint_models" not in without
+    for bad in [
+        {"endpoint_models": "bad"},
+        {"endpoint_models": {"dhs": {"model": "x"}}},
+        {"endpoint_models": {"antigravity": {"unknown": "x"}}},
+        {"endpoint_models": {"antigravity": {"reasoning_effort": "maximum"}}},
+    ]:
+        with pytest.raises((TypeError, ValueError)):
+            normalize_steward_executor_machine_defaults({**base, **bad})

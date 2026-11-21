@@ -13,7 +13,7 @@ def build_reward_memory_surface_read_authority_checkpoints(
 ) -> dict[str, dict[str, Any]]:
     """Project only the configured surface; the caller supplies existing read proof.
 
-    Enabled configuration is not proof. False remains false. This does not call
+    False remains false. This does not call
     a provider, select a policy source, or verify/expand the caller's authority.
     """
     route = resolve_reward_memory_surface_config(config, surface_id)

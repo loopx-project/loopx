@@ -65,6 +65,50 @@ def test_ordinary_result_uses_the_same_fresh_app_proof_for_sender_and_source(ord
         runtime.close()
 
 
+@pytest.mark.parametrize("private", [False, True])
+def test_recalled_message_with_retained_body_cannot_admit_a_turn(ordinary, private):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary) if private else connect_group(ordinary)
+    try:
+        text = "Explain the project result"
+        event = provider.event("notes-app", "recalled-source", text) if private else provider.topic("recalled-source", text)
+        provider.messages[event["message_id"]]["deleted"] = True
+
+        assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
+        assert not store.list_sessions()
+        assert not list(transport.core.root.glob("*.json"))
+        assert not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_recall_during_preview_holds_reply_with_no_provider_attempt(ordinary, private, monkeypatch):  # noqa: F811
+    _, runtime, provider, transport = connect(ordinary) if private else connect_group(ordinary)
+    try:
+        event = provider.event("notes-app", "late-recall", "/status") if private else provider.topic("late-recall", "/status")
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        path, = transport.root.glob("*.json")
+        reply = transport._reply_runner
+        source = provider.messages[event["message_id"]]
+
+        def preview_then_recall(args):
+            result = reply(args)
+            if "--dry-run" in args and ("+messages-reply" in args or "+messages-send" in args):
+                source["deleted"] = True
+            return result
+
+        monkeypatch.setattr(transport, "_reply_runner", preview_then_recall)
+        delivered = transport.reconcile_request(path)
+
+        assert source["deleted"] is True
+        assert delivered == 0 and not provider.writes
+        terminal = json.loads(path.read_text())["deliveries"].get("terminal", {})
+        assert not terminal.get("started") and not terminal.get("attempt")
+        assert not transport.core.read_request(path.stem).get("delivery_verified")
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("change", ["app", "revoke"])
 def test_successful_preflight_cannot_authorize_a_send_after_authority_changes(
     completed_group_stop, monkeypatch, change,  # noqa: F811
@@ -74,8 +118,8 @@ def test_successful_preflight_cannot_authorize_a_send_after_authority_changes(
     original = transport._source_authority
     proofs = []
 
-    def change_after_proof(*args):
-        proof = original(*args)
+    def change_after_proof(*args, **kwargs):
+        proof = original(*args, **kwargs)
         proofs.append(proof)
         if len(proofs) == 1:
             assert proof[0] and proof[1] is True
@@ -94,7 +138,8 @@ def test_successful_preflight_cannot_authorize_a_send_after_authority_changes(
     assert not record["deliveries"]["admission"].get("started")
 
 
-@pytest.mark.parametrize("change", ["app", "bot", "owner", "revoke", "root", "sender", "chat", "parent", "thread"])
+@pytest.mark.parametrize("change", ["app", "bot", "owner", "revoke", "root", "sender", "chat", "parent", "thread",
+    "recall", "recall-root"])
 def test_current_source_denial_never_becomes_a_send_or_receipt_intent(completed_group_stop, change):  # noqa: F811
     _, provider, transport, root, event, record = completed_group_stop
     transport._inbox(record)
@@ -111,6 +156,9 @@ def test_current_source_denial_never_becomes_a_send_or_receipt_intent(completed_
         transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
     elif change == "root":
         provider.messages[root["message_id"]]["mentions"] = []
+    elif change in {"recall", "recall-root"}:
+        recalled = root if change == "recall-root" else event
+        provider.messages[recalled["message_id"]]["deleted"] = True
     else:
         field, value = {"sender": ("sender", {"id": "ou_other", "sender_type": "user"}),
             "chat": ("chat_id", "oc_other"), "parent": ("parent_id", "om_other"),
@@ -119,7 +167,7 @@ def test_current_source_denial_never_becomes_a_send_or_receipt_intent(completed_
     assert not _deliver(transport, record)
     assert not provider.writes and not provider.reaction_creates
     assert not record["deliveries"]["admission"].get("started")
-    if change in {"root", "sender", "chat", "parent", "thread"}:
+    if change in {"root", "sender", "chat", "parent", "thread", "recall", "recall-root"}:
         # A verified App with a changed source is not an App-name mismatch.
         # Keeping that distinction also avoids an unrelated metadata refresh.
         assert record["deliveries"]["admission"]["blocker"] == "lark_inbox_reply_sender_not_in_configured_chat"
@@ -203,10 +251,10 @@ def test_completed_stop_overlaps_preview_but_joins_fresh_authority(completed_gro
     source = transport._source_authority
     runner = transport.runner
 
-    def verify(*args):
+    def verify(*args, **kwargs):
         source_entered.set()
         assert release_source.wait(5)
-        result = source(*args)
+        result = source(*args, **kwargs)
         source_done.set()
         return result
 

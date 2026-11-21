@@ -80,7 +80,7 @@ function currentOracleChecks(basis: JsonObject, effects: JsonObject[]): JsonObje
   return {oracle_checks: checks};
 }
 
-/** Fresh host check observation, not an independent-verifier or persisted receipt.
+/** Fresh host check observation.
  * Host IO brackets the actual checks; only stable declared output versions return. */
 export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "delegation binding");
@@ -151,7 +151,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   return binding.todo_id === undefined ? {...binding, todo_id: null} : binding;
 }
 
-/** An operation locator is not proof that a new selection owns its result.
+/**
  * Recover only the original source, peer work, binding and return conversation.
  * The host observes these records through the existing exact-Goal Inbox owner.
  */
@@ -236,6 +236,7 @@ export function delegationRequestDecision(params: JsonObject): JsonObject {
   cli.spend_policy = "spend once after independent request validation and durable writeback";
   const contract = requireJsonObject(packet.interaction_contract, "interaction contract");
   const agent = requireJsonObject(contract.agent_channel, "agent channel");
+  for (const key of ["selection_required", "action_portfolio_ref", "suggested_action_count"]) delete agent[key];
   const work = requireJsonObject(agent.work_context, "work context");
   if (Array.isArray(work.sources)) work.sources = work.sources.filter(raw =>
     requireJsonObject(raw, "work source").source !== "selected_todo");

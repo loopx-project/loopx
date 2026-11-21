@@ -47,13 +47,12 @@ def attach_refresh_settlement_recovery(
             runtime_root=runtime_root, goal_ref=goal_ref)
         recovery.pop("ok")
         owed = recovery.get("settlement_owed")
-        # Select the complete CLI consumer explicitly: an unprofiled guard can
-        # return legacy unbound refresh templates. Replan guards recover their
-        # obligation from the Turn receipt (that flag is spend-only on quota).
+        # Use the current complete guard with the original binding. Replan
+        # guards recover their obligation from the Turn receipt.
         command = render_host_cli_command([
             *loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root", str(runtime_root),
             "--format", "json", "quota", "should-run",
-            "--complete-turn", "--runtime-profile", "generic_cli",
+            "--runtime-profile", "generic_cli",
             "--goal-id", identity.goal_id, "--agent-id", identity.agent_id,
             "--turn-instance-id", identity.turn_instance_id,
             *(["--todo-id", identity.todo_id] if identity.todo_id else []),

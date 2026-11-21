@@ -553,8 +553,8 @@ class FirstPartyHostGoalAdmission:
         Legacy registries have no exact Goal instance identity. Their original
         byte witness can reject stale admission without promoting an alias to
         one; a changed registry requires a fresh plan. A caller with the original
-        Turn binding supplies its full current admission check. This lifecycle
-        witness alone does not certify quota/health. Hold only through dispatch.
+        Turn binding supplies its full current admission check.
+        Hold only through dispatch.
         """
         if self.source_profile:
             with self.current_lifetime(operation=operation):

@@ -39,11 +39,35 @@ test("an interrupted Task start retries only its original saved Task", () => {
   assert.equal(plan.retryOriginal, true);
   assert.equal(plan.canApply, true);
   for (const change of [{checkpoint: null}, {status: "gated"}, {failure: {retry_safe: false}},
-    {normalized_parameters: {goal_id: "report", start_execution: false}},
     {checkpoint: {steps: {todo_created: {...created, todo_id: "todo-other"}}}},
     {expected_state_fingerprint: "another-review"}, {normalized_parameters: {goal_id: "other", start_execution: true}}]) {
     assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
   }
+});
+
+test("a retained Todo confirmation can recover the original result after a source gate", () => {
+  const receipt = {schema_version: "loopx_chat_todo_receipt_v0", status: "applied", todo_id: "todo-original",
+    goal_id: "report", preview_id: "reviewed", preview_revision: "original-revision", receipt_id: "saved-receipt"};
+  const created = {todo_id: receipt.todo_id, canonical_receipt: receipt};
+  const proposal = {proposal_id: "create-task", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    permission_classification: "durable_write", normalized_parameters: {goal_id: "report", start_execution: false},
+    context: {goal_id: "report"}, checkpoint: {steps: {todo_created: created}}};
+  const sourceGate = {status: "gated", gate: {kind: "canonical_authority_required"}};
+  for (const state of [{status: "failed", failure: {retry_safe: true}}, {status: "applying"}, sourceGate]) {
+    const plan = compileActionReviewPlan({...proposal, ...state});
+    assert.equal(plan.reason, "todo_creation_retry");
+    assert.equal(plan.proposalId, "create-task");
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.prohibitRegeneration, true);
+  }
+  for (const change of [{context: {goal_id: "other"}}, {context: {binding_id: "steward-binding"}},
+    {gate: {kind: "unrelated_gate"}}, {expected_state_fingerprint: "other"},
+    {checkpoint: {steps: {todo_created: {...created, source: null}}}}]) {
+    const plan = compileActionReviewPlan({...proposal, ...sourceGate, ...change});
+    assert.equal(plan.canApply, false);
+    assert.equal(plan.prohibitRegeneration, true);
+  }
+  assert.equal(compileActionReviewPlan({...proposal, status: "stale", checkpoint: null}).prohibitRegeneration, undefined);
 });
 
 test("confirmed Task dispatch resolves only to the receipt's own execution Turn", () => {
@@ -65,6 +89,18 @@ test("confirmed Task dispatch resolves only to the receipt's own execution Turn"
     {receipt: {...receipt, canonical_receipt: {...canonical, preview_id: "another-review"}}},
   ]) {
     assert.equal(compileActionReviewPlan({...proposal, ...change}).taskExecution, undefined);
+  }
+  const pending = {...proposal, permission_classification: "durable_write", task_execution_dispatch_pending: true};
+  assert.equal(compileActionReviewPlan(pending).reason, "task_start_retry");
+  assert.equal(compileActionReviewPlan(pending).canApply, true);
+  assert.equal(compileActionReviewPlan(pending).retryOriginal, true);
+  for (const change of [
+    {task_execution_dispatch_pending: "true"},
+    {context: {binding_id: "bound-source"}},
+    {permission_classification: "protected"},
+    {receipt: {...receipt, resource_ids: {...resources, turn_id: ""}}},
+  ]) {
+    assert.equal(compileActionReviewPlan({...pending, ...change}).canApply, false);
   }
   // Older saved actions can still report creation while the Session is unknown.
   const legacy = compileActionReviewPlan({...proposal, receipt: {projection_verified: true, outcome: "todo_added"}});

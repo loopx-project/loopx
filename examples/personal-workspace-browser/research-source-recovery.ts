@@ -113,7 +113,9 @@ threading.Event().wait()
         await page.screenshot({path:resolve(output, `source-recovered-${language}-1440.png`)});
         // Recovered data must be the new source's original records, including its
         // negative findings, rather than a renamed or summarized old snapshot.
-        await page.getByRole("button", {name:zh ? "搜索研究记录" : "Search research records",exact:true}).click();
+        const searchName = zh ? "搜索研究记录" : "Search research records";
+        const searchButton = page.getByRole("button", {name:searchName,exact:true});
+        await searchButton.click();
         const records = page.locator(".research-record-search");
         const downloading = page.waitForEvent("download");
         await records.getByRole("button", {name:zh ? "下载匹配记录（JSON）" : "Download matches (JSON)",exact:true}).click();
@@ -135,6 +137,15 @@ threading.Event().wait()
           return reading !== null && JSON.parse(reading).expanded.length === 1;
         });
         const readingUrl = page.url();
+        const drawerSummary = page.locator(".research-history-all-records > summary");
+        await drawerSummary.press("Enter");
+        await records.waitFor({state:"detached"});
+        await searchButton.press("Enter");
+        await expandedRecord.waitFor();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        assert.equal(await page.getByRole("searchbox", {name:searchName,exact:true}).evaluate(
+          input => input === document.activeElement), true, "Reopening from the search button focuses the search input");
+        assert.equal(page.url(), readingUrl, "Opening search preserves the previously expanded record");
         await page.goBack();
         await page.getByRole("heading", {name:captures[0].display_name,exact:true}).waitFor();
         await coverage.filter({hasText:"33 / 33"}).waitFor();
@@ -143,6 +154,8 @@ threading.Event().wait()
         await coverage.filter({hasText:"11 / 11"}).waitFor();
         await expandedRecord.waitFor();
         assert.equal(page.url(), readingUrl, "Forward restores the saved drawer and record in their source");
+        await page.waitForFunction(() => document.activeElement?.matches(
+          ".research-history-records > li:first-child > details[open] > summary"));
 
         const empty = analysisReadback("c");
         empty.pack.result = null;

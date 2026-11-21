@@ -3,10 +3,34 @@ import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
 import {AlertTriangle, ChevronRight, RefreshCw} from "lucide-react";
 import {fetchExploreResults, readTodoRequest, type ExploreResultPage} from "../../data/chat";
+import {ENVELOPED_SHA256_PATTERN} from "../../../../../../loopx/control_plane/content_digest.js";
 import {parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {ExploreMeasurements} from "./explore-measurements";
 import {ContextHelp} from "./context-help";
 import "./goal-explore-results.css";
+
+type Finding = ExploreResultPage["items"][number];
+
+function relatedCandidateMeasurements(findings: Finding[], selected?: Finding) {
+  const current = selected?.measurement_error ? [] : selected?.measurements ?? [];
+  // Plain candidate labels identify a choice within its own measurement scope.
+  // Across evaluations, only an exact content digest identifies the artifact.
+  const candidates = new Set(current.map(row => row.candidate_ref)
+    .filter(ref => ENVELOPED_SHA256_PATTERN.test(ref)));
+  if (!candidates.size) return [];
+  const seen = new Set(current.map(row => JSON.stringify(row)));
+  return findings.flatMap(finding => {
+    if (finding === selected || finding.measurement_error) return [];
+    const measurements = (finding.measurements ?? []).filter(row => {
+      if (!candidates.has(row.candidate_ref)) return false;
+      const key = JSON.stringify(row);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return measurements.length ? [{finding, measurements}] : [];
+  });
+}
 
 function LinkedFindingTask({goalId, todo, statuses, zh, readSourceUrl}: {
   goalId: string; todo: ExploreResultPage["items"][number]["linked_todos"][number]; statuses: Record<string, string>; zh: boolean; readSourceUrl?: string;
@@ -60,6 +84,7 @@ export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active 
     return () => {current = false;};
   }, [goalId, originalGoalId, cursor, revision, active, readSourceUrl]);
   const selected = page?.items.find(item => item.finding_id === selectedId);
+  const related = relatedCandidateMeasurements(page?.items ?? [], selected);
   const sections = selected ? parseExploreFindingSections(selected.summary) : null;
   const findingCopy = exploreFindingCopy(zh);
   const statuses: Record<string, string> = zh
@@ -129,6 +154,16 @@ export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active 
             </div> : null)}</section> : null}
         </div> : <p className="explore-finding-raw">{selected.summary}</p>}
         {selected.work_yardstick ? <WorkYardstickReadback capture={selected.work_yardstick} zh={zh}/> : null}
+        {related.length ? <details className="explore-reader-details explore-related-measurements">
+          <summary>{zh ? "同一候选的其他测量（本页）" : "Other measurements of this candidate (this page)"}</summary>
+          {related.map(({finding, measurements}) => <section key={finding.finding_id}>
+            <button className="explore-related-finding-source" type="button" onClick={() => selectFinding(finding.finding_id, true)}>
+              {finding.question || finding.finding}
+            </button>
+            <span className="explore-reader-status">{statuses[finding.status] ?? finding.status} · <time dateTime={finding.last_updated_at}>{time(finding.last_updated_at)}</time></span>
+            <ExploreMeasurements measurements={measurements} zh={zh}/>
+          </section>)}
+        </details> : null}
         <details className="explore-reader-details"><summary>{zh ? "来源与范围" : "Sources and scope"}</summary>
           <dl><dt>{zh ? "记录时间" : "Recorded at"}</dt><dd><time dateTime={selected.last_updated_at}>{selected.last_updated_at}</time></dd>
             <dt>{zh ? "记录者" : "Recorded by"}</dt><dd>{selected.agent_id || "—"}</dd>

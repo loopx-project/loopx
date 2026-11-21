@@ -86,14 +86,17 @@ The usual loop is:
 issue or regression
   -> deterministic characterization
   -> focused implementation
-  -> focused tests and durable smoke
-  -> catalog-selected canary
-  -> owner review when behavior is sensitive
+  -> focused tests, durable smoke, and catalog-selected canary (`loopx canary premerge`)
+  -> Goal-bound exact-head review (`loopx pr-review --goal-id GOAL`, respecting `wait_for_ci=false` without polling remote CI)
+  -> immediate eligible self-merge or maintainer handoff
   -> release outcome observation when needed
 ```
 
-通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测与 durable smoke ->
-catalog 选择的 canary -> 敏感变更 owner review -> 必要时观察发布结果。
+通常闭环为：问题或回归 -> 确定性刻画 -> 聚焦实现 -> 单测、durable smoke 与 catalog 选择的 canary（`loopx canary premerge`）-> 绑定 Goal 的精确头评审（`loopx pr-review --goal-id GOAL`，遵守 `wait_for_ci=false`，不等待也不轮询远端 CI）-> 满足自合并资格时立即合并或交由维护者合入 -> 必要时观察发布结果。
+
+When the owning Goal sets `pull_request_review.wait_for_ci=false`, deterministic local checks plus Goal-bound exact-head review and readiness (`--registry <repo>/.loopx/registry.json --goal-id <goal>`) form the complete pre-merge gate; never wait for or poll asynchronous GitHub Actions CI before finishing review or eligible self-merge.
+
+当所属 Goal 配置了 `pull_request_review.wait_for_ci=false` 时，本地确定性验证加上显式绑定 Goal 的精确头评审与就绪检查（`--registry <repo>/.loopx/registry.json --goal-id <goal>`）即构成完整合入前门禁；不得为等待或轮询异步 GitHub Actions CI 而阻塞评审结论或符合条件的自合并。
 
 ## Engineering Scope And Refactoring
 
@@ -223,13 +226,11 @@ compliance and live effects. Existing sessions may retain an older copy.
 Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
 for root size, shared import, local routes and existing inbound anchors. Review
 a moved obligation clause by clause: owner, modality, scope, order, exceptions,
-evidence provenance, continuation and stop conditions. A link test or shorter
-file does not establish equivalence. Keep operational rules in their existing
+evidence provenance, continuation and stop conditions. Keep operational rules in their existing
 owners rather than adding another parallel policy collection.
 
 Design sources and the disposition of the earlier proposal are recorded in
 [the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).
-
 
 ### Progressive Context For Development
 
@@ -275,7 +276,7 @@ Existing sessions may retain old instructions; source edits alone do not prove
 native startup adoption or agent compliance.
 
 For product context delivery, selection, continuation and replanning have different
-information needs. A suggested `selected_todo` is not proof of an actual work choice.
+information needs.
 A qualified continuation can retain the bound work in full and make other candidates
 discoverable with exact details; a new choice must inspect what that choice needs.
 Do not implement this by filtering a full-required response in the caller. Change

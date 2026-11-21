@@ -244,3 +244,45 @@ def promoted_create_fixture(
         runtime_root, goal_id, projection, state_path=state_file, provider=provider
     )
     return registry_path, runtime_root, state_file
+
+
+def ensure_unrelated_goal_in_registry(registry_path: Path, current_goal_id: str) -> str:
+    """Add a second ordinary Goal to exercise shared-registry recovery."""
+    from loopx.control_plane.projects.registry_codec import project_registry_transaction
+
+    unrelated_goal_id = "unrelated-goal"
+    with project_registry_transaction(
+        registry_path, operation="test_add_unrelated_goal",
+    ) as transaction:
+        payload = transaction.payload_copy()
+        goals = payload.get("goals")
+        assert isinstance(goals, list)
+        if not any(goal.get("id") == unrelated_goal_id for goal in goals if isinstance(goal, dict)):
+            current = next(goal for goal in goals if isinstance(goal, dict) and goal.get("id") == current_goal_id)
+            goals.append({
+                "id": unrelated_goal_id,
+                "repo": current["repo"],
+                "state_file": current["state_file"],
+                "title": "Unrelated Goal",
+                "coordination": current.get("coordination", {}),
+            })
+        transaction.commit(payload)
+    return unrelated_goal_id
+
+
+def change_unrelated_goal_title(registry_path: Path, unrelated_goal_id: str = "unrelated-goal") -> None:
+    """Change only an unrelated Goal title to move the shared registry digest."""
+    from loopx.control_plane.projects.registry_codec import project_registry_transaction
+
+    with project_registry_transaction(
+        registry_path, operation="test_edit_unrelated_goal_title",
+    ) as transaction:
+        payload = transaction.payload_copy()
+        goals = payload.get("goals")
+        assert isinstance(goals, list)
+        unrelated = next(
+            goal for goal in goals
+            if isinstance(goal, dict) and goal.get("id") == unrelated_goal_id
+        )
+        unrelated["title"] = "Renamed Unrelated Goal"
+        transaction.commit(payload)

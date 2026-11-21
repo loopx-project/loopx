@@ -237,4 +237,12 @@ test("source provenance is exact and local bound input never borrows provider li
   const unbound = {...session, steward_context: undefined};
   assert.deepEqual(validateSourceIngress({...params, session: unbound, turn: {...turn, origin: "lark"}, ingress: legacy}), {verified: true});
   assert.throws(() => validateSourceIngress({...params, session: unbound, turn: {...turn, origin: "external"}, ingress: legacy}));
+  // Native LoopX steward advancement turns also bind to original operator ingress without borrowing provider lineage.
+  const nativeTurn = {client_turn_id: "advancement.1", origin: "native_loopx", message_digest: "digest"};
+  const nativeIngress = {...ingress, client_turn_id: "advancement.1",
+    source_id: "native_steward:steward-agent-1:advancement.1", origin: "native_loopx"};
+  assert.deepEqual(validateSourceIngress({session, turn: nativeTurn, ingress: nativeIngress}), {verified: true});
+  assert.throws(() => validateSourceIngress({session: unbound, turn: nativeTurn, ingress: nativeIngress}));
+  assert.throws(() => validateSourceIngress({session, turn: nativeTurn, ingress: {...nativeIngress, sender_id: "other"}}));
+  assert.throws(() => validateSourceIngress({session, turn: nativeTurn, ingress: {...nativeIngress, message_digest: "stale"}}));
 });

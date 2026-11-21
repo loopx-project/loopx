@@ -383,3 +383,135 @@ def test_schedule_change_cannot_strand_a_frozen_original_report(steward, tmp_pat
     result = reports.configure(binding["binding_id"], operation="enable", schedule=changed,
         execute=True, expected_plan_id=preview["plan_id"])
     assert result["applied"] and result["report"]["schedule"] == changed
+
+
+def test_monitor_report_reconciles_to_chat_root_without_periodic_subscription(steward, tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import loopx.capabilities.native_chat.steward_monitor as monitor_mod
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor, steward_monitor_delivery_dir
+    from loopx.capabilities.native_chat.steward_reports import StewardReports
+    from loopx.extensions.lark.conversation_identity import identity_ref
+    from test_native_steward_managed_mode import storage
+    from test_native_steward_monitor import edit_local_watch
+    from test_steward_generic_monitor_todo import _configure_codex_response
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _, runtime, provider, transport, binding, _, _ = steward
+    storage(runtime, "sqlite")
+
+    parent = provider.event("steward-app", "earlier-thread-parent", "Earlier threaded question")
+    event = provider.event("steward-app", "threaded-origin", "Keep steward monitor reports on chat root")
+    thread = dict(root_id=parent["message_id"], parent_id=parent["message_id"], thread_id="omt_steward")
+    event.update(thread)
+    provider.messages[event["message_id"]].update(thread)
+    transport.admit("steward-app", event)
+    row = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    assert finish(runtime, row)["status"] == "completed"
+    sid = row["session_id"]
+
+    plan = transport.managed_steward.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = transport.managed_steward.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        execute=True,
+        expected_plan_id=plan["plan_id"],
+    )["actor"]
+    transport.reconcile()
+    assert StewardReports(runtime).subscription(binding["binding_id"]) is None
+    assert not transport.steward_reports.pending()
+
+    monitor = StewardMonitor(runtime)
+    enable_plan = monitor.configure(binding["binding_id"], operation="enable")["plan"]
+    monitor.configure(binding["binding_id"], operation="enable", execute=True, expected_plan_id=enable_plan["plan_id"])
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    actions = transport.core.actions
+    preview = actions.preview({
+        "action_kind": "monitor.create",
+        "summary": "Scoped PR monitor for chat_root delivery",
+        "normalized_parameters": {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": "Report matching PRs directly to chat_root.",
+            "target_key": "steward-chat-root-pr-monitor",
+            "task_repository": "acme/widgets",
+            "cadence": "every_hour",
+            "timezone": "UTC",
+            "stop_condition": "watch_only",
+            "signal_scope": {
+                "schema_version": "steward_signal_monitor_scope_v0",
+                "include_portfolio": False,
+                "include_inbox": False,
+                "pr_filter": {"exclude_drafts": True},
+            },
+        },
+        "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+        "idempotency_key": "create-chat-root-pr-monitor",
+    })
+    created_todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
+    edit_local_watch(
+        runtime,
+        actor,
+        created_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo: {
+        "status": "ok",
+        "repository": repo,
+        "items": [{"number": 42, "title": "Ready PR", "isDraft": False, "updatedAt": "2026-11-20T00:00:00Z"}],
+    })
+    poll_turns = pump_steward_monitors(runtime)
+    assert len(poll_turns) == 1
+    assert finish(runtime, poll_turns[0])["status"] == "completed"
+
+    report_md = "## 合并候选\n- PR #42 Ready PR"
+    _configure_codex_response(runtime, sid, {
+        "result_kind": "validated_completion",
+        "classification": "steward_scoped_pr_report",
+        "summary": "Delivered aggregated report.",
+        "next_action": "Wait for next poll.",
+        "evidence": ["PR #42 ready"],
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": ["Aggregated PR #42"],
+        "validation_evidence": ["Scoped snapshot confirmed"],
+        "path_delta_mode": "unchanged",
+        "vision_unchanged_reason": "Monitor report delivery.",
+        "steward_owner_report": report_md,
+    })
+
+    runtime._steward_monitor_next_check.clear()
+    adv_turns = pump_steward_monitors(runtime)
+    assert len(adv_turns) == 1
+    adv_done = finish(runtime, adv_turns[0])
+    assert adv_done["status"] == "completed", adv_done
+    assert adv_done["response"]["steward_owner_report_queued"] is True
+
+    assert transport.steward_reports.pending() is True
+    before_writes = len(provider.writes)
+    before_topic = len(provider.topic_writes)
+    assert transport.steward_reports.reconcile() == 1
+    assert len(provider.writes) == before_writes + 1
+    assert len(provider.topic_writes) == before_topic
+    sent_message = provider.messages[f"om_out_{before_writes}"]
+    assert sent_message["chat_id"] == "oc_steward_app"
+    assert not sent_message.get("parent_id")
+    assert report_md in json.loads(sent_message["body"]["content"])["zh_cn"]["content"][0][0]["text"]
+
+    delivery_path = steward_monitor_delivery_dir(runtime.coordination_runtime_root, actor["goal_id"]) / f"{adv_turns[0]['turn_id']}.json"
+    record = json.loads(delivery_path.read_text(encoding="utf-8"))
+    assert record["delivery_status"] == "delivered"
+    assert transport.steward_reports.pending() is False
+    writes_snapshot = list(provider.writes)
+    assert LarkStewardReports(transport).reconcile() == 0
+    assert provider.writes == writes_snapshot

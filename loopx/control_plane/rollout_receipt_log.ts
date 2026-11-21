@@ -11,7 +11,7 @@ import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { requireNonEmptyString } from "./runtime_decode.ts";
+import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
 import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
@@ -32,7 +32,22 @@ export interface GoalRolloutEventSnapshot {
   readonly runtimeRoot: string;
   readonly goalId: string;
   readonly events: readonly JsonObject[];
+  /** Physical line of each event, in `events` order. */
+  readonly eventLines: readonly number[];
+  /** Intact members of damaged lines, with their line numbers. */
+  readonly malformedLines: readonly Readonly<{
+    line: number;
+    members: readonly (readonly [string, unknown])[];
+    /** Identity members the damaged line contained but could not read. */
+    unreadable: readonly string[];
+    /** A key name was lost to damage, so recovered members may be incomplete. */
+    lostKeyName: boolean;
+    /** A separator or container boundary was unknowable after damage. */
+    ambiguous: boolean;
+  }>[];
   readonly firstStrictErrorLine: number | null;
+  /** A complete final row that never received its committing newline. */
+  readonly unterminatedRecordLine: number | null;
 }
 
 /** Reject a goal id that is not one path segment, before any log read. */
@@ -81,12 +96,35 @@ export async function readGoalRolloutEventSnapshot(
   goalId: string,
 ): Promise<GoalRolloutEventSnapshot | null> {
   const snapshot = await readReceiptLogSnapshot(
-    goalRolloutEventLogPath(runtimeRoot, goalId), ROLLOUT_EVENT_SCHEMA_VERSION,
+    goalRolloutEventLogPath(runtimeRoot, goalId),
+    ROLLOUT_EVENT_SCHEMA_VERSION,
+    ADMISSION_IDENTITY_MEMBERS,
   );
   return snapshot === null ? null : {
     runtimeRoot, goalId, events: snapshot.records,
+    eventLines: snapshot.recordLines,
+    malformedLines: snapshot.malformedLines,
     firstStrictErrorLine: snapshot.firstErrorLine,
+    unterminatedRecordLine: snapshot.unterminatedRecordLine,
   };
+}
+
+/**
+ * Rows whose writer reached the committing newline.
+ *
+ * The append owner drops an unterminated final row before writing its next
+ * record.  Any read that decides whether work already happened must use this
+ * view; otherwise an interrupted write can look committed until the next
+ * unrelated append removes it.
+ */
+export function committedGoalRolloutEvents(
+  snapshot: GoalRolloutEventSnapshot | null,
+): readonly JsonObject[] {
+  if (snapshot === null) return [];
+  if (snapshot.unterminatedRecordLine === null) return snapshot.events;
+  return snapshot.events.filter((_, index) =>
+    snapshot.eventLines[index] !== snapshot.unterminatedRecordLine
+  );
 }
 
 /** Return strict settlement input, or fail on the first malformed line. */
@@ -99,7 +137,19 @@ export function strictGoalRolloutEvents(
       "malformed_settlement_state",
     );
   }
-  return snapshot?.events ?? [];
+  return committedGoalRolloutEvents(snapshot);
+}
+
+function assertGoalSnapshotScope(
+  snapshot: GoalRolloutEventSnapshot,
+  goalId: string,
+): void {
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
 }
 
 /** Qualify heartbeat receipts without discarding diagnostic quota audit rows. */
@@ -109,13 +159,19 @@ export function goalHeartbeatReceiptsFromSnapshot(
   agentId?: string | null,
 ): JsonObject[] | null {
   if (snapshot === null) return null;
-  if (snapshot.goalId !== goalId) {
-    throw new EffectRuntimeRequestError(
-      "rollout event snapshot does not belong to the requested goal",
-      "rollout_event_snapshot_scope_mismatch",
-    );
-  }
+  assertGoalSnapshotScope(snapshot, goalId);
   return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId);
+}
+
+/** Heartbeat receipts whose row reached its committing newline. */
+export function committedGoalHeartbeatReceiptsFromSnapshot(
+  snapshot: GoalRolloutEventSnapshot | null,
+  goalId: string,
+  agentId?: string | null,
+): JsonObject[] | null {
+  if (snapshot === null) return null;
+  assertGoalSnapshotScope(snapshot, goalId);
+  return heartbeatReceiptsFromEvents(committedGoalRolloutEvents(snapshot), goalId, agentId);
 }
 
 /** The heartbeat receipt filter over events a caller already read. */
@@ -134,44 +190,216 @@ export function heartbeatReceiptsFromEvents(
   );
 }
 
+/** A receipt without an exact Goal instance belongs to the legacy goal scope. */
+function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
+  if (goalRef === null) return !Object.hasOwn(event, "goal_ref");
+  const eventGoalRef = jsonObject(event.goal_ref);
+  return eventGoalRef !== null &&
+    eventGoalRef.goal_id === goalRef.goal_id &&
+    eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
+}
+
+/**
+ * One qualified receipt view for both originating and superseding reads.
+ *
+ * The originating Turn and every candidate successor must come from the same
+ * set: a heartbeat receipt with a real Turn identity in this Goal/Agent and
+ * this exact Goal instance scope. Diagnostic audit rows and rows from another
+ * Goal lifetime therefore cannot renew or retire this transaction.
+ */
+function scopedHeartbeatReceipts(
+  snapshot: GoalRolloutEventSnapshot,
+  goalId: string,
+  agentId: string,
+  goalRef: JsonObject | null,
+): JsonObject[] {
+  if (snapshot.goalId !== goalId) {
+    throw new EffectRuntimeRequestError(
+      "rollout event snapshot does not belong to the requested goal",
+      "rollout_event_snapshot_scope_mismatch",
+    );
+  }
+  return heartbeatReceiptsFromEvents(snapshot.events, goalId, agentId).filter(
+    (event) => receiptMatchesGoalRef(event, goalRef),
+  );
+}
+
+const ADMISSION_IDENTITY_MEMBERS = [
+  "schema_version",
+  "event_kind",
+  "goal_id",
+  "agent_id",
+  "run_id",
+  "goal_ref",
+] as const;
+
+/**
+ * What a finished row still proves about the Turn that superseded this receipt.
+ *
+ * The row's commit fact is its own writer's newline: the log owner withdraws
+ * every member of a row a *later* append had to terminate, so a torn prefix
+ * cannot manufacture an admission.  What remains is whether the row still
+ * carries one identity.  A duplicated identity member proves nothing, so a
+ * stray write cannot invent a successor.  A row whose display field was
+ * corrupted still proves the Turn its writer committed, and a row that is
+ * demonstrably a receipt of this scope but whose Turn bytes are unreadable
+ * proves that *some* Turn was admitted: it is not evidence for the old receipt.
+ */
+type CommittedSuccessor =
+  | { readonly kind: "superseded"; readonly runId: string }
+  | { readonly kind: "unattributed" }
+  // The row belongs to this scope but its damage left an identity unknowable.
+  // Absence of proof is not proof of absence: a caller must treat this receipt
+  // as possibly superseding rather than as unrelated.
+  | { readonly kind: "unknown" };
+
+function committedSuccessor(
+  damaged: Readonly<{
+    members: readonly (readonly [string, unknown])[];
+    unreadable: readonly string[];
+    lostKeyName: boolean;
+    ambiguous: boolean;
+  }>,
+  goalId: string,
+  agentId: string,
+  goalRef: JsonObject | null,
+): CommittedSuccessor | null {
+  // Every value the row shows for a member, not just the first.  A duplicate
+  // that names the same value as its twin says nothing new, while a duplicate
+  // that disagrees must not be allowed to erase the identity it contradicts.
+  const observed = new Map<string, unknown[]>();
+  for (const [key, value] of damaged.members) {
+    const existing = observed.get(key);
+    if (existing === undefined) observed.set(key, [value]);
+    else existing.push(value);
+  }
+  const equal = (left: unknown, right: unknown): boolean =>
+    JSON.stringify(left) === JSON.stringify(right);
+  const distinct = (key: string): unknown[] => {
+    const seen: unknown[] = [];
+    for (const value of observed.get(key) ?? []) {
+      if (!seen.some((item) => equal(item, value))) seen.push(value);
+    }
+    return seen;
+  };
+  const confirms = (key: string, expected: unknown): boolean =>
+    distinct(key).includes(expected);
+  const goalRefMatches = (value: unknown): boolean => {
+    if (goalRef === null) return false;
+    const eventGoalRef = jsonObject(value);
+    return eventGoalRef !== null &&
+      eventGoalRef.goal_id === goalRef.goal_id &&
+      eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
+  };
+
+  const unreadableScope = new Set(
+    damaged.unreadable.filter(
+      (key) => (ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key),
+    ),
+  );
+  // A foreign value only proves the row is unrelated when every copy of that
+  // member is readable: the same member may be duplicated, and a damaged copy
+  // that could have named this scope leaves the row unreadable rather than
+  // unrelated.  Every member must be examined before uncertainty is reported:
+  // a readable foreign Agent identity proves the row unrelated even when some
+  // other member is damaged, while uncertainty stays local to its own member.
+  const foreign = new Set<string>();
+  const noteForeign = (key: string, matches: boolean): void => {
+    if (!observed.has(key) || matches) return;
+    if (!unreadableScope.has(key)) foreign.add(key);
+  };
+  noteForeign("schema_version",
+    confirms("schema_version", ROLLOUT_EVENT_SCHEMA_VERSION));
+  noteForeign("event_kind", confirms("event_kind", HEARTBEAT_RECEIPT_EVENT_KIND));
+  noteForeign("goal_id", confirms("goal_id", goalId));
+  noteForeign("agent_id", confirms("agent_id", agentId));
+  noteForeign("goal_ref", goalRef === null
+    ? false
+    : (observed.get("goal_ref") ?? []).some(goalRefMatches));
+  // One conclusively foreign member settles the row; damage in a different
+  // member cannot pull an unrelated diagnostic back into this transaction.
+  if (foreign.size > 0) return null;
+
+  // Scope members whose bytes could not be read keep the row inside this
+  // transaction without proving which Turn admitted it.
+  for (const key of damaged.unreadable) {
+    if (!(ADMISSION_IDENTITY_MEMBERS as readonly string[]).includes(key)) continue;
+    if (key !== "run_id") return { kind: "unknown" };
+  }
+  const identityUncertain = damaged.lostKeyName || damaged.ambiguous;
+  const scopeKeys = goalRef === null
+    ? ["schema_version", "event_kind", "goal_id", "agent_id"]
+    : ["schema_version", "event_kind", "goal_id", "agent_id", "goal_ref"];
+  if (scopeKeys.some((key) => distinct(key).length === 0)) {
+    // Without damage such a row simply is not one of this scope's receipts.
+    // Damage can have hidden the member behind a key name or separator it
+    // could not read, so the row is unreadable instead of unrelated.
+    return identityUncertain ? { kind: "unknown" } : null;
+  }
+  // The row proves it is one of this scope's heartbeat receipts.  A duplicate
+  // scope member that names two different values cannot be resolved, and the
+  // same row with only one of them written would still be a successor.
+  if (scopeKeys.some((key) => distinct(key).length > 1)) {
+    return { kind: "unknown" };
+  }
+  // Only then does an unknown Turn mean "somebody else's turn superseded mine".
+  if (damaged.ambiguous) return { kind: "unknown" };
+  const turnValues = distinct("run_id");
+  if (turnValues.length > 1) return { kind: "unattributed" };
+  if (damaged.unreadable.includes("run_id")) return { kind: "unattributed" };
+  const runId = turnValues[0];
+  if (typeof runId === "string" && runId.trim().length > 0) {
+    return { kind: "superseded", runId };
+  }
+  // Nothing names a Turn here.  A lost key name could have been that Turn, so
+  // only a row whose key names all survived may be read as a diagnostic.
+  return damaged.lostKeyName ? { kind: "unknown" } : null;
+}
+
 export async function heartbeatReceiptStatus(params: {
   runtimeRoot: string;
   goalId: string;
   agentId: string;
   turnInstanceId: string;
+  goalRef?: JsonObject | null;
 }): Promise<HeartbeatReceiptStatus> {
+  const goalRef = params.goalRef ?? null;
   const snapshot = await readGoalRolloutEventSnapshot(
     params.runtimeRoot,
     params.goalId,
   );
-  const receipts = goalHeartbeatReceiptsFromSnapshot(
+  if (snapshot === null) return "missing";
+  const receipts = scopedHeartbeatReceipts(
     snapshot,
     params.goalId,
     params.agentId,
+    goalRef,
   );
-  if (snapshot === null || receipts === null) return "missing";
-  const firstReceipt = receipts.find(
-    (event) => event.run_id === params.turnInstanceId,
+  // An unterminated final row never committed; the next append drops those
+  // bytes, so it can neither be this Turn's receipt nor supersede it.
+  const receiptLines = snapshot.events
+    .map((event, index) => ({ event, line: snapshot.eventLines[index] }))
+    .filter(({ line }) => line !== snapshot.unterminatedRecordLine)
+    .filter(({ event }) => receipts.includes(event));
+  const firstIndex = receiptLines.findIndex(
+    ({ event }) => event.run_id === params.turnInstanceId,
   );
-  const firstMatch = firstReceipt === undefined
-    ? -1
-    : snapshot.events.indexOf(firstReceipt);
-  if (firstMatch < 0) return "missing";
-  return snapshot.events.slice(firstMatch + 1).some((event) => {
-    if (
-      event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
-      event.goal_id !== params.goalId ||
-      event.agent_id !== params.agentId
-    ) return false;
-    if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
-      return event.run_id !== params.turnInstanceId;
+  if (firstIndex < 0) return "missing";
+  const originatingLine = receiptLines[firstIndex].line;
+  const laterReceipt = receiptLines.slice(firstIndex + 1).some(
+    ({ event }) => event.run_id !== params.turnInstanceId,
+  );
+  const laterAdmission = snapshot.malformedLines.some((damaged) => {
+    if (damaged.line <= originatingLine) return false;
+    const admitted = committedSuccessor(
+      damaged, params.goalId, params.agentId, goalRef,
+    );
+    if (admitted === null) return false;
+    if (admitted.kind === "superseded") {
+      return admitted.runId !== params.turnInstanceId;
     }
-    const details = event.details;
-    return event.status === "normal_run" &&
-      typeof details === "object" && details !== null && !Array.isArray(details) &&
-      (details as JsonObject).ok === true &&
-      (details as JsonObject).should_run === true;
-  })
-    ? "stale"
-    : "fresh";
+    // An unreadable admission of this scope still retires the old Turn.
+    return true;
+  });
+  return laterReceipt || laterAdmission ? "stale" : "fresh";
 }

@@ -246,6 +246,10 @@ def register_manager_inbox(subparsers, add_format):
                         help="For report: explicit relative file in the registered Goal workspace; bound-owner App only, at most four files.")
     parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
     parser.add_argument("--result-key", help="For acknowledge-return: the exact peer result read; defaults to the initial conclusion.")
+    parser.add_argument("--read-token", help="For acknowledge-return: the read_token supplied with the peer result, if present.")
+    parser.add_argument("--turn-instance-id", help="For acknowledge-return: identify the work Turn that already received the peer result.")
+    parser.add_argument("--disposition", choices=("accepted", "deferred", "rejected"),
+                        help="For acknowledge-return: whether this Turn used, deferred, or rejected the peer result.")
     parser.add_argument("--related-todo-id", action="append", default=[])
     parser.add_argument("--evidence-id", action="append", default=[])
     parser.add_argument("--offset", type=int, default=0)
@@ -340,6 +344,12 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             raise ValueError("--attachment-ref is only supported for report")
         if getattr(args, "result_key", None) is not None and args.manager_inbox_action != "acknowledge-return":
             raise ValueError("--result-key is only supported for acknowledge-return")
+        if getattr(args, "read_token", None) is not None and args.manager_inbox_action != "acknowledge-return":
+            raise ValueError("--read-token is only supported for acknowledge-return")
+        if getattr(args, "turn_instance_id", None) is not None and args.manager_inbox_action not in {"read", "acknowledge-return"}:
+            raise ValueError("--turn-instance-id is only supported for read/acknowledge-return")
+        if getattr(args, "disposition", None) is not None and args.manager_inbox_action != "acknowledge-return":
+            raise ValueError("--disposition is only supported for acknowledge-return")
         cursor = getattr(args, "cursor", None)
         operation_cursor = getattr(args, "operation_cursor", None)
         if cursor is not None and args.manager_inbox_action != "read":
@@ -440,6 +450,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 }
         elif args.manager_inbox_action == "acknowledge-return":
             from ..control_plane.collaboration.peers import consume_return
+            if not args.turn_instance_id or not args.disposition:
+                raise ValueError("acknowledge-return requires --turn-instance-id and --disposition")
             result = consume_return(
                 runtime_root,
                 args.goal_id,
@@ -447,10 +459,14 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 args.request_id,
                 registry=registry_path,
                 result_key=getattr(args, "result_key", None) or "conclusion",
+                turn_instance_id=args.turn_instance_id,
+                disposition=args.disposition,
+                read_token=getattr(args, "read_token", None),
             )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
             request_id = getattr(args, "request_id", None)
+            # Only the invocation-bound host reader can record Turn delivery.
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,
                                 request_id=request_id)

@@ -2,7 +2,7 @@ import type {ExploreHistoryEvent, ExploreHistoryNode} from "../../../../../../lo
 import type {ExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.ts";
 
 /** The history reader supplies its already qualified, current-language projection.
- * This search neither validates a translation nor borrows another snapshot. */
+ *  */
 export type ResearchRecordDisplay = {
   events?: ReadonlyMap<string, ExploreHistoryEvent>;
   sections?: ReadonlyMap<string, ExploreFindingSections | null>;

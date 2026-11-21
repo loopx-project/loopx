@@ -54,7 +54,6 @@ counts as execution or evidence coverage.
 
 Connector registry 仅拥有库存与遥测。即使 connector 标为 `supported`，在当前
 provider 生命周期读回证明 installed/enabled/ready 之前仍投影为 `ready=false`。
-注册不等于调用，更不等于证据覆盖。
 
 ## CLI / 命令行
 
@@ -65,7 +64,7 @@ and non-object roots are reported separately in JSON and default Markdown output
 so callers can correct the input.
 
 `external-evidence` 的 `--*-json` 参数接收**文件路径**，不接收 inline JSON。
-provider inventory 文件的根对象须包含 `providers` 数组，不是裸数组。
+provider inventory 文件的根对象须包含 `providers` 数组。
 JSON 与默认 Markdown 输出分别报告文件读取、JSON 解析和根对象类型错误，
 便于调用者修正输入。
 
@@ -182,7 +181,7 @@ setup and execution remain with the upstream tool and host adapter.
    lineage coverage and retirement readiness before declaring the slice used.
 
 实际 probe 后才能填 ready inventory；先生成 plan，再调用选中的宿主工具。上述 JSON
-是 caller 回执，不是执行认证。逐来源记录原始 URL、同源关系、依据、真实日期、读取
+是 caller 回执。逐来源记录原始 URL、同源关系、依据、真实日期、读取
 内容 digest 与局限；用 `receipt` 验证，再独立采纳/拒绝。持久化沿用既有 deepresearch
 账本，研究问题必须与 plan objective 完全一致；实际读回覆盖后才可退休。
 
@@ -216,14 +215,12 @@ X merely because a research plan exists.
 Reuse the optional [Ego source reader's `search_x`](../../../docs/integrations/ego-source-reader.md#x-search-and-original-post-discovery)
 when that tool is available. Otherwise use the installed `ego-browser` CLI under
 its current skill: open the platform search UI, wait for actual results, retain
-original post links and inspect relevant media. Web-search snippets and a search
-URL alone are not evidence that an Ego/X search ran. Preserve the existing
+original post links and inspect relevant media. Preserve the existing
 TaskSpace and account boundary; do not copy cookies, install a browser, change
 profiles or take over user control to complete a search.
 
 优先复用已启用 Ego reader 的 `search_x`；没有该工具时，按当前 Ego skill 使用已安装
-CLI 打开平台搜索、等待真实结果、保留原帖链接并检查相关媒体。网页搜索摘要或仅有
-搜索 URL 不证明已通过 Ego 搜索 X。沿用现有 TaskSpace 和账户边界，不复制 cookie、
+CLI 打开平台搜索、等待真实结果、保留原帖链接并检查相关媒体。沿用现有 TaskSpace 和账户边界，不复制 cookie、
 安装浏览器、更换 profile 或接管用户控制。
 
 After a bounded real readiness probe, represent this observed host tool as a
@@ -260,13 +257,12 @@ bounded read; receipt `completed_at` is recorded after all attempted reads,
 including failures. Neither timestamp establishes publication or first availability.
 
 每条成功来源的 `accessed_at` 在有界读取后记录 UTC 观察时间；回执的
-`completed_at` 在全部读取尝试（包括失败）结束后记录。两者均不证明发布或首次可得时间。
+`completed_at` 在全部读取尝试（包括失败）结束后记录。
 
 Failure limitations identify the reached step: public repository visibility,
 source file read, or source text validation. HTTP status codes remain visible;
 exception messages, response bodies and transport reasons remain redacted.
-The step is diagnostic context, not proof of a timeout, missing permission or
-source unavailability beyond this attempt. Partial successful reads are retained.
+The step is diagnostic context. Partial successful reads are retained.
 
 失败局限会标明实际到达的步骤：仓库公开性核验、来源文件读取或文本验证。保留 HTTP
 状态码，不暴露异常正文、响应内容或传输原因；步骤只辅助诊断，不能据此推断超时、
@@ -300,8 +296,7 @@ sources and exhausted source budgets remain blockers; partial projection stays
 retained until every admitted source is actually read back with matching lineage.
 Omit `--execute` for read-only projection; omit `--public-github` to avoid the
 provider readiness probe. There is no persistent provider enablement to uninstall.
-Original sources remain available on partial, empty and failed results. Literal
-matches prove neither semantic conclusions nor evidence completeness.
+Original sources remain available on partial, empty and failed results.
 
 `execute --execute` 只授权读取来源；`readback --execute` 只把已明确采纳的紧凑证据
 写入现有研究账本，且要求研究问题与 plan objective 相同。同一 admission 可幂等重试；

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { JsonObject } from "../runtime_decode.ts";
 import { jsonObject, requireJsonObject, requireNonEmptyString, requireBoolean, requireStringArray } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { projectCadenceSchedule } from "../quota/automation_cadence.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { schedulerQuotaContext, SCHEDULER_QUOTA_IDENTITY_KEYS as BASE_KEYS } from "../quota/turn_envelope.ts";
@@ -10,7 +9,7 @@ import { rruleForMinutes, schedulerRruleIntervalMinutes,
   APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY } from "./state_store.ts";
 import { evaluateSchedulerStateTransition, SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
   type SchedulerBackoffTransitionResult, type SchedulerSettledReplayResult } from "./state_transition_rules.ts";
-import { schedulerAckHint, schedulerFailureHint, schedulerFallbackHint, legacySchedulerAckHint, legacySchedulerFailureHint } from "./hint_followup.ts";
+import { schedulerAckHint, schedulerFailureHint, schedulerFallbackHint } from "./hint_followup.ts";
 import { applyHintExecutionContext, goalRuntimeContinuation } from "./hint_execution.ts";
 import { boundedMonitorProfile, hintFrontier, hintPendingRetry, hintTimestamp, type HintProfile } from "./hint_wait.ts";
 
@@ -81,6 +80,7 @@ function profileJson(raw: unknown): string {
 }
 
 function legacyProfile(profile: JsonObject): JsonObject {
+  // Keep persisted reset tokens stable as the output vocabulary changes.
   return Object.fromEntries(Object.entries(profile).map(([key, entry]) => [
     key.startsWith("app_automation_") ? key.replace("app_automation_", "codex_app_") : key, entry]));
 }
@@ -199,7 +199,7 @@ function hostFacts(request: JsonObject, profile: HintProfile, decision: Schedule
     apply_needed: decision.host_transition === "apply_required"};
 }
 
-function attachAppFollowups(app: JsonObject, request: JsonObject, facts: JsonObject | null, projection: {ack: typeof schedulerAckHint; failure: typeof schedulerFailureHint}): void {
+function attachAppFollowups(app: JsonObject, request: JsonObject, facts: JsonObject | null): void {
   const payload = request.payload as JsonObject, backoff = app.stateful_backoff as JsonObject;
   const agent = jsonObject(payload.agent_identity)?.agent_id;
   if (!payload.goal_id || !agent) return;
@@ -208,13 +208,13 @@ function attachAppFollowups(app: JsonObject, request: JsonObject, facts: JsonObj
   const observed = request.effective_host_rrule;
   if (backoff.apply_needed) {
     app.recommended_rrule = backoff.current_rrule;
-    app.failure_hint = projection.failure({...scope, failed_rrule: backoff.current_rrule, observed_host_rrule: observed,
+    app.failure_hint = schedulerFailureHint({...scope, failed_rrule: backoff.current_rrule, observed_host_rrule: observed,
       scheduler_host_facts: facts ? {...facts, operation: "host_failure", applied_rrule: observed, observed_host_rrule: observed,
         failure_kind: "host_tool_failure", source: "quota_scheduler_host_update_failure", host_match_observed: false} : null});
     if (scope.surface === "codex_app" && !app.execution_interval_policy)
       app.fallback_hint = schedulerFallbackHint({...scope, automation_id: request.automation_id});
   }
-  if (backoff.ack_needed) app.ack_hint = projection.ack({...scope, applied_rrule: backoff.current_rrule,
+  if (backoff.ack_needed) app.ack_hint = schedulerAckHint({...scope, applied_rrule: backoff.current_rrule,
     reset_token: backoff.reset_token, identity_signature: backoff.identity_signature, host_match_observed: true,
     after: backoff.apply_needed ? app.execution_interval_policy ? "automation_update_then_readback_actual_rrule" : "automation_update_rrule_success" : "matching_host_rrule_observed",
     scheduler_host_facts: facts ? {...facts, operation: "ack", applied_rrule: backoff.current_rrule,
@@ -259,19 +259,18 @@ function buildCadenceHint(request: CompleteHintRequest, selected: HintProfile): 
   const facts = hostFacts(request, profile, decision, {surface, state_key: stateKey, reset_token: identity.reset_token,
     identity_signature: identity.identity_signature, progression_minutes: cadence.app});
   const withObservation = {...request, effective_host_rrule: decision.effective_host_rrule};
-  attachAppFollowups(app, withObservation, facts, {ack: schedulerAckHint, failure: schedulerFailureHint});
-  return completeCadenceProjection(request, profile, {cadence, identity, decision, app, facts, withObservation});
+  attachAppFollowups(app, withObservation, facts);
+  return completeCadenceProjection(request, profile, {cadence, identity, decision, app});
 }
 
 interface CadenceObservation {
   cadence: Cadence; identity: HintIdentity; decision: SchedulerBackoffTransitionResult;
-  app: JsonObject; facts: JsonObject | null; withObservation: JsonObject;
+  app: JsonObject;
 }
 
 function completeCadenceProjection(request: CompleteHintRequest, profile: HintProfile, observation: CadenceObservation): JsonObject {
-  const {cadence, identity, decision, app, facts, withObservation} = observation;
+  const {cadence, identity, decision, app} = observation;
   const payload = request.payload, context = request.context;
-  const surface = context.app_automation_applicability === "applicable" || context.codex_app_applicability === "applicable" ? context.host_surface : "codex_app";
   const replan = finalReplan(profile), loops = loopDetails(profile, cadence, replan), keys = identityKeys(profile.cadence_class, context);
   const limits: JsonObject = {local_scheduler: profile.cli_limit, codex_cli_tui: profile.cli_limit, claude_code_loop: profile.claude_limit};
   const after: JsonObject = Object.fromEntries(["local_scheduler", "codex_cli_tui", "claude_code_loop"].map(key => [key, (loops[key] as JsonObject).after_limit]));
@@ -288,14 +287,6 @@ function completeCadenceProjection(request: CompleteHintRequest, profile: HintPr
       hot_path_runtime_fields: ["app_automation", "unchanged_poll", "reset_policy"], contains}};
   const retry = hintPendingRetry(payload);
   if (retry) hint.pending_retry = retry;
-  if (surface === "codex_app") {
-    const legacy = structuredClone(app), legacyBackoff = legacy.stateful_backoff as JsonObject;
-    legacy.applicability = "applicable";
-    legacy.rrule_source = legacy.recommended_rrule ? "scheduler_hint.codex_app.recommended_rrule" : null;
-    legacyBackoff.schema_version = "codex_app_stateful_backoff_v0";
-    attachAppFollowups(legacy, withObservation, facts, {ack: legacySchedulerAckHint, failure: legacySchedulerFailureHint});
-    hint.codex_app = legacy;
-  }
   const cooldown = notificationCooldown(profile, decision, request);
   if (cooldown) hint.user_gate_notification_cooldown = cooldown;
   const frontier = hintFrontier(request);
@@ -413,7 +404,7 @@ function invalidContextHint(context: JsonObject): JsonObject {
     unchanged_poll: {local_scheduler: "stop_until_context_repaired", codex_cli_tui: "stop_until_context_repaired",
       [SSH]: "stop_until_context_repaired", claude_code_loop: "stop_until_context_repaired", final_quota_replan_check_enabled: false, spend_policy: spend},
     consistency_error: {source: "scheduler_execution_context", errors: context.errors},
-    [["trae_app", "antigravity_app"].includes(stripPythonWhitespace(String(context.host_surface ?? ""))) ? "app_automation" : "codex_app"]: {
+    app_automation: {
       applicability: "blocked_invalid_context", apply: "none", host_action: "none", ack_required: false}};
 }
 
@@ -514,9 +505,7 @@ export function projectSchedulerHint(raw: JsonObject): JsonObject {
   switch (operation) {
     case "hint": hint = completeHint(requireHintFacts(request)); break;
     case "ack": hint = schedulerAckHint(request); break;
-    case "legacy_ack": hint = legacySchedulerAckHint(request); break;
     case "failure": hint = schedulerFailureHint(request); break;
-    case "legacy_failure": hint = legacySchedulerFailureHint(request); break;
     case "fallback": hint = schedulerFallbackHint(request); break;
     case "continuation": hint = goalRuntimeContinuation(requireJsonObject(request.hint, "scheduler hint"), request.frontier_recheck_after_seconds); break;
     default: throw new EffectRuntimeRequestError(`unsupported scheduler hint operation: ${operation}`);

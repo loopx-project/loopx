@@ -66,6 +66,7 @@ def check_remote_authority_gateway_status(
             env={key: os.environ[key] for key in ("PATH", "SystemRoot", "WINDIR", "TMPDIR", "TEMP")
                  if key in os.environ},
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=True,
             timeout=5,

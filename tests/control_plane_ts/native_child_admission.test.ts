@@ -199,14 +199,14 @@ test("same-binding reentry appends only explicit work qualification and preserve
       pending_action_selection: {todo_id: todoId}, closeout_required: false,
     }};
     await writeFile(log, JSON.stringify(original) + "\n");
-    const current = {...event.details, semantic_replan_obligation_id: "",
+    const current = {...event.details, semantic_replan_obligation_id: "", quota_spend_source: "visible-goal",
       delivery_workspace_causality: {requirement: "not_required"}, ignored_caller_fact: true};
     const readback = await readQuotaSettlement({...request, heartbeat_reentry_guard: current});
     assert.equal(readback.native_child_admission.report_permission, "not_admitted");
     const qualification = readback.heartbeat_reentry_qualification;
     assert.equal(qualification.append, true);
     assert.deepEqual(qualification.details, {...original.details, ...proof,
-      closeout_required: true, settlement_receipt_revision: "work_admission"});
+      closeout_required: true, settlement_receipt_revision: "work_admission", quota_spend_source: "visible-goal"});
     // A readback cannot commit or grant work by itself.
     assert.equal((await readQuotaSettlement(request)).native_child_admission.report_permission, "not_admitted");
     const corrected = {...original, event_id: "event-qualified", status: "normal_run",
@@ -259,18 +259,50 @@ test("a retained binding cannot replace fresh same-Todo executable selection", a
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("one prepared Turn admits only renewal of its original lease generation", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const originalDetails = {...event.details, prepared_lease_key_sha256: "a".repeat(64),
+      prepared_lease_version: 3, prepared_lease_epoch: 2};
+    const original = {...event, details: originalDetails};
+    const renewal = {...originalDetails, prepared_lease_version: 4};
+    assert.deepEqual(heartbeatWorkRequalification(original, renewal, identity, "open", false), {
+      append: true,
+      details: {...renewal, settlement_receipt_revision: "lease_readiness"},
+    });
+    for (const changed of [
+      {prepared_lease_epoch: 3},
+      {prepared_lease_key_sha256: "b".repeat(64)},
+      {prepared_lease_epoch: undefined},
+    ]) {
+      const replacement = Object.fromEntries(Object.entries({...renewal, ...changed})
+        .filter(([, value]) => value !== undefined));
+      assert.throws(() => heartbeatWorkRequalification(original, replacement, identity, "open", false),
+        /original task lease generation/);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "settlement_pending", false).append, false);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "open", true).append, false);
+    }
+    const {prepared_lease_epoch: _, ...historicalDetails} = originalDetails;
+    const historical = {...event, details: historicalDetails};
+    assert.equal(heartbeatWorkRequalification(historical, historicalDetails, identity, "open", false).append, false);
+    assert.throws(() => heartbeatWorkRequalification(historical, renewal, identity, "open", false),
+      /original task lease generation/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("work requalification fails closed on binding and semantic guard conflicts", async () => {
   const {root, identity, event} = await fixture();
   try {
     const original = {...event, details: {...event.details, delivery_allowed: false,
-      semantic_replan_obligation_id: "replan-0000000000000001"}};
+      semantic_replan_obligation_id: "replan-0000000000000001", quota_spend_source: "visible-goal"}};
     for (const changed of [
       {todo_id: "todo_other_validation"}, {settlement_effect_id: "different-effect"},
       {replan_obligation_id: "replan-0000000000000002"},
       {semantic_replan_obligation_id: "replan-0000000000000002"},
+      {quota_spend_source: "heartbeat"}, {quota_spend_source: "unexpected"},
     ]) {
       assert.throws(() => heartbeatWorkRequalification(original, {...event.details, ...changed},
-        identity, "open", false), /binding|guard|conflicting/);
+        identity, "open", false), /binding|guard|conflicting|spend source/);
     }
   } finally {await rm(root, {recursive: true, force: true});}
 });

@@ -49,10 +49,9 @@ export function scopeWorkspaceDirectory(
 
 /**
  * Snapshots a same-source read may keep visible while it reconciles.
- *
  * A directory entry is the cheap authoritative signal for "this Goal's
- * lifecycle did not move here". It does not establish Todo freshness: a full
- * refresh still re-reads retained Goals. A partial retry or known action may
+ * lifecycle did not move here".
+ *  A partial retry or known action may
  * skip unaffected peers. Touched Goals and entries that moved or left the
  * directory lose their snapshot.
  */

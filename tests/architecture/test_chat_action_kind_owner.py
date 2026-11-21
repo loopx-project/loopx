@@ -36,6 +36,7 @@ KIND_VALUE = frozenset(
         "monitor.create",
         "monitor.update",
         "operation.execute",
+        "pr.merge",
         "run.correct",
         "team.plan",
         "todo.create",

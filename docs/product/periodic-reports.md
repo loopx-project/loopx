@@ -4,7 +4,7 @@ Status: source-bound identity preparation, opt-in status monitoring, the
 original steward's periodic full-body reports and explicitly configured local
 Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
-readback evidence. Preparing an identity enables neither monitoring nor reports.
+readback evidence.
 
 Changing a previously prepared private steward to an executor without native
 scheduled-work support keeps its original configuration readable in connection
@@ -34,8 +34,7 @@ original Session. When Core has retained a private Antigravity steward on its
 qualified, flexible Codex fallback, the existing monitor and report controls
 remain usable. Bound input, recovery and native consent share the same executor
 match; the settings API observes that Core decision instead of rejecting the
-configured preference. This neither switches hosts nor enables native scheduled
-work on Antigravity. A preference alone, an unallocated historical thread or a
+configured preference. A preference alone, an unallocated historical thread or a
 pinned policy does not qualify the fallback. Original source, grant, actor,
 idle-queue and report-window checks still apply on every operation.
 
@@ -67,8 +66,7 @@ the original Turn's path evidence, alongside their digest identities. New
 private portfolio inputs bind those references to the same frozen source and
 make them available to the report author as **recorded, unverified** citations.
 Local paths, credential-bearing and malformed reference values remain withheld;
-the source reader never fetches a URL. A recorded address proves neither public
-access nor permission to publish to a different audience. The original scope,
+the source reader never fetches a URL. The original scope,
 source gaps and unread-artifact status remain authoritative; an opaque digest
 does not supply a missing URL. Existing v1 frozen inputs retain their original
 fact set and bytes. New ordinary managed Session inputs use the same frozen
@@ -98,7 +96,7 @@ and reports retain their original requirements and bytes.
 The public browser fixture also keeps the original private outbound owner
 running through its periodic source-history check. Its shared synthetic
 provider returns the stored messages with source-bound pagination and time
-windows; it does not replace history with an empty successful response.
+windows.
 The observation includes worker liveness, history-page count and ingress
 coverage so a background exception cannot be mistaken for a completed journey.
 File and SQLite regressions retain all 55 synthetic uncaptured sources without
@@ -296,8 +294,7 @@ automatic business replay or separate activation scheduler. The combined App
 upgrade also stops before restarting the App when this service switch is pending.
 
 Keep the steward's existing portfolio-read authority separate from its execution
-actor. Resolve both through their native owners on every admission. Registering
-the actor does not grant new project writes or broaden the original audience.
+actor. Resolve both through their native owners on every admission.
 Keep ordinary project assistants unchanged.
 
 ### Identity preparation available now
@@ -336,25 +333,29 @@ operation. Monitoring requires the separate explicit setting below.
 
 ### Native status monitoring
 
-If the host restarts before a native watch observes anything, the original
-idle pump can create one separately correlated Chat continuation. It preserves
-the failed request and uses the same native observation identity and deadline.
-For a bound steward, this also covers a portfolio read explicitly refused
-because its authorization snapshot changed. The exact original failure and a
-single empty `external_authorization_changed` context must both be present.
-An App identity read that fails before context publication can also qualify,
-but only with its exact original error, one recorded `manager_context` phase,
-no published context and the independent no-effect checks below. The current
-provider must verify successfully before acceptance; a matching error alone,
-other runtime errors or missing, conflicting or unreadable evidence do not qualify.
+If the host restarts before a native watch observes anything, the existing
+idle pump can create a Chat Turn linked to the stopped attempt. A later
+continuation can proceed from the latest failed Turn when another proven host
+restart occurs before observation. Each continuation retains the previous
+failed Turns, native observation identity and deadline. Admission checks each
+attempt independently.
+
+For a bound steward, the first continuation can also recover a portfolio read
+explicitly refused because its authorization snapshot changed. The exact
+original failure and a single empty `external_authorization_changed` context
+must both be present. An App identity read can qualify for the first
+continuation with its exact original error, one recorded `manager_context`
+phase, no published context and the independent no-effect checks below. The
+current provider must verify successfully before acceptance.
+
 The shared typed admission requires an untouched observation-only request, an
-available original worker lock, complete event/history reads and no pending or
-committed native poll receipt. It rechecks current authority, lease generation
-and user work; it never starts a model, repeats business or spends execution
-quota. Unknown effects, unreadable history, an active old worker, revoked or
-paused watches and another failed continuation remain held for reconciliation.
-This bounded recovery applies to both local managed Sessions and the prepared
-steward through the existing host, without another scheduler or consumer.
+available original worker lock, complete event and history reads, and no
+pending or committed native poll receipt. It rechecks current authority, lease
+generation and queued user work. This recovery is observation-only and uses
+zero execution quota. Unknown effects, unreadable history, an active old
+worker, revoked or paused watches and all other continuation failures remain
+held for reconciliation. The existing host applies these rules to both local
+managed Sessions and the prepared steward.
 
 After preparation, choose **Enable monitoring** in the same connection panel.
 The native continuous-monitor Todo owns enable/pause, the 30–1440 minute cadence,
@@ -548,10 +549,11 @@ Chat Turn and task lease. It does not select a continuous monitor as a heartbeat
 advancement task, so open executable work does not prevent a due observation.
 Fresh source, user-gate, capability, deadline and lease checks still apply; the
 poll keeps its stable Turn identity and does not invoke a model or spend a slot.
-The earlier adapter's exact pre-poll selection rejection can receive one
-separately correlated attempt only when its failed Turn has no native start,
-answer, delta or poll event. The original failure remains; unknown failures,
-interruptions and a failed recovery do not trigger a retry loop.
+The earlier adapter's exact pre-poll selection rejection qualifies for a single
+correlated attempt when its failed Turn has no native start, answer, delta or
+poll event. The original failure remains in history. The
+[native status monitoring rules](#native-status-monitoring) govern recovery
+after a proven restart before observation.
 
 ## Daily portfolio report
 
@@ -593,8 +595,7 @@ the owner can enable or update detailed reports, select daily/weekly frequency,
 local time, timezone and first report date, or pause/cancel. The existing calendar
 field is reused. A source-bound preview and exact-plan apply configure the
 existing `periodic_report` Goal setting with the `portfolio-progress` preset;
-the destination is derived from the original private binding. Neither the
-browser nor the model can supply another Goal, App or recipient. The generic
+the destination is derived from the original private binding. The generic
 single-Goal report consumer cannot consume this private portfolio preset.
 This preset requires a calendar; its switch cannot select the generic
 stage-boundary reporting mode. Pause or cancel through the report actions.
@@ -619,8 +620,7 @@ Portfolio evidence collection finishes before the governed driver captures its
 launch authority. A long read can then observe legitimate registry rewrites
 without immediately invalidating an earlier launch witness. The original
 source and execution lease are checked after collection and again at dispatch;
-authority changes after plan capture still reject the launch. This ordering
-does not authorize replay of a historical attempt with unknown host effects.
+authority changes after plan capture still reject the launch.
 
 The original pump can resume one retained report after the first-party launch
 owner's exact `stale_goal_authority` refusal. That owner rejects before publishing
@@ -757,8 +757,7 @@ not production-message or real-phone proof.
 
 A managed conversation must belong to the selected registered **Agent**, with
 its own original Session, execution state and return path. In the Goal's Agent
-view, managed and attached conversations are parallel sources; a Goal-wide
-Codex chat with an extra Agent selector does not establish that binding.
+view, managed and attached conversations are parallel sources.
 The experimental **Advance LoopX tasks** control has therefore been withdrawn
 from ordinary Goal Chat. The existing general conversation, native Goal mode
 and original attached conversation entry retain their current owners.
@@ -1019,8 +1018,7 @@ data, while the original live authorization check still wins over the cache.
 Another Turn or a lost snapshot cannot resume at an old offset. An inventory
 change, source revision conflict, outage, invalid/oversized row or read budget
 limit remains an explicit coverage gap. Other readable Goals continue. Current
-task and handoff state is observed at collection time; it is not an as-of-window
-reconstruction or proof of a newly completed business outcome.
+task and handoff state is observed at collection time.
 
 The provider's `manager_portfolio_report_source_adapter` composes with the
 existing `PeriodicReportAdapterRegistry` using that authorized reader. Its
@@ -1042,8 +1040,7 @@ again from the unchanged frozen source, including its revision. A recomputed
 request digest cannot substitute an unsupported URL, summary or incomplete fact
 set. The generation receipt retains the same marker. Historical windows without
 it keep their original validation contract and bytes; they are not retroactively
-qualified or regenerated. This is source-to-fact consistency, not proof of a
-claim, public disclosure permission or URL reachability. Opaque references stay
+qualified or regenerated. This is source-to-fact consistency. Opaque references stay
 opaque when no permitted accessible source has been supplied.
 
 This source can also be read through the original Chat dynamic tool. Reading
@@ -1051,7 +1048,6 @@ alone does not activate a subscription or deliver a report. The opt-in original
 steward report path binds it to the admitted calendar window, native generation
 and private full-body delivery; installed adoption, current configuration and
 the original production route still need independent verification.
-
 
 ## Repeat an existing native Task in a managed Session
 
@@ -1116,7 +1112,7 @@ from an older configuration.
 
 当前通用 Goal 编辑器尚未登记 `task` 字段：表单会在草稿中丢失原来源，JSON 编辑器也
 拒绝未登记字段，因此完整任务配置界面仍未交付。上述 HTTP 合同和只读来源目录只是
-阶段能力，预配置的合成场景不代表已完成 Task 选择器或自然语言旅程。缺失、空值、
+阶段能力。缺失、空值、
 非对象或夹带命令的 Task 输入在读取 Session 来源前即以 HTTP 400 拒绝，不改订阅、
 不创建窗口、不执行业务，也不从旧配置推断来源。
 
@@ -1134,8 +1130,7 @@ no real identity or private provider is attached. The `start-existing-owners`
 control starts the real idle wake owner. `stop-existing-wake` stops only that
 owner; removing it resumes the same stored state through a new wake-service
 instance. `observed.json` records artifact, completion, retained history and
-actual post-setup model calls. This qualifies neither live-model understanding,
-complete Chat-process restart nor production delivery.
+actual post-setup model calls.
 
 For a controller-restart check, stop that wake owner, await accepted work, then
 write a unique operation token to `restart-runtime` in the same output directory.
@@ -1210,8 +1205,7 @@ If the native transaction has committed and the Chat result-event append loses
 its acknowledgment, that same invocation may finish returning the original
 answer after reading exactly one event with the complete matching result.
 Missing, conflicting, duplicate or unreadable result events, and uncommitted
-transactions, retain their failure. This readback neither repeats native
-execution or settlement nor reopens historical failed Chat Turns.
+transactions, retain their failure.
 
 Set `enabled=false` to pause new work and delivery; retain the rest of the
 configuration to resume that plan. Clearing the override after a known failed

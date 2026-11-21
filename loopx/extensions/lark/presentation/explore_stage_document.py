@@ -367,8 +367,7 @@ def ensure_stage_whiteboards(
             or duplicate_stage_indexes
         )
 
-        # A readable whiteboard token does not prove that the board is still
-        # embedded in the configured document. Drop detached checkpoints so
+                #  Drop detached checkpoints so
         # the normal missing-stage path recreates the managed section.
         for stage_index in missing_remote_stage_indexes:
             configured.pop(stage_index, None)

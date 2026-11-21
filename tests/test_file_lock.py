@@ -518,7 +518,7 @@ def test_cross_runtime_cleanup_failure_cannot_replace_success(
     with exclusive_cross_runtime_file_lock(target, timeout_seconds=0.2):
         pass
 
-    assert calls == [True]
+    assert calls == [True, True]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Win32 extended path regression")

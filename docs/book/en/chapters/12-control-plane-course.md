@@ -206,7 +206,7 @@ The returned command yields `appended=false` and the debit count remains one. A 
 `settled` without `settlement_owed`; the next Turn no longer remains in that settlement-recovery path.
 
 These assertions establish this internal recovery, not a zero supplier bill, resolution of another
-unknown effect, G1 closure, or Goal acceptance. Passing a test does not prove that a live Goal recovered.
+unknown effect, G1 closure, or Goal acceptance.
 
 #### Next entrypoint and stopping condition {#settlement-next}
 
@@ -230,15 +230,13 @@ Should this Agent continue waiting? What changes with its own advancement or an 
 #### Factual basis {#monitor-facts}
 
 Read current-Agent lane, selectable advancement, the Monitor's `consecutive_no_change`, `watch_only`,
-target, due state, and actual Host liveness. A busy peer does not supply facts for this lane. Receiving
-no notification does not prove no external change.
+target, due state, and actual Host liveness. A busy peer does not supply facts for this lane.
 
 #### Why allow or refuse? {#monitor-reason}
 
 This replan obligation depends on count, ownership, and selectable work together. Five is a particular
 policy threshold, not a theorem about all waiting. Current-Agent advancement can preempt it, and
-explicit watch-only does not use the same trigger. No obligation does not establish an available waking
-Host or authorize mutation or delivery debit.
+explicit watch-only does not use the same trigger.
 
 #### Supporting evidence {#monitor-evidence}
 
@@ -318,12 +316,12 @@ work.
 
 [Authority](work-graph-and-authority.md), [recovery](04-runtime-boundaries.md), and the
 [Workspace](workspace-v1.md) own the corresponding operating instructions. Owner decisions are not all
-authorized by automatic-Turn quota. An internal test run also does not establish this real CI result or approval.
+authorized by automatic-Turn quota.
 
 Replace the task with a comparison report based on two public sources and the same reasoning applies:
 material versions replace commits, methods and citation checks support findings, and an acceptor and
 publication scope remain explicit. Recheck affected analysis after a source update; do not turn all old
-discussion into new evidence. A finished report does not authorize publication. This is conceptual transfer,
+discussion into new evidence. This is conceptual transfer,
 not qualification of another product journey.
 
 ### Add one condition: the original Turn is not closed

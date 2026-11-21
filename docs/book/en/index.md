@@ -45,8 +45,7 @@ waits for CI, crosses sessions, changes owners, encounters approval gates, and r
 LoopX keeps the goal, work queue, authority, evidence, and recovery conditions in a project-owned control
 plane.
 
-This book is not a copy of the LoopX CLI reference, and it does not assume that you want to contribute to
-the Kernel. It gives external developers a stable path for deciding:
+It gives external developers a stable path for deciding:
 
 - whether a task needs only one session, a persistent Host goal, or a project-level control plane;
 - when Todo, Gate, Evidence, Quota, monitor, and recovery contracts add real value;
@@ -72,7 +71,7 @@ source change. Contributions are not limited to Kernel maintainers, and the Cour
 mechanism model further into implementation, rules, and validation. You can work on the Control Plane,
 Capabilities and Domain State, Providers, Host or Runner integration, projections, documentation and
 fixtures, or Extension and package lifecycle. An Extension is one delivery choice for independently
-versioned or optional functionality, not the default shape of every contribution.
+versioned or optional functionality.
 
 ## Current validation baseline
 
@@ -84,11 +83,11 @@ versioned or optional functionality, not the default shape of every contribution
 
 The official public protocols remain authoritative for protocol facts. Commands that change across
 releases remain authoritative in the release you use, its current `--help`, and official documentation.
-This book owns the learning path and explanatory model, not another complete command reference.
+This book owns the learning path and explanatory model.
 
 In `v0.5.4`, key semantics for the Effect Program, Turn settlement, Todo completion, quota delivery
 routing, workspace causality, and scheduler state sit behind typed TypeScript owners. During the
 migration, the Python CLI still owns transport, legacy projections, external Provider calls, and some
-durable writeback. These are not two independently evolving control planes. Treat the
+durable writeback. Treat the
 [TypeScript Control-Plane Migration RFC](/loopx/docs/architecture/rfcs/typescript-control-plane-migration-v0/)
-on current `main` as the direction for later stages, not as shipped `v0.5.4` behavior.
+on current `main` as the direction for later stages.

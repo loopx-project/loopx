@@ -144,7 +144,7 @@ def execute_request_amendment(*, registry_path: Path, runtime_root: Path | None,
             replan_configuration_reader=replan_configuration_reader)
         observation = {key: attempted[key] for key in ("status", "reason_code", "reason") if key in attempted}
     except (OSError, ValueError, EffectRuntimeRejected) as exc:
-        # A failed response does not establish no effect. The exact receipt
+        #  The exact receipt
         # read below owns that conclusion and keeps an absent result pending.
         observation = {"error": str(exc)}
     return _finish(registry=registry_path, root=root, ref=goal_ref, receiver=receiver_agent_id,

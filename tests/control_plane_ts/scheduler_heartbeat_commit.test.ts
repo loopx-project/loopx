@@ -16,6 +16,7 @@ import {
   normalizeSchedulerState,
   schedulerStatePath,
 } from "../../loopx/control_plane/scheduler/state_store.ts";
+import { withFileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 
 const scope = {
@@ -738,4 +739,237 @@ test("a tighter progression requires a fresh identity and preserves CAS and repl
   const old = await evaluateSchedulerHeartbeatCommit({ ...clamp, effect_id: "late-old-policy" });
   assert.equal(old.reason_code, "state_digest_conflict");
   assert.equal(old.state_digest, reset.state_digest);
+});
+
+async function writeGoalRegistry(
+  t: test.TestContext,
+  runtimeRoot: string,
+  goalInstanceId: string,
+  options: { readonly active?: boolean; readonly duplicates?: boolean } = {},
+): Promise<string> {
+  const goal = {
+    id: scope.goal_id,
+    goal_instance_id: goalInstanceId,
+    status: options.active === false ? "archived" : "active",
+  };
+  const goals = options.duplicates === true ? [goal, { ...goal }] : [goal];
+  const path = join(runtimeRoot, "projects.json");
+  await writeFile(path, JSON.stringify([
+    {
+      schema_version: "loopx_project_registry_envelope_v1",
+      minimum_writer_protocol: "goal_instance_v1",
+      payload_sha256: "sha256:fixture",
+    },
+    { goals, projects: [] },
+  ]), "utf8");
+  t.after(() => rm(path, { force: true }));
+  return path;
+}
+
+test("a Goal recreation that publishes during the commit cannot be overwritten", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const instanceA = `ginst_${"a".repeat(32)}`;
+  const instanceB = `ginst_${"b".repeat(32)}`;
+  const goalRefA = { goal_id: scope.goal_id, goal_instance_id: instanceA };
+  const registryPath = await writeGoalRegistry(t, runtimeRoot, instanceA);
+  const options = { registryPath, heartbeatReceiptGoalRef: goalRefA };
+  const first = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot), options);
+  assert.equal(first.status, "written");
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const committedBytes = await readFile(statePath, "utf8");
+
+  // Hold the marker a recreation takes while it publishes the new lifetime, so
+  // the commit reads instance A and only then sees instance B.
+  let late: Promise<Awaited<ReturnType<typeof evaluateSchedulerHeartbeatCommit>>> | null = null;
+  await withFileMutationLock(registryPath, async () => {
+    late = evaluateSchedulerHeartbeatCommit(request(runtimeRoot, {
+      effect_id: "heartbeat-effect-late-a",
+      applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+      expected_state_digest: first.state_digest,
+    }), options);
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    await writeGoalRegistry(t, runtimeRoot, instanceB);
+  });
+  const lateResult = await late!;
+  assert.equal(lateResult.status, "conflict");
+  assert.equal(lateResult.reason_code, "heartbeat_receipt_goal_instance_superseded");
+  assert.equal(await readFile(statePath, "utf8"), committedBytes);
+});
+
+test("a superseded Goal instance cannot overwrite or replay a newer lifetime", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const instanceA = `ginst_${"a".repeat(32)}`;
+  const instanceB = `ginst_${"b".repeat(32)}`;
+  const goalRefA = { goal_id: scope.goal_id, goal_instance_id: instanceA };
+  const goalRefB = { goal_id: scope.goal_id, goal_instance_id: instanceB };
+  const registryPath = await writeGoalRegistry(t, runtimeRoot, instanceA);
+  const options = { registryPath, heartbeatReceiptGoalRef: goalRefA };
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+
+  const firstA = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot), options,
+  );
+  assert.equal(firstA.status, "written");
+  assert.equal(
+    (firstA.state?.heartbeat_commit as Record<string, unknown> | undefined)
+      ?.goal_instance_id,
+    instanceA,
+  );
+
+  // The project registry starts a new Goal lifetime with the same name.
+  await writeGoalRegistry(t, runtimeRoot, instanceB);
+  const newInstanceCommit = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot, {
+      effect_id: "heartbeat-effect-new-instance",
+      progression_index: 1,
+      expected_rrule: "FREQ=MINUTELY;INTERVAL=30",
+      applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+      expected_state_digest: firstA.state_digest,
+    }),
+    { registryPath, heartbeatReceiptGoalRef: goalRefB },
+  );
+  assert.equal(newInstanceCommit.status, "written");
+  assert.equal(newInstanceCommit.state?.last_applied_rrule, "FREQ=MINUTELY;INTERVAL=30");
+  assert.equal(
+    (newInstanceCommit.state?.heartbeat_commit as Record<string, unknown> | undefined)
+      ?.goal_instance_id,
+    instanceB,
+  );
+  const committedBytes = await readFile(statePath, "utf8");
+
+  const staleAck = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot, {
+      effect_id: "heartbeat-effect-late-a",
+      applied_rrule: "FREQ=MINUTELY;INTERVAL=15",
+    }),
+    options,
+  );
+  assert.equal(staleAck.status, "conflict");
+  assert.equal(staleAck.reason_code, "heartbeat_receipt_goal_instance_superseded");
+  const staleFailure = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot, {
+      operation: "host_failure",
+      effect_id: "heartbeat-effect-late-a-failure",
+      observed_host_rrule: "FREQ=MINUTELY;INTERVAL=3",
+      apply_needed: true,
+      failure_kind: "timeout",
+    }),
+    options,
+  );
+  assert.equal(staleFailure.status, "conflict");
+  assert.equal(staleFailure.reason_code, "heartbeat_receipt_goal_instance_superseded");
+  // The old response-loss retry must not read the new lifetime's receipt.
+  // A superseded lifetime is refused before any replay read happens.
+  const staleReplay = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot, { effect_id: "heartbeat-effect-new-instance" }),
+    options,
+  );
+  assert.equal(staleReplay.status, "conflict");
+  assert.equal(staleReplay.reason_code, "heartbeat_receipt_goal_instance_superseded");
+  assert.notEqual(staleReplay.replayed, true);
+  // A caller that cannot prove which lifetime it belongs to must not read the
+  // replay of another lifetime's commit either.
+  const unverifiableReplay = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot, { effect_id: "heartbeat-effect-new-instance" }),
+  );
+  assert.equal(unverifiableReplay.status, "conflict");
+  assert.equal(unverifiableReplay.reason_code, "goal_instance_replay_conflict");
+  assert.notEqual(unverifiableReplay.replayed, true);
+  assert.equal(await readFile(statePath, "utf8"), committedBytes);
+
+  // Returning to the exact receipt's lifetime re-enables its own commands.
+  await writeGoalRegistry(t, runtimeRoot, instanceA);
+  const currentA = await evaluateSchedulerHeartbeatCommit(
+    request(runtimeRoot, {
+      effect_id: "heartbeat-effect-late-a",
+      progression_index: 2,
+      expected_rrule: "FREQ=MINUTELY;INTERVAL=60",
+      applied_rrule: "FREQ=MINUTELY;INTERVAL=60",
+      expected_state_digest: newInstanceCommit.state_digest,
+    }), options,
+  );
+  assert.equal(currentA.status, "written");
+  assert.equal(
+    (currentA.state?.heartbeat_commit as Record<string, unknown> | undefined)
+      ?.goal_instance_id,
+    instanceA,
+  );
+});
+
+test("a cancelled Goal lifetime and duplicate registry entries refuse writeback", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const instanceA = `ginst_${"c".repeat(32)}`;
+  const goalRef = { goal_id: scope.goal_id, goal_instance_id: instanceA };
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+  const registryPath = await writeGoalRegistry(t, runtimeRoot, instanceA, { active: false });
+  const inactive = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot), {
+    registryPath, heartbeatReceiptGoalRef: goalRef,
+  });
+  assert.equal(inactive.status, "conflict");
+  assert.equal(inactive.reason_code, "goal_instance_inactive");
+  await assert.rejects(readFile(statePath, "utf8"), { code: "ENOENT" });
+
+  const duplicatePath = await writeGoalRegistry(t, runtimeRoot, instanceA, {
+    duplicates: true,
+  });
+  const ambiguous = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot), {
+    registryPath: duplicatePath, heartbeatReceiptGoalRef: goalRef,
+  });
+  assert.equal(ambiguous.status, "conflict");
+  assert.equal(ambiguous.reason_code, "goal_instance_ambiguous");
+  await assert.rejects(readFile(statePath, "utf8"), { code: "ENOENT" });
+
+  // A legacy registry without instance identity keeps the goal-scoped path.
+  await writeFile(duplicatePath, JSON.stringify([
+    { schema_version: "loopx_project_registry_envelope_v1" },
+    { goals: [{ id: scope.goal_id, status: "active" }] },
+  ]), "utf8");
+  const legacy = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot), {
+    registryPath: duplicatePath, heartbeatReceiptGoalRef: goalRef,
+  });
+  assert.equal(legacy.status, "written");
+});
+
+test("a lifetime-scoped Goal refuses a receipt that names no Goal reference", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const instanceA = `ginst_${"d".repeat(32)}`;
+  const registryPath = await writeGoalRegistry(t, runtimeRoot, instanceA);
+  const statePath = schedulerStatePath(runtimeRoot, {
+    goalId: scope.goal_id,
+    agentId: scope.agent_id,
+    surface: scope.surface,
+    stateKey: scope.state_key,
+  });
+
+  const unnamed = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot), {
+    registryPath,
+  });
+  assert.equal(unnamed.status, "conflict");
+  assert.equal(unnamed.reason_code, "heartbeat_receipt_goal_ref_missing");
+  await assert.rejects(readFile(statePath, "utf8"), { code: "ENOENT" });
+
+  // An old-style Goal keeps its goal-scoped path.
+  await writeFile(registryPath, JSON.stringify([
+    { schema_version: "loopx_project_registry_envelope_v1" },
+    { goals: [{ id: scope.goal_id, status: "active" }] },
+  ]), "utf8");
+  const legacy = await evaluateSchedulerHeartbeatCommit(request(runtimeRoot), {
+    registryPath,
+  });
+  assert.equal(legacy.status, "written");
 });

@@ -499,19 +499,12 @@ def _bounded_quota_transport_failure(
     return result if _failure_output_size(result) <= limit else _compact_quota_failure()
 
 
-def quota_decision_transport_failure_payload(
+def quota_decision_transport_diagnostic(
     args: argparse.Namespace,
     committed: Mapping[str, object],
     error: Exception,
-    *,
-    capture_directory: Path | None,
-    capture_sha256: str | None = None,
 ) -> dict[str, object]:
-    """Report a post-guard failure with the original receipt and capture.
-
-    The saved digest, when available, comes from publication rather than
-    reopening the path to establish a new identity.
-    """
+    """Keep receipt evidence from a failed delivery without projecting work."""
     typed_transport = isinstance(error, QuotaDecisionTransportError)
     reason = (
         " ".join(str(error).split())[:500] if typed_transport
@@ -539,6 +532,19 @@ def quota_decision_transport_failure_payload(
     if not typed_transport:
         failure["error_class"] = type(error).__name__
         failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
+    return failure
+
+
+def quota_decision_transport_failure_payload(
+    args: argparse.Namespace,
+    committed: Mapping[str, object],
+    error: Exception,
+    *,
+    capture_directory: Path | None,
+    capture_sha256: str | None = None,
+) -> dict[str, object]:
+    """Report the failure with the digest returned by the capture writer."""
+    failure = quota_decision_transport_diagnostic(args, committed, error)
     limit = getattr(args, "max_page_output_bytes", None) if args.format == "json" else None
     reader = getattr(args, "_quota_failure_reader", None)
     if limit is not None:

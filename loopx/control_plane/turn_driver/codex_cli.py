@@ -56,6 +56,7 @@ from .transaction import (
 
 
 CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION = "codex_stdio_mcp_server_v0"
+LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME = "loopx_delegation"
 CODEX_CLI_RESULT_KINDS = (
     "validated_progress",
     "validated_completion",
@@ -176,8 +177,28 @@ def normalize_codex_stdio_mcp_server(
     }
 
 
+def collaboration_mcp_turn_environment(
+    server: Mapping[str, Any] | None,
+    *,
+    turn_key: str,
+    lineage: Mapping[str, str],
+    project: Path,
+) -> dict[str, str]:
+    """Bind the built-in collaboration server to this invocation only."""
+    if not server or server["name"] != LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME:
+        return {}
+    return {
+        "LOOPX_TURN_KEY": turn_key,
+        "LOOPX_TURN_GOAL_ID": lineage["goal_id"],
+        "LOOPX_TURN_AGENT_ID": lineage["agent_id"],
+        "LOOPX_TURN_WORKSPACE": str(project.resolve()),
+    }
+
+
 def _codex_mcp_config_arguments(
     value: Mapping[str, Any] | None,
+    *,
+    turn_environment: Mapping[str, str],
 ) -> list[str]:
     server = normalize_codex_stdio_mcp_server(value)
     if server is None:
@@ -193,6 +214,10 @@ def _codex_mcp_config_arguments(
         f"mcp_servers.{name}.startup_timeout_sec=30",
         f"mcp_servers.{name}.tool_timeout_sec=60",
     ]
+    pairs.extend(
+        f"mcp_servers.{name}.env.{key}={json.dumps(value, ensure_ascii=False)}"
+        for key, value in turn_environment.items()
+    )
     return [item for pair in pairs for item in ("-c", pair)]
 
 
@@ -772,6 +797,7 @@ def _codex_command(
     reasoning_effort: str | None,
     session_id: str | None,
     mcp_server: Mapping[str, Any] | None,
+    mcp_turn_environment: Mapping[str, str],
 ) -> list[str]:
     if session_id:
         command = [
@@ -809,7 +835,9 @@ def _codex_command(
                 f"model_reasoning_effort={json.dumps(reasoning_effort)}",
             ]
         )
-    command.extend(_codex_mcp_config_arguments(mcp_server))
+    command.extend(_codex_mcp_config_arguments(
+        mcp_server, turn_environment=mcp_turn_environment,
+    ))
     if session_id:
         command.append(session_id)
     command.append("-")
@@ -983,6 +1011,9 @@ def run_codex_cli_host(
             reasoning_effort=reasoning_effort,
             session_id=session_id,
             mcp_server=mcp_server,
+            mcp_turn_environment=collaboration_mcp_turn_environment(
+                mcp_server, turn_key=request["turn_key"], lineage=lineage, project=project,
+            ),
         )
         observed_session: list[str] = []
         failures = CodexFailureObservation()

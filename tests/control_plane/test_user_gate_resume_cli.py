@@ -11,9 +11,9 @@ from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cl
 
 
 @pytest.fixture
-def tmp_path(tmp_path_factory):
+def tmp_path(case_mktemp):
     # The hashed SQLite filename must fit under the native Windows path limit.
-    return tmp_path_factory.mktemp("gate")
+    return case_mktemp("gate")
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
