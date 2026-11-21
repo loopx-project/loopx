@@ -15,8 +15,8 @@ import time
 import tempfile
 import urllib.request
 
-from loopx.chat import CHAT_REVIEW_CLOSE_TAG, CHAT_REVIEW_OPEN_TAG, parse_agent_response
-from loopx.chat_agent import CodexChatAgentSession, _turn_prompt
+from loopx.chat import CHAT_REVIEW_CLOSE_TAG, CHAT_REVIEW_OPEN_TAG, _turn_prompt, parse_agent_response
+from loopx.chat_agent import CodexChatAgentSession
 from loopx.control_plane.operator_provider import operator_provider_environ
 
 

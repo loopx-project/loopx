@@ -95,10 +95,10 @@ independent clients, but enabling cross-host execution requires its own deployed
 host and service qualification. The [current scoped-read candidate](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
 adds explicit Todo and audience checks. Its scoped listener rejects writes.
 
-[Open PR #8747](https://github.com/loopx-project/loopx/pull/8747) proposes broader resource
-access control for cross-person collaboration. The first candidate's coarse
-scope is tenant, Goal, actor and allowed operations, pinned to a store
-incarnation. The proposal intersects principal grants, credential scope,
+[PR #8747](https://github.com/loopx-project/loopx/pull/8747) added the broader cross-person access design to the
+[Shared Authority RFC](https://github.com/loopx-project/loopx/blob/1b18ece5906611eb6dd71941d1e2475443c19009/docs/architecture/rfcs/shared-goal-authority-state-provider-v0.md#cross-person-delivery-under-r6).
+The first candidate's coarse scope is tenant, Goal, actor and allowed operations,
+pinned to a store incarnation. The design intersects principal grants, credential scope,
 resource ACL, and applicable delegation/source permissions. Missing or
 unverifiable grants are denied. Resource access, execution leases and budgets
 continue to use their respective authority checks.

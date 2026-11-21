@@ -158,7 +158,10 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 
 @pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("reader_output_bytes", [12_000, 64_000])
+def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
+    tmp_path, monkeypatch, provider, reader_output_bytes,
+):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_context_first_read import read_selection
     from tests.control_plane.test_quota_settlement_cli import (
@@ -169,6 +172,10 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    if reader_output_bytes == 64_000:
+        monkeypatch.setenv("LOOPX_CONTEXT_PAGE_OUTPUT_BYTES", str(reader_output_bytes))
+    else:
+        monkeypatch.delenv("LOOPX_CONTEXT_PAGE_OUTPUT_BYTES", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     with state.open("a", encoding="utf-8") as stream:
@@ -213,10 +220,10 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
     read, = (row for row in first["/interaction_contract/agent_channel/required_reads"] if row.get("kind") == "operator_inbox")
     command = shlex.split(read["command"])
     assert command[0] == str(console)
-    def invoke(argv):
+    def invoke(argv, output_limit=12_000):
         result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
-        assert 0 < len(result.stdout) <= 12_000
+        assert 0 < len(result.stdout) <= output_limit
         return result.stdout.decode()
 
     def read_receipts():
@@ -224,6 +231,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
         return {file.relative_to(root): file.read_bytes() for file in root.rglob("*.json")}
 
     cursor, seen, captured_pages, logical_pages = None, set(), 0, 0
+    largest_reader_output = 0
     while True:
         stdout = invoke([*command, *(["--cursor", cursor] if cursor else [])])
         page = json.loads(stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
@@ -240,10 +248,15 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
             direct = shlex.split(page["recovery_command"])
             assert direct[:3] == reader[:3]
             assert direct[direct.index("--capture-sha256") + 1] == pinned
+            for argv in (reader, direct):
+                for option in ("--page-bytes", "--max-page-output-bytes"):
+                    assert int(argv[argv.index(option) + 1]) == reader_output_bytes
             before = read_receipts()
             raw = bytearray()
             while reader:
-                part = json.loads(invoke(reader))
+                stdout = invoke(reader, reader_output_bytes)
+                largest_reader_output = max(largest_reader_output, len(stdout.encode("utf-8")))
+                part = json.loads(stdout)
                 assert part["ok"] and part["offset"] == len(raw) and part["sha256"] == pinned
                 raw.extend(part["content"].encode("utf-8"))
                 assert len(raw) > part["offset"]
@@ -252,6 +265,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
                 if reader:
                     assert reader[:3] == direct[:3] and "--capture-sha256" not in reader
                     assert Path(reader[reader.index("--reference-file") + 1]) == reference_path
+                    assert int(reader[reader.index("--max-page-output-bytes") + 1]) == reader_output_bytes
                 captured_pages += 1
             assert raw == saved.read_bytes()
             if logical_pages == 1:
@@ -259,7 +273,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
                 failed = subprocess.run(shlex.split(page["command"]), cwd=project, capture_output=True, timeout=40)
                 assert failed.returncode == 1 and len(failed.stdout) <= 12_000
                 assert "content" not in json.loads(failed.stdout)
-                recovered = json.loads(invoke(direct))
+                recovered = json.loads(invoke(direct, reader_output_bytes))
                 assert recovered["offset"] == 0 and recovered["sha256"] == pinned
                 assert raw.startswith(recovered["content"].encode("utf-8"))
             assert read_receipts() == before
@@ -273,6 +287,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(tmp_path,
         if cursor is None:
             break
     assert seen == request_ids and logical_pages == 2 and captured_pages > 1
+    assert (largest_reader_output > 12_000) is (reader_output_bytes > 12_000)
     _, saved = read_selection(view["recovery"]["command"] + " --select " + shlex.quote(address))
     assert saved[address] == channel["work_context"]["sources"][index]["content"]["unfinished_delegations"]
     assert path.read_bytes() == original

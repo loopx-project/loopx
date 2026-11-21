@@ -49,7 +49,7 @@ def test_activation_reads_the_original_real_settlement_without_writing_or_replay
     assert decision()["source_change_allowed"] is False
     assert _spend_run_count(runtime) == 0
     plan = packet["interaction_contract"]["cli_channel"]["settlement_plan"]
-    writeback = plan["ordered_steps"][1]["command_template"]
+    writeback = plan["ordered_steps"][1]["command_template"].replace(" --settle-turn --settlement-receipt", "")
     for old, new in (("<validated_progress>", "verified_exclusion"), ("<scale>", "single_surface"),
                      ("<outcome>", "outcome_progress")):
         writeback = writeback.replace(old, new)

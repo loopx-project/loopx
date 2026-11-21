@@ -19,24 +19,52 @@ from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTu
 from loopx.configure_goal import configure_goal
 
 
+class _ObservedCalls(list):
+    def __init__(self, on_len):
+        super().__init__()
+        self._on_len = on_len
+        self.baseline_started = 0
+
+    def __len__(self) -> int:
+        self.baseline_started = self._on_len()
+        return super().__len__()
+
+
 @pytest.fixture
 def consumption(monkeypatch):
-    condition, calls = threading.Condition(), []
+    condition = threading.Condition()
+    started = 0
+    completed_start_seq = 0
+
+    def current_started() -> int:
+        with condition:
+            return started
+
+    calls = _ObservedCalls(current_started)
     consume = ManagedSessionTurn.consume_creation_request
 
     def observe(self, creation):
+        nonlocal started, completed_start_seq
+        with condition:
+            started += 1
+            entry_seq = started
         try:
             return consume(self, creation)
         finally:
             with condition:
                 calls.append(deepcopy(creation))
+                completed_start_seq = max(completed_start_seq, entry_seq)
                 condition.notify_all()
 
     monkeypatch.setattr(ManagedSessionTurn, "consume_creation_request", observe)
 
     def after(previous):
         with condition:
-            assert condition.wait_for(lambda: len(calls) > previous, timeout=15)
+            baseline = calls.baseline_started
+            assert condition.wait_for(
+                lambda: list.__len__(calls) > previous and completed_start_seq > baseline,
+                timeout=30,
+            )
 
     return calls, after
 
@@ -338,3 +366,60 @@ def test_final_native_quota_refusal_cannot_be_replaced_by_preparation_read(
     controller.resume_creation_requests()
     assert controller.store.turn_for_client(saved["session_id"], "managed." + saved["operation_id"])["turn_id"] == turn["turn_id"]
     assert capture.read_bytes() == after
+
+
+def test_in_flight_consumption_started_before_count_does_not_unblock_after(consumption) -> None:
+    from types import SimpleNamespace
+
+    stale_entered = threading.Event()
+    release_stale = threading.Event()
+    waiter_unblocked = threading.Event()
+
+    class _StubTurn:
+        def __init__(self, *, wait_on_stale: bool) -> None:
+            self.wait_on_stale = wait_on_stale
+            self.controller = SimpleNamespace(
+                _session_adapter_lock=lambda _sid: contextmanager(lambda: (yield))()
+            )
+            self.store = SimpleNamespace(
+                turn_for_client=lambda _sid, _cid: {
+                    "status": "completed",
+                    "loopx_request": {"id": "op", "creation_request": {
+                        "session_id": "s1",
+                        "agent_id": "codex",
+                        "operation_id": "op",
+                        "todo_id": "todo_1",
+                    }},
+                }
+            )
+
+        def _request(self, _sid, _aid, _oid, _tid):
+            if self.wait_on_stale:
+                stale_entered.set()
+                assert release_stale.wait(timeout=5)
+            return {"id": "op"}
+
+    creation = {"session_id": "s1", "agent_id": "codex", "operation_id": "op", "todo_id": "todo_1"}
+    stale_thread = threading.Thread(
+        target=ManagedSessionTurn.consume_creation_request,
+        args=(_StubTurn(wait_on_stale=True), creation),
+        daemon=True,
+    )
+    stale_thread.start()
+    assert stale_entered.wait(timeout=5)
+
+    count = len(consumption[0])
+    release_stale.set()
+    stale_thread.join(timeout=5)
+
+    waiter = threading.Thread(
+        target=lambda: (consumption[1](count), waiter_unblocked.set()),
+        daemon=True,
+    )
+    waiter.start()
+    assert not waiter_unblocked.wait(0.2)
+
+    ManagedSessionTurn.consume_creation_request(_StubTurn(wait_on_stale=False), creation)
+    waiter.join(timeout=5)
+    assert waiter_unblocked.is_set()
+    assert len(consumption[0]) == 2

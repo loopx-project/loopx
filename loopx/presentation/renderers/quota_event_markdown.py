@@ -4,7 +4,14 @@ from typing import Any
 
 from ...control_plane.quota.ledger_readback import QUOTA_SLOT_SPENT_CLASSIFICATION
 from ...control_plane.quota.settlement import render_settlement_progress_markdown
-from ..markdown import append_operator_action_markdown, as_dict
+from ..markdown import append_operator_action_markdown, as_dict, render_json_object_block
+
+
+def render_quota_guard_diagnostic_markdown(payload: dict[str, Any]) -> str:
+    return (
+        f"# LoopX Quota Should Run\n\n- ok: `{payload.get('ok')}`\n\n"
+        + render_json_object_block(payload)
+    )
 
 
 def render_quota_monitor_poll_markdown(payload: dict[str, Any]) -> str:

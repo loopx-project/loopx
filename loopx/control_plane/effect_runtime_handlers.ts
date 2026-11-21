@@ -26,6 +26,7 @@ import {
 } from "./effect_program.ts";
 
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+import type { SqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {
   optionalNonEmptyString as optionalString,
   requireBoolean,
@@ -38,7 +39,7 @@ import {
 
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
-type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
+export type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
 // Resolve only the selected module/handler, never cache its params or decision.
 // Node owns module caching; the existing runtime fingerprint owns invalidation.
@@ -57,6 +58,7 @@ export interface EffectRuntimeHandlerContext {
   fingerprint: string;
   /** Physical publication path observed by the managed server, not its caller. */
   readonly infoPath?: string;
+  readonly localRuntimeIdentity?: SqliteRuntimeIdentity;
   requestShutdown: () => void;
 }
 
@@ -254,7 +256,9 @@ export function createEffectRuntimeHandlers(
     [
       "runtime.ping",
       () => ({ ready: true, pid: process.pid, fingerprint: context.fingerprint,
-        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}) }),
+        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}),
+        ...(context.localRuntimeIdentity === undefined
+          ? {} : {runtime_identity: context.localRuntimeIdentity}) }),
     ],
     [
       "runtime.shutdown",
@@ -268,6 +272,8 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./turn_driver/turn_journal.ts"), ({interpretTurnJournal}) => (params) => interpretTurnJournal(turnJournalInspectionRequest(params))),
     ],
     ["host_failure.retry", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRetryRequest}) => hostFailureRetryRequest)],
+    ["host_failure.record", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRecordRequest}) => hostFailureRecordRequest)],
+    ["host_failure.observe", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureObservationRequest}) => hostFailureObservationRequest)],
     ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
@@ -644,6 +650,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.steward.report.plan", lazyHandler(() => import("./collaboration/steward_reports.ts"), ({planStewardReport}) => planStewardReport)],
     ["collaboration.steward.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardPortfolio}) => observeStewardPortfolio)],
     ["collaboration.steward.monitor.signal_observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardSignalMonitor}) => observeStewardSignalMonitor)],
+    ["collaboration.steward.monitor.signal_scope.normalize", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({normalizeStewardSignalMonitorScope}) => (params) => ({signal_scope: normalizeStewardSignalMonitorScope(params?.signal_scope)}))],
     ["collaboration.session.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeManagedWork}) => observeManagedWork)],
     ["collaboration.conversation.binding", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planConversationBinding}) => planConversationBinding)],
     ["collaboration.conversation.bound_context", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveBoundConversation}) => resolveBoundConversation)],

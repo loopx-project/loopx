@@ -101,6 +101,8 @@ SERVER_RESTARTED_MESSAGE = (
     "You can continue with a follow-up in this session."
 )
 WORKER_EXITED_CODE = "execution_worker_exited"
+BEFORE_DISPATCH_CODE = "execution_worker_exited_before_dispatch"
+BEFORE_DISPATCH_MESSAGE = "The LoopX Chat worker exited before the original request was dispatched."
 WORKER_EXITED_MESSAGE = (
     "The LoopX Chat execution worker exited before this turn finished. "
     "Your conversation is saved; execution may have occurred. "
@@ -525,49 +527,11 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         Only a proven non-delivery restores FIFO eligibility. A lost native
         acknowledgement keeps the original input durably reserved.
         """
-        from .control_plane.chat_turn_acceptance import plan_queued_chat_steering
+        from .capabilities.native_chat.queued_admission import steer_queued_turn
+
         self._require_steering_session(session_id)
-        ingress_id = "queue-steer-" + hashlib.sha256(
-            json.dumps([session_id, queued_turn_id, client_ingress_id]).encode()
-        ).hexdigest()[:40]
-        with self.store.queue_steering_lock(session_id, queued_turn_id):
-            session = self.store.load_session(session_id)
-            turn = self.store.load_turn(session_id, queued_turn_id)
-            if session is None or turn is None:
-                raise KeyError("chat turn was not found")
-            active = self.store.load_turn(session_id, str(session.get("active_turn_id") or "")) if session.get("active_turn_id") else None
-
-            def plan(phase):
-                return plan_queued_chat_steering(session, turn, active,
-                    self.store.steering_receipt(session_id, ingress_id),
-                    ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase)
-
-            decision = plan("prepare")
-            if decision["action"] == "unresolved":
-                try:
-                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                        client_ingress_id=ingress_id, message=turn["message"],
-                        _queued_turn_id=queued_turn_id)
-                except Exception:
-                    pass  # Only the original receipt can complete the reservation.
-                decision = plan("settle")
-            if decision["action"] == "dispatch":
-                turn = self.store.write_queue_steering(session_id, turn, decision)
-                try:
-                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                        client_ingress_id=ingress_id, message=turn["message"],
-                        _queued_turn_id=queued_turn_id)
-                except Exception:
-                    # The durable ingress, including absence before any send,
-                    # owns the outcome. Exception wording cannot release work.
-                    pass
-                decision = plan("settle")
-            self.store.write_queue_steering(session_id, turn, decision)
-            if decision["action"] != "complete":
-                raise RuntimeError(decision["error_code"])
-            return {"session_id": session_id, "queued_turn_id": queued_turn_id,
-                "turn_id": expected_turn_id, "client_ingress_id": client_ingress_id,
-                "status": "delivered"}
+        return steer_queued_turn(self, session_id=session_id, queued_turn_id=queued_turn_id,
+            expected_turn_id=expected_turn_id, client_ingress_id=client_ingress_id)
 
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
@@ -623,8 +587,10 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             fail_ingress("live_steering_turn_mismatch")
         if not active_turn_id:
             fail_ingress("live_steering_requires_active_turn")
-        with self.lock:
-            adapter = self.adapters.get(session_id)
+        # Snapshot one adapter without taking the controller lock while a
+        # binding or queue fence is held. The native call still checks health
+        # and binds to the current upstream Turn.
+        adapter = self.adapters.get(session_id)
         if not isinstance(adapter, CodexAppServerAdapter) or not adapter.healthcheck():
             fail_ingress("live_steering_session_not_attached")
         upstream_turn_id = ""
@@ -769,10 +735,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             if managed_turn_recovery_allowed(session, turn, managed=managed, owner_dead=True):
                 code, message = (("server_restarted", SERVER_RESTARTED_MESSAGE)
                                  if state == LOCK_HOLDER_DEAD else (WORKER_EXITED_CODE, WORKER_EXITED_MESSAGE))
-                self._fail_turn(
-                    session_id, turn_id, code, message,
-                    status="failed", expected_statuses={"starting", "running", "interrupting"},
-                )
+                statuses = {"starting", "running", "interrupting"}
+                if (session and session.get("steward_context") and turn and turn.get("status") == "starting"
+                        and turn.get("execution_dispatch") == "pending"):
+                    code, message = BEFORE_DISPATCH_CODE, BEFORE_DISPATCH_MESSAGE
+                    statuses = {"starting"}  # A concurrent stop must win over replay.
+                self._fail_turn(session_id, turn_id, code, message, status="failed", expected_statuses=statuses)
             else:
                 # An earlier recovery may have persisted the exact failed result
                 # and then lost its event, message or claim write. The typed
@@ -782,6 +750,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     session_id, turn_id, session, turn,
                     recovery_messages={"server_restarted": SERVER_RESTARTED_MESSAGE,
                                        WORKER_EXITED_CODE: WORKER_EXITED_MESSAGE,
+                                       BEFORE_DISPATCH_CODE: BEFORE_DISPATCH_MESSAGE,
                                        "runtime_error": WORKER_EXITED_MESSAGE},  # Legacy exact record.
                 )
 
@@ -822,6 +791,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     expected_statuses={"queued"},
                     status="starting",
                     started_at=utc_now(),
+                    **({"execution_dispatch": "pending"} if isinstance(adapter, CodexAppServerAdapter) else {}),
                 )
                 if started_turn is None:
                     with self.lock:
@@ -989,6 +959,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             if team_plan_context is not None:
                 adapter.team_plan_context = team_plan_context
             if execution_ended():
+                return
+            # Seal against replay before invoking anything that can execute the
+            # original input, even if it never reports an upstream Turn ID.
+            if current_turn.get("execution_dispatch") == "pending" and self.store.update_turn(
+                    session_id, turn_id, expected_statuses={"starting", "running"},
+                    execution_dispatch="committed") is None:
                 return
             if native_loopx:
                 from .capabilities.native_chat.steward_turn import StewardTurnHost
@@ -1180,6 +1156,10 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                             last_error_code="transport_disconnected",
                         )
         except Exception as exc:  # noqa: BLE001 - preserve compact runtime failure.
+            if isinstance(exc, OSError) and (self.store.load_turn(session_id, turn_id) or {}).get("execution_dispatch") == "pending":
+                # The exact execution-fence owner will reconcile this I/O loss
+                # with the durable dispatch marker instead of a generic failure.
+                raise
             if completion_reserved and isinstance(exc, OSError):
                 # The answer already exists. Its lifecycle owner can finish
                 # publication without turning this into an execution failure.

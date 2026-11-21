@@ -68,10 +68,14 @@ class QuotaCommandContext:
 def _scheduler_execution_context_from_args(
     args: argparse.Namespace,
 ) -> Mapping[str, object] | SchedulerExecutionContextResolution | None:
+    host_surface = getattr(args, "host_surface", None)
+    scheduler_owner = getattr(args, "scheduler_owner", None)
+    execution_mode = getattr(args, "execution_mode", None)
+    runtime_profile = getattr(args, "runtime_profile", None)
     explicit_scheduler_fields = (
-        args.host_surface,
-        args.scheduler_owner,
-        args.execution_mode,
+        host_surface,
+        scheduler_owner,
+        execution_mode,
     )
     codex_app = bool(getattr(args, "codex_app", False))
     trae_app = bool(getattr(args, "trae_app", False))
@@ -81,32 +85,34 @@ def _scheduler_execution_context_from_args(
         raise QuotaCommandValidationError(
             "--codex-app, --trae_app, and --antigravity_app are mutually exclusive"
         )
-    if app_alias_count and (args.runtime_profile or any(explicit_scheduler_fields)):
+    if app_alias_count and (runtime_profile or any(explicit_scheduler_fields)):
         raise QuotaCommandValidationError(
             "app runtime aliases cannot be combined with --runtime-profile, "
             "--host-surface, --scheduler-owner, or --execution-mode"
         )
-    if args.runtime_profile and any(explicit_scheduler_fields):
+    if runtime_profile and any(explicit_scheduler_fields):
         raise QuotaCommandValidationError(
             "--runtime-profile cannot be combined with --host-surface, "
             "--scheduler-owner, or --execution-mode"
         )
-    runtime_profile = (
+    effective_runtime_profile = (
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value
         if codex_app
         else SchedulerRuntimeProfile.TRAE_APP.value
         if trae_app
         else SchedulerRuntimeProfile.ANTIGRAVITY_APP.value
         if antigravity_app
-        else args.runtime_profile
+        else runtime_profile
     )
-    if runtime_profile:
-        return scheduler_execution_context_for_runtime_profile(runtime_profile)
+    if effective_runtime_profile:
+        return scheduler_execution_context_for_runtime_profile(
+            effective_runtime_profile
+        )
     if any(explicit_scheduler_fields):
         return {
-            "host_surface": args.host_surface,
-            "scheduler_owner": args.scheduler_owner,
-            "execution_mode": args.execution_mode,
+            "host_surface": host_surface,
+            "scheduler_owner": scheduler_owner,
+            "execution_mode": execution_mode,
             "source": "quota_cli_invocation",
         }
     return None
@@ -180,7 +186,7 @@ def validate_quota_command_context_request(
         raise QuotaCommandValidationError(
             "--replan-obligation-id cannot be combined with --todo-id"
         )
-    if heartbeat_turn_id and not args.agent_id:
+    if heartbeat_turn_id and not getattr(args, "agent_id", None):
         raise QuotaCommandValidationError(
             "turn-scoped quota settlement requires --agent-id"
         )
@@ -266,7 +272,7 @@ def validate_quota_command_context_request(
     if (
         (heartbeat_turn_id or begin_turn)
         and command == "should-run"
-        and bool(args.dry_run)
+        and bool(getattr(args, "dry_run", False))
     ):
         raise QuotaCommandValidationError(
             "turn-scoped `quota should-run` cannot use --dry-run"

@@ -854,10 +854,25 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
     assert _heartbeat_receipt_count(runtime, TURN_ID) >= 1
 
 
+def test_composed_guard_refusal_keeps_turn_envelope_markdown():
+    from loopx.cli_commands.quota_presentation import _quota_renderer
+
+    payload = {
+        "schema_version": "loopx_turn_envelope_v1",
+        "ok": False,
+        "should_run": False,
+        "interaction_contract": {"cli_channel": {"spend_allowed_now": False}},
+    }
+    render = _quota_renderer(argparse.Namespace(quota_command="should-run"), failure=True)
+    output = render(payload)
+    assert output.startswith("# LoopX Turn Envelope\n")
+    assert json.loads(output.split("```json\n", 1)[1].rsplit("\n```", 1)[0]) == payload
+
+
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('delivery', ['off', 'on'])
+@pytest.mark.parametrize(('delivery', 'output_format'), [('off', 'json'), ('off', 'markdown'), ('on', 'json')])
 def test_failed_complete_composition_captures_only_recovery_evidence(
-    tmp_path, monkeypatch, capsys, provider, delivery,
+    tmp_path, monkeypatch, capsys, provider, delivery, output_format,
 ):
     from loopx.cli import main
     from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
@@ -897,9 +912,13 @@ def test_failed_complete_composition_captures_only_recovery_evidence(
 
     with monkeypatch.context() as fault:
         fault.setattr(turn_envelope, '_turn_envelope_result', interrupt_compose)
-        code = main(['--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json',
+        code = main(['--registry', str(registry), '--runtime-root', str(runtime), '--format', output_format,
             'quota', 'should-run', *binding, '--todo-id', TODO_ID, *delivery_args, '--decision-output-dir', str(capture)])
-    failure = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr().out
+    if output_format == 'markdown':
+        assert output.startswith('# LoopX Quota Should Run\n')
+        output = output.split('```json\n', 1)[1].rsplit('\n```', 1)[0]
+    failure = json.loads(output)
     assert code == 1 and failure['ok'] is False
     assert failure['error_code'] == 'quota_decision_transport_failed'
     assert len(captured) == 1 and captured[0]['ok'] is True

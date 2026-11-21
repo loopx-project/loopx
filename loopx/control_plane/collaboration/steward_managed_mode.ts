@@ -18,11 +18,42 @@ import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts
 import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
 
 /** A stopped observation may get a new Chat carrier for the same native
- * identity. After a recovery starts, only another proven process restart can
- * continue it. The host reads the stopped worker lock, journals and native poll
- * receipts. Normal admission still checks ownership, deadline, permissions and user work. */
+ * identity. After a recovery starts, only another proven process restart or a
+ * cooldown-bounded pre-poll transient failure can continue it. The host reads
+ * the stopped worker lock, journals and native poll receipts. Normal admission
+ * still checks ownership, deadline, permissions and user work. */
 const WORKER_EXITED_ERROR =
   "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+const MONITOR_RECOVERY_RETRY_COOLDOWN_MS = 300_000;
+const REPORT_VALIDATOR_PREFIX =
+  "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
+  + "validate_private_generation(Path(";
+
+function sameReportValidatorCommand(frozenCmd: unknown, requestCmd: unknown): boolean {
+  return Array.isArray(frozenCmd) && Array.isArray(requestCmd)
+    && frozenCmd.length === 3 && requestCmd.length === 3
+    && frozenCmd.every(part => typeof part === "string" && part.length > 0 && !part.includes("\0"))
+    && requestCmd.every(part => typeof part === "string" && part.length > 0 && !part.includes("\0"))
+    && frozenCmd[1] === "-c" && requestCmd[1] === "-c"
+    && frozenCmd[2] === requestCmd[2]
+    && frozenCmd[2].startsWith(REPORT_VALIDATOR_PREFIX)
+    && frozenCmd[2].endsWith("))");
+}
+
+function sameReportRequestField(key: string, priorValue: unknown, requestValue: unknown): boolean {
+  if (key === "validation_command" && sameReportValidatorCommand(priorValue, requestValue)) {
+    return true;
+  }
+  return JSON.stringify(priorValue) === JSON.stringify(requestValue);
+}
+
+function sameReportRequest(priorValue: unknown, request: JsonObject): boolean {
+  const prior = jsonObject(priorValue);
+  if (!prior) return false;
+  const keys = Object.keys(request);
+  return Object.keys(prior).length === keys.length
+    && keys.every(key => Object.hasOwn(prior, key) && sameReportRequestField(key, prior[key], request[key]));
+}
 
 function hasSingleManagerContextEvidence(basis: JsonObject, prior: JsonObject, events: unknown): boolean {
   if (requireJsonObject(prior.actor, "original watch actor").schema_version !== "loopx_steward_managed_actor_v0"
@@ -80,8 +111,9 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   // Post-context monitor failures (external signal outage, daemon worker exit,
   // storage I/O error, or runtime unavailability) before any poll receipt or
-  // upstream model turn may recover at most once when strict single-context
-  // and zero-effect journal proofs hold; pre-context unknown worker launches remain closed.
+  // upstream model turn may recover once immediately and retry only after a
+  // bounded cooldown when strict single-context and zero-effect journal proofs
+  // hold; pre-context unknown worker launches remain closed.
   const postContextWatchRecoverable = hasSingleManagerContextEvidence(basis, prior, events) && (
     original.error_code === "runtime_unavailable"
     || original.error_code === "runtime_error" && (
@@ -90,6 +122,12 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       || original.error === WORKER_EXITED_ERROR
     )
   );
+  const completedAtMs = typeof original.completed_at === "string" ? Date.parse(original.completed_at) : NaN;
+  const observedAtMs = typeof basis.observed_at === "number" && Number.isFinite(basis.observed_at)
+    ? basis.observed_at * 1000 : NaN;
+  const chainedPostContextWatchRecoverable = postContextWatchRecoverable
+    && Number.isFinite(completedAtMs) && Number.isFinite(observedAtMs)
+    && observedAtMs - completedAtMs >= MONITOR_RECOVERY_RETRY_COOLDOWN_MS;
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
@@ -98,7 +136,7 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
-      || (predecessor !== null && (original.error_code !== "server_restarted"
+      || (predecessor !== null && (!(original.error_code === "server_restarted" || chainedPostContextWatchRecoverable)
         || Object.keys(predecessor).join() !== "original_turn_id"
         || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
         || predecessor.original_turn_id === original.turn_id))
@@ -154,9 +192,9 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || original.origin !== "native_loopx" || original.loopx_execution !== true || original.status !== "completed"
       || original.delta_count !== 0 || typeof original.upstream_turn_id !== "string" || !original.upstream_turn_id
       || Object.keys(prior).length !== keys.length
-      || keys.some(key => key === "turn_instance_id"
+      || keys.some(key => !Object.hasOwn(prior, key) || (key === "turn_instance_id"
         ? request[key] !== String(prior[key]) + ".quota-recovery"
-        : JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
+        : !sameReportRequestField(key, prior[key], request[key])))
       || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false || result.mode !== "run_once"
       || result.status !== "failed" || result.result_kind !== "host_failure"
       || failure.schema_version !== "loopx_turn_host_failure_v0" || failure.attempt !== 1
@@ -194,8 +232,7 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
   if (original.session_id !== sessionId || original.origin !== "native_loopx"
       || original.loopx_execution !== true || original.status !== "completed"
       || original.delta_count !== 0 || original.upstream_turn_id !== null
-      || Object.keys(prior).length !== Object.keys(request).length
-      || Object.keys(request).some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+      || !sameReportRequest(prior, request)
       || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
       || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
       || result.error_code !== "turn_todo_selection_deferred" || result.resume_turn_key != null
@@ -228,7 +265,7 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
     || !/^[a-f0-9]{32}$/.test(observed.turn_id) || observed.turn_id === original.turn_id
     || observed.origin !== "native_loopx" || observed.loopx_execution !== true
     || observed.error_code != null || observed.error != null
-    || JSON.stringify(observed.loopx_request) !== JSON.stringify(request)
+    || !sameReportRequest(observed.loopx_request, request)
     || !(runningHere || observed.status === "completed"
       && JSON.stringify(requireJsonObject(observed.response, "probe response").native_loopx) === JSON.stringify(result))
     || journal.schema_version !== "loopx_turn_journal_v0" || !ENVELOPED_SHA256_PATTERN.test(String(journal.turn_key))
@@ -397,7 +434,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
         || todo.action_kind !== "generate_periodic_report" || !(todo.status === "open" && !recovery || settlementOnly)) {
       throw new EffectRuntimeRequestError("report execution requires the original Session subscription, window and task");
     }
-  } else if (params.report_settlement_recovery != null) {
+  } else if (params.report_settlement_recovery != null || params.report_frozen_contract_recovery != null) {
     throw new EffectRuntimeRequestError("report recovery belongs only to its original calendar report");
   }
   if (scheduledWork) {
@@ -454,14 +491,48 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
 
 /** Both original conversation hosts use the native journal's no-model recovery. */
 function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: JsonObject): boolean {
-  if (params.report_settlement_recovery == null) return false;
+  if (params.report_settlement_recovery == null) {
+    if (params.report_frozen_contract_recovery != null) {
+      throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+    }
+    return false;
+  }
   const recovery = requireJsonObject(params.report_settlement_recovery, "native original report recovery");
   const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+  if (params.report_frozen_contract_recovery != null) {
+    const frozen = requireJsonObject(params.report_frozen_contract_recovery, "frozen report contract recovery");
+    const effects = requireJsonObject(recovery.recorded_effects, "native recorded effects");
+    const commonProof = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+      && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
+      && recovery.journal_consistent === true && todo.status === "open"
+      && effects.host_invoked === true && effects.state_written === false
+      && effects.quota_spent === false && effects.scheduler_acknowledged === false
+      && typeof frozen.turn_key === "string" && ENVELOPED_SHA256_PATTERN.test(frozen.turn_key)
+      && frozen.host_attempt_count === 1
+      && frozen.generation_verified === true && frozen.saved_candidate_verified === true;
+    const acceptedFrozen = commonProof && recovery.journal_status === "failed"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && decision.action === "continue" && decision.resume_from === "host_execute" && decision.reinvoke_host === true
+      && frozen.result_kind === "validation_failed" && frozen.validation_stage === "host_result_contract";
+    const acceptedStoppedCandidate = commonProof && recovery.journal_status === "stopped"
+      && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 3
+      && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+      && recovery.completed_phases[2] === "validation"
+      && decision.action === "return_existing" && decision.resume_from === null && decision.reinvoke_host === false
+      && frozen.result_kind === "wait" && frozen.classification === "no_typed_host_result"
+      && !Object.hasOwn(frozen, "validation_stage");
+    if ((!acceptedFrozen && !acceptedStoppedCandidate) || params.preparing_model_context === true) {
+      throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+    }
+    return true;
+  }
   const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
     && decision.action === "continue" && decision.resume_from === "validation"
     && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
     && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
-  const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
+  const completedGeneration = todo.status === "done"
+    && [request.turn_instance_id, `${String(request.turn_instance_id)}.saved-candidate`].includes(String(todo.completion_turn_key))
     && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
       || decision.action === "return_existing" && recovery.journal_status === "committed");
   const accepted = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
@@ -638,7 +709,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
             || original.loopx_execution !== true || original.status !== "completed"
             || original.delta_count !== 0 || original.upstream_turn_id !== null
             || Object.keys(prior).length !== keys.length
-            || keys.some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+            || keys.some(key => !Object.hasOwn(prior, key) || !sameReportRequestField(key, prior[key], request[key]))
             || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
             || result.mode !== "run_once" || result.status !== "failed" || result.result_kind !== "host_failure"
             || result.reason !== "first-party Host runtime rejected: stale_goal_authority"
@@ -668,7 +739,8 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("launch recovery must retain the original native Turn key");
     }
   } else if (request.report_window_id !== undefined || request.report_subscription_revision !== undefined
-      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null || params.report_launch_recovery != null) {
+      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null
+      || params.report_frozen_contract_recovery != null || params.report_launch_recovery != null) {
     throw new EffectRuntimeRequestError("report fields belong only to an original calendar report");
   }
   let refreshScope = false;
@@ -781,6 +853,198 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
   return {result_hash: resultHash, material_change: previousHash != null && previousHash !== resultHash};
 }
 
+const PR_SIGNAL_VERDICTS = new Set(["APPROVE", "REQUEST_CHANGES", "NONE"]);
+const PR_AUTHOR_MODES = new Set(["include", "exclude"]);
+const SIGNAL_SCOPE_SCHEMA = "steward_signal_monitor_scope_v0";
+
+export function normalizeStewardSignalMonitorScope(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const scope = requireJsonObject(value, "steward monitor signal scope");
+  const allowedKeys = new Set(["schema_version", "include_portfolio", "include_inbox", "pr_filter"]);
+  for (const key of Object.keys(scope)) {
+    if (!allowedKeys.has(key)) {
+      throw new EffectRuntimeRequestError(`unsupported signal_scope field: ${key}`);
+    }
+  }
+  if (scope.schema_version !== SIGNAL_SCOPE_SCHEMA) {
+    throw new EffectRuntimeRequestError(`signal_scope requires schema_version=${SIGNAL_SCOPE_SCHEMA}`);
+  }
+  const includePortfolio = scope.include_portfolio === undefined ? true : scope.include_portfolio;
+  const includeInbox = scope.include_inbox === undefined ? true : scope.include_inbox;
+  if (typeof includePortfolio !== "boolean" || typeof includeInbox !== "boolean") {
+    throw new EffectRuntimeRequestError("signal_scope include_portfolio and include_inbox must be booleans");
+  }
+  let normalizedFilter: JsonObject | null = null;
+  if (scope.pr_filter !== undefined && scope.pr_filter !== null) {
+    const rawFilter = requireJsonObject(scope.pr_filter, "PR signal filter");
+    const allowedFilterKeys = new Set([
+      "exclude_drafts",
+      "exclude_conflicting",
+      "effective_verdicts",
+      "required_approver_declarations",
+      "author_mode",
+      "authors",
+      "min_stalled_hours",
+    ]);
+    for (const key of Object.keys(rawFilter)) {
+      if (!allowedFilterKeys.has(key)) {
+        throw new EffectRuntimeRequestError(`unsupported pr_filter field: ${key}`);
+      }
+    }
+    const nextFilter: JsonObject = {};
+    for (const boolKey of ["exclude_drafts", "exclude_conflicting"] as const) {
+      if (rawFilter[boolKey] !== undefined) {
+        if (typeof rawFilter[boolKey] !== "boolean") {
+          throw new EffectRuntimeRequestError(`pr_filter.${boolKey} must be a boolean`);
+        }
+        nextFilter[boolKey] = rawFilter[boolKey];
+      }
+    }
+    if (rawFilter.required_approver_declarations !== undefined) {
+      if (!Array.isArray(rawFilter.required_approver_declarations) || rawFilter.required_approver_declarations.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.required_approver_declarations must be a non-empty array");
+      }
+      const tokens = rawFilter.required_approver_declarations.map((entry) =>
+        requireNonEmptyString(entry, "pr_filter.required_approver_declarations[]").toLowerCase(),
+      );
+      nextFilter.required_approver_declarations = [...new Set(tokens)].sort();
+    }
+    if (rawFilter.effective_verdicts !== undefined) {
+      if (!Array.isArray(rawFilter.effective_verdicts) || rawFilter.effective_verdicts.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.effective_verdicts must be a non-empty array");
+      }
+      const verdicts = rawFilter.effective_verdicts.map((item) => {
+        if (typeof item !== "string" || !PR_SIGNAL_VERDICTS.has(item)) {
+          throw new EffectRuntimeRequestError(`invalid pr_filter.effective_verdicts entry: ${String(item)}`);
+        }
+        return item;
+      });
+      nextFilter.effective_verdicts = [...new Set(verdicts)];
+    }
+    if (rawFilter.author_mode !== undefined || rawFilter.authors !== undefined) {
+      if (typeof rawFilter.author_mode !== "string" || !PR_AUTHOR_MODES.has(rawFilter.author_mode)) {
+        throw new EffectRuntimeRequestError("pr_filter.author_mode must be include or exclude");
+      }
+      if (!Array.isArray(rawFilter.authors) || rawFilter.authors.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.authors must be a non-empty array when author_mode is set");
+      }
+      const authors = rawFilter.authors.map((entry) => requireNonEmptyString(entry, "pr_filter.authors[]").toLowerCase());
+      nextFilter.author_mode = rawFilter.author_mode;
+      nextFilter.authors = [...new Set(authors)].sort();
+    }
+    if (rawFilter.min_stalled_hours !== undefined) {
+      if (
+        typeof rawFilter.min_stalled_hours !== "number"
+        || !Number.isFinite(rawFilter.min_stalled_hours)
+        || rawFilter.min_stalled_hours <= 0
+      ) {
+        throw new EffectRuntimeRequestError("pr_filter.min_stalled_hours must be a positive finite number");
+      }
+      nextFilter.min_stalled_hours = rawFilter.min_stalled_hours;
+    }
+    normalizedFilter = nextFilter;
+  }
+  return {
+    schema_version: SIGNAL_SCOPE_SCHEMA,
+    include_portfolio: includePortfolio,
+    include_inbox: includeInbox,
+    ...(normalizedFilter !== null ? { pr_filter: normalizedFilter } : {}),
+  };
+}
+
+function prAuthorLogin(item: JsonObject): string {
+  const authorObj = jsonObject(item.author);
+  const raw = authorObj ? authorObj.login : item.author;
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function hasMatchingApprovedReviewerDeclaration(item: JsonObject, requiredTokens: string[]): boolean {
+  const reviewSummary = jsonObject(item.review_summary);
+  if (!reviewSummary || reviewSummary.effective_verdict !== "APPROVE" || reviewSummary.has_review_conflict === true) {
+    return false;
+  }
+  const exactReviews = Array.isArray(reviewSummary.exact_head_reviews) ? reviewSummary.exact_head_reviews : [];
+  const latestByActor = new Map<string, { verdict: string; declaration: string }>();
+  for (const entry of exactReviews) {
+    const review = jsonObject(entry);
+    if (!review) continue;
+    const actorKey = `${String(review.author_login ?? "").trim().toLowerCase()}\0${String(review.reviewer_declaration ?? "").trim().toLowerCase()}`;
+    if (review.state === "DISMISSED") {
+      latestByActor.delete(actorKey);
+    } else if (
+      review.valid_verdict_review === true
+      && (review.verdict === "APPROVE" || review.verdict === "REQUEST_CHANGES")
+    ) {
+      latestByActor.set(actorKey, {
+        verdict: review.verdict,
+        declaration: String(review.reviewer_declaration ?? "").toLowerCase(),
+      });
+    }
+  }
+  return Array.from(latestByActor.values()).some(
+    (entry) => entry.verdict === "APPROVE" && requiredTokens.some((tok) => entry.declaration.includes(tok)),
+  );
+}
+
+function filterScopedRepositoryItems(
+  rawItems: unknown[],
+  filter: JsonObject | null,
+  observedAtValue: unknown,
+): JsonObject[] {
+  const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
+  let observedAtMs = NaN;
+  if (minStalledHours !== null) {
+    observedAtMs = typeof observedAtValue === "string" ? Date.parse(observedAtValue) : NaN;
+    if (!Number.isFinite(observedAtMs)) {
+      throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
+    }
+  }
+  const effectiveVerdicts = Array.isArray(filter?.effective_verdicts)
+    ? new Set(filter.effective_verdicts.map(String))
+    : null;
+  const requiredApprovers = Array.isArray(filter?.required_approver_declarations)
+    ? filter.required_approver_declarations.map(String)
+    : null;
+  const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
+  const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
+
+  const matched: JsonObject[] = [];
+  for (const rawItem of rawItems) {
+    const item = jsonObject(rawItem);
+    if (!item) continue;
+    if (filter?.exclude_drafts === true && item.isDraft === true) continue;
+    const reviewSummary = jsonObject(item.review_summary);
+    if (
+      filter?.exclude_conflicting === true
+      && (String(item.mergeable ?? "").toUpperCase() === "CONFLICTING" || reviewSummary?.has_review_conflict === true)
+    ) {
+      continue;
+    }
+    if (effectiveVerdicts !== null) {
+      const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
+      if (!effectiveVerdicts.has(verdict)) continue;
+    }
+    if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
+      continue;
+    }
+    if (authorMode !== null && authors !== null) {
+      const login = prAuthorLogin(item);
+      if (authorMode === "include" && (!login || !authors.has(login))) continue;
+      if (authorMode === "exclude" && login && authors.has(login)) continue;
+    }
+    if (minStalledHours !== null) {
+      const updatedMs = typeof item.updatedAt === "string" ? Date.parse(item.updatedAt) : NaN;
+      if (!Number.isFinite(updatedMs) || observedAtMs - updatedMs < minStalledHours * 3_600_000) {
+        continue;
+      }
+      matched.push({ ...item, stalled_threshold_met: true });
+    } else {
+      matched.push(item);
+    }
+  }
+  return matched;
+}
+
 /** Combine authorized local portfolio, inbox and optional repository signal
  * snapshots into one deterministic change gate for custom Steward monitors.
  * Unavailable external signal reads fail closed so transient provider errors
@@ -788,6 +1052,7 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
+  const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
   if (repo !== null && repo.status === "unavailable") {
     return {
@@ -800,11 +1065,28 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const portfolio = params.portfolio_observation == null ? null
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
   const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
-  const facts = {
-    portfolio_hash: portfolio?.result_hash ?? null,
-    inbox_items: inboxItems,
-    repository_items: repo === null ? null : (Array.isArray(repo.items) ? repo.items : []),
-  };
+  const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
+  const scopedRepoItems = signalScope !== null && rawRepoItems !== null
+    ? filterScopedRepositoryItems(
+      rawRepoItems,
+      signalScope.pr_filter === undefined ? null : jsonObject(signalScope.pr_filter),
+      params.observed_at ?? repo?.observed_at,
+    )
+    : null;
+  const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
+  const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
+  const facts = signalScope === null
+    ? {
+      portfolio_hash: portfolio?.result_hash ?? null,
+      inbox_items: inboxItems,
+      repository_items: rawRepoItems,
+    }
+    : {
+      signal_scope: signalScope,
+      portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
+      inbox_items: includeInbox ? inboxItems : [],
+      repository_items: scopedRepoItems,
+    };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
     "collection_completed_at", "generated_at", "evaluated_at", "age_seconds", "observed_at"]);
   function canonical(value: unknown): unknown {
@@ -820,6 +1102,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     material_change: previousHash !== resultHash,
     observation_incomplete: false,
     own_monitor_bookkeeping_excluded: true,
+    ...(scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
   };
 }
 

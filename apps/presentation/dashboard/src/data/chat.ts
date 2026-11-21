@@ -1,3 +1,4 @@
+import {normalizeExploreExecutionObservation} from "../../../../../loopx/control_plane/capabilities/explore_execution_observation.js";
 import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
@@ -3354,6 +3355,7 @@ const exploreResultPageSchema = z.object({
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
     measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
     measurement_error: z.string().optional(),
+    execution_observation: z.unknown().transform(observation => normalizeExploreExecutionObservation({observation})).optional(),
     work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({

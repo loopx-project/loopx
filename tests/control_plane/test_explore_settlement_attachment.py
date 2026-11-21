@@ -72,7 +72,7 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     assert "--explore-result-json" not in writeback["command_template"]
     rc, compact = _run_cli(path, runtime, *command, "--turn-envelope", cwd=project)
     assert rc == 0, compact
-    assert compact["writeback"]["settlement_plan"] == plan
+    assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     rc, completed = _run_cli(path, runtime, "todo", "complete", *binding,
                             "--evidence", "Synthetic deliverable validated", "--no-follow-up", cwd=project)
     assert rc != 0 and completed["settlement_blocked_completion"], completed
@@ -80,7 +80,7 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     # affordance; evidence attachment never bypasses the ordinary receipt gate.
     def plans(value):
         if isinstance(value, dict):
-            if value.get("schema_version") == "quota_settlement_plan_v1":
+            if value.get("schema_version") in {"quota_settlement_plan_v1", "quota_settlement_plan_v2"}:
                 yield value
             for child in value.values():
                 yield from plans(child)
@@ -483,14 +483,17 @@ def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path
     assert rc == 0, guard
     steps = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
     assert steps[1]["optional_attachments"][0]["required"] is False
+    assert steps[2]["owner"] == "runtime" and "command_template" not in steps[2]
     command = steps[1]["command_template"].replace("<validated_progress>", "validated_change").replace(
         "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
-    rc, refreshed = _run_generated_cli(command + " --progress-result-class advanced"
+    refresh_cmd = (command + " --progress-result-class advanced"
         " --progress-evidence-id validation:ordinary-result --delivery-boundary in_flight_continuation"
-        " --no-global-sync --suppress-external-sinks", registry_path=path)
-    assert rc == 0, refreshed
-    rc, spent = _run_generated_cli(steps[2]["command_template"], registry_path=path)
-    assert rc == 0, spent
+        " --no-global-sync --suppress-external-sinks")
+    rc, refreshed = _run_generated_cli(refresh_cmd, registry_path=path)
+    assert rc == 0 and refreshed["settlement_progress"]["state"] == "settled", refreshed
+    assert refreshed["settlement_result"]["ok"] is True
+    rc, replayed = _run_generated_cli(refresh_cmd, registry_path=path)
+    assert rc == 0 and replayed["idempotent_replay"] is True, replayed
     assert _spend_run_count(runtime) == 1
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 

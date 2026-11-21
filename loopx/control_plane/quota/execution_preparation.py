@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_mutation_file_lock
+from ..agents.agent_scope import AgentScopeFrontierAction
 from ..coordination.local_authority import (
     local_authority_is_promoted,
     LOCAL_AUTHORITY_SOURCES,
@@ -144,6 +145,27 @@ class RefreshTaskLeaseUnavailable(ValueError):
     code = "refresh_task_lease_unavailable"
 
 
+def read_active_task_lease_epoch(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    todo_id: str,
+    agent_id: str,
+    requested_proof: Mapping[str, Any],
+) -> int | None:
+    """Return the verified current lease epoch for an active resumed execution lease."""
+    snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+    if snapshot is None:
+        raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
+    if snapshot.get("handoff_mode") != "hard_lease":
+        return None
+    current = _project_execution_facts(_execution_facts(snapshot, goal_id, todo_id, agent_id))
+    if current.get("state") != "ready" or current.get("lease_proof") != dict(requested_proof):
+        raise RefreshTaskLeaseUnavailable("The resumed Turn's active task lease could not be verified.")
+    epoch = current.get("lease_epoch")
+    return int(epoch) if epoch is not None else None
+
+
 def prepared_lease_receipt_fields(
     proof: Mapping[str, Any], *, lease_epoch: int | None = None,
 ) -> dict[str, Any]:
@@ -175,12 +197,194 @@ def quota_prepared_lease_receipt_fields(
     return fields
 
 
+def _clamp_admitted_lease_version(
+    fields: dict[str, Any], *, prepared_lease: Mapping[str, Any],
+) -> None:
+    """Allow same-generation version advances while keeping epoch-pinned fields comparable."""
+    admitted_epoch = prepared_lease.get("prepared_lease_epoch")
+    admitted_version = prepared_lease.get("prepared_lease_version")
+    if (
+        isinstance(admitted_epoch, int)
+        and not isinstance(admitted_epoch, bool)
+        and isinstance(admitted_version, int)
+        and not isinstance(admitted_version, bool)
+        and fields["prepared_lease_version"] > admitted_version
+    ):
+        fields["prepared_lease_version"] = admitted_version
+
+
+def _recovery_lease_bound(
+    *,
+    prepared_lease: Mapping[str, Any] | None,
+    requested_proof: Mapping[str, Any] | None,
+    current_proof: Mapping[str, Any] | None,
+    settlement: QuotaSettlementReadback,
+    todo_id: str,
+    agent_id: str,
+    validation_recovery_turn_instance_id: str | None,
+) -> bool:
+    """Verify retired `.validation-recovery.` or `.admission-retry` lease ownership for a resumed completion."""
+    if (
+        not validation_recovery_turn_instance_id
+        or prepared_lease is None
+        or requested_proof is None
+        or current_proof is None
+        or not isinstance(settlement.completion_event, Mapping)
+    ):
+        return False
+    requested_key = str(requested_proof.get("idempotency_key") or "")
+    current_key = str(current_proof.get("idempotency_key") or "")
+    completion = settlement.completion_event
+    if (
+        completion.get("event_kind") != "todo_complete"
+        or completion.get("todo_id") != todo_id
+        or completion.get("agent_id") != agent_id
+        or completion.get("run_id") != validation_recovery_turn_instance_id
+    ):
+        return False
+    recovery_bases = tuple(
+        dict.fromkeys(base for base in (validation_recovery_turn_instance_id, requested_key) if base)
+    )
+    if not any(
+        current_key == f"{base}.admission-retry"
+        or current_key.startswith((f"{base}.validation-recovery.", f"{base}.admission-retry."))
+        for base in recovery_bases
+    ):
+        return False
+    admitted_epoch = prepared_lease.get("prepared_lease_epoch")
+    admitted_fields = prepared_lease_receipt_fields(
+        requested_proof,
+        lease_epoch=(
+            admitted_epoch
+            if isinstance(admitted_epoch, int) and not isinstance(admitted_epoch, bool)
+            else None
+        ),
+    )
+    _clamp_admitted_lease_version(admitted_fields, prepared_lease=prepared_lease)
+    return prepared_lease == admitted_fields
+
+
+def _autonomous_replan_guard_bound(
+    *,
+    settlement: QuotaSettlementReadback,
+    current: Mapping[str, Any],
+    current_proof: Mapping[str, Any] | None,
+    requested_proof: Mapping[str, Any] | None,
+) -> bool:
+    """Allow semantic writeback for a todo-bound autonomous replan guard without execution leases."""
+    guard = settlement.semantic_replan_guard
+    receipt = settlement.heartbeat_receipt
+    details = receipt.get("details") if isinstance(receipt, Mapping) else None
+    return (
+        isinstance(guard, Mapping)
+        and guard.get("scope") == "turn_guard"
+        and isinstance(guard.get("selected_obligation_id"), str)
+        and bool(guard.get("selected_obligation_id"))
+        and isinstance(receipt, Mapping)
+        and receipt.get("status") == "autonomous_replan_required"
+        and isinstance(details, Mapping)
+        and details.get("delivery_allowed") is not True
+        and current.get("state") in {"ready", "claim_required"}
+        and (requested_proof is None or (current_proof is not None and requested_proof == current_proof))
+    )
+
+
+def _hard_lease_execution_bound(
+    *,
+    snapshot: Mapping[str, Any],
+    goal_id: str,
+    todo_id: str,
+    agent_id: str,
+    requested_proof: dict[str, Any] | None,
+    settlement: QuotaSettlementReadback,
+    allow_same_generation_lease_renewal: bool,
+    validation_recovery_turn_instance_id: str | None,
+) -> bool:
+    """Check whether hard-lease execution or recovery authority binds this writeback."""
+    prepared_lease = settlement.prepared_lease
+    prepared_required = settlement.prepared_lease_required or prepared_lease is not None
+    todo_open = snapshot["todo"].get("status") == "open"
+    facts = _execution_facts(dict(snapshot), goal_id, todo_id, agent_id)
+    current = _project_execution_facts({**facts, "include_retired_lease_for_writeback": not todo_open})
+    current_proof = (
+        current.get("lease_proof") if current.get("state") == "ready" else current.get("retired_lease_proof")
+    )
+    if not (todo_open or prepared_required):
+        # Older admitted closeouts may predate persisted lease readiness.
+        # Their retired holder still has to match the original binding.
+        admission = settlement.native_child_admission or {}
+        return (
+            current_proof is not None
+            and admission.get("report_permission") in {"new_operation", "existing_operation_only"}
+            and (requested_proof is None or requested_proof == current_proof)
+        )
+    # Legacy prepared receipts can prove their exact version, but cannot
+    # advance to a later version without a recorded generation.
+    lease_epoch = (
+        current.get("lease_epoch") if prepared_lease and "prepared_lease_epoch" in prepared_lease else None
+    )
+    # Recovery can read the retired proof from the same locked
+    # snapshot, including a renewal within the admitted generation.
+    proof = current_proof if not todo_open and requested_proof is None else requested_proof
+    if (
+        allow_same_generation_lease_renewal
+        and lease_epoch is not None
+        and requested_proof is not None
+        and current_proof is not None
+        and current_proof.get("idempotency_key") == requested_proof.get("idempotency_key")
+        and isinstance(current_proof.get("expected_version"), int)
+        and not isinstance(current_proof.get("expected_version"), bool)
+        and isinstance(requested_proof.get("expected_version"), int)
+        and not isinstance(requested_proof.get("expected_version"), bool)
+        and current_proof["expected_version"] >= requested_proof["expected_version"]
+    ):
+        proof = current_proof
+    if prepared_lease is not None and proof is not None and proof == current_proof:
+        observed = prepared_lease_receipt_fields(proof, lease_epoch=lease_epoch)
+        _clamp_admitted_lease_version(observed, prepared_lease=prepared_lease)
+        if prepared_lease == observed:
+            return True
+    if not todo_open and _recovery_lease_bound(
+        prepared_lease=prepared_lease,
+        requested_proof=requested_proof,
+        current_proof=current_proof,
+        settlement=settlement,
+        todo_id=todo_id,
+        agent_id=agent_id,
+        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
+    ):
+        return True
+    return not prepared_required and prepared_lease is None and _autonomous_replan_guard_bound(
+        settlement=settlement, current=current, current_proof=current_proof, requested_proof=requested_proof,
+    )
+
+
+def _todo_superseded_for_turn(
+    settlement: QuotaSettlementReadback, *, todo_id: str, agent_id: str,
+) -> bool:
+    """Return True when the exact Turn's todo_supersede receipt already closed the Todo."""
+    supersede = settlement.supersede_event
+    settlement_turn_id = (
+        settlement.identity.value.turn_instance_id if settlement.identity.value is not None else None
+    )
+    return (
+        isinstance(supersede, Mapping)
+        and supersede.get("event_kind") == "todo_supersede"
+        and supersede.get("status") == "done"
+        and supersede.get("todo_id") == todo_id
+        and supersede.get("agent_id") == agent_id
+        and (settlement_turn_id is None or supersede.get("run_id") == settlement_turn_id)
+    )
+
+
 @contextmanager
 def guard_first_writeback_execution(
     *, runtime_root: Path, registry_path: Path, goal_id: str,
     todo_id: str, agent_id: str, requested_proof: dict[str, Any] | None,
     settlement: QuotaSettlementReadback,
     locked_goal: dict[str, Any] | None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> Iterator[None]:
     prepared_lease = settlement.prepared_lease
     prepared_required = settlement.prepared_lease_required or prepared_lease is not None
@@ -192,7 +396,7 @@ def guard_first_writeback_execution(
     # The typed receipt owner positively admits a non-delivery planning review.
     # A selected Todo supplies context; it is not business execution. Explicit
     # or previously prepared execution proofs retain the original lease gate.
-    planning_only = (settlement.replan_execution_pending
+    planning_only = (getattr(settlement, "replan_execution_pending", False)
                      and not prepared_required and requested_proof is None)
 
     # Legacy spend acquires maintenance before the run index. Try maintenance
@@ -212,42 +416,26 @@ def guard_first_writeback_execution(
             if prepared_required and snapshot.get("handoff_mode") != "hard_lease":
                 raise RefreshTaskLeaseUnavailable("The Todo's original hard-lease authority is unavailable.")
             if snapshot.get("handoff_mode") == "hard_lease":
-                todo_open = snapshot["todo"].get("status") == "open"
-                facts = _execution_facts(snapshot, goal_id, todo_id, agent_id)
-                current = _project_execution_facts({**facts, "include_retired_lease_for_writeback": not todo_open})
-                current_proof = (current.get("lease_proof") if current.get("state") == "ready"
-                                 else current.get("retired_lease_proof"))
-                if todo_open or prepared_required:
-                    # Legacy prepared receipts can prove their exact version, but cannot
-                    # advance to a later version without a recorded generation.
-                    lease_epoch = (current.get("lease_epoch")
-                                   if prepared_lease and "prepared_lease_epoch" in prepared_lease else None)
-                    # Recovery can read the retired proof from the same locked
-                    # snapshot, including a renewal within the admitted generation.
-                    proof = current_proof if not todo_open and requested_proof is None else requested_proof
-                    execution_bound = False
-                    if prepared_lease is not None and proof is not None and proof == current_proof:
-                        observed = prepared_lease_receipt_fields(proof, lease_epoch=lease_epoch)
-                        admitted_version = prepared_lease["prepared_lease_version"]
-                        if (
-                            not todo_open and lease_epoch is not None
-                            and observed["prepared_lease_version"] > admitted_version
-                        ):
-                            observed["prepared_lease_version"] = admitted_version
-                        execution_bound = prepared_lease == observed
-                else:
-                    # Older admitted closeouts may predate persisted lease readiness.
-                    # Their retired holder still has to match the original binding.
-                    admission = settlement.native_child_admission or {}
-                    execution_bound = (current_proof is not None
-                        and admission.get("report_permission") in {"new_operation", "existing_operation_only"}
-                        and (requested_proof is None or requested_proof == current_proof))
-                if not execution_bound:
+                if not _hard_lease_execution_bound(
+                    snapshot=snapshot,
+                    goal_id=goal_id,
+                    todo_id=todo_id,
+                    agent_id=agent_id,
+                    requested_proof=requested_proof,
+                    settlement=settlement,
+                    allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                    validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
+                ):
                     raise RefreshTaskLeaseUnavailable(
                         "The original writeback needs a current task lease recorded for this Turn. "
                         "Read the same Todo and Turn through its current guard before retrying."
                     )
-                if snapshot["todo"].get("status") == "done" and prepared_required and settlement.completion_event is None:
+                if (
+                    snapshot["todo"].get("status") == "done"
+                    and prepared_required
+                    and settlement.completion_event is None
+                    and not _todo_superseded_for_turn(settlement, todo_id=todo_id, agent_id=agent_id)
+                ):
                     raise RefreshTaskLeaseUnavailable("The completed Todo is missing this Turn's completion receipt.")
         if planning_only or (snapshot is not None and snapshot.get("handoff_mode") == "hard_lease"):
             goal = locked_goal
@@ -277,12 +465,33 @@ def apply_selected_todo_execution_preparation(
     receipt_bound: bool = False,
 ) -> None:
     selected = payload.get("selected_todo")
+    fallback = payload.get("scoped_user_gate_fallback")
+    fallback_selected = (
+        fallback.get("selected_executable")
+        if isinstance(fallback, Mapping)
+        else None
+    )
+    scoped_fallback_admitted = (
+        isinstance(fallback, Mapping)
+        and obligation is not None
+        and obligation.get("delivery_allowed") is True
+        and payload.get("effective_action")
+        != AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value
+        and (
+            not isinstance(fallback_selected, Mapping)
+            or fallback_selected.get("fallback_kind") != "deferred_successor_replan"
+        )
+    )
     if (
         not isinstance(selected, dict)
         or payload.get("should_run") is not True
         # Planning and recovery can retain a Todo without authorizing its
-        # business execution. Preserve their existing typed route.
-        or payload.get("normal_delivery_allowed") is not True
+        # business execution. Preserve their existing typed route, while still
+        # preparing scoped user-gate fallback work whose delivery is admitted.
+        or (
+            payload.get("normal_delivery_allowed") is not True
+            and not scoped_fallback_admitted
+        )
         or action_portfolio_requires_explicit_selection(payload)
     ):
         return

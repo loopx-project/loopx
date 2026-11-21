@@ -125,7 +125,10 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
 @pytest.mark.parametrize("large_peer_scope", [False, True], ids=["small-scope", "large-scope"])
 def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, capsys, provider, large_peer_scope):
     """Normal claims admit sibling edits without weakening physical collisions."""
+    import os
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}")
     project = tmp_path / "repo"
     project.mkdir()
 
