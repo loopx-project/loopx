@@ -6,7 +6,7 @@ from hashlib import sha256
 from urllib.parse import quote, unquote
 
 from ..capabilities.manager_context.roundtrip import read_chat_return_file
-from ..chat_attachments import CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_TYPES
+from .attachments import CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_TYPES
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import effect_runtime_request_scope
 

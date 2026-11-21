@@ -1486,7 +1486,7 @@ def test_original_steward_history_links_images_but_preserves_bytes_and_cursor(
 
 
 def test_download_attachment_does_not_expand_chat_input_admission(returned_file_history):
-    from loopx.chat_attachments import normalize_chat_attachments
+    from loopx.chat.attachments import normalize_chat_attachments
 
     root, registry, store, session, _, _, message, _, _ = returned_file_history
     visible = project_chat_return_deliveries(root, session["session_id"], [message], source_store=store, registry=registry)[0]
