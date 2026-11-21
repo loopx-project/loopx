@@ -25,6 +25,9 @@ import {
   readQuotaSettlementForAdmittedOwnerFromSnapshot,
   readQuotaSettlementSnapshot,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
+import {buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA, visionAuthoringContract}
+  from "../../loopx/control_plane/goals/vision_checkpoint.ts";
+import {decodeRefreshRetry, refreshRecovery} from "../../loopx/control_plane/quota/refresh_recovery.ts";
 import {projection, todo} from "./shadow_file_fixture.ts";
 
 const identity = settlementIdentity({goal_id: "goal-a", agent_id: "agent-a",
@@ -295,17 +298,28 @@ function request(root: string): JsonObject {
     allow_unbound_binding: false};
 }
 
-async function receiptFixture(events: JsonObject[], handoffMode = "hard_lease", seedLease = currentLease) {
+async function receiptFixture(events: JsonObject[], handoffMode = "hard_lease", seedLease = currentLease,
+  options: {provider?: "file" | "sqlite"; seedTodo?: JsonObject} = {}) {
   const root = await mkdtemp(join(tmpdir(), "prepared-source-"));
   const log = join(root, "goals", identity.goal_id, "rollout-event-log.jsonl");
   await mkdir(join(root, "goals", identity.goal_id), {recursive: true});
   await writeFile(log, events.map(row => JSON.stringify(row)).join("\n") + "\n");
-  const store = new FileAuthorityStore(join(root, "authority", "file-v0"), identity.goal_id);
+  const store = options.provider === "sqlite"
+    ? new (await import("../../loopx/control_plane/coordination/sqlite_authority_store.ts")).SqliteAuthorityStore(
+      join(root, "authority", "sqlite-v0"), identity.goal_id)
+    : new FileAuthorityStore(join(root, "authority", "file-v0"), identity.goal_id);
   const committed = await store.commitAuthority({operation_id: "seed-prepared-source",
     expected_provider_revision: null, next_projection: projection([
-      {...todo(identity.todo_id!), claimed_by: identity.agent_id}], [seedLease], handoffMode),
+      options.seedTodo ?? {...todo(identity.todo_id!), claimed_by: identity.agent_id}], [seedLease], handoffMode),
     events: [], receipts: []});
   assert.equal(committed.status, "applied", JSON.stringify(committed));
+  if (options.provider === "sqlite") {
+    const storeIdentity = await store.storeIdentity();
+    assert.equal(storeIdentity.status, "available");
+    if (storeIdentity.status !== "available") throw new Error("Fixture authority identity unavailable");
+    await (await import("../../loopx/control_plane/coordination/local_authority_provider.ts"))
+      .publishLocalAuthoritySelection(root, identity.goal_id, "sqlite", storeIdentity.store_identity);
+  }
   return {root, log, store};
 }
 
@@ -543,3 +557,153 @@ test("legacy identity upgrade retains prepared source that predated the effect i
     assert.equal((broken.identity as any).result.failure.kind, "receipt_missing");
   } finally {await rm(f.root, {recursive: true, force: true});}
 });
+
+
+function semanticWritebackCandidate(requestedProof: JsonObject | null = null): JsonObject {
+  const packet = visionAuthoringContract().minimal_example as JsonObject;
+  const vision = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare",
+    goal_id: identity.goal_id, agent_id: identity.agent_id, agent_vision_packet: packet,
+    existing_agent_vision: null, merge_patch: false, require_path_delta_for_durable_change: true,
+    allow_terminal_stride_path: false}).agent_vision;
+  const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+    agent_id: identity.agent_id, agent_vision: vision, existing_agent_vision: null,
+    vision_unchanged_reason: null, delivery_outcome: "outcome_progress",
+    active_state_next_action_would_update: false, delivery_boundary: "semantic_closeout",
+    todo_id: identity.todo_id, completion_todo_id: null, autonomous_replan_recorded: false, blocked_retry: null});
+  const retry = {vision: packet, unchanged_reason: null, merge_patch: false,
+    workspace_requested: false, mutation: {}, delivery_outcome: "outcome_progress", delivery_batch_scale: null,
+    delivery_boundary: "semantic_closeout", progress_observation: null};
+  return {refresh_retry: retry,
+    writeback_candidate: {requested_proof: requestedProof, effect_ref: `${identity.effect_id}#durable_writeback`,
+      completion_todo_id: null, completion_turn_key: null,
+      run: {goal_id: identity.goal_id, agent_id: identity.agent_id, todo_id: identity.todo_id,
+        turn_instance_id: identity.turn_instance_id, settlement_identity: settlementIdentityPayload(identity),
+        classification: "turn_run_once", delivery_outcome: "outcome_progress", delivery_boundary: "semantic_closeout",
+        progress_observation: null, agent_vision: vision, vision_checkpoint: checkpoint, autonomous_replan_ack: null,
+        refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}};
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: resume hints retain exact CAS and original-generation authority`, async () => {
+    const f = await receiptFixture([preparedReceipt], "hard_lease", currentLease, {provider});
+    try {
+      const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      for (const renewal of [true, false]) {
+        const result = await readQuotaSettlement({...request(f.root), resume_lease_candidate: {
+          requested_proof: {idempotency_key: originalKey, expected_version: 120},
+          allow_same_generation_lease_renewal: renewal, validation_recovery_turn_instance_id: identity.turn_instance_id}});
+        assert.deepEqual((result.resume_lease_qualification as JsonObject).original_prepared, originalPrepared);
+        assert.equal((result.resume_lease_qualification as JsonObject).state, "ready");
+      }
+      for (const candidate of [
+        {requested_proof: {idempotency_key: originalKey, expected_version: 119}, allow_same_generation_lease_renewal: true},
+        {requested_proof: {idempotency_key: originalKey, expected_version: 120},
+          validation_recovery_turn_instance_id: "foreign-turn"},
+      ]) await assert.rejects(readQuotaSettlement({...request(f.root), resume_lease_candidate: candidate}),
+        {code: "refresh_task_lease_unavailable"});
+      for (const hint of [{allow_same_generation_lease_renewal: "true"},
+        {validation_recovery_turn_instance_id: " turn-original "}]) {
+        await assert.rejects(readQuotaSettlement({...request(f.root), resume_lease_candidate: {
+          requested_proof: {idempotency_key: originalKey, expected_version: 120}, ...hint}}));
+      }
+      assert.deepEqual(await readFile(f.log), before);
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: active prepared authority still requalifies actual semantic inputs`, async () => {
+    const f = await receiptFixture([preparedReceipt], "hard_lease", currentLease, {provider});
+    try {
+      const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      const input = {...request(f.root), ...semanticWritebackCandidate({idempotency_key: originalKey, expected_version: 120})};
+      const candidate = input.writeback_candidate as JsonObject, run = candidate.run as JsonObject;
+      const retry = input.refresh_retry as JsonObject;
+      const result = await readQuotaSettlement({...input, writeback_candidate: {...candidate,
+        run: {...run, classification: "caller-supplied-opaque-classification"}}});
+      assert.deepEqual((result.writeback_qualification as any).result.value.original_prepared, originalPrepared);
+      for (const patch of [
+        {vision_checkpoint: {...run.vision_checkpoint as JsonObject, satisfied: false}},
+        {vision_checkpoint: {...run.vision_checkpoint as JsonObject, triggers: []}},
+        {agent_vision: {...run.agent_vision as JsonObject, state: "invalid-vision-state"}},
+        {agent_vision: null},
+      ]) await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate, run: {...run, ...patch}}}));
+      const withoutVision = {...retry, vision: null};
+      await assert.rejects(readQuotaSettlement({...input, refresh_retry: withoutVision,
+        writeback_candidate: {...candidate, run: {...run, agent_vision: null,
+          refresh_recovery: refreshRecovery(decodeRefreshRetry(withoutVision)!, null, false, undefined, false)}}}),
+        {code: "refresh_task_lease_unavailable"}, "A forged satisfied checkpoint cannot replace actual Vision");
+      const progress = {schema_version: "typed_progress_observation_v0", result_class: "advanced",
+        work_item_id: identity.todo_id, fingerprint: "abcdef0123456789", surface_id: "surface:current",
+        evidence_ids: ["evidence:current"]};
+      for (const observation of [{...progress, work_item_id: "todo_foreign", evidence_ids: ["evidence:foreign"]},
+        {...progress, evidence_ids: ["untyped evidence"]}]) {
+        await assert.rejects(readQuotaSettlement({...input, refresh_retry: {...retry, progress_observation: observation},
+          writeback_candidate: {...candidate, run: {...run, progress_observation: observation}}}));
+      }
+      assert.deepEqual(await readFile(f.log), before);
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: same-Turn supersede qualifies only first semantic writeback`, async () => {
+    const supersede: JsonObject = {...completed, event_kind: "todo_supersede", status: "done", event_id: "supersede-original"};
+    const f = await receiptFixture([preparedReceipt, supersede], "hard_lease", {...currentLease, status: "released"},
+      {provider, seedTodo: {...todo(identity.todo_id!, "done"), claimed_by: null}});
+    try {
+      const before = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      const input = {...request(f.root), ...semanticWritebackCandidate()};
+      const result = await readQuotaSettlement(input);
+      assert.deepEqual((result.writeback_qualification as any).result.value, {
+        step_kind: "durable_writeback", effect_ref: `${identity.effect_id}#durable_writeback`,
+        delivery_boundary: "semantic_closeout", original_prepared: originalPrepared, selected_obligation_id: null});
+      assert.equal((result.writeback_qualification as any).payload.ok, true);
+      assert.equal(result.resume_lease_qualification, undefined);
+      assert.equal(result.completion_event, null);
+      assert.equal(result.original_prepared_receipt_sha256, canonicalAuthoritySha256(preparedReceipt));
+      await assert.rejects(readQuotaSettlement({...request(f.root), resume_lease_candidate: {requested_proof: null}}),
+        {code: "refresh_task_lease_unavailable"}, "Supersede does not grant business resume");
+      const candidate = input.writeback_candidate as JsonObject;
+      for (const patch of [
+        {effect_ref: `${identity.effect_id}#terminal_closeout`},
+        {completion_todo_id: identity.todo_id}, {completion_turn_key: identity.turn_instance_id},
+        {requested_proof: {idempotency_key: originalKey, expected_version: 119}, allow_same_generation_lease_renewal: true},
+        {validation_recovery_turn_instance_id: "foreign-turn"},
+        {run: {...candidate.run as JsonObject, turn_instance_id: "foreign-turn"}},
+        {run: {...candidate.run as JsonObject, delivery_outcome: "outcome_achieved"}},
+        {run: {...candidate.run as JsonObject, vision_checkpoint: {
+          ...(candidate.run as any).vision_checkpoint, satisfied: false}}},
+      ]) await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate, ...patch}}),
+        {code: "refresh_task_lease_unavailable"});
+      const snapshot = await readQuotaSettlementSnapshot(f.root, identity.goal_id);
+      assert.throws(() => readQuotaSettlementFromSnapshot(input, snapshot), /live canonical authority/);
+      for (const patch of [{run_id: "foreign-turn"}, {agent_id: "agent-b"}, {todo_id: "todo_foreign"},
+        {goal_id: "goal-b"}, {status: "failed"}, {details: {settlement_effect_id: "foreign-effect"}}]) {
+        await writeFile(f.log, [preparedReceipt, {...supersede, ...patch}].map(row => JSON.stringify(row)).join("\n") + "\n");
+        await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"});
+      }
+      await writeFile(f.log, [preparedReceipt, supersede, completed].map(row => JSON.stringify(row)).join("\n") + "\n");
+      await assert.rejects(readQuotaSettlement(input), {code: "refresh_task_lease_unavailable"},
+        "Supersede qualification cannot mix a business completion");
+      await writeFile(f.log, before);
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: supersede rejects replacement generation and epochless renewal`, async () => {
+    const supersede = {...completed, event_kind: "todo_supersede", status: "done", event_id: "supersede-original"};
+    for (const changed of [
+      {receipt: preparedReceipt, lease: {...currentLease, idempotency_key: "replacement", lease_epoch: 51, version: 121}},
+      {receipt: preparedReceipt, lease: {...currentLease, lease_epoch: 51}},
+      {receipt: {...preparedReceipt, details: {...preparedReceipt.details as JsonObject,
+        prepared_lease_epoch: undefined}}, lease: currentLease},
+    ]) {
+      const f = await receiptFixture([changed.receipt, supersede], "hard_lease", {...changed.lease, status: "released"},
+        {provider, seedTodo: {...todo(identity.todo_id!, "done"), claimed_by: null}});
+      try {
+        await assert.rejects(readQuotaSettlement({...request(f.root), ...semanticWritebackCandidate({
+          idempotency_key: changed.lease.idempotency_key, expected_version: changed.lease.version})}),
+          {code: "refresh_task_lease_unavailable"});
+      } finally {await rm(f.root, {recursive: true, force: true});}
+    }
+  });
+}

@@ -4820,6 +4820,16 @@ view shows its independently checked result in the same conversation.
   existing TS admission must permit the report before its preparation acquires one.
   Historical generation conflicts
   reject, and validated causal links preserve the original prepared revision.
+- **Semantic writeback scope:** an explicit semantic closeout independently
+  qualifies the actual Run, original receipt/Goal/Todo/Turn, current generation,
+  progress and Vision/checkpoint in TS. Exact supersession allows only the
+  original semantic writeback; business resume still rejects it. A Todo-bound
+  replan without a business lease proves its selected obligation and semantic
+  evidence. Required preparation without an original positive proof rejects.
+  The scope grants no execution lease. The supported writer rereads inside the
+  shared maintenance marker and retains Goal/source ownership through JSON,
+  Markdown and index durability; direct provider writes bypassing the marker
+  remain outside that guarantee.
 - **Source evidence:** CLI tests cover both local providers, stale/foreign
   proofs, ordinary parity and zero completion/debit. Recovery tests inject
   interruption after JSON, Markdown, index and receipt durability. SourceSession

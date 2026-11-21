@@ -37,6 +37,10 @@ import {
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
   preflightPriorHostTurnCloseout,
 } from "../../loopx/control_plane/quota/unsettled_host_turn_recovery.ts";
+import {heartbeatSemanticAdmissionEvent} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
+import {buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA, visionAuthoringContract}
+  from "../../loopx/control_plane/goals/vision_checkpoint.ts";
+import {decodeRefreshRetry, refreshRecovery} from "../../loopx/control_plane/quota/refresh_recovery.ts";
 import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
 import {
   AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
@@ -2870,4 +2874,193 @@ test("readback exposes matching supersede_event when records are included", asyn
   } finally {
     await rm(runtimeRoot, {recursive: true, force: true});
   }
+});
+
+
+const selectedWritebackObligation = "replan-1111111111111111";
+function todoSemanticAdmission(): JsonObject {
+  return {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run", event_id: "semantic-admitted",
+    goal_id: goalId, agent_id: agentId, run_id: turnId, status: "normal_run", recorded_at: "2026-01-01T00:00:00Z",
+    details: {todo_id: todoId, selected_todo_id: todoId, settlement_effect_id: identity.effect_id,
+      closeout_required: true, ok: true, should_run: true,
+      must_attempt_work: true, delivery_allowed: false, quiet_noop_allowed: false, interaction_mode: "autonomous_replan",
+      semantic_replan_obligation_id: selectedWritebackObligation, semantic_replan_review_kind: "goal_outcome_uncovered",
+      semantic_replan_review_stop_condition: "Stop at owner-only decisions."}};
+}
+
+function todoSemanticWriteback(): JsonObject {
+  const packet = visionAuthoringContract().minimal_example as JsonObject;
+  const vision = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare",
+    goal_id: goalId, agent_id: agentId, agent_vision_packet: packet, existing_agent_vision: null,
+    merge_patch: false, require_path_delta_for_durable_change: true, allow_terminal_stride_path: false}).agent_vision;
+  const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+    agent_id: agentId, agent_vision: vision, existing_agent_vision: null, vision_unchanged_reason: null,
+    delivery_outcome: "outcome_progress", active_state_next_action_would_update: false,
+    delivery_boundary: "semantic_closeout", todo_id: todoId, completion_todo_id: null,
+    autonomous_replan_recorded: true, blocked_retry: null});
+  const progress = {schema_version: "typed_progress_observation_v0", result_class: "advanced", work_item_id: todoId,
+    fingerprint: "1234567890abcdef", surface_id: "surface:verified", evidence_ids: ["evidence:verified"]};
+  // Independent expected semantic outcomes: the typed observation advances a
+  // new surface; the evidenced Vision retains the route. The selected scalar
+  // outcome review accepts the surface, not the Vision decision by itself.
+  const semantic = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    outcomes: ["new_surface", "fresh_vision_path_outcome"], satisfying_outcomes: ["new_surface"],
+    required_any_of: ["new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
+      "coverage_backed_exploration_exhausted", "new_concrete_blocker", "coverage_backed_no_followup"],
+    observation_fingerprint: progress.fingerprint};
+  const retry = {vision: packet, unchanged_reason: null, merge_patch: false, workspace_requested: false,
+    mutation: {autonomous_replan_recorded: true}, delivery_outcome: "outcome_progress", delivery_batch_scale: null,
+    delivery_boundary: "semantic_closeout", progress_observation: progress};
+  return {refresh_retry: retry,
+    writeback_candidate: {requested_proof: null, effect_ref: `${identity.effect_id}#durable_writeback`,
+      completion_todo_id: null, completion_turn_key: null,
+      run: {goal_id: goalId, agent_id: agentId, todo_id: todoId, turn_instance_id: turnId,
+        settlement_identity: settlementIdentityPayload(identity), classification: "turn_run_once",
+        delivery_outcome: "outcome_progress", delivery_boundary: "semantic_closeout", progress_observation: progress,
+        agent_vision: vision, vision_checkpoint: checkpoint,
+        autonomous_replan_ack: {schema_version: "autonomous_replan_ack_v0", recorded: true, semantic_delta: semantic},
+        refresh_recovery: refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false)}}};
+}
+
+async function todoSemanticFixture(provider: "file" | "sqlite", seedTodo?: JsonObject, leases: JsonObject[] = []) {
+  const root = await fixture({guard: false});
+  const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+  const admission = todoSemanticAdmission();
+  await writeFile(log, JSON.stringify(admission) + "\n");
+  const {projection, todo} = await import("./shadow_file_fixture.ts");
+  const store = provider === "sqlite"
+    ? new (await import("../../loopx/control_plane/coordination/sqlite_authority_store.ts")).SqliteAuthorityStore(
+      join(root, "authority", "sqlite-v0"), goalId)
+    : new (await import("../../loopx/control_plane/coordination/file_authority_store.ts")).FileAuthorityStore(
+      join(root, "authority", "file-v0"), goalId);
+  assert.equal((await store.commitAuthority({operation_id: "seed-semantic-authority", expected_provider_revision: null,
+    next_projection: {...projection([seedTodo ?? {...todo(todoId), claimed_by: agentId}], leases), goal_id: goalId},
+    events: [], receipts: []})).status, "applied");
+  if (provider === "sqlite") {
+    const observed = await store.storeIdentity();
+    assert.equal(observed.status, "available");
+    if (observed.status !== "available") throw new Error("Fixture authority unavailable");
+    await (await import("../../loopx/control_plane/coordination/local_authority_provider.ts"))
+      .publishLocalAuthoritySelection(root, goalId, "sqlite", observed.store_identity);
+  }
+  return {root, log, store, admission};
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: Todo-bound semantic writeback without business lease remains operation scoped`, async () => {
+    const f = await todoSemanticFixture(provider);
+    try {
+      const logBefore = await readFile(f.log), authorityBefore = await f.store.loadAuthority();
+      const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
+      const result = await readQuotaSettlement(input);
+      assert.deepEqual((result.writeback_qualification as any).result.value, {
+        step_kind: "durable_writeback", effect_ref: `${identity.effect_id}#durable_writeback`,
+        delivery_boundary: "semantic_closeout", original_prepared: null,
+        selected_obligation_id: selectedWritebackObligation});
+      assert.equal((result.writeback_qualification as any).payload.ok, true);
+      assert.equal(result.resume_lease_qualification, undefined);
+      assert.equal(result.prepared_lease, undefined);
+      assert.equal(Object.hasOwn(result, "prepared_lease"), false);
+      assert.equal(result.completion_event, null);
+      await assert.rejects(readQuotaSettlement({...request(f.root), resume_lease_candidate: {requested_proof: null}}),
+        {code: "refresh_task_lease_unavailable"});
+      const candidate = input.writeback_candidate as JsonObject, run = candidate.run as JsonObject;
+      for (const patch of [
+        {requested_proof: {idempotency_key: "invented-business-proof", expected_version: 1}},
+        {completion_todo_id: todoId}, {completion_turn_key: turnId},
+        {run: {...run, autonomous_replan_ack: {...run.autonomous_replan_ack as JsonObject,
+          semantic_delta: {...(run.autonomous_replan_ack as any).semantic_delta, outcomes: ["new_concrete_blocker"]}}}},
+        {run: {...run, settlement_identity: {...settlementIdentityPayload(identity), todo_id: "todo_foreign"}}},
+      ]) await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate, ...patch}}),
+        {code: "refresh_task_lease_unavailable"});
+      const retry = input.refresh_retry as JsonObject;
+      const progress = run.progress_observation as JsonObject;
+      for (const observation of [{...progress, work_item_id: "todo_foreign", evidence_ids: ["evidence:foreign"]},
+        {...progress, work_item_id: undefined}, {...progress, evidence_ids: ["untyped evidence"]}]) {
+        await assert.rejects(readQuotaSettlement({...input, refresh_retry: {...retry, progress_observation: observation},
+          writeback_candidate: {...candidate, run: {...run, progress_observation: observation}}}));
+      }
+      // All real retry metadata must bind the actual Run, including mutation
+      // values under the existing recovery digest owner.
+      for (const patch of [{delivery_batch_scale: "multi_surface"},
+        {mutation: {autonomous_replan_recorded: true, next_action: "Different next step"}}]) {
+        await assert.rejects(readQuotaSettlement({...input, refresh_retry: {...retry, ...patch}}),
+          {code: "refresh_task_lease_unavailable"});
+      }
+      await assert.rejects(readQuotaSettlement({...input, writeback_candidate: {...candidate, run: {...run,
+        refresh_recovery: {...run.refresh_recovery as JsonObject, mutation_digest: "0".repeat(64)}}}}),
+        {code: "refresh_task_lease_unavailable"});
+      const scaled = {...retry, delivery_batch_scale: "single_surface"};
+      const scaledResult = await readQuotaSettlement({...input, refresh_retry: scaled,
+        writeback_candidate: {...candidate, run: {...run, delivery_batch_scale: "single_surface"}}});
+      assert.equal((scaledResult.writeback_qualification as any).payload.ok, true);
+      for (const patch of [{external_delivery: {suppress: true, resume_key: null}},
+        {workspace_requested: true}, {checkpoint_read_context_id: "checkpoint:foreign"}]) {
+        const changedRetry = {...retry, ...patch};
+        await assert.rejects(readQuotaSettlement({...input, refresh_retry: changedRetry,
+          writeback_candidate: {...candidate, run: {...run,
+            refresh_recovery: refreshRecovery(decodeRefreshRetry(changedRetry)!, null, false, undefined, false)}}}),
+          {code: "refresh_task_lease_unavailable"});
+      }
+      await assert.rejects(readQuotaSettlement({...input, refresh_retry: {...retry, unsupported_operation: true}}),
+        /unsupported operation field/);
+      const noProgress = {...input, refresh_retry: {...input.refresh_retry as JsonObject, progress_observation: null},
+        writeback_candidate: {...candidate, run: {...run, progress_observation: null}}};
+      await assert.rejects(readQuotaSettlement(noProgress), {code: "refresh_task_lease_unavailable"},
+        "Proposed accepted=true cannot replace the typed observation");
+      for (const patch of [{refresh_retry: undefined}, {resume_lease_candidate: {requested_proof: null}},
+        {infer_turn_instance_id: true}, {allow_unbound_binding: true}, {resolve_original_binding: true},
+        {pending_closeout: true}, {spend_precheck: true}, {tolerate_malformed_history: true},
+        {replan_obligation_id: selectedWritebackObligation}, {native_task_lease_cleanup: cleanupRequest}]) {
+        await assert.rejects(readQuotaSettlement({...input, ...patch}));
+      }
+      assert.deepEqual(await readFile(f.log), logBefore);
+      assert.deepEqual(await f.store.loadAuthority(), authorityBefore);
+    } finally {await rm(f.root, {recursive: true, force: true});}
+  });
+
+  test(`${provider}: semantic writeback requires actual selected admission and current Todo lifetime`, async () => {
+    const f = await todoSemanticFixture(provider);
+    try {
+      const input: JsonObject = {...request(f.root), ...todoSemanticWriteback()};
+      for (const patch of [{must_attempt_work: false}, {should_run: false}, {ok: false},
+        {quiet_noop_allowed: true}, {closeout_required: false}, {delivery_allowed: true},
+        {interaction_mode: "control_plane_self_repair"}, {semantic_replan_obligation_id: ""},
+        {semantic_replan_review_kind: undefined}, {prepared_lease_required: true},
+        {prepared_lease_key_sha256: "a".repeat(64)}, {prepared_lease_version: 119}, {prepared_lease_epoch: 50}]) {
+        await writeFile(f.log, JSON.stringify({...f.admission, details: {...f.admission.details as JsonObject, ...patch}}) + "\n");
+        await assert.rejects(readQuotaSettlement(input), JSON.stringify(patch));
+      }
+    } finally {await rm(f.root, {recursive: true, force: true});}
+    const {todo} = await import("./shadow_file_fixture.ts");
+    for (const selected of [{...todo(todoId), claimed_by: "foreign-agent"},
+      {...todo(todoId, "done"), claimed_by: null}, {...todo(todoId, "deferred"), claimed_by: agentId}]) {
+      const denied = await todoSemanticFixture(provider, selected);
+      try {
+        await assert.rejects(readQuotaSettlement({...request(denied.root), ...todoSemanticWriteback()}),
+          {code: "refresh_task_lease_unavailable"});
+      } finally {await rm(denied.root, {recursive: true, force: true});}
+    }
+  });
+}
+
+test("semantic admission follows one causal source and cannot substitute another obligation", () => {
+  const admitted = todoSemanticAdmission();
+  const reservation = {...admitted, event_id: "semantic-reserved", details: {...admitted.details as JsonObject,
+    closeout_required: false, should_run: false, must_attempt_work: false, quiet_noop_allowed: true}};
+  const causal: JsonObject = {...admitted, details: {...admitted.details as JsonObject, settlement_receipt_revision: "work_admission"},
+    causality: {source_event_id: reservation.event_id, caused_by: reservation.event_id}};
+  const renewed = {...causal, event_id: "semantic-readiness", details: {...causal.details as JsonObject, settlement_receipt_revision: "lease_readiness"},
+    causality: {source_event_id: causal.event_id, caused_by: causal.event_id}};
+  assert.deepEqual(heartbeatSemanticAdmissionEvent([reservation, causal, renewed], renewed, identity), causal);
+  assert.equal(heartbeatSemanticAdmissionEvent([reservation], reservation, identity), null);
+  for (const patch of [{source_event_id: "missing", caused_by: "missing"},
+    {source_event_id: causal.event_id, caused_by: "another-parent"}]) {
+    const invalid = {...renewed, causality: patch};
+    assert.equal(heartbeatSemanticAdmissionEvent([reservation, causal, invalid], invalid, identity), null);
+  }
+  const changed = {...causal, event_id: "semantic-replacement", details: {...causal.details as JsonObject,
+    semantic_replan_obligation_id: "replan-2222222222222222"}};
+  assert.throws(() => heartbeatSemanticAdmissionEvent([causal, changed], changed, identity),
+    {code: "heartbeat_receipt_identity_conflict"});
 });

@@ -15,6 +15,7 @@ import {
   settlementFailed,
   executionRequestSubject, settlementIdentity,
   settlementIdentityPayload,
+  settlementIdentityFromPlan,
   settlementPure,
   settlementReceipt,
   settlementResultPayload,
@@ -72,6 +73,8 @@ import {
   heartbeatPreparedLease,
   heartbeatPreparedWorkAdmission,
   heartbeatValidationEvent,
+  heartbeatSemanticAdmissionEvent,
+  qualifyHeartbeatPreparedGeneration,
   qualifyHeartbeatResumeLease,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
@@ -168,9 +171,22 @@ interface OwedPriorTurn extends PriorHostTurnCloseoutCandidate {
   missing_receipts: string[];
 }
 
-interface ResumeLeaseCandidate {
+interface ExecutionQualificationHints {
+  allow_same_generation_lease_renewal?: boolean;
+  validation_recovery_turn_instance_id?: string | null;
+}
+
+interface ResumeLeaseCandidate extends ExecutionQualificationHints {
   requested_proof: JsonObject | null;
   provider_context?: {turn_key: string; effect_ref: string | null};
+}
+
+interface WritebackCandidate extends ExecutionQualificationHints {
+  requested_proof: JsonObject | null;
+  effect_ref: string;
+  completion_todo_id: string | null;
+  completion_turn_key: string | null;
+  run: JsonObject;
 }
 
 type OwedPriorTurnLookup = (agentId: string, turnInstanceId: string) => OwedPriorTurn | null;
@@ -195,6 +211,7 @@ interface ReadbackRequest {
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
   resume_lease_candidate: ResumeLeaseCandidate | null;
+  writeback_candidate: WritebackCandidate | null;
   native_task_lease_cleanup: NativeTaskLeaseCleanupRequest | null;
   owner: QuotaAccountingOwner;
 }
@@ -229,9 +246,22 @@ interface SpendTerms {
 function decodeResumeLeaseCandidate(value: unknown): ResumeLeaseCandidate | null {
   if (value === undefined) return null;
   const candidate = requireJsonObject(value, "resume_lease_candidate");
-  if (Object.keys(candidate).some(key => key !== "requested_proof" && key !== "provider_context")
+  if (Object.keys(candidate).some(key => !["requested_proof", "provider_context",
+      "allow_same_generation_lease_renewal", "validation_recovery_turn_instance_id"].includes(key))
       || !Object.hasOwn(candidate, "requested_proof")) {
     throw new EffectRuntimeRequestError("resume_lease_candidate requires only requested_proof and optional provider_context");
+  }
+  const hints: ExecutionQualificationHints = {};
+  if (Object.hasOwn(candidate, "allow_same_generation_lease_renewal")) {
+    hints.allow_same_generation_lease_renewal = requireBoolean(candidate.allow_same_generation_lease_renewal,
+      "allow_same_generation_lease_renewal");
+  }
+  if (Object.hasOwn(candidate, "validation_recovery_turn_instance_id")) {
+    const recovery = candidate.validation_recovery_turn_instance_id;
+    if (recovery !== null && (typeof recovery !== "string" || !recovery || recovery !== recovery.trim())) {
+      throw new EffectRuntimeRequestError("validation_recovery_turn_instance_id requires an exact Turn or null");
+    }
+    hints.validation_recovery_turn_instance_id = recovery;
   }
   let providerContext: ResumeLeaseCandidate["provider_context"];
   if (Object.hasOwn(candidate, "provider_context")) {
@@ -244,7 +274,7 @@ function decodeResumeLeaseCandidate(value: unknown): ResumeLeaseCandidate | null
     }
     providerContext = {turn_key: context.turn_key, effect_ref: context.effect_ref};
   }
-  const contextFields = providerContext === undefined ? {} : {provider_context: providerContext};
+  const contextFields = {...hints, ...(providerContext === undefined ? {} : {provider_context: providerContext})};
   if (candidate.requested_proof === null) return {requested_proof: null, ...contextFields};
   const proof = requireJsonObject(candidate.requested_proof, "requested resume proof");
   if (Object.keys(proof).length !== 2 || typeof proof.idempotency_key !== "string"
@@ -254,6 +284,36 @@ function decodeResumeLeaseCandidate(value: unknown): ResumeLeaseCandidate | null
     throw new EffectRuntimeRequestError("requested resume proof requires an exact key and positive safe-integer version");
   }
   return {requested_proof: proof, ...contextFields};
+}
+
+function decodeWritebackCandidate(value: unknown): WritebackCandidate | null {
+  if (value === undefined) return null;
+  const candidate = requireJsonObject(value, "writeback_candidate");
+  if (Object.keys(candidate).some(key => !["requested_proof", "effect_ref", "completion_todo_id",
+      "completion_turn_key", "run", "allow_same_generation_lease_renewal",
+      "validation_recovery_turn_instance_id"].includes(key))) {
+    throw new EffectRuntimeRequestError("writeback_candidate contains an unsupported operation field");
+  }
+  const proof = decodeResumeLeaseCandidate({requested_proof: candidate.requested_proof,
+    ...(Object.hasOwn(candidate, "allow_same_generation_lease_renewal")
+      ? {allow_same_generation_lease_renewal: candidate.allow_same_generation_lease_renewal} : {}),
+    ...(Object.hasOwn(candidate, "validation_recovery_turn_instance_id")
+      ? {validation_recovery_turn_instance_id: candidate.validation_recovery_turn_instance_id} : {})})!;
+  const nullableExactString = (key: string): string | null => {
+    if (candidate[key] === null) return null;
+    const value = requireNonEmptyString(candidate[key], `writeback_candidate.${key}`);
+    if (value !== value.trim()) throw new EffectRuntimeRequestError(`writeback_candidate.${key} must be exact`);
+    return value;
+  };
+  const run = requireJsonObject(candidate.run, "writeback_candidate.run");
+  if (Object.keys(run).some(key => !["goal_id", "agent_id", "todo_id", "turn_instance_id",
+      "settlement_identity", "goal_ref", "classification", "delivery_outcome", "delivery_batch_scale", "delivery_boundary",
+      "progress_observation", "agent_vision", "vision_checkpoint", "autonomous_replan_ack", "refresh_recovery"].includes(key))) {
+    throw new EffectRuntimeRequestError("writeback_candidate.run contains an unsupported payload field");
+  }
+  return {...proof, effect_ref: requireNonEmptyString(candidate.effect_ref, "writeback_candidate.effect_ref"),
+    completion_todo_id: nullableExactString("completion_todo_id"),
+    completion_turn_key: nullableExactString("completion_turn_key"), run};
 }
 
 const ORIGINAL_TURN_SPEND_SLOTS = 1;
@@ -416,12 +476,31 @@ function decodeRequest(
       || optionalRequestString(request.turn_instance_id, "turn_instance_id") === null)) {
     throw new EffectRuntimeRequestError("resume lease qualification requires an exact Agent/Todo/Turn readback");
   }
+  const writebackCandidate = decodeWritebackCandidate(request.writeback_candidate);
+  if (writebackCandidate !== null && (resumeCandidate !== null || request.infer_turn_instance_id
+      || request.allow_unbound_binding || request.resolve_original_binding || request.pending_closeout
+      || request.refresh_retry == null || request.heartbeat_reentry_guard != null || request.spend_precheck === true
+      || request.tolerate_malformed_history === true
+      || optionalRequestString(request.agent_id, "agent_id") === null
+      || optionalRequestString(request.todo_id, "todo_id") === null
+      || optionalRequestString(request.turn_instance_id, "turn_instance_id") === null
+      || optionalRequestString(request.replan_obligation_id, "replan_obligation_id") !== null)) {
+    throw new EffectRuntimeRequestError("writeback qualification requires only an explicit original Todo operation and payload");
+  }
+  if (writebackCandidate !== null) {
+    const retry = requireJsonObject(request.refresh_retry, "writeback refresh_retry");
+    if (Object.keys(retry).some(key => !["checkpoint_read_context_id", "external_delivery", "vision",
+        "unchanged_reason", "merge_patch", "workspace_requested", "mutation", "delivery_outcome",
+        "delivery_batch_scale", "delivery_boundary", "progress_observation"].includes(key))) {
+      throw new EffectRuntimeRequestError("writeback refresh_retry contains an unsupported operation field");
+    }
+  }
   const nativeCleanup = request.native_task_lease_cleanup === undefined ? null
     : decodeNativeTaskLeaseCleanup(request.native_task_lease_cleanup);
   if (nativeCleanup !== null && (request.infer_turn_instance_id || request.allow_unbound_binding
       || request.resolve_original_binding || request.pending_closeout || request.refresh_retry != null
       || request.heartbeat_reentry_guard != null || request.spend_precheck === true
-      || request.tolerate_malformed_history === true || resumeCandidate !== null
+      || request.tolerate_malformed_history === true || resumeCandidate !== null || writebackCandidate !== null
       || !optionalRequestString(request.agent_id, "agent_id")
       || !optionalRequestString(request.todo_id, "todo_id")
       || !optionalRequestString(request.turn_instance_id, "turn_instance_id")
@@ -452,6 +531,7 @@ function decodeRequest(
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
     resume_lease_candidate: resumeCandidate,
+    writeback_candidate: writebackCandidate,
     native_task_lease_cleanup: nativeCleanup,
     owner,
   };
@@ -1796,7 +1876,7 @@ export function readQuotaSettlementFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
   const request = decodeRequest(value);
-  if (request.resume_lease_candidate !== null) throw new EffectRuntimeRequestError(
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) throw new EffectRuntimeRequestError(
     "resume lease qualification requires a live canonical authority read");
   if (request.owner.kind !== "alias") {
     throw new EffectRuntimeRequestError(
@@ -1813,7 +1893,7 @@ export function readAdmittedQuotaSettlementFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
   const request = decodeRequest(value);
-  if (request.resume_lease_candidate !== null) throw new EffectRuntimeRequestError(
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) throw new EffectRuntimeRequestError(
     "resume lease qualification requires a live canonical authority read");
   return readQuotaSettlementFromRequest(request, snapshot);
 }
@@ -1825,12 +1905,14 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
   const request = decodeRequest(value, owner);
-  if (request.resume_lease_candidate !== null) throw new EffectRuntimeRequestError(
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) throw new EffectRuntimeRequestError(
     "resume lease qualification requires a live canonical authority read");
   return readQuotaSettlementFromRequest(request, snapshot);
 }
 
-async function readResumeLeaseQualification(request: ReadbackRequest, result: JsonObject): Promise<JsonObject> {
+async function readSettlementExecutionAuthority(request: ReadbackRequest, result: JsonObject): Promise<{
+  identity: SettlementIdentity; todo: JsonObject; lease: JsonObject | undefined; handoffMode: unknown;
+}> {
   function reject(message: string): never {
     throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
   }
@@ -1839,12 +1921,16 @@ async function readResumeLeaseQualification(request: ReadbackRequest, result: Js
   if (result.found !== true || identityResult?.failure != null || identityValue === null) {
     reject("The original Turn's settlement identity could not be verified.");
   }
-  const originalReceipt = jsonObject(result.original_prepared_receipt);
   const identity = settlementIdentity({goal_id: String(identityValue.goal_id),
     agent_id: String(identityValue.agent_id), todo_id: optionalString(identityValue.todo_id),
     turn_instance_id: String(identityValue.turn_instance_id),
     replan_obligation_id: optionalString(identityValue.replan_obligation_id),
     request_subject: executionRequestSubject(identityValue.request_subject)});
+  const hint = request.resume_lease_candidate ?? request.writeback_candidate;
+  if (hint?.validation_recovery_turn_instance_id != null
+      && hint.validation_recovery_turn_instance_id !== identity.turn_instance_id) {
+    reject("Recovery Turn hint differs from the original settlement identity.");
+  }
   // The ordinary reader does not load lease decision owners. Only this
   // explicitly requested ephemeral branch reads the real provider authority,
   // inside the enclosing quota/source admission and without claiming a lease.
@@ -1869,8 +1955,17 @@ async function readResumeLeaseQualification(request: ReadbackRequest, result: Js
   if (observed.status !== "available" || observed.store_identity !== snapshot.identity.store_identity) {
     reject("Canonical authority changed during resume qualification.");
   }
+  return {identity, todo, lease, handoffMode: authority.head.handoff_mode};
+}
+
+async function readResumeLeaseQualification(request: ReadbackRequest, result: JsonObject): Promise<JsonObject> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const {identity, todo, lease, handoffMode} = await readSettlementExecutionAuthority(request, result);
+  const originalReceipt = jsonObject(result.original_prepared_receipt);
   if (originalReceipt === null) {
-    if (request.owner.kind === "exact_source" || authority.head.handoff_mode !== "soft_claim"
+    if (request.owner.kind === "exact_source" || handoffMode !== "soft_claim"
         || result.prepared_lease_required === true || result.prepared_lease != null) {
       reject("The original Turn's positive prepared admission is missing.");
     }
@@ -1897,7 +1992,7 @@ async function readResumeLeaseQualification(request: ReadbackRequest, result: Js
   }
   return qualifyHeartbeatResumeLease({originalReceipt, identity,
     requestedProof: request.resume_lease_candidate!.requested_proof, todo, lease,
-    handoffMode: authority.head.handoff_mode, completionEvent: completion,
+    handoffMode, completionEvent: completion,
     replayPhase: result.replay_phase as ReceiptBoundReplayPhase,
     closeoutStarted: [result.writeback_run, result.writeback_event, result.spend_run,
       result.spend_event, result.completion_event].some(record => record != null),
@@ -1906,6 +2001,206 @@ async function readResumeLeaseQualification(request: ReadbackRequest, result: Js
       || result.replay_phase === "settled",
     terminalProviderEffect, terminalCompletion,
     exactSource: request.owner.kind === "exact_source", observedAt: new Date()});
+}
+
+/** A first semantic writeback has its own operation scope. Its result is not
+ * a task lease and is never consumed by host execution or Todo completion. */
+async function readWritebackQualification(request: ReadbackRequest, result: JsonObject,
+  snapshot: QuotaSettlementReadbackSnapshot): Promise<JsonObject> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const candidate = request.writeback_candidate!, run = candidate.run;
+  const {identity, todo, lease, handoffMode} = await readSettlementExecutionAuthority(request, result);
+  if (identity.binding_kind !== "todo" || candidate.effect_ref !== `${identity.effect_id}#durable_writeback`
+      || candidate.completion_todo_id !== null || candidate.completion_turn_key !== null
+      || run.goal_id !== identity.goal_id || run.agent_id !== identity.agent_id
+      || run.todo_id !== identity.todo_id || run.turn_instance_id !== identity.turn_instance_id
+      || run.delivery_boundary !== "semantic_closeout"
+      || typeof run.classification !== "string" || !run.classification.trim()) {
+    reject("Writeback candidate does not describe this original Todo's semantic operation.");
+  }
+  const parsed = settlementIdentityFromPlan({settlement_plan: {identity: run.settlement_identity}});
+  if (parsed.failure !== null || !isDeepStrictEqual(settlementIdentityPayload(parsed.value), settlementIdentityPayload(identity))
+      || !quotaOwnerOwnsProjection(request.owner, run.goal_ref)
+      || (request.owner.kind === "alias" && Object.hasOwn(run, "goal_ref"))) {
+    reject("Writeback candidate crosses its original settlement or Goal ownership.");
+  }
+  const retry = request.refresh_retry!;
+  const progress = jsonObject(run.progress_observation);
+  if (run.progress_observation != null && (progress === null || progress.work_item_id !== identity.todo_id)) {
+    reject("Writeback progress must describe the original Todo, without substituting another work item.");
+  }
+  const recovery = jsonObject(result.refresh_recovery);
+  if (retry.external_delivery != null || retry.workspace_requested || retry.checkpoint_read_context_id != null
+      || retry.delivery_boundary !== "semantic_closeout" || retry.delivery_outcome !== run.delivery_outcome
+      || retry.delivery_batch_scale !== (run.delivery_batch_scale ?? null)
+      || !isDeepStrictEqual(retry.progress_observation, run.progress_observation ?? null)
+      || recovery?.decision !== "append" || recovery.reason !== "first_writeback"
+      || !isDeepStrictEqual(run.refresh_recovery, recovery)
+      || Object.keys(retry.mutation).some(key => !["next_action", "next_action_basis", "autonomous_replan_recorded",
+        "repair_delta_kinds", "usage_measurement", "usage_codex_session", "explore_result"].includes(key))) {
+    reject("Writeback candidate differs from its actual semantic payload or carries another operation.");
+  }
+  if ([result.writeback_run, result.writeback_event, result.spend_run, result.spend_event].some(record => record != null)) {
+    reject("Committed writeback and accounting use their existing replay owner, not a new writeback qualification.");
+  }
+  const originalReceipt = jsonObject(result.original_prepared_receipt);
+  if (originalReceipt === null && (result.prepared_lease_required === true || result.prepared_lease != null)) {
+    reject("The original Turn's required positive preparation is missing.");
+  }
+  const effective = jsonObject(result.heartbeat_receipt);
+  if (effective === null) reject("The original semantic receipt is unavailable.");
+  const events = indexedEvents(snapshot, request.goal_id, identity.agent_id, identity.turn_instance_id)
+    .filter(event => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
+  const scope = (original: JsonObject | null, selected: string | null): JsonObject => bundle(settlementPure({
+    step_kind: "durable_writeback", effect_ref: candidate.effect_ref, delivery_boundary: "semantic_closeout",
+    original_prepared: original, selected_obligation_id: selected,
+  }, (jsonObject(result.identity)?.result as SettlementResult).receipts));
+  const closeoutStarted = [result.completion_event, result.supersede_event].some(record => record != null);
+  let activePrepared: JsonObject | null = null;
+  if (originalReceipt !== null && lease !== undefined && !closeoutStarted) {
+    const qualified = qualifyHeartbeatResumeLease({originalReceipt, identity, requestedProof: candidate.requested_proof,
+      todo, lease, handoffMode, completionEvent: null, replayPhase: result.replay_phase as ReceiptBoundReplayPhase,
+      closeoutStarted: false, writebackPending: true, otherTerminalStarted: false,
+      exactSource: request.owner.kind === "exact_source", observedAt: new Date()});
+    activePrepared = jsonObject(qualified.original_prepared);
+  }
+  const [{buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA, qualifiesOpenTodoSemanticCheckpoint},
+    {projectExecutionPreparation, EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION}, {leaseIsActive}, {projectProgressDelta}] = await Promise.all([
+    import("../goals/vision_checkpoint.ts"), import("../work_items/execution_preparation.ts"),
+    import("../work_items/task_lease_record.ts"), import("../work_items/progress_delta.ts"),
+  ]);
+  const ownerRuns = snapshot.runs.filter(row => row.goal_id === identity.goal_id && row.agent_id === identity.agent_id
+    && quotaOwnerOwnsProjection(request.owner, row.goal_ref));
+  const progressSource = progress === null ? null : {current: progress, baseline: null,
+    window: ownerRuns.map(row => jsonObject(row.progress_observation)).filter(value => value !== null)};
+  // Reuse the typed observation codec for every semantic branch. Its outcome
+  // qualification remains with the existing replan owner below.
+  if (progressSource !== null) projectProgressDelta(progressSource);
+  const existingVision = [...ownerRuns].reverse().map(row => jsonObject(row.agent_vision)).find(value => value !== null) ?? null;
+  let vision: JsonObject | null = null;
+  if (run.agent_vision != null) {
+    vision = jsonObject(buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare",
+      goal_id: identity.goal_id, agent_id: identity.agent_id, agent_vision_packet: run.agent_vision,
+      existing_agent_vision: null, merge_patch: false, require_path_delta_for_durable_change: true,
+      allow_terminal_stride_path: false}).agent_vision);
+  }
+  if (retry.vision === null && vision !== null) {
+    reject("Writeback cannot introduce a Vision absent from its actual request.");
+  }
+  if (retry.vision !== null) {
+    const expected = jsonObject(buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare",
+      goal_id: identity.goal_id, agent_id: identity.agent_id, agent_vision_packet: retry.vision,
+      existing_agent_vision: existingVision, merge_patch: retry.merge_patch,
+      require_path_delta_for_durable_change: true, allow_terminal_stride_path: false}).agent_vision);
+    if (expected === null || vision === null || Object.keys(expected).some(key => key !== "generated_at"
+        && !isDeepStrictEqual(expected[key], vision![key]))) reject("Writeback Vision differs from its actual request.");
+  }
+  const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+    agent_id: identity.agent_id, agent_vision: vision, existing_agent_vision: existingVision,
+    vision_unchanged_reason: retry.unchanged_reason, delivery_outcome: run.delivery_outcome,
+    active_state_next_action_would_update: retry.mutation.next_action != null,
+    delivery_boundary: "semantic_closeout", todo_id: identity.todo_id, completion_todo_id: null,
+    autonomous_replan_recorded: retry.mutation.autonomous_replan_recorded === true, blocked_retry: null});
+  const offeredCheckpoint = jsonObject(run.vision_checkpoint);
+  if (checkpoint.satisfied !== true || offeredCheckpoint === null
+      || ["schema_version", "agent_id", "required", "satisfied", "decision", "triggers",
+      "delivery_boundary", "agent_vision_state"].some(key => !isDeepStrictEqual(offeredCheckpoint[key], checkpoint[key]))) {
+    reject("Writeback checkpoint was not qualified from its actual semantic inputs.");
+  }
+  const qualifiedRun = {...run, settlement_identity: settlementIdentityPayload(identity), agent_vision: vision,
+    vision_checkpoint: checkpoint};
+  // Prepared execution authority alone cannot validate semantic writeback.
+  // The same actual Vision, progress identity and checkpoint checks above
+  // apply before returning this operation's scope.
+  if (activePrepared !== null) return scope(activePrepared, null);
+  const supersede = jsonObject(result.supersede_event);
+  if (originalReceipt !== null && supersede !== null && result.completion_event == null
+      && todo.status === "done" && lease?.status === "released") {
+    const proof = qualifyHeartbeatPreparedGeneration({originalReceipt, identity, todo, lease, handoffMode,
+      requestedProof: candidate.requested_proof, exactSource: request.owner.kind === "exact_source"});
+    if (supersede.event_kind !== "todo_supersede" || supersede.status !== "done"
+        || supersede.goal_id !== identity.goal_id || supersede.agent_id !== identity.agent_id
+        || supersede.run_id !== identity.turn_instance_id || supersede.todo_id !== identity.todo_id
+        || !effectIdsMatch(optionalString(details(supersede).settlement_effect_id), identity.effect_id)
+        || !qualifiesOpenTodoSemanticCheckpoint(qualifiedRun, identity)) {
+      reject("Retired writeback requires exact supersession and a fresh nonterminal semantic checkpoint.");
+    }
+    return scope({...proof.original}, null);
+  }
+  const completion = jsonObject(result.completion_event), receiptDetails = details(effective);
+  if (request.owner.kind === "alias" && originalReceipt === null && result.prepared_lease_required !== true
+      && !["prepared_lease_key_sha256", "prepared_lease_version", "prepared_lease_epoch", "prepared_lease_required",
+        "must_attempt_work", "delivery_allowed", "quiet_noop_allowed", "settlement_receipt_revision"]
+        .some(key => Object.hasOwn(receiptDetails, key))
+      && todo.status === "done" && handoffMode === "hard_lease" && lease?.status === "released"
+      && lease.owner === identity.agent_id && (todo.claimed_by == null || todo.claimed_by === identity.agent_id)
+      && jsonObject(result.native_child_admission)?.report_permission === "existing_operation_only"
+      && completion?.event_kind === "todo_complete" && completion.goal_id === identity.goal_id
+      && completion.agent_id === identity.agent_id && completion.run_id === identity.turn_instance_id
+      && (completion.todo_id == null || completion.todo_id === identity.todo_id)
+      && effectIdsMatch(optionalString(details(completion).settlement_effect_id), identity.effect_id)
+      && qualifiesOpenTodoSemanticCheckpoint(qualifiedRun, identity)) {
+    const legacy = projectExecutionPreparation({schema_version: EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION,
+      goal_id: identity.goal_id, agent_id: identity.agent_id, handoff_mode: handoffMode, authority_available: true,
+      selected_todo: todo, include_retired_lease_for_writeback: true,
+      leases: [{status: lease.status, active: false, owner: lease.owner,
+        lease_proof: {idempotency_key: lease.idempotency_key, expected_version: lease.version}, lease_epoch: lease.lease_epoch}]});
+    const currentProof = jsonObject(legacy.retired_lease_proof);
+    if (currentProof === null || (candidate.requested_proof !== null
+        && !isDeepStrictEqual(candidate.requested_proof, currentProof))) {
+      reject("Legacy semantic writeback requires its exact current retired holder.");
+    }
+    // Historical absence proves no incarnation. Return only this writeback's
+    // scope, never the observed epoch or a business execution lease.
+    return scope(null, null);
+  }
+  const semanticReceipt = heartbeatSemanticAdmissionEvent(events, effective, identity, request.owner.kind === "alias");
+  const guard = semanticReceipt === null ? null : projectSemanticReplanGuard(details(semanticReceipt));
+  const selected = optionalString(guard?.selected_obligation_id);
+  if (semanticReceipt === null || guard?.scope !== "turn_guard" || selected === null
+      || selected !== optionalString(jsonObject(result.semantic_replan_guard)?.selected_obligation_id)
+      || guard.selected_capability_guard != null || todo.status !== "open") {
+    reject("Semantic writeback needs the original typed replan admission and selected obligation.");
+  }
+  if (originalReceipt !== null) reject("Semantic writeback cannot replace this Turn's prepared business generation.");
+  const currentProof = lease === undefined ? null : {idempotency_key: lease.idempotency_key, expected_version: lease.version};
+  if (candidate.requested_proof !== null && !isDeepStrictEqual(candidate.requested_proof, currentProof)) {
+    reject("The supplied writeback proof does not match current canonical authority.");
+  }
+  const preparation = projectExecutionPreparation({schema_version: EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION,
+    goal_id: identity.goal_id, agent_id: identity.agent_id, handoff_mode: handoffMode, authority_available: true,
+    selected_todo: todo, leases: lease === undefined ? [] : [{status: lease.status,
+      active: leaseIsActive(lease, new Date()), owner: lease.owner, lease_proof: currentProof, lease_epoch: lease.lease_epoch}]});
+  if (preparation.state !== "ready" && preparation.state !== "claim_required" && preparation.state !== "not_required") {
+    reject("The original semantic Todo's current authority conflicts with this actor.");
+  }
+  if (candidate.requested_proof !== null && preparation.state !== "ready") {
+    reject("An offered semantic writeback proof requires current active authority.");
+  }
+  const [{projectReplanSettlementContract, REPLAN_SETTLEMENT_REQUEST_SCHEMA}, {projectReplanWriteback}] = await Promise.all([
+    import("../work_items/replan_settlement.ts"), import("../work_items/replan_semantics.ts"),
+  ]);
+  const contract = projectReplanSettlementContract({schema_version: REPLAN_SETTLEMENT_REQUEST_SCHEMA,
+    selected_todo_id: identity.todo_id, semantic_replan_obligation_id: selected});
+  if (contract.settlement_binding.id !== identity.todo_id || contract.semantic_obligation.discharge !== "todo_bound_writeback") {
+    reject("Semantic obligation does not belong to the original Todo settlement.");
+  }
+  const obligation = projectReplanWriteback({operation: "receipt_bound_obligation", guard_scoped: true,
+    selected_obligation_id: selected, agent_id: identity.agent_id, goal_id: identity.goal_id,
+    guard_recorded_at: semanticReceipt.recorded_at, guard_turn_instance_id: identity.turn_instance_id,
+    replay_phase: "open", current_obligation: null, receipt_review: guard.selected_review_source,
+    transition_candidates: []}).obligation;
+  const semantic = projectReplanWriteback({operation: "qualify", obligation, agent_vision: vision ?? {},
+    progress_source: progressSource});
+  const ack = jsonObject(run.autonomous_replan_ack), offered = jsonObject(ack?.semantic_delta);
+  if (semantic.accepted !== true || ack?.schema_version !== "autonomous_replan_ack_v0" || ack.recorded !== true
+      || offered === null || ["schema_version", "accepted", "outcomes", "satisfying_outcomes", "required_any_of",
+        "observation_fingerprint"].some(key => !isDeepStrictEqual(offered[key], semantic[key]))) {
+    reject("Semantic writeback payload does not satisfy its original replan source.");
+  }
+  return scope(null, selected);
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
@@ -1935,7 +2230,7 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     throw new EffectRuntimeRequestError("spend_request requires spend_precheck, integer slots and a source");
   }
   if (spendPrecheck) request.include_record_bodies = true;
-  if (request.resume_lease_candidate !== null) request.include_record_bodies = true;
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
     ? withBorrowedQuotaAccountingOwner
     : withQuotaAccountingOwner;
@@ -1943,15 +2238,18 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     request.owner,
     async () => {
       const matchedSpend: MatchedSpendRecords = {run: null, receipt: null};
-      const result = readQuotaSettlementFromRequest(request,
-        await readQuotaSettlementSnapshot(
+      const snapshot = await readQuotaSettlementSnapshot(
           request.runtime_root,
           request.goal_id,
           undefined,
           request.tolerate_malformed_history,
-        ), true, matchedSpend);
+        );
+      const result = readQuotaSettlementFromRequest(request, snapshot, true, matchedSpend);
       if (request.resume_lease_candidate !== null) {
         result.resume_lease_qualification = await readResumeLeaseQualification(request, result);
+      }
+      if (request.writeback_candidate !== null) {
+        result.writeback_qualification = await readWritebackQualification(request, result, snapshot);
       }
       const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
       const receipt = spendReceiptTerms(matchedSpend.receipt);

@@ -3722,6 +3722,14 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
   报告业务 lease；既有 TS admission 允许报告后，才在 preparation 前获取。
   历史 generation 冲突拒绝，已核验因果链接保留
   原 prepared revision。
+- **语义写回范围：**显式 semantic closeout 在 TS 内独立核验实际 Run、原
+  receipt/Goal/Todo/Turn、当前 generation、progress 与 Vision/checkpoint。
+  Exact supersede 只允许原 semantic writeback，business resume 仍拒绝。
+  无业务 lease 的 Todo-bound replan 须证明 selected obligation 与语义证据；
+  要求 preparation 却缺少原 positive proof 时拒绝。该 scope 不授予 execution
+  lease。受支持 writer 在共享 maintenance marker 内重新读取，并持有 Goal/source
+  ownership 直到 JSON、Markdown、index 持久化；绕过 marker 的直接 provider
+  写仍不属于此保证。
 - **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
   parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
   持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，

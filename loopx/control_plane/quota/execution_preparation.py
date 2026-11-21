@@ -287,6 +287,46 @@ def read_turn_execution_lease_qualification(
     return readback
 
 
+def read_turn_writeback_qualification(
+    *, runtime_root: Path, registry_path: Path, identity: SettlementIdentity,
+    candidate: Mapping[str, Any], refresh_retry: Mapping[str, Any] | None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Transport the actual Run to the independent TS writeback owner.
+
+    Callers retain the shared maintenance/source lifetime through commit.
+    This result names one writeback operation and supplies no execution lease.
+    """
+    from .settlement import read_heartbeat_settlement
+
+    readback = read_heartbeat_settlement(
+        runtime_root, goal_id=identity.goal_id, agent_id=identity.agent_id,
+        todo_id=identity.todo_id, turn_instance_id=identity.turn_instance_id,
+        replan_obligation_id=identity.replan_obligation_id,
+        registry_path=registry_path, goal_ref=goal_ref,
+        source_admission=source_admission,
+        borrow_source_admission=source_admission is not None,
+        refresh_retry=dict(refresh_retry) if refresh_retry is not None else None,
+        writeback_candidate=dict(candidate),
+    )
+    qualification = readback.writeback_qualification if readback is not None else None
+    if qualification is None:
+        raise RefreshTaskLeaseUnavailable("The original Turn's writeback scope could not be qualified.")
+    if qualification.failure is not None:
+        raise RefreshTaskLeaseUnavailable(qualification.failure.reason)
+    scope = qualification.value
+    if (
+        not isinstance(scope, dict)
+        or set(scope) != {"step_kind", "effect_ref", "delivery_boundary", "original_prepared", "selected_obligation_id"}
+        or scope.get("step_kind") != "durable_writeback"
+        or scope.get("effect_ref") != f"{identity.effect_id}#durable_writeback"
+        or scope.get("delivery_boundary") != "semantic_closeout"
+    ):
+        raise RefreshTaskLeaseUnavailable("The qualified scope does not describe this Turn's semantic writeback.")
+    return scope
+
+
 def prepared_lease_receipt_fields(
     proof: Mapping[str, Any], *, lease_epoch: int | None = None,
 ) -> dict[str, Any]:
@@ -328,10 +368,12 @@ def guard_first_writeback_execution(
     source_admission: Mapping[str, Any] | None = None,
     allow_same_generation_lease_renewal: bool = False,
     validation_recovery_turn_instance_id: str | None = None,
+    writeback_candidate: Mapping[str, Any] | None = None,
+    refresh_retry: Mapping[str, Any] | None = None,
 ) -> Iterator[None]:
     prepared_lease = settlement.prepared_lease
     prepared_required = settlement.prepared_lease_required or prepared_lease is not None
-    if (requested_proof is None and not prepared_required
+    if (writeback_candidate is None and requested_proof is None and not prepared_required
             and not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id)):
         yield
         return
@@ -345,8 +387,20 @@ def guard_first_writeback_execution(
             operation="refresh-state-execution",
         ))
         require_shadow_primary_write_allowed(runtime_root, goal_id)
-        hard_lease_required = prepared_required
-        if prepared_required:
+        goal_lifetime_required = prepared_required
+        if writeback_candidate is not None:
+            identity = settlement.identity.value
+            if identity is None:
+                raise RefreshTaskLeaseUnavailable("The original Turn's settlement identity is unavailable.")
+            # Always read inside M. Never consume a qualification carried by
+            # the caller's earlier settlement snapshot.
+            read_turn_writeback_qualification(
+                runtime_root=runtime_root, registry_path=registry_path,
+                identity=identity, candidate=writeback_candidate, refresh_retry=refresh_retry,
+                goal_ref=goal_ref, source_admission=source_admission,
+            )
+            goal_lifetime_required = True
+        elif prepared_required:
             identity = settlement.identity.value
             if identity is None:
                 raise RefreshTaskLeaseUnavailable("The original Turn's settlement identity is unavailable.")
@@ -363,8 +417,8 @@ def guard_first_writeback_execution(
             snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
             if snapshot is None:
                 raise RefreshTaskLeaseUnavailable("The selected Todo's execution authority could not be read.")
-            hard_lease_required = snapshot.get("handoff_mode") == "hard_lease"
-            if hard_lease_required:
+            goal_lifetime_required = snapshot.get("handoff_mode") == "hard_lease"
+            if goal_lifetime_required:
                 todo_open = snapshot["todo"].get("status") == "open"
                 facts = _execution_facts(snapshot, goal_id, todo_id, agent_id)
                 current = _project_execution_facts({**facts, "include_retired_lease_for_writeback": not todo_open})
@@ -381,7 +435,7 @@ def guard_first_writeback_execution(
                         "The original writeback needs a current task lease recorded for this Turn. "
                         "Read the same Todo and Turn through its current guard before retrying."
                     )
-        if hard_lease_required:
+        if goal_lifetime_required:
             goal = locked_goal
             if goal is None:
                 source, _ = load_recommendation_source_goal(registry_path, goal_id)

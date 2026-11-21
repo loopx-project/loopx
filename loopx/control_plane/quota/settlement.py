@@ -192,6 +192,7 @@ class QuotaSettlementReadback:
     original_prepared_event_id: str | None = None
     original_prepared_receipt_sha256: str | None = None
     native_task_lease_cleanup: dict[str, Any] | None = None
+    writeback_qualification: SettlementResult[dict[str, Any]] | None = None
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -508,6 +509,7 @@ def read_heartbeat_settlement(
     heartbeat_reentry_guard: dict[str, Any] | None = None,
     resume_lease_candidate: Mapping[str, Any] | None = None,
     native_task_lease_cleanup: Mapping[str, Any] | None = None,
+    writeback_candidate: Mapping[str, Any] | None = None,
     include_record_bodies: bool = True,
     tolerate_malformed_history: bool = False,
 ) -> QuotaSettlementReadback | None:
@@ -550,6 +552,11 @@ def read_heartbeat_settlement(
             **(
                 {"native_task_lease_cleanup": dict(native_task_lease_cleanup)}
                 if native_task_lease_cleanup is not None
+                else {}
+            ),
+            **(
+                {"writeback_candidate": dict(writeback_candidate)}
+                if writeback_candidate is not None
                 else {}
             ),
         },
@@ -617,4 +624,8 @@ def read_heartbeat_settlement(
         original_prepared_event_id=_optional_readback_text(payload.get("original_prepared_event_id")),
         original_prepared_receipt_sha256=_optional_readback_text(payload.get("original_prepared_receipt_sha256")),
         native_task_lease_cleanup=_optional_readback_record(payload.get("native_task_lease_cleanup")),
+        writeback_qualification=(
+            _readback_result(payload["writeback_qualification"])
+            if "writeback_qualification" in payload else None
+        ),
     )

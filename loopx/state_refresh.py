@@ -880,6 +880,7 @@ def refresh_state_run(
         settlement_workspace_requirement = None
         settlement_readback = None
         refresh_recovery = None
+        refresh_retry_request = None
         prior_writeback_run = None
         checkpoint_supplement = False
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
@@ -1611,11 +1612,41 @@ def refresh_state_run(
                     # An administrative closeout can report inability to start.
                     # A prepared Turn's blocker is still a first writeback.
                     and (
-                        blocked_retry is None
+                        normalized_delivery_boundary == "semantic_closeout"
+                        or blocked_retry is None
                         or task_lease_proof is not None
                         or (settlement_readback is not None and settlement_readback.prepared_lease is not None)
                     )
                 ):
+                    writeback_candidate = None
+                    if normalized_delivery_boundary == "semantic_closeout":
+                        # Project the final Run without replacing its observed
+                        # work identity, semantic delta or recovery metadata.
+                        writeback_run = {
+                            field: record[field]
+                            for field in (
+                                "goal_id", "agent_id", "todo_id", "turn_instance_id",
+                                "settlement_identity", "classification", "delivery_outcome",
+                                "delivery_batch_scale", "delivery_boundary", "progress_observation",
+                                "agent_vision", "vision_checkpoint", "autonomous_replan_ack",
+                                "refresh_recovery",
+                            )
+                            if field in record
+                        }
+                        writeback_run["delivery_boundary"] = normalized_delivery_boundary
+                        if goal_ref is not None:
+                            writeback_run["goal_ref"] = dict(goal_ref)
+                        writeback_candidate = {
+                            "requested_proof": dict(task_lease_proof) if task_lease_proof is not None else None,
+                            "effect_ref": f"{settlement_identity.effect_id}#durable_writeback",
+                            "completion_todo_id": completion_todo_id,
+                            "completion_turn_key": completion_turn_key,
+                            "run": writeback_run,
+                            **({"allow_same_generation_lease_renewal": allow_same_generation_lease_renewal}
+                               if allow_same_generation_lease_renewal is not False else {}),
+                            **({"validation_recovery_turn_instance_id": validation_recovery_turn_instance_id}
+                               if validation_recovery_turn_instance_id is not None else {}),
+                        }
                     usage_booking_guard.enter_context(guard_first_writeback_execution(
                         runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
                         todo_id=settlement_identity.todo_id, agent_id=settlement_identity.agent_id,
@@ -1626,6 +1657,8 @@ def refresh_state_run(
                         source_admission=source_admission,
                         allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
                         validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
+                        writeback_candidate=writeback_candidate,
+                        refresh_retry=refresh_retry_request,
                     ))
                 if settlement_readback is not None:
                     persist_external_delivery_pause(

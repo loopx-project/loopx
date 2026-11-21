@@ -96,7 +96,8 @@ and provides no ABA guarantee. A different generation cannot complete the old
 Turn, including a frozen report; it requires execution-loss closeout or a fresh
 Turn through the existing C1 owner. Every effect boundary rereads its owning authority;
 retired authority is usable only for the original Turn's proven post-completion
-writeback or its verified pending terminal-receipt repair. A conditional terminal
+writeback, independently qualified semantic writeback after exact supersession,
+or its verified pending terminal-receipt repair. A conditional terminal
 effect after writeback and spend uses the existing journal/settlement owner and
 exact effect reference; an active proof may execute that remaining original
 effect, while a canonical completed Todo permits only receipt repair. Committed
@@ -115,6 +116,18 @@ unchanged. Conflicting prepared generations in one identity's history are reject
 validated causal links retain the original proof even on older revisions without
 a revision marker. Direct receipt publication permits exact replay and rejects any
 change to already prepared fields before appending a receipt.
+
+An explicit `semantic_closeout` uses a separate TS writeback qualification. It
+checks the actual Run, original Todo/Turn/effect and Goal owner, current canonical
+generation, typed progress, Vision and checkpoint. Exact supersession permits
+only that original Turn's semantic writeback; business resume still rejects it.
+A Todo-bound replan with no business lease must prove its original selected
+obligation and actual semantic evidence. Required preparation without a positive
+original proof is rejected. Qualification returns only the durable-writeback
+effect scope, never an execution lease. The supported writer rereads inside the
+shared maintenance marker and holds Goal/source ownership and the marker through
+Run JSON, Markdown and index durability. Direct provider writes bypassing that
+marker are outside this canonical writer guarantee.
 
 `refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
 执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
@@ -141,7 +154,8 @@ key 与 epoch 保持相同，version 不降低。Legacy exact-proof 兼容保留
 不提供 ABA 保证。不同 generation 不能完成旧 Turn，即便已有 frozen report；
 恢复使用 execution-loss closeout 或既有 C1 owner 下的 fresh Turn。每个 effect
 边界均重新读取对应 owner 的 authority；retired proof 只支持原 Turn 已证明 completion 后尚余的
-writeback 或已核验的 pending terminal receipt 修复。writeback 与 spend 后的条件
+writeback、exact supersede 后独立核验的 semantic writeback，或已核验的 pending
+terminal receipt 修复。writeback 与 spend 后的条件
 terminal effect 复用既有 journal/settlement owner 及 exact effect ref：active 原
 generation proof 只能执行该剩余 effect；canonical Todo 已完成时只能修复收据。
 已提交重放直接返回原结果，不请求租约或执行 effect。durable writeback 已被接受后，
@@ -155,6 +169,16 @@ governance probe；既有 TS admission 允许报告后，才在报告 preparatio
 prepared generation 均拒绝；旧收据没有 revision 标记时，已核验的因果链接仍保留
 原 proof。Direct receipt publication 只允许 exact replay，任何已准备字段变化都
 必须在追加收据前拒绝。
+
+显式 `semantic_closeout` 使用独立 TS writeback qualification，核验实际 Run、原
+Todo/Turn/effect、Goal owner、当前 canonical generation、typed progress、Vision
+与 checkpoint。Exact supersede 只允许原 Turn 的 semantic writeback，business
+resume 仍拒绝。没有业务 lease 的 Todo-bound replan 须证明原 selected obligation
+与实际语义证据；要求 preparation 却缺少 positive original proof 时拒绝。返回值
+仅为 durable-writeback effect scope，不授予 execution lease。受支持 writer 在共享
+maintenance marker 内重新读取，并持有 Goal/source ownership 与 marker 直到 Run
+JSON、Markdown、index 持久化完成。绕过 marker 的直接 provider 写不属于此
+canonical writer 保证。
 
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.

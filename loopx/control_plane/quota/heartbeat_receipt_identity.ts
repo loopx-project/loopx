@@ -383,6 +383,39 @@ export function heartbeatValidationEvent(
   identity: SettlementIdentity,
   allowLegacyPrepared = false,
 ): JsonObject | null {
+  return selectHeartbeatValidationEvent(events, receipt, identity, allowLegacyPrepared, false);
+}
+
+/** A semantic admission remains bound to its original Todo and obligation;
+ * its report permission supplies no business execution lease. */
+function heartbeatSemanticWorkAdmission(event: JsonObject, identity: SettlementIdentity): string | null {
+  const fact = heartbeatReceiptFactFromEvent(event), receiptDetails = heartbeatReceiptDetails(event);
+  const binding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
+  const selected = normalizeHeartbeatReplanObligationId(receiptDetails.semantic_replan_obligation_id);
+  if (selected === null || event.schema_version !== "loopx_rollout_event_v0"
+      || event.event_kind !== "quota_should_run" || event.goal_id !== identity.goal_id
+      || event.agent_id !== identity.agent_id || fact.run_id !== identity.turn_instance_id
+      || fact.todo_id !== identity.todo_id || binding?.binding_kind !== "todo"
+      || binding.binding_id !== identity.todo_id || fact.closeout_required !== true
+      || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))
+      || receiptDetails.interaction_mode !== "autonomous_replan" || receiptDetails.delivery_allowed !== false
+      || receiptDetails.ok !== true || receiptDetails.should_run !== true
+      || receiptDetails.must_attempt_work !== true || receiptDetails.quiet_noop_allowed !== false
+      || nativeChildReportAdmission(receiptDetails, event.status, identity.effect_id, "open", false, selected)
+        .report_permission !== "new_operation") return null;
+  return selected;
+}
+
+export function heartbeatSemanticAdmissionEvent(events: readonly JsonObject[], receipt: JsonObject,
+  identity: SettlementIdentity, allowLegacyPrepared = false): JsonObject | null {
+  const selected = selectHeartbeatValidationEvent(events, receipt, identity, allowLegacyPrepared, true);
+  return selected !== null && heartbeatSemanticWorkAdmission(selected, identity) !== null ? selected : null;
+}
+
+function selectHeartbeatValidationEvent(
+  events: readonly JsonObject[], receipt: JsonObject, identity: SettlementIdentity,
+  allowLegacyPrepared: boolean, semanticAdmission: boolean,
+): JsonObject | null {
   const scoped = events.filter(event => event.event_kind === "quota_should_run"
     && event.goal_id === identity.goal_id && event.agent_id === identity.agent_id
     && event.run_id === identity.turn_instance_id
@@ -402,7 +435,10 @@ export function heartbeatValidationEvent(
         && !effectIdsMatch(initialFact.settlement_effect_id, identity.effect_id)))) return null;
   const generations = new Set<string>();
   const positivePrepared = new Map<number, HeartbeatPreparedLease>();
+  const semanticObligations = new Set<string>();
   for (const [index, event] of scoped.entries()) {
+    const semantic = semanticAdmission ? heartbeatSemanticWorkAdmission(event, identity) : null;
+    if (semantic !== null) semanticObligations.add(semantic);
     const prepared = heartbeatPreparedWorkAdmission(event, identity, allowLegacyPrepared);
     if (prepared === null) continue;
     positivePrepared.set(index, prepared);
@@ -412,12 +448,15 @@ export function heartbeatValidationEvent(
   }
   if (generations.size > 1) throw receiptIdentityConflict(
     "one Turn cannot contain positive prepared admissions from different lease generations");
+  if (semanticObligations.size > 1) throw receiptIdentityConflict(
+    "one Turn cannot replace its admitted semantic replan obligation");
   let position = start[0]!;
   let validation = scoped[position]!;
   let preparedAdmission: JsonObject | null = null;
   while (position >= 0) {
     const prepared = positivePrepared.get(position);
-    const positive = prepared !== undefined;
+    const positive = semanticAdmission ? heartbeatSemanticWorkAdmission(validation, identity) !== null
+      : prepared !== undefined;
     if (positive) preparedAdmission = validation;
     const validationDetails = heartbeatReceiptDetails(validation);
     const revision = validationDetails.settlement_receipt_revision;
@@ -425,7 +464,7 @@ export function heartbeatValidationEvent(
       && positive && Object.hasOwn(validation, "causality");
     if (revision !== "lease_readiness" && revision !== "work_admission"
         && revision !== "identity_upgrade" && revision !== "review_guard_upgrade" && !legacyLineage) {
-      if (positive && !Object.hasOwn(validationDetails, "settlement_receipt_revision")
+      if (!semanticAdmission && positive && !Object.hasOwn(validationDetails, "settlement_receipt_revision")
           && !Object.hasOwn(validation, "causality")) {
         let first: JsonObject | null = null;
         for (const [index, priorPrepared] of positivePrepared) {
@@ -451,7 +490,8 @@ export function heartbeatValidationEvent(
       if ((parentBinding !== null && (parentBinding.binding_kind !== identity.binding_kind
           || parentBinding.binding_id !== identity.binding_id))
           || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))) return null;
-      if (heartbeatPreparedWorkAdmission(parent, identity, allowLegacyPrepared) === null) return preparedAdmission;
+      if (semanticAdmission ? heartbeatSemanticWorkAdmission(parent, identity) === null
+        : heartbeatPreparedWorkAdmission(parent, identity, allowLegacyPrepared) === null) return preparedAdmission;
     }
     const pendingParent = revision === "identity_upgrade" && identity.binding_kind === "todo"
       && fact.todo_id === null && fact.replan_obligation_id === null && fact.request_subject == null
@@ -469,23 +509,20 @@ export function heartbeatValidationEvent(
 
 /** Ephemeral qualification over freshly loaded canonical facts. This never
  * publishes a new prepared proof or grants a replacement generation work. */
-export function qualifyHeartbeatResumeLease(input: {
+interface HeartbeatPreparedGenerationInput {
   originalReceipt: JsonObject;
   identity: SettlementIdentity;
   requestedProof: JsonObject | null;
   todo: JsonObject;
   lease: JsonObject;
   handoffMode: unknown;
-  completionEvent: JsonObject | null;
-  replayPhase: ReceiptBoundReplayPhase;
-  closeoutStarted: boolean;
-  writebackPending: boolean;
-  otherTerminalStarted: boolean;
-  terminalProviderEffect?: ProviderEffect | null;
-  terminalCompletion?: JsonObject | null;
   exactSource: boolean;
-  observedAt: Date;
-}): JsonObject {
+}
+
+/** Shared generation proof; phase and operation permission stay with callers. */
+export function qualifyHeartbeatPreparedGeneration(input: HeartbeatPreparedGenerationInput): {
+  original: HeartbeatPreparedLease; currentProof: JsonObject;
+} {
   function reject(message: string): never {
     throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
   }
@@ -506,21 +543,35 @@ export function qualifyHeartbeatResumeLease(input: {
   if (input.requestedProof !== null && !isDeepStrictEqual(input.requestedProof, currentProof)) {
     reject("The supplied resume proof does not match the current canonical lease.");
   }
-  const keyDigest = createHash("sha256").update(lease.idempotency_key).digest("hex");
-  if (keyDigest !== original.prepared_lease_key_sha256) {
+  if (createHash("sha256").update(lease.idempotency_key).digest("hex") !== original.prepared_lease_key_sha256) {
     reject("A replacement lease cannot execute this Turn's original work.");
   }
   if (original.prepared_lease_epoch === undefined) {
-    // Preserve the existing legacy exact-version contract, without claiming
-    // incarnation/ABA protection or allowing an unrecorded renewal/rebind.
     if (input.exactSource || lease.version !== original.prepared_lease_version) {
       reject("This prepared receipt cannot prove a renewed lease generation.");
     }
   } else if (typeof lease.lease_epoch !== "number" || !Number.isSafeInteger(lease.lease_epoch)
-      || lease.lease_epoch !== original.prepared_lease_epoch
-      || lease.version < original.prepared_lease_version) {
+      || lease.lease_epoch !== original.prepared_lease_epoch || lease.version < original.prepared_lease_version) {
     reject("The current lease does not preserve the original prepared generation.");
   }
+  return {original, currentProof};
+}
+
+export function qualifyHeartbeatResumeLease(input: HeartbeatPreparedGenerationInput & {
+  completionEvent: JsonObject | null;
+  replayPhase: ReceiptBoundReplayPhase;
+  closeoutStarted: boolean;
+  writebackPending: boolean;
+  otherTerminalStarted: boolean;
+  terminalProviderEffect?: ProviderEffect | null;
+  terminalCompletion?: JsonObject | null;
+  observedAt: Date;
+}): JsonObject {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const {original, currentProof} = qualifyHeartbeatPreparedGeneration(input);
+  const {todo, lease, identity} = input;
   const terminalPending = input.terminalProviderEffect?.step_kind === "terminal_closeout"
     && input.terminalProviderEffect.effect_ref === `${identity.effect_id}#terminal_closeout`
     && ["prepare_and_execute", "resolve_prepared", "execute_prepared"].includes(input.terminalProviderEffect.action);
