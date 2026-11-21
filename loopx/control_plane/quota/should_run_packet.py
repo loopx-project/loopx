@@ -1653,6 +1653,7 @@ def _build_active_quota_payload(
         state_action_projection_warning=route.state_action_projection_warning,
         next_action_warning=route.next_action_warning,
         replan_obligation=prepared.replan_obligation,
+        work_lane=_dict_field(payload, "work_lane_contract"),
     )
     frontier = _dict_field(prepared.status_payload, "bounded_research_frontier")
     bounded_research_frontier = _dict_field(frontier or {}, "public_projection") or frontier
@@ -1983,7 +1984,8 @@ def _build_settled_quota_payload(
         selected_recommended_action=route.selected_recommended_action, state=route.state,
         user_todo_summary=prepared.user_todo_summary, should_run=False,
         state_action_projection_warning=None, next_action_warning=None,
-        replan_obligation=None, notify_gate=False,
+        replan_obligation=None, work_lane=_dict_field(payload, "work_lane_contract"),
+        notify_gate=False,
     )
     # Work-mode diagnostics survive settlement, while execution authority comes
     # only from the settled result, never a fallback readback or the monitor

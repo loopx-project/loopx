@@ -122,6 +122,32 @@ ValueProjection = Callable[[Any], Optional[dict[str, Any]]]
 SubagentRunCompactor = Callable[..., Optional[dict[str, Any]]]
 
 
+_HUMAN_REWARD_LESSON_FIELDS = (
+    "schema_version",
+    "kind",
+    "summary",
+    "avoid",
+    "prefer",
+    "todo_id",
+    "todo_ids",
+    "claimed_by",
+    "agent_id",
+    "task_class",
+    "capability_id",
+    "capability_ids",
+    "required_capabilities",
+    "work_lane",
+    "action_kind",
+    "target_key",
+    "scope_key",
+    "scope_keys",
+    "target_scopes",
+    "decision_scope",
+    "target",
+    "scope",
+)
+
+
 def compact_human_reward(reward: Any) -> dict[str, Any] | None:
     if not isinstance(reward, dict):
         return None
@@ -130,7 +156,7 @@ def compact_human_reward(reward: Any) -> dict[str, Any] | None:
     if isinstance(lesson, dict):
         compact["lesson"] = {
             field: lesson[field]
-            for field in ("schema_version", "kind", "summary", "avoid", "prefer")
+            for field in _HUMAN_REWARD_LESSON_FIELDS
             if field in lesson
         }
     return compact or None
