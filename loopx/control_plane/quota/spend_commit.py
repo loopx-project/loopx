@@ -17,19 +17,14 @@ from ..effect_runtime import (
 )
 from ..runtime.time import now_local_iso
 from ..todos.contract import normalize_todo_claimed_by
-from .decision_summary import compact_quota_decision, quota_decision_agent_id
 from .accounting_admission import quota_accounting_admission
+from .decision_summary import compact_quota_decision, quota_decision_agent_id
+from .error_codes import QuotaRunIndexConflict
 from .spend_sources import DEFAULT_SLOT_SPEND_SOURCE
 
 
 QUOTA_SPEND_COMMIT_REQUEST_SCHEMA = "loopx_quota_spend_commit_request_v0"
 QUOTA_SPEND_COMMIT_RESULT_SCHEMA = "loopx_quota_spend_commit_result_v0"
-
-
-class QuotaRunIndexConflict(ValueError):
-    """A quota spend was definitively rejected by the run-index CAS."""
-
-    reason_code = "index_digest_conflict"
 
 
 def quota_spend_index_digest(index_path: Path) -> str | None:
