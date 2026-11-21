@@ -5215,6 +5215,7 @@ def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
     )
     assert ready_rc == 0, ready
     assert ready["execution_preparation"]["state"] == "ready"
+    lease_proof = ready["execution_preparation"]["lease_proof"]
 
     refresh_rc, refresh = _run_cli(
         registry_path,
@@ -5228,6 +5229,10 @@ def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
+        "--task-lease-idempotency-key",
+        str(lease_proof["idempotency_key"]),
+        "--task-lease-expected-version",
+        str(lease_proof["expected_version"]),
         "--classification",
         "visible_goal_hard_lease_progress",
         "--delivery-batch-scale",
