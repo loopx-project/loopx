@@ -1556,7 +1556,15 @@ def effect_runtime_request(
     """Call the managed TS runtime, retrying only idempotent typed effects."""
 
     fingerprint = _runtime_fingerprint_for_request()
-    info_path = _runtime_info_path(fingerprint)
+    try:
+        info_path = _runtime_info_path(fingerprint)
+    except OSError as exc:
+        # tempfile may fail before we have a locator or dispatch a request.
+        raise EffectRuntimeStartupError(
+            "TypeScript Effect runtime temporary directory is unavailable. "
+            "Check the host temporary directory's write access and free space.",
+            diagnostic_code="runtime_request_failed",
+        ) from exc
     request_id = str(uuid.uuid4())
     last_error: OSError | RuntimeError | None = None
     for attempt in range(2 if retry_safe else 1):

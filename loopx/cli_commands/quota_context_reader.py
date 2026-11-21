@@ -277,6 +277,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     cannot silently mix two decisions or detail views.
     EOF describes this page, never a model's complete-consumption receipt.
     """
+    runtime_read_retry = None
     try:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
@@ -406,6 +407,19 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     "recovery": ("Use recovery_command to read the original capture from offset zero; "
                         if initial_read else "Use recovery_command to restart the original selected read from offset zero; ")
                     + "this read performs no guard, admission or spend."}
+            except EffectRuntimeStartupError:
+                # The source already passed its digest check. Retain the
+                # caller's cursor, including a historical reference.
+                unpinned = pinned_selection is None
+                runtime_read_retry = context_capture_read_command(path, digest, offset=offset,
+                    page_bytes=size, max_page_output_bytes=output_limit,
+                    select=selectors if unpinned else None,
+                    selection_sha256=selection_digest if unpinned else None,
+                    list_fields=list_fields if unpinned else False,
+                    list_depth=list_depth if unpinned else None,
+                    initial_read=initial_read if unpinned else False, reference_file=reference_file,
+                    reader_argv=reader_argv, compact=bound_route is not None)
+                raise
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -460,6 +474,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             result["diagnostic_code"] = exc.diagnostic_code
             result["recovery"] = ("Resolve the reported runtime failure, then retry reading the same digest-bound capture; "
                 "no guard, admission or spend was performed.")
+            if runtime_read_retry is not None:
+                result["recovery_command"] = runtime_read_retry
         if isinstance(exc, EffectRuntimeRemoteError):
             result["error_kind"] = exc.error_kind
             if exc.error_kind == "request_rejected":

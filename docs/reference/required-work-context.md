@@ -280,6 +280,16 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+If the local Effect runtime is unavailable while planning a selected read,
+the reader returns a runtime diagnostic and a `recovery_command` for the same
+capture and cursor. After restoring the runtime, use that command to retry the
+selected read with its original digests. A full-file read can verify and read
+the capture directly while the selector is unavailable.
+
+选读规划时若本地 Effect 运行时不可用，读取器会返回运行时诊断和绑定原捕获与原游标的
+`recovery_command`。恢复运行时后，可用该命令按原摘要重试选读。选读服务不可用期间，
+仍可按原摘要验证和读取完整捕获。
+
 For an exact complete Turn bound to a Todo whose dated resume condition has
 fired, the starting selection puts the existing reopen and same-Turn guard
 commands and the current plan's obligations before the longer work context.
