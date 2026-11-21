@@ -18,6 +18,10 @@ progress, decisions and verifiable results so work can continue across sessions.
 
 </div>
 
+https://github.com/user-attachments/assets/9b36c5ba-a4e6-4e94-aa96-9c1fb6c91f91
+
+<p align="center"><sub><b>77-second 3D overview</b> — durable Goals, Todos, verifiable evidence, human approval gates, and crash-safe recovery across 200+ hour runs (community film by <a href="https://x.com/lemomo_ai">@lemomo_ai</a>; English-captioned v2 cut coming soon · <a href="#see-loopx-in-action">more product recordings below</a>).</sub></p>
+
 ---
 
 <a id="quick-start"></a>
