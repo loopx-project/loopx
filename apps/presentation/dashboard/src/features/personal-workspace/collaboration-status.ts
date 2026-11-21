@@ -90,6 +90,7 @@ export type AttachedWorkerStatusInput = {
   turnModel?: { model: string; reasoning_effort?: string | null } | null;
   hostSurfaces?: readonly string[];
   latestFocus?: string | null;
+  includeFallbackNow?: boolean;
   locale: CollaborationLocale;
 };
 
@@ -718,6 +719,7 @@ export function deriveAttachedWorkerStatus({
   turnModel,
   hostSurfaces = [],
   latestFocus,
+  includeFallbackNow = true,
   locale,
 }: AttachedWorkerStatusInput): AttachedWorkerStatus {
   const w = ROSTER_WORDS[locale];
@@ -736,18 +738,21 @@ export function deriveAttachedWorkerStatus({
   const modelText = turnModel
     ? [turnModel.model, turnModel.reasoning_effort].filter(Boolean).join(" · ")
     : "";
-  const now = sanitizeFocusLine(latestFocus, 84) || (
-    bindingRejected
-      ? w.bindingRejected
-      : bindingError
-        ? sanitizeFocusLine(bindingError, 84) || w.connectionLost
-        : state === "lease_expired"
-          ? w.connectionLost
-          : state === "working"
-            ? (modelText ? `${w.runningTurn} · ${modelText}` : w.runningTurn)
-            : canReply
-              ? w.acceptingReplies
-              : w.connecting
+  const sanitizedFocus = sanitizeFocusLine(latestFocus, 84);
+  const now = sanitizedFocus || (
+    !includeFallbackNow
+      ? ""
+      : bindingRejected
+        ? w.bindingRejected
+        : bindingError
+          ? sanitizeFocusLine(bindingError, 84) || w.connectionLost
+          : state === "lease_expired"
+            ? w.connectionLost
+            : state === "working"
+              ? (modelText ? `${w.runningTurn} · ${modelText}` : w.runningTurn)
+              : canReply
+                ? w.acceptingReplies
+                : w.connecting
   );
 
   return {

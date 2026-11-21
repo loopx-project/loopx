@@ -326,4 +326,15 @@ test("deriveAttachedWorkerStatus reflects active turn, idle accepting, and disco
   });
   assert.equal(broken.state, "lease_expired");
   assert.equal(broken.stateLabel, "租约过期");
+
+  const quiet = deriveAttachedWorkerStatus({
+    agentId: "builder",
+    connected: true,
+    canReply: true,
+    activeTurn: false,
+    includeFallbackNow: false,
+    locale: "zh-CN",
+  });
+  assert.equal(quiet.state, "waiting");
+  assert.equal(quiet.now, "");
 });

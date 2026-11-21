@@ -92,25 +92,42 @@ export function GoalWorkerRosterStrip({
       </header>
       {summaryOnly ? (
         <ul className="pw-roster-chips">
-          {roster.workers.map((worker) => (
-            <li key={worker.agentId} className="pw-roster-chip" data-roster-state={worker.state} title={worker.now ? `${worker.label} — ${worker.now}` : worker.label}>
-              <WorkerStateGlyph state={worker.state} />
-              <strong className="pw-roster-chip-name">{worker.label}</strong>
-              <span className="pw-roster-state-text">{worker.stateLabel}</span>
-              <WorkerScopeTag scope={worker.scope} />
-              <WorkerProgressBadge progress={worker.progress} />
-              {!readOnly && worker.hasConversation && onOpenAgentConversation ? (
-                <button
-                  type="button"
-                  className="pw-roster-chip-jump"
-                  aria-label={locale === "zh-CN" ? `打开 ${worker.label} 工作记录` : `Open ${worker.label} conversation`}
-                  onClick={() => onOpenAgentConversation(worker.agentId)}
-                >
-                  {locale === "zh-CN" ? "对话" : "Chat"}
-                </button>
-              ) : null}
-            </li>
-          ))}
+          {roster.workers.map((worker) => {
+            const title = [worker.label, worker.scope, worker.now].filter(Boolean).join(" — ");
+            const canOpen = !readOnly && worker.hasConversation && Boolean(onOpenAgentConversation);
+            const content = (
+              <>
+                <WorkerStateGlyph state={worker.state} />
+                <strong className="pw-roster-chip-name">{worker.label}</strong>
+                <span className="pw-roster-state-text">{worker.stateLabel}</span>
+                <WorkerProgressBadge progress={worker.progress} />
+              </>
+            );
+            return (
+              <li key={worker.agentId} className="pw-roster-chip-item">
+                {canOpen ? (
+                  <button
+                    type="button"
+                    className="pw-roster-chip pw-roster-chip-btn"
+                    data-roster-state={worker.state}
+                    title={title}
+                    aria-label={
+                      locale === "zh-CN"
+                        ? `打开 ${worker.label} 工作记录（${worker.stateLabel}${worker.progress.label ? `，${worker.progress.label}` : ""}）`
+                        : `Open ${worker.label} conversation (${worker.stateLabel}${worker.progress.label ? `, ${worker.progress.label}` : ""})`
+                    }
+                    onClick={() => onOpenAgentConversation?.(worker.agentId)}
+                  >
+                    {content}
+                  </button>
+                ) : (
+                  <div className="pw-roster-chip" data-roster-state={worker.state} title={title}>
+                    {content}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <ul className="pw-roster-list">

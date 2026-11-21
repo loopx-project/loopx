@@ -522,6 +522,7 @@ export function AttachedConversation({goalId, binding, agentLabel, hostSurfaces,
     bindingError: error,
     turnModel,
     hostSurfaces,
+    includeFallbackNow: false,
     locale: zh ? "zh-CN" : "en",
   });
   return <div className="attached-conversation-content">

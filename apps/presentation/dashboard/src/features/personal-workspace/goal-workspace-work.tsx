@@ -245,7 +245,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
             roster={roster}
             locale={workspaceLocale}
             readOnly={readOnly}
-            summaryOnly={lens === "owner" && digest.work.groups.length > 0}
+            summaryOnly
             onOpenAgentConversation={onOpenAgentConversation}
           />
         ) : null}

@@ -27,10 +27,10 @@
 }
 
 .pw-collab-roster-list li {
-  display: grid;
-  grid-template-columns: 12px auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   padding-top: 6px;
   border-top: 1px solid var(--pw-line);
   min-width: 0;
@@ -61,7 +61,18 @@
   color: var(--pw-red);
 }
 
+.pw-collab-roster-list .pw-roster-progress {
+  order: 2;
+  margin-left: auto;
+}
+
+.pw-collab-roster-list .pw-roster-scope {
+  order: 3;
+}
+
 .pw-collab-roster-now {
+  flex: 1 0 100%;
+  order: 10;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -202,28 +213,6 @@
 .personal-request-control :is(input, textarea) { padding: 8px 10px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }
 
 @media (max-width: 640px) {
-  .pw-collab-roster-list li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 8px;
-  }
-
-  .pw-collab-roster-list .pw-roster-progress {
-    order: 2;
-    margin-left: auto;
-  }
-
-  .pw-collab-roster-list .pw-roster-scope {
-    order: 5;
-    max-width: 100%;
-  }
-
-  .pw-collab-roster-list .pw-collab-roster-now {
-    flex: 1 0 100%;
-    order: 10;
-  }
-
   .pw-collab-meta-group {
     width: 100%;
   }

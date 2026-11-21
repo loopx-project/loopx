@@ -268,35 +268,54 @@
   margin: 0;
   padding: 6px 0 0;
   border-top: 1px solid var(--pw-line);
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.pw-roster-chip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
+.pw-roster-chip-item {
+  display: inline-flex;
   min-width: 0;
-  width: 100%;
-  padding: 6px 8px;
+  max-width: 100%;
+}
+
+.pw-roster-chip,
+.goal-overview .pw-roster-chip-btn {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 30px;
+  width: auto;
+  max-width: 100%;
+  padding: 3px 8px;
   border: 1px solid var(--pw-line);
   border-radius: 6px;
   background: var(--pw-bg);
+  color: inherit;
+  font: inherit;
   font-size: var(--text-caption);
   line-height: var(--leading-caption);
   box-sizing: border-box;
+  text-align: left;
 }
 
 .pw-roster-chip-name {
   min-width: 0;
-  max-width: 180px;
+  max-width: 128px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
   color: var(--pw-text);
+}
+
+.pw-roster-chip .pw-roster-state-text {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .pw-roster-chip[data-roster-state="working"] .pw-roster-state-text {
@@ -311,25 +330,20 @@
   color: var(--pw-red);
 }
 
-.pw-roster-chip .pw-roster-chip-jump,
-.goal-overview .pw-roster-chip .pw-roster-chip-jump {
-  margin-left: auto;
-  min-height: 26px;
-  padding: 1px 8px;
-  border: 1px solid var(--pw-line);
-  border-radius: 4px;
-  background: var(--pw-card);
-  color: var(--pw-muted);
-  font-size: var(--text-caption);
-  line-height: var(--leading-caption);
+.pw-roster-chip-btn {
   cursor: pointer;
 }
 
-.pw-roster-chip .pw-roster-chip-jump:hover,
-.goal-overview .pw-roster-chip .pw-roster-chip-jump:hover {
+.pw-roster-chip-btn:hover,
+.goal-overview .pw-roster-chip-btn:hover {
   border-color: var(--pw-line-strong);
   background: var(--pw-hover);
-  color: var(--pw-text);
+}
+
+.pw-roster-chip-btn:focus-visible,
+.goal-overview .pw-roster-chip-btn:focus-visible {
+  outline: 2px solid var(--pw-blue);
+  outline-offset: 2px;
 }
 
 .pw-roster-row .pw-roster-jump:hover {
