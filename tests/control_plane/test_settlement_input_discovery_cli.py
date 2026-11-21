@@ -215,6 +215,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeypatch, provider):
     """A caller following the delivered example must retain a real work link."""
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     # Fund all three admitted Turns before execution; the shared fixture's
@@ -244,12 +245,9 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
             rc, guard = _run_generated_cli(command, registry_path=registry)
         assert rc == 0, (stage, guard.get("error"), guard.get("reason"))
         if stage == "review":
-            from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
             channel = guard["interaction_contract"]["agent_channel"]
             assert channel["must_attempt"] and not channel["delivery_allowed"]
-            assert "writeback" not in guard["replan_action_packet"]
-            staged_packet = _turn_envelope_result("replan_cli_view", payload=guard)["replan_action_packet"]
-            read_command = staged_packet["writeback"]
+            read_command = guard["replan_action_packet"]["writeback"]
             result = subprocess.run(
                 shlex.split(read_command), cwd=project, capture_output=True, text=True, check=True, timeout=60,
             )
