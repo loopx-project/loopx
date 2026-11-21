@@ -391,16 +391,15 @@ async function collectReturns(source: InboxSource, page: PeerReturnPage | null =
   return {view: {items: items.slice(0, 20), has_more: hasMore,
     ...(hasMore && nextCursor ? {next_cursor: nextCursor} : {})}, deliveries};
 }
-function peerDeliveryIdentity(row: JsonObject, reply: JsonObject, key: string): JsonObject {
+function peerDeliveryScope(row: JsonObject): JsonObject {
   return {status: "delivered",
-    ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
     ...(row.recipient !== undefined ? {requester: row.requester, recipient: row.recipient}
       : Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})};
 }
 
-function partialDeliveryMatches(row: JsonObject, reply: JsonObject, key: string, state: JsonObject): boolean {
+function partialDeliveryMatches(row: JsonObject, key: string, state: JsonObject): boolean {
   if (row.source_kind === "peer" && state.kind === "requester_cli_read") {
-    return Object.entries(peerDeliveryIdentity(row, reply, key))
+    return Object.entries({...peerDeliveryScope(row), request_id: row.request_id, result_key: key})
       .every(([field, value]) => equal(state[field], value));
   }
   return state.message_id === returnMessageId(requestId(row.request_id), key);
@@ -429,7 +428,7 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
       status = "explicit_unverified"; error = "delivery_state_unreadable";
     }
     if (status === "delivered" && phase === "conclusion" && reply.remaining_work != null
-        && !partialDeliveryMatches(row, reply, key, state)) {
+        && !partialDeliveryMatches(row, key, state)) {
       fail("partial delegation result delivery scope mismatch");
     }
     return {...identity, status, created_at: reply.created_at ?? null,
@@ -589,11 +588,18 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
       if (!conversation) lifecycle(source, "read_record", stored);
       const prior = present(path) ? readRecord(path) : null;
-      const identity = peerDeliveryIdentity(stored, reply, key);
-      if (prior && Object.entries(identity).some(([field, value]) => !equal(prior[field], value))) {
+      const scope = peerDeliveryScope(stored);
+      const identity = {...scope, request_id: id, result_key: key};
+      const bound = prior !== null && Object.hasOwn(prior, "request_id");
+      const expected = bound ? identity
+        : {...scope, ...(Object.hasOwn(reply, "result_key") || Object.hasOwn(prior ?? {}, "result_key")
+          ? {result_key: key} : {})};
+      if (prior && Object.entries(expected).some(([field, value]) => !equal(prior[field], value))) {
         fail("peer return delivery receipt scope mismatch");
       }
-      const priorTurn = jsonObject(prior?.model_turn);
+      // An older receipt may come from another request in the same scope.
+      // Bind it on a fresh delivery of this result without inheriting its Turn.
+      const priorTurn = bound ? jsonObject(prior?.model_turn) : null;
       const sameTurn = turn !== null && priorTurn?.turn_instance_id === turn;
       const priorToken = sameTurn ? priorTurn?.read_token : undefined;
       if (priorToken !== undefined && (typeof priorToken !== "string" || !BARE_SHA256_PATTERN.test(priorToken))) {
@@ -602,9 +608,9 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
       // Stamping the Turn can succeed before the focused response reaches its caller.
       // The same result retains its token on reread, including across host restarts.
       const token = priorToken ?? (turn !== null && params.operation === "returns" ? randomBytes(32).toString("hex") : undefined);
-      if (!prior || turn !== null && (!sameTurn || token !== priorToken)) {
+      if (!bound || turn !== null && (!sameTurn || token !== priorToken)) {
         await atomicWriteJson(path, {...identity,
-          delivered_at: prior?.delivered_at ?? params.observed_at, kind: "requester_cli_read",
+          delivered_at: (bound ? prior?.delivered_at : null) ?? params.observed_at, kind: "requester_cli_read",
           ...(turn !== null ? {model_turn: {turn_instance_id: turn,
             supplied_at: sameTurn ? priorTurn?.supplied_at : params.observed_at,
             ...(token !== undefined ? {read_token: token} : {})}} : {})});

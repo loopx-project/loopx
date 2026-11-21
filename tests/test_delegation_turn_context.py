@@ -206,6 +206,63 @@ def test_before_work_reader_preserves_delivered_partial_work_without_repeating_t
         assert exact["items"][0]["brief"] == brief
 
 
+@pytest.mark.skipif(os.name != "posix", reason="exercise the rendered POSIX host command")
+def test_before_work_reader_requires_exact_peer_delivery(flow):
+    root, registry, _store, _create = flow
+    configured = json.loads(registry.read_text())
+    configured["goals"][0]["coordination"]["registered_agents"].append("reviewer")
+    registry.write_text(json.dumps(configured))
+
+    def partial(name):
+        brief = {"schema_version": "collaboration_brief_v0", "purpose": name,
+                 "context": f"Original brief for {name}", "constraints": [], "inputs": [],
+                 "acceptance": ["Check the final package"], "return_requirement": "Return the result"}
+        rid = request(root, registry, "research", "worker", "reviewer", name, brief)["request_id"]
+        acknowledge(root, "research", "reviewer", rid, "adopt", "Review")
+        report(root, "research", "reviewer", rid, "conclusion", "The first check passed.",
+               remaining_work={"summary": "Check the final package", "resume_when": "The package is ready"})
+        return rid, brief, _root(root) / "replies" / rid / "conclusion.delivery.json"
+
+    first, _, first_delivery = partial("first-review")
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-first")
+    first_receipt = json.loads(first_delivery.read_bytes())
+    assert first_receipt["kind"] == "requester_cli_read"
+    second, second_brief, second_delivery = partial("second-review")
+    assert not second_delivery.exists()
+
+    hook = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "reviewer")])
+    command = shlex.split(hook["required_reads"][0]["command"])
+    assert "--attention-only" in command
+    legacy = {key: value for key, value in first_receipt.items()
+              if key not in {"request_id", "result_key"}}
+    wrong_result = {**first_receipt, "request_id": second, "result_key": "conclusion-00000001"}
+    for receipt in (legacy, first_receipt, wrong_result):
+        second_delivery.write_text(json.dumps(receipt))
+        before = second_delivery.read_bytes()
+        view = json.loads(subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60).stdout)
+        assert [row["brief"] for row in view["items"]] == [second_brief]
+        assert [row["request_id"] for row in view["open_request_summaries"]] == [first]
+        compact = {row["request_id"]: row for row in view["unfinished_delegations"]["items"]}
+        assert compact[second]["step"] == "recover_evidence"
+        assert second_delivery.read_bytes() == before
+
+    assert first_receipt["request_id"] == first
+    assert first_receipt["result_key"] == "conclusion"
+    with pytest.raises(ValueError, match="peer return delivery receipt scope mismatch"):
+        read_inbox(root, registry, "research", "worker", turn_instance_id="turn-recovery")
+    assert json.loads(second_delivery.read_bytes()) == wrong_result
+
+    second_delivery.write_text(json.dumps(legacy))
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-recovery")
+    restored = json.loads(second_delivery.read_bytes())
+    assert restored["request_id"] == second
+    assert restored["result_key"] == "conclusion"
+    assert restored["model_turn"]["turn_instance_id"] == "turn-recovery"
+    view = json.loads(subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60).stdout)
+    assert view["items"] == []
+    assert {row["request_id"] for row in view["open_request_summaries"]} == {first, second}
+
+
 def test_invalid_receipt_and_invalid_entries_are_visible_as_unavailable(flow):
     root, registry, _store, create = flow
     _session, _turn, receipt = create()

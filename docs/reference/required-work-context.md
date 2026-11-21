@@ -227,6 +227,9 @@ whose latest delivered conclusion leaves remaining work. Follow `next_cursor`
 even on summary-only pages. The same cursor continues to open sent requests
 after the incoming rows. Pages with only sent summaries do not deliver or
 consume results. A nonzero `unavailable_count` calls for receipt recovery.
+For peer returns, folding a brief requires a delivery receipt that binds its
+request ID and exact result key. An older receipt without that binding keeps
+the full brief visible until an authorized read supplies the specific result.
 Use `--request-id` without `--attention-only` to read a complete incoming
 brief. Inspect a sent Goal request with `manager-inbox status` using the
 summary's receiver `agent_id` and exact `request_id` in the same Goal.
@@ -448,6 +451,8 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 下，需要原简报的收件仍在 `items`，最近一次结论已送达且有剩余工作的收件在
 `open_request_summaries`。只有摘要的页也继续跟随 `next_cursor`，收件读完后
 沿同一游标查阅未结外发委派。只含外发摘要的续页不送达或消费结果。
+`Peer` 回传只有在送达回执绑定请求 ID 和确切结果键时才折叠简报。缺少绑定的旧回执
+继续保留完整简报，直到有权限的读取实际交付该条结果。
 `unavailable_count` 大于零时须恢复对应收执。收件全文用不带
 `--attention-only` 的 `--request-id` 精读。Goal 外发委派可在同一 Goal 下用
 摘要中的接收方 `agent_id` 和精确 `request_id` 查阅 `manager-inbox status`。
