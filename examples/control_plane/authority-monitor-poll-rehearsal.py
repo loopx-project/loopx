@@ -27,12 +27,11 @@ from loopx.state_refresh import resolve_goal_state  # noqa: E402
 
 NODE_REHEARSAL = r"""
 import assert from 'node:assert/strict';
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {Pool} from 'pg';
 let raw=''; for await (const chunk of process.stdin) raw+=chunk;
 const input=JSON.parse(raw);
 const moduleAt=(root,path)=>import(pathToFileURL(join(root,'loopx/control_plane',path)).href);
@@ -40,8 +39,6 @@ const {pollLocalCoordinationMonitor: current,updateLocalCoordinationTodo: update
 const {pollLocalCoordinationMonitor: baseline,updateLocalCoordinationTodo: baselineUpdate}=await moduleAt(input.baseline_repo,'coordination/local_authority_runtime.ts');
 const {FileAuthorityStore}=await moduleAt(input.repo,'coordination/file_authority_store.ts');
 const {SqliteAuthorityStore}=await moduleAt(input.repo,'coordination/sqlite_authority_store.ts');
-const {PostgreSqlAuthorityStore,installPostgreSqlAuthorityStoreSchema}=await moduleAt(input.repo,'coordination/postgresql_authority_store.ts');
-const {PostgreSqlAuthorityService}=await moduleAt(input.repo,'coordination/postgresql_authority_service.ts');
 const {selectLocalSqliteAuthority}=await moduleAt(input.repo,'coordination/local_authority_provider.ts');
 const {executeCanonicalTaskLeaseAcquire}=await moduleAt(input.repo,'coordination/task_lease_acquire.ts');
 const {coordinationTodoReadModel}=await moduleAt(input.repo,'coordination/coordination_projection.ts');
@@ -62,35 +59,15 @@ const lease={schema_version:'task_lease_v0',goal_id:goal,todo_id:target,owner:'a
   idempotency_key:proof.idempotency_key,version:3,lease_epoch:2,status:'active',write_scopes:[],
   acquired_at:'2026-01-01T00:00:00Z',updated_at:'2026-01-01T00:00:00Z',expires_at:'2099-01-01T00:00:00Z'};
 const root=await mkdtemp(join(tmpdir(),'loopx-monitor-rehearsal-'));
-const pool=new Pool({connectionString:process.env.LOOPX_TEST_POSTGRES_URL,max:4});
-const database={connect:async()=>{const c=await pool.connect();return {query:async(t,v)=>c.query(t,v),release:e=>c.release(e)};}};
-const tenant=`monitor-rehearsal-${randomUUID()}`;
 const heads={}, compatible={}, report={};
 try {
-  await installPostgreSqlAuthorityStoreSchema(database,`postgresql:${'b'.repeat(32)}`);
-  for (const arm of ['baseline','file','sqlite','postgresql']) {
+  for (const arm of ['baseline','file','sqlite']) {
     const runtime=join(root,arm); await mkdir(runtime,{recursive:true});
     const display=join(runtime,'state.md'); await writeFile(display,'# Disposable display\n');
-    let store=new FileAuthorityStore(join(runtime,'authority/file-v0'),goal), dependencies={};
+    let store=new FileAuthorityStore(join(runtime,'authority/file-v0'),goal); const dependencies={};
     if(arm==='sqlite') {
       assert.equal((await selectLocalSqliteAuthority(runtime,goal,true)).ok,true);
       store=new SqliteAuthorityStore(join(runtime,'authority/sqlite-v0'),goal);
-    }
-    if(arm==='postgresql') {
-      store=new PostgreSqlAuthorityStore(database,{tenant_id:tenant,goal_id:goal});
-      const identity=await store.storeIdentity(); assert.equal(identity.status,'available');
-      const selection={schema_version:'loopx_local_authority_provider_v0',provider:'postgresql',goal_id:goal,
-        tenant_id:tenant,store_identity:identity.store_identity};
-      await mkdir(join(runtime,'authority'),{recursive:true});
-      await writeFile(join(runtime,'authority',`provider-${createHash('sha256').update(goal).digest('hex')}.json`),JSON.stringify(selection));
-      const service=new PostgreSqlAuthorityService({database,
-        authenticatePrincipal:()=>({status:'authenticated',principal:{principal_id:'isolated-rehearsal'}}),
-        authorizeTenant:(principal,selected)=>principal==='isolated-rehearsal'&&selected===tenant?{status:'allowed'}:
-          {status:'denied',reason_code:'wrong_tenant',reason:'outside disposable tenant'}});
-      dependencies={openPostgresqlStore:async selected=>{
-        const opened=await service.openStore({credential:null,...selected});
-        assert.equal(opened.status,'opened'); return opened.store;
-      }};
     }
     const seed=await store.commitAuthority({expected_provider_revision:null,operation_id:'seed',events:[],receipts:[],next_projection:initial});
     assert.equal(seed.status,'applied');
@@ -189,15 +166,14 @@ try {
     report[arm]={poll_parity:true,retained_lease_reactivation:'applied',fresh_execution_epoch:3,same_hash_reactivation_generation:2,
       historical_replay_keeps_completion:true,stale_observation:'rejected',non_target_unchanged:true};
   }
-  for(const arm of ['file','sqlite','postgresql']) assert.deepEqual(compatible[arm],compatible.baseline);
-  for(const arm of ['file','sqlite','postgresql']) assert.deepEqual(heads[arm],heads.baseline);
+  for(const arm of ['file','sqlite']) assert.deepEqual(compatible[arm],compatible.baseline);
+  for(const arm of ['file','sqlite']) assert.deepEqual(heads[arm],heads.baseline);
   process.stdout.write(JSON.stringify({schema_version:'authority_monitor_rehearsal_v0',
     source_todos:input.projection.todos.length,source_leases:input.projection.leases.length,
     compatible_head_sha256:digest(compatible.baseline),final_head_sha256:digest(heads.file),
     provider_heads_equal:true,arms:report}));
 } finally {
-  await pool.query('DELETE FROM loopx_control_plane.authority_heads WHERE tenant_id=$1',[tenant]);
-  await pool.end(); await rm(root,{recursive:true,force:true});
+  await rm(root,{recursive:true,force:true});
 }
 """
 
@@ -207,11 +183,8 @@ def main() -> int:
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--goal-id", required=True)
     parser.add_argument("--baseline-repo", type=Path, required=True)
-    parser.add_argument("--execute-isolated-postgresql", action="store_true")
     parser.add_argument("--private-diagnostics", type=Path)
     args = parser.parse_args()
-    if not args.execute_isolated_postgresql or not os.environ.get("LOOPX_TEST_POSTGRES_URL"):
-        raise SystemExit("an explicitly isolated PostgreSQL server is required")
     baseline = args.baseline_repo.resolve()
     def git(*command):
         return subprocess.check_output(["git", "-C", str(baseline), *command], text=True).strip()

@@ -6,8 +6,6 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {Pool} from "pg";
-import {PostgreSqlAuthorityStore,installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {executeDirectionOperation} from "../../loopx/control_plane/goals/direction_authority.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -20,16 +18,10 @@ const material={material_id:"contract",purpose:"Preserve the agreed outcome",top
   boundary:"local_private",source_ref_sha256:sha("source.md"),revision:`sha256:${sha("original material")}`};
 function request(operation:string,fields:JsonObject={}):JsonObject{return {operation,goal_ref,source,actor_agent_id:"agent-a",
   observed_at:"2026-10-13T01:00:00.001Z",dry_run:false,...fields};}
-for(const provider of ["file","sqlite","postgresql"]){
- test(`${provider}: acknowledged delivery replays only its own exact source and preserves work`,{skip:provider==="postgresql"&&!process.env.LOOPX_TEST_POSTGRES_URL},async t=>{
+for(const provider of ["file","sqlite"] as const){
+ test(`${provider}: acknowledged delivery replays only its own exact source and preserves work`,async t=>{
   const folder=await mkdtemp(join(tmpdir(),"direction-owner-"));t.after(()=>rm(folder,{recursive:true,force:true}));
-  let store:AuthorityStore;
-  if(provider==="postgresql"){
-    const pool=new Pool({connectionString:process.env.LOOPX_TEST_POSTGRES_URL});t.after(()=>pool.end());
-    const database={connect:async()=>{const client=await pool.connect();return {query:(sql:string,values?:readonly unknown[])=>client.query(sql,values?[...values]:undefined),release:()=>client.release()};}};
-    await installPostgreSqlAuthorityStoreSchema(database,"postgresql:"+"b".repeat(32));
-    store=new PostgreSqlAuthorityStore(database,{tenant_id:folder,goal_id:goal_ref.goal_id});
-  }else store=provider==="file"?new FileAuthorityStore(folder,goal_ref.goal_id):new SqliteAuthorityStore(folder,goal_ref.goal_id);
+  const store:AuthorityStore=provider==="file"?new FileAuthorityStore(folder,goal_ref.goal_id):new SqliteAuthorityStore(folder,goal_ref.goal_id);
   const work={goal_id:goal_ref.goal_id,todos:[{todo_id:"existing",text:"Retain independent work"}],leases:[]};
   const initial=await store.commitAuthority({expected_provider_revision:null,operation_id:"seed",events:[],receipts:[],next_projection:work});
   assert.equal(initial.status,"applied");if(initial.status!=="applied")throw Error("seed");

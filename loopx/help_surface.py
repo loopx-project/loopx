@@ -400,7 +400,6 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "ml-experiment",
         "opencode2-goal-worker",
         "operator-gate",
-        "postgres",
         "pr-review",
         "promotion-gate",
         "read-only-map",

@@ -324,7 +324,7 @@ Mapping 拒绝顺序、精确整数 IO、会话 ID 解码、轮询时钟及 pend
 [CLI 对照](../../../tests/control_plane/test_canonical_authority_fixture.py)
 验证真实 File/SQLite 回读及拒绝时状态不变。此前 PostgreSQL 标签会静默
 初始化 File authority。既有
-[PostgreSQL remote task 候选](../../reference/remote-authority-task-service-v0.md)
+[出站 `RemoteAuthority` 客户端契约](../../../loopx/control_plane/coordination/remote_authority_contract.ts)（以及服务端权威现已归入 `loopx-project/loopx-cloud` 的 [`v2.4.0` PostgreSQL remote task 候选](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md)）
 另经真实 TLS、受限角色、任务生命周期和只读 quota 观察验证，仍不准入普通
 host Turn。因此这些服务检查不能取得普通 PostgreSQL 反馈 Turn 资格，
 也不构成本切片新增执行 profile 的理由。

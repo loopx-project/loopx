@@ -19,13 +19,11 @@ from loopx.control_plane.testing import authority_e2e_ladder as ladder
 
 
 LIVE_ENVIRONMENT_VARIABLES = (
-    ladder.POSTGRES_URL_VARIABLE,
     ladder.NOKV_AUTHORITY_LIVE_FLAG,
     *ladder.NOKV_AUTHORITY_VARIABLES,
 )
 GATED_ROW_IDS = (
     "s2a.nokv_live_qualification",
-    "s2b.postgresql_conformance_live",
 )
 LOCAL_FILE_ROW_ID = "s0.native_file_conformance"
 FULL_LADDER_VARIABLE = "LOOPX_LADDER_FULL"
@@ -68,13 +66,26 @@ def test_ladder_row_passes_or_is_declared_unverified(
     assert report["exit_policy"]["exit_code"] == 0
 
 
-def test_registry_vocabulary_and_pending_rows_are_declared_not_claimed() -> None:
+def test_registry_vocabulary_and_pending_rows_are_declared_not_claimed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     row_ids = [row.id for row in ladder.LADDER_ROWS]
     pending_ids = [row.id for row in ladder.PENDING_ROWS]
     assert len(set(row_ids)) == len(row_ids)
     assert set(row_ids).isdisjoint(pending_ids)
-    assert pending_ids == []
-    assert {row.stage for row in ladder.LADDER_ROWS} == {"0", "1", "2a", "2b"}
+    assert pending_ids == ["s2b.postgresql_conformance_live"]
+    assert {row.stage for row in ladder.PENDING_ROWS} == {"2b"}
+    assert {row.stage for row in ladder.LADDER_ROWS} == {"0", "1", "2a"}
+    assert ladder.main(["--stage", "2b", "--list"]) == 0
+    stage_2b_listing = json.loads(capsys.readouterr().out)
+    assert stage_2b_listing["rows"] == []
+    assert [row["id"] for row in stage_2b_listing["pending"]] == ["s2b.postgresql_conformance_live"]
+    assert ladder.main(["--stage", "2b"]) == 1
+    capsys.readouterr()
+    assert ladder.main(["--stage", "2b", "--allow-pending"]) == 0
+    stage_2b_report = json.loads(capsys.readouterr().out)
+    assert stage_2b_report["summary"]["pending"] == 1
+    assert stage_2b_report["pending"][0]["status"] == "pending"
     assert all(row.gate in ladder.GATES for row in ladder.LADDER_ROWS)
     assert all(row.product_path in ladder.PRODUCT_PATHS for row in ladder.LADDER_ROWS)
     with pytest.raises(ValueError):
@@ -107,15 +118,14 @@ def test_main_never_reports_green_while_unverified(
     assert report["summary"] == {
         "pass": 0,
         "fail": 0,
-        "unverified": 2,
+        "unverified": 1,
         "pending": 0,
-        "executed": 2,
+        "executed": 1,
         "privacy_violations": 0,
     }
     assert {row["status"] for row in report["rows"]} == {"unverified"}
     assert {row["reason_code"] for row in report["rows"]} == {
         "nokv_authority_env_missing",
-        "postgres_url_missing",
     }
     assert report["exit_policy"] == {
         "allow_unverified": False,
@@ -123,7 +133,6 @@ def test_main_never_reports_green_while_unverified(
         "exit_code": 1,
         "rule": ladder.EXIT_POLICY_RULE,
     }
-    assert report["bindings"]["postgres_url_sha256_prefix"] is None
     assert report["bindings"]["nokv_client_config_sha256"] is None
     assert report["bindings"]["loopx_commit"] is None or len(report["bindings"]["loopx_commit"]) == 40
     captured = capsys.readouterr()
@@ -131,7 +140,7 @@ def test_main_never_reports_green_while_unverified(
 
     assert ladder.main([*argv, "--allow-unverified"]) == 0
     relaxed = json.loads(report_path.read_text(encoding="utf-8"))
-    assert relaxed["summary"]["unverified"] == 2
+    assert relaxed["summary"]["unverified"] == 1
     assert relaxed["exit_policy"]["allow_unverified"] is True
     assert relaxed["exit_policy"]["exit_code"] == 0
     capsys.readouterr()
@@ -333,7 +342,7 @@ def test_privacy_scan_turns_leaks_into_failures(tmp_path: Path) -> None:
         "privacy_violations": 1,
     }
     assert report["exit_policy"]["exit_code"] == 1
-    assert report["pending"] == []
+    assert report["pending"] == [row.describe() for row in ladder.PENDING_ROWS]
 
 
 def test_privacy_leak_confined_to_bindings_still_fails_the_run() -> None:

@@ -250,11 +250,14 @@ effect 和独立验证后的 postcondition，才允许形成 delivery receipt。
 
 In-memory fake 可以验证状态规则及调用顺序，但无法单独证明真实后端的 durable write、事务隔离、schema 失败和跨进程竞争。需要在对应后端复现这些边界，才能把规则测试的结论扩展到实际存储路径。
 
-LoopX 对这类改动的门是明确的：重构交付前必须验证受影响的生产入口和真实后端。影响 PostgreSQL
-authority 时，配置指向隔离临时实例的 `LOOPX_TEST_POSTGRES_URL`，运行
-`npm run test:postgresql-authority-store`，并记录精确 commit、后端版本、验证行为与失败或局限。
-`PostgreSQL Integration` workflow 会在临时实例上运行同一条 ladder row 与 service admission
-套件，所以这条路径在 CI 与本地都被验证。
+LoopX 对这类改动的门是明确的：重构交付前必须验证受影响的生产入口和真实后端。
+在 `loopx-project/loopx` 中，本地路径对应 `npm run test:control-plane`（真实 File 与
+SQLite 存储）和 `npm run test:remote-authority`（出站 HTTPS/mTLS 客户端）。影响服务端
+PostgreSQL authority 时，请在 `loopx-project/loopx-cloud` 中配置指向隔离临时实例的
+`LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store` 与
+`npm run test:postgresql-authority-service`，并记录精确 commit、后端版本、验证行为
+与失败或局限；`loopx-cloud` 的 `PostgreSQL Integration` workflow 会在临时实例上
+验证服务端存储与 admission 套件（拆分前的旧自托管路径保留在 `v2.4.0` 标签）。
 
 ### 隔离是这条门的前提
 

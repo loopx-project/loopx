@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Compare legacy, file, and PostgreSQL archive semantics from one live snapshot.
+"""Compare legacy, file, and SQLite archive semantics from one live snapshot.
 
 The selected Goal is read only. All mutations happen in a temporary Markdown
-clone, an isolated file store, and a caller-supplied disposable PostgreSQL
-tenant. Output contains bounded counts and digest prefixes, never Todo text,
-identifiers, paths, connection strings, or raw projections.
+clone, an isolated file store, and an isolated SQLite store. Output contains
+bounded counts and digest prefixes, never Todo text, identifiers, paths, or raw
+projections.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import argparse
 import copy
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -36,13 +35,12 @@ from loopx.todos import archive_completed_todos  # noqa: E402
 
 NODE_REHEARSAL = r"""
 import assert from 'node:assert/strict';
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {Pool} from 'pg';
 import {FileAuthorityStore} from '__FILE_STORE__';
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from '__PG_STORE__';
+import {SqliteAuthorityStore} from '__SQLITE_STORE__';
 import {executeCoordinationTodoArchiveCompleted} from '__ARCHIVE__';
 import {canonicalAuthorityBytes} from '__CODEC__';
 import {evaluateTodoResumeConditions} from '__RESUME__';
@@ -85,26 +83,11 @@ const semanticTodo = (todo) => {
   }
   return result;
 };
-const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 4});
-const database = {connect: async () => {
-  const client = await pool.connect();
-  return {
-    query: async (text, values) => await client.query(text, values),
-    release: (error) => client.release(error),
-  };
-}};
-await installPostgreSqlAuthorityStoreSchema(
-  database,
-  `postgresql:${'b'.repeat(32)}`,
-);
-const tenant = `three-arm-${randomUUID()}`;
 const fileRoot = await mkdtemp(join(tmpdir(), 'loopx-three-arm-file-'));
+const sqliteRoot = await mkdtemp(join(tmpdir(), 'loopx-three-arm-sqlite-'));
 const stores = [
   ['file', new FileAuthorityStore(fileRoot, request.goal_id)],
-  ['postgresql', new PostgreSqlAuthorityStore(database, {
-    tenant_id: tenant,
-    goal_id: request.goal_id,
-  })],
+  ['sqlite', new SqliteAuthorityStore(sqliteRoot, request.goal_id)],
 ];
 const results = {};
 try {
@@ -176,8 +159,8 @@ try {
 
   assert.equal(
     digest(results.file.head),
-    digest(results.postgresql.head),
-    'file and PostgreSQL heads differ',
+    digest(results.sqlite.head),
+    'file and SQLite heads differ',
   );
   const initialById = new Map(request.initial.todos.map((todo) => [todo.todo_id, todo]));
   const providerById = new Map(results.file.head.todos.map((todo) => [todo.todo_id, todo]));
@@ -274,19 +257,8 @@ try {
     provider_receipts_found: true,
   }));
 } finally {
-  for (const table of [
-    'authority_receipts',
-    'authority_events',
-    'authority_commits',
-    'authority_heads',
-  ]) {
-    await pool.query(
-      `DELETE FROM loopx_control_plane.${table} WHERE tenant_id=$1 AND goal_id=$2`,
-      [tenant, request.goal_id],
-    );
-  }
-  await pool.end();
   await rm(fileRoot, {recursive: true, force: true});
+  await rm(sqliteRoot, {recursive: true, force: true});
 }
 """
 
@@ -305,10 +277,10 @@ def _node_script(repository: Path) -> str:
             ),
         )
         .replace(
-            "__PG_STORE__",
+            "__SQLITE_STORE__",
             _module_uri(
                 repository,
-                "loopx/control_plane/coordination/postgresql_authority_store.ts",
+                "loopx/control_plane/coordination/sqlite_authority_store.ts",
             ),
         )
         .replace(
@@ -335,20 +307,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--goal-id", required=True)
     parser.add_argument("--role", choices=("agent", "user"), default="agent")
     parser.add_argument("--max-active-done", type=int, default=5)
-    parser.add_argument(
-        "--execute-isolated-postgresql",
-        action="store_true",
-        help="acknowledge that LOOPX_TEST_POSTGRES_URL names a disposable server",
-    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-    if not args.execute_isolated_postgresql:
-        raise SystemExit("--execute-isolated-postgresql is required")
-    if not os.environ.get("LOOPX_TEST_POSTGRES_URL"):
-        raise SystemExit("LOOPX_TEST_POSTGRES_URL is required")
     if args.max_active_done < 0:
         raise SystemExit("--max-active-done must be non-negative")
 

@@ -28,7 +28,7 @@ The standalone ladder always runs every selected row.
 | `s0.native_sqlite_conformance` | 0 | `store_direct` | deterministic | The current `SqliteAuthorityStore` passes the same complete conformance contract against real SQLite files. |
 | `s1.cli_document_decodes_through_ts_store` | 1 | `real_cli` | deterministic | Public CLI bootstrap creates canonical File authority. Todo add, lease acquire, and Todo update commit at cursors 2 through 4. An independent TypeScript process reads the four ordered transactions and the first business receipt from `runtime/authority/file-v0`. |
 | `s2a.nokv_live_qualification` | 2a | `store_direct` | `env:nokv_authority` | The NoKV candidate passes the live single-node qualification with SDK `0.11.1`, API `1`, and both stale-incarnation fence checks. |
-| `s2b.postgresql_conformance_live` | 2b | `store_direct` | `env:postgresql` | The PostgreSQL candidate passes the provider integration suite with at least nine TAP passes and no failures or skips. |
+| `s2b.postgresql_conformance_live` | 2b | `pending` | `loopx-cloud` | Declared pending in `loopx-project/loopx`; server-side PostgreSQL integration and service admission moved to `loopx-project/loopx-cloud` (`npm run test:postgresql-authority-store` / `npm run test:postgresql-authority-service`). Pre-split self-hosted tags remain archived at `v2.4.0`. |
 
 Stage 1 checks the complete public path. It applies File creation defaults,
 bootstraps a new Goal, configures its registered agents, performs three
@@ -85,7 +85,6 @@ qualified.
 | Gate | Required input | Unverified result |
 | --- | --- | --- |
 | `deterministic` | Node.js on `PATH` for native execution and readback | `node_missing` |
-| `env:postgresql` | `LOOPX_TEST_POSTGRES_URL` and the installed `pg` package | `postgres_url_missing`, `pg_dependency_missing`, or `node_missing` |
 | `env:nokv_authority` | `LOOPX_NOKV_AUTHORITY_LIVE=1`, absolute config and Python paths, an existing workbench, and Node.js | A specific missing-input or disabled-live reason |
 
 The NoKV probe creates a fresh tenant and Goal in the selected workbench.
@@ -105,9 +104,12 @@ Exit code `0` requires:
 - no unverified row unless `--allow-unverified` is set;
 - no pending declaration unless `--allow-pending` is set.
 
-There are no pending rows in the current registry. The generic pending
-mechanism remains tested so a future obligation cannot be listed as completed
-work. `--list` prints the registry and makes no verification claim.
+`s2b.postgresql_conformance_live` is declared in `PENDING_ROWS` pointing to
+`loopx-project/loopx-cloud` (`npm run test:postgresql-authority-store`):
+`--stage 2b --list` prints the pending declaration (`exit 0`), selecting stage
+`2b` without `--allow-pending` exits non-zero, and `--allow-pending` reports
+`pending` (never `pass`). `--list` prints the registry and makes no verification
+claim.
 
 ## Distribution qualification
 

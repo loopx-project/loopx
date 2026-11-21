@@ -99,10 +99,26 @@ amends those grants.
 
 ## Open Core And Commercial Boundaries
 
-This repository's unified open source core is Apache-2.0. A separately
-delivered Managed Control Plane, enterprise-only modules, hosted operations,
-or implementation and support services may use separate commercial terms when
-they are not part of this repository's Apache-2.0 core distribution.
+This repository's unified open source core (`loopx-project/loopx`) is 100%
+Apache-2.0. In particular:
+
+- Local `File` and `SQLite` authority stores, portable state export/archive,
+  the provider injection SPI (`local_authority_provider.ts`), and the outbound
+  HTTPS `RemoteAuthority` wire contract and client
+  ([`remote_authority_contract.ts`](../../loopx/control_plane/coordination/remote_authority_contract.ts),
+  [`remote_authority_http.ts`](../../loopx/control_plane/coordination/remote_authority_http.ts),
+  [`remote_authority_probe.ts`](../../loopx/control_plane/coordination/remote_authority_probe.ts),
+  [`remote_authority_gateway.py`](../../loopx/control_plane/coordination/remote_authority_gateway.py),
+  and [`remote-authority-client.ts`](../../examples/coordination/remote-authority-client.ts))
+  remain Apache-2.0 in `loopx-project/loopx`.
+- Server-side PostgreSQL authority, distributed lease coordination, and
+  multi-tenant governance live in `loopx-project/loopx-cloud` (preserving full
+  Apache-2.0 `LICENSE` and `NOTICE` attributions on any migrated base files).
+
+A separately delivered Managed Control Plane (`loopx-project/loopx-cloud`),
+enterprise-only modules, hosted operations, or implementation and support
+services may use separate commercial terms when they are not part of this
+repository's Apache-2.0 core distribution.
 
 Apache-2.0 itself permits commercial use, modification, and distribution
 subject to its terms. The separate project-name and logo guidance in

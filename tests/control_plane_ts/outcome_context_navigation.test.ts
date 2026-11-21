@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {randomUUID} from "node:crypto";
-import {Pool} from "pg";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -96,27 +93,9 @@ for (const kind of ["missing_relation", "unbound_work", "goal_wide", "lifetime"]
     assert.match(String(result.instruction), /not an automatic full-file read/);
   });
 
-for (const provider of ["file", "sqlite", "postgresql"]) test(`${provider}: inspect derives navigation from one actual canonical snapshot without mutations`,
-  {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+for (const provider of ["file", "sqlite"] as const) test(`${provider}: inspect derives navigation from one actual canonical snapshot without mutations`, async t => {
   const root = await mkdtemp(join(tmpdir(), "scope-provider-")); t.after(() => rm(root, {recursive: true, force: true}));
-  let store;
-  if (provider === "postgresql") {
-    const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 4});
-    const db = {connect: async () => {
-      const client = await pool.connect();
-      return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-        release: () => client.release()};
-    }};
-    const tenant = `outcome-navigation-${randomUUID()}`;
-    t.after(async () => {
-      try {
-        for (const table of ["authority_commits", "authority_heads"])
-          await pool.query(`DELETE FROM loopx_control_plane.${table} WHERE tenant_id=$1 AND goal_id=$2`, [tenant, goal]);
-      } finally { await pool.end(); }
-    });
-    await installPostgreSqlAuthorityStoreSchema(db, `postgresql:${"b".repeat(32)}`);
-    store = new PostgreSqlAuthorityStore(db, {tenant_id: tenant, goal_id: goal});
-  } else store = provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
+  const store = provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
   const seeded = await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
     next_projection: fixture(), events: [], receipts: []});
   assert.equal(seeded.status, "applied", JSON.stringify(seeded));

@@ -343,21 +343,31 @@ Mutation 运行必须经过同一 public entrypoint，并让独立 oracle 失败
 
 Refactors must exercise the affected production entrypoint and real backend
 before delivery. Unit tests, mocks, and in-memory conformance remain useful,
-but cannot replace that proof. For changes affecting PostgreSQL authority,
-configure `LOOPX_TEST_POSTGRES_URL` to an isolated disposable server and run
-`npm run test:postgresql-authority-store`; a skipped suite is an evidence gap,
+but cannot replace that proof. In `loopx-project/loopx` (Apache-2.0 core), run
+`npm run test:control-plane` (`FileAuthorityStore` and `SqliteAuthorityStore`)
+and `npm run test:remote-authority` (outbound HTTPS/mTLS client and gateway).
+For changes affecting server-side PostgreSQL authority, configure
+`LOOPX_TEST_POSTGRES_URL` to an isolated disposable server in
+`loopx-project/loopx-cloud` (`https://github.com/loopx-project/loopx-cloud`) and
+run `npm run test:postgresql-authority-store` plus
+`npm run test:postgresql-authority-service`; a skipped suite is an evidence gap,
 not a pass. Record the exact commit, backend version, tested behavior, and
-failures or limits. The `PostgreSQL Integration` workflow runs that ladder row
-and the service admission suite against a disposable server, so the path stays
-qualified in CI as well as locally. If no safe real environment is available,
-hold delivery.
+failures or limits. The `PostgreSQL Integration` workflow in `loopx-cloud`
+qualifies those suites against a disposable server, while pre-split self-hosted
+installations retain the frozen `v2.4.0` tag (`loopx postgres`, Compose bundle,
+and legacy test runner). If no safe real environment is available, hold
+delivery.
 
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
-不能替代这项证据。影响 PostgreSQL authority 时，配置指向隔离临时实例的
-`LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store`；跳过不算
-通过。记录精确 commit、后端版本、验证行为与失败或局限；`PostgreSQL Integration`
-workflow 会在临时实例上运行该 ladder row 与 service admission 套件，因此这条路径在
-CI 与本地都会保持验证。没有安全的真实环境则暂停交付。
+不能替代这项证据。在开源核心 `loopx-project/loopx` 中，运行
+`npm run test:control-plane`（`FileAuthorityStore` 与 `SqliteAuthorityStore`）与
+`npm run test:remote-authority`（出站 HTTPS/mTLS 客户端与只读网关）。影响服务端
+PostgreSQL authority 时，请在 `loopx-project/loopx-cloud` 中配置指向隔离临时实例的
+`LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store` 与
+`npm run test:postgresql-authority-service`；跳过不算通过。记录精确 commit、
+后端版本、验证行为与失败或局限；`loopx-cloud` 的 `PostgreSQL Integration`
+workflow 会在临时实例上验证这些套件，拆分前的自托管部署可继续参考冻结标签
+`v2.4.0`。没有安全的真实环境则暂停交付。
 
 #### Default-Provider Performance Qualification / 默认 Provider 性能资格
 
@@ -435,21 +445,22 @@ provenance 也可不同。domain 字段、归档选择、相对顺序、active l
 Todo 图中仍有对应 Todo 的 live edge。历史 orphan lease 文件继续留在 source inventory，
 但绝不进入 canonical head。
 
-The archive rehearsal is executable and emits only bounded counts and digest
-prefixes. It never prints raw projections, Todo identifiers, source paths, or
-the PostgreSQL URL. The URL must name a disposable isolated server:
+The local three-arm archive rehearsal in `loopx-project/loopx` is executable and
+compares the immutable legacy baseline against isolated `FileAuthorityStore` and
+`SqliteAuthorityStore` copies, emitting only bounded counts and digest prefixes
+without mutating the live Goal:
 
 ```bash
-LOOPX_TEST_POSTGRES_URL="$DISPOSABLE_POSTGRES_URL" \
-python examples/control_plane/authority-three-arm-rehearsal.py \
+uv run --extra test python examples/control_plane/authority-three-arm-rehearsal.py \
   --registry "$REGISTRY_PATH" \
-  --goal-id "$GOAL_ID" \
-  --execute-isolated-postgresql
+  --goal-id "$GOAL_ID"
 ```
 
-归档三臂演练可直接执行，且只输出有界计数和 digest 前缀；不输出 raw projection、
-Todo 标识、源路径或 PostgreSQL URL。URL 必须指向一次性隔离服务。命令中的显式
-`--execute-isolated-postgresql` 只是安全确认，不会授权连接共享或生产数据库。
+本地三臂归档演练可直接执行（对比不可变 legacy 基线、隔离 `File` 与隔离
+`SQLite`），且只输出有界计数和 digest 前缀，不修改真实 Goal、也不输出 raw
+projection、Todo 标识或源路径；PostgreSQL 服务端演练与迁移验证归属
+`loopx-project/loopx-cloud`（`npm run test:postgresql-authority-store`，以
+`LOOPX_TEST_POSTGRES_URL` 指向一次性隔离实例）。
 
 Keep tests separate from active state: use a disposable database/tenant and
 runtime directory, with synthetic fixtures or an owner-authorized read-only
