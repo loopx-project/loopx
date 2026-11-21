@@ -15,14 +15,14 @@ from .agent_registry import (
 )
 from .control_plane.projects.identity import GoalCreationConflictError
 from .control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
-from .chat import build_todo_review_preview
-from .chat_action_normalization import ChatActionNormalizationMixin
+from .chat import apply_todo_review_preview, build_todo_review_preview
+from .chat.action_normalization import ChatActionNormalizationMixin
 from .chat_action_store import (
     ACTION_KINDS as SUPPORTED_ACTION_KINDS,
     ActionConflictError,
     ChatActionStore,
 )
-from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
+from .chat.goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .chat.todo_actions import ChatTodoActionMixin
