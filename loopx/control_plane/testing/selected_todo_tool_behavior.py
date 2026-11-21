@@ -18,8 +18,10 @@ from .doubao_model_behavior_actor import (
     DOUBAO_MODEL_ENV,
     DoubaoActorTransport,
     _direct_ark_transport,
+    _direct_deepseek_transport,
 )
 from .model_tool_behavior import (
+    DeepSeekExecToolClient,
     QuotaToolContext,
     is_context_read_command,
     DoubaoExecToolClient,
@@ -1022,16 +1024,21 @@ class DoubaoSelectedTodoToolBehaviorActor:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str = "",
         model: str = DOUBAO_2_1_PRO_MODEL,
         timeout_seconds: float = 90.0,
         transport: DoubaoActorTransport = _direct_ark_transport,
+        client: DoubaoExecToolClient | None = None,
     ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
+        self._client = (
+            client
+            if client is not None
+            else DoubaoExecToolClient(
+                api_key=api_key,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
         )
 
     @classmethod
@@ -1053,6 +1060,24 @@ class DoubaoSelectedTodoToolBehaviorActor:
             model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
             timeout_seconds=timeout_seconds,
             transport=transport,
+        )
+
+    @classmethod
+    def from_deepseek_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DoubaoSelectedTodoToolBehaviorActor:
+        return cls(
+            client=DeepSeekExecToolClient.from_environment(
+                environ=environ,
+                transport=transport,
+                timeout_seconds=timeout_seconds,
+                model=model,
+            )
         )
 
     def qualify(
