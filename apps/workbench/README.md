@@ -248,6 +248,8 @@ npm test -w @calli/e2e -- --test-concurrency=1 test/smoke.spec.mjs
 
 ### 安装为桌面应用
 
-在 Chrome 中打开 LooChat 后，可通过浏览器菜单将它安装为应用。安装名称为 LooChat，图标使用蓝白配色的大小钳小螃蟹。
+在 macOS 或 Windows 的 Chrome 中打开 LoopX，浏览器允许安装时，侧栏底部会出现「安装 LoopX」。点击「安装」后，在 Chrome 弹窗中确认；网页不能跳过这次确认。安装后可从 Spotlight 或开始菜单打开独立窗口。
+
+选择「以后再说」或取消安装后，7 天内不再主动提示；「配置 → 安装 LoopX」仍可手动进入。没有快捷安装按钮时，该页面会显示浏览器菜单安装说明。请使用 HTTPS（本机 localhost 也可）；受管理的浏览器可能禁用安装。独立窗口仍需连接原来的 Workbench 服务，不提供离线 Agent 执行。
 
 如果此前安装的应用仍显示 Limi、AgentHub 或旧图标，先尝试关闭所有应用窗口后重新打开，并接受 Chrome 提供的名称或图标更新。如果仍未更新，可卸载旧应用后从当前网页重新安装；卸载时不要勾选清除网站数据，以保留本机登录和偏好。

@@ -94,6 +94,7 @@ import { SchedulesPage } from './components/SchedulesPage';
 import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
 import { GoalsPage, type GoalsFilter } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
+import { PwaInstallPromotion, PwaInstallSettings } from './components/PwaInstall';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
 import { StewardActions, StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
@@ -133,7 +134,7 @@ import { ConnectDialog, DemoBar } from './components/ConnectDialog';
 import { DemoApi, DemoError } from './demo/DemoApi';
 import { EMPTY_MODEL_PREFERENCE, type DraftModelPreference } from '../../daemon/src/model-preferences';
 import { QUICK_SWITCH_HIDDEN_KEY, clampQuickSwitchBottom, savedQuickSwitchBottom, saveQuickSwitchBottom } from './quick-switch';
-import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
+import { IconDownload, IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
 import { StatReadings } from './components/SessionStats';
 import { ThreadTracePanel } from './components/TracePanel';
 import { chooseLocale, locale, LOCALES, localeChoice, t } from './i18n';
@@ -2829,6 +2830,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     { label: t('settings.preferences'), entries: [
       ...(!demo ? [{ id: 'general', label: t('general.title'), icon: IconSettings, render: () => <GeneralSettingsDialog api={api} onSave={value => { setStartupSettings(value); setExternalNonce(n => n + 1); }} onClose={closeSettings} /> }] : []),
       { id: 'appearance', label: t('appearance.title'), icon: IconPalette, render: () => <AppearancePanel appearance={appearance} theme={theme} onChange={setAppearance} onClose={closeSettings} /> },
+      ...(!showcase ? [{ id: 'install', label: t('pwa.title'), icon: IconDownload, render: () => <PwaInstallSettings /> }] : []),
       { id: 'language', label: t('locale.menu'), icon: IconLanguage, render: () => <SettingsSection title={t('locale.menu')} hint={t('settings.automatic')}><div className="settings-options">
         {[{ id: 'system' as const, name: t('locale.system') }, ...LOCALES].map(l => <button key={l.id} className="settings-link-row" role="radio" aria-checked={localeChoice() === l.id} onClick={() => navigate(() => chooseLocale(l.id))}><span>{l.name}</span>{localeChoice() === l.id && <IconCheck size={16} />}</button>)}
       </div></SettingsSection> },
@@ -3020,7 +3022,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           schedulesActive={onSchedules}
           extensionNav={extensionNav}
           notice={demo && compact ? showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact onConnect={askToConnect} /> : undefined}
-          footerNotice={authKind?.kind === 'link' && !showcase ? <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} /> : undefined}
+          footerNotice={!showcase ? <>
+            <PwaInstallPromotion onHelp={() => openSettings('install')} />
+            {authKind?.kind === 'link' && <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} />}
+          </> : undefined}
         />
       </aside>
       {!compact && !sidebarHidden && (
