@@ -202,6 +202,9 @@ include = ["loopx*"]
 
 [tool.pytest.ini_options]
 markers = ["stage2c_e2e: real process Stage 2C correctness and recovery acceptance"]
+# Bound deadlocked tests above CI's --ci-stall-after=120s cooperative snapshot so local/subagent runs never hang forever.
+faulthandler_timeout = 180
+faulthandler_exit_on_timeout = true
 # Private snapshots and packaging copies are not source tests; optional provider suites have dedicated workflows.
 norecursedirs = [".*", "*.egg", ".local", "build", "dist", "deprecate", "node_modules", "venv", "packages/loopx-ark-turn", "packages/loopx-memt-turn"]
 

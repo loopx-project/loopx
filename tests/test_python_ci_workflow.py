@@ -609,3 +609,37 @@ def test_merge_queue_candidates_run_full_qualification() -> None:
     assert "github.event_name != 'merge_group'" in WORKFLOW.split("  sonar:\n", 1)[1].split("    uses:", 1)[0]
     # The required check list is unchanged: merge-gate always reports.
     assert "if: always()" in WORKFLOW.split("  merge-gate:\n", 1)[1]
+
+
+def test_pytest_config_enforces_bounded_deadlock_exit_above_ci_stall_snapshot(
+    tmp_path: Path,
+) -> None:
+    import tomllib
+
+    config = tomllib.loads((WORKFLOW_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    ini = config["tool"]["pytest"]["ini_options"]
+    assert ini["faulthandler_timeout"] == 180
+    assert ini["faulthandler_timeout"] > 120
+    assert ini["faulthandler_exit_on_timeout"] is True
+
+    (tmp_path / "pyproject.toml").write_text(
+        (WORKFLOW_ROOT / "pyproject.toml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (tmp_path / "test_hang.py").write_text(
+        "import threading\n\ndef test_deadlock():\n    threading.Event().wait(30)\n",
+        encoding="utf-8",
+    )
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-o", "faulthandler_timeout=1"],
+        cwd=tmp_path,
+        env={k: v for k, v in os.environ.items() if not k.startswith("PYTEST")},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert time.monotonic() - started < 10
+    assert result.returncode != 0
+    assert "Timeout" in result.stdout + result.stderr
