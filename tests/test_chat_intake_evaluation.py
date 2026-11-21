@@ -71,7 +71,7 @@ def test_accepted_report_fixture_supplies_the_content_it_claims_to_have_read():
 
 
 def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
-    from loopx.chat_agent import CONVERSATION_INTENT_RESOLUTION_INSTRUCTION, _turn_prompt
+    from loopx.chat import CONVERSATION_INTENT_RESOLUTION_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
 
     prompt = _turn_prompt("Continue.")
@@ -84,7 +84,7 @@ def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
 
 
 def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
-    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
 
     prompt = _turn_prompt("Save the supplied source using this project's rules.", runtime_profile="trusted_owner")
@@ -100,7 +100,7 @@ def test_capable_owner_can_complete_work_without_claiming_a_worker_launch():
 
 @pytest.mark.parametrize("existing_workspace", [False, True])
 def test_managed_owner_instructions_and_turn_agree_on_completion(tmp_path, existing_workspace):
-    from loopx.chat_agent import _turn_prompt
+    from loopx.chat import _turn_prompt
     from loopx.chat_manager import manager_workspace
 
     if existing_workspace:
@@ -117,7 +117,7 @@ def test_managed_owner_instructions_and_turn_agree_on_completion(tmp_path, exist
 
 @pytest.mark.parametrize("mode", ["restricted", "project", "execution"])
 def test_direct_manager_work_does_not_widen_other_conversations(mode):
-    from loopx.chat_agent import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
+    from loopx.chat import TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
 
     kwargs = {"runtime_profile": "restricted"}
@@ -292,7 +292,7 @@ def test_review_evidence_retains_brief_without_provider_payload():
 def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_owner_text(
     tmp_path, profile, custom_owner_instructions, previous_marker
 ):
-    from loopx.chat_agent import _turn_prompt
+    from loopx.chat import _turn_prompt
     from loopx.chat_manager import manager_workspace, MANAGED_SKILL_CURRENT_MARKER
 
     workspace = manager_workspace(tmp_path, runtime_profile=profile)
@@ -516,3 +516,69 @@ def test_material_release_cli_keeps_counterfactual_answers_for_review(tmp_path, 
         if row["id"] in routed:
             assert row["review_response"]["context_handoff"]["brief"]["constraints"] == ["App only; do not publish."]
     assert "synthetic-test-only" not in output.read_text()
+
+
+def test_chat_intake_suite_includes_30_cases_and_v240_status_and_watch_oracles():
+    suite = json.loads((ROOT / "examples/evaluations/chat-intake.public.json").read_text())
+    assert len(suite["cases"]) == 30
+    cases = {row["id"]: row for row in suite["cases"]}
+
+    pr_status = cases["unconfirmed-pr-merge-status-only"]
+    assert pr_status["expected"] == "answer" and pr_status["context_ref"] == "open-object"
+    assert evaluation.score(pr_status, {"message": "PR 42 is still OPEN and unmerged; checks are failing."})["passed"]
+    for bad in (
+        {"message": "Handing off repair.", "context_handoff": {"goal_id": "example-product", "agent_id": "product-owner"}},
+        {"message": "Proposing merge.", "protected_action": {"operation": "merge", "target": "42"}},
+        {"message": "Drafting.", "goal_draft": {"objective": "Merge PR 42"}},
+        {"message": "Adding todo.", "proposals": [{"kind": "todo"}]},
+    ):
+        assert not evaluation.score(pr_status, bad)["passed"]
+
+    watch = cases["watch-only-monitor-not-completed"]
+    assert watch["expected"] == "answer" and watch["context_ref"] == "watch-only-monitor"
+    assert watch["required_evidence_refs"] == ["monitor-tick-1"]
+    watch_context = suite["contexts"]["watch-only-monitor"]
+    assert watch_context["external_observations"][0]["ref"] == "monitor-tick-1"
+    assert watch_context["goals"][0]["current_todos"][0]["watch_only"] is True
+    assert evaluation.score(watch, {"message": "monitor-tick-1 recorded unchanged watch-only status; task work is not completed."})["passed"]
+    assert not evaluation.score(watch, {"message": "The watch-only check completed the task."})["passed"]
+    assert not evaluation.score(watch, {"message": "monitor-tick-1", "context_handoff": {"goal_id": "example-product", "agent_id": "product-owner"}})["passed"]
+
+
+@pytest.mark.parametrize("workers_args, expected_workers", [([], 6), (["--workers", "1"], 1), (["--workers", "12"], 12)])
+def test_chat_intake_cli_supports_bounded_workers_and_rejects_out_of_range(
+    tmp_path, monkeypatch, workers_args, expected_workers
+):
+    from io import BytesIO
+
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps({"contexts": {"ordinary": {"scope": "public", "goals": []}}, "cases": [
+        {"id": "ordinary", "context_ref": "ordinary", "expected": "answer", "request": "Explain Goals."}]}))
+    output = tmp_path / "report.json"
+    captured_workers = []
+    real_pool = evaluation.ThreadPoolExecutor
+
+    def capturing_pool(*, max_workers):
+        captured_workers.append(max_workers)
+        return real_pool(max_workers=max_workers)
+
+    monkeypatch.setattr(evaluation, "ThreadPoolExecutor", capturing_pool)
+    monkeypatch.setattr(evaluation, "operator_provider_environ", lambda _: {"DEEPSEEK_API_KEY": "synthetic-test-only"})
+    monkeypatch.setattr(
+        evaluation.urllib.request,
+        "urlopen",
+        lambda *_, **__: BytesIO(json.dumps({"choices": [{"finish_reason": "stop", "message": {
+            "content": evaluation.CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "A Goal defines an outcome."}) + evaluation.CHAT_REVIEW_CLOSE_TAG
+        }}]}).encode()),
+    )
+    monkeypatch.setattr(sys, "argv", ["chat-intake", "--live", "--model", "fixture-model",
+                                      "--cases", str(cases), "--output", str(output), *workers_args])
+    assert evaluation.main() == 0
+    assert captured_workers == [expected_workers]
+
+    for invalid in ("0", "13"):
+        monkeypatch.setattr(sys, "argv", ["chat-intake", "--live", "--model", "fixture-model",
+                                          "--cases", str(cases), "--output", str(output), "--workers", invalid])
+        with pytest.raises(SystemExit) as err:
+            evaluation.main()
+        assert err.value.code == 2

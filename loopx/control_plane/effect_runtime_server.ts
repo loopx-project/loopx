@@ -1,33 +1,21 @@
 import { writeSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
-import { realpath, type FileHandle } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 
-import type { JsonObject } from "./effect_program.ts";
-import localSnapshotMethods from "./effect_runtime_snapshot_methods.json" with { type: "json" };
+import { createEffectRuntimeHandlers } from "./effect_runtime_handlers.ts";
 import {
-  createEffectRuntimeHandlers,
-  dispatchEffectRuntimeMethod,
-} from "./effect_runtime_handlers.ts";
-import {
-  EffectRuntimeRequestError,
-  effectRuntimeErrorPayload,
-} from "./effect_runtime_errors.ts";
+  exchangeEffectRuntimeRequest,
+  MAX_REQUEST_BYTES,
+  oversizedEffectRuntimeRequest,
+} from "./effect_runtime_exchange.ts";
+import { effectRuntimeErrorPayload } from "./effect_runtime_errors.ts";
 import { atomicWriteJson, withFileMutationLock } from "./effect_runtime_io.ts";
 import { retireRuntime } from "./effect_runtime_compile_cache.ts";
 import { sqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
-import {MAX_INLINE_RESPONSE_BYTES, openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse} from "./effect_runtime_snapshot.ts";
-import {
-  requireJsonObject as requiredObject,
-  requireNonEmptyString as requiredString,
-} from "./runtime_decode.ts";
+import { requireNonEmptyString as requiredString } from "./runtime_decode.ts";
 
-const REQUEST_SCHEMA = "loopx_effect_runtime_request_v0";
-const RESPONSE_SCHEMA = "loopx_effect_runtime_response_v1";
 const INFO_SCHEMA = "loopx_effect_runtime_info_v0";
 const STARTUP_ERROR_SCHEMA = "loopx_effect_runtime_startup_error_v0";
-const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-// Explicit opt-in: ordinary effects retain a bounded request/response wire.
-const LOCAL_SNAPSHOT_METHODS = new Set(localSnapshotMethods);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest
 // delay `setTimeout` accepts: a larger delay overflows and fires immediately,
@@ -39,12 +27,6 @@ const STARTUP_CONFIG_EXIT_CODE = 2;
 const INVALID_IDLE_TIMEOUT_CODE = "invalid_idle_timeout";
 const MAX_REPORTED_RAW_LENGTH = 32;
 let shutdownRequested = false;
-
-function asObject(value: unknown): JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {};
-}
 
 function parseArg(name: string): string {
   const index = process.argv.indexOf(name);
@@ -127,23 +109,6 @@ function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   idleTimer.unref();
 }
 
-async function writeResponse(socket: Socket, response: JsonObject, sink: FileHandle | null): Promise<void> {
-  const encoded = Buffer.from(`${JSON.stringify(response)}\n`);
-  if (encoded.length <= MAX_INLINE_RESPONSE_BYTES) {
-    socket.end(encoded);
-    return;
-  }
-  if (sink === null) {
-    // The operation may already have committed. Never downgrade a lost large
-    // response to a safe request rejection or retry it automatically.
-    socket.destroy();
-    return;
-  }
-  const ref = await writePrivateResponse(sink, encoded);
-  socket.end(`${JSON.stringify({schema_version: RESPONSE_SCHEMA,
-    request_id: response.request_id, ok: true, result_ref: ref})}\n`);
-}
-
 const sockets = new Set<Socket>();
 const server = createServer((socket) => {
   sockets.add(socket);
@@ -163,15 +128,7 @@ const server = createServer((socket) => {
       raw = "";
       socket.pause();
       socket.removeAllListeners("data");
-      socket.end(`${JSON.stringify({
-        schema_version: RESPONSE_SCHEMA,
-        request_id: "unknown",
-        ok: false,
-        error: effectRuntimeErrorPayload(new EffectRuntimeRequestError(
-          "Effect runtime request exceeds the 8 MiB limit",
-          "request_too_large",
-        )),
-      })}\n`);
+      socket.end(oversizedEffectRuntimeRequest());
       return;
     }
     raw += chunk;
@@ -182,86 +139,25 @@ const server = createServer((socket) => {
     pendingRequests += 1;
     clearTimeout(idleTimer);
     void (async () => {
-      let requestId = "unknown";
-      let sink: FileHandle | null = null;
-      let dispatched = false;
       try {
         // The locator becomes visible inside the publication lock. A first
         // response must wait for its release: otherwise an immediate process
         // death can strand an incomplete cleanup claim before the next write.
         await publicationReady;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(
-            raw.slice(0, raw.indexOf("\n")),
-          );
-        } catch {
-          throw new EffectRuntimeRequestError(
-            "Effect runtime request is not valid JSON",
-            "malformed_json",
-          );
-        }
-        const request = requiredObject(parsed, "Effect runtime request");
-        requestId = requiredString(request.request_id, "request_id");
-        if (request.schema_version !== REQUEST_SCHEMA || request.token !== token) {
-          throw new EffectRuntimeRequestError(
-            "Effect runtime request authentication failed",
-            "authentication_failed",
-          );
-        }
-        const method = requiredString(request.method, "method");
-        if (request.params_ref !== undefined || request.response_sink !== undefined) {
-          if (!LOCAL_SNAPSHOT_METHODS.has(method) || request.response_sink === undefined ||
-              (request.params_ref !== undefined && request.params !== undefined)) {
-            throw new EffectRuntimeRequestError("local snapshot transport is unavailable for this request");
-          }
-          sink = await openPrivateResponseSink(request.response_sink);
-        }
-        let params: JsonObject;
-        if (request.params_ref !== undefined) {
-          const ref = requiredObject(request.params_ref, "params snapshot reference");
-          if (ref.schema_version !== "loopx_effect_runtime_snapshot_v0") {
-            throw new EffectRuntimeRequestError("invalid local snapshot schema");
-          }
-          params = requiredObject(await readPrivateJsonSnapshot(ref), "snapshot params");
-        } else {
-          params = asObject(request.params);
-        }
-        const result = await dispatchEffectRuntimeMethod(
-          handlers,
-          method,
-          params,
+        const frame = await exchangeEffectRuntimeRequest(
+          raw.slice(0, raw.indexOf("\n")), token, handlers,
         );
-        dispatched = true;
-        await writeResponse(socket, {
-          schema_version: RESPONSE_SCHEMA,
-          request_id: requestId,
-          ok: true,
-          result,
-        }, sink);
-      } catch (error) {
-        if (dispatched) socket.destroy();
-        else {
-          try {
-            await writeResponse(socket, {
-              schema_version: RESPONSE_SCHEMA,
-              request_id: requestId,
-              ok: false,
-              error: effectRuntimeErrorPayload(error),
-            }, sink);
-          } catch { socket.destroy(); }
-        }
+        if (frame === null) socket.destroy();
+        else socket.end(frame);
+      } catch {
+        socket.destroy();
       } finally {
-        try {
-          await sink?.close();
-        } finally {
-          pendingRequests -= 1;
-          if (pendingRequests === 0) resolveDrain?.();
-          // Stop accepting new work immediately on shutdown, but drain every
-          // already accepted handler, including those whose caller disconnected.
-          if (shutdownRequested && server.listening) server.close();
-          resetIdleTimer(server);
-        }
+        pendingRequests -= 1;
+        if (pendingRequests === 0) resolveDrain?.();
+        // Stop accepting new work immediately on shutdown, but drain every
+        // already accepted handler, including those whose caller disconnected.
+        if (shutdownRequested && server.listening) server.close();
+        resetIdleTimer(server);
       }
     })();
   });

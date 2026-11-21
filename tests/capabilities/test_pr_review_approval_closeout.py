@@ -190,7 +190,7 @@ def test_live_adapter_paginates_history_without_ci_or_mutations(monkeypatch, cap
             assert "--paginate" in args and "--slurp" in args
             return [[review(1, "CHANGES_REQUESTED")], [own]]
         assert "statusCheckRollup" not in args[-1]
-        return {"number": 42, "headRefOid": HEAD, "state": "OPEN",
+        return {"number": 42, "headRefOid": HEAD, "baseRefOid": OLD, "state": "OPEN",
                 "author": {"login": "contributor"}, "reviewDecision": "CHANGES_REQUESTED",
                 "files": [{"path": "loopx/runtime.py"}], "changedFiles": 1}
 
@@ -204,6 +204,44 @@ def test_live_adapter_paginates_history_without_ci_or_mutations(monkeypatch, cap
     assert len(calls) == 3
     assert all("--method" not in args for args in calls)
     assert "body" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("comparison_change", [
+    {"baseRefOid": "c" * 40},
+    {"changedFiles": 2},
+    {"baseRefOid": None},
+])
+def test_live_adapter_rejects_comparison_drift_at_unchanged_head(
+    monkeypatch, capsys, comparison_change,
+):
+    from loopx.cli import main
+    import loopx.pr_review as pr_module
+    from loopx.capabilities.pr_review_queue import github_source
+
+    body = (Path(__file__).parents[2] / "examples/fixtures/pr-review.body.md").read_text()
+    body = body.replace("HEAD_OID", HEAD).replace("VERDICT", "APPROVE")
+    approval = review(3, "APPROVED", login="maintainer", head=HEAD) | {"body": body}
+    snapshot = {
+        "number": 42, "headRefOid": HEAD, "baseRefOid": OLD, "state": "OPEN",
+        "author": {"login": "contributor"}, "reviewDecision": "APPROVED",
+        "files": [{"path": "loopx/runtime.py"}], "changedFiles": 1,
+    }
+    readbacks = iter((snapshot, snapshot | comparison_change))
+
+    def read(args, **_):
+        if args[0] == "api":
+            return [[approval]]
+        fields = args[args.index("--json") + 1].split(",")
+        current = next(readbacks)
+        return {key: current[key] for key in fields if key in current}
+
+    monkeypatch.setattr(github_source, "run_gh_json", read)
+    monkeypatch.setattr(pr_module, "resolve_current_github_login", lambda: "maintainer")
+    result = main(["--format", "json", "pr-review", "--repo", "owner/repo",
+                   "--check-approval-closeout", f"42@{HEAD}"])
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 1, payload
+    assert "comparison changed during readback" in json.dumps(payload)
 
 
 def test_cli_rejects_mixed_modes_before_github_read(monkeypatch, capsys):

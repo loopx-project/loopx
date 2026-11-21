@@ -527,49 +527,11 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         Only a proven non-delivery restores FIFO eligibility. A lost native
         acknowledgement keeps the original input durably reserved.
         """
-        from .control_plane.chat_turn_acceptance import plan_queued_chat_steering
+        from .capabilities.native_chat.queued_admission import steer_queued_turn
+
         self._require_steering_session(session_id)
-        ingress_id = "queue-steer-" + hashlib.sha256(
-            json.dumps([session_id, queued_turn_id, client_ingress_id]).encode()
-        ).hexdigest()[:40]
-        with self.store.queue_steering_lock(session_id, queued_turn_id):
-            session = self.store.load_session(session_id)
-            turn = self.store.load_turn(session_id, queued_turn_id)
-            if session is None or turn is None:
-                raise KeyError("chat turn was not found")
-            active = self.store.load_turn(session_id, str(session.get("active_turn_id") or "")) if session.get("active_turn_id") else None
-
-            def plan(phase):
-                return plan_queued_chat_steering(session, turn, active,
-                    self.store.steering_receipt(session_id, ingress_id),
-                    ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase)
-
-            decision = plan("prepare")
-            if decision["action"] == "unresolved":
-                try:
-                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                        client_ingress_id=ingress_id, message=turn["message"],
-                        _queued_turn_id=queued_turn_id)
-                except Exception:
-                    pass  # Only the original receipt can complete the reservation.
-                decision = plan("settle")
-            if decision["action"] == "dispatch":
-                turn = self.store.write_queue_steering(session_id, turn, decision)
-                try:
-                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                        client_ingress_id=ingress_id, message=turn["message"],
-                        _queued_turn_id=queued_turn_id)
-                except Exception:
-                    # The durable ingress, including absence before any send,
-                    # owns the outcome. Exception wording cannot release work.
-                    pass
-                decision = plan("settle")
-            self.store.write_queue_steering(session_id, turn, decision)
-            if decision["action"] != "complete":
-                raise RuntimeError(decision["error_code"])
-            return {"session_id": session_id, "queued_turn_id": queued_turn_id,
-                "turn_id": expected_turn_id, "client_ingress_id": client_ingress_id,
-                "status": "delivered"}
+        return steer_queued_turn(self, session_id=session_id, queued_turn_id=queued_turn_id,
+            expected_turn_id=expected_turn_id, client_ingress_id=client_ingress_id)
 
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
@@ -625,8 +587,10 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             fail_ingress("live_steering_turn_mismatch")
         if not active_turn_id:
             fail_ingress("live_steering_requires_active_turn")
-        with self.lock:
-            adapter = self.adapters.get(session_id)
+        # Snapshot one adapter without taking the controller lock while a
+        # binding or queue fence is held. The native call still checks health
+        # and binds to the current upstream Turn.
+        adapter = self.adapters.get(session_id)
         if not isinstance(adapter, CodexAppServerAdapter) or not adapter.healthcheck():
             fail_ingress("live_steering_session_not_attached")
         upstream_turn_id = ""

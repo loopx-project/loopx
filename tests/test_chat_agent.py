@@ -16,6 +16,7 @@ import time
 from types import SimpleNamespace
 from pathlib import Path
 
+import loopx.chat as chat
 import loopx.chat_agent as chat_agent
 import loopx.chat_providers as chat_providers
 import loopx.chat_runtime as chat_runtime
@@ -1502,7 +1503,7 @@ def test_project_filesystem_scope_is_verified_on_start_resume_and_pinned_per_tur
         if public_reader:
             assert "requested version's URL" in prompt and "truncation and read coverage" in prompt
         else:
-            assert prompt == chat_agent._turn_prompt("Continue.", context_summary=session.context_summary,
+            assert prompt == chat._turn_prompt("Continue.", context_summary=session.context_summary,
                 runtime_profile=session.runtime_profile, project_work=grant == "workspace_write")
         assert sent[0][1]["threadId"] == session.thread_id == "thread-loopx-chat"
     finally:
@@ -2426,7 +2427,7 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     ):
         assert (competing_route in prompt) is not execution_mode
     if execution_mode:
-        assert chat_agent.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
+        assert chat.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
         assert "Never claim the change has been written without a verified control-plane receipt" not in prompt
         assert "keep proposals=[], goal_draft=null and context_handoff=null" in prompt
         assert "protected_action must be null" in prompt
@@ -2436,7 +2437,7 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     {}, {"runtime_profile": "trusted_owner"}, {"project_work": True}, {"execution_mode": True},
 ])
 def test_turn_guidance_scopes_gates_without_cutting_requested_results(mode):
-    prompt = chat_agent._turn_prompt(
+    prompt = chat._turn_prompt(
         "Inspect the seven requested files; publishing still needs owner authorization.", **mode
     )
     assert "stop only actions that depend on the missing authority or tool" in prompt

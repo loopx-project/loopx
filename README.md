@@ -18,6 +18,10 @@ progress, decisions and verifiable results so work can continue across sessions.
 
 </div>
 
+https://github.com/user-attachments/assets/6d459488-4834-40ef-90bc-d6649c4f0ef1
+
+<p align="center"><sub><b>60-second overview</b> — one sentence sets a long-horizon goal across Codex, Claude Code, Gemini &amp; DeepSeek; LoopX keeps Todos, replanning, human sign-off, and 3% first-read session recovery verifiable across 200+ hour runs (community film by <a href="https://x.com/lemomo_ai">@lemomo_ai</a> · <a href="#see-loopx-in-action">more product recordings below</a>).</sub></p>
+
 ---
 
 <a id="quick-start"></a>

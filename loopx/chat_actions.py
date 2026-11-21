@@ -15,14 +15,14 @@ from .agent_registry import (
 )
 from .control_plane.projects.identity import GoalCreationConflictError
 from .control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
-from .chat import build_todo_review_preview
-from .chat_action_normalization import ChatActionNormalizationMixin
+from .chat import apply_todo_review_preview, build_todo_review_preview
+from .chat.action_normalization import ChatActionNormalizationMixin
 from .chat_action_store import (
     ACTION_KINDS as SUPPORTED_ACTION_KINDS,
     ActionConflictError,
     ChatActionStore,
 )
-from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
+from .chat.goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .chat.todo_actions import ChatTodoActionMixin
@@ -1265,6 +1265,12 @@ class ChatActionService(
             }), receipt={})
             return {"proposal": stale, "turn": None}
         todo_id = _opaque(result.get("todo_id"), field="todo_id")
+        if parameters.get("signal_scope") is not None:
+            from .capabilities.native_chat.steward_monitor import write_steward_monitor_scope
+            target_key = str(parameters.get("target_key") or "").strip()
+            if not target_key:
+                raise ValueError("signal_scope requires target_key")
+            write_steward_monitor_scope(source.runtime_root, goal_id, target_key, parameters["signal_scope"])
         receipt = {
             "receipt_id": _digest(
                 {"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}

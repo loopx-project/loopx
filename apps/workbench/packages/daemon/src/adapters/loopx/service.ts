@@ -126,7 +126,7 @@ export class LoopxService implements LoopxHooks {
    * read then, not before) and bound to that Goal under the Goal's registered root; one on a Goal the core
    * no longer has stays as it is, marked in lists but bound to nothing. Safe to run again.
    */
-  async syncSessions(sessions: Array<{ agent: string; sessionId: string; updatedAt: string | null; loopx?: SessionLoopx }>, idleMs = 60_000): Promise<void> {
+  async syncSessions(sessions: Array<{ agent: string; sessionId: string; cwd?: string; updatedAt: string | null; loopx?: SessionLoopx }>, idleMs = 60_000): Promise<void> {
     const manager = this.manager;
     if (!manager) return;
     const titles = new Map<string, string>();
@@ -145,6 +145,9 @@ export class LoopxService implements LoopxHooks {
       if (!thread) {
         // A conversation that is still being written to by its host is left until it has been quiet a while.
         if (session.updatedAt && Date.now() - Date.parse(session.updatedAt) < idleMs) continue;
+        // The list shows sessions from every directory, but this sync never widens the workdirs: one
+        // outside them is left for the person to import, without asking its agent again every scan.
+        if (session.cwd !== undefined && !isWithinWorkdirs(session.cwd, this.deps.dirs.all())) continue;
         thread = await manager.importSession({ agent: session.agent, sessionId: session.sessionId }).catch((err) => { console.warn(`loopx: could not import session for Goal ${info.goalId}: ${err instanceof Error ? err.message : err}`); return null; });
         if (!thread) continue;
       }

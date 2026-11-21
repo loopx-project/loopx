@@ -18,6 +18,7 @@ from tests.control_plane.test_delegation_context import _fixture as delegation_f
 from tests.test_loopx_turn_driver import _write_live_fixture
 
 KEY = "machine-credential-fixture"
+LEGACY_KEY = "legacy-machine-credential-fixture"
 GOAL_KEY = "goal-must-not-select-this-credential"
 
 
@@ -45,6 +46,7 @@ def turn(project, runtime, registry, *options, action="plan"):
         ])
     payload = json.loads(output.getvalue())
     assert KEY not in output.getvalue()
+    assert LEGACY_KEY not in output.getvalue()
     assert GOAL_KEY not in output.getvalue()
     return code, payload
 
@@ -94,6 +96,55 @@ def test_invalid_machine_store_cannot_fall_back_to_goal_or_environment(tmp_path,
     provider.operator_provider_store_path(machine).write_text('{"schema_version":"invalid"}')
     _, plan = turn(project, runtime, registry, "--host", "dsh")
     assert plan["managed_executor"]["available"] is False
+    assert plan["managed_executor"]["unavailable_reason"] == "operator_credential_unconfigured"
+
+
+@pytest.mark.parametrize("alias_parent", [False, True], ids=["direct-parent", "symlink-parent"])
+def test_explicit_machine_binding_disambiguates_dual_default_roots(
+    tmp_path, machine, monkeypatch, alias_parent,
+):
+    machine_home = tmp_path / "operator-home"
+    current = _write_live_fixture(machine_home / "current")
+    legacy = _write_live_fixture(machine_home / "legacy")
+    route_home = machine_home
+    if alias_parent:
+        route_home = tmp_path / "operator-home-link"
+        route_home.symlink_to(machine_home, target_is_directory=True)
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", route_home / "current" / "runtime")
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", route_home / "legacy" / "runtime")
+    provider.write_operator_provider(runtime_root=current[1], api_key=KEY)
+    provider.write_operator_provider(runtime_root=legacy[1], api_key=LEGACY_KEY)
+    assert paths.default_runtime_route()["status"] == paths.RuntimeRouteStatus.CONFLICT
+
+    host_options = ("--host", "dsh", "--execution-mode", "isolated-headless")
+    for (project, runtime, registry), configured_root, key in (
+        (current, paths.DEFAULT_RUNTIME_ROOT, KEY),
+        (legacy, paths.LEGACY_RUNTIME_ROOT, LEGACY_KEY),
+    ):
+        code, plan = turn(project, runtime, registry, *host_options)
+        assert code == 0, plan.get("error")
+        assert plan["managed_executor"]["available"] is True, plan["managed_executor"]
+        credential_environ = provider.operator_provider_environ(
+            bound_runtime_root=configured_root, environ={},
+        )
+        assert credential_environ["DEEPSEEK_API_KEY"] == key
+
+    other_project, other_runtime, other_registry = _write_live_fixture(tmp_path / "other")
+    provider.write_operator_provider(runtime_root=other_runtime, api_key=GOAL_KEY)
+    _, plan = turn(other_project, other_runtime, other_registry, *host_options)
+    assert plan["managed_executor"]["unavailable_reason"] == "operator_credential_unconfigured"
+
+
+def test_explicit_binding_cannot_select_redirected_default_root(tmp_path, machine):
+    project, runtime, registry = _write_live_fixture(tmp_path / "legacy")
+    provider.write_operator_provider(runtime_root=runtime, api_key=LEGACY_KEY)
+    paths.LEGACY_RUNTIME_ROOT.symlink_to(runtime, target_is_directory=True)
+    assert paths.default_runtime_route()["status"] == paths.RuntimeRouteStatus.INVALID
+
+    code, plan = turn(
+        project, runtime, registry, "--host", "dsh", "--execution-mode", "isolated-headless",
+    )
+    assert code == 0, plan.get("error")
     assert plan["managed_executor"]["unavailable_reason"] == "operator_credential_unconfigured"
 
 

@@ -68,7 +68,7 @@ def read_delegation_facts(
         rows = [row for row in (config.get("bindings") or [])
                 if isinstance(row, dict) and isinstance(row.get("requesters"), list) and agent_id in row["requesters"]]
         executors: dict[tuple[str, ...], Any] = {}
-        environ = operator_provider_environ()
+        environ = operator_provider_environ(bound_runtime_root=runtime_root)
         for host_args in (row.get("host_args") for row in rows[:MAX_PROBED_ROUTES]):
             if (isinstance(host_args, list) and all(isinstance(arg, str) for arg in host_args)
                     and tuple(host_args) not in executors):

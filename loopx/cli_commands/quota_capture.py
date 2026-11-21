@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.quota.turn_envelope import (
     COMPLETE_TURN_DECISION_VERSION, TURN_ENVELOPE_SCHEMA_VERSION,
@@ -125,24 +124,22 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             # metadata is optional and never a read/authority receipt.
             pass
 
-    interaction = current_document.get("interaction_contract")
-    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
-    stateless_ready = (
+    stateless_navigation = (
         progressive_enabled and initial_read_plan is None and context_directory is None and not page_attached
-        and current_document.get("effective_action") == EffectiveAction.NORMAL_RUN.value
-        and current_document.get("normal_delivery_allowed") is True
-        and isinstance(channel, dict) and channel.get("delivery_allowed") is True
     )
-    if stateless_ready:
+    if stateless_navigation:
         try:
             navigation_plan = _turn_envelope_result("context_select", context=current_document,
-                select=[""], list_fields=True, include_initial_read_plan=True)
+                select=[""], list_fields=True, include_initial_read_plan=True, normal_work_initial_read=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass
         else:
             selection = navigation_plan.get("initial_read_plan")
-            initial_read_plan = {"initial": selection is not None,
-                                 "plan": navigation_plan if selection is None else selection}
+            if selection is not None:
+                initial_read_plan = {"initial": True, "plan": selection}
+            else:
+                field_index = _context_index_fields(current_document, navigation_plan["selections"][0]["children"])
+                initial_read_pointers = navigation_plan.get("initial_read_pointers")
 
     if progressive_enabled and initial_read_plan is not None:
         try:
@@ -154,7 +151,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             # Optional discovery cannot invalidate the immutable file reference.
             pass
-    elif progressive_enabled and not stateless_first_read and not stateless_ready:
+    elif progressive_enabled and not stateless_first_read and not stateless_navigation:
         try:
             plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):

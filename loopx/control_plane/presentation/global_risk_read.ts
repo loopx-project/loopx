@@ -31,7 +31,8 @@ const text = (value: unknown): string => stripPythonWhitespace(pyString(truth(va
 // Mirrors loopx/public_safe_text.py PRESENTATION_LOCAL_PATH_PATTERNS; guarded by parity test.
 export const LOCAL_PATH_PATTERNS = [
   /\/(?:Users|home|private|tmp|var)\/[^\s`|,)]+/gu,
-  /(?<![:/A-Za-z0-9])(?:\/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)\/[^\s`'"<>]+|[A-Za-z]:[\\/][^\s`'"<>]+|\\\\[A-Za-z0-9_.-]+\\[^\s`'"<>]+)/giu,
+  /(?<![:/A-Za-z0-9])(?:\/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)\/(?:[^\s`'"<>]+)?|[A-Za-z]:[\\/](?:[^\s`'"<>]+)?|\\\\[A-Za-z0-9_.-]+\\[^\s`'"<>]+)/giu,
+  /(?<![:/A-Za-z0-9])(?:\/{2,})(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)\/(?:[^\s`'"<>]+)?/giu,
   /\\\\\?\\(?:UNC\\[A-Za-z0-9_.-]+\\|Volume\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}\\|GLOBALROOT\\Device\\)[^\s`|,)]+/giu,
   /(?<=:)(?:[A-Za-z]:[\\/][^\s`|,)]+|\\\\\?\\(?:UNC\\[A-Za-z0-9_.-]+\\|Volume\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}\\)[^\s`|,)]+|\\\\\?\\GLOBALROOT\\Device\\[^\s`|,)]+|\\\\[A-Za-z0-9_.-]+\\[^\s`|,)]+)/giu,
 ];

@@ -433,30 +433,36 @@ def test_review_retains_scoped_dependencies_and_unknown_outcomes():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("envelope", [False, True])
-def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider, envelope):
+@pytest.mark.parametrize("explicit_envelope", [False, True])
+def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider, explicit_envelope):
+    from loopx.control_plane.quota.turn_envelope import project_captured_replan_cli_view
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
     capture = tmp_path / "capture"
+    host = ["--codex-app", *(["--turn-envelope"] if explicit_envelope else [])]
     try:
-        initial = call_progress_cli(fixture, "quota", "should-run", "--codex-app",
+        initial = call_progress_cli(fixture, "quota", "should-run", *host,
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
         assert initial["decision"] == "autonomous_replan_required"
         # Exercise the emitted command verbatim even with a hostile ambient
         # PATH entry. The captured reader belongs to the originating checkout.
         pinned_cli = str(Path(sys.executable).with_name("loopx"))
-        guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
-            "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
-            "--todo-id", TODO, "--decision-output-dir", str(capture),
-            *(["--turn-envelope"] if envelope else []))
-        guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
-        packet = guard["replan_action_packet"]
-        if not envelope:
-            assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
-            assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
-        saved = (capture / "decision.json").read_bytes()
+        guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", *host,
+            "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--todo-id", TODO, "--decision-output-dir", str(capture))
+        source_path = capture / "decision.json"
+        saved = source_path.read_bytes()
         source = json.loads(saved)
+        # Both Codex App declarations return the signed decision. Verify that
+        # binding before asking the existing reader owner for its staged view.
+        assert guard["schema_version"] == "loopx_turn_envelope_v1"
+        assert guard["contract_binding"] == source["contract_binding"]
+        assert guard["interaction_contract"]["cli_channel"] == source["interaction_contract"]["cli_channel"]
+        entry = project_captured_replan_cli_view(source, captured_decision_path=str(source_path))
+        capture_sha256 = json.loads(source_path.with_suffix(".reader.json").read_bytes())["sha256"]
+        packet = entry["replan_action_packet"]
         # Unknown old/custom prose, different templates, ambiguous/missing
         # writers and missing capture must remain fully inline.
         for mutation in ("custom", "template", "duplicate", "missing", "capture"):
@@ -481,7 +487,8 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 changed.pop("replan_read_path")
             projected = _turn_envelope_result("replan_cli_view", payload=changed)
             assert explore_source(projected)["content"]["graph"] == graph
-        entry_writeback = guard["interaction_contract"]["cli_channel"]
+        entry_writeback = entry["interaction_contract"]["cli_channel"]
+        assert entry_writeback["settlement_read_ref"] == "$.replan_action_packet.writeback"
         assert "settlement_plan" not in entry_writeback and "next_cli_actions" not in entry_writeback
         assert entry_writeback["settlement_identity"] == source["heartbeat_receipt"]["settlement_identity"]
         original_files = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
@@ -492,26 +499,26 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         (trap / "loopx").write_text("#!/bin/sh\nexit 73\n")
         (trap / "loopx").chmod(0o700)
         reader_fixture = {**fixture, "registry": tmp_path / "missing-registry.json"}
-        def read(stage, expected_code=0):
+        def read(stage, expected_code=0, *, bind_capture=False):
             args = shlex.split(packet[stage])
             assert args[:3] == [pinned_cli, "--cli-bin", pinned_cli]
+            if bind_capture:
+                args.extend(("--capture-sha256", capture_sha256))
             result = subprocess.run([args[0], "--registry", str(reader_fixture["registry"]), *args[1:]],
                 cwd=fixture["project"], env={**os.environ, "PATH": str(trap) + os.pathsep + os.environ["PATH"],
                     "LOOPX_USAGE_PING": "0"}, capture_output=True, text=True, timeout=60)
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
-        assert_explore_entry_and_writer(source, guard, writer)
+        assert_explore_entry_and_writer(source, entry, writer)
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
-        # Real CLI/default-off and native readers both deliver the original
-        # planning facts after admission, without a second body in the entry.
+        # The staged reader delivers planning facts from the original admission.
         expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
         assert review["core_goal"] == expected_goal
         assert review["action_portfolio"] == source.get("action_portfolio")
-        if not envelope:
-            assert "core_goal" not in guard and "planning_horizon" not in guard
-            assert guard.get("action_portfolio") == source.get("action_portfolio")
+        assert "core_goal" not in entry and "planning_horizon" not in entry
+        assert entry.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
         assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
@@ -532,9 +539,17 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 target = target[key]
             target[field] = value
             (capture / "decision.json").write_text(json.dumps(source))
-            rejected = read("review", expected_code=1)
+            rejected = read("review", expected_code=1, bind_capture=True)
             assert rejected["reason"] == "capture digest mismatch; restore the original capture, do not rerun admission"
-        (capture / "decision.json").write_bytes(saved)
+        source_hash_error = read("review", expected_code=1)
+        assert source_hash_error["reason"] == "complete Turn decision content integrity mismatch"
+        source_path.write_bytes(saved)
+        bound_review = read("review", bind_capture=True)
+        writer_args = shlex.split(review["next"]["writeback"])
+        assert shlex.split(bound_review.pop("next")["writeback"]) == [
+            *writer_args[:-2], "--capture-sha256", capture_sha256, *writer_args[-2:],
+        ]
+        assert bound_review == {key: value for key, value in review.items() if key != "next"}
         # A valid next operation still reaches the existing writer and semantic gate.
         result = call_progress_cli(fixture, *fixture["refresh"])
         assert result["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True

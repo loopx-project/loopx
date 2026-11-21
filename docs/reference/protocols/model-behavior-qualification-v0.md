@@ -253,6 +253,31 @@ is evidence that a named Doubao model followed the projection. Raw prompts,
 tool results, provider responses, commands, Todo ids, and local paths are not
 retained in its receipt.
 
+## Direct DeepSeek Shadow Actors
+
+`DeepSeekModelBehaviorActor`, `DeepSeekOnboardingModelBehaviorActor`, and
+`DeepSeekExecToolClient` run the same fail-closed portfolio and real-tool
+qualification suite against the canonical DeepSeek Chat Completions endpoint
+(`https://api.deepseek.com/chat/completions`), allowlisting `deepseek-flash`
+and `deepseek-v4-pro`. Only `None`, empty strings, `https://api.deepseek.com`,
+and `https://api.deepseek.com/v1` via `DEEPSEEK_BASE_URL` resolve to the canonical
+endpoint; arbitrary base URLs fail closed with `noncanonical_endpoint`. Live
+calls require runtime-injected `DEEPSEEK_API_KEY` (and optional
+`LOOPX_DEEPSEEK_BEHAVIOR_MODEL`), disable thinking where deterministic packet
+interpretation applies, do not follow redirects, and emit the same compact
+Git-bound portfolio receipt (`actor_ref="deepseek:<model>"`):
+
+```bash
+python3 scripts/qualify-deepseek-model-behavior-live.py \
+  --qualification-id <public-safe-run-id> \
+  --model deepseek-flash
+```
+
+All 5 real-tool actors (`selected_todo`, `replan_semantic_action`,
+`scoped_gate_successor`, `capability_monitor_repair`, and `terminal_settlement`)
+expose `from_deepseek_environment(...)` reusing the shared state machines and
+oracles without separate DeepSeek-specific decision rules.
+
 ## New-User Onboarding Closed Loop
 
 `onboarding_actual_behavior_qualification_v0` extends the same low-frequency

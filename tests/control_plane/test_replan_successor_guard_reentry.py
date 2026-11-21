@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -396,9 +397,11 @@ def test_real_guard_uses_strict_microsecond_vision_ack(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("later_vision", [False, True])
+@pytest.mark.parametrize("later_vision,interleaved_ack", [
+    (False, False), (True, False), (True, "precise"), (True, "same_second"),
+])
 def test_successor_guard_returns_original_settlement_not_repeated_planning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool, interleaved_ack: bool | str,
 ) -> None:
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, later_vision=later_vision)
     original = _guard(call)
@@ -407,6 +410,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
         assert original["decision"] == "autonomous_replan_required"
         assert original["execution_obligation"]["must_attempt_work"] is True
         assert original["autonomous_replan_obligation"]["triggers"][0]["kind"] == "vision_acceptance_gap"
+        assert original["autonomous_replan_obligation"]["rearmed_after_obligation_id"] == "replan-1111111111111111"
     core_goal = original["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert core_goal["objective"] == "Deliver the independently accepted source outcome."
     assert core_goal["objective_source"] == "active_state"
@@ -416,6 +420,23 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     added = _add(call, obligation_id)
     assert added["replan_transition"]["recorded"] is True
     assert added["replan_transition"]["outcome"] == "new_runnable_successor"
+
+    if interleaved_ack:
+        # A distinct newer review is source history, not settlement proof for
+        # this Turn. It must not replace the original predecessor/digest.
+        prior = next(
+            row for row in reversed([json.loads(line) for line in index.read_text().splitlines()])
+            if row.get("autonomous_replan_ack")
+        )
+        newer = json.loads(json.dumps(prior))
+        admitted = datetime.fromisoformat(original["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
+        newer["generated_at"] = (
+            admitted.replace(microsecond=0) if interleaved_ack == "same_second"
+            else admitted + timedelta(microseconds=1)
+        ).isoformat()
+        newer["autonomous_replan_ack"]["semantic_delta"]["obligation_id"] = "replan-2222222222222222"
+        with index.open("a") as stream:
+            stream.write(json.dumps(newer) + "\n")
 
     # This same-Turn read is a closeout query, not permission for the new work.
     reread = _guard(call)
@@ -441,6 +462,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == actions
     assert envelope["contract_binding"]["source_decision_hash"]
     assert envelope["contract_binding"]["content_hash"]
+    assert envelope["heartbeat_receipt"]["settlement_identity"] == identity
     premature_spend = call(*shlex.split(actions[1])[1:], expected_code=1)
     assert premature_spend.get("appended") is not True
     assert not any(json.loads(line).get("classification") == "quota_slot_spent"
@@ -469,6 +491,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert pending_envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == pending_plan
     assert pending_envelope["contract_binding"]["source_decision_hash"]
     assert pending_envelope["contract_binding"]["content_hash"]
+    assert pending_envelope["heartbeat_receipt"]["settlement_identity"] == identity
     spent = call(*shlex.split(spend_actions[0])[1:])
     assert spent["settlement_progress"]["state"] == "settled"
     assert spent["appended"] is True

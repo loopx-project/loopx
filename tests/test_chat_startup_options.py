@@ -306,3 +306,46 @@ def test_failed_option_composition_does_not_replace_a_running_server(tmp_path, m
     assert result == 1 and calls == []
     assert payloads[0]["ok"] is False
     assert payloads[0]["schema_version"] == "loopx_chat_start_v0"
+
+
+def test_non_login_runtime_path_appends_user_cli_directories_without_leaking_binary_paths(
+    tmp_path, monkeypatch
+):
+    import os
+    from loopx.cli_commands.support_control_agent_runtime import ensure_agent_runtime_path
+
+    home = tmp_path / "home"
+    local_bin = home / ".local" / "bin"
+    nvm_older = home / ".nvm" / "versions" / "node" / "v20.11.0" / "bin"
+    nvm_newer = home / ".nvm" / "versions" / "node" / "v22.23.2" / "bin"
+    for directory in (local_bin, nvm_older, nvm_newer):
+        directory.mkdir(parents=True)
+    env = {"PATH": "/usr/bin:/bin"}
+    updated = ensure_agent_runtime_path(env, home=home)
+    parts = updated.split(":")
+    assert parts[:2] == ["/usr/bin", "/bin"]
+    assert parts.index(str(nvm_newer)) < parts.index(str(nvm_older))
+    assert str(local_bin) in parts
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda _cls: home))
+    args = build_parser().parse_args(["chat", "--no-open"])
+    options = chat_server_options(args, registry_path=tmp_path / "registry.json")
+    assert options["codex_bin"] == "codex"
+    assert options["claude_bin"] == "claude"
+    assert str(local_bin) in os.environ["PATH"].split(os.pathsep)
+
+    # An unreadable optional NVM directory must not break explicit or normal startup.
+    orig_iterdir = type(nvm_newer).iterdir
+
+    def guarded_iterdir(self):
+        if self == home / ".nvm" / "versions" / "node":
+            raise PermissionError("nvm directory is not readable")
+        return orig_iterdir(self)
+
+    monkeypatch.setattr(type(nvm_newer), "iterdir", guarded_iterdir)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    explicit = build_parser().parse_args(["chat", "--no-open", "--codex-bin", "/custom/codex"])
+    explicit_options = chat_server_options(explicit, registry_path=tmp_path / "registry.json")
+    assert explicit_options["codex_bin"] == "/custom/codex"
+    assert str(local_bin) in os.environ["PATH"].split(os.pathsep)

@@ -26,6 +26,37 @@ import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummary
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 
+test("normal-work initial navigation stays scoped while other reads keep discovery", () => {
+  const source = payload();
+  source.normal_delivery_allowed = true;
+  const request = {operation: "context_select", select: [""], list_fields: true, include_initial_read_plan: true};
+  for (const change of [null, "action", "delivery", "channel", "missing_channel"]) {
+    const context = structuredClone(source);
+    if (change === "action") context.effective_action = "wait";
+    if (change === "delivery") context.normal_delivery_allowed = false;
+    const interaction = context.interaction_contract as JsonObject;
+    if (change === "channel") (interaction.agent_channel as JsonObject).delivery_allowed = false;
+    if (change === "missing_channel") delete interaction.agent_channel;
+    const before = structuredClone(context);
+    const scoped = evaluateTurnEnvelope({...request, context, normal_work_initial_read: true});
+    if (change === null) assert.ok(scoped.initial_read_plan);
+    else {
+      assert.equal(scoped.initial_read_plan, undefined);
+      assert.equal((scoped.selections as JsonObject[])[0].pointer, "");
+      assert.ok(Array.isArray(scoped.initial_read_pointers));
+    }
+    assert.ok(evaluateTurnEnvelope({...request, context}).initial_read_plan);
+    assert.deepEqual(evaluateTurnEnvelope({...request, context, normal_work_initial_read: false}),
+      evaluateTurnEnvelope({...request, context}));
+    assert.deepEqual(context, before);
+  }
+  assert.throws(() => evaluateTurnEnvelope({...request, context: source, normal_work_initial_read: "true"}),
+    /normal_work_initial_read must be a boolean/);
+  for (const scope of [{}, {normal_work_initial_read: false}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context: null,
+      select: ["/goal_id"], recover_selection_errors: "true", ...scope}), /recover-selection-errors must be boolean/);
+});
+
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
   source.planning_horizon = {core_goal: {acceptance_contract: {outcome_requirements: {

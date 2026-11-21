@@ -1,6 +1,8 @@
 """Canonical CLI fixtures retain runtime isolation and actual backend identity."""
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -70,3 +72,37 @@ def test_local_fixture_reads_its_actual_provider_through_cli(tmp_path, monkeypat
     assert result["todo"]["todo_id"] == fixture.TODO_ID
     assert result["authority_read"]["decision_read_from_provider"]
     assert not result["authority_read"]["legacy_fallback_used"]
+
+
+def test_session_effect_runtime_sets_private_node_compile_cache(tmp_path):
+    cache = os.environ.get("NODE_COMPILE_CACHE")
+    if os.environ.get("NODE_DISABLE_COMPILE_CACHE") == "1" or os.environ.get("NODE_V8_COVERAGE"):
+        pytest.skip("compile cache disabled by caller environment")
+    assert cache
+    cache_path = Path(cache)
+    assert cache_path.is_dir()
+    assert cache_path.name == "node-compile-cache"
+    assert cache_path.stat().st_mode & 0o077 == 0
+
+
+def test_persistent_canonical_worker_reuses_and_auto_respawns_once(tmp_path, monkeypatch):
+    import canonical_authority_fixture as fixture_mod
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state.md"
+    state.write_text("# Goal\n", encoding="utf-8")
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-respawn", todos=[], handoff_mode="soft_claim")
+    first = fixture_mod.initialize_canonical_authority(runtime, "goal-respawn", projection, state_path=state, provider="sqlite")
+    assert first["status"] == "applied"
+
+    worker = fixture_mod._get_canonical_authority_worker(Path(fixture_mod.loopx.__file__).resolve().parent)
+    original_pid = worker._process.pid
+    worker._process.kill()
+    worker._process.wait(timeout=5)
+
+    second = fixture_mod.advance_canonical_fixture_authority(runtime, "goal-respawn", projection, operation_id="after-kill")
+    assert second["status"] == "applied"
+    assert worker._process.pid != original_pid
+    assert worker._process.poll() is None

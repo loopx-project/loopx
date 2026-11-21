@@ -67,14 +67,20 @@ sets `pull_request_review.wait_for_ci=false`, callers pass `--registry` and
 `--goal-id GOAL` to `loopx pr-review` and `--check-merge-readiness`, resolving
 `ci_policy="not_consulted"` so local `pytest`/`ruff`/`mypy` checks,
 `loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`, and
-exact-head review complete merge readiness without waiting on or polling CI.
-Standalone or unconfigured callers keep the safe default `wait_for_ci=true`.
+exact-head review complete merge readiness without waiting on or polling remote CI
+once local gates pass. `ci_policy="not_consulted"` separates CI waiting from
+merge and self-merge authority: it never authorizes merging or auto-self-merging
+ready PRs, and the default remains leaving PRs open for maintainer/owner
+authorization. Standalone or unconfigured callers keep the safe default
+`wait_for_ci=true`.
 
 当本地确定性验证已完整通过时，远端 CI 作为异步安全兜底，而不应成为串行阻塞点。对于配置了
 `pull_request_review.wait_for_ci=false` 的受管 Goal，调用 `loopx pr-review` 与
 `--check-merge-readiness` 时须显式传入 `--registry` 与 `--goal-id GOAL`（解析为
-`ci_policy="not_consulted"`），以本地测试、`loopx canary premerge` 和精确头评审直接完成
-就绪判断与合入，不再等待或轮询远端 CI；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
+`ci_policy="not_consulted"`），在本地测试、`loopx canary premerge` 与精确头评审等本地
+门禁通过后即可完成就绪判断，不再等待或轮询远端 CI。`ci_policy="not_consulted"` 仅控制
+CI 等待策略，合入与自合并授权仍保持独立：它不会自动批准或触发自合并，默认仍保持 PR 开启等待
+维护者或所有者授权；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
 
 Tests first judge whether the state and rule are correct, then whether the
 implementation conforms. Expected outcomes come from an independently reviewed
@@ -439,7 +445,11 @@ Keep the separate data/registry paths too: process isolation does not isolate
 data. In a Python process that already imported `tempfile`, also scope and
 restore its cached `tempfile.tempdir`; the existing
 `tests/control_plane/canonical_authority_fixture.py::isolate_sqlite_runtime`
-fixture demonstrates both boundaries. Record the serving runtime PID and verify
+fixture demonstrates both boundaries, while persistent fixture-worker Node
+processes in `tests/control_plane/canonical_authority_fixture.py`, scoped
+`NODE_COMPILE_CACHE` setup in `tests/conftest.py`, and in-process CLI test
+entry points avoid repeated Node/Python startup overhead without sharing mutable
+runtime state across worker namespaces. Record the serving runtime PID and verify
 it differs from the live server before dispatching expensive work. Stop only
 that isolated runtime after its requests settle, retaining the same temporary
 environment for shutdown; never restart a live server as test cleanup.
@@ -479,7 +489,9 @@ request may still be running.
 Effect 后台进程；相同源码指纹可能让源码环境与已安装版本共享进程。演练前创建私有
 临时目录，对所有子命令同时设置 `TMPDIR`、`TEMP`、`TMP`；Python 进程若已缓存
 `tempfile.tempdir`，须在同一作用域覆盖并恢复。数据／registry 仍须单独隔离，且在
-重型操作前核对服务 PID 与活跃服务不同。等请求结束后，只在同一临时环境中停止
+重型操作前核对服务 PID 与活跃服务不同。`canonical_authority_fixture.py` 中的持久化
+fixture worker Node 进程、`tests/conftest.py` 中的隔离 `NODE_COMPILE_CACHE` 以及进程内
+CLI 单测入口仅复用进程启动开销，不跨 worker 共享可变运行时状态。等请求结束后，只在同一临时环境中停止
 演练进程。进程隔离不消除整机资源竞争：耗时对照顺序运行，发现竞争则保留失败与
 回执、作废受污染耗时并重新采样；超时不能当作服务端已停止，也不能因此重复恢复。
 
@@ -2001,6 +2013,10 @@ handling; they never qualify Doubao behavior. Run the real gate with:
 ```bash
 python3 scripts/qualify-doubao-model-behavior-live.py \
   --qualification-id <public-safe-run-id>
+# Or for DeepSeek (`deepseek-flash` default or `deepseek-v4-pro`) with DEEPSEEK_API_KEY:
+python3 scripts/qualify-deepseek-model-behavior-live.py \
+  --qualification-id <public-safe-run-id> \
+  --model deepseek-flash
 ```
 
 The command requires a clean candidate checkout, fails when `ARK_API_KEY` is
@@ -2049,10 +2065,10 @@ and passes only after the model reads the target named by the selected Todo.
 Reading the target before quota, choosing a deferred decoy, describing the
 action without calling the tool, or issuing an unallowlisted command fails.
 
-真实 Doubao 调用是低频本地/手动门，不进入普通 CI。`ARK_API_KEY` 只通过进程环境
-注入；packet、prompt、原始响应、凭证和对话都不能成为仓库证据，只保留有界 receipt
+真实 Doubao 与 DeepSeek 调用是低频本地/手动门，不进入普通 CI。`ARK_API_KEY` 或 `DEEPSEEK_API_KEY` 只通过进程环境
+注入（DeepSeek 通过 `scripts/qualify-deepseek-model-behavior-live.py` 并支持 `deepseek-flash` / `deepseek-v4-pro`）；packet、prompt、原始响应、凭证和对话都不能成为仓库证据，只保留有界 receipt
 与 mismatch code。fake transport 只能验证 adapter 的序列化、脱敏与 fail-closed，不能
-作为 Doubao 行为通过证据。真实入口缺少密钥时直接失败，且任一真实调用不通过都会以
+作为 Doubao 或 DeepSeek 行为通过证据。真实入口缺少密钥时直接失败，且任一真实调用不通过都会以
 非零状态退出。
 
 replan semantic action 另有一条 function-tool 行为资格门，因为 no-tool JSON 决策不能
@@ -2299,13 +2315,15 @@ deadline is 1,200 seconds; this is a wall-clock ceiling, not a token budget.
 ### Claude Code and release coverage / Claude Code 与发布覆盖
 
 For focused thin/brief prompt-decision regression, use
-`python3 scripts/qualify-host-prompt-release.py --release-live` only during
-explicit release qualification. It defaults to no calls; missing credentials
-report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
-Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
-quiet-wait, required-vision-replan and typed external-wait fallback cases in
-each mode. The fallback case uses the real compact quota projection: its wait
-transition already exists, so the host must advance the selected independent
+`python3 scripts/qualify-host-prompt-release.py --release-live` (or
+`--release-live --provider deepseek --model deepseek-flash` / `deepseek-v4-pro`
+with `DEEPSEEK_API_KEY`) only during explicit release qualification. It defaults
+to no calls; missing credentials report `skipped`, not a live pass. With
+securely injected `ARK_API_KEY` or `DEEPSEEK_API_KEY`, it exercises two
+independent repetitions of quiet-work, notifying-wait, quiet-wait,
+required-vision-replan and typed external-wait fallback cases in each mode. The fallback case composes the complete quota source through the
+shared TypeScript owner and reuses that checked instance in both modes. Its
+wait transition already exists, so the host must advance the selected independent
 successor and notify rather than authoring another transition. Expected
 decisions remain outside model input. All attempts must pass; no answer
 correction or retry-until-pass is used. Ordinary pytest only checks the probe
@@ -2316,7 +2334,8 @@ as separate evidence. Only hashes and pass/fail receipts are emitted, not raw
 prompts/responses. Model transport failures fail qualification rather than
 becoming environment skips.
 
-仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
+回退场景使用完整 C1 来源，thin 与 brief 每批共享同一份已检查契约；原四个小型
+决策对照仍为合成输入。`qualify-host-prompt-release.py` 支持 `--provider ark`（默认）与 `--provider deepseek --model deepseek-flash|deepseek-v4-pro`。仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
 vision replan 未关闭时不能提前结束 Goal；这不是完整 Claude/Codex 行为验收的替代。
 
 ```bash

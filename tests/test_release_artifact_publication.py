@@ -23,8 +23,11 @@ SPEC.loader.exec_module(owner)
 @pytest.mark.parametrize("metadata", ["valid", "mismatch", "malformed"])
 def test_colocated_artifact_cli_never_initializes_the_candidate(tmp_path, isolated, metadata):
     root = Path(__file__).resolve().parents[1]
-    (tmp_path / "loopx").mkdir()
-    shutil.copyfile(root / "loopx/release_metadata.py", tmp_path / "loopx/release_metadata.py")
+    (tmp_path / "loopx/control_plane/testing").mkdir(parents=True)
+    shutil.copyfile(
+        root / "loopx/control_plane/testing/release_metadata.py",
+        tmp_path / "loopx/control_plane/testing/release_metadata.py",
+    )
     (tmp_path / "scripts").mkdir()
     script = tmp_path / "scripts/release_artifacts.py"
     shutil.copyfile(root / "scripts/release_artifacts.py", script)

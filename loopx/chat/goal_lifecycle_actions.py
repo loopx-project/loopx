@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .control_plane.goals.activation import GoalActivationState, goal_activation_state
-from .control_plane.goals.activation_service import set_goal_activation_state
-from .control_plane.goals.deletion_service import delete_stopped_goal
+from ..control_plane.goals.activation import GoalActivationState, goal_activation_state
+from ..control_plane.goals.activation_service import set_goal_activation_state
+from ..control_plane.goals.deletion_service import delete_stopped_goal
 
 
 GOAL_LIFECYCLE_SOURCE_BASIS_SCHEMA_VERSION = "loopx_goal_lifecycle_source_basis_v1"
@@ -75,7 +75,7 @@ class ChatGoalLifecycleActionMixin:
     def _normalize_goal_lifecycle(
         self, parameters: dict[str, Any]
     ) -> dict[str, Any]:
-        from .chat_actions import _opaque, _text
+        from ..chat_actions import _opaque, _text
 
         values = self._allowed_parameters(
             parameters,
@@ -100,7 +100,7 @@ class ChatGoalLifecycleActionMixin:
         goal_id: str,
         current_fingerprint: str,
     ) -> dict[str, Any]:
-        from .chat_actions import _digest
+        from ..chat_actions import _digest
 
         expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
         if current_fingerprint != expected_fingerprint:
@@ -175,7 +175,7 @@ class ChatGoalLifecycleActionMixin:
     def _apply_goal_lifecycle(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
-        from .chat_actions import _digest
+        from ..chat_actions import _digest
 
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
