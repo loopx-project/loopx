@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_mutation_file_lock
+from ..agents.agent_scope import AgentScopeFrontierAction
 from ..coordination.local_authority import (
     local_authority_is_promoted,
     LOCAL_AUTHORITY_SOURCES,
@@ -455,10 +456,22 @@ def apply_selected_todo_execution_preparation(
     receipt_bound: bool = False,
 ) -> None:
     selected = payload.get("selected_todo")
+    fallback = payload.get("scoped_user_gate_fallback")
+    fallback_selected = (
+        fallback.get("selected_executable")
+        if isinstance(fallback, Mapping)
+        else None
+    )
     scoped_fallback_admitted = (
-        isinstance(payload.get("scoped_user_gate_fallback"), Mapping)
+        isinstance(fallback, Mapping)
         and obligation is not None
         and obligation.get("delivery_allowed") is True
+        and payload.get("effective_action")
+        != AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value
+        and (
+            not isinstance(fallback_selected, Mapping)
+            or fallback_selected.get("fallback_kind") != "deferred_successor_replan"
+        )
     )
     if (
         not isinstance(selected, dict)
