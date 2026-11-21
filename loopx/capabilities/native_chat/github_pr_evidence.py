@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
@@ -41,6 +42,30 @@ _CHECK_FAIL_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 )
 _CHECK_PASS_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+_KNOWN_BOT_LOGINS = frozenset(
+    {"mergify", "codecov", "codecov-commenter", "github-actions", "dependabot"}
+)
+
+
+def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt, raw
+
+
+def _is_bot_login(login: str) -> bool:
+    cleaned = str(login or "").strip().casefold()
+    return not cleaned or cleaned.endswith("[bot]") or cleaned in _KNOWN_BOT_LOGINS
 
 
 def normalize_github_repo_slug(value: Any) -> str | None:
@@ -275,6 +300,70 @@ def _actor_actionable_verdict(record: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _summarize_request_changes_stall(
+    row: Mapping[str, Any],
+    *,
+    raw_reviews: Sequence[Mapping[str, Any]],
+    latest_record_by_actor: Mapping[tuple[str, str], tuple[str, dict[str, Any]]],
+    head_oid: str,
+    pr_author: str,
+) -> tuple[str | None, str | None, bool]:
+    rc_candidates: list[tuple[datetime, str, dict[str, Any], str]] = []
+    for verdict_val, rec in latest_record_by_actor.values():
+        if verdict_val != "REQUEST_CHANGES":
+            continue
+        parsed = _parse_iso_timestamp(rec.get("submitted_at"))
+        if parsed is not None:
+            rc_candidates.append((parsed[0], str(rec.get("id") or ""), rec, parsed[1]))
+    if not rc_candidates:
+        return None, None, False
+    latest_rc_dt, _latest_id, latest_rec, rc_iso = max(
+        rc_candidates, key=lambda item: (item[0], item[1])
+    )
+    latest_rc_review_id = latest_rec.get("id")
+    anchors: list[tuple[datetime, str]] = [(latest_rc_dt, rc_iso)]
+    for commit_key in ("headCommitPushedAt", "headCommitCommittedAt"):
+        parsed_commit = _parse_iso_timestamp(row.get(commit_key))
+        if parsed_commit is not None:
+            anchors.append(parsed_commit)
+    stalled_anchor_dt, stalled_since = max(anchors, key=lambda pair: pair[0])
+
+    post_replies: list[tuple[datetime, int, str]] = []
+    for comment in row.get("comments") or []:
+        if not isinstance(comment, Mapping):
+            continue
+        parsed_ts = _parse_iso_timestamp(comment.get("createdAt") or comment.get("created_at"))
+        if parsed_ts is None or parsed_ts[0] <= stalled_anchor_dt:
+            continue
+        raw_user = comment.get("author") or comment.get("user") or {}
+        login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
+        if _is_bot_login(login):
+            continue
+        is_author = 1 if (pr_author and login.casefold() == pr_author.casefold()) else 0
+        post_replies.append((parsed_ts[0], is_author, login))
+
+    for review in raw_reviews:
+        if str(review.get("state") or "").strip().upper() != "COMMENTED":
+            continue
+        parsed_ts = _parse_iso_timestamp(review.get("submittedAt") or review.get("submitted_at"))
+        if parsed_ts is None or parsed_ts[0] <= stalled_anchor_dt:
+            continue
+        raw_user = review.get("author") or review.get("user") or {}
+        login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
+        if _is_bot_login(login):
+            continue
+        if _extract_review_record(review, head_oid=head_oid, pr_author=pr_author)["valid_verdict_review"]:
+            continue
+        is_author = 1 if (pr_author and login.casefold() == pr_author.casefold()) else 0
+        post_replies.append((parsed_ts[0], is_author, login))
+
+    post_replies.sort(key=lambda item: (item[0], item[1]))
+    author_replied = bool(
+        pr_author and post_replies and post_replies[-1][2].casefold() == pr_author.casefold()
+    )
+    return latest_rc_review_id, stalled_since, author_replied
+
+
 def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     """Project compact, deterministic exact-head review, check, and gate facts."""
     head_oid = str(row.get("headRefOid") or "").strip()
@@ -297,6 +386,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     exact_reviews.sort(key=lambda item: (item["submitted_at"] or "", item["id"] or ""))
 
     latest_by_actor: dict[tuple[str, str], str | None] = {}
+    latest_record_by_actor: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
     inconsistent_verdict = False
     for record in exact_reviews:
         actionable = _actor_actionable_verdict(record)
@@ -308,11 +398,22 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         )
         if actionable == "DISMISSED":
             latest_by_actor.pop(actor_key, None)
+            latest_record_by_actor.pop(actor_key, None)
         elif actionable == "CONFLICT":
             inconsistent_verdict = True
             latest_by_actor[actor_key] = "REQUEST_CHANGES"
+            latest_record_by_actor[actor_key] = ("REQUEST_CHANGES", record)
         else:
             latest_by_actor[actor_key] = actionable
+            latest_record_by_actor[actor_key] = (actionable, record)
+
+    latest_rc_review_id, stalled_since, author_replied_after_rc = _summarize_request_changes_stall(
+        row,
+        raw_reviews=raw_reviews,
+        latest_record_by_actor=latest_record_by_actor,
+        head_oid=head_oid,
+        pr_author=pr_author,
+    )
 
     verdicts = {val for val in latest_by_actor.values() if val}
     review_decision = str(row.get("reviewDecision") or "").strip().upper()
@@ -363,11 +464,16 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "mergeStateStatus": row.get("mergeStateStatus"),
         "mergeable": row.get("mergeable"),
         "updatedAt": row.get("updatedAt"),
+        "stalled_since": stalled_since,
+        "author_replied_after_request_changes": author_replied_after_rc,
         "checks_summary": checks_summary,
         "review_summary": {
             "effective_verdict": effective_verdict,
             "has_review_conflict": has_conflict,
             "stale_review_count": stale_count,
+            "latest_request_changes_review_id": latest_rc_review_id,
+            "stalled_since": stalled_since,
+            "author_replied_after_request_changes": author_replied_after_rc,
             "exact_head_reviews": exact_reviews,
         },
         "bypassed_gates": bypassed_gates,
@@ -409,6 +515,14 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
         author {
           login
         }
+        comments(last: 20) {
+          nodes {
+            createdAt
+            author {
+              login
+            }
+          }
+        }
         reviews(last: 20) {
           nodes {
             id
@@ -426,6 +540,9 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
         commits(last: 1) {
           nodes {
             commit {
+              oid
+              committedDate
+              pushedDate
               statusCheckRollup {
                 contexts(first: 30) {
                   nodes {
@@ -460,15 +577,34 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     else:
         reviews = []
 
+    raw_comments = node.get("comments")
+    if isinstance(raw_comments, Mapping) and isinstance(raw_comments.get("nodes"), list):
+        comments = [item for item in raw_comments["nodes"] if isinstance(item, Mapping)]
+    elif isinstance(raw_comments, list):
+        comments = [item for item in raw_comments if isinstance(item, Mapping)]
+    else:
+        comments = []
+
+    raw_commits = node.get("commits")
+    commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
+    first_commit = (
+        commit_nodes[0].get("commit")
+        if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
+        else None
+    )
+    head_oid = str(node.get("headRefOid") or "").strip()
+    head_committed_at = node.get("headCommitCommittedAt")
+    head_pushed_at = node.get("headCommitPushedAt")
+    if isinstance(first_commit, Mapping):
+        commit_oid = str(first_commit.get("oid") or "").strip()
+        if not commit_oid or not head_oid or commit_oid.casefold() == head_oid.casefold():
+            if head_committed_at is None:
+                head_committed_at = first_commit.get("committedDate")
+            if head_pushed_at is None:
+                head_pushed_at = first_commit.get("pushedDate")
+
     rollup = node.get("statusCheckRollup")
     if rollup is None:
-        raw_commits = node.get("commits")
-        commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
-        first_commit = (
-            commit_nodes[0].get("commit")
-            if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
-            else None
-        )
         raw_rollup = first_commit.get("statusCheckRollup") if isinstance(first_commit, Mapping) else None
         raw_contexts = raw_rollup.get("contexts") if isinstance(raw_rollup, Mapping) else None
         context_nodes = raw_contexts.get("nodes") if isinstance(raw_contexts, Mapping) else None
@@ -487,6 +623,9 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         "mergeStateStatus": node.get("mergeStateStatus"),
         "mergeable": node.get("mergeable"),
         "updatedAt": node.get("updatedAt"),
+        "headCommitCommittedAt": head_committed_at,
+        "headCommitPushedAt": head_pushed_at,
+        "comments": comments,
         "reviews": reviews,
         "statusCheckRollup": rollup,
     }

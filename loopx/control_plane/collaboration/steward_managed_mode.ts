@@ -1053,6 +1053,13 @@ function hasMatchingApprovedReviewerDeclaration(item: JsonObject, requiredTokens
   );
 }
 
+function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean): string {
+  if (authorReplyBypass) return "awaiting_maintainer_reply";
+  if (stalledAgeMs >= 168 * 3_600_000) return "7d_plus";
+  if (stalledAgeMs >= 72 * 3_600_000) return "72h_plus";
+  return "24h_to_72h";
+}
+
 function filterScopedRepositoryItems(
   rawItems: unknown[],
   filter: JsonObject | null,
@@ -1100,11 +1107,35 @@ function filterScopedRepositoryItems(
       if (authorMode === "exclude" && login && authors.has(login)) continue;
     }
     if (minStalledHours !== null) {
-      const updatedMs = typeof item.updatedAt === "string" ? Date.parse(item.updatedAt) : NaN;
-      if (!Number.isFinite(updatedMs) || observedAtMs - updatedMs < minStalledHours * 3_600_000) {
+      const authorReplied = item.author_replied_after_request_changes === true
+        || reviewSummary?.author_replied_after_request_changes === true;
+      const hasExplicitStalledSince = Object.prototype.hasOwnProperty.call(item, "stalled_since")
+        || (reviewSummary !== null && Object.prototype.hasOwnProperty.call(reviewSummary, "stalled_since"));
+      const rawStalledSince = typeof item.stalled_since === "string"
+        ? item.stalled_since
+        : (typeof reviewSummary?.stalled_since === "string" ? reviewSummary.stalled_since : null);
+      if (
+        hasExplicitStalledSince
+        && rawStalledSince === null
+        && effectiveVerdicts !== null
+        && effectiveVerdicts.size === 1
+        && effectiveVerdicts.has("REQUEST_CHANGES")
+      ) {
         continue;
       }
-      matched.push({ ...item, stalled_threshold_met: true });
+      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
+      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
+      const authorReplyBypass = authorReplied && authorMode === "exclude";
+      const thresholdMet = Number.isFinite(basisMs) && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      if (!authorReplyBypass && !thresholdMet) {
+        continue;
+      }
+      const stalledAgeMs = Number.isFinite(basisMs) ? Math.max(0, observedAtMs - basisMs) : 0;
+      matched.push({
+        ...item,
+        stalled_threshold_met: thresholdMet,
+        stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
+      });
     } else {
       matched.push(item);
     }
@@ -1140,6 +1171,16 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
       params.observed_at ?? repo?.observed_at,
     )
     : null;
+  const hashedRepoItems = signalScope !== null && scopedRepoItems !== null
+    ? scopedRepoItems.map((item) => {
+      const reviewSummary = jsonObject(item.review_summary);
+      const hasStalledSinceClock = typeof item.stalled_since === "string"
+        || typeof reviewSummary?.stalled_since === "string";
+      if (!hasStalledSinceClock) return item;
+      const { updatedAt: _ignoredUpdatedAt, ...rest } = item;
+      return rest;
+    })
+    : rawRepoItems;
   const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
   const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
   const facts = signalScope === null
@@ -1152,7 +1193,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
       signal_scope: signalScope,
       portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
       inbox_items: includeInbox ? inboxItems : [],
-      repository_items: scopedRepoItems,
+      repository_items: hashedRepoItems,
     };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
     "collection_completed_at", "generated_at", "evaluated_at", "age_seconds", "observed_at"]);
