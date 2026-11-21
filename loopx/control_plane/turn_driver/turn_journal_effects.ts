@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
 import { settlementIdentityFromPlan } from "../effect_program.ts";
@@ -424,6 +424,36 @@ export async function commitTurnJournal(
         operation_id: incomingOperationId,
       };
     });
+  if (asObject(params.source_admission).schema_version === "loopx_quota_native_admission_v0") {
+    // Native exact registration is a selected transport variant, not Source's
+    // lifecycle profile or a fresh work grant. Keep its owner out of the
+    // dormant/default journal handler closure.
+    const {parseQuotaAccountingOwner,
+      withBorrowedQuotaAccountingOwner, requireNativeQuotaWorkAgent} = await import("../quota/source_admission.ts");
+    if (goalBinding.kind !== "exact") {
+      throw new EffectRuntimeRequestError("Native exact journal admission cannot upgrade a legacy journal binding.",
+        "journal_source_admission_invalid");
+    }
+    const admission = asObject(params.source_admission);
+    const runtimeRoot = requiredString(admission.runtime_root, "native journal runtime_root");
+    const identity = settlementIdentityFromPlan(asObject(asObject(journal.plan).transaction));
+    // Match journal_store.turn_journal_path: a validated Turn key becomes
+    // its bare digest filename, including on Windows.
+    const digest = typeof journal.turn_key === "string" ? /^sha256:([0-9a-f]{64})$/.exec(journal.turn_key)?.[1] : undefined;
+    const journalName = `${digest}.json`;
+    if (digest === undefined || identity.failure !== null || !isAbsolute(runtimeRoot) || resolve(runtimeRoot) !== runtimeRoot
+        || basename(path) !== journalName
+        || path !== join(runtimeRoot, "goals", identity.value.goal_id, "turns", journalName)) {
+      throw new EffectRuntimeRequestError("Native journal path does not match its verified Goal and Turn identity.",
+        "journal_source_admission_invalid");
+    }
+    const owner = parseQuotaAccountingOwner({goalRefValue: goalBinding.goal_ref,
+      sourceAdmissionValue: admission, runtimeRoot, goalId: identity.value.goal_id});
+    return await withBorrowedQuotaAccountingOwner(owner, async () => {
+      requireNativeQuotaWorkAgent(owner, identity.value.agent_id, false);
+      return await commit();
+    });
+  }
   if (goalBinding.kind === "legacy") {
     if (params.source_admission !== undefined) {
       throw new EffectRuntimeRequestError(

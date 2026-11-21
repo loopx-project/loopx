@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -20,6 +21,7 @@ from loopx.file_lock import exclusive_file_lock
 
 
 TURN_KEY = "sha256:" + "a" * 64
+_MISSING_FIELD = object()
 COMPLETED_PHASES = [
     "host_execute",
     "typed_result",
@@ -66,6 +68,51 @@ def _journal(*, status: str = "committed") -> dict[str, Any]:
         "host_result": {"turn_key": TURN_KEY, "private_detail": "do-not-expose"},
         "receipt": {"turn_key": TURN_KEY, "body": "do-not-expose"},
     }
+
+
+def _cached_validation_journal(
+    *,
+    turn_instance_id: str = TURN_KEY,
+    result_kind: str = "validated_completion",
+) -> dict[str, Any]:
+    journal = _journal(status="in_progress")
+    journal["completed_phases"] = COMPLETED_PHASES[:3]
+    journal["host_attempt_count"] = 1
+    journal["result_kind"] = result_kind
+    journal["validation_stage"] = "task_postcondition"
+    transaction = journal["plan"]["transaction"]
+    transaction["turn_instance_id"] = turn_instance_id
+    identity = transaction["settlement_plan"]["identity"]
+    identity["turn_instance_id"] = turn_instance_id
+    identity["effect_id"] = (
+        f"fixture-goal:fixture-agent:todo_fixture0001:{turn_instance_id}"
+    )
+    journal["host_result"] = {
+        "schema_version": "loopx_turn_result_v0",
+        "turn_key": TURN_KEY,
+        "result_kind": result_kind,
+        "completed_phases": COMPLETED_PHASES[:2],
+        "classification": "fixture_completion",
+        "recommended_action": "Retain the original artifact.",
+        "next_action": "Read back the original artifact.",
+        "delivery_batch_scale": "single_surface",
+        "delivery_outcome": "outcome_progress",
+        "vision_unchanged_reason": "Keep the original goal.",
+        "path_delta_mode": "unchanged",
+        "summary": "do-not-expose",
+    }
+    journal["task_validation"] = {
+        "schema_version": "loopx_turn_task_validation_v0",
+        "ok": True,
+        "status": "passed",
+        "validator_kind": "callback",
+        "summary": "do-not-expose",
+        "recovery_kind": None,
+        "exit_code": None,
+        "errors": [],
+    }
+    del journal["receipt"]
+    return journal
 
 
 def _write_journal(runtime_root: Path, journal: dict[str, Any]) -> Path:
@@ -915,6 +962,210 @@ def test_typescript_runtime_rejects_malformed_projection_types(
             agent_id="fixture-agent",
             turn_key=TURN_KEY,
         )
+
+
+@pytest.mark.parametrize("turn_instance_id", [TURN_KEY, "fixture-turn.saved-candidate"])
+@pytest.mark.parametrize("result_kind", [
+    "validated_progress", "validated_completion", "repair_required", "replan_required",
+])
+def test_real_typescript_checkpoint_crosses_python_inspection_adapter(
+    turn_instance_id: str, result_kind: str,
+) -> None:
+    journal = _cached_validation_journal(
+        turn_instance_id=turn_instance_id, result_kind=result_kind,
+    )
+    before = copy.deepcopy(journal)
+
+    result = turn_journal_runtime.interpret_turn_journal_projection(
+        journal, goal_id="fixture-goal", agent_id="fixture-agent", turn_key=TURN_KEY,
+    )
+
+    assert result["turn_key"] == TURN_KEY
+    assert result["cached_validation_state"] == {
+        "goal_id": "fixture-goal", "agent_id": "fixture-agent",
+        "todo_id": "todo_fixture0001", "turn_instance_id": turn_instance_id,
+        "turn_key": TURN_KEY, "result_kind": result_kind,
+        "task_validation": {
+            "schema_version": "loopx_turn_task_validation_v0", "ok": True, "status": "passed",
+        },
+    }
+    assert result["journal_consistent"] is True
+    assert result["replay_legal"] is False
+    assert result["recovery_decision"]["action"] == "continue"
+    assert result["recovery_decision"]["resume_from"] == "durable_writeback"
+    assert result["recovery_decision"]["reinvoke_host"] is False
+    assert result["recorded_effects"] == {
+        "host_invoked": True, "state_written": False,
+        "quota_spent": False, "scheduler_acknowledged": False,
+    }
+    assert result["effects"] == []
+    assert "do-not-expose" not in json.dumps(result)
+    assert "current_task_lease_proof" not in result
+    assert "native_work_admission" not in result
+    assert journal == before
+
+
+@pytest.mark.parametrize("status,count", [
+    ("committed", 7), ("stopped", 0), ("in_progress", 2), ("failed", 0),
+])
+def test_real_typescript_old_inspection_shape_retains_adapter_parity(
+    status: str, count: int,
+) -> None:
+    journal = _journal(status=status)
+    journal["completed_phases"] = COMPLETED_PHASES[:count]
+    expected = turn_journal_runtime.effect_runtime_result("turn_journal.inspect", {
+        "schema_version": "loopx_turn_journal_interpretation_request_v0",
+        "journal": journal, "goal_id": "fixture-goal", "agent_id": "fixture-agent",
+        "turn_key": TURN_KEY, "retry_failed": False, "session_recovery_check": None,
+    })
+
+    result = turn_journal_runtime.interpret_turn_journal_projection(
+        journal, goal_id="fixture-goal", agent_id="fixture-agent", turn_key=TURN_KEY,
+    )
+
+    assert result == expected
+    assert "turn_key" not in result
+    assert "cached_validation_state" not in result
+    assert result["effects"] == []
+
+
+@pytest.fixture
+def cached_validation_projection() -> tuple[dict[str, Any], dict[str, Any]]:
+    journal = _cached_validation_journal()
+    projection = turn_journal_runtime.interpret_turn_journal_projection(
+        journal, goal_id="fixture-goal", agent_id="fixture-agent", turn_key=TURN_KEY,
+    )
+    assert "cached_validation_state" in projection
+    return journal, projection
+
+
+@pytest.mark.parametrize("path,replacement", [
+    (("turn_key",), _MISSING_FIELD),
+    (("cached_validation_state",), _MISSING_FIELD),
+    *[((key,), "unexpected") for key in (
+        "body", "current_task_lease_proof", "native_work_admission", "execution_grant",
+    )],
+    (("cached_validation_state",), None),
+    (("cached_validation_state",), []),
+    *[(("cached_validation_state", key), _MISSING_FIELD) for key in (
+        "goal_id", "agent_id", "todo_id", "turn_instance_id", "turn_key",
+        "result_kind", "task_validation",
+    )],
+    *[(("cached_validation_state", "task_validation", key), _MISSING_FIELD)
+      for key in ("schema_version", "ok", "status")],
+    *[(("cached_validation_state", key), "unexpected") for key in (
+        "body", "current_task_lease_proof", "native_work_admission", "execution_grant",
+    )],
+    (("cached_validation_state", "task_validation", "summary"), "unexpected"),
+    (("cached_validation_state", "task_validation", "execution_grant"), True),
+    *[(("cached_validation_state", key), 1) for key in (
+        "goal_id", "agent_id", "turn_instance_id", "turn_key", "result_kind",
+    )],
+    (("cached_validation_state", "todo_id"), {}),
+    (("cached_validation_state", "task_validation"), []),
+    (("cached_validation_state", "task_validation", "schema_version"), "unknown"),
+    (("cached_validation_state", "task_validation", "ok"), "true"),
+    (("cached_validation_state", "task_validation", "ok"), 1),
+    (("cached_validation_state", "task_validation", "status"), "progress"),
+    (("turn_key",), 1),
+    (("turn_key",), "sha256:" + "A" * 64),
+    (("turn_key",), "sha256:" + "b" * 64),
+    (("cached_validation_state", "turn_key"), "sha256:" + "b" * 64),
+    (("cached_validation_state", "goal_id"), "other-goal"),
+    (("cached_validation_state", "goal_id"), ""),
+    (("cached_validation_state", "agent_id"), "other-agent"),
+    (("cached_validation_state", "agent_id"), " "),
+    (("cached_validation_state", "todo_id"), "todo_other00001"),
+    (("cached_validation_state", "todo_id"), None),
+    (("cached_validation_state", "todo_id"), "TODO_FIXTURE0001"),
+    (("cached_validation_state", "todo_id"), "invalid"),
+    (("cached_validation_state", "turn_instance_id"), "other-turn"),
+    (("cached_validation_state", "turn_instance_id"), ""),
+    (("cached_validation_state", "turn_instance_id"), "a" * 129),
+    (("cached_validation_state", "turn_instance_id"), "unsafe/turn"),
+    (("cached_validation_state", "result_kind"), "unknown"),
+    (("cached_validation_state", "result_kind"), "validated_progress"),
+    (("effects",), [{"kind": "execute"}]),
+])
+def test_python_inspection_adapter_rejects_corrupt_checkpoint_carriers(
+    monkeypatch: pytest.MonkeyPatch,
+    cached_validation_projection: tuple[dict[str, Any], dict[str, Any]],
+    path: tuple[str, ...], replacement: Any,
+) -> None:
+    journal, projection = cached_validation_projection
+    before = copy.deepcopy(journal)
+    target = projection
+    for key in path[:-1]:
+        target = target[key]
+    if replacement is _MISSING_FIELD:
+        del target[path[-1]]
+    else:
+        target[path[-1]] = replacement
+    calls: list[str] = []
+
+    def rpc(method: str, _params: dict[str, Any]) -> dict[str, Any]:
+        calls.append(method)
+        return projection
+
+    monkeypatch.setattr(turn_journal_runtime, "effect_runtime_result", rpc)
+    with pytest.raises(
+        RuntimeError,
+        match="projection shape mismatch|cached validation state mismatch|must remain effect-free",
+    ):
+        turn_journal_runtime.interpret_turn_journal_projection(
+            journal, goal_id="fixture-goal", agent_id="fixture-agent", turn_key=TURN_KEY,
+        )
+    assert calls == ["turn_journal.inspect"]
+    assert journal == before
+
+
+@pytest.mark.parametrize("path,replacement", [
+    (("goal_id",), "other-goal"),
+    (("turn_key",), "sha256:" + "b" * 64),
+    (("plan", "transaction", "turn_key"), "sha256:" + "b" * 64),
+    (("host_result", "turn_key"), "sha256:" + "b" * 64),
+    (("result_kind",), "validated_progress"),
+    (("host_result", "result_kind"), "validated_progress"),
+    *[(("plan", "transaction", "settlement_plan", "identity", key), value)
+      for key, value in (
+          ("goal_id", "other-goal"), ("agent_id", "other-agent"),
+          ("todo_id", "todo_other00001"), ("turn_instance_id", "other-turn"),
+      )],
+])
+def test_python_inspection_adapter_binds_checkpoint_to_source_identity_and_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    cached_validation_projection: tuple[dict[str, Any], dict[str, Any]],
+    path: tuple[str, ...], replacement: Any,
+) -> None:
+    journal, projection = cached_validation_projection
+    target = journal
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+    monkeypatch.setattr(turn_journal_runtime, "effect_runtime_result", lambda *_args: projection)
+
+    with pytest.raises(RuntimeError, match="cached validation state mismatch"):
+        turn_journal_runtime.interpret_turn_journal_projection(
+            journal, goal_id="fixture-goal", agent_id="fixture-agent", turn_key=TURN_KEY,
+        )
+
+
+@pytest.mark.parametrize("field,replacement", [
+    ("goal_id", "other-goal"), ("agent_id", "other-agent"),
+    ("turn_key", "sha256:" + "b" * 64),
+])
+def test_python_inspection_adapter_binds_checkpoint_to_requested_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    cached_validation_projection: tuple[dict[str, Any], dict[str, Any]],
+    field: str, replacement: str,
+) -> None:
+    journal, projection = cached_validation_projection
+    scope = {"goal_id": "fixture-goal", "agent_id": "fixture-agent", "turn_key": TURN_KEY}
+    scope[field] = replacement
+    monkeypatch.setattr(turn_journal_runtime, "effect_runtime_result", lambda *_args: projection)
+
+    with pytest.raises(RuntimeError, match="cached validation state mismatch"):
+        turn_journal_runtime.interpret_turn_journal_projection(journal, **scope)
 
 
 @pytest.mark.parametrize("status,count", [

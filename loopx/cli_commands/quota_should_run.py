@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +29,135 @@ if TYPE_CHECKING:
     from .quota_context import QuotaCommandContext
 
 RolloutEventAppender = Callable[..., dict[str, object]]
+
+
+@contextmanager
+def _native_heartbeat_admission_request(
+    *, identity: SettlementIdentity, runtime_root: Path, registry_path: Path,
+    goal_ref: Mapping[str, object] | None, goal_admission: Any = None,
+    publication: bool = False,
+) -> Iterator[dict[str, Any]]:
+    from ..control_plane.coordination.shadow_management import shadow_maintenance_lock_target
+    from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from ..control_plane.quota.accounting_admission import QUOTA_NATIVE_ADMISSION_SCHEMA, quota_accounting_admission
+    from ..file_lock import exclusive_cross_runtime_file_lock, exclusive_mutation_file_lock
+    from ..rollout_event_log import rollout_event_log_path
+
+    root = runtime_root.expanduser().resolve()
+    registry = registry_path.expanduser().resolve()
+    admission = goal_admission or FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry, goal_id=identity.goal_id, planned_goal_ref=goal_ref, agent_id=identity.agent_id)
+    with quota_accounting_admission(runtime_root=root, registry_path=registry,
+            goal_id=identity.goal_id, goal_ref=goal_ref, operation="native-work-admission",
+            handoff_legacy_index=True, native_agent_id=identity.agent_id,
+            native_publication=publication) as source_admission, ExitStack() as locks:
+        locks.enter_context(nullcontext() if source_admission is not None
+            else admission.launch_lifetime(operation="native-work-admission"))
+        if publication and (source_admission is None
+                or source_admission.get("schema_version") != QUOTA_NATIVE_ADMISSION_SCHEMA):
+            locks.enter_context(exclusive_mutation_file_lock(shadow_maintenance_lock_target(root, identity.goal_id),
+                timeout_seconds=0, operation="native-work-admission"))
+            locks.enter_context(exclusive_cross_runtime_file_lock(rollout_event_log_path(root, identity.goal_id),
+                timeout_seconds=0, operation="native-work-admission"))
+        yield {"schema_version": "loopx_quota_settlement_readback_request_v0",
+            "runtime_root": str(root), "goal_id": identity.goal_id, "agent_id": identity.agent_id,
+            "todo_id": identity.todo_id, "turn_instance_id": identity.turn_instance_id,
+            "infer_turn_instance_id": False, "allow_unbound_binding": False,
+            **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
+            **({"source_admission": source_admission, "borrow_source_admission": True}
+               if source_admission is not None else {})}
+
+
+def _read_native_heartbeat_admission(request: Mapping[str, Any]) -> dict[str, Any]:
+    from ..control_plane.effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
+    from ..control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+
+    try:
+        result = effect_runtime_result("quota.settlement.read", dict(request), large_local_snapshot=True)
+    except EffectRuntimeRemoteError as exc:
+        rejected = RefreshTaskLeaseUnavailable(str(exc))
+        rejected.code = exc.diagnostic_code
+        rejected.payload = {"original_ts_refusal": {
+            "kind": exc.error_kind, "code": exc.diagnostic_code,
+            "message": str(exc), "details": list(getattr(exc, "details", ())),
+        }}
+        raise rejected from exc
+    if not isinstance(result, dict) or not isinstance(result.get("native_work_admission"), dict):
+        raise RefreshTaskLeaseUnavailable("Native work admission returned no typed evidence.")
+    return result
+
+
+def check_fresh_native_heartbeat_prior_closeout(
+    *, identity: SettlementIdentity, runtime_root: Path, registry_path: Path,
+    goal_ref: Mapping[str, object] | None, goal_admission: Any = None,
+) -> dict[str, Any]:
+    """Read same-Todo prior debt before preparation; this grants no execution."""
+    from ..control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+
+    with _native_heartbeat_admission_request(identity=identity, runtime_root=runtime_root,
+            registry_path=registry_path, goal_ref=goal_ref, goal_admission=goal_admission) as request:
+        evidence = _read_native_heartbeat_admission({**request,
+            "native_work_admission": {"check_prior_closeout_only": True}})["native_work_admission"]
+        if evidence.get("prior_closeout_checked") is not True or evidence.get("append") is not False:
+            raise RefreshTaskLeaseUnavailable("The original Todo's prior closeout could not be checked.")
+        return evidence
+
+
+def record_fresh_native_heartbeat_receipt(
+    decision: Mapping[str, Any], *, identity: SettlementIdentity,
+    runtime_root: Path, registry_path: Path, goal_ref: Mapping[str, object] | None,
+    goal_admission: Any,
+) -> dict[str, Any]:
+    """Publish actual native start facts under the existing receipt resources.
+
+    The typed settlement owner alone decides first admission, current proof,
+    prior debt and immutable replay. No legacy guard is written before it.
+    """
+    from ..control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+    from ..control_plane.quota.settlement_cli import quota_rollout_details
+    from ..rollout_event_log import _append_rollout_event_line, build_rollout_event, rollout_event_log_path
+
+    root = runtime_root.expanduser().resolve()
+    details = quota_rollout_details(decision,
+        argparse.Namespace(quota_command="should-run", agent_id=identity.agent_id),
+        todo_id=identity.todo_id, replan_obligation_id=identity.replan_obligation_id)
+    details.update(turn_instance_id=identity.turn_instance_id,
+        settlement_effect_id=identity.effect_id, stall_observation="not_applicable")
+    log_path = rollout_event_log_path(root, identity.goal_id)
+    with _native_heartbeat_admission_request(identity=identity, runtime_root=root,
+            registry_path=registry_path, goal_ref=goal_ref, goal_admission=goal_admission,
+            publication=True) as base_request:
+        request = {**base_request, "native_work_admission": {"details": details}}
+
+        def read() -> dict[str, Any]:
+            result = _read_native_heartbeat_admission(request)
+            if result["native_work_admission"].get("state") != "ready":
+                raise RefreshTaskLeaseUnavailable("Fresh native work admission could not be qualified.")
+            return result
+
+        qualified = read()["native_work_admission"]
+        if qualified.get("append") is True:
+            offered_details = qualified.get("details")
+            parent = qualified.get("source_event_id")
+            if not isinstance(offered_details, dict) or (parent is not None and not isinstance(parent, str)):
+                raise RuntimeError("typed native admission omitted its publication facts")
+            event = build_rollout_event(goal_id=identity.goal_id, event_kind="quota_should_run",
+                goal_ref=goal_ref, agent_id=identity.agent_id, todo_id=identity.todo_id,
+                run_id=identity.turn_instance_id, status=str(decision.get("effective_action") or "should-run"),
+                summary=f"Native work admission recorded for turn={identity.turn_instance_id}",
+                source_event_id=parent, caused_by=parent, details=offered_details)
+            _append_rollout_event_line(log_path, event)
+        elif qualified.get("append") is not False:
+            raise RuntimeError("typed native admission omitted its append disposition")
+        committed = read()
+        disposition = committed["native_work_admission"]
+        receipt = committed.get("heartbeat_receipt")
+        if (disposition.get("append") is not False or not isinstance(receipt, dict)
+                or receipt.get("goal_id") != identity.goal_id or receipt.get("agent_id") != identity.agent_id
+                or receipt.get("run_id") != identity.turn_instance_id
+                or disposition.get("original_prepared") != qualified.get("original_prepared")):
+            raise RefreshTaskLeaseUnavailable("Fresh native work admission could not be read back after publication.")
+        return disposition
 
 
 @dataclass(slots=True)

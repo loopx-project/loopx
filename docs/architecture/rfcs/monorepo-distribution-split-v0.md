@@ -4796,3 +4796,105 @@ view shows its independently checked result in the same conversation.
 - **Boundary:** this is a source wiring repair. Installed Core and composition
   qualification, interrupted original-Task recovery, complete context/closure,
   actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.
+
+### 2026-11-20 — Close a lost execution attempt without replacement delivery
+
+- **Proposal:** [#9153](https://github.com/loopx-project/loopx/pull/9153).
+- **Gap:** a replacement task lease cannot authorize the original prepared
+  Turn's business writeback. Repeating the same work guard can therefore leave
+  the original receipt open without a legal recovery operation.
+- **Delta:** the explicit administrative closeout reuses the TS settlement,
+  Goal lifetime and File/SQLite provider owners. It preserves the original
+  identity and prepared proof, qualifies a distinct current control writer,
+  and records only blocked no-spend evidence. Its immutable Run recovers
+  missing tails within the same store identity; replay requires a fresh control
+  proof. Ordinary writeback and pure historical readback keep their boundaries.
+- **Resume authority:** later receipts and native resume do not replace the
+  original prepared admission. Remaining execution effects in the same generation use
+  ephemeral current-CAS qualification from the single TS owner without
+  rewriting original proof/version; a different generation's frozen report
+  gains no old-Turn business completion authority. Every effect rereads its owning
+  authority, and execution-loss no-spend closeout still
+  compares the original admission with the current control writer.
+  Alias-only legacy prepared Turn bindings retain their bounded compatibility;
+  they do not certify administrative work admission. Pending terminal effects
+  and committed replay reuse the existing journal/settlement owner: execute
+  only the original remaining effect, repair a proven missing receipt, or
+  return existing results without a new effect. After accepted durable writeback,
+  pending quota spend uses the existing accounting owner and journal-authorized
+  recovery without requesting execution authority or repeating business effects.
+  TS-owned cleanup retains an admitted Turn's original lease while closeout is
+  owed; frozen-report recovery qualifies and renews that same generation.
+  Selection-recovery governance probes acquire no report business lease;
+  existing TS admission must permit the report before its preparation acquires one.
+  Historical generation conflicts
+  reject, and validated causal links preserve the original prepared revision.
+- **Semantic writeback scope:** an explicit semantic closeout independently
+  qualifies the actual Run, original receipt/Goal/Todo/Turn, current generation,
+  progress and Vision/checkpoint in TS. Exact supersession allows only the
+  original semantic writeback; business resume still rejects it. A Todo-bound
+  replan without a business lease proves its selected obligation and semantic
+  evidence. Required preparation without an original positive proof rejects.
+  An ordinary typed blocked gap with exact live preparation preserves the
+  Vision owner's genuine negative checkpoint, including `missing_required`;
+  it does not claim satisfied acceptance. Every builder-owned field and its
+  presence must match the actual inputs. Independently appended acceptance-gap
+  diagnostics remain read-only and grant no authority. Accountable delivery,
+  retired writeback and no-business obligation discharge retain their satisfied
+  checkpoint requirements.
+  The scope grants no execution lease. The supported writer rereads inside the
+  shared maintenance marker and retains Goal/source ownership through JSON,
+  Markdown and index durability; direct provider writes bypassing the marker
+  remain outside that guarantee.
+  Uncaused repeats preserve the complete typed review/capability source and
+  earliest admission; the same obligation id cannot authorize a source rewrite.
+  Integration remains held for final writeback of aggregate replan duties
+  whose original receipt has no scalar review source. Early and final
+  qualification must share a complete canonical-source reader and the existing
+  TS semantic owner; a caller-authored obligation or a digest-only snapshot
+  cannot replace that provenance. This unresolved path is not qualified by
+  passing claim, report, cached-result or TypeScript controls.
+- **Recovery readback:** a frozen report retains the typed original-lease
+  refusal. An optional, default-off settlement attachment verifies its original
+  owner, identity and journal before providing journal and task-lease inspection
+  commands. Missing or conflicting evidence withholds the commands. The
+  receiver records an idempotent local notice and the same health packet;
+  inspection grants no execution or administrative write authority. Modern
+  positive prepared admission may explain the existing explicit administrative
+  closeout and its separate current-control-writer requirement; bounded legacy
+  evidence supports inspection only.
+- **Validated report checkpoint:** an open Todo with a consistent in-progress
+  journal, complete validation prefix and cached material result may continue
+  only its original durable writeback without a model. Compact inspection
+  binds the Goal, Agent, Todo, Turn and inspected key to the packet headers
+  and recorded passed task receipt. The executor's full result validation and
+  original saved-generation lease qualification still precede business effects.
+  Python transport accepts the old inspection shape or the strict paired
+  optional fields; it neither decides continuation nor supplies authority.
+- **Fresh native admission:** a new native Turn records its own genuine typed
+  work admission before Host execution. The shared owner checks prior debt
+  before preparation and rereads it with current CAS at publication. A saved
+  candidate supplies content evidence; it cannot borrow the original Turn's
+  execution proof or clear its debt. Freeze and replay follow the new Turn's
+  admission, and later recovery and cleanup retain that Turn's identity.
+  An ordinary registry's exact GoalRef requires its actual persisted instance
+  and registry/resource witnesses; a nonempty ref does not activate the
+  SourceSession runtime. Callers without a ref retain their bounded alias
+  ownership. Historical readback preserves the original journal/receipt owner
+  rather than substituting the current actor's ref.
+  Ordinary exact journal checkpoints reuse the same typed native registry
+  witnesses, bound to the original settlement identity and canonical journal
+  path. Checkpoint persistence does not grant Host execution authority.
+  Nested read-only replan projections reuse held native metadata while retaining
+  original receipt and journal identities. Native writeback verifies the actual
+  borrowed registry/index scope inside the existing maintenance guard before
+  avoiding duplicate lock acquisition; source reread and Stop checks remain.
+- **Source evidence:** CLI tests cover both local providers, stale/foreign
+  proofs, ordinary parity and zero completion/debit. Recovery tests inject
+  interruption after JSON, Markdown, index and receipt durability. SourceSession
+  coverage uses typed-owner history plus the administrative CLI; its generic
+  Todo/quota entry remains unavailable.
+- **Boundary:** this is an R1 recovery proposal aligned with C1's single TS
+  owner. Installed Core, C1 composition, the original ten requirements and full
+  R1/M3 regression remain independent acceptance; earlier failures and budgets
+  retain their status.

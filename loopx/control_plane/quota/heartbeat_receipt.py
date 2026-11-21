@@ -264,19 +264,36 @@ def ensure_turn_heartbeat_settlement_receipt(
             raise HeartbeatReceiptIdentityConflictError(
                 "Turn heartbeat receipt belongs to another quota spend source"
             )
-        if before_bind is not None:
-            # The existing cross-runtime binding lock serializes the competing
-            # identity before transport-specific start admission. Its owner may
-            # refuse admission without writing a receipt or claiming work.
-            before_bind()
         if task_lease_proof is not None and identity.todo_id is not None:
             from .execution_preparation import prepared_lease_receipt_fields
+            from ..effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
 
-            rebound_lease_fields = prepared_lease_receipt_fields(
+            proposed_lease_fields = prepared_lease_receipt_fields(
                 task_lease_proof, lease_epoch=task_lease_epoch,
             )
+            try:
+                publication = effect_runtime_result("quota.heartbeat_prepared_publication.qualify", {
+                    "schema_version": "loopx_quota_heartbeat_prepared_publication_request_v0",
+                    "existing_receipt": effective,
+                    "original_prepared": None,
+                    "receipt_history": matching,
+                    "settlement_identity": identity.as_dict(),
+                    "proposed_prepared_fields": proposed_lease_fields,
+                })
+            except EffectRuntimeRemoteError as error:
+                if error.diagnostic_code == "heartbeat_receipt_identity_conflict":
+                    raise HeartbeatReceiptIdentityConflictError(str(error)) from error
+                raise
+            if publication.get("ok") is not True or not isinstance(publication.get("prepared_fields"), Mapping):
+                raise RuntimeError("typed prepared publication returned an invalid result")
+            prepared_lease_fields = dict(publication["prepared_fields"])
         else:
-            rebound_lease_fields = None
+            prepared_lease_fields = None
+        if before_bind is not None:
+            # The binding lock and typed immutable-proof check precede any
+            # transport-specific start admission. Resume authority is a separate
+            # ephemeral qualification; it never rewrites prepared fields here.
+            before_bind()
         preserved_details: dict[str, object] = {}
         if effective is not None:
             if observed is not None:
@@ -287,13 +304,8 @@ def ensure_turn_heartbeat_settlement_receipt(
                     else {}
                 )
                 preserved_details = dict(effective_details)
-                lease_unchanged = rebound_lease_fields is None or (
-                    all(effective_details.get(k) == v for k, v in rebound_lease_fields.items())
-                    and (task_lease_epoch is not None or "prepared_lease_epoch" not in effective_details)
-                )
                 if not semantic_replan_guard_scoped:
-                    if lease_unchanged:
-                        return effective
+                    return effective
                 elif "semantic_replan_obligation_id" in effective_details:
                     raw_existing_guard = effective_details.get(
                         "semantic_replan_obligation_id"
@@ -323,8 +335,7 @@ def ensure_turn_heartbeat_settlement_receipt(
                         raise HeartbeatReceiptIdentityConflictError(
                             "Turn heartbeat receipt belongs to another capability guard"
                         )
-                    if lease_unchanged:
-                        return effective
+                    return effective
 
         details = {
             **preserved_details,
@@ -338,10 +349,8 @@ def ensure_turn_heartbeat_settlement_receipt(
         }
         if identity.todo_id is not None and (prepared_lease_required or task_lease_proof is not None):
             details["prepared_lease_required"] = True
-        if rebound_lease_fields is not None:
-            details.update(rebound_lease_fields)
-            if task_lease_epoch is None:
-                details.pop("prepared_lease_epoch", None)
+        if prepared_lease_fields is not None:
+            details.update(prepared_lease_fields)
         if semantic_replan_guard_scoped:
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""

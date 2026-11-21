@@ -20,6 +20,7 @@
   "work_item.task_graph.status",
   "work_item.replan_semantics.project",
   "quota.settlement.read",
+  "quota.heartbeat_prepared_publication.qualify",
   "quota.spend.commit",
   "quota.turn_envelope.evaluate",
   "turn.controller",

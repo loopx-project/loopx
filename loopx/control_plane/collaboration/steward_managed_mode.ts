@@ -535,10 +535,34 @@ function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: Jso
     && [request.turn_instance_id, `${String(request.turn_instance_id)}.saved-candidate`].includes(String(todo.completion_turn_key))
     && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
       || decision.action === "return_existing" && recovery.journal_status === "committed");
+  const cachedResult = jsonObject(recovery.cached_validation_state);
+  const taskValidation = jsonObject(cachedResult?.task_validation);
+  const recorded = jsonObject(recovery.recorded_effects);
+  const actor = requireJsonObject(request.actor, "original report actor");
+  // The journal owner attests only the cached packet headers and recorded
+  // passed task receipt. The executor's full result validation and this Run's
+  // independent execution-lease qualification still precede every effect.
+  const pendingValidatedGeneration = todo.status === "open" && recovery.journal_status === "in_progress"
+    && decision.action === "continue" && decision.can_continue === true
+    && decision.resume_from === "durable_writeback" && decision.reinvoke_host === false
+    && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 3
+    && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result"
+    && recovery.completed_phases[2] === "validation"
+    && typeof recovery.turn_key === "string" && ENVELOPED_SHA256_PATTERN.test(recovery.turn_key)
+    && cachedResult !== null && cachedResult.turn_key === recovery.turn_key
+    && cachedResult.goal_id === actor.goal_id && cachedResult.agent_id === actor.agent_id
+    && cachedResult.todo_id === request.todo_id && cachedResult.todo_id === todo.todo_id
+    && [request.turn_instance_id, `${String(request.turn_instance_id)}.saved-candidate`].includes(cachedResult.turn_instance_id)
+    && typeof cachedResult.result_kind === "string"
+    && ["validated_progress", "validated_completion"].includes(cachedResult.result_kind)
+    && taskValidation?.schema_version === "loopx_turn_task_validation_v0"
+    && taskValidation.ok === true && taskValidation.status === "passed"
+    && recorded?.host_invoked === true && recorded.state_written === false
+    && recorded.quota_spent === false && recorded.scheduler_acknowledged === false;
   const accepted = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
     && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
     && recovery.journal_consistent === true && decision.reinvoke_host === false
-    && (cachedGeneration || completedGeneration);
+    && (cachedGeneration || completedGeneration || pendingValidatedGeneration);
   if (!accepted || params.preparing_model_context === true) {
     throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
   }

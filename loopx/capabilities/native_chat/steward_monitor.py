@@ -609,6 +609,9 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
     from .steward_turn import StewardTurnHost
 
     bindings = getattr(getattr(controller, "project_contexts", None), "conversation_bindings", None)
+    from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+    from .steward_reports import present_report_settlement_recovery
+
     if controller.closed.is_set():
         return []
     service, changed = StewardMonitor(controller), []
@@ -643,6 +646,9 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                     if created:
                         changed.append(accepted)
                         continue
+                except RefreshTaskLeaseUnavailable as rejected:
+                    if not present_report_settlement_recovery(controller, rejected):
+                        _LOG.warning("An original steward report recovery could not be presented; its original window is retained")
                 except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                     _LOG.warning("An original steward report is unavailable; its window and other work are retained")
             due = service.due_monitors(actor)
@@ -708,6 +714,8 @@ def pump_managed_session_monitors(controller: Any, *, cancelled=lambda: False) -
     provider is needed, and no model or task is created by a due observation.
     """
     from .steward_managed_mode import ManagedSessionTurn
+    from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+    from .steward_reports import present_report_settlement_recovery
 
     changed, monitor = [], StewardMonitor(controller)
     cache = controller._steward_monitor_next_check
@@ -745,6 +753,9 @@ def pump_managed_session_monitors(controller: Any, *, cancelled=lambda: False) -
                     if created:
                         changed.append(accepted)
                         continue
+                except RefreshTaskLeaseUnavailable as rejected:
+                    if not present_report_settlement_recovery(controller, rejected):
+                        _LOG.warning("A managed Session report recovery could not be presented; its original window is retained")
                 except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                     _LOG.warning("A managed Session report is unavailable; its original window and other work are retained")
             rows = [row for row in monitor.todos(request["actor"])

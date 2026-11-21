@@ -3703,3 +3703,81 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 - **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
   恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
   独立验收。
+
+### 2026-11-20 — 收尾失去的执行尝试，不借用替代执行交付
+
+- **提案：**[#9153](https://github.com/loopx-project/loopx/pull/9153)。
+- **缺口：**替代 task lease 不能授权原 prepared Turn 的业务写回。重复同一个
+  work guard 会让原收据持续开放，却没有合法的恢复操作。
+- **增量：**显式行政收尾复用 TS settlement、Goal lifetime 与 File/SQLite
+  provider owner。保留原 identity/prepared proof，独立核验当前 control writer，
+  仅记录 blocked 免扣额证据。不可变 Run 在同一 store identity 内恢复缺失尾部；
+  重放仍须 fresh control proof。普通写回与纯历史回读保留各自边界。
+- **恢复权限：**原 prepared admission 不被后续收据或 native resume 替换。
+  同 generation 的 remaining execution effects 使用单一 TS owner 的 ephemeral 当前 CAS
+  资格，不重写原 proof/version；不同 generation 的 frozen report 不能取得旧
+  Turn 业务完成权。每个 effect 边界重新读取对应 owner 的 authority，
+  失去执行的原 Turn 仍以原 admission 对比当前 control writer 做免扣额收尾。
+  仅 alias 的 legacy prepared Turn binding 保留有限兼容，不据此证明行政 work
+  admission。pending terminal effect 与已提交重放复用既有 journal/settlement
+  owner：只执行原剩余 effect、修复已证明缺失的收据，或不执行新 effect 而返回
+  原结果。durable writeback 被接受后，pending quota spend 使用既有记账 owner
+  与 journal 授权的恢复，不请求 execution authority 或重跑业务 effect。
+  TS-owned cleanup 在 admitted Turn 欠收尾时保留原 lease；frozen-report 恢复
+  核验并续租同一 generation。selection-recovery governance probe 不获取
+  报告业务 lease；既有 TS admission 允许报告后，才在 preparation 前获取。
+  历史 generation 冲突拒绝，已核验因果链接保留
+  原 prepared revision。
+- **语义写回范围：**显式 semantic closeout 在 TS 内独立核验实际 Run、原
+  receipt/Goal/Todo/Turn、当前 generation、progress 与 Vision/checkpoint。
+  Exact supersede 只允许原 semantic writeback，business resume 仍拒绝。
+  无业务 lease 的 Todo-bound replan 须证明 selected obligation 与语义证据；
+  要求 preparation 却缺少原 positive proof 时拒绝。持有 exact live preparation
+  的普通 typed blocked gap 保留 Vision owner 的真实 negative checkpoint，
+  包括 `missing_required`，不宣称验收满足。所有 builder-owned 字段及其存在性
+  必须与实际输入一致；独立追加的 acceptance-gap 诊断仅供读取，不授予权限。
+  Accountable delivery、retired writeback 与无业务 obligation discharge 保留
+  satisfied checkpoint 要求。该 scope 不授予 execution
+  lease。受支持 writer 在共享 maintenance marker 内重新读取，并持有 Goal/source
+  ownership 直到 JSON、Markdown、index 持久化；绕过 marker 的直接 provider
+  写仍不属于此保证。
+  无因果链接的重复记录保留完整 typed review／capability 来源与最早准入；相同
+  obligation id 不能授权来源改写。
+  原 receipt 没有 scalar review source 的 aggregate replan duty，其最终写回
+  仍阻塞整合。早期与最终资格核验必须共用完整 canonical-source reader 和既有
+  TS semantic owner；caller 自行构造的 obligation 或只有 digest 的 snapshot
+  不能替代来源证明。领取、报告、缓存结果或 TypeScript 控制通过，不构成这条
+  未解决路径的资格。
+- **恢复回读：**frozen report 保留 typed 原租约拒绝。默认关闭的可选 settlement
+  attachment 核验原 owner、identity 与 journal 后，仅提供 journal 与 task-lease
+  检查命令；证据缺失或冲突时不提供命令。receiver 记录幂等的本地提示与同一
+  health packet；检查不授予 execution 或行政写权限。现代 positive prepared
+  admission 可以说明既有显式行政收尾及其独立的当前 control-writer 要求；
+  有限 legacy 证据仅支持检查。
+- **已验证报告 checkpoint：**开放 Todo 的 in-progress journal 若一致、具备
+  完整 validation prefix 和缓存 material result，仅可在不调用模型的情况下
+  继续原 durable writeback。compact inspection 将 Goal、Agent、Todo、Turn
+  与被检查 key 绑定到 packet header 和已记录的 passed task receipt；业务
+  effect 前仍须通过 executor 完整结果验证和原 saved-generation lease 资格。
+  Python transport 仅接受旧 inspection shape 或严格成对的可选字段，不决定
+  continuation，也不提供权限。
+- **首次 native 准入：**新 native Turn 在 Host 执行前记录自己的真实 typed
+  work admission。共享 owner 在 preparation 前检查原债务，并在 publication
+  时连同当前 CAS 复读。saved candidate 仅提供内容证据，不能借原 Turn 的
+  执行证明或消除原债务。freeze、replay 发生在新 Turn 准入后，后续恢复与
+  cleanup 保持该 Turn 的身份。普通 registry 的 exact GoalRef 必须由真实
+  持久 instance 及 registry/resource witness 证明；非空 ref 不意味着激活
+  SourceSession runtime。没有 ref 的 caller 保留有限 alias ownership。
+  历史回读沿原 journal/receipt owner，不以当前 actor 的 ref 替换。
+  普通 exact journal checkpoint 复用同一 typed native registry witness，绑定
+  原 settlement identity 与 canonical journal 路径；checkpoint 持久化不授予
+  Host 执行权限。
+  嵌套的只读 replan projection 复用已持有的 native metadata，保留原 receipt
+  与 journal 身份。native writeback 在既有 maintenance guard 内验证实际借用的
+  registry/index scope 后，避免重复获取同一锁；source 重读和 Stop 检查保留。
+- **源码证据：**CLI 测试覆盖两个本地 provider、stale/foreign proof、普通路径
+  parity 与零 completion/debit；恢复测试在 JSON、Markdown、index 与 receipt
+  持久化后注入中断。SourceSession 范围是 typed-owner history 加行政 CLI，
+  其通用 Todo/quota 入口仍不可用。
+- **边界：**这是与 C1 单一 TS owner 对齐的 R1 恢复提案。Installed Core、C1
+  组合、原十项要求与完整 R1/M3 回归仍须独立验收；保留既有失败与预算的状态。

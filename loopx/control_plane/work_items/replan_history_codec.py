@@ -228,7 +228,7 @@ def project_replan_history(
 def _project_admitted_replan_request(params: dict[str, Any], context: dict[str, Any]) -> Any:
     # One live admission and one snapshot cover all Turns. Borrow an enclosing
     # refresh transaction instead of releasing its source/index locks early.
-    from ..quota.accounting_admission import quota_accounting_admission
+    from ..quota.accounting_admission import _borrow_native_read_admission, quota_accounting_admission
 
     source = dict(params["settlement_source"])
     goal_ref = context.get("goal_ref")
@@ -244,6 +244,15 @@ def _project_admitted_replan_request(params: dict[str, Any], context: dict[str, 
 
     if context.get("source_admission") is not None:
         return invoke(context["source_admission"], borrow=True)
+    native_read = _borrow_native_read_admission(
+        runtime_root=Path(source["runtime_root"]), registry_path=context.get("registry_path"),
+        goal_id=source["goal_id"], goal_ref=goal_ref, agent_id=params.get("agent_id"))
+    if native_read is not None:
+        # This is the paired resource identity of one read-only TS projection,
+        # never a replacement for a receipt, journal or business effect.
+        if goal_ref is None:
+            goal_ref = native_read["planned_goal_ref"]
+        return invoke(native_read, borrow=True)
     with quota_accounting_admission(
         runtime_root=Path(source["runtime_root"]),
         registry_path=context.get("registry_path"),

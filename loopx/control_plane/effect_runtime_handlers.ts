@@ -387,6 +387,7 @@ export function createEffectRuntimeHandlers(
     ["quota.spend.commit", lazyHandler(() => import("./quota/spend_commit.ts"), ({evaluateQuotaSpendCommit}) => evaluateQuotaSpendCommit)],
     ["quota.void.commit", lazyHandler(() => import("./quota/void_commit.ts"), ({evaluateQuotaVoidCommit}) => evaluateQuotaVoidCommit)],
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
+    ["quota.heartbeat_prepared_publication.qualify", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({qualifyHeartbeatPreparedPublication}) => qualifyHeartbeatPreparedPublication)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),
@@ -835,6 +836,7 @@ export function createEffectRuntimeHandlers(
     ["turn.host_todo_completion.evaluate", lazyHandler(() => import("./turn_driver/host_todo_completion.ts"), ({evaluateHostTodoCompletion}) => evaluateHostTodoCompletion)],
     ["work_item.interaction_execution.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectInteractionExecution}) => projectInteractionExecution)],
     ["work_item.execution_preparation.project", lazyHandler(() => import("./work_items/execution_preparation.ts"), ({projectExecutionPreparation}) => projectExecutionPreparation)],
+    ["quota.execution_loss_closeout.commit", lazyHandler(() => import("./quota/execution_loss_closeout.ts"), ({commitExecutionLossCloseout}) => commitExecutionLossCloseout)],
     ["work_item.interaction_reads.project", lazyHandler(() => import("./quota/turn_envelope.ts"), ({projectInteractionReadsAndGuidance}) => projectInteractionReadsAndGuidance)],
     ["work_item.blocked_wait_observation.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectBlockedSuccessorWaitObservation}) => projectBlockedSuccessorWaitObservation)],
     ["work_item.context.plan", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({planInteractionWorkContext}) => planInteractionWorkContext)],

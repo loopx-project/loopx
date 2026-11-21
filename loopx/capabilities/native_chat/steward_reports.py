@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from contextlib import contextmanager
 import json
+import hashlib
 import sys
 from typing import Any
 
@@ -29,6 +30,84 @@ PRESET = "portfolio-progress"
 
 class PendingStewardReportError(ValueError):
     pass
+
+
+def _report_recovery_message_id(session_id: str, turn_id: str, payload: dict[str, Any]) -> str:
+    # The shared gate, rather than changing exception prose or read timestamps,
+    # identifies a notice revision. The typed refusal remains in the event.
+    revision = payload.get("settlement_recovery") or {
+        "error_code": payload.get("error_code"), "recovery_available": False}
+    encoded = json.dumps([session_id, turn_id, revision], sort_keys=True, ensure_ascii=False)
+    return "report-recovery." + hashlib.sha256(encoded.encode()).hexdigest()[:32]
+
+
+def report_settlement_recovery_health(controller: Any, actor: dict[str, Any], window: dict[str, Any] | None) -> dict[str, Any]:
+    """Project a retained local refusal; this is no settlement or delivery proof."""
+    from .steward_turn import report_turn
+    from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+
+    original = report_turn(controller.store, actor, window) if window else None
+    if original is None:
+        return {}
+    request = original.get("loopx_request") or {}
+    if (request.get("actor") != actor or request.get("work_kind") != "report"
+            or request.get("report_window_id") != window["window_id"]
+            or request.get("report_subscription_revision") != window["subscription_revision"]):
+        return {}
+    for row in reversed(controller.store.events_after(actor["session_id"], original["turn_id"], None)):
+        if row.get("kind") != "native_loopx.result":
+            continue
+        payload = row.get("payload") or {}
+        if payload.get("status") == "committed":
+            return {}
+        if payload.get("error_code") != RefreshTaskLeaseUnavailable.code:
+            continue
+        message_id = _report_recovery_message_id(actor["session_id"], original["turn_id"], payload)
+        messages = controller.store.messages(actor["session_id"])
+        return {"recovery_failure": payload,
+            "recovery_message_id": message_id if any(message.get("message_id") == message_id
+                and message.get("turn_id") == original["turn_id"] for message in messages) else None}
+    return {}
+
+
+def present_report_settlement_recovery(controller: Any, rejected: Exception) -> bool:
+    """Show the shared read gate once in its original local Session only."""
+    from ...control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from ...control_plane.goals.goal_ref_validation import exact_goal_ref
+    from ...control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+    from .steward_turn import StewardTurnHost, report_turn
+
+    if not isinstance(rejected, RefreshTaskLeaseUnavailable):
+        return False
+    context, payload = getattr(rejected, "report_recovery_context", None), getattr(rejected, "payload", None)
+    if not isinstance(context, dict) or not isinstance(payload, dict):
+        return False
+    request, window = context["request"], context["window"]
+    actor, host = request["actor"], StewardTurnHost(controller)
+    host._observe(actor)
+    goal_ref = (exact_goal_ref(actor["goal_id"], actor["goal_instance_id"])
+        if actor.get("goal_instance_id") is not None else None)
+    admission = FirstPartyHostGoalAdmission.for_plan(registry_path=controller.registry_path,
+        goal_id=actor["goal_id"], planned_goal_ref=goal_ref, agent_id=actor["agent_id"])
+    with controller.lock, host._report_fence(request):
+        admission.require_running(operation="report_settlement_recovery_notice")
+        reports, owner_key = report_service(controller, actor)
+        original = report_turn(controller.store, actor, window)
+        if (not reports.delivery_current(owner_key, window) or original is None
+                or original["turn_id"] != context["original_turn_id"]
+                or original.get("loopx_request") != request):
+            return False
+        recovery = payload.get("settlement_recovery")
+        if isinstance(recovery, dict):
+            text = "本期报告的原执行暂时无法继续，原结果和窗口已保留。\n\n" + recovery["instruction"]
+            for command in recovery["next_cli_actions"]:
+                text += "\n\n```sh\n" + command + "\n```"
+        else:
+            text = "本期报告的原执行暂时无法继续，原结果和窗口已保留。恢复指引暂时无法读取，请重新读取原报告状态。"
+        controller.store.append_message(actor["session_id"], role="error", text=text,
+            turn_id=original["turn_id"], origin="native_loopx",
+            message_id=_report_recovery_message_id(actor["session_id"], original["turn_id"], payload))
+        return True
 
 
 class StewardReports:
@@ -365,14 +444,16 @@ class StewardReports:
                 elif self._known_generation_failure(actor, journal["window"]):
                     delivery = "generation_failed"
             active = resolve_active_goal_periodic_report_subscription(goal)
+            recovery = report_settlement_recovery_health(self.controller, actor, journal["window"] if journal else None)
             return {"available": True, "configured": True, "enabled": bool(active),
                 "schedule": config.get("schedule"), "next_due_at": report_cadence_next_due_at(
                     config.get("schedule"), now=datetime.now(timezone.utc)) if config.get("enabled") else None,
                 "retained_window_due_at": journal["window"]["due_at"] if journal else None,
                 "generation_id": generation, "delivery_status": delivery or "not_generated",
-                "execution_failed": bool(journal and self._execution_failed(actor, journal["window"])),
+                "execution_failed": bool(recovery or journal and self._execution_failed(actor, journal["window"])),
                 "publication_verified": bool(journal and self._published_window(journal["window"])),
-                "destination": "original_owner_private_chat_full_body"}
+                "destination": "original_owner_private_chat_full_body",
+                **recovery}
         except (OSError, ValueError, TypeError, KeyError, StopIteration):
             return {"available": False, "error_code": "steward_report_unavailable"}
 
@@ -725,14 +806,16 @@ class ManagedSessionReports(StewardReports):
                 returned = [row for row in self.controller.store.messages(session_id)
                     if row["role"] == "agent" and row["turn_id"] == turn["turn_id"] and row["text"] == body]
             verified = published and len(returned) == 1
+            recovery = report_settlement_recovery_health(self.controller, actor, window)
             return {"available": True, "configured": True, "enabled": bool(self.subscription(session_id)),
                 "scheduled": bool(config.get("schedule")),
                 "schedule": config.get("schedule"), "next_due_at": report_cadence_next_due_at(
                     config.get("schedule"), now=datetime.now(timezone.utc)) if config.get("enabled") else None,
                 "retained_window_due_at": window["due_at"] if window else None,
                 "generation_complete": bool(folder and (folder / "private-generation.json").exists()),
-                "execution_failed": failed,
+                "execution_failed": bool(failed or recovery),
                 "publication_verified": verified,
-                "report_message_id": returned[0]["message_id"] if verified else None}
+                "report_message_id": returned[0]["message_id"] if verified else None,
+                **recovery}
         except (OSError, ValueError, KeyError, TypeError):
             return {"available": False, "error_code": "managed_session_report_unavailable"}

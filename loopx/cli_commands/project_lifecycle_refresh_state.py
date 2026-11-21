@@ -202,6 +202,8 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--execution-loss-closeout", action="store_true",
+        help="Close only the original prepared Turn with verified blocked no-spend evidence after execution generation loss.")
     refresh_state_parser.add_argument("--completion-todo-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-turn-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument(
@@ -449,6 +451,29 @@ def handle_refresh_state_command(
     if args.command != "refresh-state":
         return None
     fmt = output_format(args)
+    if getattr(args, "execution_loss_closeout", False):
+        # This path must precede ordinary file/Explore/Vision input hooks and
+        # all outcome refinement, post-writeback, sink and spend composition.
+        from ..control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+        from .project_lifecycle_inputs import inline_progress_observation
+        try:
+            ref = (exact_goal_ref(args.goal_id, args.goal_instance_id) if args.goal_instance_id
+                else capture_first_party_host_goal_ref(registry_path=registry_path, goal_id=args.goal_id))
+            payload = refresh_state_run(registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, project=None, state_file=None, classification=args.classification,
+                recommended_action=None, agent_id=args.agent_id, todo_id=args.todo_id,
+                turn_instance_id=args.turn_instance_id, delivery_outcome=args.delivery_outcome,
+                delivery_boundary=args.delivery_boundary, progress_observation=inline_progress_observation(args),
+                task_lease_proof={"idempotency_key": args.task_lease_idempotency_key,
+                    "expected_version": args.task_lease_expected_version}, goal_ref=ref, dry_run=bool(args.dry_run),
+                sync_global=False,
+                execution_loss_closeout=True, execution_loss_requested_effects=vars(args))
+        except Exception as exc:
+            payload = {"ok": False, "goal_id": args.goal_id, "appended": False, "error": str(exc),
+                **({"error_code": exc.code} if isinstance(getattr(exc, "code", None), str) else {})}
+        print_payload(payload, fmt, render_state_refresh_markdown)
+        return 0 if payload.get("ok") is True else 1
     agent_vision_packet: dict[str, object] | None = None
     progress_observation: dict[str, object] | None = None
     merge_agent_vision_patch = False

@@ -106,13 +106,42 @@ def build_turn_error_payload(
                 "journal_consistent", "journal_status", "completed_phases",
                 "recorded_effects", "recovery_decision",
             )} if journal_readback is not None else {}),
-        }} if execution_started else {}),
+        }} if execution_started or journal_readback is not None else {}),
         **({
             "resume_turn_key": turn_key,
             "journal_ref": f"turn:{turn_key.removeprefix('sha256:')[:16]}",
         } if run_once and turn_key else {}),
         **({"recovery_decision": exc.decision}
            if isinstance(exc, TurnRecoveryBlockedError) else {}),
+    }
+
+
+def render_readonly_settlement_recovery(
+    recovery: Mapping[str, Any], *, registry_path: Path, runtime_root: Path,
+) -> dict[str, Any]:
+    """Add private invocation addresses to the shared owner's read-only argv."""
+    from ..command_invocation import loopx_cli_argv
+    from ..install_contract import render_host_cli_command
+
+    actions = recovery.get("next_cli_actions_argv")
+    allowed = {"required", "settlement_identity", "goal_ref", "instruction",
+        "next_cli_actions_argv", "original_settlement_readback"}
+    if (set(recovery) - allowed or recovery.get("required") is not True
+            or not isinstance(recovery.get("instruction"), str) or not recovery["instruction"]
+            or not isinstance(recovery.get("settlement_identity"), Mapping)
+            or not isinstance(recovery.get("original_settlement_readback"), Mapping)
+            or not isinstance(actions, list)
+            or len(actions) != 2 or any(not isinstance(argv, list) or not argv
+                or any(not isinstance(word, str) or not word for word in argv) for argv in actions)
+            or actions[0][:2] != ["turn", "inspect-journal"]
+            or len(actions[0]) != 8 or actions[0][2::2] != ["--goal-id", "--agent-id", "--turn-key"]
+            or actions[1][:2] != ["task-lease", "inspect"]
+            or len(actions[1]) != 6 or actions[1][2::2] != ["--goal-id", "--todo-id"]):
+        raise ValueError("shared read-only settlement recovery actions are unavailable")
+    prefix = [*loopx_cli_argv(), "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root), "--format", "json"]
+    return {**dict(recovery), "next_cli_actions": [
+        render_host_cli_command([*prefix, *argv]) for argv in actions],
     }
 
 

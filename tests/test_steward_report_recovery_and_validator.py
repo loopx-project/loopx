@@ -1,5 +1,6 @@
 """Focused regressions for report validator path portability and cancel recovery."""
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 import logging
 
@@ -181,7 +182,11 @@ def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
     steward, tmp_path, monkeypatch, caplog,
 ):
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat import steward_commands
     from loopx.configure_goal import configure_goal
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.rollout_event_log import rollout_event_log_path
     from test_native_steward_reports import _REPORT_MODEL_SOURCE
 
     store, runtime, _, transport, binding, _, _ = steward
@@ -208,6 +213,35 @@ def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
     runtime._steward_monitor_next_check.clear()
     rejected = finish(runtime, pump_steward_monitors(runtime)[0])
     assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+    request = rejected["loopx_request"]
+    report_acquires = []
+    actual_command = steward_commands.native_command
+
+    def observe_acquire(controller, argv):
+        result = actual_command(controller, argv)
+        if argv[:2] == ["task-lease", "acquire"]:
+            assert argv[argv.index("--todo-id") + 1] == request["todo_id"]
+            report_acquires.append(dict(result["lease"]))
+        return result
+
+    def report_readback():
+        return read_heartbeat_settlement(reports.root,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], todo_id=request["todo_id"],
+            turn_instance_id=request["turn_instance_id"], registry_path=runtime.registry_path)
+
+    def model_call_count():
+        return sum(json.loads(line).get("method") == "turn/start"
+            for line in steward[5].read_text().splitlines())
+
+    rollout_path = rollout_event_log_path(reports.root, actor["goal_id"])
+
+    def replan_receipt_lines():
+        return [line for line in rollout_path.read_bytes().splitlines(keepends=True)
+            if (row := json.loads(line)).get("event_kind") == "quota_should_run"
+            and row.get("run_id") == request["turn_instance_id"] + ".replan"]
+
+    monkeypatch.setattr(steward_commands, "native_command", observe_acquire)
+    model_calls_before_probe = model_call_count()
 
     bad_vision = {
         "schema_version": "goal_vision_replan_contract_v0",
@@ -247,6 +281,22 @@ def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
     )
     runtime._steward_monitor_next_check.clear()
     probe = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert report_acquires == []
+    assert model_call_count() == model_calls_before_probe + 1
+    governance = next(row["payload"] for row in store.events_after(sid, probe["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result")
+    assert governance["status"] == "failed" and governance["validation_stage"] == "host_result_contract"
+    assert governance["effects"]["state_written"] is False and governance["effects"]["quota_spent"] is False
+    business = report_readback()
+    assert business is not None and business.identity.failure is not None
+    assert business.identity.failure.kind == "receipt_missing"
+    assert business.prepared_lease is None and business.original_prepared_receipt is None
+    assert business.writeback_run is None and business.spend_run is None
+    probe_journal_path = turn_journal_path(reports.root, goal_id=actor["goal_id"],
+        turn_key=governance["resume_turn_key"])
+    probe_journal_bytes = probe_journal_path.read_bytes()
+    probe_receipt_bytes = replan_receipt_lines()
+    assert probe_receipt_bytes
 
     # Simulate host Python interpreter path upgrade on both the original refused turn and probe turn.
     for row_id in (rejected["turn_id"], probe["turn_id"]):
@@ -273,8 +323,21 @@ def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
     assert resumed[0]["client_turn_id"] == expected_client_id
     done = finish(runtime, resumed[0])
     assert done["response"]["native_loopx"]["status"] == "committed", done
+    assert len(report_acquires) == 1
+    assert model_call_count() == model_calls_before_probe + 2
+    business = report_readback()
+    assert business is not None and business.prepared_lease == {
+        "prepared_lease_key_sha256": sha256(report_acquires[0]["idempotency_key"].encode()).hexdigest(),
+        "prepared_lease_version": report_acquires[0]["version"],
+        "prepared_lease_epoch": report_acquires[0]["lease_epoch"],
+    }
+    assert business.original_prepared_receipt is not None
+    assert probe_journal_path.read_bytes() == probe_journal_bytes
+    assert replan_receipt_lines() == probe_receipt_bytes
+    model_bytes = steward[5].read_bytes()
     runtime._steward_monitor_next_check.clear()
     assert not pump_steward_monitors(runtime)
+    assert steward[5].read_bytes() == model_bytes
     assert transport.steward_reports.reconcile() == 1
     assert reports.health(owner)["publication_verified"]
     task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == done["loopx_request"]["todo_id"])
@@ -300,14 +363,24 @@ def test_steward_report_normalizes_profile_minimum_scale_shorthand(steward, tmp_
     assert reports.health(binding["binding_id"])["publication_verified"]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("lease_loss", ["none", "replacement", "released", "readonly_unavailable"],
+    ids=["same-generation", "replacement-refused", "released-read-required", "readonly-unavailable"])
 def test_frozen_report_recovers_host_result_contract_failure_without_model_call(
-    steward, tmp_path, monkeypatch, caplog,
+    steward, tmp_path, monkeypatch, caplog, provider, lease_loss,
 ):
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat import steward_commands
     import loopx.capabilities.native_chat.steward_turn as steward_turn_mod
     from loopx.configure_goal import configure_goal
+    from loopx.control_plane.quota import execution_preparation
+    from loopx.control_plane.quota import settlement
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path
 
-    _, runtime, _, transport, binding, _, _ = steward
+    store, runtime, _, transport, binding, _, _ = steward
+    replace_original_lease = lease_loss != "none"
     point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
 
     class CalendarClock(datetime):
@@ -317,7 +390,7 @@ def test_frozen_report_recovers_host_result_contract_failure_without_model_call(
 
     monkeypatch.setattr(report_host, "datetime", CalendarClock)
     monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
-    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
     owner = binding["binding_id"]
     assert configure_goal(
         registry_path=runtime.registry_path, goal_id=actor["goal_id"],
@@ -358,19 +431,322 @@ def test_frozen_report_recovers_host_result_contract_failure_without_model_call(
     assert native["status"] == "failed"
     assert native["result_kind"] == "validation_failed"
     assert native["validation_stage"] == "host_result_contract"
+    assert native["effects"]["state_written"] is False
+    assert native["effects"]["quota_spent"] is False
     window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
-    assert (attempt_directory(reports.root, window) / "private-generation.json").is_file()
+    generation_path = attempt_directory(reports.root, window) / "private-generation.json"
+    generation_bytes = generation_path.read_bytes()
+    request = resumed["loopx_request"]
+    route = ["--goal-id", actor["goal_id"], "--todo-id", request["todo_id"]]
 
+    def readback():
+        return read_heartbeat_settlement(
+            reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            todo_id=request["todo_id"], turn_instance_id=request["turn_instance_id"],
+            registry_path=runtime.registry_path,
+        )
+
+    original_lease = steward_commands.native_command(runtime, ["task-lease", "inspect", *route])["lease"]
+    original_readback = readback()
+    assert original_readback is not None and original_readback.original_prepared_receipt is not None
+    original_prepared = original_readback.prepared_lease
+    assert original_prepared == {
+        "prepared_lease_key_sha256": sha256(original_lease["idempotency_key"].encode()).hexdigest(),
+        "prepared_lease_version": original_lease["version"],
+        "prepared_lease_epoch": original_lease["lease_epoch"],
+    }
+    assert original_lease["status"] == "active"
+    assert original_readback.writeback_run is None and original_readback.writeback_event is None
+    assert original_readback.spend_run is None and original_readback.spend_event is None
+
+    commands, qualification_requests, qualifications = [], [], []
+    actual_command = steward_commands.native_command
+    actual_qualification = execution_preparation.read_turn_execution_lease_qualification
+
+    def observe_command(controller, argv):
+        result = actual_command(controller, argv)
+        if argv[:2] in (["task-lease", "renew"], ["task-lease", "acquire"]):
+            commands.append((list(argv), dict(result["lease"])))
+        return result
+
+    def observe_qualification(**kwargs):
+        qualification_requests.append(kwargs["requested_proof"])
+        result = actual_qualification(**kwargs)
+        qualifications.append(result.resume_lease_qualification)
+        return result
+
+    monkeypatch.setattr(steward_commands, "native_command", observe_command)
+    monkeypatch.setattr(execution_preparation, "read_turn_execution_lease_qualification", observe_qualification)
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == request["todo_id"])
     model_calls = steward[5].read_bytes()
+    external_writes = list(steward[2].writes)
+    replacement = None
+    rejected_packet = None
+    if lease_loss == "readonly_unavailable":
+        actual_readback = settlement.read_heartbeat_settlement
+
+        def unavailable_readonly_gate(*args, **kwargs):
+            if kwargs.get("include_readonly_recovery") is True:
+                raise OSError("fixture read-only recovery transport unavailable")
+            return actual_readback(*args, **kwargs)
+
+        monkeypatch.setattr(settlement, "read_heartbeat_settlement", unavailable_readonly_gate)
+    if replace_original_lease:
+        actual_command(runtime, ["task-lease", "release", *route, "--owner", actor["agent_id"],
+            "--idempotency-key", original_lease["idempotency_key"],
+            "--expected-version", str(original_lease["version"])])
+        released = actual_command(runtime, ["task-lease", "inspect", *route])["lease"]
+        if lease_loss == "released":
+            replacement = released
+        else:
+            replacement = actual_command(runtime, ["task-lease", "acquire", *route, "--owner", actor["agent_id"],
+                "--idempotency-key", request["turn_instance_id"] + ".replacement", "--ttl-seconds", "3600",
+                "--expected-version", str(released["version"])])["lease"]
+            assert replacement["idempotency_key"] != original_lease["idempotency_key"]
+            assert replacement["lease_epoch"] > original_lease["lease_epoch"]
+            assert replacement["version"] > original_lease["version"]
+        protected = [runtime.registry_path, generation_path,
+            cadence_journal_path(reports.root, actor["goal_id"]),
+            turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])]
+        protected_bytes = {path: path.read_bytes() for path in protected}
+        with pytest.raises(execution_preparation.RefreshTaskLeaseUnavailable) as refused:
+            StewardTurnHost(runtime).recover_report_settlement(actor, window, task)
+        rejected_packet = refused.value.payload
+        assert rejected_packet["error_code"] == "refresh_task_lease_unavailable"
+        assert rejected_packet["original_ts_refusal"]["code"] == "refresh_task_lease_unavailable"
+        assert all(effect is False for effect in rejected_packet["effects"].values())
+
     runtime._steward_monitor_next_check.clear()
     with caplog.at_level(logging.WARNING):
         assert not pump_steward_monitors(runtime)
-    assert "An original steward report is unavailable" not in caplog.text
     assert steward[5].read_bytes() == model_calls
-    assert transport.steward_reports.reconcile() == 1
-    assert reports.health(owner)["publication_verified"]
+    assert generation_path.read_bytes() == generation_bytes
+    final_readback = readback()
+    assert final_readback is not None
+    assert final_readback.original_prepared_receipt == original_readback.original_prepared_receipt
+    assert final_readback.original_prepared_event_id == original_readback.original_prepared_event_id
+    assert final_readback.original_prepared_receipt_sha256 == original_readback.original_prepared_receipt_sha256
+    current_lease = actual_command(runtime, ["task-lease", "inspect", *route])["lease"]
     task = next(
         row for row in StewardMonitor(runtime).todos(actor)
         if row["todo_id"] == resumed["loopx_request"]["todo_id"]
     )
-    assert task["status"] == "done"
+    if replace_original_lease:
+        assert "An original steward report is unavailable" not in caplog.text
+        assert commands == [] and qualifications == []
+        assert qualification_requests and all(proof == {
+            "idempotency_key": replacement["idempotency_key"], "expected_version": replacement["version"],
+        } for proof in qualification_requests)
+        assert current_lease == replacement
+        assert task["status"] == "open"
+        assert final_readback.writeback_run is None and final_readback.writeback_event is None
+        assert final_readback.spend_run is None and final_readback.spend_event is None
+        assert final_readback.completion_event is None
+        assert transport.steward_reports.reconcile() == 0
+        health = reports.health(owner)
+        assert health["recovery_failure"] == rejected_packet
+        notice = [row for row in store.messages(sid) if row.get("message_id") == health["recovery_message_id"]]
+        assert len(notice) == 1 and notice[0]["role"] == "error"
+        assert notice[0]["turn_id"] == refused.value.report_recovery_context["original_turn_id"]
+        assert "ready" not in rejected_packet and "can_execute" not in rejected_packet
+        if lease_loss == "readonly_unavailable":
+            assert "settlement_recovery" not in rejected_packet
+            assert "fixture read-only recovery transport unavailable" in rejected_packet["settlement_recovery_error"]
+            assert "```sh" not in notice[0]["text"]
+        else:
+            gate = rejected_packet["settlement_recovery"]
+            assert gate["required"] is True
+            assert gate["settlement_identity"] == original_readback.identity.value.as_dict()
+            assert gate["original_settlement_readback"]["prepared_lease"] == original_prepared
+            assert gate["next_cli_actions_argv"][0][:2] == ["turn", "inspect-journal"]
+            assert gate["next_cli_actions_argv"][1][:2] == ["task-lease", "inspect"]
+            assert len(gate["next_cli_actions"]) == 2
+            assert all("--execution-loss-closeout" not in command for command in gate["next_cli_actions"])
+            assert all(command in notice[0]["text"] for command in gate["next_cli_actions"])
+            assert not {"ready", "can_execute", "control_writer_proof", "claim", "reactivate"} & gate.keys()
+        messages = store.messages(sid)
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        assert store.messages(sid) == messages
+        assert reports.health(owner)["recovery_failure"] == rejected_packet
+        assert steward[5].read_bytes() == model_calls
+        assert steward[2].writes == external_writes
+        assert actual_command(runtime, ["task-lease", "inspect", *route])["lease"] == replacement
+        assert {path: path.read_bytes() for path in protected} == protected_bytes
+    else:
+        assert "An original steward report is unavailable" not in caplog.text
+        assert commands and all(argv[:2] == ["task-lease", "renew"] for argv, _ in commands)
+        assert qualifications and all(row["state"] == "ready" and row["original_prepared"] == original_prepared
+            for row in qualifications)
+        for lease in [current_lease, *(lease for _, lease in commands)]:
+            assert lease["idempotency_key"] == original_lease["idempotency_key"]
+            assert lease["lease_epoch"] == original_lease["lease_epoch"]
+            assert lease["version"] >= original_lease["version"]
+        assert current_lease["version"] > original_lease["version"]
+        assert current_lease["status"] == "released"
+        assert actual_command(runtime, ["task-lease", "inspect", *route])["active"] is False
+        assert final_readback.writeback_run is not None and final_readback.spend_run is not None
+        assert task["status"] == "done"
+        assert transport.steward_reports.reconcile() == 1
+        assert reports.health(owner)["publication_verified"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_local_report_lost_execution_projects_one_readonly_recovery_notice(
+    steward, tmp_path, monkeypatch, provider,
+):
+    from test_native_steward_reports import configured_local_report
+    from loopx.capabilities.native_chat import steward_turn as turn_host
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    from loopx.control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path
+
+    store, runtime, bot, *_ = steward
+    session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+    sid = session["session_id"]
+    actor = reports.selected(sid)["actor"]
+    install_model(steward, tmp_path, sid)
+    runtime.project_contexts.conversation_bindings = None
+    with monkeypatch.context() as invalid_candidate:
+        invalid_candidate.setattr(turn_host, "_normalize_report_kernel_candidate", lambda candidate: {
+            **{key: value for key, value in candidate.items() if key != "editorial_response"},
+            "result_kind": "validated_completion", "delivery_batch_scale": "unsupported",
+        })
+        failed = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = failed["response"]["native_loopx"]
+    assert native["status"] == "failed" and native["validation_stage"] == "host_result_contract"
+    request = failed["loopx_request"]
+    _, window = reports.current_window(sid)
+    route = ["--goal-id", actor["goal_id"], "--todo-id", request["todo_id"]]
+    original_lease = native_command(runtime, ["task-lease", "inspect", *route])["lease"]
+    native_command(runtime, ["task-lease", "release", *route, "--owner", actor["agent_id"],
+        "--idempotency-key", original_lease["idempotency_key"], "--expected-version", str(original_lease["version"])])
+    released = native_command(runtime, ["task-lease", "inspect", *route])["lease"]
+    replacement = native_command(runtime, ["task-lease", "acquire", *route, "--owner", actor["agent_id"],
+        "--idempotency-key", request["turn_instance_id"] + ".replacement", "--ttl-seconds", "3600",
+        "--expected-version", str(released["version"])])["lease"]
+    paths = [runtime.registry_path, store._turn_path(sid, failed["turn_id"]),
+        turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"]),
+        cadence_journal_path(reports.root, actor["goal_id"]),
+        attempt_directory(reports.root, window) / "private-generation.json"]
+    originals = {path: path.read_bytes() for path in paths}
+    model_calls, writes = steward[5].read_bytes(), list(bot.writes)
+    for _ in range(2):
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+    health = reports.health(sid)
+    payload = health["recovery_failure"]
+    assert payload["error_code"] == RefreshTaskLeaseUnavailable.code
+    assert payload["original_ts_refusal"]["code"] == RefreshTaskLeaseUnavailable.code
+    gate = payload["settlement_recovery"]
+    assert gate["settlement_identity"]["turn_instance_id"] == request["turn_instance_id"]
+    assert gate["next_cli_actions_argv"][0][:2] == ["turn", "inspect-journal"]
+    assert gate["next_cli_actions_argv"][1][:2] == ["task-lease", "inspect"]
+    assert not {"ready", "can_execute", "control_writer_proof", "claim", "reactivate"} & gate.keys()
+    notices = [row for row in store.messages(sid) if row["message_id"] == health["recovery_message_id"]]
+    assert len(notices) == 1 and notices[0]["role"] == "error" and notices[0]["turn_id"] == failed["turn_id"]
+    assert all(command in notices[0]["text"] for command in gate["next_cli_actions"])
+    assert {path: path.read_bytes() for path in paths} == originals
+    assert native_command(runtime, ["task-lease", "inspect", *route])["lease"] == replacement
+    assert steward[5].read_bytes() == model_calls and bot.writes == writes
+    readback = read_heartbeat_settlement(reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"], todo_id=request["todo_id"],
+        turn_instance_id=request["turn_instance_id"], registry_path=runtime.registry_path)
+    assert readback is not None and readback.writeback_run is None and readback.spend_run is None
+    assert readback.completion_event is None and not health["publication_verified"]
+
+
+@pytest.mark.parametrize("cleanup_boundary", ["normal", "rollout_occupied"])
+def test_legacy_native_task_lease_cleanup_uses_fenced_release(
+    steward, tmp_path, monkeypatch, cleanup_boundary,
+):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    from loopx.control_plane.quota import settlement
+    from loopx.file_lock import exclusive_cross_runtime_file_lock
+    from loopx.rollout_event_log import rollout_event_log_path
+
+    store, runtime, *_ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    assert actor.get("goal_instance_id") is None
+    added = native_command(runtime, ["todo", "add", "--goal-id", actor["goal_id"],
+        "--role", "agent", "--text", "[P1] Inspect the authorized task before admission.",
+        "--claimed-by", actor["agent_id"], "--operation-id", "lease-cleanup-fixture", "--execute"])
+    turn, _ = store.create_queued_turn(sid, client_turn_id="legacy-lease-cleanup",
+        message="Inspect the original task before admission.")
+    request = {"actor": actor, "todo_id": added["todo_id"], "turn_instance_id": "legacy-lease-cleanup"}
+    route = ["--goal-id", actor["goal_id"], "--todo-id", request["todo_id"]]
+    actual_readback = settlement.read_heartbeat_settlement
+    dispositions = []
+    rollout_path = rollout_event_log_path(reports.root, actor["goal_id"])
+    original_rollout = rollout_path.read_bytes() if rollout_path.exists() else None
+    rollout_held, release_rollout, rollout_released = threading.Event(), threading.Event(), threading.Event()
+
+    def occupy_rollout():
+        with exclusive_cross_runtime_file_lock(
+            rollout_event_log_path(reports.root, actor["goal_id"]), operation="fixture_competing_rollout_owner",
+        ):
+            rollout_held.set()
+            assert release_rollout.wait(15), "cleanup waited for the occupied rollout lock"
+        rollout_released.set()
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        competing_owner = None
+
+        def observe_cleanup(*args, **kwargs):
+            nonlocal competing_owner
+            result = actual_readback(*args, **kwargs)
+            if kwargs.get("native_task_lease_cleanup") is None:
+                return result
+            assert kwargs["goal_ref"] is None and kwargs["borrow_source_admission"] is False
+            assert kwargs["native_task_lease_cleanup"] == {
+                "schema_version": "native_task_lease_cleanup_request_v0", "recovery": False,
+                "admission_retry": False, "resume_turn_key_present": False, "original_journal_present": False,
+            }
+            assert result.identity.failure is not None and result.identity.failure.kind == "receipt_missing"
+            assert result.heartbeat_receipt is None
+            assert result.native_task_lease_cleanup == {
+                "schema_version": "native_task_lease_cleanup_v0", "disposition": "release",
+                "reason": "fresh_pre_admission_missing",
+            }
+            assert result.writeback_run is None and result.writeback_event is None
+            assert result.spend_run is None and result.spend_event is None
+            assert result.completion_event is None
+            dispositions.append(result.native_task_lease_cleanup["disposition"])
+            if len(dispositions) == 1 and cleanup_boundary == "rollout_occupied":
+                competing_owner = workers.submit(occupy_rollout)
+                assert rollout_held.wait(10), "competing owner did not acquire rollout"
+            return result
+
+        monkeypatch.setattr(settlement, "read_heartbeat_settlement", observe_cleanup)
+        try:
+            with StewardTurnHost(runtime)._task_execution_lease(request, turn["turn_id"]) as lease:
+                original_lease = dict(lease)
+            if cleanup_boundary == "rollout_occupied":
+                assert competing_owner is not None and not competing_owner.done()
+                assert rollout_held.is_set() and not rollout_released.is_set()
+        finally:
+            release_rollout.set()
+            if competing_owner is not None:
+                competing_owner.result(timeout=10)
+
+    inspected = native_command(runtime, ["task-lease", "inspect", *route])
+    diagnostics = [row for row in store.events_after(sid, turn["turn_id"], None)
+        if row["kind"] == "native_loopx.task_lease_release_unconfirmed"]
+    assert (rollout_path.read_bytes() if rollout_path.exists() else None) == original_rollout
+    if cleanup_boundary == "normal":
+        assert dispositions == ["release", "release"]
+        assert inspected["active"] is False and inspected["lease"]["status"] == "released"
+        assert inspected["lease"]["idempotency_key"] == original_lease["idempotency_key"]
+        assert inspected["lease"]["lease_epoch"] == original_lease["lease_epoch"]
+        assert diagnostics == []
+    else:
+        assert dispositions == ["release"]
+        assert inspected["active"] is True and inspected["lease"] == original_lease
+        assert len(diagnostics) == 1 and diagnostics[0]["payload"] == {
+            "todo_id": request["todo_id"], "lease_epoch": original_lease["lease_epoch"],
+        }

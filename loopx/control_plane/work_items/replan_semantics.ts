@@ -10,6 +10,10 @@ import { id as todoId, readResume, taskClass } from "../todos/read_codec.ts";
 import { indexInferredSuccessors } from "../todos/succession.ts";
 import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
 import { projectProgressDelta } from "./progress_delta.ts";
+import {AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID}
+  from "../quota/semantic_replan_guard.ts";
+export {AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+  AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION} from "../quota/semantic_replan_guard.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -38,15 +42,6 @@ const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_accepta
 // same scalar receipt can retain a mixed review after its work links change.
 const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap", "monitor_no_change_streak"]);
 const RECONSTRUCTIBLE_REVIEW_KINDS = new Set([...SCALAR_REVIEW_KINDS, "periodic_review_due"]);
-export const AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID = "autonomous_replan_default_v0";
-export const AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION =
-  "stop only the affected path when required access, destructive git, production actions, " +
-  "or owner-only decisions exceed existing user authority. Keep authorized private reads " +
-  "within their storage and publication boundaries; do not expose credentials or disclose " +
-  "private material beyond that authority. Continue independent authorized replan work " +
-  "while honoring explicit stops";
-export const AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION =
-  "stop this replan path until a compatible reader validates its digest-bound review guard";
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";

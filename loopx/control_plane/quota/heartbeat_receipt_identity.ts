@@ -10,15 +10,20 @@
  * this rule, so it lives here rather than in either caller.
  */
 import type { JsonObject } from "../effect_program.ts";
-import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
+import {effectIdsMatch, executionRequestSubject, settlementIdentity, settlementIdentityPayload, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
+import {isDeepStrictEqual} from "node:util";
+import {createHash} from "node:crypto";
+import {leaseIsActive} from "../work_items/task_lease_record.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
-import { jsonObject } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
+import type {ProviderEffect} from "../turn_driver/settlement_provider.ts";
+import {normalizeHeartbeatReplanObligationId, projectSemanticReplanGuard} from "./semantic_replan_guard.ts";
+export {normalizeHeartbeatReplanObligationId} from "./semantic_replan_guard.ts";
 
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
-const REPLAN_OBLIGATION_ID_PATTERN = /^replan-[a-f0-9]{16}$/;
 /** Public diagnostic preserved from the retired Python identity rule. */
 const IDENTITY_CONFLICT_CODE = "heartbeat_receipt_identity_conflict";
 
@@ -38,15 +43,6 @@ export function optionalHeartbeatString(value: unknown): string | null {
 export function normalizeHeartbeatTodoId(value: unknown): string | null {
   const candidate = String(value ?? "").trim().toLowerCase();
   return candidate && TODO_ID_PATTERN.test(candidate) ? candidate : null;
-}
-
-export function normalizeHeartbeatReplanObligationId(
-  value: unknown,
-): string | null {
-  const candidate = String(value ?? "").trim();
-  return candidate && REPLAN_OBLIGATION_ID_PATTERN.test(candidate)
-    ? candidate
-    : null;
 }
 
 export interface HeartbeatReceiptBinding extends JsonObject {
@@ -231,6 +227,101 @@ interface HeartbeatPreparedLease extends JsonObject {
   prepared_lease_epoch?: number;
 }
 
+export const HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA =
+  "loopx_quota_heartbeat_prepared_publication_request_v0";
+
+/** Publication compatibility is separate from execution readiness. A null
+ * proposal preserves stored history; it cannot renew or repair a proof. */
+export function qualifyHeartbeatPreparedPublication(value: unknown): JsonObject {
+  const prepared = (fields: JsonObject): HeartbeatPreparedLease | null => {
+    try {return heartbeatPreparedLease(fields);}
+    catch (error) {
+      if (error instanceof EffectRuntimeRequestError) throw receiptIdentityConflict(
+        "prepared receipt publication requires a complete exact proof");
+      throw error;
+    }
+  };
+  const request = requireJsonObject(value, "prepared receipt publication");
+  if (request.schema_version !== HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA
+      || Object.keys(request).some(key => !["schema_version", "existing_receipt",
+        "original_prepared", "proposed_prepared_fields", "receipt_history", "settlement_identity"].includes(key))) {
+    throw receiptIdentityConflict("prepared receipt publication request is malformed");
+  }
+  let existing = request.existing_receipt === null ? null
+    : requireJsonObject(request.existing_receipt, "existing heartbeat receipt");
+  const originalFields = request.original_prepared === null ? null
+    : requireJsonObject(request.original_prepared, "original prepared proof");
+  const suppliedOriginal = originalFields === null ? null : prepared(originalFields);
+  if (originalFields !== null && (suppliedOriginal === null || !isDeepStrictEqual(originalFields, suppliedOriginal))) {
+    throw receiptIdentityConflict("original prepared proof is incomplete");
+  }
+  let original = suppliedOriginal;
+  const hasHistory = Object.hasOwn(request, "receipt_history");
+  if (hasHistory !== Object.hasOwn(request, "settlement_identity")) {
+    throw receiptIdentityConflict("publication receipt history requires its exact settlement identity");
+  }
+  if (hasHistory) {
+    if (!Array.isArray(request.receipt_history)) throw receiptIdentityConflict("publication receipt history is malformed");
+    const binding = requireJsonObject(request.settlement_identity, "publication settlement identity");
+    const identity = settlementIdentity({goal_id: requireNonEmptyString(binding.goal_id, "goal_id"),
+      agent_id: requireNonEmptyString(binding.agent_id, "agent_id"),
+      todo_id: optionalHeartbeatString(binding.todo_id),
+      turn_instance_id: requireNonEmptyString(binding.turn_instance_id, "turn_instance_id"),
+      replan_obligation_id: optionalHeartbeatString(binding.replan_obligation_id),
+      request_subject: executionRequestSubject(binding.request_subject)});
+    if (!isDeepStrictEqual(binding, settlementIdentityPayload(identity))) {
+      throw receiptIdentityConflict("publication must preserve the exact settlement identity");
+    }
+    const history = request.receipt_history.map(row => requireJsonObject(row, "heartbeat history row"))
+      .filter(row => row.event_kind === "quota_should_run" && row.goal_id === identity.goal_id
+        && row.agent_id === identity.agent_id && row.run_id === identity.turn_instance_id);
+    if (history.length && history.some(row => !isDeepStrictEqual(row.goal_ref ?? null,
+        (existing ?? history[0]!).goal_ref ?? null))) {
+      throw receiptIdentityConflict("publication receipt history crosses Goal instances");
+    }
+    const effective = history.length === 0 ? null : selectEffectiveHeartbeatReceipt(identity.goal_id,
+      identity.agent_id, history.map(value => ({value, fact: heartbeatReceiptFactFromEvent(value)})));
+    if (existing !== null && !isDeepStrictEqual(existing, effective)) {
+      throw receiptIdentityConflict("publication effective receipt differs from its locked history");
+    }
+    existing = effective;
+    const allowLegacyPrepared = effective !== null && !Object.hasOwn(effective, "goal_ref");
+    const validation = effective === null ? null
+      : heartbeatValidationEvent(history, effective, identity, allowLegacyPrepared);
+    if (effective !== null && validation === null) {
+      throw receiptIdentityConflict("publication prepared receipt causality is incomplete");
+    }
+    original = validation === null ? null
+      : heartbeatPreparedWorkAdmission(validation, identity, allowLegacyPrepared);
+    if (suppliedOriginal !== null && !isDeepStrictEqual(suppliedOriginal, original)) {
+      throw receiptIdentityConflict("supplied original proof differs from its causal admission");
+    }
+  }
+  const storedDetails = heartbeatReceiptDetails(existing);
+  const stored = prepared(storedDetails);
+  const retained: JsonObject = {...stored,
+    ...(Object.hasOwn(storedDetails, "prepared_lease_required")
+      ? {prepared_lease_required: storedDetails.prepared_lease_required} : {})};
+  if (request.proposed_prepared_fields === null) return {ok: true, prepared_fields: retained};
+  const proposal = requireJsonObject(request.proposed_prepared_fields, "proposed prepared fields");
+  if (Object.keys(proposal).some(key => !["prepared_lease_required", "prepared_lease_key_sha256",
+      "prepared_lease_version", "prepared_lease_epoch"].includes(key))
+      || (Object.hasOwn(proposal, "prepared_lease_required")
+        && typeof proposal.prepared_lease_required !== "boolean")) {
+    throw receiptIdentityConflict("proposed prepared fields are malformed");
+  }
+  const proposed = prepared(proposal);
+  if (proposed === null) throw receiptIdentityConflict("a non-null publication proposal requires a complete proof");
+  if ((!hasHistory && stored !== null && original !== null && !isDeepStrictEqual(stored, original))
+      || !isDeepStrictEqual(original ?? stored ?? proposed, proposed)
+      || (storedDetails.prepared_lease_required === true && proposal.prepared_lease_required === false)) {
+    throw receiptIdentityConflict("prepared receipt publication must preserve the exact original proof");
+  }
+  // A valid replay of the causal root does not rewrite a later stored
+  // readiness record. The append/binder retains that record's exact fields.
+  return {ok: true, prepared_fields: stored === null ? {...retained, ...proposal} : retained};
+}
+
 export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLease | null {
   const key = details.prepared_lease_key_sha256;
   const version = details.prepared_lease_version;
@@ -245,8 +336,408 @@ export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLe
     ...(epoch === undefined ? {} : {prepared_lease_epoch: epoch})};
 }
 
+/** Positive prepared work admission, using the existing identity and report
+ * admission owners. A pre-upgrade receipt may omit the derived effect id. */
+export function heartbeatPreparedWorkAdmission(
+  event: JsonObject,
+  identity: SettlementIdentity,
+  allowLegacyPrepared = false,
+): HeartbeatPreparedLease | null {
+  const fact = heartbeatReceiptFactFromEvent(event);
+  const binding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
+  const receiptDetails = heartbeatReceiptDetails(event);
+  // The ordinary Turn guard predates work projections. This compatibility is
+  // explicit at alias callers and cannot promote partial modern facts or
+  // supply the strict work admission required by execution-loss closeout.
+  const legacyPrepared = allowLegacyPrepared && !Object.hasOwn(event, "goal_ref")
+    && event.status === "turn_run_once" && !Object.hasOwn(receiptDetails, "closeout_required")
+    && receiptDetails.prepared_lease_required === true
+    && ["must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]
+      .every(field => !Object.hasOwn(receiptDetails, field));
+  if (event.schema_version !== "loopx_rollout_event_v0" || event.event_kind !== "quota_should_run"
+      || event.goal_id !== identity.goal_id || event.agent_id !== identity.agent_id
+      || fact.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id
+      || binding?.binding_kind !== "todo" || binding.binding_id !== identity.todo_id
+      || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))
+      || (fact.closeout_required !== true && !legacyPrepared)
+      || (Object.hasOwn(receiptDetails, "prepared_lease_required") && receiptDetails.prepared_lease_required !== true)
+      || nativeChildReportAdmission(receiptDetails, event.status, identity.effect_id, "open", false,
+        normalizeHeartbeatReplanObligationId(receiptDetails.semantic_replan_obligation_id))
+        .report_permission !== "new_operation") return null;
+  return heartbeatPreparedLease(receiptDetails);
+}
+
+/** One causal owner for binding validation and original positive preparation.
+ * Readiness, work and identity revisions cannot replace an earlier admission. */
+export function heartbeatValidationEvent(
+  events: readonly JsonObject[],
+  receipt: JsonObject,
+  identity: SettlementIdentity,
+  allowLegacyPrepared = false,
+): JsonObject | null {
+  return selectHeartbeatValidationEvent(events, receipt, identity, allowLegacyPrepared, false);
+}
+
+/** A semantic admission remains bound to its original Todo and obligation;
+ * its report permission supplies no business execution lease. */
+function heartbeatSemanticWorkAdmission(event: JsonObject, identity: SettlementIdentity): string | null {
+  const fact = heartbeatReceiptFactFromEvent(event), receiptDetails = heartbeatReceiptDetails(event);
+  const binding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
+  const selected = normalizeHeartbeatReplanObligationId(receiptDetails.semantic_replan_obligation_id);
+  // Business-delivery closeout debt is a recorded boolean. Semantic report
+  // permission comes from the exact obligation and typed admission below.
+  if (selected === null || event.schema_version !== "loopx_rollout_event_v0"
+      || event.event_kind !== "quota_should_run" || event.goal_id !== identity.goal_id
+      || event.agent_id !== identity.agent_id || fact.run_id !== identity.turn_instance_id
+      || fact.todo_id !== identity.todo_id || binding?.binding_kind !== "todo"
+      || binding.binding_id !== identity.todo_id || typeof receiptDetails.closeout_required !== "boolean"
+      || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))
+      || receiptDetails.interaction_mode !== "autonomous_replan" || receiptDetails.delivery_allowed !== false
+      || receiptDetails.ok !== true || receiptDetails.should_run !== true
+      || receiptDetails.must_attempt_work !== true || receiptDetails.quiet_noop_allowed !== false
+      || nativeChildReportAdmission(receiptDetails, event.status, identity.effect_id, "open", false, selected)
+        .report_permission !== "new_operation") return null;
+  return selected;
+}
+
+export function heartbeatSemanticAdmissionEvent(events: readonly JsonObject[], receipt: JsonObject,
+  identity: SettlementIdentity, allowLegacyPrepared = false): JsonObject | null {
+  const selected = selectHeartbeatValidationEvent(events, receipt, identity, allowLegacyPrepared, true);
+  return selected !== null && heartbeatSemanticWorkAdmission(selected, identity) !== null ? selected : null;
+}
+
+function ordinarySelectionReservationParent(parent: JsonObject, upgrade: JsonObject,
+  identity: SettlementIdentity, allowLegacyPrepared: boolean): boolean {
+  const reservation = heartbeatReceiptDetails(parent), bound = heartbeatReceiptDetails(upgrade);
+  const empty = (value: unknown): boolean => value === undefined || value === null || value === "";
+  const workFacts = (fields: JsonObject): boolean => fields.command === "quota"
+    && fields.quota_command === "should-run" && fields.turn_instance_id === identity.turn_instance_id
+    && fields.ok === true && fields.should_run === true && fields.must_attempt_work === true
+    && fields.selection_required === true && fields.quiet_noop_allowed === false
+    && ["request_id", "request_revision", "request_digest", "execution_scope_sha256"]
+      .every(field => !Object.hasOwn(fields, field));
+  const negative = (fields: JsonObject): boolean => workFacts(fields)
+    && fields.delivery_allowed === false && fields.closeout_required === false
+    && ["prepared_lease_key_sha256", "prepared_lease_version", "prepared_lease_epoch"]
+      .every(field => !Object.hasOwn(fields, field));
+  // quota_rollout_details records selected_todo_id before a portfolio choice.
+  // It is a recommendation, not this identity's eventual settlement binding.
+  return identity.binding_kind === "todo" && parent.schema_version === "loopx_rollout_event_v0"
+    && upgrade.schema_version === "loopx_rollout_event_v0" && parent.status === "normal_run"
+    && negative(reservation) && workFacts(bound) && reservation.interaction_mode === "bounded_delivery"
+    && (empty(reservation.selected_todo_id)
+      || normalizeHeartbeatTodoId(reservation.selected_todo_id) === reservation.selected_todo_id)
+    && empty(parent.todo_id) && ["todo_id", "replan_obligation_id", "settlement_effect_id",
+      "semantic_replan_obligation_id"].every(field => empty(reservation[field]))
+    && ["settlement_receipt_revision", "prepared_lease_required", "pending_action_selection_state",
+      "pending_action_selection_todo_id"].every(field => !Object.hasOwn(reservation, field))
+    && !Object.hasOwn(parent, "causality") && bound.todo_id === identity.todo_id
+    && bound.selected_todo_id === identity.todo_id
+    && typeof bound.settlement_effect_id === "string" && effectIdsMatch(bound.settlement_effect_id, identity.effect_id)
+    && empty(bound.replan_obligation_id) && empty(bound.semantic_replan_obligation_id)
+    && (!Object.hasOwn(bound, "prepared_lease_required") || bound.prepared_lease_required === true)
+    // An already-held canonical lease can make the first identity binding
+    // positive. Reuse the strict prepared-admission owner for that case.
+    && (negative(bound) || (bound.prepared_lease_required === true
+      && heartbeatPreparedWorkAdmission(upgrade, identity, allowLegacyPrepared) !== null));
+}
+
+function selectHeartbeatValidationEvent(
+  events: readonly JsonObject[], receipt: JsonObject, identity: SettlementIdentity,
+  allowLegacyPrepared: boolean, semanticAdmission: boolean,
+): JsonObject | null {
+  const scoped = events.filter(event => event.event_kind === "quota_should_run"
+    && event.goal_id === identity.goal_id && event.agent_id === identity.agent_id
+    && event.run_id === identity.turn_instance_id
+    && isDeepStrictEqual(event.goal_ref ?? null, receipt.goal_ref ?? null));
+  const positions = new Map<unknown, number[]>();
+  for (const [index, event] of scoped.entries()) {
+    const indices = positions.get(event.event_id) ?? [];
+    indices.push(index); positions.set(event.event_id, indices);
+  }
+  const start = positions.get(receipt.event_id);
+  if (start?.length !== 1 || !isDeepStrictEqual(scoped[start[0]!], receipt)) return null;
+  const initialFact = heartbeatReceiptFactFromEvent(receipt);
+  const initialBinding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, initialFact);
+  if (initialBinding !== null && (initialBinding.binding_kind !== identity.binding_kind
+      || initialBinding.binding_id !== identity.binding_id
+      || (initialFact.settlement_effect_id !== null
+        && !effectIdsMatch(initialFact.settlement_effect_id, identity.effect_id)))) return null;
+  const generations = new Set<string>();
+  const positivePrepared = new Map<number, HeartbeatPreparedLease>();
+  const semanticObligations = new Set<string>();
+  for (const [index, event] of scoped.entries()) {
+    const semantic = semanticAdmission ? heartbeatSemanticWorkAdmission(event, identity) : null;
+    if (semantic !== null) semanticObligations.add(semantic);
+    const prepared = heartbeatPreparedWorkAdmission(event, identity, allowLegacyPrepared);
+    if (prepared === null) continue;
+    positivePrepared.set(index, prepared);
+    generations.add(JSON.stringify(prepared.prepared_lease_epoch === undefined
+      ? ["legacy", prepared.prepared_lease_key_sha256, prepared.prepared_lease_version]
+      : ["epoch", prepared.prepared_lease_key_sha256, prepared.prepared_lease_epoch]));
+  }
+  if (generations.size > 1) throw receiptIdentityConflict(
+    "one Turn cannot contain positive prepared admissions from different lease generations");
+  if (semanticObligations.size > 1) throw receiptIdentityConflict(
+    "one Turn cannot replace its admitted semantic replan obligation");
+  let position = start[0]!;
+  let validation = scoped[position]!;
+  let preparedAdmission: JsonObject | null = null;
+  while (position >= 0) {
+    const prepared = positivePrepared.get(position);
+    const positive = semanticAdmission ? heartbeatSemanticWorkAdmission(validation, identity) !== null
+      : prepared !== undefined;
+    if (positive) preparedAdmission = validation;
+    const validationDetails = heartbeatReceiptDetails(validation);
+    const revision = validationDetails.settlement_receipt_revision;
+    const legacyLineage = !Object.hasOwn(validationDetails, "settlement_receipt_revision")
+      && positive && Object.hasOwn(validation, "causality");
+    if (revision !== "lease_readiness" && revision !== "work_admission"
+        && revision !== "identity_upgrade" && revision !== "review_guard_upgrade" && !legacyLineage) {
+      if (!semanticAdmission && positive && !Object.hasOwn(validationDetails, "settlement_receipt_revision")
+          && !Object.hasOwn(validation, "causality")) {
+        let first: JsonObject | null = null;
+        for (const [index, priorPrepared] of positivePrepared) {
+          if (index >= position) break;
+          if (!isDeepStrictEqual(priorPrepared, prepared)) throw receiptIdentityConflict(
+            "an uncaused prepared receipt cannot redefine this Turn's original proof");
+          first ??= scoped[index]!;
+        }
+        return first ?? validation;
+      }
+      if (semanticAdmission && positive && !Object.hasOwn(validationDetails, "settlement_receipt_revision")
+          && !Object.hasOwn(validation, "causality")) {
+        const originalGuard = projectSemanticReplanGuard(validationDetails);
+        let first: JsonObject | null = null;
+        for (const [index, prior] of scoped.entries()) {
+          if (index >= position) break;
+          if (heartbeatSemanticWorkAdmission(prior, identity) === null) continue;
+          if (!isDeepStrictEqual(projectSemanticReplanGuard(heartbeatReceiptDetails(prior)), originalGuard)) {
+            throw receiptIdentityConflict("an uncaused semantic receipt cannot redefine this Turn's original guard");
+          }
+          first ??= prior;
+        }
+        return first ?? validation;
+      }
+      return preparedAdmission ?? validation;
+    }
+    const lineage = jsonObject(validation.causality);
+    const parentId = optionalHeartbeatString(lineage?.source_event_id);
+    if (parentId === null || lineage?.caused_by !== parentId) return null;
+    const parentPositions = positions.get(parentId);
+    if (parentPositions?.length !== 1 || parentPositions[0]! >= position) return null;
+    const parent = scoped[parentPositions[0]!]!;
+    const fact = heartbeatReceiptFactFromEvent(parent);
+    const parentDetails = heartbeatReceiptDetails(parent);
+    if (legacyLineage) {
+      const parentBinding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
+      if ((parentBinding !== null && (parentBinding.binding_kind !== identity.binding_kind
+          || parentBinding.binding_id !== identity.binding_id))
+          || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))) return null;
+      if (semanticAdmission ? heartbeatSemanticWorkAdmission(parent, identity) === null
+        : heartbeatPreparedWorkAdmission(parent, identity, allowLegacyPrepared) === null) return preparedAdmission;
+    }
+    const pendingParent = revision === "identity_upgrade" && identity.binding_kind === "todo"
+      && fact.todo_id === null && fact.replan_obligation_id === null && fact.request_subject == null
+      && fact.settlement_effect_id === null && !fact.closeout_required
+      && parentDetails.pending_action_selection_state === "deferred"
+      && parentDetails.pending_action_selection_todo_id === identity.todo_id
+      && normalizeHeartbeatTodoId(parentDetails.pending_action_selection_todo_id) === identity.todo_id;
+    const selectionParent = revision === "identity_upgrade"
+      && ordinarySelectionReservationParent(parent, validation, identity, allowLegacyPrepared);
+    // A first binding cannot skip an earlier positive prepared admission.
+    if (selectionParent && [...positivePrepared.keys()].some(index => index < position)) return null;
+    if ((!pendingParent && !selectionParent && fact.todo_id !== identity.todo_id)
+        || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))) return null;
+    validation = parent;
+    position = parentPositions[0]!;
+  }
+  return null;
+}
+
+/** Ephemeral qualification over freshly loaded canonical facts. This never
+ * publishes a new prepared proof or grants a replacement generation work. */
+interface HeartbeatPreparedGenerationInput {
+  originalReceipt: JsonObject;
+  identity: SettlementIdentity;
+  requestedProof: JsonObject | null;
+  todo: JsonObject;
+  lease: JsonObject;
+  handoffMode: unknown;
+  exactSource: boolean;
+}
+
+/** Shared generation proof; phase and operation permission stay with callers. */
+export function qualifyHeartbeatPreparedGeneration(input: HeartbeatPreparedGenerationInput): {
+  original: HeartbeatPreparedLease; currentProof: JsonObject;
+} {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const original = heartbeatPreparedWorkAdmission(input.originalReceipt, input.identity, !input.exactSource);
+  if (original === null || input.handoffMode !== "hard_lease") {
+    reject("The original Turn's prepared work admission is unavailable.");
+  }
+  const {todo, lease, identity} = input;
+  if (todo.todo_id !== identity.todo_id || lease.todo_id !== identity.todo_id
+      || lease.owner !== identity.agent_id
+      || (todo.claimed_by != null && todo.claimed_by !== identity.agent_id)
+      || typeof lease.idempotency_key !== "string" || !lease.idempotency_key
+      || lease.idempotency_key !== lease.idempotency_key.trim()
+      || typeof lease.version !== "number" || !Number.isSafeInteger(lease.version) || lease.version < 1) {
+    reject("The original Turn's current canonical lease proof is unavailable.");
+  }
+  const currentProof = {idempotency_key: lease.idempotency_key, expected_version: lease.version};
+  if (input.requestedProof !== null && !isDeepStrictEqual(input.requestedProof, currentProof)) {
+    reject("The supplied resume proof does not match the current canonical lease.");
+  }
+  if (createHash("sha256").update(lease.idempotency_key).digest("hex") !== original.prepared_lease_key_sha256) {
+    reject("A replacement lease cannot execute this Turn's original work.");
+  }
+  if (original.prepared_lease_epoch === undefined) {
+    if (input.exactSource || lease.version !== original.prepared_lease_version) {
+      reject("This prepared receipt cannot prove a renewed lease generation.");
+    }
+  } else if (typeof lease.lease_epoch !== "number" || !Number.isSafeInteger(lease.lease_epoch)
+      || lease.lease_epoch !== original.prepared_lease_epoch || lease.version < original.prepared_lease_version) {
+    reject("The current lease does not preserve the original prepared generation.");
+  }
+  return {original, currentProof};
+}
+
+export function qualifyHeartbeatResumeLease(input: HeartbeatPreparedGenerationInput & {
+  completionEvent: JsonObject | null;
+  replayPhase: ReceiptBoundReplayPhase;
+  closeoutStarted: boolean;
+  writebackPending: boolean;
+  otherTerminalStarted: boolean;
+  terminalProviderEffect?: ProviderEffect | null;
+  terminalCompletion?: JsonObject | null;
+  observedAt: Date;
+}): JsonObject {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const {original, currentProof} = qualifyHeartbeatPreparedGeneration(input);
+  const {todo, lease, identity} = input;
+  const terminalPending = input.terminalProviderEffect?.step_kind === "terminal_closeout"
+    && input.terminalProviderEffect.effect_ref === `${identity.effect_id}#terminal_closeout`
+    && ["prepare_and_execute", "resolve_prepared", "execute_prepared"].includes(input.terminalProviderEffect.action);
+  const active = todo.status === "open"
+    && input.requestedProof !== null
+    && ((input.replayPhase === "open" && !input.closeoutStarted) || terminalPending)
+    && leaseIsActive(lease, input.observedAt);
+  const completion = input.completionEvent;
+  const retiredWriteback = input.writebackPending
+    && !input.otherTerminalStarted && completion !== null
+    && completion.event_kind === "todo_complete" && completion.goal_id === identity.goal_id
+    && completion.agent_id === identity.agent_id && completion.run_id === identity.turn_instance_id
+    && (completion.todo_id == null || completion.todo_id === identity.todo_id)
+    && (heartbeatReceiptDetails(completion).todo_id == null
+      || heartbeatReceiptDetails(completion).todo_id === identity.todo_id)
+    && effectIdsMatch(optionalHeartbeatString(heartbeatReceiptDetails(completion).settlement_effect_id), identity.effect_id);
+  const terminalCompletion = jsonObject(input.terminalCompletion?.completion);
+  const retiredTerminal = terminalPending && input.terminalProviderEffect?.action === "resolve_prepared"
+    && input.terminalCompletion?.kind === "committed" && terminalCompletion?.todo_id === identity.todo_id
+    && terminalCompletion.continuation === "no_followup";
+  const retired = todo.status === "done" && lease.status === "released" && (retiredWriteback || retiredTerminal);
+  if (!active && !retired) {
+    reject("The original Turn requires active execution or its exact retired completion proof.");
+  }
+  return {state: "ready", original_prepared: {...original},
+    current_task_lease_proof: currentProof,
+    lease_epoch: original.prepared_lease_epoch ?? null,
+    source: active ? "active" : "retired"};
+}
+
 export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {
   return heartbeatReceiptDetails(event).settlement_receipt_revision === "lease_readiness";
+}
+
+/** A runtime-owned fresh native Turn publishes its real prepared decision.
+ * Current CAS is checked here; an existing admission keeps its immutable proof.
+ * Status compatibility and another Turn's resume grant are never inputs. */
+export function qualifyHeartbeatNativeWorkAdmission(input: {
+  identity: SettlementIdentity; currentDetails: JsonObject;
+  existingReceipt: JsonObject | null; receiptHistory: readonly JsonObject[];
+  todo: JsonObject; lease: JsonObject; handoffMode: unknown;
+  replayPhase: ReceiptBoundReplayPhase; closeoutStarted: boolean; observedAt: Date;
+}): JsonObject {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const {identity, currentDetails, lease} = input;
+  if (identity.todo_id == null || identity.replan_obligation_id != null || identity.request_subject != null
+      || input.todo.role !== "agent" || lease.goal_id !== identity.goal_id
+      || currentDetails.todo_id !== identity.todo_id || currentDetails.selected_todo_id !== identity.todo_id
+      || currentDetails.turn_instance_id !== identity.turn_instance_id
+      || currentDetails.settlement_effect_id !== identity.effect_id
+      || currentDetails.closeout_required !== true || currentDetails.prepared_lease_required !== true
+      || currentDetails.delivery_allowed !== true
+      || Object.hasOwn(currentDetails, "settlement_receipt_revision")
+      || nativeChildReportAdmission(currentDetails, null, identity.effect_id, "open", false)
+        .report_permission !== "new_operation") {
+    reject("Fresh native admission requires the same Turn's complete explicit prepared work decision.");
+  }
+  const candidatePrepared = heartbeatPreparedLease(currentDetails);
+  if (candidatePrepared === null || candidatePrepared.prepared_lease_epoch === undefined
+      || candidatePrepared.prepared_lease_version !== lease.version) {
+    reject("Fresh native preparation must match the current canonical lease CAS and epoch.");
+  }
+  const candidate: JsonObject = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+    goal_id: identity.goal_id, agent_id: identity.agent_id, run_id: identity.turn_instance_id,
+    details: currentDetails};
+  const currentProof = {idempotency_key: lease.idempotency_key, expected_version: lease.version};
+  qualifyHeartbeatResumeLease({originalReceipt: candidate, identity, requestedProof: currentProof,
+    todo: input.todo, lease, handoffMode: input.handoffMode, exactSource: true,
+    completionEvent: null, replayPhase: input.replayPhase, closeoutStarted: input.closeoutStarted,
+    writebackPending: false, otherTerminalStarted: input.closeoutStarted, observedAt: input.observedAt});
+  const existing = input.existingReceipt;
+  if (existing === null) {
+    qualifyHeartbeatPreparedPublication({schema_version: HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA,
+      existing_receipt: null, original_prepared: null, receipt_history: [],
+      settlement_identity: settlementIdentityPayload(identity),
+      proposed_prepared_fields: {prepared_lease_required: true, ...candidatePrepared}});
+    return {state: "ready", append: true, details: structuredClone(currentDetails), source_event_id: null,
+      original_prepared: {...candidatePrepared}, current_task_lease_proof: currentProof};
+  }
+  const validation = heartbeatValidationEvent(input.receiptHistory, existing, identity, false);
+  if (validation === null) reject("The existing native Turn's receipt lineage is incomplete.");
+  const original = heartbeatPreparedWorkAdmission(validation, identity, false);
+  if (original !== null) {
+    const originalDetails = heartbeatReceiptDetails(validation);
+    if (!isDeepStrictEqual(projectSemanticReplanGuard(originalDetails), projectSemanticReplanGuard(currentDetails))
+        || (originalDetails.quota_spend_source != null && originalDetails.quota_spend_source !== currentDetails.quota_spend_source)) {
+      reject("Fresh native replay cannot replace the original admission's semantic or spend source.");
+    }
+    qualifyHeartbeatResumeLease({originalReceipt: validation, identity, requestedProof: currentProof,
+      todo: input.todo, lease, handoffMode: input.handoffMode, exactSource: true,
+      completionEvent: null, replayPhase: input.replayPhase, closeoutStarted: input.closeoutStarted,
+      writebackPending: false, otherTerminalStarted: input.closeoutStarted, observedAt: input.observedAt});
+    return {state: "ready", append: false, details: null, source_event_id: null,
+      original_prepared: {...original}, current_task_lease_proof: currentProof};
+  }
+  // The existing reentry owner alone may qualify a genuine negative precursor.
+  // In particular, an ensure-only legacy-positive receipt is not promoted.
+  const previousDetails = heartbeatReceiptDetails(existing);
+  if (["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]
+      .some(field => typeof previousDetails[field] !== "boolean")
+      || previousDetails.closeout_required !== false || previousDetails.prepared_lease_required !== true) {
+    reject("Only a complete explicit negative work receipt can precede native admission.");
+  }
+  qualifyHeartbeatPreparedPublication({schema_version: HEARTBEAT_PREPARED_PUBLICATION_REQUEST_SCHEMA,
+    existing_receipt: existing, original_prepared: null, receipt_history: [...input.receiptHistory],
+    settlement_identity: settlementIdentityPayload(identity),
+    proposed_prepared_fields: {prepared_lease_required: true, ...candidatePrepared}});
+  const qualified = heartbeatWorkRequalification(existing, currentDetails, identity,
+    input.replayPhase, input.closeoutStarted);
+  const qualifiedDetails = jsonObject(qualified.details);
+  if (qualified.append !== true || qualifiedDetails?.settlement_receipt_revision !== "work_admission"
+      || !optionalHeartbeatString(existing.event_id)) {
+    reject("The existing receipt does not admit a fresh native work qualification.");
+  }
+  return {state: "ready", append: true, details: qualifiedDetails, source_event_id: existing.event_id!,
+    original_prepared: {...candidatePrepared}, current_task_lease_proof: currentProof};
 }
 
 /** Reentry can qualify work on the original binding, never replace its authority.

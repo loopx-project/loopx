@@ -65,6 +65,98 @@ function request(status = "committed"): TurnJournalInspectionRequest {
   };
 }
 
+function cachedResultRequest(): TurnJournalInspectionRequest {
+  const input = request("in_progress");
+  input.journal.completed_phases = ["host_execute", "typed_result", "validation"];
+  input.journal.host_attempt_count = 1;
+  input.journal.result_kind = "validated_completion";
+  input.journal.validation_stage = "task_postcondition";
+  input.journal.host_result = {schema_version: "loopx_turn_result_v0", turn_key: turnKey,
+    result_kind: "validated_completion", completed_phases: ["host_execute", "typed_result"],
+    classification: "periodic_report_generation", recommended_action: "Retain the original report.",
+    next_action: "Read back the original report.", delivery_batch_scale: "single_surface",
+    delivery_outcome: "outcome_progress", vision_unchanged_reason: "Keep the original reporting goal.",
+    path_delta_mode: "unchanged", summary: "do-not-expose"};
+  input.journal.task_validation = {schema_version: "loopx_turn_task_validation_v0", ok: true,
+    status: "passed", validator_kind: "callback", summary: "do-not-expose",
+    recovery_kind: null, exit_code: null, errors: []};
+  delete input.journal.receipt;
+  return input;
+}
+
+test("a recorded checkpoint projects bounded cache and task receipt facts without execution authority", () => {
+  const input = cachedResultRequest();
+  const before = structuredClone(input);
+  const result = interpretTurnJournal(input);
+  assert.equal(result.journal_consistent, true);
+  assert.equal(result.replay_legal, false); // No terminal replay is fabricated.
+  assert.equal(result.turn_key, turnKey);
+  assert.deepEqual(result.cached_validation_state, {goal_id: "fixture-goal", agent_id: "fixture-agent", todo_id: todoId,
+    turn_instance_id: turnKey,
+    turn_key: turnKey, result_kind: "validated_completion",
+    task_validation: {schema_version: "loopx_turn_task_validation_v0", ok: true, status: "passed"}});
+  assert.equal(result.recovery_decision.action, "continue");
+  assert.equal(result.recovery_decision.can_continue, true);
+  assert.equal(result.recovery_decision.resume_from, "durable_writeback");
+  assert.equal(result.recovery_decision.reinvoke_host, false);
+  assert.deepEqual(result.recorded_effects, {host_invoked: true, state_written: false,
+    quota_spent: false, scheduler_acknowledged: false});
+  assert.deepEqual(result.effects, []);
+  assert.equal(JSON.stringify(result).includes("do-not-expose"), false);
+  assert.deepEqual(input, before);
+  assert.equal("current_task_lease_proof" in result, false);
+  assert.equal("native_work_admission" in result, false);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.cached_validation_state)) < 400);
+});
+
+test("cache readback cannot be inferred from a phase prefix or corrupt packet and task receipt", () => {
+  const result = (input: TurnJournalInspectionRequest) => input.journal.host_result as Record<string, unknown>;
+  const validation = (input: TurnJournalInspectionRequest) => input.journal.task_validation as Record<string, unknown>;
+  const invalid: Array<[string, (input: TurnJournalInspectionRequest) => void]> = [
+    ["foreign Goal", input => { input.goal_id = "other-goal"; }],
+    ["foreign Agent", input => { input.agent_id = "other-agent"; }],
+    ["foreign key", input => { input.turn_key = "sha256:" + "b".repeat(64); }],
+    ["missing result", input => { delete input.journal.host_result; }],
+    ["missing result schema", input => { delete result(input).schema_version; }],
+    ["corrupt result schema", input => { result(input).schema_version = "unverified_result"; }],
+    ["wrong result key", input => { result(input).turn_key = "sha256:" + "b".repeat(64); }],
+    ["missing result kind", input => { delete result(input).result_kind; }],
+    ["unsupported result kind", input => { result(input).result_kind = "unverified_completion"; }],
+    ["stop result is not material", input => { result(input).result_kind = "wait"; input.journal.result_kind = "wait"; }],
+    ["contradictory kind", input => { input.journal.result_kind = "validated_progress"; }],
+    ["missing result phases", input => { delete result(input).completed_phases; }],
+    ["changed result phases", input => { result(input).completed_phases = ["typed_result", "host_execute"]; }],
+    ["extra result phase", input => { result(input).completed_phases = ["host_execute", "typed_result", "validation"]; }],
+    ["missing validation", input => { delete input.journal.task_validation; }],
+    ["corrupt validation schema", input => { validation(input).schema_version = "unverified_validation"; }],
+    ["validation not passed", input => { validation(input).status = "progress"; }],
+    ["failed validation", input => { validation(input).ok = false; }],
+    ["missing validation errors", input => { delete validation(input).errors; }],
+    ["validation errors", input => { validation(input).errors = ["not validated"]; }],
+    ["missing recovery fact", input => { delete validation(input).recovery_kind; }],
+    ["contradictory recovery", input => { validation(input).recovery_kind = "repair_required"; }],
+    ["missing exit fact", input => { delete validation(input).exit_code; }],
+    ["nonzero exit", input => { validation(input).exit_code = 1; }],
+    ["string exit", input => { validation(input).exit_code = "0"; }],
+    ["missing validator", input => { delete validation(input).validator_kind; }],
+    ["empty validator", input => { validation(input).validator_kind = " "; }],
+    ["missing validation summary", input => { delete validation(input).summary; }],
+    ["wrong validation stage", input => { input.journal.validation_stage = "host_result_contract"; }],
+    ["incomplete checkpoint", input => { input.journal.completed_phases = ["host_execute", "typed_result"]; }],
+    ["changed checkpoint", input => { input.journal.completed_phases = ["host_execute", "validation", "typed_result"]; }],
+  ];
+  for (const [name, change] of invalid) {
+    const input = cachedResultRequest();
+    change(input);
+    const before = structuredClone(input);
+    const inspected = interpretTurnJournal(input);
+    assert.equal(inspected.cached_validation_state, undefined, name);
+    assert.equal("turn_key" in inspected, false, name);
+    assert.deepEqual(inspected.effects, [], name);
+    assert.deepEqual(input, before, name);
+  }
+});
+
 function failedHostRetryRequest({
   attempt = 1,
   kind = "provider_capacity",

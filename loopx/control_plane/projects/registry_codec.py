@@ -492,12 +492,14 @@ def _registry_transaction(
     require_writer: Callable[[_ProjectRegistryDocument], None],
     agent_id: str | None = None,
     allow_retired_activation: bool = False,
+    timeout_seconds: float | None = None,
 ) -> Iterator[ProjectRegistryTransaction]:
     expanded = path.expanduser()
     with exclusive_cross_runtime_file_lock(
         expanded,
         agent_id=agent_id,
         operation=operation,
+        timeout_seconds=timeout_seconds,
     ):
         existed = expanded.exists()
         if existed:
@@ -598,6 +600,7 @@ def project_registry_transaction(
     operation: str,
     create: Callable[[], dict[str, Any]] | None = None,
     agent_id: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> Iterator[ProjectRegistryTransaction]:
     """Hold one legacy/v1 project-registry transaction."""
 
@@ -612,6 +615,7 @@ def project_registry_transaction(
         create_document=create_document,
         require_writer=_require_supported_writer,
         agent_id=agent_id,
+        timeout_seconds=timeout_seconds,
     ) as transaction:
         yield transaction
 

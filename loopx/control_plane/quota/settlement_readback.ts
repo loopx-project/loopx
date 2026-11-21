@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
 import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
@@ -15,6 +14,7 @@ import {
   settlementFailed,
   executionRequestSubject, settlementIdentity,
   settlementIdentityPayload,
+  settlementIdentityFromPlan,
   settlementPure,
   settlementReceipt,
   settlementResultPayload,
@@ -23,11 +23,11 @@ import {
   type SettlementResult,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { hasMonitorPollTransaction } from "./monitor_poll_commit.ts";
 import { readQuotaSpendEventFromRun } from "./accounting_artifact_transaction.ts";
 import {
   jsonObject,
+  requireBoolean,
   requireJsonObject,
   requireNonEmptyString,
 } from "../runtime_decode.ts";
@@ -49,6 +49,10 @@ import {
   type ReceiptBoundReplayPhase,
 } from "./settlement_phase.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
+import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "./execution_loss_closeout_record.ts";
+import {isDeepStrictEqual} from "node:util";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {
   decodeRefreshRetry,
   isMaterialMonitorPoll,
@@ -66,7 +70,12 @@ import {
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
   heartbeatPreparedLease,
-  isHeartbeatLeaseReadiness,
+  heartbeatPreparedWorkAdmission,
+  heartbeatValidationEvent,
+  heartbeatSemanticAdmissionEvent,
+  qualifyHeartbeatPreparedGeneration,
+  qualifyHeartbeatResumeLease,
+  qualifyHeartbeatNativeWorkAdmission,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
 
@@ -79,14 +88,13 @@ import {
 import { refreshExternalDelivery } from "./refresh_external_delivery.ts";
 import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA, projectReceiptBoundWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
-import {
-  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
-  AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
-  AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
-} from "../work_items/replan_semantics.ts";
+import {projectSemanticReplanGuard} from "./semantic_replan_guard.ts";
+export {projectSemanticReplanGuard, SEMANTIC_REPLAN_GUARD_SCHEMA} from "./semantic_replan_guard.ts";
 import {
   parseQuotaAccountingOwner,
+  quotaGoalRef,
   quotaOwnerOwnsProjection,
+  requireNativeQuotaWorkAgent,
   withBorrowedQuotaAccountingOwner,
   withQuotaAccountingOwner,
   type QuotaAccountingOwner,
@@ -96,7 +104,79 @@ export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
   "loopx_quota_settlement_readback_request_v0";
 export const QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA =
   "loopx_quota_settlement_readback_result_v0";
-export const SEMANTIC_REPLAN_GUARD_SCHEMA = "semantic_replan_guard_v0";
+export const NATIVE_TASK_LEASE_CLEANUP_REQUEST_SCHEMA = "native_task_lease_cleanup_request_v0";
+export const NATIVE_TASK_LEASE_CLEANUP_SCHEMA = "native_task_lease_cleanup_v0";
+
+interface NativeTaskLeaseCleanupRequest {
+  schema_version: typeof NATIVE_TASK_LEASE_CLEANUP_REQUEST_SCHEMA;
+  recovery: boolean;
+  admission_retry: boolean;
+  resume_turn_key_present: boolean;
+  original_journal_present: boolean;
+}
+
+function decodeNativeTaskLeaseCleanup(value: unknown): NativeTaskLeaseCleanupRequest {
+  const request = requireJsonObject(value, "native task lease cleanup request");
+  if (request.schema_version !== NATIVE_TASK_LEASE_CLEANUP_REQUEST_SCHEMA ||
+      Object.keys(request).some(key => !["schema_version", "recovery", "admission_retry",
+        "resume_turn_key_present", "original_journal_present"].includes(key))) {
+    throw new EffectRuntimeRequestError("native task lease cleanup request shape mismatch");
+  }
+  return {schema_version: NATIVE_TASK_LEASE_CLEANUP_REQUEST_SCHEMA,
+    recovery: requireBoolean(request.recovery, "cleanup.recovery"),
+    admission_retry: requireBoolean(request.admission_retry, "cleanup.admission_retry"),
+    resume_turn_key_present: requireBoolean(request.resume_turn_key_present, "cleanup.resume_turn_key_present"),
+    original_journal_present: requireBoolean(request.original_journal_present, "cleanup.original_journal_present")};
+}
+
+/** Receipt cleanup eligibility belongs to the settlement owner. Host/journal
+ * facts never substitute for a readable admitted receipt or settle its debt. */
+export function projectNativeTaskLeaseCleanup(readback: JsonObject, value: unknown): JsonObject {
+  const request = decodeNativeTaskLeaseCleanup(value);
+  const disposition = (action: "release" | "retain" | "unconfirmed", reason: string): JsonObject =>
+    ({schema_version: NATIVE_TASK_LEASE_CLEANUP_SCHEMA, disposition: action, reason});
+  const identity = jsonObject(jsonObject(readback.identity)?.result);
+  const failure = jsonObject(identity?.failure);
+  if (failure !== null) {
+    if (failure.kind === "receipt_unbound") return disposition("release", "receipt_unbound");
+    if (failure.kind === "receipt_missing" && !request.recovery && !request.admission_retry
+        && !request.resume_turn_key_present && !request.original_journal_present) {
+      return disposition("release", "fresh_pre_admission_missing");
+    }
+    return disposition("unconfirmed", "original_identity_unconfirmed");
+  }
+  if (identity?.value == null) return disposition("unconfirmed", "original_identity_unconfirmed");
+  if (readback.replay_phase === "settled") return disposition("release", "original_turn_settled");
+  const receipt = jsonObject(readback.heartbeat_receipt), receiptDetails = jsonObject(receipt?.details);
+  if (receiptDetails === null) return disposition("unconfirmed", "original_receipt_unconfirmed");
+  const revision = receiptDetails.settlement_receipt_revision, required = receiptDetails.closeout_required;
+  if (revision === "turn_reservation" && (!Object.hasOwn(receiptDetails, "closeout_required") || required === false)) {
+    return disposition("release", "original_reservation_without_closeout");
+  }
+  if (["work_admission", "lease_readiness", "identity_upgrade"].includes(String(revision)) && required === true) {
+    return disposition("retain", "original_turn_owes_closeout");
+  }
+  // Primary positive receipts predate revision markers. Their explicit work
+  // facts and verified original prepared admission carry the debt themselves;
+  // status-only ensure and partial projections still remain unconfirmed.
+  const original = jsonObject(readback.original_prepared_receipt);
+  const identityValue = jsonObject(identity?.value);
+  if (!Object.hasOwn(receiptDetails, "settlement_receipt_revision") && required === true
+      && original !== null && identityValue !== null && typeof identityValue.goal_id === "string"
+      && typeof identityValue.agent_id === "string" && typeof identityValue.todo_id === "string"
+      && typeof identityValue.turn_instance_id === "string") {
+    const exactIdentity = settlementIdentity({goal_id: identityValue.goal_id, agent_id: identityValue.agent_id,
+      todo_id: identityValue.todo_id, turn_instance_id: identityValue.turn_instance_id});
+    if (heartbeatPreparedWorkAdmission(original, exactIdentity, false) !== null
+        && nativeChildReportAdmission(details(original), null, exactIdentity.effect_id, "open", false)
+          .report_permission === "new_operation"
+        && nativeChildReportAdmission(receiptDetails, null, exactIdentity.effect_id, "open", false)
+          .report_permission === "new_operation") {
+      return disposition("retain", "original_turn_owes_closeout");
+    }
+  }
+  return disposition("unconfirmed", "original_closeout_requirement_unconfirmed");
+}
 
 // Where the guard compiles the repair for an owed prior Turn. The repair lane
 // depends on the bound Todo's facts, which this read model does not read, so
@@ -105,6 +185,24 @@ const PRIOR_TURN_RECOVERY_ACTIONS_REF = "interaction_contract.cli_channel.next_c
 
 interface OwedPriorTurn extends PriorHostTurnCloseoutCandidate {
   missing_receipts: string[];
+}
+
+interface ExecutionQualificationHints {
+  allow_same_generation_lease_renewal?: boolean;
+  validation_recovery_turn_instance_id?: string | null;
+}
+
+interface ResumeLeaseCandidate extends ExecutionQualificationHints {
+  requested_proof: JsonObject | null;
+  provider_context?: {turn_key: string; effect_ref: string | null};
+}
+
+interface WritebackCandidate extends ExecutionQualificationHints {
+  requested_proof: JsonObject | null;
+  effect_ref: string;
+  completion_todo_id: string | null;
+  completion_turn_key: string | null;
+  run: JsonObject;
 }
 
 type OwedPriorTurnLookup = (agentId: string, turnInstanceId: string) => OwedPriorTurn | null;
@@ -125,9 +223,14 @@ interface ReadbackRequest {
   pending_closeout: boolean;
   borrow_source_admission: boolean;
   include_record_bodies: boolean;
+  include_readonly_recovery: boolean;
   tolerate_malformed_history: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
+  native_work_admission: JsonObject | null;
+  resume_lease_candidate: ResumeLeaseCandidate | null;
+  writeback_candidate: WritebackCandidate | null;
+  native_task_lease_cleanup: NativeTaskLeaseCleanupRequest | null;
   owner: QuotaAccountingOwner;
 }
 
@@ -156,6 +259,80 @@ interface MatchedSpendRecords {
 interface SpendTerms {
   slots: unknown;
   source: unknown;
+}
+
+function decodeResumeLeaseCandidate(value: unknown): ResumeLeaseCandidate | null {
+  if (value === undefined) return null;
+  const candidate = requireJsonObject(value, "resume_lease_candidate");
+  if (Object.keys(candidate).some(key => !["requested_proof", "provider_context",
+      "allow_same_generation_lease_renewal", "validation_recovery_turn_instance_id"].includes(key))
+      || !Object.hasOwn(candidate, "requested_proof")) {
+    throw new EffectRuntimeRequestError("resume_lease_candidate requires only requested_proof and optional provider_context");
+  }
+  const hints: ExecutionQualificationHints = {};
+  if (Object.hasOwn(candidate, "allow_same_generation_lease_renewal")) {
+    hints.allow_same_generation_lease_renewal = requireBoolean(candidate.allow_same_generation_lease_renewal,
+      "allow_same_generation_lease_renewal");
+  }
+  if (Object.hasOwn(candidate, "validation_recovery_turn_instance_id")) {
+    const recovery = candidate.validation_recovery_turn_instance_id;
+    if (recovery !== null && (typeof recovery !== "string" || !recovery || recovery !== recovery.trim())) {
+      throw new EffectRuntimeRequestError("validation_recovery_turn_instance_id requires an exact Turn or null");
+    }
+    hints.validation_recovery_turn_instance_id = recovery;
+  }
+  let providerContext: ResumeLeaseCandidate["provider_context"];
+  if (Object.hasOwn(candidate, "provider_context")) {
+    const context = requireJsonObject(candidate.provider_context, "resume provider_context");
+    if (Object.keys(context).length !== 2 || typeof context.turn_key !== "string"
+        || !context.turn_key || context.turn_key !== context.turn_key.trim()
+        || (context.effect_ref !== null && (typeof context.effect_ref !== "string"
+          || !context.effect_ref || context.effect_ref !== context.effect_ref.trim()))) {
+      throw new EffectRuntimeRequestError("resume provider_context requires an exact turn_key and nullable effect_ref");
+    }
+    providerContext = {turn_key: context.turn_key, effect_ref: context.effect_ref};
+  }
+  const contextFields = {...hints, ...(providerContext === undefined ? {} : {provider_context: providerContext})};
+  if (candidate.requested_proof === null) return {requested_proof: null, ...contextFields};
+  const proof = requireJsonObject(candidate.requested_proof, "requested resume proof");
+  if (Object.keys(proof).length !== 2 || typeof proof.idempotency_key !== "string"
+      || !proof.idempotency_key || proof.idempotency_key !== proof.idempotency_key.trim()
+      || typeof proof.expected_version !== "number" || !Number.isSafeInteger(proof.expected_version)
+      || proof.expected_version < 1) {
+    throw new EffectRuntimeRequestError("requested resume proof requires an exact key and positive safe-integer version");
+  }
+  return {requested_proof: proof, ...contextFields};
+}
+
+function decodeWritebackCandidate(value: unknown): WritebackCandidate | null {
+  if (value === undefined) return null;
+  const candidate = requireJsonObject(value, "writeback_candidate");
+  if (Object.keys(candidate).some(key => !["requested_proof", "effect_ref", "completion_todo_id",
+      "completion_turn_key", "run", "allow_same_generation_lease_renewal",
+      "validation_recovery_turn_instance_id"].includes(key))) {
+    throw new EffectRuntimeRequestError("writeback_candidate contains an unsupported operation field");
+  }
+  const proof = decodeResumeLeaseCandidate({requested_proof: candidate.requested_proof,
+    ...(Object.hasOwn(candidate, "allow_same_generation_lease_renewal")
+      ? {allow_same_generation_lease_renewal: candidate.allow_same_generation_lease_renewal} : {}),
+    ...(Object.hasOwn(candidate, "validation_recovery_turn_instance_id")
+      ? {validation_recovery_turn_instance_id: candidate.validation_recovery_turn_instance_id} : {})})!;
+  const nullableExactString = (key: string): string | null => {
+    if (candidate[key] === null) return null;
+    const value = requireNonEmptyString(candidate[key], `writeback_candidate.${key}`);
+    if (value !== value.trim()) throw new EffectRuntimeRequestError(`writeback_candidate.${key} must be exact`);
+    return value;
+  };
+  const run = requireJsonObject(candidate.run, "writeback_candidate.run");
+  if (Object.keys(run).some(key => !["goal_id", "agent_id", "todo_id", "turn_instance_id",
+      "settlement_identity", "goal_ref", "classification", "delivery_outcome", "delivery_batch_scale", "delivery_boundary",
+      "progress_observation", "agent_vision", "vision_checkpoint", "autonomous_replan_ack", "refresh_recovery",
+      "generated_at", "blocked_retry"].includes(key))) {
+    throw new EffectRuntimeRequestError("writeback_candidate.run contains an unsupported payload field");
+  }
+  return {...proof, effect_ref: requireNonEmptyString(candidate.effect_ref, "writeback_candidate.effect_ref"),
+    completion_todo_id: nullableExactString("completion_todo_id"),
+    completion_turn_key: nullableExactString("completion_turn_key"), run};
 }
 
 const ORIGINAL_TURN_SPEND_SLOTS = 1;
@@ -209,6 +386,7 @@ function settlementProgress(
     quota_spend_source: source,
     ...(noSpendKind ? {
       closeout_kind: noSpendKind,
+      no_spend: true,
     } : {}),
   };
 }
@@ -297,17 +475,88 @@ function decodeRequest(
       "quota_source_admission_invalid",
     );
   }
+  if (admittedOwner?.admission?.kind === "native_runtime" && admittedOwner.admission.goalId !== goalId) {
+    throw new EffectRuntimeRequestError("Native admitted owner does not match settlement goal_id", "quota_source_admission_invalid");
+  }
   const owner = admittedOwner ?? parseQuotaAccountingOwner({
     goalRefValue: request.goal_ref,
     sourceAdmissionValue: request.source_admission,
     runtimeRoot,
     goalId,
   });
-  if (request.borrow_source_admission === true && owner.kind !== "exact_source") {
+  if (request.borrow_source_admission === true && owner.kind !== "exact_source"
+      && owner.admission?.kind !== "native_runtime") {
     throw new EffectRuntimeRequestError(
       "borrow_source_admission requires exact source admission",
       "quota_source_admission_invalid",
     );
+  }
+  const resumeCandidate = decodeResumeLeaseCandidate(request.resume_lease_candidate);
+  const nativeAdmission = request.native_work_admission === undefined ? null
+    : requireJsonObject(request.native_work_admission, "native_work_admission");
+  if (nativeAdmission !== null && (Object.keys(nativeAdmission).length !== 1
+      || (jsonObject(nativeAdmission.details) === null && nativeAdmission.check_prior_closeout_only !== true)
+      || resumeCandidate !== null
+      || request.writeback_candidate != null || request.native_task_lease_cleanup != null
+      || request.include_readonly_recovery === true || request.infer_turn_instance_id || request.allow_unbound_binding
+      || request.resolve_original_binding === true || request.pending_closeout === true
+      || request.refresh_retry != null || request.heartbeat_reentry_guard != null || request.spend_precheck === true
+      || request.spend_request != null || request.tolerate_malformed_history === true
+      || !optionalRequestString(request.agent_id, "agent_id") || !optionalRequestString(request.todo_id, "todo_id")
+      || !optionalRequestString(request.turn_instance_id, "turn_instance_id")
+      || optionalRequestString(request.replan_obligation_id, "replan_obligation_id") !== null)) {
+    throw new EffectRuntimeRequestError("native work admission requires only its exact fresh Agent/Todo/Turn decision");
+  }
+  if (resumeCandidate !== null && (request.infer_turn_instance_id
+      || request.allow_unbound_binding || request.pending_closeout === true
+      || optionalRequestString(request.agent_id, "agent_id") === null
+      || optionalRequestString(request.todo_id, "todo_id") === null
+      || optionalRequestString(request.turn_instance_id, "turn_instance_id") === null)) {
+    throw new EffectRuntimeRequestError("resume lease qualification requires an exact Agent/Todo/Turn readback");
+  }
+  const writebackCandidate = decodeWritebackCandidate(request.writeback_candidate);
+  if (writebackCandidate !== null && (resumeCandidate !== null || request.infer_turn_instance_id
+      || request.allow_unbound_binding || request.resolve_original_binding || request.pending_closeout
+      || request.refresh_retry == null || request.heartbeat_reentry_guard != null || request.spend_precheck === true
+      || request.tolerate_malformed_history === true
+      || optionalRequestString(request.agent_id, "agent_id") === null
+      || optionalRequestString(request.todo_id, "todo_id") === null
+      || optionalRequestString(request.turn_instance_id, "turn_instance_id") === null
+      || optionalRequestString(request.replan_obligation_id, "replan_obligation_id") !== null)) {
+    throw new EffectRuntimeRequestError("writeback qualification requires only an explicit original Todo operation and payload");
+  }
+  if (writebackCandidate !== null) {
+    const retry = requireJsonObject(request.refresh_retry, "writeback refresh_retry");
+    if (Object.keys(retry).some(key => !["checkpoint_read_context_id", "external_delivery", "vision",
+        "unchanged_reason", "merge_patch", "workspace_requested", "mutation", "delivery_outcome",
+        "delivery_batch_scale", "delivery_boundary", "progress_observation"].includes(key))) {
+      throw new EffectRuntimeRequestError("writeback refresh_retry contains an unsupported operation field");
+    }
+  }
+  const nativeCleanup = request.native_task_lease_cleanup === undefined ? null
+    : decodeNativeTaskLeaseCleanup(request.native_task_lease_cleanup);
+  if (nativeCleanup !== null && (request.infer_turn_instance_id || request.allow_unbound_binding
+      || request.resolve_original_binding || request.pending_closeout || request.refresh_retry != null
+      || request.heartbeat_reentry_guard != null || request.spend_precheck === true
+      || request.tolerate_malformed_history === true || resumeCandidate !== null || writebackCandidate !== null
+      || !optionalRequestString(request.agent_id, "agent_id")
+      || !optionalRequestString(request.todo_id, "todo_id")
+      || !optionalRequestString(request.turn_instance_id, "turn_instance_id")
+      || optionalRequestString(request.replan_obligation_id, "replan_obligation_id") !== null)) {
+    throw new EffectRuntimeRequestError("native task lease cleanup requires only an explicit original Todo Turn read");
+  }
+  if (request.include_readonly_recovery !== undefined && typeof request.include_readonly_recovery !== "boolean") {
+    throw new EffectRuntimeRequestError("include_readonly_recovery must be a boolean");
+  }
+  if (request.include_readonly_recovery === true && (resumeCandidate !== null || writebackCandidate !== null
+      || nativeCleanup !== null || request.infer_turn_instance_id || request.allow_unbound_binding
+      || request.resolve_original_binding === true || request.pending_closeout === true || request.refresh_retry != null
+      || request.heartbeat_reentry_guard != null || request.spend_precheck === true || request.spend_request != null
+      || request.tolerate_malformed_history === true || request.replan_obligation_id != null
+      || ["agent_id", "todo_id", "turn_instance_id"].some(key => typeof request[key] !== "string"
+        || !request[key] || request[key] !== (request[key] as string).trim())
+      || normalizeAgentId(request.agent_id) !== request.agent_id || normalizeTodoId(request.todo_id) !== request.todo_id)) {
+    throw new EffectRuntimeRequestError("read-only recovery requires only an exact original Agent/Todo/Turn readback");
   }
   return {
     runtime_root: runtimeRoot,
@@ -328,10 +577,15 @@ function decodeRequest(
     pending_closeout: request.pending_closeout === true,
     borrow_source_admission: request.borrow_source_admission === true,
     include_record_bodies: request.include_record_bodies !== false,
+    include_readonly_recovery: request.include_readonly_recovery === true,
     tolerate_malformed_history: request.tolerate_malformed_history === true,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
+    native_work_admission: nativeAdmission,
+    resume_lease_candidate: resumeCandidate,
+    writeback_candidate: writebackCandidate,
+    native_task_lease_cleanup: nativeCleanup,
     owner,
   };
 }
@@ -555,85 +809,6 @@ function runEffectMatches(
       quotaSpendMetadataMatches(run.quota_spend_commit, effectRef, expectedEffectRef));
 }
 
-export function projectSemanticReplanGuard(
-  receiptDetails: JsonObject,
-): JsonObject {
-  const hasCapability = ["semantic_replan_capability_id", "semantic_replan_gap_id", "semantic_replan_frontier_revision"]
-    .some(field => Object.hasOwn(receiptDetails, field));
-  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition",
-    "semantic_replan_review_stop_condition_sha256", "semantic_replan_review_stop_contract_id"]
-    .some(field => Object.hasOwn(receiptDetails, field));
-  if (hasCapability && hasReview) throw new EffectRuntimeRequestError(
-    "a review source cannot replace a capability guard", "malformed_settlement_state");
-  if (!Object.hasOwn(receiptDetails, "semantic_replan_obligation_id")) {
-    if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
-    if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
-    return {
-      schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
-      scope: "legacy_unscoped",
-      selected_obligation_id: null,
-    };
-  }
-  const rawObligationId = receiptDetails.semantic_replan_obligation_id;
-  if (rawObligationId === "" || rawObligationId === null) {
-    if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
-    if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
-    return {
-      schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
-      scope: "turn_guard",
-      selected_obligation_id: null,
-    };
-  }
-  const selectedObligationId = normalizeReplanObligationId(rawObligationId);
-  if (selectedObligationId === null) {
-    throw new EffectRuntimeRequestError(
-      "heartbeat receipt semantic replan guard is malformed",
-      "malformed_settlement_state",
-    );
-  }
-  const reviewKind = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_kind, "receipt review kind") : null;
-  const stop = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition")
-    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
-  const stopDigest = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition_sha256")
-    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition_sha256,
-      "receipt review stop condition digest") : null;
-  const stopContractId = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_contract_id")
-    ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_contract_id,
-      "receipt review stop contract id") : null;
-  if (hasReview && stop === null && stopDigest === null) throw new EffectRuntimeRequestError(
-    "a receipt review requires a stop condition or digest", "malformed_settlement_state");
-  if (stop && stop.length > 240) throw new EffectRuntimeRequestError(
-    "receipt review stop condition exceeds scalar metadata bounds", "malformed_settlement_state");
-  if (stopDigest !== null && !BARE_SHA256_PATTERN.test(stopDigest)) throw new EffectRuntimeRequestError(
-    "receipt review stop condition digest is malformed", "malformed_settlement_state");
-  if (stopContractId !== null &&
-      (stopContractId !== AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID || stopDigest === null ||
-       createHash("sha256").update(AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION, "utf8").digest("hex") !== stopDigest)) {
-    throw new EffectRuntimeRequestError(
-      "receipt review stop contract does not match its digest", "malformed_settlement_state");
-  }
-  if (stop !== null && stopDigest !== null &&
-      stop !== AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION &&
-      createHash("sha256").update(stop, "utf8").digest("hex") !== stopDigest) {
-    throw new EffectRuntimeRequestError(
-      "receipt review stop condition digest does not match its value", "malformed_settlement_state");
-  }
-  return {
-    schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
-    scope: "turn_guard",
-    selected_obligation_id: selectedObligationId,
-    ...(hasReview ? {selected_review_source: {kind: reviewKind,
-      ...(stop === null ? {} : {stop_condition: stop}),
-      ...(stopDigest === null ? {} : {stop_condition_sha256: stopDigest}),
-      ...(stopContractId === null ? {} : {stop_contract_id: stopContractId})}} : {}),
-    ...(hasCapability ? {
-      selected_capability_guard: decodeCapabilityGuard({schema_version: "semantic_replan_capability_guard_v0",
-        capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,
-        frontier_revision: receiptDetails.semantic_replan_frontier_revision}),
-    } : {}),
-  };
-}
-
 /** Upgrade a legacy bound review receipt without changing its Turn identity.
  *
  * Older receipts retained the selected replan obligation but not the review
@@ -674,18 +849,6 @@ function requalifyHeartbeatReceipt(
   }
   upgraded.settlement_receipt_revision = "review_guard_upgrade";
   return {append: true, details: upgraded};
-}
-
-function decodeCapabilityGuard(value: unknown): JsonObject {
-  const guard = jsonObject(value);
-  if (!guard || guard.schema_version !== "semantic_replan_capability_guard_v0"
-    || typeof guard.capability_id !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(guard.capability_id)
-    || typeof guard.gap_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(guard.gap_id)
-    || typeof guard.frontier_revision !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(guard.frontier_revision)
-    || Object.keys(guard).some(key => !["schema_version", "capability_id", "gap_id", "frontier_revision"].includes(key))) {
-    throw new EffectRuntimeRequestError("heartbeat receipt capability guard is malformed", "malformed_settlement_state");
-  }
-  return guard;
 }
 
 function runMatchesBinding(run: JsonObject, identity: SettlementIdentity): boolean {
@@ -785,32 +948,6 @@ function admissionHeartbeatReceipt(
   return entries.length === 0
     ? null
     : selectAdmissionHeartbeatReceipt(identity.goal_id, identity.agent_id, entries);
-}
-
-function heartbeatValidationEvent(
-  events: readonly JsonObject[],
-  receipt: JsonObject,
-  identity: SettlementIdentity,
-): JsonObject | null {
-  if (!isHeartbeatLeaseReadiness(receipt)) return receipt;
-  // Readiness appends to the same Turn; only its original positive work
-  // admission can serve as validation. Follow durable links toward that root.
-  let validation = receipt;
-  for (let index = events.lastIndexOf(receipt) - 1; index >= 0; index -= 1) {
-    const event = events[index]!;
-    const lineage = jsonObject(validation.causality);
-    const parentId = optionalString(lineage?.source_event_id);
-    if (parentId === null || lineage?.caused_by !== parentId) return null;
-    if (event.event_id !== parentId) continue;
-    const fact = heartbeatReceiptFactFromEvent(event);
-    if (event.event_kind !== "quota_should_run" ||
-        event.goal_id !== identity.goal_id || event.agent_id !== identity.agent_id ||
-        fact.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id ||
-        !effectIdsMatch(fact.settlement_effect_id, identity.effect_id)) return null;
-    if (!isHeartbeatLeaseReadiness(event)) return event;
-    validation = event;
-  }
-  return null;
 }
 
 function writebackResult(
@@ -1385,6 +1522,17 @@ function readQuotaSettlementFromRequest(
   nameOwedPriorTurn = true,
   matchedSpend?: MatchedSpendRecords,
 ): JsonObject {
+  const result = readQuotaSettlementFromRequestBase(request, snapshot, nameOwedPriorTurn, matchedSpend);
+  if (request.native_task_lease_cleanup === null || result.found !== true) return result;
+  return {...result, native_task_lease_cleanup: projectNativeTaskLeaseCleanup(result, request.native_task_lease_cleanup)};
+}
+
+function readQuotaSettlementFromRequestBase(
+  request: ReadbackRequest,
+  snapshot: QuotaSettlementReadbackSnapshot,
+  nameOwedPriorTurn = true,
+  matchedSpend?: MatchedSpendRecords,
+): JsonObject {
   if (
     snapshot.runtimeRoot !== request.runtime_root ||
     snapshot.goalId !== request.goal_id
@@ -1462,7 +1610,11 @@ function readQuotaSettlementFromRequest(
     );
   }
   const receiptDetails = details(heartbeatReceipt);
-  const preparedLease = heartbeatPreparedLease(receiptDetails);
+  const allowLegacyPrepared = request.owner.kind === "alias";
+  const validationReceipt = heartbeatValidationEvent(events, heartbeatReceipt, identity, allowLegacyPrepared);
+  const preparedLease = validationReceipt === null ? null
+    : heartbeatPreparedWorkAdmission(validationReceipt, identity, allowLegacyPrepared);
+  const originalPreparedReceipt = preparedLease === null ? null : validationReceipt;
   if (Object.hasOwn(receiptDetails, "prepared_lease_required") && receiptDetails.prepared_lease_required !== true) {
     throw new EffectRuntimeRequestError("Turn readiness requirement is malformed", "malformed_settlement_state");
   }
@@ -1482,6 +1634,41 @@ function readQuotaSettlementFromRequest(
   }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
+  if (writebackRun !== null && (writebackRun.execution_loss_closeout !== undefined
+      || writebackRun.execution_loss_commit !== undefined
+      || jsonObject(writebackRun.blocked_retry)?.schema_version === EXECUTION_LOSS_CLOSEOUT_SCHEMA)) {
+    const closeout = jsonObject(writebackRun.execution_loss_closeout);
+    const commit = jsonObject(writebackRun.execution_loss_commit);
+    const permittedRunFields = ["generated_at", "goal_id", "agent_id", "todo_id", "turn_instance_id",
+      "settlement_identity", "classification", "delivery_outcome", "delivery_batch_scale", "delivery_boundary",
+      "progress_observation", "blocked_retry", "execution_loss_closeout", "json_path", "markdown_path",
+      "execution_loss_commit", ...(request.owner.kind === "exact_source" ? ["goal_ref"] : [])];
+    if (!closeout || !isExecutionLossCloseout(closeout, identity.todo_id)
+        || Object.keys(writebackRun).sort().join("|") !== permittedRunFields.sort().join("|")
+        || writebackRun.classification !== "execution_loss_closeout"
+        || writebackRun.delivery_outcome !== "outcome_gap" || writebackRun.delivery_boundary !== "semantic_closeout"
+        || writebackRun.delivery_batch_scale !== "single_surface" || writebackRun.generated_at !== closeout.observed_at
+        || closeout.effect_id !== identity.effect_id
+        || originalPreparedReceipt === null
+        || closeout.original_receipt_event_id !== originalPreparedReceipt.event_id
+        || !isDeepStrictEqual(closeout.original_prepared, preparedLease)
+        || jsonObject(closeout.current_control_writer)?.owner !== identity.agent_id
+        || closeout.observation_fingerprint !== jsonObject(writebackRun.progress_observation)?.fingerprint
+        || !isDeepStrictEqual(writebackRun.blocked_retry, closeout)
+        || !commit || Object.keys(commit).sort().join("|") !== ["schema_version", "request_sha256",
+          "original_receipt_sha256", "event"].sort().join("|")
+        || commit.schema_version !== "quota_execution_loss_closeout_commit_v0"
+        || commit.original_receipt_sha256 !== canonicalAuthoritySha256(originalPreparedReceipt)
+        || commit.request_sha256 !== canonicalAuthoritySha256({identity: settlementIdentityPayload(identity),
+          goal_ref: quotaGoalRef(request.owner), intent: {delivery_outcome: "outcome_gap", delivery_boundary: "semantic_closeout",
+            progress_observation: writebackRun.progress_observation}})
+        || !isDeepStrictEqual(jsonObject(commit.event)?.details,
+          {settlement_effect_id: identity.effect_id, execution_loss_closeout: closeout})
+        || (writebackEvent !== null && !isDeepStrictEqual(writebackEvent, commit.event))) {
+      throw new EffectRuntimeRequestError("administrative execution-loss receipt differs from original admission",
+        "malformed_settlement_state");
+    }
+  }
   const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
     .some((receipt) => receipt !== null);
 
@@ -1614,6 +1801,10 @@ function readQuotaSettlementFromRequest(
     ),
     spend_run: includeRecords ? spendRun : null,
     heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    original_prepared_receipt: includeRecords ? originalPreparedReceipt : null,
+    original_prepared_event_id: originalPreparedReceipt?.event_id ?? null,
+    original_prepared_receipt_sha256: originalPreparedReceipt === null ? null
+      : canonicalAuthoritySha256(originalPreparedReceipt),
     ...(preparedLease === null ? {} : {prepared_lease: preparedLease}),
     ...(receiptDetails.prepared_lease_required === true ? {prepared_lease_required: true} : {}),
     admission_recorded_at: typeof admissionReceipt?.recorded_at === "string"
@@ -1647,7 +1838,10 @@ export function readQuotaSettlementFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
   const request = decodeRequest(value);
-  if (request.owner.kind !== "alias") {
+  if (request.include_readonly_recovery) throw new EffectRuntimeRequestError("read-only recovery requires a live journal read");
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) throw new EffectRuntimeRequestError(
+    "resume lease qualification requires a live canonical authority read");
+  if (request.owner.kind !== "alias" || request.owner.admission !== undefined) {
     throw new EffectRuntimeRequestError(
       "exact source settlement readback requires live owner admission",
       "quota_source_admission_invalid",
@@ -1661,7 +1855,11 @@ export function readAdmittedQuotaSettlementFromSnapshot(
   value: unknown,
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
-  return readQuotaSettlementFromRequest(decodeRequest(value), snapshot);
+  const request = decodeRequest(value);
+  if (request.include_readonly_recovery) throw new EffectRuntimeRequestError("read-only recovery requires a live journal read");
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) throw new EffectRuntimeRequestError(
+    "resume lease qualification requires a live canonical authority read");
+  return readQuotaSettlementFromRequest(request, snapshot);
 }
 
 /** Read under the parsed owner already admitted by the enclosing transaction. */
@@ -1670,7 +1868,475 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
   owner: QuotaAccountingOwner,
   snapshot: QuotaSettlementReadbackSnapshot,
 ): JsonObject {
-  return readQuotaSettlementFromRequest(decodeRequest(value, owner), snapshot);
+  const request = decodeRequest(value, owner);
+  if (request.include_readonly_recovery) throw new EffectRuntimeRequestError("read-only recovery requires a live journal read");
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) throw new EffectRuntimeRequestError(
+    "resume lease qualification requires a live canonical authority read");
+  return readQuotaSettlementFromRequest(request, snapshot);
+}
+
+async function readSettlementExecutionAuthority(request: ReadbackRequest, result: JsonObject): Promise<{
+  identity: SettlementIdentity; todo: JsonObject; todos: JsonObject[];
+  lease: JsonObject | undefined; handoffMode: unknown;
+}> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const identityResult = jsonObject(jsonObject(result.identity)?.result);
+  const identityValue = jsonObject(identityResult?.value);
+  if (result.found !== true || identityResult?.failure != null || identityValue === null) {
+    reject("The original Turn's settlement identity could not be verified.");
+  }
+  const identity = settlementIdentity({goal_id: String(identityValue.goal_id),
+    agent_id: String(identityValue.agent_id), todo_id: optionalString(identityValue.todo_id),
+    turn_instance_id: String(identityValue.turn_instance_id),
+    replan_obligation_id: optionalString(identityValue.replan_obligation_id),
+    request_subject: executionRequestSubject(identityValue.request_subject)});
+  const hint = request.resume_lease_candidate ?? request.writeback_candidate;
+  if (hint?.validation_recovery_turn_instance_id != null
+      && hint.validation_recovery_turn_instance_id !== identity.turn_instance_id) {
+    reject("Recovery Turn hint differs from the original settlement identity.");
+  }
+  return await readCanonicalExecutionAuthority(request, identity);
+}
+
+async function readCanonicalExecutionAuthority(request: ReadbackRequest, identity: SettlementIdentity): Promise<{
+  identity: SettlementIdentity; todo: JsonObject; todos: JsonObject[];
+  lease: JsonObject | undefined; handoffMode: unknown;
+}> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  // The ordinary reader does not load lease decision owners. Only this
+  // explicitly requested ephemeral branch reads the real provider authority,
+  // inside the enclosing quota/source admission and without claiming a lease.
+  const [{openRuntimeAuthorityStore}, {readAuthoritySnapshot}, {canonicalTodoCollection}] = await Promise.all([
+    import("../coordination/local_authority_provider.ts"),
+    import("../coordination/authority_store.ts"),
+    import("../coordination/local_authority_read.ts"),
+  ]);
+  const store = await openRuntimeAuthorityStore(request.runtime_root, request.goal_id, {}, {existingOnly: true});
+  const snapshot = await readAuthoritySnapshot(store);
+  if (snapshot.identity.status !== "available" || snapshot.authority.status !== "loaded") {
+    reject("The current canonical execution authority is unavailable.");
+  }
+  const authority = snapshot.authority;
+  const collection = canonicalTodoCollection(authority.head, identity.goal_id, true);
+  const todo = collection.projection.todos.get(identity.todo_id!);
+  const lease = collection.leaseIndex?.leases.get(identity.todo_id!);
+  if (todo === undefined) reject("The original Todo's canonical authority is unavailable.");
+  // Reuse the canonical read contract's within-read incarnation check, not a
+  // new historical legacy incarnation/ABA gate.
+  const observed = await store.storeIdentity();
+  if (observed.status !== "available" || observed.store_identity !== snapshot.identity.store_identity) {
+    reject("Canonical authority changed during resume qualification.");
+  }
+  return {identity, todo, todos: collection.projection.todo_ids.map(id => collection.projection.todos.get(id)!),
+    lease, handoffMode: authority.head.handoff_mode};
+}
+
+async function readNativeWorkAdmission(request: ReadbackRequest, result: JsonObject,
+  snapshot: QuotaSettlementReadbackSnapshot): Promise<JsonObject> {
+  requireNativeQuotaWorkAgent(request.owner, request.agent_id!, request.native_work_admission!.check_prior_closeout_only !== true);
+  const identity = settlementIdentity({goal_id: request.goal_id, agent_id: request.agent_id!,
+    todo_id: request.todo_id, turn_instance_id: request.turn_instance_id!});
+  const events = indexedEvents(snapshot, identity.goal_id, identity.agent_id, identity.turn_instance_id);
+  if (events.some(event => event.event_kind === "quota_should_run"
+      && !quotaOwnerOwnsProjection(request.owner, event.goal_ref))) {
+    throw new EffectRuntimeRequestError("Fresh native admission cannot upgrade another receipt owner or Goal instance.",
+      "heartbeat_receipt_identity_conflict");
+  }
+  for (const event of snapshot.events) {
+    if (event.event_kind !== "quota_should_run") continue;
+    const fact = heartbeatReceiptFactFromEvent(event);
+    if (fact.todo_id !== identity.todo_id || !fact.closeout_required) continue;
+    const invalidOwner = event.goal_ref === undefined ? request.owner.kind === "exact_source"
+      : parseExactGoalRef(event.goal_ref).kind !== "parsed";
+    if (invalidOwner || (quotaOwnerOwnsProjection(request.owner, event.goal_ref)
+        && (optionalString(event.agent_id) === null || fact.run_id === null))) {
+      throw new EffectRuntimeRequestError("The original Todo's admitted closeout subject or owner is unconfirmed.",
+        "heartbeat_receipt_identity_conflict");
+    }
+  }
+  // The same prior-Turn owner fences publication as fresh selection. Restrict
+  // discovery to this Todo but retain its complete indexed settlement evidence.
+  const scoped = {...snapshot, events: snapshot.events.filter(event =>
+    quotaOwnerOwnsProjection(request.owner, event.goal_ref)
+      && heartbeatReceiptFactFromEvent(event).todo_id === identity.todo_id)};
+  const agents = new Set(scoped.events.map(event => optionalString(event.agent_id))
+    .filter((agent): agent is string => agent !== null));
+  for (const agent of agents) {
+    const debt = owedPriorTurnFromSnapshot({...request, native_work_admission: null}, scoped, agent,
+      agent === identity.agent_id ? identity.turn_instance_id : null);
+    if (debt !== null) {
+      throw new EffectRuntimeRequestError("The original Todo Turn must close its own admitted settlement before fresh native work.",
+        "refresh_task_lease_unavailable");
+    }
+  }
+  const {todo, lease, handoffMode} = await readCanonicalExecutionAuthority(request, identity);
+  if (request.native_work_admission!.check_prior_closeout_only === true) {
+    return {prior_closeout_checked: true, append: false, details: null, source_event_id: null,
+      original_prepared: null, current_task_lease_proof: null};
+  }
+  const existing = effectiveHeartbeatReceipt(events, identity);
+  const runs = indexedRuns(snapshot, identity).filter(run => quotaOwnerOwnsProjection(request.owner, run.goal_ref));
+  if ((existing === null && runs.length !== 0) || (existing !== null && (result.found !== true
+      || jsonObject(jsonObject(result.identity)?.result)?.failure != null))) {
+    throw new EffectRuntimeRequestError("Fresh native work cannot replace an existing or unconfirmed Turn transaction.",
+      "refresh_task_lease_unavailable");
+  }
+  if (lease === undefined) throw new EffectRuntimeRequestError("Fresh native work requires its current canonical task lease.",
+    "refresh_task_lease_unavailable");
+  return qualifyHeartbeatNativeWorkAdmission({identity, currentDetails: requireJsonObject(
+    request.native_work_admission!.details, "native admission details"), existingReceipt: existing,
+    receiptHistory: events, todo, lease, handoffMode,
+    replayPhase: existing === null ? "open" : result.replay_phase as ReceiptBoundReplayPhase,
+    closeoutStarted: existing !== null && [result.writeback_run, result.writeback_event,
+      result.spend_run, result.spend_event, result.completion_event].some(record => record != null),
+    observedAt: new Date()});
+}
+
+async function readResumeLeaseQualification(request: ReadbackRequest, result: JsonObject): Promise<JsonObject> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const {identity, todo, lease, handoffMode} = await readSettlementExecutionAuthority(request, result);
+  const originalReceipt = jsonObject(result.original_prepared_receipt);
+  if (originalReceipt === null) {
+    if (request.owner.kind === "exact_source" || handoffMode !== "soft_claim"
+        || result.prepared_lease_required === true || result.prepared_lease != null) {
+      reject("The original Turn's positive prepared admission is missing.");
+    }
+    return {state: "not_required", original_prepared: null,
+      current_task_lease_proof: null, lease_epoch: null, source: null};
+  }
+  if (lease === undefined) reject("The original Todo's canonical lease is unavailable.");
+  const completion = jsonObject(result.completion_event);
+  const progress = jsonObject(result.progress);
+  let terminalProviderEffect: import("../turn_driver/settlement_provider.ts").ProviderEffect | null = null;
+  let terminalCompletion: JsonObject | null = null;
+  const providerContext = request.resume_lease_candidate!.provider_context;
+  if (providerContext !== undefined && jsonObject(jsonObject(result.settlement)?.payload)?.ok === true
+      && [result.writeback_run, result.writeback_event, result.spend_run, result.spend_event]
+        .every(record => record != null)) {
+    const {readTurnTerminalCloseoutProvider} = await import("../turn_driver/turn_journal_query.ts");
+    terminalProviderEffect = await readTurnTerminalCloseoutProvider(request.runtime_root,
+      identity, request.owner, providerContext, todo);
+    if (terminalProviderEffect !== null && todo.status === "done" && lease.status === "released") {
+      const {projectCompletionEvidence} = await import("../todos/read_projection.ts");
+      terminalCompletion = projectCompletionEvidence({operation: "terminal", todo,
+        expected_todo_id: identity.todo_id, completion_turn_key: identity.turn_instance_id});
+    }
+  }
+  return qualifyHeartbeatResumeLease({originalReceipt, identity,
+    requestedProof: request.resume_lease_candidate!.requested_proof, todo, lease,
+    handoffMode, completionEvent: completion,
+    replayPhase: result.replay_phase as ReceiptBoundReplayPhase,
+    closeoutStarted: [result.writeback_run, result.writeback_event, result.spend_run,
+      result.spend_event, result.completion_event].some(record => record != null),
+    writebackPending: progress?.state === "writeback_required" || progress?.state === "writeback_receipt_required",
+    otherTerminalStarted: result.spend_run != null || result.spend_event != null
+      || result.replay_phase === "settled",
+    terminalProviderEffect, terminalCompletion,
+    exactSource: request.owner.kind === "exact_source", observedAt: new Date()});
+}
+
+/** A first semantic writeback has its own operation scope. Its result is not
+ * a task lease and is never consumed by host execution or Todo completion. */
+async function readWritebackQualification(request: ReadbackRequest, result: JsonObject,
+  snapshot: QuotaSettlementReadbackSnapshot): Promise<JsonObject> {
+  function reject(message: string): never {
+    throw new EffectRuntimeRequestError(message, "refresh_task_lease_unavailable");
+  }
+  const candidate = request.writeback_candidate!, run = candidate.run;
+  const {identity, todo, todos, lease, handoffMode} = await readSettlementExecutionAuthority(request, result);
+  if (identity.binding_kind !== "todo" || candidate.effect_ref !== `${identity.effect_id}#durable_writeback`
+      || candidate.completion_todo_id !== null || candidate.completion_turn_key !== null
+      || run.goal_id !== identity.goal_id || run.agent_id !== identity.agent_id
+      || run.todo_id !== identity.todo_id || run.turn_instance_id !== identity.turn_instance_id
+      || run.delivery_boundary !== "semantic_closeout"
+      || typeof run.generated_at !== "string" || !run.generated_at || run.generated_at !== run.generated_at.trim()
+      || typeof run.classification !== "string" || !run.classification.trim()) {
+    reject("Writeback candidate does not describe this original Todo's semantic operation.");
+  }
+  const parsed = settlementIdentityFromPlan({settlement_plan: {identity: run.settlement_identity}});
+  if (parsed.failure !== null || !isDeepStrictEqual(settlementIdentityPayload(parsed.value), settlementIdentityPayload(identity))
+      || !quotaOwnerOwnsProjection(request.owner, run.goal_ref)
+      || (request.owner.kind === "alias" && Object.hasOwn(run, "goal_ref"))) {
+    reject("Writeback candidate crosses its original settlement or Goal ownership.");
+  }
+  const retry = request.refresh_retry!;
+  const progress = jsonObject(run.progress_observation);
+  if (run.progress_observation != null && (progress === null || progress.work_item_id !== identity.todo_id)) {
+    reject("Writeback progress must describe the original Todo, without substituting another work item.");
+  }
+  const recovery = jsonObject(result.refresh_recovery);
+  // The existing external-delivery owner consumes the actual default/suppress
+  // policy separately. A resume acknowledgement is another operation.
+  if (retry.external_delivery?.resume_key != null || retry.workspace_requested || retry.checkpoint_read_context_id != null
+      || retry.delivery_boundary !== "semantic_closeout" || retry.delivery_outcome !== run.delivery_outcome
+      || retry.delivery_batch_scale !== (run.delivery_batch_scale ?? null)
+      || !isDeepStrictEqual(retry.progress_observation, run.progress_observation ?? null)
+      || recovery?.decision !== "append" || recovery.reason !== "first_writeback"
+      || !isDeepStrictEqual(run.refresh_recovery, recovery)
+      || Object.keys(retry.mutation).some(key => !["next_action", "next_action_basis", "autonomous_replan_recorded",
+        "repair_delta_kinds", "usage_measurement", "usage_codex_session", "explore_result"].includes(key))) {
+    reject("Writeback candidate differs from its actual semantic payload or carries another operation.");
+  }
+  if ([result.writeback_run, result.writeback_event, result.spend_run, result.spend_event].some(record => record != null)) {
+    reject("Committed writeback and accounting use their existing replay owner, not a new writeback qualification.");
+  }
+  const originalReceipt = jsonObject(result.original_prepared_receipt);
+  if (originalReceipt === null && (result.prepared_lease_required === true || result.prepared_lease != null)) {
+    reject("The original Turn's required positive preparation is missing.");
+  }
+  const effective = jsonObject(result.heartbeat_receipt);
+  if (effective === null) reject("The original semantic receipt is unavailable.");
+  const events = indexedEvents(snapshot, request.goal_id, identity.agent_id, identity.turn_instance_id)
+    .filter(event => quotaOwnerOwnsProjection(request.owner, event.goal_ref));
+  const scope = (original: JsonObject | null, selected: string | null): JsonObject => bundle(settlementPure({
+    step_kind: "durable_writeback", effect_ref: candidate.effect_ref, delivery_boundary: "semantic_closeout",
+    original_prepared: original, selected_obligation_id: selected,
+  }, (jsonObject(result.identity)?.result as SettlementResult).receipts));
+  const closeoutStarted = [result.completion_event, result.supersede_event].some(record => record != null);
+  let activePrepared: JsonObject | null = null;
+  if (originalReceipt !== null && lease !== undefined && !closeoutStarted) {
+    const qualified = qualifyHeartbeatResumeLease({originalReceipt, identity, requestedProof: candidate.requested_proof,
+      todo, lease, handoffMode, completionEvent: null, replayPhase: result.replay_phase as ReceiptBoundReplayPhase,
+      closeoutStarted: false, writebackPending: true, otherTerminalStarted: false,
+      exactSource: request.owner.kind === "exact_source", observedAt: new Date()});
+    activePrepared = jsonObject(qualified.original_prepared);
+  }
+  const [{buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA, qualifiesOpenTodoSemanticCheckpoint},
+    {projectExecutionPreparation, EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION}, {leaseIsActive}, {projectProgressDelta}] = await Promise.all([
+    import("../goals/vision_checkpoint.ts"), import("../work_items/execution_preparation.ts"),
+    import("../work_items/task_lease_record.ts"), import("../work_items/progress_delta.ts"),
+  ]);
+  const ownerRuns = snapshot.runs.filter(row => row.goal_id === identity.goal_id && row.agent_id === identity.agent_id
+    && quotaOwnerOwnsProjection(request.owner, row.goal_ref));
+  const progressSource = progress === null ? null : {current: progress, baseline: null,
+    window: ownerRuns.map(row => jsonObject(row.progress_observation)).filter(value => value !== null)};
+  // Reuse the typed observation codec for every semantic branch. Its outcome
+  // qualification remains with the existing replan owner below.
+  if (progressSource !== null) projectProgressDelta(progressSource);
+  const blockedGap = run.delivery_outcome === "outcome_gap" && progress?.result_class === "blocked";
+  let blockedRetry: JsonObject | null = null;
+  if (!blockedGap && run.blocked_retry != null) reject("A blocked wait cannot accompany a different semantic outcome.");
+  if (blockedGap) {
+    try {
+      const {evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION} = await import("../todos/resume_condition.ts");
+      const rawTodos = todos.map(row => {
+        const raw = {...row};
+        delete raw.resume_condition;
+        delete raw.resume_ready;
+        return raw;
+      });
+      const evaluated = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+        items: rawTodos, source_items: rawTodos, evaluated_at: run.generated_at,
+        rollout_events: snapshot.events.filter(event => quotaOwnerOwnsProjection(request.owner, event.goal_ref)),
+        kinds: ["resume_at", "todo_done", "monitor_changed"]});
+      const conditions = new Map((evaluated.conditions as JsonObject[]).map(row => [row.todo_id, row.condition]));
+      const currentTodos = rawTodos.map(row => conditions.has(row.todo_id)
+        ? {...row, resume_condition: conditions.get(row.todo_id), resume_ready: jsonObject(conditions.get(row.todo_id))?.satisfied === true}
+        : row);
+      let allowTurnSettlementRetry = false;
+      if (!todo.resume_when && todo.status === "open") {
+        const {loadLegacyCoordinationWriterFence} = await import("../coordination/legacy_writer_fence.ts");
+        const mode = await loadLegacyCoordinationWriterFence(request.runtime_root, identity.goal_id);
+        if (mode.status === "failed") reject(mode.reason);
+        allowTurnSettlementRetry = mode.status === "loaded";
+      }
+      blockedRetry = prepareBlockedWait({schema_version: BLOCKED_WAIT_REQUEST_SCHEMA, todo_id: identity.todo_id,
+        todos: currentTodos, observed_at: run.generated_at, allow_turn_settlement_retry: allowTurnSettlementRetry});
+      if (!isDeepStrictEqual(run.blocked_retry, blockedRetry)) {
+        reject("Writeback blocked retry differs from the actual Run clock or current canonical Todo wait.");
+      }
+    } catch (error) {
+      reject(error instanceof Error ? error.message : "The actual blocked writeback could not be qualified.");
+    }
+  }
+  const existingVision = [...ownerRuns].reverse().map(row => jsonObject(row.agent_vision)).find(value => value !== null) ?? null;
+  let vision: JsonObject | null = null;
+  if (run.agent_vision != null) {
+    vision = jsonObject(buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare",
+      goal_id: identity.goal_id, agent_id: identity.agent_id, agent_vision_packet: run.agent_vision,
+      existing_agent_vision: null, merge_patch: false, require_path_delta_for_durable_change: true,
+      allow_terminal_stride_path: false}).agent_vision);
+  }
+  if (retry.vision === null && vision !== null) {
+    reject("Writeback cannot introduce a Vision absent from its actual request.");
+  }
+  if (retry.vision !== null) {
+    const expected = jsonObject(buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare",
+      goal_id: identity.goal_id, agent_id: identity.agent_id, agent_vision_packet: retry.vision,
+      existing_agent_vision: existingVision, merge_patch: retry.merge_patch,
+      require_path_delta_for_durable_change: true, allow_terminal_stride_path: false}).agent_vision);
+    if (expected === null || vision === null || Object.keys(expected).some(key => key !== "generated_at"
+        && !isDeepStrictEqual(expected[key], vision![key]))) reject("Writeback Vision differs from its actual request.");
+  }
+  const checkpoint = buildVisionCheckpoint({schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "finalize",
+    agent_id: identity.agent_id, agent_vision: vision, existing_agent_vision: existingVision,
+    vision_unchanged_reason: retry.unchanged_reason, delivery_outcome: run.delivery_outcome,
+    active_state_next_action_would_update: false,
+    delivery_boundary: "semantic_closeout", todo_id: identity.todo_id, completion_todo_id: null,
+    autonomous_replan_recorded: retry.mutation.autonomous_replan_recorded === true, blocked_retry: blockedRetry});
+  const offeredCheckpoint = jsonObject(run.vision_checkpoint);
+  if (offeredCheckpoint === null) reject("Writeback checkpoint is missing from its actual Run.");
+  const offeredBuilderCheckpoint = {...offeredCheckpoint};
+  // outcome_continuity.py appends this read-only diagnostic after the Vision
+  // builder. Preserve its actual facts without duplicating that owner or
+  // consuming the annotation as checkpoint acceptance or write authority.
+  delete offeredBuilderCheckpoint.acceptance_gaps;
+  if (!isDeepStrictEqual(offeredBuilderCheckpoint, checkpoint)) {
+    reject("Writeback checkpoint was not qualified from its actual semantic inputs.");
+  }
+  const qualifiedRun = {...run, settlement_identity: settlementIdentityPayload(identity), agent_vision: vision,
+    vision_checkpoint: {...checkpoint, ...(Object.hasOwn(offeredCheckpoint, "acceptance_gaps")
+      ? {acceptance_gaps: offeredCheckpoint.acceptance_gaps} : {})}, blocked_retry: blockedRetry};
+  // An exact active prepared Turn records the Vision owner's negative decision
+  // as its original writeback. The scope neither passes the checkpoint nor
+  // grants completion, spend, a lease, or another Turn's execution.
+  if (activePrepared !== null) {
+    if (checkpoint.satisfied !== true && !(blockedGap && blockedRetry !== null
+        && checkpoint.decision === "missing_required" && checkpoint.satisfied === false)) {
+      reject("Only an original typed blocked outcome-gap writeback can retain a negative checkpoint.");
+    }
+    return scope(activePrepared, null);
+  }
+  if (checkpoint.satisfied !== true) reject("This semantic writeback requires a satisfied Vision checkpoint.");
+  const supersede = jsonObject(result.supersede_event);
+  if (originalReceipt !== null && supersede !== null && result.completion_event == null
+      && todo.status === "done" && lease?.status === "released") {
+    const proof = qualifyHeartbeatPreparedGeneration({originalReceipt, identity, todo, lease, handoffMode,
+      requestedProof: candidate.requested_proof, exactSource: request.owner.kind === "exact_source"});
+    if (supersede.event_kind !== "todo_supersede" || supersede.status !== "done"
+        || supersede.goal_id !== identity.goal_id || supersede.agent_id !== identity.agent_id
+        || supersede.run_id !== identity.turn_instance_id || supersede.todo_id !== identity.todo_id
+        || !effectIdsMatch(optionalString(details(supersede).settlement_effect_id), identity.effect_id)
+        || !qualifiesOpenTodoSemanticCheckpoint(qualifiedRun, identity)) {
+      reject("Retired writeback requires exact supersession and a fresh nonterminal semantic checkpoint.");
+    }
+    return scope({...proof.original}, null);
+  }
+  const completion = jsonObject(result.completion_event), receiptDetails = details(effective);
+  if (request.owner.kind === "alias" && originalReceipt === null && result.prepared_lease_required !== true
+      && !["prepared_lease_key_sha256", "prepared_lease_version", "prepared_lease_epoch", "prepared_lease_required",
+        "must_attempt_work", "delivery_allowed", "quiet_noop_allowed", "settlement_receipt_revision"]
+        .some(key => Object.hasOwn(receiptDetails, key))
+      && todo.status === "done" && handoffMode === "hard_lease" && lease?.status === "released"
+      && lease.owner === identity.agent_id && (todo.claimed_by == null || todo.claimed_by === identity.agent_id)
+      && jsonObject(result.native_child_admission)?.report_permission === "existing_operation_only"
+      && completion?.event_kind === "todo_complete" && completion.goal_id === identity.goal_id
+      && completion.agent_id === identity.agent_id && completion.run_id === identity.turn_instance_id
+      && (completion.todo_id == null || completion.todo_id === identity.todo_id)
+      && effectIdsMatch(optionalString(details(completion).settlement_effect_id), identity.effect_id)
+      && qualifiesOpenTodoSemanticCheckpoint(qualifiedRun, identity)) {
+    const legacy = projectExecutionPreparation({schema_version: EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION,
+      goal_id: identity.goal_id, agent_id: identity.agent_id, handoff_mode: handoffMode, authority_available: true,
+      selected_todo: todo, include_retired_lease_for_writeback: true,
+      leases: [{status: lease.status, active: false, owner: lease.owner,
+        lease_proof: {idempotency_key: lease.idempotency_key, expected_version: lease.version}, lease_epoch: lease.lease_epoch}]});
+    const currentProof = jsonObject(legacy.retired_lease_proof);
+    if (currentProof === null || (candidate.requested_proof !== null
+        && !isDeepStrictEqual(candidate.requested_proof, currentProof))) {
+      reject("Legacy semantic writeback requires its exact current retired holder.");
+    }
+    // Historical absence proves no incarnation. Return only this writeback's
+    // scope, never the observed epoch or a business execution lease.
+    return scope(null, null);
+  }
+  const semanticReceipt = heartbeatSemanticAdmissionEvent(events, effective, identity, request.owner.kind === "alias");
+  const guard = semanticReceipt === null ? null : projectSemanticReplanGuard(details(semanticReceipt));
+  const selected = optionalString(guard?.selected_obligation_id);
+  if (semanticReceipt === null || guard?.scope !== "turn_guard" || selected === null
+      || selected !== optionalString(jsonObject(result.semantic_replan_guard)?.selected_obligation_id)
+      || guard.selected_capability_guard != null || todo.status !== "open") {
+    reject("Semantic writeback needs the original typed replan admission and selected obligation.");
+  }
+  if (originalReceipt !== null) reject("Semantic writeback cannot replace this Turn's prepared business generation.");
+  const currentProof = lease === undefined ? null : {idempotency_key: lease.idempotency_key, expected_version: lease.version};
+  if (candidate.requested_proof !== null && !isDeepStrictEqual(candidate.requested_proof, currentProof)) {
+    reject("The supplied writeback proof does not match current canonical authority.");
+  }
+  const preparation = projectExecutionPreparation({schema_version: EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION,
+    goal_id: identity.goal_id, agent_id: identity.agent_id, handoff_mode: handoffMode, authority_available: true,
+    selected_todo: todo, leases: lease === undefined ? [] : [{status: lease.status,
+      active: leaseIsActive(lease, new Date()), owner: lease.owner, lease_proof: currentProof, lease_epoch: lease.lease_epoch}]});
+  if (preparation.state !== "ready" && preparation.state !== "claim_required" && preparation.state !== "not_required") {
+    reject("The original semantic Todo's current authority conflicts with this actor.");
+  }
+  if (candidate.requested_proof !== null && preparation.state !== "ready") {
+    reject("An offered semantic writeback proof requires current active authority.");
+  }
+  const [{projectReplanSettlementContract, REPLAN_SETTLEMENT_REQUEST_SCHEMA}, {projectReplanWriteback}] = await Promise.all([
+    import("../work_items/replan_settlement.ts"), import("../work_items/replan_semantics.ts"),
+  ]);
+  const contract = projectReplanSettlementContract({schema_version: REPLAN_SETTLEMENT_REQUEST_SCHEMA,
+    selected_todo_id: identity.todo_id, semantic_replan_obligation_id: selected});
+  if (contract.settlement_binding.id !== identity.todo_id || contract.semantic_obligation.discharge !== "todo_bound_writeback") {
+    reject("Semantic obligation does not belong to the original Todo settlement.");
+  }
+  const obligation = projectReplanWriteback({operation: "receipt_bound_obligation", guard_scoped: true,
+    selected_obligation_id: selected, agent_id: identity.agent_id, goal_id: identity.goal_id,
+    guard_recorded_at: semanticReceipt.recorded_at, guard_turn_instance_id: identity.turn_instance_id,
+    replay_phase: "open", current_obligation: null, receipt_review: guard.selected_review_source,
+    transition_candidates: []}).obligation;
+  const semantic = projectReplanWriteback({operation: "qualify", obligation, agent_vision: vision ?? {},
+    progress_source: progressSource});
+  const ack = jsonObject(run.autonomous_replan_ack), offered = jsonObject(ack?.semantic_delta);
+  if (semantic.accepted !== true || ack?.schema_version !== "autonomous_replan_ack_v0" || ack.recorded !== true
+      || offered === null || ["schema_version", "accepted", "outcomes", "satisfying_outcomes", "required_any_of",
+        "observation_fingerprint"].some(key => !isDeepStrictEqual(offered[key], semantic[key]))) {
+    reject("Semantic writeback payload does not satisfy its original replan source.");
+  }
+  return scope(null, selected);
+}
+
+/** Read-only recovery is an attachment to verified receipt/journal evidence,
+ * not execution readiness or a substitute control-writer proof. */
+async function readReadonlySettlementRecovery(request: ReadbackRequest, result: JsonObject): Promise<JsonObject> {
+  const identityResult = jsonObject(jsonObject(result.identity)?.result);
+  const failure = jsonObject(identityResult?.failure);
+  if (failure !== null) {
+    throw new EffectRuntimeRequestError(requireNonEmptyString(failure.reason, "original settlement failure reason"),
+      requireNonEmptyString(failure.kind, "original settlement failure kind"));
+  }
+  const value = jsonObject(identityResult?.value);
+  if (result.found !== true || value === null) {
+    throw new EffectRuntimeRequestError("The original settlement readback is unavailable.", "refresh_task_lease_unavailable");
+  }
+  const parsed = settlementIdentityFromPlan({settlement_plan: {identity: value}});
+  if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason, parsed.failure.kind);
+  const identity = parsed.value;
+  if (identity.binding_kind !== "todo" || identity.goal_id !== request.goal_id || identity.agent_id !== request.agent_id
+      || identity.todo_id !== request.todo_id || identity.turn_instance_id !== request.turn_instance_id) {
+    throw new EffectRuntimeRequestError("Read-only recovery does not match the original Todo Turn.", "refresh_task_lease_unavailable");
+  }
+  const {readTurnJournalRecoveryLocator} = await import("../turn_driver/turn_journal_query.ts");
+  const turnKey = await readTurnJournalRecoveryLocator(request.runtime_root, identity, request.owner);
+  if (turnKey === null) {
+    throw new EffectRuntimeRequestError("The original Turn journal could not be verified for recovery inspection.", "refresh_task_lease_unavailable");
+  }
+  const original = jsonObject(result.original_prepared_receipt);
+  const prepared = original === null ? null : heartbeatPreparedWorkAdmission(original, identity);
+  const originalDetails = details(original);
+  const modern = original !== null && prepared?.prepared_lease_epoch !== undefined
+    && heartbeatReceiptFactFromEvent(original).settlement_effect_id === identity.effect_id
+    && (originalDetails.semantic_replan_obligation_id == null || originalDetails.semantic_replan_obligation_id === "");
+  const instruction = "Inspect the original journal and this Todo's current lease before retrying. Keep the original Goal, Agent, Todo and Turn; "
+    + "these read-only observations grant no execution, lease, claim, reactivation, completion or spend authority. "
+    + (modern
+      ? "The original receipt contains modern positive epoch-bound preparation. If that execution was lost, the existing refresh-state --execution-loss-closeout entry remains a separate administrative operation: it requires the current registered control writer and exact current active lease/CAS, the original admission, and its own fenced qualification. This attachment supplies none of that permission or proof."
+      : "This receipt does not establish modern epoch-bound administrative admission. Retain read-only inspection; do not infer a recovery grant or reconstruct missing preparation.");
+  const goalRef = quotaGoalRef(request.owner);
+  const originalReadback = Object.fromEntries(["identity", "settlement", "progress", "replay_phase",
+    "prepared_lease_required", "prepared_lease", "original_prepared_receipt", "original_prepared_event_id",
+    "original_prepared_receipt_sha256"].filter(field => Object.hasOwn(result, field)).map(field => [field, result[field]]));
+  return {required: true, settlement_identity: settlementIdentityPayload(identity), ...(goalRef === null ? {} : {goal_ref: goalRef}),
+    instruction, next_cli_actions_argv: [
+      ["turn", "inspect-journal", "--goal-id", identity.goal_id, "--agent-id", identity.agent_id, "--turn-key", turnKey],
+      ["task-lease", "inspect", "--goal-id", identity.goal_id, "--todo-id", identity.todo_id!],
+    ], original_settlement_readback: structuredClone(originalReadback)};
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
@@ -1699,7 +2365,8 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
       !Number.isSafeInteger(spendRequest.slots) || typeof spendRequest.source !== "string")) {
     throw new EffectRuntimeRequestError("spend_request requires spend_precheck, integer slots and a source");
   }
-  if (spendPrecheck) request.include_record_bodies = true;
+  if (spendPrecheck || request.include_readonly_recovery) request.include_record_bodies = true;
+  if (request.resume_lease_candidate !== null || request.writeback_candidate !== null || request.native_work_admission !== null) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
     ? withBorrowedQuotaAccountingOwner
     : withQuotaAccountingOwner;
@@ -1707,13 +2374,22 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     request.owner,
     async () => {
       const matchedSpend: MatchedSpendRecords = {run: null, receipt: null};
-      const result = readQuotaSettlementFromRequest(request,
-        await readQuotaSettlementSnapshot(
+      const snapshot = await readQuotaSettlementSnapshot(
           request.runtime_root,
           request.goal_id,
           undefined,
           request.tolerate_malformed_history,
-        ), true, matchedSpend);
+        );
+      const result = readQuotaSettlementFromRequest(request, snapshot, true, matchedSpend);
+      if (request.native_work_admission !== null) {
+        result.native_work_admission = await readNativeWorkAdmission(request, result, snapshot);
+      }
+      if (request.resume_lease_candidate !== null) {
+        result.resume_lease_qualification = await readResumeLeaseQualification(request, result);
+      }
+      if (request.writeback_candidate !== null) {
+        result.writeback_qualification = await readWritebackQualification(request, result, snapshot);
+      }
       const identity = jsonObject(jsonObject(jsonObject(result.identity)?.result)?.value);
       const receipt = spendReceiptTerms(matchedSpend.receipt);
       // Only exact readback opens its matched debit artifact. Check its
@@ -1748,6 +2424,7 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
           "a stored Monitor poll may already have committed its observation; recover the exact monitor-poll before an unavailable closeout",
         );
       }
+      if (request.include_readonly_recovery) result.settlement_recovery = await readReadonlySettlementRecovery(request, result);
       if (!spendPrecheck || result.found !== true) return result;
       // Preview still needs a fresh full read. The earlier replay check needs
       // only its receipts and whether a spend Run already needs receipt repair.

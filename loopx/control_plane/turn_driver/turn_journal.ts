@@ -18,6 +18,7 @@ import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_ef
 import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
 import { turnPlanWorkSource, turnEnvelopeScopedSettlementIdentity } from "../quota/turn_envelope.ts";
 import { sourceNumberTokens } from "../runtime_decode.ts";
+import { TURN_RESULT_KINDS, type TurnResultKind } from "./turn_contract_generated.ts";
 
 export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
@@ -101,7 +102,25 @@ export interface TurnJournalInspection {
   recovery_decision: TurnRecoveryDecision;
   last_recovery: TurnRecoveryAudit | null;
   recorded_effects: RecordedTurnEffects;
+  turn_key?: string;
+  cached_validation_state?: CachedTurnValidationState;
   effects: [];
+}
+
+/** Structural cache/receipt readback, not full Host-result validation or a lease.
+ * The executor still revalidates the cached packet before remaining effects. */
+export interface CachedTurnValidationState {
+  goal_id: string;
+  agent_id: string;
+  todo_id: string | null;
+  turn_instance_id: string;
+  turn_key: string;
+  result_kind: TurnResultKind;
+  task_validation: {
+    schema_version: "loopx_turn_task_validation_v0";
+    ok: true;
+    status: "passed";
+  };
 }
 
 export interface TurnJournalEffectContext {
@@ -118,6 +137,8 @@ export interface TurnJournalEffectContext {
   recovery_decision: TurnRecoveryDecision;
   last_recovery: TurnRecoveryAudit | null;
   recorded_effects: RecordedTurnEffects;
+  turn_key?: string;
+  cached_validation_state?: CachedTurnValidationState;
 }
 
 // Replay has its own verdict. It is not a quota decision and must not manufacture
@@ -168,6 +189,40 @@ function asObject(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
     : {};
+}
+
+function cachedValidationState(
+  request: TurnJournalInspectionRequest, journal: JsonObject, journalConsistent: boolean,
+  completedPhases: readonly string[],
+): CachedTurnValidationState | undefined {
+  if (!journalConsistent || journal.status !== "in_progress"
+      || JSON.stringify(completedPhases) !== JSON.stringify(transactionPhases.slice(0, 3))) return undefined;
+  const result = asObject(journal.host_result);
+  const validation = asObject(journal.task_validation);
+  const kind = result.result_kind;
+  // These are the existing result packet and independent validation receipt
+  // codecs. Do not infer a cached result or a passed receipt from phases alone.
+  if (result.schema_version !== "loopx_turn_result_v0" || result.turn_key !== request.turn_key
+      || typeof kind !== "string" || !TURN_RESULT_KINDS.includes(kind as TurnResultKind)
+      || !["validated_progress", "validated_completion", "repair_required", "replan_required"].includes(kind)
+      || journal.result_kind !== kind
+      || JSON.stringify(result.completed_phases) !== JSON.stringify(transactionPhases.slice(0, 2))
+      || journal.validation_stage !== "task_postcondition"
+      || validation.schema_version !== "loopx_turn_task_validation_v0"
+      || validation.ok !== true || validation.status !== "passed"
+      || validation.recovery_kind !== null || ![null, 0].includes(validation.exit_code as null | number)
+      || !Array.isArray(validation.errors) || validation.errors.length !== 0
+      || typeof validation.validator_kind !== "string" || !validation.validator_kind.trim()
+      || validation.validator_kind.length > 80
+      || typeof validation.summary !== "string" || !validation.summary.trim() || validation.summary.length > 240) {
+    return undefined;
+  }
+  const identity = settlementIdentityFromPlan(asObject(asObject(journal.plan).transaction)).value;
+  if (identity === null) return undefined;
+  return {goal_id: request.goal_id, agent_id: request.agent_id, todo_id: identity.todo_id,
+    turn_instance_id: identity.turn_instance_id,
+    turn_key: request.turn_key, result_kind: kind as TurnResultKind,
+    task_validation: {schema_version: "loopx_turn_task_validation_v0", ok: true, status: "passed"}};
 }
 
 export function parseTurnJournalGoalBinding(
@@ -678,6 +733,7 @@ export function interpretTurnJournalEffect(
     journalStatus,
     journalConsistent,
   );
+  const cachedResult = cachedValidationState(request, journal, journalConsistent, completedPhases);
   return {
     request: {
       kind: "turn_journal",
@@ -701,6 +757,7 @@ export function interpretTurnJournalEffect(
         recorded_effects: recordedTurnEffects(
           journal, completedPhases, lineageConsistent, attemptViolation === null,
         ),
+        ...(cachedResult === undefined ? {} : {turn_key: request.turn_key, cached_validation_state: cachedResult}),
       },
     },
     interpretation: {
@@ -754,6 +811,10 @@ export function projectTurnJournalInspection(
     recovery_decision: context.recovery_decision,
     last_recovery: context.last_recovery,
     recorded_effects: context.recorded_effects,
+    ...(context.cached_validation_state === undefined ? {} : {
+      turn_key: context.turn_key,
+      cached_validation_state: context.cached_validation_state,
+    }),
     effects: [],
   };
 }

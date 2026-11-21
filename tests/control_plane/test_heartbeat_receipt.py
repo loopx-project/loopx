@@ -381,15 +381,22 @@ def test_cli_reentry_distinguishes_admission_timer_from_later_wait(
     command += (" --delivery-boundary in_flight_continuation --progress-result-class advanced"
                 f" --progress-work-item-id {work} --progress-evidence-id evidence:synthetic-result"
                 " --no-global-sync --suppress-external-sinks")
-    for attempt in range(2):
-        rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
-        assert rc == 0, written
-        assert written["settlement_result"]["ok"] is True
-        assert written["settlement_progress"]["state"] == "settled"
-        assert [row["step_kind"] for row in written["settlement_result"]["receipts"]] == [
-            "validation", "durable_writeback", "quota_spend",
-        ]
-        assert written.get("idempotent_replay", False) is bool(attempt)
+    rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0, written
+    assert written["settlement_progress"]["state"] == "settled"
+    assert written["settlement_result"]["ok"] is True
+    assert [row["step_kind"] for row in written["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    assert written.get("idempotent_replay", False) is False
+    assert "settlement_owed" not in written
+    for _ in range(2):
+        rc, settled = _run_generated_cli(command, registry_path=registry, cwd=project)
+        assert rc == 0, settled
+        assert settled["idempotent_replay"] is True
+        assert settled["appended"] is False
+        assert settled["settlement_result"]["ok"] is True
+        assert settled["settlement_result"] == written["settlement_result"]
     assert _spend_run_count(runtime) == 1
     rc, replay = _run_cli(registry, runtime, *guard)
     assert rc == 0, replay

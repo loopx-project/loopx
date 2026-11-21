@@ -1670,7 +1670,9 @@ def run_loopx_turn_once(
     journal_path = turn_journal_path(runtime_root, goal_id=goal_id, turn_key=turn_key)
 
     def persist_journal(snapshot: Mapping[str, Any]) -> None:
-        if goal_admission is None or not goal_admission.enabled:
+        if goal_admission is None or (
+            not goal_admission.source_profile and goal_admission.planned_goal_ref is None
+        ):
             _write_journal(journal_path, snapshot)
             return
         try:
@@ -1678,7 +1680,7 @@ def run_loopx_turn_once(
                 runtime_root=runtime_root,
             ) as source_admission:
                 if source_admission is None:
-                    raise RuntimeError("source journal admission was not produced")
+                    raise RuntimeError("exact journal admission was not produced")
                 _write_journal(
                     journal_path,
                     snapshot,

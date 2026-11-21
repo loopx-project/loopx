@@ -61,6 +61,189 @@ the original `settlement_owed` recovery instead of a second debit. Contract
 composition failure preserves the decided receipt and available original
 capture, reports failure, and grants no work or automatic retry.
 
+`refresh-state --execution-loss-closeout` explicitly closes an original
+prepared Todo Turn after its execution generation was replaced. Supply the
+same Goal, Agent, Todo and Turn, typed `blocked` / `outcome_gap` /
+`semantic_closeout` evidence, and the current control writer's exact lease key
+and version. The TypeScript owner checks original admission and current
+canonical Todo/lease under the real File/SQLite provider fence, retaining the
+original prepared proof. It appends only an administrative blocked no-spend Run
+and refresh receipt. Current control ownership grants no original business
+execution. Vision, replan, Next Action, Explore, usage, external delivery,
+completion, lease mutation and ordinary refresh hooks/sync are unavailable.
+Direct `refresh_state_run` callers set `sync_global=False`; an ordinary sync
+request, including that API's default, is rejected before any write.
+The deterministic immutable Run is the recovery intent for missing index or
+receipt appends within the same authority-store identity. Explicit replay still
+requires a valid current control-writer proof; pure historical settlement readback
+does not. Conflicting or damaged history refuses recovery.
+Repeating `quota spend-slot` on the settled identity returns its TS-qualified
+no-spend progress and appends no debit.
+Ordinary same-generation writeback retains its existing fence. Exact SourceSession
+ownership stays with its original GoalRef. Non-activated legacy projects keep
+their existing stable runtime/Goal alias ownership without an incarnation or
+ABA guarantee; mixed/malformed source ownership never falls back to legacy.
+Identity conflicts return pure original settlement readback, without another
+work guard. Omitting the flag retains the ordinary writer and recovery rules.
+
+Native resume does not republish a current lease as the original prepared
+proof. The positive prepared admission event remains the original source even
+after later review or readiness receipts. Remaining execution effects may use a freshly
+verified current CAS proof only within the same execution generation, under the
+existing lease owner: the key and epoch remain equal and the version does not
+decrease. Exact legacy-proof compatibility retains its existing limited scope
+and provides no ABA guarantee. A different generation cannot complete the old
+Turn, including a frozen report; it requires execution-loss closeout or a fresh
+Turn through the existing C1 owner. Every effect boundary rereads its owning authority;
+retired authority is usable only for the original Turn's proven post-completion
+writeback, independently qualified semantic writeback after exact supersession,
+or its verified pending terminal-receipt repair. A conditional terminal
+effect after writeback and spend uses the existing journal/settlement owner and
+exact effect reference; an active proof may execute that remaining original
+effect, while a canonical completed Todo permits only receipt repair. Committed
+replay returns the existing result without asking for a lease or executing an
+effect. After durable writeback is accepted, a pending quota spend is accounting
+under the existing receipt/writeback/quota owner. Its journal-authorized recovery
+does not request an execution lease or repeat host, completion or writeback work;
+it still freshly validates the original accounting authority. Cleanup retains
+the original task lease while its admitted Turn owes closeout and releases it
+only when the TS settlement owner confirms eligibility. Frozen-report recovery
+qualifies and renews that same generation; a replacement lease cannot recover
+the old business. Report selection recovery runs its governance probe before
+acquiring a report execution lease; the existing TS admission must permit the
+report before its preparation acquires that lease. The probe's evidence remains
+unchanged. Conflicting prepared generations in one identity's history are rejected;
+validated causal links retain the original proof even on older revisions without
+a revision marker. Direct receipt publication permits exact replay and rejects any
+change to already prepared fields before appending a receipt.
+
+An explicit `semantic_closeout` uses a separate TS writeback qualification. It
+checks the actual Run, original Todo/Turn/effect and Goal owner, current canonical
+generation, typed progress, Vision and checkpoint. Exact supersession permits
+only that original Turn's semantic writeback; business resume still rejects it.
+A Todo-bound replan with no business lease must prove its original selected
+obligation and actual semantic evidence. Required preparation without a positive
+original proof is rejected. An ordinary typed blocked gap with exact live
+preparation may record the Vision owner's actual `missing_required` negative
+checkpoint. All builder-owned fields and their presence must match the actual
+inputs; separately appended acceptance-gap diagnostics remain read-only and
+grant no authority. Accountable delivery, retired writeback and no-business
+obligation discharge retain their satisfied-checkpoint requirements.
+Qualification returns only the durable-writeback
+effect scope, never an execution lease. The supported writer rereads inside the
+shared maintenance marker and holds Goal/source ownership and the marker through
+Run JSON, Markdown and index durability. Direct provider writes bypassing that
+marker are outside this canonical writer guarantee.
+Uncaused repeated semantic admissions must retain the complete typed review or
+capability source. Exact repeats retain the earliest admission; a later receipt
+cannot change that source merely by retaining the same obligation id.
+
+`quota.settlement.read` may request `include_readonly_recovery: true`, disabled
+by default and mutually exclusive with operation-qualification requests. It
+requires the original Goal owner, Agent, Todo and Turn plus a verified journal
+binding. The `settlement_recovery` attachment preserves the original settlement
+readback and provides only `turn inspect-journal` and `task-lease inspect` argv.
+Missing or conflicting evidence withholds these actions. It exposes no execution
+proof, lease claim, reactivation or administrative-closeout argv. Only verified
+modern positive prepared admission may explain the existing explicit closeout's
+separate current-control-writer requirement; legacy evidence supports inspection
+only. A frozen-report receiver retains its typed lease refusal, publishes an
+idempotent local notice and exposes the same failure packet in health. Reading
+the attachment or repeating the notice performs no business or accounting work.
+
+A fresh runtime-owned native Turn must publish its own genuine typed work
+admission before Host execution. The shared owner checks prior debt before
+preparation and rereads current CAS and debt at publication. A saved candidate
+provides content evidence, never the original Turn's execution authority;
+freeze and replay follow the new admission. That new Turn's receipt and journal
+own completion, subsequent recovery and cleanup. Ordinary registries may carry
+an exact GoalRef only with a matching persisted instance and real registry and
+resource witnesses. This does not activate generic SourceSession execution.
+No-ref callers retain bounded alias ownership; historical readback and resume
+retain the original journal/receipt ref without a current-actor substitution.
+Ordinary exact journal writes reuse the same typed native registry witnesses
+and bind them to the original settlement identity and canonical journal path;
+persisting a checkpoint grants no Host execution authority.
+
+`refresh-state --execution-loss-closeout` 显式关闭原 prepared Todo Turn 已失去的
+执行尝试。使用相同 Goal、Agent、Todo、Turn，提供 typed blocked / outcome_gap /
+semantic_closeout 证据及当前 control writer 的确切租约 key/version。TS owner 在真实
+File/SQLite provider fence 内核验原准入与当前 canonical Todo/lease，只追加免扣额
+blocked Run 和 refresh 收据，保留原 prepared proof；当前证明不成为原业务执行证明。
+该路径不执行 Vision、replan、Next Action、Explore、usage、外部投递、completion、
+租约 mutation 或普通 refresh hooks/sync。
+直接调用 `refresh_state_run` 时须设置 `sync_global=False`；普通 sync 请求及该 API
+的默认值在任何写入前被拒绝。
+确定路径的不可变 Run 是同一 authority-store
+identity 内缺失 index/receipt append 的恢复 intent。显式重放仍须有效的当前 control
+writer proof；纯历史结算回读不依赖当前租约。历史冲突或损坏均拒绝。
+在已结算 identity 上重复 `quota spend-slot`，返回 TS 核验的免扣额进度，不追加扣额。
+原 generation 可用时沿普通 fence。
+SourceSession 沿原 GoalRef；未激活项目保留既有稳定 runtime/Goal alias 语义，不新增
+incarnation 或 ABA 保证，混合及非法 ownership 不回退。identity conflict 返回原结算
+的纯 readback，不再运行 work guard。省略该 flag 保持普通 writer 与 recovery 规则。
+
+Native resume 不把当前租约重新发布为原 prepared proof。后续 review/readiness 收据
+不能取代最初的 positive prepared admission。既存 remaining execution effects 只能通过现有
+租约 owner 在同一 execution generation 下使用 freshly verified 当前 CAS proof：
+key 与 epoch 保持相同，version 不降低。Legacy exact-proof 兼容保留原有限边界，
+不提供 ABA 保证。不同 generation 不能完成旧 Turn，即便已有 frozen report；
+恢复使用 execution-loss closeout 或既有 C1 owner 下的 fresh Turn。每个 effect
+边界均重新读取对应 owner 的 authority；retired proof 只支持原 Turn 已证明 completion 后尚余的
+writeback、exact supersede 后独立核验的 semantic writeback，或已核验的 pending
+terminal receipt 修复。writeback 与 spend 后的条件
+terminal effect 复用既有 journal/settlement owner 及 exact effect ref：active 原
+generation proof 只能执行该剩余 effect；canonical Todo 已完成时只能修复收据。
+已提交重放直接返回原结果，不请求租约或执行 effect。durable writeback 已被接受后，
+尚欠的 quota spend 由既有 receipt/writeback/quota owner 负责记账。journal 授权的
+恢复不请求 execution lease，也不重跑 host、completion 或 writeback；仍须 freshly
+核验原记账 authority。cleanup 在原 admitted Turn 欠收尾时保留原 task lease，
+仅在 TS settlement owner 确认资格后释放。frozen-report 恢复核验并续租同一
+generation；replacement lease 不能恢复旧业务。报告 selection recovery 先执行
+governance probe；既有 TS admission 允许报告后，才在报告 preparation 前获取
+业务 execution lease，保留原 probe 证据。同 identity 历史中的不同
+prepared generation 均拒绝；旧收据没有 revision 标记时，已核验的因果链接仍保留
+原 proof。Direct receipt publication 只允许 exact replay，任何已准备字段变化都
+必须在追加收据前拒绝。
+
+显式 `semantic_closeout` 使用独立 TS writeback qualification，核验实际 Run、原
+Todo/Turn/effect、Goal owner、当前 canonical generation、typed progress、Vision
+与 checkpoint。Exact supersede 只允许原 Turn 的 semantic writeback，business
+resume 仍拒绝。没有业务 lease 的 Todo-bound replan 须证明原 selected obligation
+与实际语义证据；要求 preparation 却缺少 positive original proof 时拒绝。返回值
+仅为 durable-writeback effect scope，不授予 execution lease。持有 exact live
+preparation 的普通 typed blocked gap 可以记录 Vision owner 的真实
+`missing_required` negative checkpoint；所有 builder-owned 字段及其存在性须与
+实际输入一致。独立追加的 acceptance-gap 诊断仅供读取，不授予权限。
+Accountable delivery、retired writeback 与无业务 obligation discharge 保留
+satisfied checkpoint 要求。受支持 writer 在共享
+maintenance marker 内重新读取，并持有 Goal/source ownership 与 marker 直到 Run
+JSON、Markdown、index 持久化完成。绕过 marker 的直接 provider 写不属于此
+canonical writer 保证。
+无因果链接的重复 semantic admission 须保留完整 typed review／capability 来源。
+完全相同的重复记录保留最早准入；后续收据不能仅凭相同 obligation id 改写来源。
+
+`quota.settlement.read` 可请求默认关闭的 `include_readonly_recovery: true`，
+与操作资格请求互斥。它要求原 Goal owner、Agent、Todo、Turn 及已验证的 journal
+binding。`settlement_recovery` attachment 保留原结算回读，仅提供
+`turn inspect-journal` 与 `task-lease inspect` argv；证据缺失或冲突时不提供操作。
+它不输出 execution proof、lease claim、reactivation 或行政收尾 argv。只有已验证
+的现代 positive prepared admission 可以说明既有显式收尾所需的独立当前
+control-writer 要求；legacy 证据仅支持检查。frozen-report receiver 保留 typed
+租约拒绝，记录幂等本地提示，并在 health 暴露同一 failure packet。读取 attachment
+或重复提示不执行任何业务或记账。
+
+fresh runtime-owned native Turn 必须在 Host 执行前发布自己的真实 typed work
+admission。共享 owner 在 preparation 前检查原债务，在 publication 时复读当前
+CAS 与债务。saved candidate 只提供内容证据，不成为原 Turn 的执行权限；
+freeze、replay 沿新准入。完成、后续恢复及 cleanup 由新 Turn 的 receipt/journal
+负责。普通 registry 的 exact GoalRef 必须匹配真实持久 instance，并具有实际
+registry/resource witness；这不激活通用 SourceSession 执行。无 ref 的 caller
+保留有限 alias ownership；历史回读与 resume 沿原 journal/receipt ref，不以
+当前 actor 替换。
+普通 exact journal 写入复用同一 typed native registry witness，绑定原 settlement
+identity 与 canonical journal 路径；checkpoint 持久化不授予 Host 执行权限。
+
 Newly generated heartbeat and same-Turn commands use the default v1 entry.
 Historical benchmark runs use the recorded runner and contract version.
 User task time requirements remain task context. Caller-private deadlines

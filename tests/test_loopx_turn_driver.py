@@ -2913,6 +2913,219 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
     assert not index_path.exists()
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["initial_after", "attempt_before"])
+def test_native_resume_rechecks_original_lease_when_binding_admitted_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, fault: str,
+) -> None:
+    from hashlib import sha256
+    from types import SimpleNamespace
+
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    from loopx.cli import build_parser
+    from loopx.cli_commands.turn import handle_turn_command
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.quota.execution_preparation import RefreshTaskLeaseUnavailable
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.work_items.task_lease import release_task_lease
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+    )
+    goal_id, agent_id, todo_id = "loopx-turn-fixture", "codex-fixture", "todo_fixture0001"
+    scope = {"runtime_root": str(runtime), "goal_id": goal_id,
+             "agent_id": agent_id, "automation_id": None}
+    configured = effect_runtime_result("quota.automation_cadence.manage", {
+        **scope, "operation": "configure", "min_interval_minutes": 3,
+        "expected_revision": 0, "owner_reference": "fixture-owner", "execute": True,
+    })
+    assert configured["eligible_now"] is True
+
+    def cli(*arguments):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
+                             "--format", "json", *arguments])
+        return code, json.loads(output.getvalue())
+
+    claim_args = ("todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
+                  "--agent-id", agent_id, "--claimed-by", agent_id)
+    code, claimed = cli(*claim_args)
+    assert code == 0, claimed
+
+    def inspect_lease():
+        code, inspected = cli("task-lease", "inspect", "--goal-id", goal_id, "--todo-id", todo_id)
+        assert code == 0 and inspected["active"] is True, inspected
+        return inspected["lease"]
+
+    original_lease = inspect_lease()
+    resolver_lease = original_lease
+    adapter = SimpleNamespace(controller=SimpleNamespace(
+        registry_path=registry, coordination_runtime_root=runtime,
+    ))
+    host_calls = []
+    artifact = project / "completion-artifact.txt"
+
+    def resolve_lease():
+        return StewardTurnHost._task_lease_proof(
+            adapter, {"actor": {"goal_id": goal_id}, "todo_id": todo_id}, resolver_lease,
+        )
+
+    def host(request, launch_lifetime):
+        host_calls.append(request["turn_key"])
+        with launch_lifetime():
+            artifact.write_text("completed", encoding="utf-8")
+        return {
+            "schema_version": "loopx_turn_result_v0", "turn_key": request["turn_key"],
+            "result_kind": "validated_completion", "completed_phases": ["host_execute", "typed_result"],
+            "classification": "fixture_completion", "recommended_action": "Refresh the active Goal.",
+            "next_action": "Read the fresh decision.", "delivery_batch_scale": "implementation",
+            "delivery_outcome": "outcome_progress", "vision_unchanged_reason": "The remaining Goal is unchanged.",
+            "work_evidence": ["artifact:completion-artifact"], "validation_evidence": ["check:artifact-contents"],
+        }
+
+    _, validation = _completion_host_and_validation_scripts()
+    base = ["turn", "run-once", "--host", "generic-cli", "--goal-id", goal_id,
+            "--agent-id", agent_id, "--project", str(project), "--no-global-sync",
+            "--validation-command-json", json.dumps([sys.executable, "-c", validation]), "--execute"]
+
+    def invoke(*extra):
+        args = build_parser().parse_args([*base, *extra])
+        args.host, args.session_scope = "codex-app-server", "agent"
+        result = {}
+        code = handle_turn_command(
+            args, registry_path=registry, runtime_root_arg=str(runtime),
+            output_format=lambda *_a, **_kw: "json", print_payload=lambda value, *_a: result.update(value),
+            native_host_runner=host, native_completion_lease_resolver=resolve_lease,
+            native_session_binding_resolver=lambda _: {
+                "schema_version": "loopx_turn_session_binding_v0", "goal_id": goal_id, "agent_id": agent_id,
+            },
+        )
+        return code, result
+
+    persist = executor._write_journal
+    interrupted = False
+
+    def checkpoint(path, journal, **kwargs):
+        nonlocal interrupted
+        if not interrupted and fault == "attempt_before" and journal["host_attempt_count"] == 1:
+            interrupted = True
+            raise RuntimeError("fixture native start interruption")
+        persist(path, journal, **kwargs)
+        if not interrupted and fault == "initial_after" and journal["host_attempt_count"] == 0:
+            interrupted = True
+            raise RuntimeError("fixture native start interruption")
+
+    with monkeypatch.context() as paused:
+        paused.setattr(executor, "_write_journal", checkpoint)
+        code, failed = invoke("--todo-id", todo_id, "--turn-instance-id", "native-bind-freshcheck")
+    assert code == 1 and interrupted, failed
+    assert failed["error"] == "fixture native start interruption"
+    journal = _turn_journal(runtime)
+    assert journal["host_attempt_count"] == 0 and "host_result" not in journal
+    assert host_calls == [] and not artifact.exists()
+    run_id = journal["plan"]["transaction"].get("turn_instance_id", journal["turn_key"])
+    event_path = runtime / "goals" / goal_id / "rollout-event-log.jsonl"
+    index_path = runtime / "goals" / goal_id / "runs" / "index.jsonl"
+    capture_path = runtime / "goals" / goal_id / "turns" / "decisions" / (
+        journal["turn_key"].removeprefix("sha256:") + ".json"
+    )
+    original_capture = capture_path.read_bytes()
+
+    def original_receipt_lines():
+        return [line for line in event_path.read_bytes().splitlines(keepends=True)
+                if (row := json.loads(line)).get("event_kind") == "quota_should_run"
+                and row.get("run_id") == run_id and row.get("agent_id") == agent_id]
+
+    receipt_bytes = original_receipt_lines()
+    assert receipt_bytes
+    original_prepared = {
+        "prepared_lease_key_sha256": sha256(original_lease["idempotency_key"].encode()).hexdigest(),
+        "prepared_lease_version": original_lease["version"], "prepared_lease_epoch": original_lease["lease_epoch"],
+    }
+    original_readback = turn_run_once_command.read_heartbeat_settlement(
+        runtime, goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+        turn_instance_id=run_id, registry_path=registry,
+    )
+    assert original_readback is not None and original_readback.prepared_lease == original_prepared
+    original_cadence = effect_runtime_result("quota.automation_cadence.manage", {**scope, "operation": "read"})
+    assert original_cadence["next_eligible_at_ms"] is not None
+    actual_qualification = turn_run_once_command.read_turn_execution_lease_qualification
+    qualification_requests, qualifications = [], []
+
+    def observe_qualification(**kwargs):
+        qualification_requests.append(kwargs["requested_proof"])
+        observed = actual_qualification(**kwargs)
+        qualifications.append(observed.resume_lease_qualification)
+        return observed
+
+    monkeypatch.setattr(turn_run_once_command, "read_turn_execution_lease_qualification", observe_qualification)
+    make_cadence = turn_run_once_command.managed_cadence_start
+    replacement = None
+    bind_refused = False
+
+    def replace_before_bind(**kwargs):
+        original_callback = kwargs["on_admitted"]
+
+        def on_admitted():
+            nonlocal replacement, resolver_lease, bind_refused
+            # The real native resume read has accepted P1 before cadence admit.
+            # Its success must not authorize binding after a new claim appears.
+            assert any(row["state"] == "ready" and row["source"] == "active"
+                       and row["original_prepared"] == original_prepared for row in qualifications)
+            assert inspect_lease() == original_lease
+            released = release_task_lease(
+                registry_path=registry, runtime_root=runtime, goal_id=goal_id, todo_id=todo_id,
+                owner=agent_id, idempotency_key=original_lease["idempotency_key"],
+                expected_version=original_lease["version"],
+            )
+            assert released["ok"] is True, released
+            code, reclaimed = cli(*claim_args, "--claim-operation-id", "native-bind-replacement")
+            assert code == 0, reclaimed
+            replacement = inspect_lease()
+            assert replacement["owner"] == agent_id
+            assert replacement["idempotency_key"] != original_lease["idempotency_key"]
+            assert replacement["lease_epoch"] > original_lease["lease_epoch"]
+            assert replacement["version"] > original_lease["version"]
+            resolver_lease = replacement
+            try:
+                original_callback()
+            except RefreshTaskLeaseUnavailable:
+                bind_refused = True
+                raise
+
+        # Keep the real TS cadence admit/confirm; only interpose at its callback.
+        return make_cadence(**{**kwargs, "on_admitted": on_admitted})
+
+    monkeypatch.setattr(turn_run_once_command, "managed_cadence_start", replace_before_bind)
+    code, resumed = invoke("--resume-turn-key", journal["turn_key"], "--retry-failed-turn")
+    assert code == 1 and bind_refused, resumed
+    assert resumed["error_code"] == "refresh_task_lease_unavailable", resumed
+    assert replacement is not None and inspect_lease() == replacement
+    assert qualification_requests[-1] == {
+        "idempotency_key": replacement["idempotency_key"], "expected_version": replacement["version"],
+    }
+    current = _turn_journal(runtime)
+    assert current["host_attempt_count"] == 0 and "host_result" not in current
+    assert current["completed_phases"] == []
+    assert host_calls == [] and not artifact.exists()
+    assert original_receipt_lines() == receipt_bytes
+    assert capture_path.read_bytes() == original_capture
+    final_readback = turn_run_once_command.read_heartbeat_settlement(
+        runtime, goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+        turn_instance_id=run_id, registry_path=registry,
+    )
+    assert final_readback is not None and final_readback.prepared_lease == original_prepared
+    assert not index_path.exists() or not index_path.read_text().strip()
+    assert not any(json.loads(line).get("event_kind") in {"refresh_state", "quota_spend", "todo_complete"}
+                   for line in event_path.read_bytes().splitlines())
+    current_cadence = effect_runtime_result("quota.automation_cadence.manage", {**scope, "operation": "read"})
+    assert current_cadence["next_eligible_at_ms"] == original_cadence["next_eligible_at_ms"]
+    code, todo = cli("todo", "list", "--goal-id", goal_id, "--todo-id", todo_id)
+    assert code == 0 and todo["todo"]["todo_id"] == todo_id and todo["todo"]["status"] == "open", todo
+
+
 def test_turn_run_once_cli_dsh_fresh_sessions_and_iteration_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
