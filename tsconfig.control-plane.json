@@ -31,6 +31,8 @@
     "examples/coordination/sqlite-authority-migration.ts",
     "examples/coordination/remote-authority-service.ts",
     "examples/coordination/remote-authority-client.ts",
+    "examples/coordination/colima-pg16-e2e-rehearsal.ts",
+    "tests/control_plane_ts/coordination_colima_rehearsal.test.ts",
     "tests/control_plane_ts/remote_authority.test.ts",
     "tests/control_plane_ts/remote_authority.integration.test.ts",
     "tests/control_plane_ts/remote_authority_fixture.ts",

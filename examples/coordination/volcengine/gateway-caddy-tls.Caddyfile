@@ -1,0 +1,51 @@
+# ==============================================================================
+# LoopX Remote Authority TLS Gateway - Caddy Configuration
+# Reverse proxy terminating HTTPS and forwarding to local Node authority service
+# ==============================================================================
+
+{
+  admin off
+  auto_https disable_redirects
+  log {
+    output file /var/log/caddy/loopx_authority_access.log {
+      roll_size 50MiB
+      roll_keep 5
+    }
+    format json
+  }
+}
+
+:443, gateway.loopx.internal {
+  tls /etc/ssl/loopx/cert.pem /etc/ssl/loopx/key.pem {
+    protocols tls1.3
+  }
+
+  # Security headers
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Cache-Control "no-store, no-cache, must-revalidate"
+  }
+
+  # Limit request body to prevent memory pressure on authority service (16KB)
+  request_body {
+    max_size 16384
+  }
+
+  # Reverse proxy to loopx remote-authority-service
+  reverse_proxy 127.0.0.1:8443 {
+    transport http {
+      tls_insecure_skip_verify
+      dial_timeout 3s
+      response_header_timeout 15s
+    }
+
+    # Pass client identification
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto https
+  }
+}
