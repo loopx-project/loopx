@@ -1085,10 +1085,24 @@ After the individual lanes pass, bind their compact receipts to the exact clean
 release checkout before tagging or moving `stable`:
 
 ```bash
+python3 scripts/qualify_release_commit.py \
+  --repo-root . \
+  --output-dir .local/release-qualification \
+  --preflight-since v2.3.0 \
+  --resume
 loopx canary release-qualification \
   --manifest-json release-qualification.json \
   --repo-root .
 ```
+
+For clean full-suite release runs, `scripts/qualify_release_commit.py` runs an
+optional changed-file preflight first (`--preflight-since`), then executes
+hardware-sized single-wave isolated pytest shards (defaulting to
+two-thirds of host CPUs capped at 12, with optional `--durations-path`,
+`--durations-out`, and fail-closed exact-commit/tree `--resume`) and reduces
+the shards into `receipt-pytest.json` with no local paths. Keep
+`scripts/qualify-doubao-model-behavior-live.py` (`--max-workers 6` by default)
+concurrent with network/CPU lanes without mutating the clean candidate tree.
 
 The `exact_release_commit_qualification_manifest_v0` contract requires the
 same Git commit, Git tree id, package version, and version tag across pytest,
