@@ -829,6 +829,11 @@ recording a `resolution` requires qualified evidence. Omitting the whole
 `meta_goal` preserves the last question. A resolution ends the question and a
 later review can start another on the same Todo.
 
+The preview and both citation forms use the same settlement readback for the
+exact work record. A pending writeback stays readable in history. It qualifies
+after the spend receipt is committed or the settlement owner confirms a typed
+no-spend closeout.
+
 Keep new questions brief. Put actions and probes in their existing Stride
 fields and give each axis its own decision-relevant reason. Use a citation
 once when it serves both the Vision path and the meta-goal. The same
@@ -859,6 +864,9 @@ Execution, Goal acceptance and gain follow their existing evidence contracts.
 可显式填写 `evidence_refs`，沿用相同范围校验。改变动作或写入 `resolution` 时须有
 合格证据。省略整个 `meta_goal` 会沿用上次问题。收口后可在后续复盘中为同一 Todo
 提出新问题。
+
+预览、显式引用和简写引用共用同一条工作记录的结算回读。待结算写回仍可从历史查看。
+扣额回执提交或结算归属方确认类型化免扣额收尾后，才可作为后续证据引用。
 
 简洁提出新问题。动作和探针沿用现有 Stride 字段，各轴说明各自影响决策的依据。
 一条引用可同时支持 Vision 路径和元目标，只填写一次。实际写入的文字和引用计入原有

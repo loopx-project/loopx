@@ -7,15 +7,17 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime
+from loopx.history import load_index_snapshot
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-from loopx.control_plane.work_items.replan_context_codec import read_todo_stride_meta_goal
+from loopx.control_plane.work_items.replan_context_codec import project_todo_stride_meta_goal, read_todo_stride_meta_goal
 from research_comparison_fixture import vision
 import test_quota_settlement_cli as fixture
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("compact", [False, True], ids=["inline", "by-reference"])
-def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, monkeypatch, provider, compact):
+@pytest.mark.parametrize("no_debit", [False, True], ids=["charged", "no-debit"])
+def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, monkeypatch, provider, compact, no_debit):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     project, runtime, registry = fixture._write_fixture(tmp_path)
@@ -26,6 +28,7 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
     goal, agent, todo = fixture.GOAL_ID, fixture.AGENT_ID, fixture.TODO_ID
     identity = ("--goal-id", goal, "--agent-id", agent)
     journal = runtime / "goals" / goal / "runs/index.jsonl"
+    rollout = journal.parents[1] / "rollout-event-log.jsonl"
 
     def cli(*arguments, expected=0):
         code, packet = fixture._run_cli(registry, runtime, *arguments, cwd=project)
@@ -44,7 +47,7 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
         cli("quota", "spend-slot", *identity, "--todo-id", task, "--turn-instance-id", turn,
             "--slots", "1", "--source", "heartbeat", "--execute")
 
-    def work(turn, task, times, *, meta_decision=None, expect_gap=False):
+    def work(turn, task, times, *, meta_decision=None, expect_gap=False, settle=True):
         packet = guard(turn, task)
         assert packet["should_run"] and packet["selected_todo"]["todo_id"] == task
         work_context = packet["interaction_contract"]["agent_channel"].get("work_context", {})
@@ -65,7 +68,8 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
             "--progress-surface-id", turn, "--progress-probe-kind", "peak-measurement",
             "--progress-evidence-id", f"measurement:{turn}", "--recommended-action", f"Worst sample was {worst} seconds.",
             "--no-global-sync", "--suppress-external-sinks")
-        spend(turn, task)
+        if settle:
+            spend(turn, task)
 
     def review(turn, *, scope=todo):
         guard(turn)
@@ -129,16 +133,42 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
         cadence(2)
 
     work("peak-unrelated", other, [6, 8])
-    work("peak-tail", todo, [22, 32], meta_decision=previous, expect_gap=True)
+    tail_turn = "peak-tail"
+    if no_debit:
+        guard(tail_turn, todo)
+        cli("todo", "update", *identity, "--todo-id", todo, "--status", "blocked")
+        uncommitted_events = rollout.read_bytes()
+        debits = fixture._spend_run_count(runtime)
+        closed = cli("refresh-state", *identity, "--todo-id", todo, "--turn-instance-id", tail_turn,
+            "--classification", "fixture_peak_blocked", "--delivery-batch-scale", "single_surface",
+            "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+            "--progress-blocker-id", "peak-source-unavailable", "--progress-evidence-id", "measurement:peak-tail",
+            "--vision-unchanged-reason", "The Todo still requires a valid peak measurement.",
+            "--no-global-sync", "--suppress-external-sinks")
+        assert closed["settlement_progress"]["state"] == "settled"
+        assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+        assert fixture._spend_run_count(runtime) == debits
+        assert guard(tail_turn)["effective_action"] == "heartbeat_settled_skip"
+        cli("todo", "update", *identity, "--todo-id", todo, "--status", "open")
+        result_class = "blocked"
+        resolution = "The incumbent peak source is unavailable. Test an independent measurement mechanism."
+    else:
+        work(tail_turn, todo, [22, 32], meta_decision=previous, expect_gap=True, settle=False)
+        uncommitted_events = rollout.read_bytes()
+        assert all(row["result_class"] != "unchanged" for row in task_record()["subsequent_evidence"])
+        spend(tail_turn, todo)
+        result_class = "unchanged"
+        resolution = "The tail exceeded the limit at 32 seconds. Compare a different mechanism next."
+
     context, stride = review("review-peak-result")
     [basis] = context["todo_meta_goals"]
     assert basis["decision_ref"] == previous
     assert len(basis["evidence"]) == (1 if compact else 2)
-    tail = next(row for row in basis["evidence"] if row["result_class"] == "unchanged")
-    resolution = "The tail exceeded the limit at 32 seconds. Compare a different mechanism next."
+    tail = next(row for row in basis["evidence"] if row["result_class"] == result_class)
     stride.update(action="switch", meta_goal={"todo_id": todo, "previous_decision_ref": previous,
         "resolution": resolution})
-    stride["next_probe"]["scope"] = "Test the streaming mechanism on the 32-second tail workload."
+    next_scope = "Test the streaming mechanism on the same peak workload."
+    stride["next_probe"]["scope"] = next_scope
     packet = proposal(context, stride)
     observations = context["decision_followthrough"]["observations"]
     foreign = next(row for row in observations if row["todo_id"] == other)
@@ -152,11 +182,36 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
     assert journal.read_bytes() == before
     if compact:
         tail_path = next(row["evidence_ref"] for row in observations
-            if row["todo_id"] == todo and row["result_class"] == "unchanged")
+            if row["todo_id"] == todo and row["result_class"] == result_class)
         assert tail_path != tail["evidence_ref"]
         packet["path_delta"]["evidence_refs"] = [tail_path]
     else:
         stride["meta_goal"]["evidence_refs"] = [tail["evidence_ref"]]
+
+    # The work (and for a paid attempt even the debit row) can already be
+    # visible in the run index while the closing receipt is still absent.
+    # A copied runtime isolates that interruption from the admitted live Turn.
+    pending_root = tmp_path / "uncommitted"
+    pending_goal = pending_root / "goals" / goal
+    pending_index = pending_goal / "runs/index.jsonl"
+    pending_index.parent.mkdir(parents=True)
+    pending_index.write_bytes(journal.read_bytes())
+    (pending_goal / rollout.name).write_bytes(uncommitted_events)
+    pending = project_todo_stride_meta_goal(
+        goal_id=goal, agent_id=agent, todo_id=todo, goal_ref=None,
+        runs=load_index_snapshot(pending_index, include_artifact_status=False).records,
+        history_newest_first=False, runtime_root=pending_root, include_evidence=True,
+    )
+    assert tail["evidence_ref"] not in {row["evidence_ref"] for row in pending["subsequent_evidence"]}
+
+    current_todo = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)["todo"]
+    with pytest.raises(ValueError, match="subsequent settled work"):
+        project_todo_stride_meta_goal(
+            goal_id=goal, agent_id=agent, todo_id=todo, goal_ref=None,
+            runs=load_index_snapshot(pending_index, include_artifact_status=False).records,
+            history_newest_first=False, runtime_root=pending_root, proposal=stride, path_delta=packet["path_delta"],
+            todo_delta=packet["todo_delta"], todo=current_todo, settlement_todo_id=todo,
+        )
     accepted = store("review-peak-result", packet)
     assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"]
     assert json.loads(Path(accepted["json_path"]).read_text())["agent_vision"]["stride_decision"]["meta_goal"] == stride["meta_goal"]
@@ -164,7 +219,7 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
     assert current["action"] == "switch"
     assert current["meta_goal"] == {**meta, "previous_decision_ref": previous, "resolution": resolution,
         "evidence_refs": [tail["evidence_ref"]]}
-    assert current["next_probe"]["scope"] == "Test the streaming mechanism on the 32-second tail workload."
+    assert current["next_probe"]["scope"] == next_scope
     assert current["evidence"][0]["evidence_ref"] == tail["evidence_ref"]
     exact = cli("history", *identity, "--evidence-ref", tail["evidence_ref"])["evidence"]
     assert exact["progress_observation"]["evidence_ids"] == ["measurement:peak-tail"]
