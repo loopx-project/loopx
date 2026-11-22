@@ -1,6 +1,5 @@
 // Host-neutral contract for the proposed verifier Hook adapter. The C1,
 // working-set and capability-portfolio owners still admit every effect.
-import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import type { QuotaGoalBoundaryReference } from "../quota/turn_envelope.ts";
 import type { WorkYardstickProfile } from "../work_items/yardstick_decision.ts";
 
@@ -18,20 +17,10 @@ export type VerifierHookPolicy = Readonly<{
   pre_tool_use?: boolean;
 }>;
 
-export function negotiateVerifierHooks(
-  policy: VerifierHookPolicy,
-  capabilities: HarnessVerifierCapabilities = {},
-): { tier: "L0" | "L1" | "L2"; pre_tool_use: boolean } | null {
-  if (policy.enabled !== true) return null;
-
-  const lineage = capabilities.session_lineage === true && capabilities.boundary_context === true;
-  const scoped = capabilities.milestone_observation === true
-    && capabilities.isolated_subscope === true && capabilities.verified_return === true;
-  return {
-    tier: lineage ? (scoped ? "L2" : "L1") : "L0",
-    pre_tool_use: policy.pre_tool_use === true && capabilities.pre_tool_use === true,
-  };
-}
+export type VerifierHookNegotiation = Readonly<{
+  tier: "L0" | "L1" | "L2";
+  pre_tool_use: boolean;
+}>;
 
 export type GoalVerifierProfile = Readonly<{
   oracle_ref: string;
@@ -106,79 +95,8 @@ export type VerifiedScopeEvidence = Readonly<{
   identity: VerifiedScopeIdentity;
 }>;
 
+// Readers return undefined for unavailable authority records.
 export type VerifiedCloseReader = Readonly<{
   readReceipt: (ref: string) => VerifierScopeReceipt | undefined;
   readEvidence: (ref: string) => VerifiedScopeEvidence | undefined;
 }>;
-
-const scopeIdentityFields = [
-  "goal_id", "todo_id", "parent_epoch_ref", "child_scope_ref", "candidate_sha", "verifier_version",
-] as const;
-
-function hasReference(ref: string): boolean {
-  return typeof ref === "string" && ref.trim().length > 0;
-}
-
-function matchesScope(expected: VerifiedScopeIdentity, observed?: VerifiedScopeIdentity): boolean {
-  return observed != null && scopeIdentityFields.every(field => observed[field] === expected[field]);
-}
-
-function matchesEvidence(
-  reader: VerifiedCloseReader,
-  identity: VerifiedScopeIdentity,
-  ref: string,
-  role: VerifiedScopeEvidence["role"],
-): boolean {
-  const evidence = hasReference(ref) ? reader.readEvidence(ref) : undefined;
-  return evidence != null && evidence.ref === ref && evidence.role === role && matchesScope(identity, evidence.identity);
-}
-
-// The adapter resolves receipts and evidence from their independent stores.
-// Evidence describes its recorded role and scope and is absent when unreadable.
-export function recommendVerifiedClose(
-  request: VerifiedCloseRequest,
-  reader: VerifiedCloseReader,
-): VerifiedCloseRecommendation {
-  const expected = request.identity;
-  if (!expected || !scopeIdentityFields.every(field => hasReference(expected[field]))
-    || !ENVELOPED_SHA256_PATTERN.test(expected.candidate_sha)
-    || !hasReference(request.receipt_ref)) {
-    return { action: "KeepRaw" };
-  }
-  const receipt = reader.readReceipt(request.receipt_ref);
-  if (!receipt || !matchesScope(expected, receipt.identity)) {
-    return { action: "KeepRaw" };
-  }
-  if (receipt.verdict === "failed") {
-    if (matchesEvidence(reader, expected, receipt.counterexample_ref, "counterexample")) {
-      return { action: "KeepRaw", counterexample_ref: receipt.counterexample_ref };
-    }
-    return { action: "KeepRaw" };
-  }
-  if (receipt.verdict !== "passed" || request.open_obligations !== false || request.overlap !== "low"
-    || !matchesEvidence(reader, expected, receipt.oracle_evidence_ref, "oracle_evidence")
-    || !matchesEvidence(reader, expected, receipt.source_ref, "source")
-    || !matchesEvidence(reader, expected, receipt.summary_ref, "summary")) {
-    return { action: "KeepRaw" };
-  }
-  return {
-    action: "FoldToReceipt",
-    receipt_ref: request.receipt_ref,
-    source_ref: receipt.source_ref,
-    summary_ref: receipt.summary_ref,
-  };
-}
-
-export type DomainPluginCandidate = Readonly<{
-  artifact_digest: string;
-  capability_ref: string;
-  kind: "yardstick" | "diagnostic_probe" | "verification_recipe";
-}>;
-
-// These observations index the existing portfolio and verifier owners. The
-// solver can propose staging only. Activated versions are read from configuration.
-export type DomainPluginTrial =
-  | { stage: "staging"; candidate: DomainPluginCandidate }
-  | { stage: "trial"; candidate: DomainPluginCandidate; trial_receipt_ref: string }
-  | { stage: "adopted"; candidate: DomainPluginCandidate; adoption_receipt_ref: string }
-  | { stage: "retired"; candidate: DomainPluginCandidate; retirement_receipt_ref: string };

@@ -2,7 +2,7 @@
 
 - **RFC status:** Accepted (upon merge)
 - **Supersedes / closes:** none
-- **Delivery maturity:** TypeScript contract. Host adapters and outcome qualification are pending.
+- **Delivery maturity:** TypeScript interface and executable contract fixture. History working-set integration and host qualification are pending.
 - **Related contracts:** [Controller and executor](controller-executor-unified-contract-v0.md), [History working sets](history-working-set-context-policy-v0.md), [Target, Yardstick and Stride](target-yardstick-stride-decisions-v0.md), [Capability portfolio](goal-scoped-capability-portfolio-v0.md)
 - **Language mirror:** [中文版 — semantic mirror](verifier-hook-co-design-v0.zh-CN.md)
 
@@ -41,7 +41,7 @@ Official Codex and DSH are complementary reference adapters. Use official Codex 
 
 1. Branch from a known session and parent epoch using a public host or controller operation. Isolate the candidate workspace. Conversation branching grants no new write lease, verifier authority, credentials or cache guarantee.
 2. Capture the exact candidate for the independent Oracle. Its immutable receipt binds Goal, Todo, parent epoch, child scope, `candidate_sha` and `verifier_version`. Use the canonical `sha256:<64 lowercase hexadecimal digits>` digest of the candidate submitted to the Oracle. The recommendation checks the digest before reading any receipt. Branch names, tags and other identifier formats keep the raw scope. The receipt identifies available fast and slow readings, verdict, falsified hypotheses and original observations or transcript. Matching failure carries a reproducible counterexample. Missing readings stay unknown.
-3. Resolve the receipt through the trusted verifier owner. Only an exact, passed receipt with nonblank scope identifiers, no open obligations and evidenced low overlap permits a `FoldToReceipt` recommendation. The authoritative reader resolves the Oracle evidence, original source and compact result with their recorded roles and scope. Each binding must match the requested reference, its role and the exact receipt identity. An empty, mismatched or unreadable reference keeps `KeepRaw`. Append its compact evidence-linked result at a supported parent boundary. Preserve original evidence for independent readback. A missing, mismatched or failed receipt keeps `KeepRaw`, as does high or unknown overlap. Return an available counterexample whose role and scope match.
+3. Resolve the receipt through the trusted verifier owner. Only an exact, passed receipt with nonblank scope identifiers, no open obligations and evidenced low overlap permits a `FoldToReceipt` recommendation. The authoritative reader resolves the Oracle evidence, original source and compact result with their recorded roles and scope. Each binding must match the requested reference, its role and the exact receipt identity. An empty, mismatched or unreadable reference keeps `KeepRaw`. At the reader boundary, a filesystem lookup that reports a missing record becomes an unavailable read. Unexpected reader errors remain visible. Append the compact evidence-linked result at a supported parent boundary and preserve original evidence for independent readback. A missing, mismatched or failed receipt keeps `KeepRaw`, as does high or unknown overlap. Return an available counterexample whose role and scope match.
 
 Classify overlap from the next work's evidence dependencies. High overlap means the next probe still needs intermediate candidate state, unresolved counterexamples or the raw comparison history. Low overlap means the next scope can act from the verified result and its bounded evidence references. Treat an unbound next step or an incomplete dependency read as unknown. Apply the existing reset break-even against the saved context bytes, cold prefill and any expected recovery reads.
 
@@ -53,6 +53,6 @@ The solver may stage content-addressed yardsticks, diagnostics or verification r
 
 ## 5. Acceptance
 
-- Contract checks cover feature off, L0/L1/L2 negotiation, explicit pre-tool opt-in, exact accepted return and refusal of foreign receipts. Run bilingual and diff-based premerge validation.
-- Qualify the deployed host path on one original Goal/Todo, with an ordinary turn, missing or failed verification, compact or branch readback and exact settlement replay. Confirm the actual Hook outputs on that version and surface. Contract tests establish neither native adoption nor cache retention.
+- The executable contract fixture covers feature off, L0/L1/L2 negotiation, explicit pre-tool opt-in, exact accepted return, refusal of foreign receipts and a real missing-file read. Run bilingual and diff-based premerge validation.
+- For the first live slice, connect one verified child return to the existing history working-set reader. Cover an ordinary turn, missing or failed verification, compact or branch readback of the original receipt and exact C1 settlement replay on the same Goal/Todo. Confirm the actual Hook outputs on the installed host version and surface.
 - Compare with the same host's Stop-Hook baseline at matched model, task, access and budget. Record accepted outcomes, invalid completions, elapsed time, cached and uncached tokens, verifier calls, retries, storage and human intervention. Include high and low overlap. Keep cross-host results outside causal attribution for the same-host treatment.

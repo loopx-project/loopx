@@ -203,6 +203,10 @@ Paired diffs do not certify translation accuracy.
     qualification without changing defaults or launching experiments.
 - [Verifier Hook Co-Design v0](verifier-hook-co-design-v0.md)
   ([中文版](verifier-hook-co-design-v0.zh-CN.md))
+  - **Delivery on `main`:** Bilingual RFC, TypeScript interface and executable contract fixture.
+  - **Current boundary:** The first live acceptance slice connects one verified child
+    return to the existing history working-set reader. It covers original receipt
+    readback, missing evidence, native recovery and exact C1 settlement replay.
 - [Recoverable History Working Sets and Context Policy Extensions v0](history-working-set-context-policy-v0.md)
   ([中文版](history-working-set-context-policy-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; tracking [#8450](https://github.com/loopx-project/loopx/issues/8450).

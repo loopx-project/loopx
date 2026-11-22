@@ -1,11 +1,14 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {createHash} from "node:crypto";
+import {mkdtempSync, readFileSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 
-import {
-  negotiateVerifierHooks, recommendVerifiedClose, type VerifiedCloseReader,
-  type VerifiedCloseRequest, type VerifiedScopeEvidence, type VerifierHookEvent, type VerifierScopeReceipt,
+import type {
+  VerifiedCloseReader, VerifiedCloseRequest, VerifiedScopeEvidence, VerifierHookEvent, VerifierScopeReceipt,
 } from "../../loopx/control_plane/turn_driver/verifier_hook_contract.ts";
+import {negotiateVerifierHooks, recommendVerifiedClose} from "./fixtures/verifier_hook_contract.ts";
 import {capturedContextSelection} from "../../loopx/control_plane/quota/context_selection.ts";
 
 const l1 = { session_lineage: true, boundary_context: true };
@@ -156,6 +159,43 @@ test("readable evidence must match the recorded role, reference and exact work s
   assert.deepEqual(recommendVerifiedClose(request, authority({
     ...source, verdict: "failed", counterexample_ref: passed.summary_ref,
   })), { action: "KeepRaw" });
+});
+
+test("files missing from the receipt or evidence reader preserve the raw child scope", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "loopx-verifier-hook-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const readMissingFile = (): never => {
+    readFileSync(join(directory, "unavailable.json"), "utf8");
+    return assert.fail("the verifier fixture unexpectedly found an unavailable file");
+  };
+
+  await t.test("a missing receipt short-circuits all evidence reads", () => {
+    assert.deepEqual(recommendVerifiedClose(request, {
+      readReceipt: readMissingFile,
+      readEvidence: () => assert.fail("evidence read after receipt disappeared"),
+    }), { action: "KeepRaw" });
+  });
+  await t.test("a missing required evidence file or counterexample retains the raw scope", () => {
+    for (const ref of [passed.oracle_evidence_ref, passed.source_ref, passed.summary_ref]) {
+      assert.deepEqual(recommendVerifiedClose(request, authority(passed, key =>
+        key === ref ? readMissingFile() : evidence.get(key),
+      )), { action: "KeepRaw" }, ref);
+    }
+    const failed = { ...source, verdict: "failed", counterexample_ref: "oracle:counterexample" } as const;
+    assert.deepEqual(recommendVerifiedClose(request, authority(failed, readMissingFile)), { action: "KeepRaw" });
+  });
+});
+
+test("unexpected authority reader errors remain observable", () => {
+  const failure = new TypeError("invalid authority record");
+  const fail = (): never => { throw failure; };
+  const readers = [
+    { readReceipt: fail, readEvidence: () => assert.fail("evidence read after unexpected failure") },
+    authority(passed, fail),
+  ];
+  for (const reader of readers) {
+    assert.throws(() => recommendVerifiedClose(request, reader), error => error === failure);
+  }
 });
 
 test("matching blank identity fields do not authorize a receipt read", () => {
