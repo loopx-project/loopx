@@ -24,7 +24,7 @@ from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import TodoReviewPreviewConflict, redact_local_paths
 from .chat_agent import CodexChatAgentError
 from .capabilities.native_chat.project_context import ChatProjectContexts
-from .chat_attachments import (
+from .chat.attachments import (
     CHAT_JSON_MAX_BYTES,
     CHAT_TURN_MAX_BODY_BYTES,
     normalize_local_chat_attachments,

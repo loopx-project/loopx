@@ -306,17 +306,21 @@ def quota_capability_automation_source(payload: Mapping[str, Any]) -> dict[str, 
     return _turn_envelope_result("capability_automation_source", payload=dict(payload))
 
 
-def turn_envelope_replan_settlement_identity(
-    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+def _turn_settlement_identity(
+    operation: str, envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> dict[str, Any] | None:
-    result = _turn_envelope_result("replan_settlement_identity", envelope=dict(envelope),
-                                   turn_instance_id=turn_instance_id)
-    identity = result.get("identity")
+    identity = _turn_envelope_result(operation, envelope=dict(envelope), turn_instance_id=turn_instance_id).get("identity")
     if identity is None:
         return None
     if not isinstance(identity, Mapping):
         raise RuntimeError("TypeScript Turn settlement identity must be an object")
     return dict(identity)
+
+
+def turn_envelope_replan_settlement_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> dict[str, Any] | None:
+    return _turn_settlement_identity("replan_settlement_identity", envelope, turn_instance_id=turn_instance_id)
 
 
 def compose_turn_decision(
@@ -367,11 +371,7 @@ def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
 def turn_envelope_scoped_settlement_identity(
     envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> dict[str, Any] | None:
-    identity = _turn_envelope_result("scoped_settlement_identity", envelope=dict(envelope),
-                                    turn_instance_id=turn_instance_id).get("identity")
-    if identity is not None and not isinstance(identity, Mapping):
-        raise RuntimeError("TypeScript Turn settlement identity must be an object")
-    return dict(identity) if identity is not None else None
+    return _turn_settlement_identity("scoped_settlement_identity", envelope, turn_instance_id=turn_instance_id)
 
 
 def build_turn_envelope(
@@ -383,19 +383,6 @@ def build_turn_envelope(
     captured_decision_path: str | None = None,
 ) -> dict[str, Any]:
     """Project one full quota decision through the canonical TS transaction."""
-
-    return _build_turn_projection(payload,
-        scheduler_execution_context=scheduler_execution_context,
-        captured_decision_path=captured_decision_path)
-
-
-def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
-    ) = None,
-    captured_decision_path: str | None = None,
-) -> dict[str, Any]:
-
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     scheduler_execution_args: object = ""
     if resolution.ok and resolution.context is not None:

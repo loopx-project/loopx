@@ -375,13 +375,15 @@ export interface Note {
   source?: NoteSource;
 }
 
-export interface NoteSource { threadId: string; turnId: string }
+/** Where a passage came from: the earlier part of a handover chain, or (`elsewhere`) another thread. */
+export interface NoteSource { threadId: string; turnId: string; elsewhere?: boolean }
 
 const NOTE_HEAD = /^\[注释 (\d+)\]$/;
 const NOTE_FILE = '文件：';
 const NOTE_COMMENT = '评论：';
-const NOTE_SOURCE_LINE = /^来源：交接前的会话，原文和上下文用 loochat history (\S+) --turn (\S+) 读$/;
-const sourceLine = (source: NoteSource) => `来源：交接前的会话，原文和上下文用 loochat history ${source.threadId} --turn ${source.turnId} 读`;
+const NOTE_ELSEWHERE = '另一个会话';
+const NOTE_SOURCE_LINE = /^来源：(交接前的会话|另一个会话)，原文和上下文用 loochat history (\S+) --turn (\S+) 读$/;
+const sourceLine = (source: NoteSource) => `来源：${source.elsewhere ? NOTE_ELSEWHERE : '交接前的会话'}，原文和上下文用 loochat history ${source.threadId} --turn ${source.turnId} 读`;
 
 /**
  * A message with numbered notes in front, in plain text any agent reads and can refer back to
@@ -427,7 +429,7 @@ export function splitNotes(text: string): { notes: Note[]; body: string } {
     while (i < lines.length && lines[i].startsWith('>')) quoted.push(lines[i++].replace(/^>\s?/, ''));
     let comment = '';
     if (i < lines.length && lines[i].startsWith(NOTE_COMMENT)) comment = lines[i++].slice(NOTE_COMMENT.length).trim();
-    notes.push({ quote: quoted.join('\n').trim(), comment, ...(file ? { file } : {}), ...(found ? { source: { threadId: found[1], turnId: found[2] } } : {}) });
+    notes.push({ quote: quoted.join('\n').trim(), comment, ...(file ? { file } : {}), ...(found ? { source: { threadId: found[2], turnId: found[3], ...(found[1] === NOTE_ELSEWHERE ? { elsewhere: true } : {}) } } : {}) });
     end = i;
   }
   if (notes.length === 0) return { notes, body: text };

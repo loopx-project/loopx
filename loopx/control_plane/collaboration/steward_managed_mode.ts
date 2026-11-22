@@ -184,7 +184,9 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
     }
     return requireNonEmptyString(item.thread_id, "original native context thread");
   })];
-  if (request.work_kind !== "report" || prior.work_kind !== "report" || prior.report_quota_recovery !== undefined
+  if (request.work_kind !== "report" || prior.work_kind !== "report"
+      || prior.report_quota_recovery !== undefined || prior.report_timeout_recovery !== undefined
+      || request.report_timeout_recovery !== undefined
       || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
       || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
       || typeof original.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(original.turn_id)
@@ -215,6 +217,69 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || accepting && (basis.generation_present !== false
         || basis.observed_at < observation.quota_observed_at || basis.observed_at - observation.quota_observed_at > 60)) {
     throw new EffectRuntimeRequestError("report continuation requires its original native user-only quota refusal and current usable allowance");
+  }
+}
+
+/** One new report Turn in an isolated cascade after an untouched Antigravity timeout.
+ * Preserves the failed Turn and its immutable artifacts without rewriting or resuming it.
+ */
+function admitReportTimeoutRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
+  if (request.report_timeout_recovery === undefined) {
+    if (params.report_timeout_basis != null) throw new EffectRuntimeRequestError("timeout recovery lacks its original report");
+    return;
+  }
+  if (request.report_quota_recovery !== undefined) {
+    throw new EffectRuntimeRequestError("report continuation cannot combine quota and timeout recovery");
+  }
+  const recovery = requireJsonObject(request.report_timeout_recovery, "report timeout continuation");
+  const observation = requireJsonObject(recovery.native_observation, "native timeout observation");
+  const basis = requireJsonObject(params.report_timeout_basis, "original timeout failure basis");
+  const original = requireJsonObject(basis.original, "original failed Chat Turn");
+  const prior = requireJsonObject(original.loopx_request, "original report request");
+  const result = requireJsonObject(requireJsonObject(original.response, "original response").native_loopx, "original failure");
+  const failure = requireJsonObject(result.host_failure, "original host failure");
+  const effects = requireJsonObject(result.effects, "original effects");
+  const receipt = requireJsonObject(result.receipt, "original native receipt");
+  const inspection = requireJsonObject(basis.inspection, "original native inspection");
+  const recorded = requireJsonObject(inspection.recorded_effects, "original recorded effects");
+  const actor = requireJsonObject(request.actor, "original report actor");
+  const lineage = requireJsonObject(receipt.lineage, "original report lineage");
+  const keys = Object.keys(request).filter(key => key !== "report_timeout_recovery");
+  const accepting = params.turn == null && params.report_settlement_recovery == null;
+  if (request.work_kind !== "report" || prior.work_kind !== "report"
+      || prior.report_timeout_recovery !== undefined || prior.report_quota_recovery !== undefined
+      || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
+      || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
+      || typeof original.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(original.turn_id)
+      || recovery.original_turn_id !== original.turn_id || original.session_id !== session.session_id
+      || original.origin !== "native_loopx" || original.loopx_execution !== true || original.status !== "completed"
+      || original.delta_count !== 0 || typeof original.upstream_turn_id !== "string" || !original.upstream_turn_id
+      || Object.keys(prior).length !== keys.length
+      || keys.some(key => !Object.hasOwn(prior, key) || (key === "turn_instance_id"
+        ? request[key] !== String(prior[key]) + ".timeout-recovery"
+        : !sameReportRequestField(key, prior[key], request[key])))
+      || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false || result.mode !== "run_once"
+      || result.status !== "failed" || result.result_kind !== "host_failure"
+      || failure.schema_version !== "loopx_turn_host_failure_v0" || failure.attempt !== 1
+      || effects.host_invoked !== true
+      || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => effects[key] !== false || recorded[key] !== false)
+      || receipt.ok !== true || receipt.failed_phase !== "host_execute" || receipt.status !== "failed"
+      || JSON.stringify(receipt.completed_phases) !== "[]" || JSON.stringify(inspection.completed_phases) !== "[]"
+      || lineage.goal_id !== actor.goal_id || lineage.agent_id !== actor.agent_id || lineage.todo_id !== request.todo_id
+      || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
+      || ["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].some(key => inspection[key] !== true)
+      || inspection.journal_status !== "failed"
+      || ![null, true].includes(recorded.host_invoked as null | boolean)
+      || observation.adapter_kind !== "antigravity_ls"
+      || typeof observation.thread_id !== "string" || !observation.thread_id
+      || observation.turn_id !== original.upstream_turn_id
+      || observation.cascade_idle !== true || observation.no_final_response !== true
+      || observation.native_timeout !== true || observation.quota_available !== true
+      || typeof observation.quota_observed_at !== "number" || !Number.isFinite(observation.quota_observed_at)
+      || typeof basis.observed_at !== "number" || !Number.isFinite(basis.observed_at)
+      || accepting && (basis.generation_present !== false
+        || basis.observed_at < observation.quota_observed_at || basis.observed_at - observation.quota_observed_at > 60)) {
+    throw new EffectRuntimeRequestError("report timeout continuation requires its original idle Antigravity timeout observation and current usable allowance");
   }
 }
 
@@ -384,7 +449,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
     ...(request.creation_request === undefined ? [] : ["creation_request"]),
     ...(observationOnly ? ["monitor_deadline", "monitor_lease_version", "monitor_restart_recovery"] : []),
-    ...(reportWork ? ["report_window_id", "report_subscription_revision", "report_quota_recovery"] : []),
+    ...(reportWork ? ["report_window_id", "report_subscription_revision", "report_quota_recovery", "report_timeout_recovery"] : []),
     ...(scheduledWork ? ["schedule_window_id", "schedule_subscription_revision"] : [])];
   if (Object.keys(request).some(key => !requestFields.includes(key))
       || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor", "report", "scheduled_task"].includes(String(request.work_kind))
@@ -486,6 +551,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   }
   admitReportSelectionRecovery(params, request, session.session_id);
   admitReportQuotaRecovery(params, request, session);
+  admitReportTimeoutRecovery(params, request, session);
   return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: observationOnly};
 }
 
@@ -634,7 +700,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   }
   const request = requireJsonObject(params.request, "native steward Turn request");
   const fields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
-    "monitor_deadline", "monitor_lease_version", "monitor_restart_recovery", "report_window_id", "report_subscription_revision", "resume_turn_key", "report_quota_recovery"];
+    "monitor_deadline", "monitor_lease_version", "monitor_restart_recovery", "report_window_id", "report_subscription_revision", "resume_turn_key", "report_quota_recovery", "report_timeout_recovery"];
   if (Object.keys(request).some(key => !fields.includes(key))
       || request.operation !== "native_turn" || request.host !== "codex-app-server"
       || ![undefined, "native_turn", "monitor", "report"].includes(request.work_kind as string | undefined)
@@ -650,6 +716,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   }
   admitReportSelectionRecovery(params, request, current.sessionId);
   admitReportQuotaRecovery(params, request, current.session);
+  admitReportTimeoutRecovery(params, request, current.session);
   admitMonitorRestartRecovery(params, request, current.session);
   if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"

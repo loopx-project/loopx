@@ -5,7 +5,8 @@ import queue
 
 import pytest
 
-from loopx import chat_agent, chat_acp
+from loopx import chat_agent
+from loopx.chat import acp as chat_acp
 from loopx.chat_store import ChatSessionStore
 from loopx.cli import build_parser
 from loopx.cli_commands.support_control_chat import chat_server_options

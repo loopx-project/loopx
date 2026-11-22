@@ -1,8 +1,8 @@
 /** Missing-checkpoint commit. Index/source claims survive the requesting CLI;
  * the real provider fence lasts through the synchronous durable append. */
 import {createHash} from "node:crypto";
-import {closeSync, fsyncSync, lstatSync, openSync, readFileSync, writeFileSync} from "node:fs";
-import {dirname, join, resolve} from "node:path";
+import {closeSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, writeFileSync} from "node:fs";
+import {basename, dirname, extname, isAbsolute, join, relative, resolve, sep} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -57,9 +57,9 @@ function indexBytes(path: string): Buffer {
   return bytes;
 }
 
-function committedArtifacts(prior: JsonObject, runsDir: string): JsonObject {
-  const jsonPath = runPath(prior.json_path, runsDir, ".json");
-  const markdownPath = runPath(prior.markdown_path, runsDir, ".md");
+function committedArtifacts(prior: JsonObject, runsDir: string, goalId: string): JsonObject {
+  const jsonPath = runPath(prior.json_path, runsDir, ".json", goalId);
+  const markdownPath = runPath(prior.markdown_path, runsDir, ".md", goalId);
   let record: JsonObject;
   try {
     record = requireJsonObject(JSON.parse(readFileSync(jsonPath, "utf8")), "checkpoint record");
@@ -88,17 +88,53 @@ export function inspectCheckpointReplay(value: unknown): JsonObject {
   if (!rows.some(line => canonicalAuthoritySha256(JSON.parse(line)) === priorDigest)) {
     unknown("checkpoint replay is not an indexed record");
   }
-  return committedArtifacts(prior, runsDir);
+  return committedArtifacts(prior, runsDir, goal);
 }
 
-function runPath(value: unknown, runsDir: string, extension: string): string {
-  const path = resolve(requireNonEmptyString(value, "run artifact path"));
-  if (dirname(path) !== resolve(runsDir) || !path.endsWith(extension)) {
-    unknown("checkpoint artifact path is invalid");
+/** A copied runtime keeps absolute `<old>/goals/<goalId>/runs/<file>` paths.
+ * Use that file name only when it is a regular file inside the current runs directory. */
+function relocatedCheckpointArtifact(rawPath: string, runsDir: string, extension: string, goalId: string): string | null {
+  if (!isAbsolute(rawPath)) return null;
+  const normalized = resolve(rawPath);
+  const fileName = basename(normalized);
+  const runsParent = dirname(normalized);
+  const goalDir = dirname(runsParent);
+  const goalsDir = dirname(goalDir);
+  if (
+    !fileName || fileName === "." || fileName === ".." ||
+    extname(fileName) !== extension || !fileName.endsWith(extension) ||
+    basename(runsParent) !== "runs" || basename(goalDir) !== goalId || basename(goalsDir) !== "goals"
+  ) {
+    return null;
   }
-  try { if (!lstatSync(path).isFile()) unknown("checkpoint artifact is not a regular file"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  return path;
+  let runsDirReal: string;
+  try { runsDirReal = realpathSync(runsDir); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  const candidate = join(runsDirReal, fileName);
+  let targetPath: string;
+  try {
+    if (!lstatSync(candidate).isFile()) return null;
+    targetPath = realpathSync(candidate);
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  const relativePath = relative(runsDirReal, targetPath);
+  if (
+    !relativePath || relativePath === ".." || relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath) || relativePath !== fileName
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+function runPath(value: unknown, runsDir: string, extension: string, goalId: string): string {
+  const raw = requireNonEmptyString(value, "run artifact path");
+  const path = resolve(raw);
+  if (dirname(path) === resolve(runsDir) && path.endsWith(extension)) {
+    try { if (!lstatSync(path).isFile()) unknown("checkpoint artifact is not a regular file"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    return path;
+  }
+  return relocatedCheckpointArtifact(raw, runsDir, extension, goalId) ?? unknown("checkpoint artifact path is invalid");
 }
 
 function writeSynced(path: string, text: string): void {
@@ -155,7 +191,7 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
         jsonObject(prior.refresh_recovery)?.vision_request_digest !== recovery.vision_request_digest) {
       unknown("checkpoint replay does not identify a committed decision");
     }
-    return committedArtifacts(prior, runsDir);
+    return committedArtifacts(prior, runsDir, identity.goal_id);
   }
 
   const claims: {
@@ -273,8 +309,8 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
         }
         projected.vision_checkpoint = {...requireJsonObject(projected.vision_checkpoint, "vision checkpoint"), read_context: context};
       }
-      const jsonPath = runPath(row.json_path, runsDir, ".json");
-      const markdownPath = runPath(row.markdown_path, runsDir, ".md");
+      const jsonPath = runPath(row.json_path, runsDir, ".json", identity.goal_id);
+      const markdownPath = runPath(row.markdown_path, runsDir, ".md", identity.goal_id);
       try {
         writeSynced(jsonPath, JSON.stringify(record, null, 2) + "\n");
         writeSynced(markdownPath, requireNonEmptyString(request.markdown, "checkpoint Markdown"));

@@ -21,6 +21,8 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 
 ## 使用方式
 
+消息菜单中的复制为引用、整条回复引用、作为上下文和侧边追问，见[引用使用说明](docs/references.md)。
+
 实时语音：开启后输入框换成一个会随声音起伏的球，你说的话以浅蓝气泡记进线程；后台任务和待批准事项一行可见；结束后逐句对话折成一行，下面留一份文字总结。
 
 用量与诊断：多 agent 的 token 用量、TPM 走势和费用估算。
@@ -39,7 +41,61 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 | zcode | `zcode app-server` 精简接入 | 有 | 按原生模型能力 | 暂无 |
 | DeepSeek Harness | `dsh --profile acp`（ACP） | 有（仅允许一次/拒绝） | 有（按当前模型路由） | 暂无 |
 
-各家 agent CLI 需要先在主机上装好并完成登录或鉴权。没装的 agent 在界面里显示为不可用。
+各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
+
+协作成员的回报、模型权限和引用对话预览见 [协作对话与概况侧栏指南](docs/collaboration.md)。
+
+### Agent 未登录时恢复
+
+读取模型时，所有 Agent 明确返回的原生认证失败都会在工作区显示「账号名 尚未登录」。恢复方式按该实例支持的能力提供：
+
+| Agent | 恢复入口 |
+| --- | --- |
+| Claude Code、Antigravity | 「去登录」展开行内授权面板；验证后自动刷新模型 |
+| Codex、TRAE CLI、ZCode | 「去登录」打开该账号的原生终端登录；模型读取确认可用后自动恢复 |
+| pi、DeepSeek Harness | 显示原生客户端凭据配置指引和「重试」；pi 在原生客户端使用 `/login` |
+
+空目录单独提示「暂无可用模型，请检查登录或模型配置」；空列表本身不作为未登录证据。配置型 Agent 在原生客户端配置后点击「重试」，已有草稿保留。网络故障、额度耗尽、不受支持的订阅和 Workbench 自身的访问令牌错误保留各自含义。
+
+以下为构建页面与隔离测试账号的实际界面；原生授权结果由测试 CLI 提供，不代表真实账号授权已验收。
+
+![Claude Code 未登录时的恢复入口](docs/images/agent-login-claude.png)
+
+<img src="docs/images/agent-login-codex-phone.png" alt="手机上的 Codex 登录与重试入口，原草稿保留" width="390" />
+
+![pi 空模型目录的配置指引](docs/images/agent-login-empty-models.png)
+
+认证识别遵循原生协议：[ACP 的认证错误](https://agentclientprotocol.com/protocol/v1/authentication)、Codex 的 `account/read`（仅在 `requiresOpenaiAuth` 为真且账号为空时判断未登录），以及 CLI 明确的登录或缺失凭据诊断。Codex 自定义服务和旧版账号协议保留原有目录行为。
+
+### Antigravity 登录
+
+若读取模型时尚未登录，当前页面会显示「Antigravity 尚未登录」和「去登录」。点击后在原位置展开授权面板；登录验证成功后自动加载模型列表，无需刷新页面。若此时模型读取暂时失败，可以重试读取，不必重复授权。网络或 CLI 故障仍单独显示为错误。
+
+![未登录时就地进入授权](docs/images/antigravity-login-required.png)
+
+<img src="docs/images/antigravity-models-restored.png" alt="授权后自动恢复的模型列表（测试账号）" width="390" />
+
+在 Agents 页点击 Antigravity 的「登录」，授权面板会在该账号行下方展开，不遮挡其他页面操作。打开 Google 授权链接，授权后把验证码或浏览器最后显示的完整回跳地址粘贴回来，点击「提交验证码」。出现登录成功后，账号邮箱会显示在列表中。收起面板、离开页面或刷新都不会取消登录，10 分钟内可从「继续登录」回到同一次授权；只有「取消登录」会主动结束它。链接过期或授权失败时点「重试」获取新链接。
+
+另加账号时，选择「添加 agent → Antigravity → 添加账号」。创建后直接展开登录面板。新账号使用独立目录，只复制可移植设置、指令和技能，不复制原账号的凭据、历史或项目信任。原生 CLI 负责 OAuth 和保存凭据。安装器留下的 `.old` 等备份不会作为可用账号展示，原文件保留。
+
+下面是同一登录入口在桌面与手机上的示意（使用测试账号）：
+
+![桌面 Antigravity 登录](docs/images/antigravity-login-desktop.png)
+
+<img src="docs/images/antigravity-login-phone.png" alt="手机 Antigravity 登录：打开链接后粘贴授权码或回跳地址" width="390" />
+
+## 通过 OAR 接入更多 Agent
+
+支持 Cursor、CodeBuddy Code、Devin、Factory Droid、Grok Build、Kimi Code、OpenCode、Qoder 和 Qwen Code。它们复用现有的「配置 → Agents → 添加 agent」入口；已安装的宿主可以发现并连接，未安装的宿主显示安装指引。Cursor 使用随工作台提供的官方 SDK，并在独立子进程运行。
+
+这些宿主需要 **Node.js 24+**。使用 Node.js 24 启动 workbench 后，在原生客户端完成所需安装或凭据配置，再通过添加页面连接。模型列表来自当前宿主和账号；未登录时可从原位置进入授权，浏览器确认型登录不要求粘贴授权码，设备授权码会直接显示。只读取列表不会开始登录或调用模型。Node.js 22 下既有原生适配器保持可用，OAR 宿主会报告运行环境不满足。
+
+OAR 宿主仅提供「完全访问」模式：原生工具可以直接修改文件和运行命令，不会弹出逐次审批。既有 Agent 的权限模式保持原样。选定模型后可在同一对话连续发送、停止执行；工作台保存原生会话 ID，重启后继续该会话。恢复失败会显示错误，不会自动换成空会话。
+
+本次接入不提供这些宿主的原生历史导入、分叉、账号复制、原生会话删除、订阅额度或实时语音。工作台自己的聊天记录仍可查看。图片按 OAR 和宿主声明的能力开放；各宿主能力及版本条件见 [OAR 运行时矩阵](https://github.com/botiverse/oar/blob/main/docs/spec/runtime-matrix.md)。
+
+可在 Agent 行菜单中隐藏或移除已连接实例；移除不会删除原生客户端的会话和凭据。OAR 与 Cursor SDK 固定版本随 lockfile 更新，故障回退时同时恢复工作台源码和 lockfile，再安装依赖、构建。现有原生适配器不经过 OAR。
 
 ## 插件与参与
 
@@ -86,6 +142,69 @@ curl -fsSL "https://raw.githubusercontent.com/loopx-project/loopx/$ref/apps/work
 它会先预览、再安装、确认服务在运行，最后告诉你地址和 token；装 Node.js、编译工具这类改系统的事会先问你。
 
 各家 agent CLI 要自己装好并登录，LooChat 只调用这台机器上现有的。
+
+### 统一启动命令
+
+安装支持此命令的 LoopX CLI，并安装、构建同版本 Workbench 后：
+
+```bash
+loopx workbench start
+loopx workbench status
+loopx workbench stop
+```
+
+`start` 在后台启动 Workbench，输出访问地址和私密登录链接。重复执行复用已有实例；
+`status` 只读检查实际服务及 Core 连通性，不创建配置、不签发登录链接。
+`stop` 保留配置和会话数据，存在运行中的 Agent 时拒绝停止；明确要中断时使用
+`loopx workbench stop --force`。Core 仍独立管理，以上命令不会启动、替换或停止 Core。
+Core 不可达会明确提示，普通 Agent 会话仍可使用；连通性不代表 Goal 功能已验收。
+
+需要登录电脑后自动运行时，显式启用：
+
+```bash
+loopx workbench start --autostart
+loopx workbench status
+# 本次停止；下次登录仍自动启动
+loopx workbench stop
+# 停止并取消自启动，保留会话和配置
+loopx workbench stop --disable-autostart
+```
+
+macOS 使用当前用户的 LaunchAgent，登录后启动、异常退出后恢复；不承诺未登录时运行。
+Linux 使用 `systemd --user`，需要可用的用户服务管理器；不自动启用 linger 或申请 root 权限。
+`status` 从系统服务管理器读取自启动状态，无法核实会明确报错。普通 `start` 不主动开启自启动；
+已有注册时沿用该服务。为已运行的 CLI 实例启用自启动需要一次空闲重启，运行中的任务会阻止迁移。
+系统服务只读取已有配置，不签发登录链接；交互执行 `start` 就会输出带 token 的私密登录链接。
+默认地址只适用于同机浏览器；异机访问仍需已有的可达域名或代理。
+
+注册使用 Node 和当前 CLI 的绝对路径。应从稳定安装位置启用，保留 Node、CLI、应用及配置文件；
+移动安装位置或更换 Node 后，先用原安装执行 `stop --disable-autostart`，再从新安装启用。
+若服务文件被外部修改，CLI 会拒绝覆盖或删除，需先核对并恢复原注册；服务管理器不可用时不假报成功。
+服务文件只保存启动路径和必要环境，不复制登录 token；密钥仍由已有 `.env` 管理。
+
+默认数据目录与 `scripts/workbench.sh` 相同：
+`${XDG_STATE_HOME:-~/.local/state}/loochat-workbench`。
+可以用 `WORKBENCH_STATE_DIR` 或每次传入 `--state-dir` 指定已有目录。
+`start --port 8796`、`--workbench-dir /path/to/apps/workbench`、
+`--env-file /path/to/workbench.env` 可选择端口、已构建应用和已有配置；
+成功启动后保存这些选择，停止后再次启动沿用。应用依次从显式目录、
+`LOOPX_WORKBENCH_DIR`、已保存目录、`LOOCHAT_HOME`、CLI 源码目录和默认安装目录查找。
+依赖或构建缺失时给出准备命令，不自动下载安装。
+
+原有脚本或 systemd 正在管理的实例不会被接管或停止。迁移时先用原启动方式正常停止，
+再指定同一数据和配置，例如安装器的默认目录：
+
+```bash
+loopx workbench start --state-dir ~/.local/state/loochat --env-file ~/.config/loochat/.env
+loopx workbench status --state-dir ~/.local/state/loochat
+loopx workbench stop --state-dir ~/.local/state/loochat
+```
+
+systemd 实例继续使用原服务管理也完全可行，不要让两种启动方式同时管理同一数据。
+CLI 管理使用独立的私有 Unix socket，不开放浏览器或远程 relay 的停服接口；
+旧 PID 文件不授予停止权限。后台日志在状态目录的 `daemon.log`；
+启动失败先看日志，修正配置后重试。异常中断留下 `lifecycle.lock` 时，先确认没有进行中的
+启动，再移除该锁目录重试。命令支持 `--format json`，但 `start` 输出包含登录链接，勿公开。
 
 ### 从源码开发
 
@@ -208,6 +327,8 @@ npm test -w @calli/e2e -- --test-concurrency=1 test/smoke.spec.mjs
 
 ### 安装为桌面应用
 
-在 Chrome 中打开 LooChat 后，可通过浏览器菜单将它安装为应用。安装名称为 LooChat，图标使用蓝白配色的大小钳小螃蟹。
+在 macOS 或 Windows 的 Chrome 中打开 LoopX，浏览器允许安装时，侧栏底部会出现「安装 LoopX」。点击「安装」后，在 Chrome 弹窗中确认；网页不能跳过这次确认。安装后可从 Spotlight 或开始菜单打开独立窗口。
+
+选择「以后再说」或取消安装后，7 天内不再主动提示；「配置 → 安装 LoopX」仍可手动进入。没有快捷安装按钮时，该页面会显示浏览器菜单安装说明。请使用 HTTPS（本机 localhost 也可）；受管理的浏览器可能禁用安装。独立窗口仍需连接原来的 Workbench 服务，不提供离线 Agent 执行。
 
 如果此前安装的应用仍显示 Limi、AgentHub 或旧图标，先尝试关闭所有应用窗口后重新打开，并接受 Chrome 提供的名称或图标更新。如果仍未更新，可卸载旧应用后从当前网页重新安装；卸载时不要勾选清除网站数据，以保留本机登录和偏好。

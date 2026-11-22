@@ -24,7 +24,7 @@ def current_session_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(chat_server.ChatRequestHandler, "_registry_and_goal", lambda *_: ({}, {}))
     monkeypatch.setattr(chat_server, "_goal_public_context", lambda *_: {
         "project": tmp_path, "objective": "Keep this conversation.", "title": "Fixture"})
-    monkeypatch.setattr("loopx.chat_providers.codex_model_options", lambda *_args, **_kwargs: {
+    monkeypatch.setattr("loopx.chat.providers.codex_model_options", lambda *_args, **_kwargs: {
         "options": [{"value": "first", "reasoning_efforts": ["low", "high"]},
                     {"value": "second", "reasoning_efforts": ["low", "high"]}]})
     session = store.create_session(goal_id="fixture", agent_id="codex", adapter_kind="codex_app_server",
@@ -173,7 +173,7 @@ def test_current_session_settings_do_not_modify_a_session_closed_during_catalog_
     def catalog(*_args, **_kwargs):
         store.update_session(session["session_id"], status="closed")
         return {"options": [{"value": "second", "reasoning_efforts": ["low", "high"]}]}
-    monkeypatch.setattr("loopx.chat_providers.codex_model_options", catalog)
+    monkeypatch.setattr("loopx.chat.providers.codex_model_options", catalog)
     status, _ = post({"agent_model_id": "second", "agent_reasoning_effort": "high"})
     assert status == 404
     saved = store.load_session(session["session_id"])
@@ -185,7 +185,7 @@ def test_current_session_settings_failure_preserves_previous_values(current_sess
     store, session, post = current_session_settings
     before = store.load_session(session["session_id"])
     if failure == "unavailable":
-        monkeypatch.setattr("loopx.chat_providers.codex_model_options", lambda *_a, **_kw: None)
+        monkeypatch.setattr("loopx.chat.providers.codex_model_options", lambda *_a, **_kw: None)
     else:
         monkeypatch.setattr(store, "update_session", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("write refused")))
     status, _ = post({"agent_model_id": "second", "agent_reasoning_effort": "high"})

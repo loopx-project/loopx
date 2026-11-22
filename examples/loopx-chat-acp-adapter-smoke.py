@@ -14,9 +14,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.chat_acp import ACPStdioAdapter  # noqa: E402
+from loopx.chat.acp import ACPStdioAdapter  # noqa: E402
 from loopx.chat_agent import CodexChatAgentError  # noqa: E402
-from loopx.chat_endpoints import AgentEndpointRegistry  # noqa: E402
+from loopx.chat.endpoints import AgentEndpointRegistry  # noqa: E402
 from loopx.chat_runtime import ChatRuntimeController  # noqa: E402
 from loopx.chat_store import ChatSessionStore  # noqa: E402
 from loopx.kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID  # noqa: E402

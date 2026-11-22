@@ -131,7 +131,7 @@ async function realRemoteMapping({ browser, collectCoverage, url, locale }) {
     const register = mapped => execFileSync(python, ["-c", `
 import json, sys
 from pathlib import Path
-from loopx.chat_endpoints import AgentEndpointRegistry
+from loopx.chat.endpoints import AgentEndpointRegistry
 runtime, binary, project, mapped = sys.argv[1:]
 endpoint = {"agent_id":"remote-first", "display_name":"Remote fixture", "command":[binary], "location":"remote"}
 if mapped == "yes": endpoint["workspace_mapping"] = [{"local_root":project,"agent_root":"/synthetic/workspace"}]
