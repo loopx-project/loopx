@@ -288,8 +288,24 @@ def read_json_pointers_paginated(
     """Read verified capture JSON pointers in-process without locks until eof=true."""
     started = time.perf_counter()
     explicit_pointers = pointers is not None
-    requested = list(pointers) if pointers is not None else list(DEFAULT_DIRECT_READ_POINTERS)
-    requested = list(dict.fromkeys(requested))[:MAX_POINTERS_PER_HOOK]
+    requested_raw = list(pointers) if pointers is not None else list(DEFAULT_DIRECT_READ_POINTERS)
+    requested = list(dict.fromkeys(requested_raw))
+    if len(requested) > MAX_POINTERS_PER_HOOK:
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        return (
+            False,
+            {
+                "ok": False,
+                "sha256_verified": False,
+                "eof": False,
+                "lock_free": True,
+                "read_latency_ms": elapsed_ms,
+                "reason": "too_many_json_pointers",
+                "requested_count": len(requested),
+                "max_pointers": MAX_POINTERS_PER_HOOK,
+            },
+            None,
+        )
     try:
         resolved_path, raw, payload = read_context_capture_file(
             str(capture_path), capture_sha256, private=private,
