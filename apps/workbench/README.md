@@ -35,7 +35,7 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 |---|---|---|---|---|
 | Claude Code | ACP（`@agentclientprotocol/claude-agent-acp`，随项目安装） | 有 | 有 | 有 |
 | pi | `pi --mode rpc` | 无（pi 本身没有） | 有。纯文本模型需要装 pi 扩展 `pi-aux-vision` | 有 |
-| Antigravity | `agy` 的无界面 stream-json 模式 | 无（不能询问，只有"自动改文件"和"完全访问"两档） | 有（按文件路径交给它） | 暂无 |
+| Antigravity | `agy acp`（ACP 1） | 有 | 有（原生 ACP 图片） | 暂无 |
 | Codex | `codex app-server` | 有 | 有 | 有 |
 | TRAE CLI | app-server 执行，ACP 模型与历史接口 | 有 | 有 | 有 |
 | zcode | `zcode app-server` 精简接入 | 有 | 按原生模型能力 | 暂无 |
@@ -64,6 +64,20 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 ![pi 空模型目录的配置指引](docs/images/agent-login-empty-models.png)
 
 认证识别遵循原生协议：[ACP 的认证错误](https://agentclientprotocol.com/protocol/v1/authentication)、Codex 的 `account/read`（仅在 `requiresOpenaiAuth` 为真且账号为空时判断未登录），以及 CLI 明确的登录或缺失凭据诊断。Codex 自定义服务和旧版账号协议保留原有目录行为。
+
+### Antigravity 模型与思考强度
+
+需要支持 `agy acp` 的原生 CLI。同一模型的多种强度合并为一个模型选项，在输入框的模型控件中打开「思考强度」滑块即可调整。可选档位来自该账号的模型目录；只有一个固定强度的模型保留原 ID，不显示可调滑块。模型列表中可手动刷新，其他客户端刷新的结果也会同步到打开的列表。
+
+模型和强度通过 ACP 在当前会话内切换；调整后继续发送即可。旧的 `模型-high` 等选择在目录可识别时转换为模型与强度，当前会话、归档会话和该账号的已保存偏好保留原强度。明确设置的强度优先，目录读取失败不会重置选择。
+
+Agy 的权限请求使用现有审批入口；已有「完全访问」默认值保留。图片通过原生 ACP 图片块传入，上下文占用使用 ACP 用量事件；`/compact` 在当前会话内执行，并显示成功、失败或取消。旧的原生会话 ID 通过 `session/resume` 恢复。登录和 `/usage` 等账号查询继续走已有原生 CLI 入口。
+
+下图使用隔离测试目录与假 Agent，展示实际构建页面中的模型分组和强度选择：
+
+![按模型归并的目录](docs/images/antigravity-model-families.png)
+
+<img src="docs/images/antigravity-effort-phone.png" alt="手机中调整 Antigravity 思考强度，当前会话保留" width="390" />
 
 ### Antigravity 登录
 

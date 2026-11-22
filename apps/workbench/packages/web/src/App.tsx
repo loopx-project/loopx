@@ -121,7 +121,7 @@ import { cachedAgentMarks, cachedThreads, rememberAgentMarks, rememberThreads } 
 import { cachedAgents, cachedDraft, cachedModels, rememberAgents, rememberDraft, rememberModels } from './host-cache';
 import { clampSidebarWidth, defaultSidebarWidth, projectDir, savedSidebarWidth, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, type HostSource } from './sidebar';
 import { enabledViews, extensionHash, looksLikeExtensionRoute, resolveExtensionRoute } from './extensions/routes';
-import { AgentPicker, type DiscoveredAccount, type DiscoveredAgent, effortsForModel, imagesBlocked, imagesNote, modelName, speedsForModel, ModelPicker, PermissionPicker, UsageMeter, WorkspacePicker } from './components/Pickers';
+import { AgentPicker, type DiscoveredAccount, type DiscoveredAgent, effortsForModel, imagesBlocked, imagesNote, modelName, resolveModel, speedsForModel, ModelPicker, PermissionPicker, UsageMeter, WorkspacePicker } from './components/Pickers';
 import { Sidebar, SIDEBAR_SHORTCUT } from './components/Sidebar';
 import { MergedHistory } from './components/MergedHistory';
 import { currentPlan, PlanButton } from './components/PlanPanel';
@@ -406,9 +406,12 @@ function savedMemberDefaults(key: string): Record<string, MemberDefault> {
 }
 
 function fitDraftModelPreference(value: DraftModelPreference, models: ModelOption[], effortLevels: string[], canSpeed: boolean): DraftModelPreference {
-  const model = value.model && models.length > 0 && !models.some((option) => option.id === value.model) ? null : value.model;
+  const resolved = value.model && models.length > 0 ? resolveModel(models, value.model) : undefined;
+  const impliedEffort = value.model && resolved && resolved.id !== value.model ? value.model.slice(resolved.id.length + 1) : null;
+  const model = value.model && models.length > 0 ? (resolved?.id ?? null) : value.model;
   const levels = effortsForModel(models, model, effortLevels);
-  const effort = value.effort && (levels.includes(value.effort) || (models.length === 0 && effortLevels.length === 0)) ? value.effort : null;
+  const rawEffort = value.effort ?? impliedEffort;
+  const effort = rawEffort && (levels.includes(rawEffort) || (models.length === 0 && effortLevels.length === 0)) ? rawEffort : null;
   const speeds = speedsForModel(models, model);
   const speed = canSpeed && value.speed && (models.length === 0 || speeds.some((option) => option.id === value.speed)) ? value.speed : null;
   return { model, effort, speed };
