@@ -176,6 +176,7 @@ def handle_heartbeat_prompt_command(
         bootstrap_args = copy(args)
         apply_context_machine_options(args, registry_path=agent_registry_path,
             runtime_root_arg=args.runtime_root, heartbeat=True)
+        resumed_codex_session = _verified_codex_resume(args, agent_registry_path, effective_agent_id)
         payload = build_heartbeat_prompt(
             goal_id=args.goal_id,
             active_state=active_state,
@@ -209,6 +210,7 @@ def handle_heartbeat_prompt_command(
             turn_granularity=turn_granularity,
             turn_instance_id=args.turn_instance_id,
             decision_output_root=args.decision_output_root,
+            resumed_codex_session=resumed_codex_session,
             decision_handoff_socket=args.decision_handoff_socket,
             codex_context_dir=args.codex_context_dir,
             codex_context_root=args.codex_context_root,
@@ -294,3 +296,28 @@ def handle_heartbeat_prompt_command(
         render_heartbeat_prompt_markdown,
     )
     return 0 if payload.get("ok") else 1
+
+
+def _verified_codex_resume(args: argparse.Namespace, registry: Path, agent_id: str | None) -> bool:
+    """Select the short wake only for the Host's existing scoped conversation."""
+    session_id = getattr(args, "resume_codex_session_id", None)
+    if not (session_id and args.thin and not args.bootstrap and args.turn_instance_id
+            and agent_id and args.runtime_root
+            and args.runtime_profile == SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value
+            and args.visible_goal_host is None):
+        return False
+    from ..control_plane.goals.first_party_host_admission import (
+        FirstPartyHostGoalAdmission, capture_first_party_host_goal_ref,
+    )
+    from ..control_plane.turn_driver.codex_sessions import select_codex_cli_session
+
+    goal_ref = capture_first_party_host_goal_ref(registry_path=registry, goal_id=args.goal_id)
+    admission = FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry, goal_id=args.goal_id, planned_goal_ref=goal_ref,
+    )
+    binding = select_codex_cli_session(
+        Path(args.runtime_root).expanduser().resolve(),
+        lineage={"goal_id": args.goal_id, "agent_id": agent_id},
+        session_scope="agent", goal_admission=admission,
+    )
+    return bool(binding and binding["session_id"] == session_id and not binding.get("operation_transport"))
