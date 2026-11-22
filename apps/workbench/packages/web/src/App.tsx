@@ -1,4 +1,5 @@
 import { AgentLoginRecovery, needsAgentLogin } from './components/AgentLoginRecovery';
+import { createPortal } from 'react-dom';
 import { GitPanel } from './components/GitPanel';
 import { SettingsPage, type SettingsGroup } from './components/SettingsPage';
 import { AssistantSettingsPage, assistantTitle } from './components/AssistantSettingsPage';
@@ -100,8 +101,9 @@ import { GoalsPage, type GoalsFilter } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
 import { PwaInstallPromotion, PwaInstallSettings } from './components/PwaInstall';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
-import { StewardActions, StewardPage } from './components/StewardPage';
-import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
+import { StewardPage } from './components/StewardPage';
+import { StewardOverview } from './components/StewardOverview';
+import { useLoopxStatus } from './components/SidebarGoals';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
 import { LoopxGoalGroup } from './components/LoopxGoalGroup';
@@ -1941,7 +1943,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The overview: a popover on narrow screens and the pages, a standing panel beside the
   // conversation on a wide one. Its switch is remembered here, and starts open.
-  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && !onPage;
+  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && (!onPage || onSteward);
   const [overviewOpen, setOverviewOpen] = useStoredFlag(OVERVIEW_OPEN_KEY, true);
   const [overviewDetail, setOverviewDetail] = useState<{ api: Api; threadId: string; section: OverviewSection; returnToPreview: boolean } | null>(null);
   const [overviewSignal, setOverviewSignal] = useState(0);
@@ -1974,8 +1976,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     wasSide.current = sideKeys; wasDock.current = dockOpen;
   }, [sideKeys, dockOpen]);
   const sideOpen = sideKeys || dockOpen;
-  const overviewRoom = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && Boolean(selected || threadPending) && hostUp;
-  const overviewShown = overviewRoom && Boolean(selected);
+  const overviewRoom = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && (onSteward || (Boolean(selected || threadPending) && hostUp));
+  const overviewShown = overviewRoom && Boolean(selected || onSteward);
   /** Only the person turns the standing panel off; the switch above remembers it. */
   const closeOverview = useCallback(() => { if (overviewDock) setOverviewOpen(false); }, [overviewDock, setOverviewOpen]);
   // A page the agent wrote, rendered in a sandboxed iframe.
@@ -2858,6 +2860,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // person. The team it opens is the lead's own (a member's thread has none to show).
   const overviewTeam = teamShown && coordination?.rootId === selected?.id ? coordination : null;
   const teamNeeds = overviewTeam?.members.filter((member) => memberProgress(member) === 'need').length ?? 0;
+  const waitingOnUser = loopxStatus?.attention.filter(item => loopxNeedsYou.has(item.goalId)) ?? [];
+  const goalNeeds = selected?.loopxInfo && !selected.loopxInfo.missing && loopxNeedsYou.has(selected.loopxInfo.goalId) ? 1 : 0;
+  const overviewNeeds = onSteward ? waitingOnUser.length : teamNeeds + goalNeeds;
+  const overviewBusy = onSteward ? loopxRead.loading : overviewLoading;
+  const goalsChanged = () => { loopxRead.reload(); void refreshThreads(); };
   // The conversation's turns, for naming the section each change belongs to in the diff dialog.
   const turnOrder = useMemo(() => {
     const seen = new Set<string>();
@@ -2970,13 +2977,19 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       pick(id);
     } };
   })() : undefined;
-  const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => selected && api && (
+  const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => onSteward ? (
+    <StewardOverview token={token} goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []}
+      failure={loopxRead.failure} loading={loopxRead.loading} onChanged={goalsChanged} onRetry={loopxRead.reload}
+      threads={threads} defaultAgent={goalCaps.find(cap => cap.agent === draftAgent && cap.available)?.agent ?? goalCaps.find(cap => cap.available)?.agent ?? ''} pickDirectory={pickGoalDir}
+      onOpenThread={id => { if (!persistent) close(); openThreadById(id); }}
+      onOpenAll={showcase ? undefined : () => { if (!persistent) close(); openGoalsList(); }} />
+  ) : selected && api && (
     <ThreadOverview key={`${hostId ?? ''}:${selected.id}:${detail ?? 'preview'}`}
       chain={overviewChain} detail={detail} onLoadingChange={setOverviewLoading}
       onViewAll={(section, returnToPreview = true) => setOverviewDetail({ api, threadId: selected.id, section, returnToPreview })}
       api={api} threadId={selected.id} updatedAt={selected.updatedAt} active={selected.status === 'running'}
       team={overviewTeam} agents={agents} plan={topPlan} roots={threadRoots}
-      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} onOpenGoal={goalId => { close(); openGoal(goalId); }} /> : undefined}
+      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} goal={loopxStatus?.goals.find(goal => goal.goalId === selected.loopxInfo?.goalId)} attention={loopxStatus?.attention.find(item => item.goalId === selected.loopxInfo?.goalId)} onChanged={goalsChanged} onOpenGoal={goalId => { close(); openGoal(goalId); }} /> : undefined}
       loadFile={loadFile} persistent={persistent}
       onOpenMember={(member) => { setAgentsStart(member ?? null); setAgentsOpen(true); setFiles(null); }}
       onOpenDiff={(file) => setDiffFile({ threadId: selected.id, file })}
@@ -3040,7 +3053,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         />
       )}
       {/* The same picker, answering a Goal join instead of setting the draft's directory. */}
-      {goalDirAsk && (
+      {goalDirAsk && createPortal(
+        <div className="goal-directory-picker">
         <DirectoryPicker
           api={api}
           roots={workdirs}
@@ -3051,6 +3065,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onSelect={cwd => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(cwd); }}
           onClose={() => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(null); }}
         />
+        </div>, document.body
       )}
       {projectDialog === 'new' && (
         <NewProjectDialog
@@ -3114,12 +3129,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onNewSection={threadActions.newSection}
           onOpenSteward={showcase ? undefined : openSteward}
           stewardActive={onSteward}
-          goals={loopxStatus?.goals ?? []}
-          attentionGoals={loopxStatus?.attention ?? []}
-          activeGoalId={onGoal ? goalPath : null}
-          onOpenGoal={openGoal}
-          onOpenGoalTasks={goalId => openGoal(goalId, 'tasks')}
-          onOpenAllGoals={showcase ? undefined : () => openGoalsList()}
+          needsYouGoals={loopxNeedsYou}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
@@ -3198,37 +3208,38 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               </button>
             )}
           </div>
-          {selected && (
+          {(selected || onSteward) && (
             <div className="topbar-actions">
               {/* The thread at a glance: one panel for the team, the plan, the changes, the pictures
                   and the files. The badge is only ever what needs the person. */}
-              {api && hostUp && (overviewDock ? (
+              {(onSteward || api && hostUp) && (overviewDock ? (
                 <button
                   type="button"
-                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${teamNeeds ? ' attention' : ''}`}
+                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${overviewNeeds ? ' attention' : ''}`}
                   aria-label={t('overview.label')}
                   aria-pressed={overviewOpen}
-                  aria-busy={overviewLoading}
-                  title={teamNeeds ? t('overview.needsYou', teamNeeds) : t('overview.label')}
+                  aria-busy={overviewBusy}
+                  title={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
                   onClick={() => setOverviewOpen(!overviewOpen)}
                 >
                   <IconOverview />
-                  {teamNeeds > 0 && <span className="topbar-badge">{teamNeeds}</span>}
+                  {overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}
                 </button>
               ) : (
                 <Popover
-                  key={`${hostId ?? ''}:${selected.id}`}
+                  key={onSteward ? 'steward' : `${hostId ?? ''}:${selected!.id}`}
                   label={t('overview.label')}
-                  prepare={() => prepareOverview(api, selected.id, selected.updatedAt)}
+                  prepare={onSteward ? undefined : () => prepareOverview(api!, selected!.id, selected!.updatedAt)}
                   openSignal={overviewSignal}
-                  triggerBusy={overviewLoading}
-                  triggerClassName={`icon-btn topbar-overview${teamNeeds ? ' attention' : ''}`}
+                  triggerBusy={overviewBusy}
+                  triggerClassName={`icon-btn topbar-overview${overviewNeeds ? ' attention' : ''}`}
                   triggerLabel={t('overview.label')}
-                  triggerTitle={teamNeeds ? t('overview.needsYou', teamNeeds) : t('overview.label')}
+                  triggerTitle={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
                   align="end"
                   placement="below"
                   panelClassName="overview-panel"
-                  trigger={<><IconOverview />{teamNeeds > 0 && <span className="topbar-badge">{teamNeeds}</span>}</>}
+                  suspendDismissal={onSteward && Boolean(goalDirAsk)}
+                  trigger={<><IconOverview />{overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}</>}
                 >
                   {(close) => overviewBody(close, false)}
                 </Popover>
@@ -3236,12 +3247,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               {/* A phone keeps its plan button: it has no margin card, and the lead's list of what
                   leaves the bar was the desktop's. The overview has the plan too, one tap away. */}
               {compact && topPlan && !onPage && <PlanButton item={topPlan} />}
-              {compact && (
+              {compact && selected && (
                 <button className="icon-btn topbar-new" aria-label={t('sidebar.newThread')} onClick={() => newThread()}>
                   <IconEdit />
                 </button>
               )}
-              <button
+              {selected && <button
                 className="icon-btn topbar-more"
                 aria-label={t('app.threadMore')}
                 onClick={(e) => {
@@ -3250,13 +3261,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 }}
               >
                 <IconMore />
-              </button>
-            </div>
-          )}
-          {onSteward && !selected && (
-            <div className="topbar-actions">
-              <StewardActions goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []} failure={loopxRead.failure}
-                onOpenGoal={openGoal} onOpenAll={showcase ? undefined : openGoalsList} />
+              </button>}
             </div>
           )}
         </header>}

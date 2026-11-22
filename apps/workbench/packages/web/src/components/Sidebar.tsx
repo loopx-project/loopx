@@ -1,8 +1,6 @@
 import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
 import { Fragment, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
-import type { LoopxAttention, LoopxGoal } from '../loopx/status';
-import { SidebarGoals } from './SidebarGoals';
 
 const EMPTY_SET: Set<string> = new Set();
 import type { ExternalSession, HostInfo, SearchHit, Section, Thread } from '../api';
@@ -11,7 +9,7 @@ import { clockLabel } from '../timeline';
 import { useInTitlebar, useLongPress, useStoredFlag, useStoredSet } from '../hooks';
 import { attentionCount, threadMark, waitingLabel, type ThreadMark } from '../notices';
 import { folderName } from '../paths';
-import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, isLoopxRow, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type HostSource } from '../sidebar';
+import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type HostSource } from '../sidebar';
 import { timeAgo } from '../sessions';
 import { deliveredPreview } from '../timeline';
 import { HostSwitcher } from './Hosts';
@@ -68,17 +66,7 @@ interface Props {
   onNewSection: () => void;
   onOpenSteward?: () => void;
   stewardActive?: boolean;
-  /** The LoopX core's goals, shown as a group under the nav; read-only here. */
-  goals?: LoopxGoal[];
-  /** The attention rows behind those goals: which wait on the person, and each one's todos. */
-  attentionGoals?: LoopxAttention[];
   needsYouGoals?: Set<string>;
-  activeGoalId?: string | null;
-  onOpenGoal?: (goalId: string) => void;
-  /** Straight to a Goal's task board. */
-  onOpenGoalTasks?: (goalId: string) => void;
-  /** The whole goal list on its own page. */
-  onOpenAllGoals?: () => void;
   /** Pinned at the sidebar's foot, above the buttons: the login-link notice while a link is in use. */
   footerNotice?: ReactNode;
   /** Opens the machines page, listed behind the nav's "more" button unless it is on screen. */
@@ -174,13 +162,7 @@ export function Sidebar({
   onNewSection,
   onOpenSteward,
   stewardActive = false,
-  goals = [],
-  attentionGoals = [],
   needsYouGoals = EMPTY_SET,
-  activeGoalId = null,
-  onOpenGoal,
-  onOpenGoalTasks,
-  onOpenAllGoals,
   footerNotice,
   onOpenMachines,
   machinesActive = false,
@@ -244,11 +226,7 @@ export function Sidebar({
   // This machine's sessions that are not threads yet mix into the list by their time; every
   // machine's own list (the merged view) shows threads only.
   const everyRow = merged ? threads : withExternalSessions(threads, external);
-  // The crab button: only the conversations that belong to a LoopX Goal, among every row there is.
-  const [loopxOnly, setLoopxOnly] = useStoredFlag(`${storagePrefix}.loopx`);
-  const loopxCount = everyRow.filter(isLoopxRow).length;
-  const filtering = loopxOnly && !merged;
-  const withExternal = filtering ? everyRow.filter(isLoopxRow) : everyRow;
+  const withExternal = everyRow;
   const model = buildSidebar(withExternal, sections, search);
   const mergedModel = merged ? buildMerged(merged, search, new Date(), selectedId) : null;
   const activity = byActivity && !mergedModel ? buildActivity(withExternal, search, new Date(), selectedId) : null;
@@ -712,18 +690,6 @@ export function Sidebar({
                 <IconBell size={compact ? 20 : 16} />
                 {waitingOnYou > 0 && <span className="bell-dot" aria-hidden="true" />}
               </button>
-              {!merged && (
-                <button
-                  className={`round-btn loopx-btn${loopxOnly ? ' on' : ''}`}
-                  aria-label={t('sidebar.loopxOnly')}
-                  aria-pressed={loopxOnly}
-                  title={t('sidebar.loopxOnly')}
-                  onClick={() => setLoopxOnly(!loopxOnly)}
-                >
-                  <IconCrab size={compact ? 20 : 16} />
-                  {loopxOnly && <span className="loopx-count" aria-hidden="true">{loopxCount}</span>}
-                </button>
-              )}
               <button className="round-btn" aria-label={t('sidebar.search')} title={t('sidebar.search')} onClick={() => setSearching(true)}>
                 <IconSearch size={compact ? 20 : 16} />
               </button>
@@ -789,9 +755,6 @@ export function Sidebar({
               />
             )}
           </div>
-        )}
-        {!down && !search.trim() && goals.length > 0 && onOpenGoal && (
-          <SidebarGoals goals={goals} attention={attentionGoals} activeGoalId={activeGoalId} onOpenGoal={onOpenGoal} onOpenGoalTasks={onOpenGoalTasks} onOpenAllGoals={onOpenAllGoals} />
         )}
         {!down && groups}
         {/* Reading the machine's sessions, or importing one, went wrong: said here, where the rows
