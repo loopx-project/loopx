@@ -2790,7 +2790,7 @@ test('agents: instances beyond the built-ins are listed, and PATH discovery offe
   process.env.PATH = `${bin}:${oldPath}`;
   try {
     const found = (await (await regApi('/api/agents/discover')).json()) as Array<{ id: string; adapter: string; command: string; label?: string; icon?: string }>;
-    const ours = found.filter((f) => f.command.startsWith(bin));
+    const ours = found.filter((f) => f.command?.startsWith(bin));
     assert.deepEqual(ours.map((f) => f.id), ['agy2']);
     assert.equal(ours[0].adapter, 'agy');
     assert.equal(ours[0].label, 'Antigravity');
