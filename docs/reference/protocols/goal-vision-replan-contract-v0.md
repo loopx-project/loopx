@@ -825,7 +825,9 @@ All authored text and refs share the existing Vision budget.
 
 Read the latest question, action, probe and cited evidence in the App's Task
 Request details or with `loopx --format json todo list --goal-id <goal> --todo-id
-<todo>`. The exact CLI read also provides recent eligible source refs under
+<todo>`. Saved questions stay available after disabling Stride. Detail reads
+open the decision journal when a source is recorded for the Todo in the current
+Goal lifetime. The exact CLI read also provides recent eligible source refs under
 `subsequent_evidence` for an open question. Use `loopx --format json history --goal-id <goal> --agent-id <agent>
 --evidence-ref <ref>` to resolve the exact decision and each cited source row.
 The references document which evidence the Agent cites for its choice.
@@ -842,7 +844,8 @@ Execution, Goal acceptance and gain follow their existing evidence contracts.
 并保留反证。省略字段则沿用上次记录。元目标收口后，可在后续复盘中为同一 Todo 提出新问题。
 字段与引用计入已有 Vision 预算。
 
-在 App 的任务要求详情或用 `todo list --todo-id` 回读元目标、动作、探针及证据，
+在 App 的任务要求详情或用 `todo list --todo-id` 回读元目标、动作、探针及证据。
+关闭 Stride 后仍可查看已保存的元目标。详情仅在当前 Goal 实例下的该 Todo 有记录来源时读取决策日志。
 用 `history --evidence-ref` 回读原决策和原证据。引用记录的是 Agent 作出选择所用的证据，
 实际执行、Goal 验收和收益沿用各自的证据契约。
 

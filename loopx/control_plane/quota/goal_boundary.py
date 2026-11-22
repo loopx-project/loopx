@@ -30,6 +30,8 @@ def quota_execution_profile_summary(value: Any) -> dict[str, Any] | None:
     for field in ("cadence", "minimum_scale", "spend_rule"):
         if value.get(field):
             compact[field] = value[field]
+    if value.get("stride_strategy") not in (None, "off"):
+        compact["stride_strategy"] = value["stride_strategy"]
     must_include = value.get("must_include")
     if isinstance(must_include, list) and must_include:
         compact["must_include"] = [str(item) for item in must_include[:3]]

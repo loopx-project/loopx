@@ -63,6 +63,7 @@ from .control_plane.work_items.repair_delta import (
 from .control_plane.work_items.progress_observation import (
     normalize_progress_observation,
 )
+from .control_plane.work_items.replan_context_codec import mark_todo_stride_meta_goal_source
 from .control_plane.work_items.semantic_replan_writeback import (
     qualify_refresh_replan_writeback,
 )
@@ -1623,6 +1624,7 @@ def refresh_state_run(
                     persist_external_delivery_pause(
                         settlement_readback, runtime_root, goal_ref=goal_ref,
                     )
+                mark_todo_stride_meta_goal_source(index_path, index_record)
                 runs_dir.mkdir(parents=True, exist_ok=True)
                 json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)
                 index_record["json_path"] = str(json_path)

@@ -239,15 +239,15 @@ function recordedDecision(row: JsonObject): JsonObject | null {
  * Append order belongs to the captured history, not timestamps or prose. A
  * progress observation proves neither execution nor scientific improvement.
  */
-function orderedDecisionRows(rows: JsonObject[], goalFacts: unknown): JsonObject[] {
+function orderedDecisionRows(rows: JsonObject[], goalFacts: unknown, exactGoalRef = false): JsonObject[] {
   const currentRef = objectOrNull(objectOrNull(goalFacts)?.goal_ref);
   return rows.filter(row => {
     const source = objectOrNull(row._source_facts);
     const ref = objectOrNull(source?.goal_ref);
     return source && Number.isSafeInteger(source.history_position) &&
       Number(source.history_position) >= 0 &&
-      (!currentRef || (ref?.goal_id === currentRef.goal_id &&
-        ref?.goal_instance_id === currentRef.goal_instance_id));
+      (currentRef ? ref?.goal_id === currentRef.goal_id && ref?.goal_instance_id === currentRef.goal_instance_id
+        : !exactGoalRef || source.goal_ref == null);
   }).sort((a, b) => Number(objectOrNull(b._source_facts)!.history_position) -
     Number(objectOrNull(a._source_facts)!.history_position));
 }
@@ -374,7 +374,7 @@ function todoMetaGoal(request: JsonObject, scoped: JsonObject[], goal: string, a
 
 function projectTodoMetaGoals(rows: JsonObject[], request: JsonObject, goal: string, agent: string): JsonObject[] {
   if (!rows.some(row => metaGoalTodoId(row) !== undefined)) return [];
-  const scoped = orderedDecisionRows(rows, request.goal_facts);
+  const scoped = orderedDecisionRows(rows, request.goal_facts, true);
   const eligible = objects(request.todo_items, "Todo source").filter(todo => eligibleMetaGoalTodo(todo, goal, agent));
   return [...metaGoalDecisions(scoped, new Set(eligible.map(todo => todo.todo_id))).values()]
     .slice(0, 6).map(recorded => ({...metaGoalView(recorded), evidence: metaGoalEvidencePreview(recorded, scoped)}));
@@ -771,7 +771,7 @@ export function projectReplanContext(value: unknown): JsonObject {
     return reviewEvidence(rows, request);
   }
   if (request.operation === "todo_meta_goal") {
-    return todoMetaGoal(request, orderedDecisionRows(rows, request.goal_facts), goal, agent);
+    return todoMetaGoal(request, orderedDecisionRows(rows, request.goal_facts, true), goal, agent);
   }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
     JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));

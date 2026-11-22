@@ -137,7 +137,6 @@ def goal_semantic_history_from_runs(
     """
 
     from ..work_items.recommendation_source_io import recommendation_run_decision
-    from ..work_items.replan_context_codec import recorded_stride_meta_goal
 
     contexts: dict[str, dict[str, Any]] = {}
     resolved_agent_vision: set[str] = set()
@@ -165,8 +164,6 @@ def goal_semantic_history_from_runs(
                 if index in qualification.active_turn_retries:
                     active_blocked_retry_runs.append(run)
         context = contexts.setdefault(agent_id, {"agent_id": agent_id})
-        if "has_stride_meta_goal" not in context and recorded_stride_meta_goal(run) is not None:
-            context["has_stride_meta_goal"] = True
 
         if ("latest_lane_step_run" not in context and run.get("agent_id") == agent_id
                 and recommendation_run_decision(run) is not None):
@@ -278,8 +275,6 @@ def compact_goal_semantic_history(
         if not agent_id:
             continue
         context: dict[str, Any] = {"agent_id": agent_id}
-        if raw_context.get("has_stride_meta_goal") is True:
-            context["has_stride_meta_goal"] = True
         retired_at = str(raw_context.get("vision_retired_at") or "").strip()
         if retired_at:
             context["vision_retired_at"] = retired_at

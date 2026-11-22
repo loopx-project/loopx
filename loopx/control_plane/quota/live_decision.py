@@ -778,6 +778,18 @@ def _restore_replan_obligation_without_foreign_acks(
     )
 
 
+def _attach_live_work_context(
+    payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
+    hook_dispatch: dict[str, Any] | None, context_navigation: bool, inline_goal_source: bool,
+) -> None:
+    from ..work_items.context_readback import attach_stride_meta_goal_context, attach_work_context
+
+    attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
+        hook_dispatch=hook_dispatch, context_navigation=context_navigation, inline_goal_source=inline_goal_source)
+    stride_strategy = (payload.get("execution_profile") or {}).get("stride_strategy", "off")
+    attach_stride_meta_goal_context(payload, runtime_root=runtime_root, stride_strategy=stride_strategy)
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -1148,13 +1160,9 @@ def build_live_quota_should_run_decision(
         registry_path=registry_path,
         runtime_root=runtime_root,
     )
-    from ..work_items.context_readback import attach_work_context, attach_stride_meta_goal_context
-
-    attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
+    _attach_live_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
         hook_dispatch=turn_start_hook_dispatch, context_navigation=context_navigation,
         inline_goal_source=inline_goal_source)
-    attach_stride_meta_goal_context(payload, status_payload=decision_status_payload,
-        registry_goal=registered_goal, runtime_root=runtime_root)
     return payload
 
 

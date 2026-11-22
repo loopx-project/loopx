@@ -38,7 +38,11 @@ from .autonomous_replan_obligation import (
 )
 from .progress_observation import guarded_replan_transition_delta, semantic_delta_from_writeback
 from .lifecycle_recovery import attach_receipt_replan_context
-from .replan_context_codec import project_todo_stride_meta_goal, recorded_stride_meta_goal, replan_history_from_status
+from .replan_context_codec import (
+    qualify_todo_stride_meta_goal_writeback,
+    recorded_stride_meta_goal,
+    require_todo_stride_meta_goal_admission,
+)
 from .replan_semantics_codec import project_replan_semantics
 from ..effect_runtime import effect_runtime_request_scope
 from .repair_delta import (
@@ -341,9 +345,8 @@ def qualify_replan_writeback(
     """
 
     safe_agent_id = str(agent_id or "").strip()
-    meta_goal = recorded_stride_meta_goal({"agent_vision": agent_vision})
-    if meta_goal is not None and not (safe_agent_id and guard_scoped and guard_semantic_replan_obligation_id):
-        raise ValueError("A Todo meta-goal requires an admitted Stride review")
+    require_todo_stride_meta_goal_admission(agent_vision, agent_id=safe_agent_id,
+        guard_scoped=guard_scoped, obligation_id=guard_semantic_replan_obligation_id)
     if not safe_agent_id:
         return None, None
     todo_projection = todo_fields if todo_fields is not None else parse_active_state_todos(
@@ -489,19 +492,11 @@ def qualify_replan_writeback(
         agent_vision=agent_vision,
         history_runs=newest_first_runs,
     )
-    if meta_goal is not None and semantic_delta.get("accepted") is True:
-        todo_id = str(meta_goal["todo_id"])
-        matches = [item for item in agent_todo_completion_items if item.get("todo_id") == todo_id]
-        if len(matches) != 1:
-            raise ValueError("The Todo targeted by the meta-goal is missing or ambiguous")
-        assert agent_vision is not None
-        project_todo_stride_meta_goal(
-            goal_id=goal_id, agent_id=safe_agent_id, todo_id=todo_id, goal_ref=goal_ref,
-            runs=replan_history_from_status(status_payload, goal_id),
-            history_newest_first=not bool(status_payload.get("registry") and status_payload.get("runtime_root")),
-            proposal=agent_vision["stride_decision"], todo_delta=agent_vision.get("todo_delta"),
-            todo=matches[0], settlement_todo_id=settlement_todo_id,
-        )
+    qualify_todo_stride_meta_goal_writeback(
+        agent_vision=agent_vision, semantic_delta=semantic_delta, status_payload=status_payload,
+        agent_todos=agent_todo_completion_items, goal_id=goal_id, agent_id=safe_agent_id,
+        goal_ref=goal_ref, settlement_todo_id=settlement_todo_id,
+    )
     if (
         "coverage_backed_no_followup"
         in set(semantic_delta.get("outcomes") or [])

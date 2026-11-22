@@ -8,6 +8,7 @@ import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.work_items.replan_context_codec import read_todo_stride_meta_goal
 from research_comparison_fixture import vision
 import test_quota_settlement_cli as fixture
 
@@ -142,4 +143,21 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
     later = guard("peak-after-resolution", todo)
     assert later["selected_todo"]["todo_id"] == todo
     assert "stride_meta_goal" not in later["interaction_contract"]["agent_channel"]["work_context"]
+    cli("configure-goal", "--goal-id", goal, "--execution-stride-strategy", "off", "--execute")
+    assert task_record() == current
+
+    # Damage in the shared journal should affect only detail reads that have
+    # a recorded source in this scope. The fixture is isolated from live state.
+    journal_contents = journal.read_bytes()
+    with journal.open("ab") as stream:
+        stream.write(b'{"incomplete":"\xe2')
+    unrelated = cli("todo", "list", "--goal-id", goal, "--todo-id", other)["todo"]
+    assert unrelated["todo_id"] == other
+    assert "stride_meta_goal" not in unrelated
+    assert read_todo_stride_meta_goal(runtime_root=runtime, goal_id=goal, todo_id=todo,
+        agent_id="different-agent") is None
+    assert read_todo_stride_meta_goal(runtime_root=runtime, goal_id=goal, todo_id=todo,
+        goal_ref={"goal_id": goal, "goal_instance_id": fixture.INSTANCE_A}) is None
+    assert task_record() == {"unavailable": True}
+    journal.write_bytes(journal_contents)
     assert task_record() == current
