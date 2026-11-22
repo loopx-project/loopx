@@ -188,16 +188,25 @@ def test_compact_hook_direct_read_survives_startup_lock_timeout_and_deduplicates
     assert after_pre["recovery"]["sha256"] == digest
     assert after_pre.get("baseline_invalidated_fail_closed") is True
 
-    # 2. PostCompact fires next -> performs <5ms lock-free direct-read + emits EpochReset context.
-    t0 = time.perf_counter()
+    # 2. PostCompact stays non-consuming ({}) while keeping baseline invalidated and
+    #    never setting compact_hook_wake or counting a direct-read wake.
     post_reply = context.codex_context_hook(
         str(journal_dir),
         {**compact_start_event, "hook_event_name": "PostCompact"},
     )
+    assert post_reply == {}
+    after_post = context._state(journal_dir)
+    assert "compact_hook_wake" not in after_post
+    assert "compact_hook_metrics" not in after_post
+    assert after_post["recovery"]["sha256"] == digest
+
+    # 3. First SessionStart(compact) performs <5ms lock-free direct-read + emits EpochReset context.
+    t0 = time.perf_counter()
+    start_reply = context.codex_context_hook(str(journal_dir), compact_start_event)
     hook_ms = (time.perf_counter() - t0) * 1000.0
     assert hook_ms < 50.0
-    hook_out = post_reply["hookSpecificOutput"]
-    assert hook_out["hookEventName"] == "PostCompact"
+    hook_out = start_reply["hookSpecificOutput"]
+    assert hook_out["hookEventName"] == "SessionStart"
     meta = hook_out["compactDirectRead"]
     assert meta["operator"] == "EpochReset"
     assert meta["sha256_verified"] is True
@@ -209,8 +218,9 @@ def test_compact_hook_direct_read_survives_startup_lock_timeout_and_deduplicates
     assert "todo_9351cbfeac8fc866a135596b" in text
     assert "Keep default-off parity" in text
     assert "turn-42" in text
+    assert context._state(journal_dir)["compact_hook_wake"]["emitted_hook"] == "SessionStart"
 
-    # 3. Immediate SessionStart(compact) within same epoch & unchanged digest deduplicates prompt!
+    # 4. Immediate duplicate SessionStart(compact) within same epoch & unchanged digest deduplicates prompt.
     dup_reply = context.codex_context_hook(str(journal_dir), compact_start_event)
     dup_out = dup_reply["hookSpecificOutput"]
     assert "additionalContext" not in dup_out
@@ -384,8 +394,12 @@ def test_corrupt_or_missing_capture_fails_closed_to_keep_raw_preserving_facts(
         json.dumps({"entries": [{"round": "r1", "status": "timed_out", "valid": False}]}),
         encoding="utf-8",
     )
-    # Tamper capture on disk -> SHA-256 check must fail closed to KeepRaw!
+    # Tamper capture on disk -> PostCompact stays inert ({}) and SessionStart(compact)
+    # fails closed to KeepRaw without setting compact_hook_wake (so retries still guide recovery).
     (tmp_path / "decision.json").write_text('{"tampered": true}', encoding="utf-8")
+    assert context.codex_context_hook(
+        str(journal_dir), {**compact_event, "hook_event_name": "PostCompact"},
+    ) == {}
 
     reply = context.codex_context_hook(
         str(journal_dir),
@@ -400,6 +414,15 @@ def test_corrupt_or_missing_capture_fails_closed_to_keep_raw_preserving_facts(
     assert "operator=KeepRaw" in hook_out["additionalContext"]
     assert "r1" in hook_out["additionalContext"]
     assert "Preserve failure r1" in hook_out["additionalContext"]
+    assert "compact_hook_wake" not in context._state(journal_dir)
+
+    retry_reply = context.codex_context_hook(
+        str(journal_dir),
+        {**compact_event, "open_obligations": ["Preserve failure r1"]},
+    )
+    retry_out = retry_reply["hookSpecificOutput"]
+    assert retry_out["compactDirectRead"]["deduplicated"] is False
+    assert "operator=KeepRaw" in retry_out["additionalContext"]
 
 
 def test_default_off_parity_and_zero_post_tool_friction_and_cli_opt_in(

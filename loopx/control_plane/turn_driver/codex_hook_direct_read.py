@@ -1,7 +1,8 @@
 """Lock-free in-process JSON pointer reader and fact extractor for Codex compact hooks.
 
 Eliminates subprocess `loopx quota context-read` calls and Node TS IPC
-startup lock contention inside `SessionStart(compact)` / `PostCompact` hooks
+startup lock contention inside `SessionStart(compact)` hooks (leaving
+`PostCompact` inert `{}` for Codex CLI hook-output compatibility)
 while verifying SHA-256 integrity, internal `eof=true` UTF-8 pagination,
 wake prompt deduplication, heavy shell prefetch retirement, and automatic
 extraction of `failure_facts` + `open_obligations`.
@@ -1080,8 +1081,11 @@ def _record_compact_wake_metrics(
     """Check compact wake dedup, update hook telemetry counters, and build telemetry meta."""
     previous_wake = state.get("compact_hook_wake")
     deduplicated = bool(
-        cfg["deduplicate"]
+        ok
+        and cfg["deduplicate"]
         and isinstance(previous_wake, Mapping)
+        and previous_wake.get("emitted_hook") == "SessionStart"
+        and previous_wake.get("operator", "EpochReset") == "EpochReset"
         and previous_wake.get("context_epoch") == context_epoch
         and previous_wake.get("source_sha256") == source_sha256
         and previous_wake.get("wake_digest") == wake_digest
@@ -1132,11 +1136,16 @@ def resolve_compact_hook_direct_read(
     continuation_text: str = "",
     raw_guidance_text: str = "",
 ) -> dict[str, Any] | None:
-    """Resolve opt-in lock-free compact hook direct-read, fact extraction, and wake dedup."""
+    """Resolve opt-in lock-free SessionStart(compact) hook direct-read, fact extraction, and wake dedup.
+
+    Codex CLI (0.171.0+) only accepts `hookSpecificOutput.additionalContext`
+    on `SessionStart`; `PostCompact` stays non-consuming (`{}`) so invalidation
+    still runs without dropping or prematurely deduplicating the first wake.
+    """
     cfg = resolve_compact_direct_read_config(state, event)
-    if cfg is None or hook_name not in ("PostCompact", "SessionStart"):
+    if cfg is None or hook_name != "SessionStart":
         return None
-    if hook_name == "SessionStart" and event.get("source") != "compact" and not recovery_needed:
+    if event.get("source") != "compact" and not recovery_needed:
         return None
     if not isinstance(recovery, Mapping) or not recovery.get("path") or not recovery.get("sha256"):
         return None
@@ -1198,13 +1207,15 @@ def resolve_compact_hook_direct_read(
     if deduplicated:
         return {"hookSpecificOutput": {"hookEventName": hook_name, "compactDirectRead": meta}}
 
-    state["compact_hook_wake"] = {
-        "context_epoch": context_epoch,
-        "source_sha256": source_sha256,
-        "wake_digest": wake_digest,
-        "emitted_hook": hook_name,
-        "recorded_at": _now_iso(),
-    }
+    if ok:
+        state["compact_hook_wake"] = {
+            "context_epoch": context_epoch,
+            "source_sha256": source_sha256,
+            "wake_digest": wake_digest,
+            "emitted_hook": hook_name,
+            "operator": operator,
+            "recorded_at": _now_iso(),
+        }
     additional_context = (
         _format_direct_read_context(
             read_result=read_result,

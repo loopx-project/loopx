@@ -847,47 +847,161 @@ def _turn_epoch_inputs(
     }
 
 
+def _safe_rendered_prompt_bytes(request: Mapping[str, Any]) -> int | None:
+    """Measure the exact UTF-8 byte length rendered for Codex CLI, when renderable."""
+    from .codex_cli import _prompt
+
+    try:
+        rendered = _prompt(request)
+    except (ValueError, RuntimeError, TypeError, KeyError):
+        return None
+    return len(rendered.encode("utf-8"))
+
+
+def _keep_raw_prefetch_payload(
+    request: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    *,
+    fallback_reason: str,
+    net_savings_bytes: int | None,
+    rendered_baseline_bytes: int | None,
+    rendered_delivered_bytes: int | None,
+    error_observation: str | None = None,
+) -> dict[str, Any]:
+    header_fields = receipt.get("header_fields") if isinstance(receipt.get("header_fields"), Mapping) else {}
+    facts = list(receipt.get("preserved_failure_facts") or header_fields.get("failure_facts") or ())
+    obligations = list(receipt.get("preserved_open_obligations") or header_fields.get("open_obligations") or ())
+    payload: dict[str, Any] = {
+        "schema_version": receipt["schema_version"],
+        "operator": "KeepRaw",
+        "status": "fallback_keep_raw",
+        "fallback_reason": fallback_reason,
+        "trust_level": receipt.get("trust_level", "tool"),
+        "context_epoch": receipt.get("context_epoch"),
+        "preserves_raw_state": True,
+        "preserved_failure_facts": facts,
+        "preserved_open_obligations": obligations,
+        "bytes_saved": 0,
+        "net_savings_bytes": net_savings_bytes if net_savings_bytes is not None else 0,
+        "round_trips_saved": 0,
+        "error_observation": error_observation or receipt.get("error_observation"),
+    }
+    if rendered_baseline_bytes is not None:
+        payload["rendered_prompt_baseline_bytes"] = rendered_baseline_bytes
+    if rendered_delivered_bytes is not None:
+        payload["rendered_prompt_delivered_bytes"] = rendered_delivered_bytes
+        if rendered_baseline_bytes is not None:
+            payload["rendered_prompt_delta_bytes"] = rendered_delivered_bytes - rendered_baseline_bytes
+    updated = dict(request)
+    updated["epoch_prefetch"] = payload
+    return updated
+
+
 def apply_turn_epoch_prefetch_to_request(
     request: Mapping[str, Any],
     receipt: Mapping[str, Any],
     *,
     replace_exploratory_context: bool = False,
 ) -> dict[str, Any]:
-    """Attach bounded Stage-then-Swap observation onto a Turn host request cleanly."""
-    updated = dict(request)
-    if receipt.get("operator") == "EpochReset":
-        updated["epoch_prefetch"] = {
-            "schema_version": receipt["schema_version"],
-            "operator": "EpochReset",
-            "trust_level": receipt["trust_level"],
-            "context_epoch": receipt["context_epoch"],
-            "source_ref": receipt.get("source_ref"),
-            "header_fields": receipt.get("header_fields"),
-            "hydrated_text": receipt.get("hydrated_text"),
-            "bytes_saved": receipt.get("bytes_saved", 0),
-            "net_savings_bytes": receipt.get("net_savings_bytes"),
-            "round_trips_saved": receipt.get("round_trips_saved", 1),
-            "replayed": bool(receipt.get("replayed")),
-        }
-        if replace_exploratory_context and "exploratory_context" in updated:
-            updated["exploratory_context"] = {
-                "replaced_by_epoch_reset": True,
-                "source_ref": receipt.get("source_ref"),
-            }
-        return updated
-    updated["epoch_prefetch"] = {
+    """Attach bounded Stage-then-Swap observation onto a Turn host request with real prompt-byte accounting."""
+    if receipt.get("operator") != "EpochReset":
+        before_bytes = _safe_rendered_prompt_bytes(request)
+        updated_keep = _keep_raw_prefetch_payload(
+            request,
+            receipt,
+            fallback_reason=str(receipt.get("fallback_reason") or "command_failed"),
+            net_savings_bytes=0,
+            rendered_baseline_bytes=before_bytes,
+            rendered_delivered_bytes=None,
+        )
+        after_bytes = _safe_rendered_prompt_bytes(updated_keep)
+        if after_bytes is not None:
+            updated_keep["epoch_prefetch"]["rendered_prompt_delivered_bytes"] = after_bytes
+            if before_bytes is not None:
+                updated_keep["epoch_prefetch"]["rendered_prompt_delta_bytes"] = after_bytes - before_bytes
+        return updated_keep
+
+    potential_saved = int(receipt.get("bytes_saved") or 0)
+    epoch_payload: dict[str, Any] = {
         "schema_version": receipt["schema_version"],
-        "operator": "KeepRaw",
-        "status": receipt.get("status", "fallback_keep_raw"),
-        "fallback_reason": receipt.get("fallback_reason"),
-        "trust_level": receipt.get("trust_level", "tool"),
-        "context_epoch": receipt.get("context_epoch"),
-        "preserves_raw_state": True,
-        "preserved_failure_facts": receipt.get("preserved_failure_facts", []),
-        "preserved_open_obligations": receipt.get("preserved_open_obligations", []),
-        "error_observation": receipt.get("error_observation"),
+        "operator": "EpochReset",
+        "trust_level": receipt["trust_level"],
+        "context_epoch": receipt["context_epoch"],
+        "source_ref": receipt.get("source_ref"),
+        "header_fields": receipt.get("header_fields"),
+        "hydrated_text": receipt.get("hydrated_text"),
+        "potential_bytes_saved": potential_saved,
+        "bytes_saved": potential_saved,
+        "net_savings_bytes": receipt.get("net_savings_bytes"),
+        "round_trips_saved": receipt.get("round_trips_saved", 1),
+        "replayed": bool(receipt.get("replayed")),
     }
-    return updated
+    candidate = dict(request)
+    candidate["epoch_prefetch"] = epoch_payload
+    has_inline_exploratory = "exploratory_context" in request
+    if replace_exploratory_context and has_inline_exploratory:
+        candidate["exploratory_context"] = {
+            "replaced_by_epoch_reset": True,
+            "source_ref": receipt.get("source_ref"),
+        }
+
+    before_bytes = _safe_rendered_prompt_bytes(request)
+    after_bytes = _safe_rendered_prompt_bytes(candidate)
+    if before_bytes is not None and after_bytes is not None:
+        prompt_delta = after_bytes - before_bytes
+        epoch_payload["rendered_prompt_baseline_bytes"] = before_bytes
+        epoch_payload["rendered_prompt_delivered_bytes"] = after_bytes
+        epoch_payload["rendered_prompt_delta_bytes"] = prompt_delta
+        if has_inline_exploratory:
+            actual_saved = before_bytes - after_bytes
+            if actual_saved <= 0:
+                return _keep_raw_prefetch_payload(
+                    request,
+                    receipt,
+                    fallback_reason="negative_net_savings",
+                    net_savings_bytes=actual_saved,
+                    rendered_baseline_bytes=before_bytes,
+                    rendered_delivered_bytes=after_bytes,
+                    error_observation=(
+                        f"Prefetch aborted atomically to KeepRaw (rendered prompt net change {actual_saved}B <= 0)."
+                    ),
+                )
+            honest_saved = min(potential_saved, actual_saved) if potential_saved > 0 else actual_saved
+            epoch_payload["bytes_saved"] = honest_saved
+            epoch_payload["net_savings_bytes"] = actual_saved
+        else:
+            receipt_baseline = receipt.get("baseline_bytes")
+            added_bytes = max(0, prompt_delta)
+            if isinstance(receipt_baseline, int) and not isinstance(receipt_baseline, bool):
+                external_net = int(receipt_baseline) - added_bytes
+                if external_net <= 0:
+                    return _keep_raw_prefetch_payload(
+                        request,
+                        receipt,
+                        fallback_reason="negative_net_savings",
+                        net_savings_bytes=external_net,
+                        rendered_baseline_bytes=before_bytes,
+                        rendered_delivered_bytes=after_bytes,
+                        error_observation=(
+                            f"Prefetch aborted atomically to KeepRaw (rendered prompt overhead {added_bytes}B >= baseline {receipt_baseline}B)."
+                        ),
+                    )
+                honest_saved = min(potential_saved, external_net) if potential_saved > 0 else external_net
+                epoch_payload["bytes_saved"] = honest_saved
+                epoch_payload["net_savings_bytes"] = external_net
+        return candidate
+
+    if has_inline_exploratory and not replace_exploratory_context:
+        return _keep_raw_prefetch_payload(
+            request,
+            receipt,
+            fallback_reason="negative_net_savings",
+            net_savings_bytes=0,
+            rendered_baseline_bytes=None,
+            rendered_delivered_bytes=None,
+            error_observation="Prefetch aborted atomically to KeepRaw (append mode does not replace exploratory_context).",
+        )
+    return candidate
 
 
 def _quiet_turn_target_params(
@@ -1127,6 +1241,25 @@ def prepare_turn_epoch_context(
                     effective_epoch_prefetch.get("replace_exploratory_context")
                 ),
             )
+            adjudicated = updated_request.get("epoch_prefetch")
+            if isinstance(adjudicated, Mapping):
+                prefetch_receipt = dict(prefetch_receipt)
+                for field in (
+                    "operator",
+                    "status",
+                    "fallback_reason",
+                    "preserves_raw_state",
+                    "bytes_saved",
+                    "net_savings_bytes",
+                    "potential_bytes_saved",
+                    "round_trips_saved",
+                    "rendered_prompt_baseline_bytes",
+                    "rendered_prompt_delivered_bytes",
+                    "rendered_prompt_delta_bytes",
+                    "error_observation",
+                ):
+                    if field in adjudicated:
+                        prefetch_receipt[field] = adjudicated[field]
     return prefetch_receipt, quiet_meta, updated_request
 
 

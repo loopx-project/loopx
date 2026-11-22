@@ -413,6 +413,23 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         # its verified authority and immutable readers, not a second executor.
         model_request = {key: value for key, value in request.items() if key != "turn_envelope"}
         model_request["turn_authority"] = authority
+    if isinstance(model_request.get("epoch_prefetch"), Mapping):
+        compact_prefetch = {
+            key: value
+            for key, value in model_request["epoch_prefetch"].items()
+            if key not in {
+                "hydrated_text",
+                "header_fields",
+                "preserved_failure_facts",
+                "preserved_open_obligations",
+                "error_observation",
+                "potential_bytes_saved",
+                "rendered_prompt_baseline_bytes",
+                "rendered_prompt_delivered_bytes",
+                "rendered_prompt_delta_bytes",
+            }
+        }
+        model_request = {**dict(model_request), "epoch_prefetch": compact_prefetch}
     request_json = json.dumps(
         model_request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )

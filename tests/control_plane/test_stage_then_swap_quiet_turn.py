@@ -1398,3 +1398,77 @@ def test_real_cli_context_read_nonzero_offset_tail_fails_closed_vs_zero_offset_s
     assert mismatch_receipt["fallback_reason"] == "source_digest_mismatch"
     assert mismatch_receipt["round_trips_saved"] == 0
     assert mismatch_receipt["bytes_saved"] == 0
+
+
+def test_codex_cli_prompt_single_emission_and_rendered_prompt_net_byte_gate(tmp_path: Path) -> None:
+    """PR #9213 P2: single-emission in _render_prompt + real rendered-prompt net byte check/gate."""
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.epoch_prefetch import apply_turn_epoch_prefetch_to_request
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+
+    _project, runtime, registry = _write_live_fixture(tmp_path, provider="file")
+    c, plan = _invoke_cli(
+        ["--registry", str(registry), "--runtime-root", str(runtime)],
+        [
+            "turn", "plan",
+            "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture",
+            "--turn-instance-id", "prompt-gate-1",
+            "--host", "generic-cli",
+            "--execution-mode", "isolated-headless",
+            "--scheduler-owner", "outer_controller",
+            "--include-transaction-detail",
+        ],
+    )
+    assert c == 0, plan
+
+    base_req = build_loopx_turn_host_request(plan)
+    base_req["exploratory_context"] = [
+        {"turn": i, "summary": f"verbose exploratory tool output row {i} " * 5}
+        for i in range(40)
+    ]
+    baseline_prompt = _prompt(base_req)
+    baseline_prompt_bytes = len(baseline_prompt.encode("utf-8"))
+    assert baseline_prompt_bytes > 10_000
+
+    hydrated = "[Stage-then-Swap EpochReset Receipt | trust=tool]\ncontext_epoch: e-prompt\n--- prefetched_output ---\nSUMMARY_OK"
+    receipt = {
+        "schema_version": "loopx_epoch_prefetch_receipt_v0",
+        "operator": "EpochReset",
+        "status": "committed",
+        "trust_level": "tool",
+        "context_epoch": "e-prompt",
+        "source_ref": None,
+        "header_fields": {"failure_facts": ["earlier test failed"], "open_obligations": ["keep obligation"]},
+        "hydrated_text": hydrated,
+        "baseline_bytes": 8000,
+        "bytes_saved": 7061,
+        "net_savings_bytes": 7061,
+        "round_trips_saved": 1,
+        "replayed": False,
+    }
+
+    # 1. Default append mode (replace_exploratory_context=False) MUST NOT grow prompt while claiming savings!
+    appended = apply_turn_epoch_prefetch_to_request(base_req, receipt, replace_exploratory_context=False)
+    appended_ep = appended["epoch_prefetch"]
+    assert appended_ep["operator"] == "KeepRaw"
+    assert appended_ep["fallback_reason"] == "negative_net_savings"
+    assert appended_ep["bytes_saved"] == 0
+    assert appended_ep["round_trips_saved"] == 0
+    assert appended["exploratory_context"] == base_req["exploratory_context"]
+    appended_prompt = _prompt(appended)
+    assert hydrated not in appended_prompt
+    assert appended_prompt.count("earlier test failed") == 1
+
+    # 2. Explicit replace_exploratory_context=True shrinks rendered prompt and emits hydrated_text ONCE.
+    replaced = apply_turn_epoch_prefetch_to_request(base_req, receipt, replace_exploratory_context=True)
+    replaced_ep = replaced["epoch_prefetch"]
+    replaced_prompt = _prompt(replaced)
+    replaced_prompt_bytes = len(replaced_prompt.encode("utf-8"))
+    real_saved = baseline_prompt_bytes - replaced_prompt_bytes
+    assert replaced_ep["operator"] == "EpochReset"
+    assert replaced_prompt.count(hydrated) == 1
+    assert real_saved > 0
+    assert replaced_ep["bytes_saved"] == min(7061, real_saved)
+    assert replaced_ep["rendered_prompt_baseline_bytes"] == baseline_prompt_bytes
+    assert replaced_ep["rendered_prompt_delivered_bytes"] == replaced_prompt_bytes
