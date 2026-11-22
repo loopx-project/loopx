@@ -552,6 +552,10 @@ def _apply_recovery_projection(
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)
+    if recovery.get("repair") == "execution_loss_closeout":
+        # Ordinary preparation was built for potential current work. Its
+        # claim must never replace the prior Turn's administrative recovery.
+        payload.pop("execution_preparation", None)
     payload.update(
         {
             "decision": "blocked_wait" if attention else "unsettled_host_turn_recovery",

@@ -83,12 +83,21 @@ def recovery_cli_actions(
             f" --progress-evidence-id {evidence} --task-lease-idempotency-key '<current-key>'"
             " --task-lease-expected-version '<current-version>' --no-global-sync --suppress-external-sinks"
         )
-        return [
-            f"{command_prefix} task-lease inspect {scope}",
-            "Use the current control-writer proof for the original Agent. When unavailable, recover ownership through the authorized Todo lifecycle before closing.",
+        inspect_lease = f"{command_prefix} task-lease inspect {scope}"
+        actions = [inspect_lease]
+        if proof.get("can_reclaim_control_writer") is True and lifecycle_actor_args:
+            writer = shlex.quote(str(proof["current_owner"]))
+            actions.extend([
+                "If the original Agent still owns this Todo and the lease is inactive, run the ordinary managed claim to obtain control-writer proof.",
+                f"{command_prefix} todo claim {scope}{lifecycle_actor_args} --claimed-by {writer} --thin",
+                inspect_lease,
+            ])
+        actions.extend([
+            "Use the active control-writer proof for the original Agent. Hold if authorized ownership cannot be verified.",
             f"{closeout} --dry-run",
             "After the preview establishes a no-spend closeout, execute the same command without --dry-run and verify the original settlement. Resume fresh work only through its own guard.",
-        ]
+        ])
+        return actions
     if recovery.get("repair") == "resume_prior_turn":
         prior_turn_id = str(recovery["prior_turn_instance_id"])
         return [
