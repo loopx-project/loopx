@@ -1605,8 +1605,54 @@ after rebasing or merging any additional runtime change; results from an
 earlier commit do not qualify a later tag. Public git history, merged PR
 metadata, and shipped CLI behavior remain the source of truth.
 
+## Versioned Evaluation Gate (a+b Dual-Scale)
+
+Every minor or major release is measured on LoopX's four-state Global Commander
+Evaluation Ledger under
+[releases/evaluations/INDEX.md](releases/evaluations/INDEX.md)
+(`loopx/control_plane/testing/release_evaluation_gate.py`):
+
+- **`horizon.{json,md}`**: freezes the constant 8-domain (`D1..D8`, weights
+  `16/16/15/14/12/10/10/7%`) / 41-battleline rubric (`30` `2.x_core` + `11`
+  `3.x/4.x_horizon`), `4×25` dimension anti-bloat caps (`C <= 15` without
+  `paired_public_evidence`, `D <= 12` when `default_off`), `open_protocol_core`
+  public-repo criteria, and Major `(a)` exit gates.
+- **`history/`**: maintains an unbroken, version-ordered record across every
+  released `a.b` series (`v0.1.3` onward). Releases prior to `v2.3.0` carry
+  `evaluation_mode: retrospective_git_audit`; releases from `v2.3.0` onward
+  require `evaluation_mode: release_gate_qualified`. Old releases stay in
+  `history/` (tagged `eol` or `superseded`) and are never isolated into
+  `archive/`.
+- **`current.{json,md}`**: tracks the active stable release baseline alongside
+  post-release `origin/main` movement and explicit `v2.x -> v3.0` ceiling
+  blockers.
+- **`archive/`**: holds physically retired components and frozen rubric
+  snapshots ([archive/README.md](releases/evaluations/archive/README.md)).
+
+When running `loopx canary release-qualification` with `--evaluations-dir
+docs/product/releases/evaluations --prior-stable-version <prior>` (plus optional
+`--evaluation-json` and `--verify-git-tags`), SemVer transitions follow a
+two-tier deterministic policy:
+
+1. **Major `(a)` promotion (`a' > a`)**: requires a `release_gate_qualified`
+   `full_41_battlelines` artifact matching candidate `git_commit` / `git_tree`,
+   all arithmetic closures and `C/D` caps, plus `major_promotion_gate` marking
+   every `horizon.json` exit gate for the prior major as `met: true` with real
+   `evidence_ref`s and `breaking_migration_contract.verified: true`.
+2. **Minor `(b)` feature release (`a' == a`, `b' > b`)**: requires an exact
+   `release_gate_qualified` evaluation matching candidate source and `v{version}`
+   metadata, closed `a`-Scale (`41` lines, `delta_from_prior` vs prior stable)
+   and `b`-Scale (`generation_major == a`), enforced `C <= 15` / `D <= 12` caps,
+   and non-contradictory `7.2` benchmark uplift claims
+   (`claims_net_benchmark_uplift`).
+3. **Patch `(c)` maintenance release (`a' == a`, `b' == b`, `c' > c`)**:
+   inherits and re-validates the parent `a.b.0` evaluation (`v0.1.3` for `0.1.x`)
+   cleanly so ordinary hotfixes and patch PRs carry zero evaluation tax.
+
 ## Related Docs
 
+- [Release evaluations ledger](releases/evaluations/INDEX.md)
+- [Global Commander horizon & 41 battlelines](releases/evaluations/horizon.md)
 - [Codex CLI packaged install path](runtimes/codex-cli/codex-cli-packaged-install.md)
 - [Codex CLI no-clone release verification](runtimes/codex-cli/codex-cli-no-clone-release-verification.md)
 - [Getting started](../guides/getting-started.md)

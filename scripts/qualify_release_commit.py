@@ -166,8 +166,10 @@ def select_preflight_tests(
             "scripts/qualify_release_commit.py",
             "scripts/qualify-doubao-model-behavior-live.py",
             "loopx/control_plane/testing/release_commit_qualification.py",
-        }:
+            "loopx/control_plane/testing/release_evaluation_gate.py",
+        } or rel.startswith("docs/product/releases/evaluations/"):
             add("tests/control_plane/test_release_commit_qualification.py")
+            add("tests/control_plane/test_release_evaluation_gate.py")
             add("tests/control_plane/test_actual_default_model_behavior_live.py")
         if rel == "pyproject.toml":
             add("tests/test_python_ci_workflow.py")
