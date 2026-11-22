@@ -26,6 +26,8 @@ type ReusableReadField = {
 };
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
+const MAX_INLINE_WORK_FACTS_BYTES = 2048;
+const MAX_INLINE_WORK_OPENING_BYTES = 7000;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
@@ -54,6 +56,39 @@ function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
     && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
     ? identity : undefined;
+}
+
+/** A normal work decision can be opened inline only when its complete current
+ * work sources and exact settlement route are available from the same capture. */
+export function inlineNormalWorkOpening(context: JsonObject, envelopeConstraints: JsonObject): JsonObject | undefined {
+  if (context.schema_version !== "loopx_turn_envelope_v1" || context.ok !== true || context.should_run !== true ||
+      context.blocked_action_scope != null || context.autonomous_replan_obligation != null || context.replan_action_packet != null)
+    return undefined;
+  const interaction = jsonObject(context.interaction_contract);
+  if (!interaction || interaction.mode !== "bounded_delivery") return undefined;
+  const agent = jsonObject(interaction.agent_channel), cli = jsonObject(interaction.cli_channel);
+  const user = jsonObject(interaction.user_channel), work = jsonObject(agent?.work_context);
+  const scheduler = jsonObject(context.scheduler_hint);
+  if (agent?.must_attempt !== true || !Array.isArray(agent.required_reads) || agent.required_reads.length ||
+      agent.next_task_action != null || work?.complete !== true || work.selected_todo_text_verified !== true ||
+      work.selected_todo_ref !== "selected_todo" || work.unavailable_context != null || user?.action_required !== false ||
+      scheduler?.action !== "run_now" || jsonObject(scheduler.app_automation)?.host_action !== "none") return undefined;
+  const plan = jsonObject(cli?.settlement_plan), identity = readySettlementIdentity(context, interaction, plan);
+  if (!identity || plan?.schema_version !== "quota_settlement_plan_v2") return undefined;
+  const writebacks = orderedSettlementSteps(plan)?.map(jsonObject).filter(step => step?.kind === "durable_writeback");
+  const writeback = writebacks?.[0];
+  if (writebacks?.length !== 1 || writeback?.owner !== "agent" ||
+      typeof writeback.semantic_closeout_command_template !== "string") return undefined;
+  const workOpening = {effective_action: context.effective_action, reason: context.reason,
+    selected_todo: context.selected_todo, settlement_identity: identity,
+    settlement_command: writeback.semantic_closeout_command_template};
+  if (Buffer.byteLength(JSON.stringify(workOpening)) > MAX_INLINE_WORK_FACTS_BYTES) return undefined;
+  const opening = {work_opening: workOpening, before_work: {
+    ...envelopeConstraints,
+    work_context: work, required_reads: agent.required_reads, user_channel: user,
+    execution_preparation: cli?.execution_preparation, delivery_workspace_causality: cli?.delivery_workspace_causality,
+  }};
+  return Buffer.byteLength(JSON.stringify(opening)) <= MAX_INLINE_WORK_OPENING_BYTES ? opening : undefined;
 }
 
 /** Reorder the opening for an exact dated Todo reentry. The saved capture
@@ -730,7 +765,7 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody): JsonObject {
+    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody, inlineOpening?: JsonObject): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -755,7 +790,8 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context, exactBody),
-    ...(initial ? {initial_read_plan: initial} : {})}, sourceValues, undefined, true);
+    ...(initial ? {initial_read_plan: {...initial, ...(inlineOpening ? {inline_opening: inlineOpening} : {})}} : {})},
+    sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
