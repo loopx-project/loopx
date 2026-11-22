@@ -2981,6 +2981,7 @@ export const en: Messages = {
   'loopx.files.workspace': 'Workspace files',
   'loopx.files.workspaceHint': 'Browse this Goal\'s working folder in the file panel: open files, see what changed.',
   'loopx.files.browse': 'Browse workspace',
+  'loopx.files.noConversationWorkspace': 'This Goal has no Workbench conversation workspace. Reports remain available below.',
   'loopx.files.noThread': 'This Goal has no conversation yet. Start one to browse its working folder here.',
   'loopx.files.reports': 'Accepted reports',
   'loopx.files.reportsHint': 'Only reports that still pass the current acceptance appear here.',

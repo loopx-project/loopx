@@ -2979,6 +2979,7 @@ export const zh = {
   'loopx.files.workspace': '工作区文件',
   'loopx.files.workspaceHint': '在文件面板里浏览这个 Goal 的工作目录，随时可以打开文件、看改动。',
   'loopx.files.browse': '浏览工作区',
+  'loopx.files.noConversationWorkspace': '这个 Goal 没有 Workbench 对话，暂无对话工作目录。报告仍可在下方读取。',
   'loopx.files.noThread': '这个 Goal 还没有对话。开一个对话后，就能在这里浏览它的工作目录。',
   'loopx.files.reports': '已验收的报告',
   'loopx.files.reportsHint': '只有仍能通过当前验收的报告会出现在这里。',

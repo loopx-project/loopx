@@ -71,7 +71,7 @@ test('the steward groups owner work separately, folds stopped Goals, and preserv
   } finally { await act(async () => renderer?.unmount()); }
 });
 
-test('failed, loading and empty steward reads stay distinct, with refresh and optional All Goals', async () => {
+test('failed, loading and empty steward reads stay distinct and offer no empty board shortcut', async () => {
   let retried = 0, opened = 0;
   const p = { ...props(), onRetry() { retried++; }, onOpenAll() { opened++; } };
   let renderer: ReactTestRenderer | undefined;
@@ -81,8 +81,8 @@ test('failed, loading and empty steward reads stay distinct, with refresh and op
     assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /0 活跃|还没有目标/);
     await act(async () => renderer!.root.findByProps({ className: 'icon-btn overview-refresh' }).props.onClick());
     assert.equal(retried, 1);
-    await act(async () => renderer!.root.findByProps({ className: 'overview-trace' }).props.onClick());
-    assert.equal(opened, 1);
+    assert.equal(renderer!.root.findAllByProps({ className: 'overview-trace' }).length, 0);
+    assert.equal(opened, 0);
     await act(async () => renderer!.update(createElement(StewardOverview, { ...props(), loading: true })));
     assert.match(JSON.stringify(renderer!.toJSON()), new RegExp(t('common.loading')));
     assert.equal(renderer!.root.findAllByProps({ className: 'overview-trace' }).length, 0);

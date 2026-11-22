@@ -2977,6 +2977,7 @@ export const ja: Messages = {
   'loopx.files.workspace': 'ワークスペースのファイル',
   'loopx.files.workspaceHint': 'この Goal の作業フォルダをファイルパネルで閲覧し、ファイルを開いたり変更を確認したりできます。',
   'loopx.files.browse': 'ワークスペースを開く',
+  'loopx.files.noConversationWorkspace': 'この Goal には Workbench の会話作業フォルダーがありません。レポートは下で閲覧できます。',
   'loopx.files.noThread': 'この Goal にはまだ会話がありません。会話を始めると、ここで作業フォルダを閲覧できます。',
   'loopx.files.reports': '受け入れ済みのレポート',
   'loopx.files.reportsHint': '現在の受け入れを通過しているレポートのみ表示されます。',

@@ -41,7 +41,7 @@ const statusWord = (status: AcceptanceStatus) => t(`loopx.accept.status.${status
 type Pending = { kind: 'verify' | 'clear-checks' } | { kind: 'adopt' };
 
 /** The Goal overview's acceptance card: what the core says is accepted, the checks and their last receipt, and the two actions the owner may take. */
-export function GoalAcceptance({ token, goal }: { token: string | undefined; goal: LoopxGoal }) {
+export function GoalAcceptance({ token, goal, readOnly = false }: { token: string | undefined; goal: LoopxGoal; readOnly?: boolean }) {
   const { readback, plan, failed, reload } = useAcceptance(token, goal.goalId);
   const observation: Observation | null = goal.acceptance?.goalId === goal.goalId ? goal.acceptance : null;
   // The fresh readback wins; the status snapshot is what the card shows while that read is on its way.
@@ -51,9 +51,9 @@ export function GoalAcceptance({ token, goal }: { token: string | undefined; goa
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const flight = useRef(false);
-  useEffect(() => { setPending(null); setError(''); setNotice(''); }, [goal.goalId]);
+  useEffect(() => { setPending(null); setError(''); setNotice(''); }, [goal.goalId, readOnly]);
   const active = (contract?.lifecycleState ?? 'active') === 'active' && goal.activationState === 'active';
-  const writable = readback !== null && !failed && active;
+  const writable = !readOnly && readback !== null && !failed && active;
   const checks = contract?.checks ?? null;
   // A check bound to a retained outcome requirement is that requirement; list it once, under the outcome.
   const outcomeReqs = (contract?.outcomes ?? []).flatMap(o => o.requirements);
@@ -102,8 +102,8 @@ export function GoalAcceptance({ token, goal }: { token: string | undefined; goa
       <details><summary>{t('loopx.accept.plan.commands')}</summary>
         {plan.criteria.map(c => <div key={c.id}><p>{c.description}</p><code>{c.command}</code>{c.outputs.map(ref => <p key={ref}>{t('loopx.accept.plan.output', ref)}</p>)}</div>)}
       </details>
-      <p className="goal-acceptance-note">{t('loopx.accept.plan.hint')}</p>
-      <button type="button" className="primary" disabled={busy || !writable} onClick={() => setPending({ kind: 'adopt' })}>{t('loopx.accept.plan.adopt')}</button>
+      {!readOnly && <p className="goal-acceptance-note">{t('loopx.accept.plan.hint')}</p>}
+      {!readOnly && <button type="button" className="primary" disabled={busy || !writable} onClick={() => setPending({ kind: 'adopt' })}>{t('loopx.accept.plan.adopt')}</button>}
     </div> : null}
 
     {checks ? <div className="goal-accept-checks">
@@ -122,10 +122,10 @@ export function GoalAcceptance({ token, goal }: { token: string | undefined; goa
           <p className="goal-acceptance-note"><code>{checks.receipt.operationId}</code> · r{checks.receipt.contractRevision}</p>
         </> : <p>{t('loopx.accept.noReceipt')}</p>}
       </details>
-      <div className="goal-accept-actions">
+      {!readOnly && <div className="goal-accept-actions">
         <button type="button" className="primary" disabled={busy || !writable} onClick={() => setPending({ kind: 'verify' })}>{busy ? t('loopx.accept.running') : t('loopx.accept.verify')}</button>
         <button type="button" className="ghost" disabled={busy || !writable} onClick={() => setPending({ kind: 'clear-checks' })}>{t('loopx.accept.clear')}</button>
-      </div>
+      </div>}
       {!active ? <p className="goal-acceptance-note">{t('loopx.accept.stopped')}</p> : null}
     </div> : !plan && !failed ? <p className="goal-empty" role={readback || observation ? undefined : 'status'}>{t(readback || observation ? 'loopx.accept.noChecks' : 'common.loading')}</p> : null}
 
@@ -149,7 +149,7 @@ export function GoalAcceptance({ token, goal }: { token: string | undefined; goa
       {observation.missingSources.length || observation.truncated ? <p className="goal-acceptance-note">{t('loopx.accept.partial')}</p> : null}
     </div> : observation ? <p className="goal-acceptance-note">{t('loopx.accept.observationUnavailable')}</p> : null}
 
-    {pending ? <Dialog
+    {pending && !readOnly ? <Dialog
       title={pending.kind === 'clear-checks' ? t('loopx.accept.clear') : pending.kind === 'adopt' ? t('loopx.accept.plan.adopt') : t('loopx.accept.verify')}
       confirmLabel={pending.kind === 'clear-checks' ? t('loopx.accept.clear') : pending.kind === 'adopt' ? t('loopx.accept.plan.adopt') : t('loopx.accept.verify')}
       danger={pending.kind === 'clear-checks'}

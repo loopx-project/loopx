@@ -13,7 +13,7 @@ export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversation
   threads: Thread[];
   /** Open the file panel on this Goal conversation's working folder. */
   onBrowse: (threadId: string) => void;
-  onOpenConversations: () => void;
+  onOpenConversations?: () => void;
 }) {
   const [page, setPage] = useState<ResultPage | null>(null);
   const [open, setOpen] = useState<ResultRead | null>(null);
@@ -55,8 +55,8 @@ export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversation
           <button type="button" className="primary" onClick={() => onBrowse(bound.id)}>{t('loopx.files.browse')}</button>
         </>
         : <>
-          <p className="goal-empty">{t('loopx.files.noThread')}</p>
-          <button type="button" className="ghost" onClick={onOpenConversations}>{t('loopx.tabConversations')}</button>
+          <p className="goal-empty">{t(onOpenConversations ? 'loopx.files.noThread' : 'loopx.files.noConversationWorkspace')}</p>
+          {onOpenConversations && <button type="button" className="ghost" onClick={onOpenConversations}>{t('loopx.tabConversations')}</button>}
         </>}
     </section>
     <section className="goal-files-results" aria-label={t('loopx.files.reports')} aria-busy={busy}>
