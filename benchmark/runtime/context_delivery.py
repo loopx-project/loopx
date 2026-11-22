@@ -14,12 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from .codex import explicit_context_opt_ins
+from .native_hooks import prepare_native_hooks
 
 
 class ContextOptInConfigurationError(ValueError):
     """Explicit opt-in hook parameter failed validation or product compatibility."""
-
-from .native_hooks import prepare_native_hooks
 
 
 def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str, *,
