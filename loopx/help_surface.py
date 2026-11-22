@@ -84,7 +84,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Start the local dashboard, status service, and Agent Chat service with one command.",
             },
             {
-                "command": "loopx workbench start|status|stop",
+                "command": "loopx workbench start / loopx workbench status / loopx workbench stop",
                 "purpose": "Start, inspect or stop the optional Workbench; preserve its data and independently managed Core.",
             },
             {
