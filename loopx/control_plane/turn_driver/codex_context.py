@@ -445,7 +445,7 @@ def _maybe_resolve_compact_direct_read(
     """Resolve Phase-2 compact hook direct-read and persist updated wake/telemetry state."""
     from .codex_hook_direct_read import resolve_compact_hook_direct_read
 
-    if direct_read_cfg is None or name not in ("PostCompact", "SessionStart"):
+    if direct_read_cfg is None or name != "SessionStart":
         return None
     saved = updated.get("recovery")
     active_recovery = (
