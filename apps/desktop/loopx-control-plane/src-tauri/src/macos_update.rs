@@ -11,7 +11,7 @@ use flate2::read::GzDecoder;
 use serde_json::Value;
 use tauri_plugin_updater::Update;
 
-const PUBLIC_DEFAULT_CONTRACT: &str =
+const ARTIFACT_DEFAULT_CONTRACTS: &str =
     include_str!("../../../../../loopx/cli_commands/public_default_contract.json");
 
 /// Read the publisher's observed contract inside the signature-verified bytes
@@ -31,7 +31,9 @@ pub(crate) fn qualify_candidate(
     }
     let invalid = "runtime_bundle_invalid";
     let unavailable = "update_platform_unavailable";
-    let supported: Value = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).map_err(|_| invalid)?;
+    let supported: Value = serde_json::from_str(ARTIFACT_DEFAULT_CONTRACTS).map_err(|_| invalid)?;
+    let current = supported.get("current").ok_or(invalid)?;
+    let historical = supported.get("historical").ok_or(invalid)?;
     let identity_path = Path::new("LoopX.app/Contents/Resources/runtime/identity.json");
     let mut archive = tar::Archive::new(GzDecoder::new(Cursor::new(verified_bytes)));
     let mut qualified = false;
@@ -46,7 +48,8 @@ pub(crate) fn qualify_candidate(
         let mut raw = Vec::new();
         entry.read_to_end(&mut raw).map_err(|_| invalid)?;
         let identity = crate::bundled_runtime::parse_identity(&raw)?;
-        if identity["default_contract"] != supported {
+        let observed = &identity["default_contract"];
+        if observed != current && observed != historical {
             return Err(unavailable.into());
         }
         qualified = true;
@@ -194,7 +197,7 @@ mod tests {
             Some(serde_json::json!({"surface": "unknown"})),
             Some(serde_json::json!({
                 "surface": "complete_turn",
-                "schema_version": "loopx_turn_envelope_v1",
+                "schema_version": "loopx_turn_envelope_v0",
                 "interaction_schema_version": "loopx_interaction_contract_v0"
             })),
         ];
@@ -216,10 +219,13 @@ mod tests {
             assert!(qualify_candidate("stable", "2.3.0", &bytes).is_ok());
         }
 
-        identity["default_contract"] = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).unwrap();
-        fs::write(identity_path, identity.to_string()).unwrap();
-        let bytes = archive(&candidate);
-        crate::prepared_update::save(&cache, "main", version, "unused", &bytes).unwrap();
+        let qualified: Value = serde_json::from_str(ARTIFACT_DEFAULT_CONTRACTS).unwrap();
+        for contract in ["historical", "current"] {
+            identity["default_contract"] = qualified[contract].clone();
+            fs::write(&identity_path, identity.to_string()).unwrap();
+            let bytes = archive(&candidate);
+            crate::prepared_update::save(&cache, "main", version, "unused", &bytes).unwrap();
+        }
         let pointer = fs::read(cache.join("prepared.json")).unwrap();
         assert!(crate::prepared_update::save(&cache, "main", version, "unused", b"bad").is_err());
         assert_eq!(fs::read(cache.join("prepared.json")).unwrap(), pointer);

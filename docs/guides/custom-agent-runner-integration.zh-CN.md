@@ -84,7 +84,7 @@ OpenCode 的目录布局。
 如果 host 没有 skill 系统，就注入等价的 `SKILL.md` 指令，并保留一段短
 re-entry instruction，要求 Agent：
 
-1. 为当前 goal 与 Agent 读取新鲜 JSON quota packet；
+1. 为当前 goal 与 Agent 读取本轮最新的 JSON Complete Turn；
 2. 遵守 `interaction_contract`、`goal_boundary` 和 selected todo；
 3. 只做一次有界动作，并验证真实 postcondition；
 4. 通过 LoopX 写回结果；
@@ -95,7 +95,7 @@ re-entry instruction，要求 Agent：
 
 ## 跑一个自驱动 Tick
 
-机器路径使用 JSON：
+当前机器入口默认返回 Complete Turn v1。已发布的 `v2.4.0` 标签仍交付原 quota packet。两者均从 `interaction_contract` 读取当前工作指令。
 
 ```bash
 loopx --format json \

@@ -14,6 +14,9 @@ delivery.
 
 C1 source uses one wire contract for both inline and staged delivery. Public
 artifacts follow the [release qualification](../product/release-readiness.md).
+During upgrades, saved Codex App loaders can still invoke `heartbeat-prompt`
+with the historical spellings until the App reads back the refreshed loader.
+Both launch the same C1 guard.
 The evidence below qualifies actual Host adoption, model outcomes, and complete cost.
 
 - To understand a work session, start with [the example](#one-task-four-situations).

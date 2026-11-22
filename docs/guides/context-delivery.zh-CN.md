@@ -11,8 +11,9 @@
 继承完整交付。
 
 C1 源码的内联和分阶段交付使用同一个 wire 契约。公开制品遵循
-[发布资格](../product/release-readiness.md)。下文的证据用于确认 Host 实际采用、
-模型成果和完整成本。
+[发布资格](../product/release-readiness.md)。升级时，已保存的 Codex App loader
+可在 App 读回新 loader 前继续用旧参数调用 `heartbeat-prompt`，两种写法均启动
+同一个 C1 准入流程。下文的证据用于确认 Host 实际采用、模型成果和完整成本。
 
 - 理解一次工作，从[四种场景](#一项任务四种场景)开始。
 - 实际使用，看[开启、验证和回退](#开启验证和回退)。

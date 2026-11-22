@@ -28,6 +28,8 @@ value=json.load(sys.stdin)
 assert module['validate_manifest'](value)==value
 profile = module['PUBLIC_DEFAULT_CONTRACT']
 assert module['validate_manifest']({**value, 'default_contract':profile})['default_contract']==profile
+history = module['HISTORICAL_DEFAULT_CONTRACT']
+assert module['validate_manifest']({**value, 'default_contract':history})['default_contract']==history
 for invalid in [None, {}, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
     try:module['validate_manifest']({**value,'default_contract':invalid})
     except ValueError:pass
@@ -98,7 +100,7 @@ def manifest(body: bytes, url: str):
 
 
 @pytest.mark.parametrize("profile", [None, {}, {"surface": "future"},
-    {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+    {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v0",
      "interaction_schema_version": "loopx_interaction_contract_v0"}])
 def test_unqualified_default_stops_before_download_or_activation(monkeypatch, profile):
     descriptor = {**manifest(b"runtime", "https://publisher.invalid/runtime"), "default_contract": profile}
@@ -113,6 +115,8 @@ def test_unqualified_default_stops_before_download_or_activation(monkeypatch, pr
 def test_qualified_scope_and_historical_metadata_remain_readable():
     historical = manifest(b"runtime", "https://publisher.invalid/runtime")
     assert update.validate_manifest(historical) == historical
+    published = {**historical, "default_contract": dict(update.HISTORICAL_DEFAULT_CONTRACT)}
+    assert update.validate_manifest(published) == published
     current = {**historical, "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
     assert update.validate_manifest(current) == current
 

@@ -169,6 +169,12 @@ def register_heartbeat_control_commands(
              "or codex-context-root with the normal per-wake LOOPX_TURN binding.",
     )
 
+    # Saved App loaders can run before the new prompt is written back.
+    # These spellings are accepted only at the loader boundary and select no writer.
+    legacy_loader = heartbeat_prompt_parser.add_mutually_exclusive_group()
+    for flag in ("--turn-envelope", "--complete-turn"):
+        legacy_loader.add_argument(flag, action="store_true", help=argparse.SUPPRESS)
+
     heartbeat_prompt_parser.add_argument(
         "--decision-handoff-socket",
         help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",

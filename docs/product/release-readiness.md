@@ -298,22 +298,23 @@ Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
 contract identity to its metadata. Historical v1 descriptors remain readable.
-The published `v2.4.0` tag and public artifact allowlist retain `quota_packet`.
-The C1 source checkout defaults to `complete_turn` (`loopx_turn_envelope_v1`).
-The existing release qualification rejects that observed writer until the
-publisher and Desktop updater adopt the matching supported contract together.
-Keep the current channel pointer while that dependency is open. Record actual
-Host adoption and the matched single-session outcome and full-cost comparison
-under [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.md#9-validation-and-acceptance).
+The published `v2.4.0` tag retains `quota_packet`. New runtime and Desktop
+builds qualify only the observed `complete_turn` (`loopx_turn_envelope_v1`)
+default. Their update readers accept both exact profiles so an installed C1
+reader can verify a pinned historical archive during rollback. Keep historical
+readback separate from publication, which requires the current default.
+Record actual Host adoption and the matched single-session outcome and full-cost
+comparison under [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.md#9-validation-and-acceptance).
 
 新 runtime 描述符记录实际观测到且受支持的 `default_contract`。构建器在写入渠道描述符
 或替换已有制品之前探测已提交的 runtime。安装资格检查在隔离的原始 Goal 中关闭
 上下文传输后再次观察普通 quota writer。发布器要求安装后的观察与不可变描述符一致。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
-已发布的 `v2.4.0` 标签和公开制品支持列表保留 `quota_packet`。C1 源码检出的默认值
-是 `complete_turn`（`loopx_turn_envelope_v1`）。发布器与桌面更新器须同步采用对应的
-支持契约，否则现有资格检查会拒绝该 writer，保留当前渠道指针。按
+已发布的 `v2.4.0` 标签保留 `quota_packet`。新的 runtime 和 Desktop 构建只为
+实际探测到的 `complete_turn`（`loopx_turn_envelope_v1`）默认契约签发资格。
+更新读取端接受两种精确契约，已安装 C1 的读取端可在回退时校验固定版本的历史归档。
+历史制品读取与新制品发布资格各自核验。按
 [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#9-验证与验收)
 记录受支持 Host 的实际采用，并完成同单会话匹配成果和完整成本对照。
 
