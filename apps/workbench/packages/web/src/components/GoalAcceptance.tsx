@@ -127,7 +127,7 @@ export function GoalAcceptance({ token, goal }: { token: string | undefined; goa
         <button type="button" className="ghost" disabled={busy || !writable} onClick={() => setPending({ kind: 'clear-checks' })}>{t('loopx.accept.clear')}</button>
       </div>
       {!active ? <p className="goal-acceptance-note">{t('loopx.accept.stopped')}</p> : null}
-    </div> : !plan ? <p className="goal-empty">{t('loopx.accept.noChecks')}</p> : null}
+    </div> : !plan && !failed ? <p className="goal-empty" role={readback || observation ? undefined : 'status'}>{t(readback || observation ? 'loopx.accept.noChecks' : 'common.loading')}</p> : null}
 
     {notice ? <p role="status" className="goal-acceptance-note">{notice}</p> : null}
     {error ? <p role="alert" className="goal-failure">{error}</p> : null}

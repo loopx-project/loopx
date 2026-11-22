@@ -3,17 +3,21 @@ import { fetchGoalBar, goalOf, statusWord, type GoalBarRead } from '../loopx/lau
 import type { LoopxAttention, LoopxGoal } from '../loopx/status';
 import type { Thread } from '../api';
 import { t } from '../i18n';
+import { GoalDetails } from './GoalDetails';
 import { GoalLifecycle } from './GoalLifecycle';
 import { IconCrab } from './icons';
 
 /** The current Goal stays compact and can be managed without leaving the conversation. */
-export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, onOpenGoal }: {
+export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, threads = [thread], onBrowseFiles = () => {}, initiallyExpanded = false, onExpandedChange }: {
   token: string | undefined; thread: Thread; goal?: LoopxGoal; attention?: LoopxAttention;
-  onChanged: () => void; onOpenGoal: (goalId: string) => void;
+  onChanged: () => void; threads?: Thread[]; onBrowseFiles?: (threadId: string) => void; initiallyExpanded?: boolean; onExpandedChange?: (threadId: string, expanded: boolean) => void;
 }) {
   const info = thread.loopxInfo;
   const bound = Boolean(goalOf(thread));
   const [read, setRead] = useState<GoalBarRead | null>(null);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
+  useEffect(() => { setExpanded(initiallyExpanded); }, [thread.id, info?.goalId, initiallyExpanded]);
+  useEffect(() => { onExpandedChange?.(thread.id, expanded); }, [thread.id, expanded, onExpandedChange]);
   const [revision, setRevision] = useState(0);
   // A scoped effect rejects late reads from a previous conversation or lifecycle refresh.
   useEffect(() => {
@@ -56,8 +60,9 @@ export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, onOp
       {read?.freshness === 'unavailable' && <p className="loopx-group-note" role="status">{t('loopx.goal.stateUnavailable')}</p>}
       <div className="overview-goal-actions">
         {goal && (goal.activationState === 'active' || goal.activationState === 'stopped') && <GoalLifecycle token={token} goal={goal} onChanged={changed} />}
-        <button type="button" className="overview-more loopx-group-open" onClick={() => onOpenGoal(info.goalId)}>{t('loopx.panel.openGoal')}</button>
+        <button type="button" className="overview-more loopx-group-open" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{t(expanded ? 'loopx.panel.closeGoal' : 'loopx.panel.openGoal')}</button>
       </div>
+      {expanded && <GoalDetails key={info.goalId} token={token} goalId={info.goalId} goal={goal} threads={threads} refreshKey={revision} onBrowseFiles={onBrowseFiles} onOpenConversation={() => setExpanded(false)} />}
     </div>}
   </section>;
 }

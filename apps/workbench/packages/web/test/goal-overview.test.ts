@@ -24,7 +24,7 @@ test('an ordinary conversation has no Goal block and never reads Goal state', as
   globalThis.fetch = async () => { reads++; throw new Error('unexpected read'); };
   let renderer: ReactTestRenderer | undefined;
   try {
-    await act(async () => { renderer = create(createElement(LoopxGoalGroup, { token: undefined, thread: { id: 'plain', status: 'idle' } as Thread, onChanged() {}, onOpenGoal() {} })); });
+    await act(async () => { renderer = create(createElement(LoopxGoalGroup, { token: undefined, thread: { id: 'plain', status: 'idle' } as Thread, onChanged() {} })); });
     assert.equal(renderer!.toJSON(), null);
     assert.equal(reads, 0);
   } finally { await act(async () => renderer?.unmount()); globalThis.fetch = saved; }
@@ -35,7 +35,7 @@ test('a bound Goal has compact progress and its real lifecycle, while a missing 
   const thread = { id: 'current-thread', status: 'idle', loopxInfo: { goalId: g.goalId, goalTitle: g.title, missing: false } } as Thread;
   const a = attention(g.goalId, 1);
   let changed = 0;
-  const p = { token: undefined, thread, goal: g, attention: a, onChanged() { changed++; }, onOpenGoal() {} };
+  const p = { token: undefined, thread, goal: g, attention: a, onChanged() { changed++; } };
   let renderer: ReactTestRenderer | undefined;
   try {
     await act(async () => { renderer = create(createElement(LoopxGoalGroup, p)); });
@@ -173,7 +173,7 @@ test('a delayed Goal read cannot replace the next conversation state', async () 
   const read = (goalId: string, summary: string) => ({ binding: binding(goalId), state: { goalId, title: goalId, status: 'connected_without_run', summary, agentTodos: { total: 0, open: 0 }, userTodos: { total: 0, open: 0 } }, freshness: 'fresh' });
   globalThis.fetch = async input => String(input).includes('/first') ? new Promise<Response>(resolve => { release = resolve; }) : Response.json(read('second', 'The second conversation'));
   const thread = (id: string) => ({ id, status: 'idle', loopx: binding(id), loopxInfo: { goalId: id, goalTitle: id, missing: false, basis: 'workbench', source: 'test' } } as Partial<Thread>) as Thread;
-  const p = { token: undefined, thread: thread('first'), onChanged() {}, onOpenGoal() {} };
+  const p = { token: undefined, thread: thread('first'), onChanged() {} };
   let renderer: ReactTestRenderer | undefined;
   try {
     await act(async () => { renderer = create(createElement(LoopxGoalGroup, p)); await tick(); });

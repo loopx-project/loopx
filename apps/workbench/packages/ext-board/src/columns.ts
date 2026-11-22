@@ -26,9 +26,11 @@ export function parseBacklogOpen(value: string | null): boolean {
 }
 
 /** Bumped when a saved filter's meaning changes. */
-export const FILTERS_VERSION = 3;
+export const FILTERS_VERSION = 4;
+export const FILTERS_KEY = 'filters.v1';
 
 export interface BoardFilters {
+  goalOnly: boolean;
   tags: string[];
   project: string[];
   agent: string[];
@@ -61,7 +63,7 @@ export interface BoardColumn {
 }
 
 export function emptyFilters(): BoardFilters {
-  return { tags: [], project: [], agent: [], scheduled: [], machine: [] };
+  return { goalOnly: false, tags: [], project: [], agent: [], scheduled: [], machine: [] };
 }
 
 function timestamp(iso: string | null | undefined): number {
@@ -183,7 +185,8 @@ export function newThreadOptions(filters: BoardFilters): { project?: string; mac
 }
 
 export function matchesFilters(thread: ThreadSummary, filters: BoardFilters): boolean {
-  return (filters.tags.length === 0 || parseTitleTags(thread.title).tags.some(tag => filters.tags.some(value => value.toLowerCase() === tag.toLowerCase())))
+  return (!filters.goalOnly || Boolean(thread.goal?.goalId))
+    && (filters.tags.length === 0 || parseTitleTags(thread.title).tags.some(tag => filters.tags.some(value => value.toLowerCase() === tag.toLowerCase())))
     && (filters.project.length === 0 || filters.project.includes(projectKey(thread)))
     && (filters.agent.length === 0 || filters.agent.includes(thread.agent))
     && (filters.scheduled.length === 0 || filters.scheduled.includes(thread.scheduled))
@@ -257,6 +260,7 @@ export function parseFilters(value: string | null): BoardFilters {
     const strings = (input: unknown) => Array.isArray(input)
       ? [...new Set(input.filter((item): item is string => typeof item === 'string'))] : [];
     return {
+      goalOnly: object.goalOnly === true,
       tags: [...new Set(strings(object.tags).map(tag => tag.trim()).filter(validTag).map(tag => tag.toLowerCase()))],
       // Before version 2 projects were kept as the path was typed, not resolved; they match nothing now.
       project: typeof object.v === 'number' && object.v >= 2 ? strings(object.project) : [],

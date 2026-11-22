@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { t } from '../i18n';
 import type { Thread } from '../api';
 import { fetchResults, readResult, resultKey, type ResultPage, type ResultRead, type ResultRow } from '../loopx/results';
-import { goalOf } from '../loopx/launch';
+import { goalConversation } from '../loopx/goal-navigation';
 
 /** The Goal's Files tab: the reports that still pass acceptance, and the workspace folder in the file panel. */
 export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversations }: {
@@ -20,7 +20,7 @@ export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversation
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const generation = useRef(0);
-  const bound = threads.find(thread => goalOf(thread)?.goalId === goalId) ?? null;
+  const bound = goalConversation(goalId, threads);
 
   const load = useCallback(async (cursor?: string) => {
     const current = ++generation.current;
