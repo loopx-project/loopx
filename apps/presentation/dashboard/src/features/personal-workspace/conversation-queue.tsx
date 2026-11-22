@@ -43,7 +43,8 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   const composing = useRef(false);
   const held = turn.steering?.status === "pending" ? turn.steering : null;
   const canSteer = !unresolved && !editing && !recovery.failed && Boolean(held || (targetTurnId && !turn.attachment_count));
-  const editable = !held && !unresolved && !recovery.failed && turn.origin === "web";
+  const sourceEditable = turn.origin === "web" && turn.input_mutation_allowed !== false;
+  const editable = !held && !unresolved && !recovery.failed && sourceEditable;
   useEffect(() => {setMessage(null);}, [turn.input_revision]);
   useEffect(() => {if (editing && message && draft === null) {
     setDraft(message.message); setEditRevision(message.input_revision);
@@ -149,9 +150,11 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
         : (zh ? "插入本轮 · Command+Enter" : "Steer · Command+Enter")}>
     {busy ? <RefreshCw size={14}/> : <CornerUpLeft size={14}/>}<span>{held ? (zh ? "核对插入" : "Check insertion") : (zh ? "插入本轮" : "Steer")}</span>
   </button><div className="personal-queue-actions"><button ref={menuButton} type="button" disabled={busy || !editable}
-    aria-label={zh ? `更多操作：待处理消息 ${index + 1}` : `More actions for queued message ${index + 1}`}
-    aria-expanded={menu} onClick={() => setMenu(!menu)}><MoreHorizontal size={16}/></button>
-    {menu ? <div className="personal-queue-menu">
+    aria-label={!sourceEditable
+      ? (zh ? `编辑或取消不可用：待处理消息 ${index + 1}` : `Editing or cancelling unavailable for queued message ${index + 1}`)
+      : (zh ? `更多操作：待处理消息 ${index + 1}` : `More actions for queued message ${index + 1}`)}
+    aria-expanded={menu && editable} onClick={() => setMenu(!menu)}><MoreHorizontal size={16}/></button>
+    {menu && editable ? <div className="personal-queue-menu">
       <button type="button" onClick={() => {setMenu(false); setEditing(true); setOpen(true);}}><Pencil size={14}/>{zh ? "编辑" : "Edit"}</button>
       <button type="button" onClick={() => void mutate({action: "cancel", operation_id: crypto.randomUUID(),
         expected_revision: turn.input_revision})}><X size={14}/>{zh ? "取消排队" : "Cancel queued message"}</button>
