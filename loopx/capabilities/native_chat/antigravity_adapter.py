@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -202,9 +202,52 @@ def _running_snapshot_steps(snapshot: dict[str, Any], *, cascade_id: str, start:
     return indexed
 
 
-def _check_hard_timeout(value: float | None) -> None:
+def _check_positive_timeout(value: float | None, label: str = "hard") -> None:
     if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
-        raise ValueError("Antigravity hard timeout must be finite and positive")
+        raise ValueError(f"Antigravity {label} timeout must be finite and positive")
+
+
+def _check_hard_timeout(value: float | None) -> None:
+    _check_positive_timeout(value, "hard")
+
+
+_NON_TOOL_STEP_TYPES = frozenset({
+    "CORTEX_STEP_TYPE_USER_INPUT", "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+    "CORTEX_STEP_TYPE_ERROR_MESSAGE", "CORTEX_STEP_TYPE_CHECKPOINT",
+    "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+})
+
+
+def _turn_progress_snapshot(current_steps: Sequence[tuple[int, Mapping[str, object]]]) -> list[tuple[object, ...]]:
+    """Project turn progress while bounding repeated error -> thinking-only retry loops."""
+    progress: list[tuple[object, ...]] = []
+    error_fence_active, settled_thinking_only_retries = False, 0
+    for index, step in current_steps:
+        step_type, step_status = str(step.get("type") or ""), str(step.get("status") or "")
+        if step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+            if step_status != "CORTEX_STEP_STATUS_CLEARED":
+                error_fence_active = True
+            continue
+        planner = step.get("plannerResponse")
+        planner_dict = planner if isinstance(planner, dict) else {}
+        response_text = planner_dict.get("modifiedResponse") or planner_dict.get("response")
+        if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+            if (isinstance(response_text, str) and response_text.strip()) or planner_dict.get("toolCalls"):
+                error_fence_active, settled_thinking_only_retries = False, 0
+            elif error_fence_active:
+                if settled_thinking_only_retries >= 1:
+                    continue
+                if step_status not in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}:
+                    settled_thinking_only_retries += 1
+        elif step_type not in _NON_TOOL_STEP_TYPES:
+            error_fence_active, settled_thinking_only_retries = False, 0
+        elif error_fence_active and settled_thinking_only_retries >= 1 and step_type != "CORTEX_STEP_TYPE_USER_INPUT":
+            continue
+        run_cmd = step.get("runCommand")
+        cmd_dict = run_cmd if isinstance(run_cmd, dict) else {}
+        progress.append((index, step.get("status"), response_text, planner_dict.get("thinking"),
+                         cmd_dict.get("combinedOutput"), cmd_dict.get("exitCode")))
+    return progress
 
 
 def _native_completion_facts(cascade_id: str, current: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
@@ -585,8 +628,8 @@ class AntigravityAdapter:
     Restricted Chat disables native tools. Trusted-owner uses Antigravity's
     existing approvals; LoopX never accepts those approvals on the user's behalf.
     Governed Tasks and workspace grants retain their existing executor owner.
-    By default, five minutes without native progress stops an invocation; an
-    explicit hard_timeout_sec also bounds wall time even while it progresses.
+    Interactive invocations have no default idle or wall-clock timeout; explicit
+    idle_timeout_sec and hard_timeout_sec bound idle and wall time when set.
     """
 
     adapter_kind = "antigravity_ls"
@@ -1058,9 +1101,11 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         initial_history: list[dict[str, str]] | None = None,
         resumed: bool = False,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
     ) -> None:
         self.work_dir = work_dir.resolve()
+        _check_positive_timeout(idle_timeout_sec, "idle")
         _check_hard_timeout(hard_timeout_sec)
         self.objective = objective
         self.cascade_id = cascade_id
@@ -1078,6 +1123,7 @@ class AntigravityAdapter:
         )
         self._system_primed = False
         self._closed = False
+        self.idle_timeout_sec = idle_timeout_sec
         self.hard_timeout_sec = hard_timeout_sec
         self._interrupted = threading.Event()
         self._send_lock = threading.Lock()
@@ -1110,10 +1156,12 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         executor_model: Mapping[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
     ) -> "AntigravityAdapter":
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Antigravity Chat runtime profile")
+        _check_positive_timeout(idle_timeout_sec, "idle")
         _check_hard_timeout(hard_timeout_sec)
         # Validate user intent before creating an upstream cascade.
         requested = dict(executor_model or {})
@@ -1188,19 +1236,12 @@ class AntigravityAdapter:
                 )
 
         return cls(
-            work_dir=work_dir,
-            objective=objective,
-            cascade_id=cascade_id,
-            ls_url=ls_url,
-            csrf_token=csrf_token,
-            model_id=model_id,
-            model_placeholder=model_placeholder,
-            reasoning_effort=model_id.rsplit("-", 1)[-1],
-            runtime_profile=runtime_profile,
-            team_plan_context=team_plan_context,
-            initial_history=history,
-            resumed=resumed,
-            hard_timeout_sec=hard_timeout_sec,
+            work_dir=work_dir, objective=objective, cascade_id=cascade_id,
+            ls_url=ls_url, csrf_token=csrf_token, model_id=model_id,
+            model_placeholder=model_placeholder, reasoning_effort=model_id.rsplit("-", 1)[-1],
+            runtime_profile=runtime_profile, team_plan_context=team_plan_context,
+            initial_history=history, resumed=resumed,
+            idle_timeout_sec=idle_timeout_sec, hard_timeout_sec=hard_timeout_sec,
         )
 
     def _build_turn_prompt(self, message: str, *, isolated_cascade: bool = False) -> str:
@@ -1273,12 +1314,15 @@ class AntigravityAdapter:
                    event_sink: Callable[[str, dict[str, Any]], None] | None = None,
                    *, read_only_review: bool = False,
                    media: list[dict[str, Any]] | None = None,
-                   isolated_cascade: bool = False) -> dict[str, Any]:
+                   isolated_cascade: bool = False,
+                   idle_timeout_sec: float | None = None) -> dict[str, Any]:
+        _check_positive_timeout(idle_timeout_sec, "idle")
         self._read_only_review = read_only_review
         self._interrupted.clear()
         self._cancel_acknowledged = False
         try:
-            return self._run_turn(message, event_sink, media=media, isolated_cascade=isolated_cascade)
+            return self._run_turn(message, event_sink, media=media, isolated_cascade=isolated_cascade,
+                                  idle_timeout_sec=idle_timeout_sec)
         except BaseException as failure:
             # A timeout/transport or permission failure is not a successful turn.
             # Retain an unconfirmed cancellation as an error for the caller fence.
@@ -1295,20 +1339,11 @@ class AntigravityAdapter:
             self._active_cascade_id = None
             self._read_only_review = False
 
-    def _run_turn(
-        self,
-        message: str,
-        event_sink: Callable[[str, dict[str, Any]], None] | None = None,
-        *,
-        media: list[dict[str, Any]] | None = None,
-        isolated_cascade: bool = False,
-    ) -> dict[str, Any]:
+    def _run_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None] | None = None, *,
+                  media: list[dict[str, Any]] | None = None, isolated_cascade: bool = False,
+                  idle_timeout_sec: float | None = None) -> dict[str, Any]:
         if self._closed:
-            raise CodexChatAgentError(
-                "Antigravity session is closed",
-                gate=None,
-                error_code="session_closed",
-            )
+            raise CodexChatAgentError("Antigravity session is closed", gate=None, error_code="session_closed")
 
         turn_id = f"agy_turn_{uuid.uuid4().hex[:12]}"
         if isolated_cascade:
@@ -1373,15 +1408,16 @@ class AntigravityAdapter:
         emitted_text_by_step: dict[int, str] = {}
         activity = AntigravityActivity(self.work_dir)
         latest_response_text = ""
+        effective_idle_timeout = self.idle_timeout_sec if idle_timeout_sec is None else idle_timeout_sec
         last_progress_at = time.monotonic()
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
-        previous_progress: Any = None
+        previous_progress: list[tuple[object, ...]] | None = None
         saw_running_or_new_step = False
         observed_native_errors: set[int] = set()
         incomplete_running_polls = 0
 
         def timeout(kind: str) -> None:
-            limit = self.hard_timeout_sec if kind == "hard" else ANTIGRAVITY_IDLE_TIMEOUT_SEC
+            limit = self.hard_timeout_sec if kind == "hard" else effective_idle_timeout
             detail = {"kind": kind, "limit_seconds": limit,
                       "native_error_count": len(observed_native_errors)}
             if event_sink is not None:
@@ -1426,7 +1462,7 @@ class AntigravityAdapter:
                 timeout("hard")
             self._check_interrupted()
             final_read_deadline = None
-            if now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
+            if effective_idle_timeout is not None and now - last_progress_at >= effective_idle_timeout:
                 # Native work can advance between the last poll and the idle
                 # deadline. Check the same invocation once before cancelling.
                 final_read_deadline = now + observation_limit
@@ -1581,31 +1617,9 @@ class AntigravityAdapter:
 
             # A running status alone is not progress. Observe only this input's
             # steps, including streamed text and command output; old history or
-            # a stuck RUNNING flag cannot keep an invocation alive indefinitely.
-            non_cleared_errors = [
-                index for index, step in current_steps
-                if step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-                and step.get("status") != "CORTEX_STEP_STATUS_CLEARED"
-            ]
-            first_error_index = non_cleared_errors[0] if non_cleared_errors else None
-            progress = [(index, step.get("status"),
-                         (step.get("plannerResponse") or {}).get("modifiedResponse")
-                         or (step.get("plannerResponse") or {}).get("response"),
-                         (step.get("plannerResponse") or {}).get("thinking"),
-                         (step.get("runCommand") or {}).get("combinedOutput"),
-                         (step.get("runCommand") or {}).get("exitCode"))
-                        for index, step in current_steps
-                        if step.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-                        and not (
-                            first_error_index is not None
-                            and index > first_error_index
-                            and step.get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
-                            and not (
-                                str((step.get("plannerResponse") or {}).get("modifiedResponse")
-                                    or (step.get("plannerResponse") or {}).get("response") or "").strip()
-                                or (step.get("plannerResponse") or {}).get("toolCalls")
-                            )
-                        )]
+            # a stuck RUNNING flag cannot keep an invocation alive when an
+            # explicit idle_timeout_sec is configured.
+            progress = _turn_progress_snapshot(current_steps)
             now = time.monotonic()
             if progress and progress != previous_progress:
                 previous_progress = progress
@@ -1613,8 +1627,11 @@ class AntigravityAdapter:
             self._check_interrupted()
             if deadline is not None and now >= deadline:
                 timeout("hard")
-            idle_expired = (final_read_deadline is not None
-                            and now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC)
+            idle_expired = (
+                effective_idle_timeout is not None
+                and final_read_deadline is not None
+                and now - last_progress_at >= effective_idle_timeout
+            )
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 final_is_error = final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"

@@ -509,7 +509,7 @@ def test_steward_antigravity_report_timeout_recovers_once_in_isolated_cascade_wi
 
     def fake_start(cls, *, work_dir, objective, resume_thread_id=None, history=None,
                    runtime_profile="restricted", team_plan_context=None, executor_model=None,
-                   env=None, hard_timeout_sec=None):
+                   env=None, idle_timeout_sec=None, hard_timeout_sec=None):
         return cls(
             work_dir=work_dir,
             objective=objective,
@@ -520,13 +520,19 @@ def test_steward_antigravity_report_timeout_recovers_once_in_isolated_cascade_wi
             model_placeholder="MODEL_PLACEHOLDER_M427",
             reasoning_effort="high",
             runtime_profile=runtime_profile,
+            idle_timeout_sec=idle_timeout_sec,
+            hard_timeout_sec=hard_timeout_sec,
         )
 
     turns_seen: list[dict[str, Any]] = []
 
     def fake_turn(self, message, event_sink=None, **kwargs):
         with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
-            turns_seen.append({"isolated_cascade": kwargs.get("isolated_cascade"), "message": message})
+            turns_seen.append({
+                "isolated_cascade": kwargs.get("isolated_cascade"),
+                "idle_timeout_sec": kwargs.get("idle_timeout_sec"),
+                "message": message,
+            })
             if len(turns_seen) == 1:
                 if event_sink is not None:
                     event_sink("turn.started", {
@@ -580,6 +586,8 @@ def test_steward_antigravity_report_timeout_recovers_once_in_isolated_cascade_wi
         assert resumed["response"]["native_loopx"].get("status") == "committed", resumed
         assert turns_seen[0]["isolated_cascade"] is True
         assert turns_seen[1]["isolated_cascade"] is True
+        assert turns_seen[0]["idle_timeout_sec"] == 300.0
+        assert turns_seen[1]["idle_timeout_sec"] == 300.0
         assert capture.read_bytes() == before_codex
         assert transport.steward_reports.reconcile() == 1
         assert reports.health(owner)["publication_verified"]

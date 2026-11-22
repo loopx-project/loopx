@@ -49,7 +49,7 @@ class ACPStdioAdapter:
     session_config_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     execution_mode: bool = False
     startup_timeout_sec: float = 30.0
-    idle_timeout_sec: float = 180.0
+    idle_timeout_sec: float | None = None
     hard_timeout_sec: float | None = None
     # Grace window for the agent to exit on stdin EOF and release any
     # per-session lock before LoopX signals the process.
@@ -73,7 +73,7 @@ class ACPStdioAdapter:
         agent_work_dir: Path | None = None,
         resume_thread_id: str | None = None,
         startup_timeout_sec: float | None = None,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         execution_mode: bool = False,
         config_values: dict[str, str] | None = None,

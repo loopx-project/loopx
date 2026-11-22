@@ -1388,7 +1388,7 @@ def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
 
     def fake_start(cls, *, work_dir, objective, resume_thread_id=None, history=None,
                    runtime_profile="restricted", team_plan_context=None, executor_model=None,
-                   env=None, hard_timeout_sec=None):
+                   env=None, idle_timeout_sec=None, hard_timeout_sec=None):
         return _EmittingAntigravityAdapter(
             work_dir=work_dir,
             objective=objective,

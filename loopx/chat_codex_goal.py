@@ -301,8 +301,13 @@ class CodexGoalDriver:
                     "hard_timeout",
                     "Native Goal reached the Chat time limit; resume it in this conversation.",
                 )
+            idle_deadline = (
+                None
+                if self.session.idle_timeout_sec is None
+                else time.monotonic() + self.session.idle_timeout_sec
+            )
             event = self.session._next_event(
-                deadline=deadline if deadline is not None else time.monotonic() + self.session.idle_timeout_sec
+                deadline=deadline if deadline is not None else idle_deadline
             )
             if self.stopped.is_set():
                 # A start already submitted by the host may arrive after Stop.
