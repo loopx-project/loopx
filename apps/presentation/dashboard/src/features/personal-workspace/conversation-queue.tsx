@@ -42,14 +42,16 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   const textarea = useRef<HTMLTextAreaElement>(null), menuButton = useRef<HTMLButtonElement>(null);
   const composing = useRef(false);
   const held = turn.steering?.status === "pending" ? turn.steering : null;
-  const canSteer = !unresolved && !editing && !recovery.failed && Boolean(held || (targetTurnId && !turn.attachment_count));
   const sourceEditable = turn.origin === "web" && turn.input_mutation_allowed !== false;
+  const canSteer = !unresolved && !(sourceEditable && editing) && !recovery.failed
+    && Boolean(held || (targetTurnId && !turn.attachment_count));
   const editable = !held && !unresolved && !recovery.failed && sourceEditable;
   useEffect(() => {setMessage(null);}, [turn.input_revision]);
   useEffect(() => {if (editing && message && draft === null) {
     setDraft(message.message); setEditRevision(message.input_revision);
   }}, [editing, message, draft]);
-  useEffect(() => {if (editing && draft !== null) textarea.current?.focus();}, [editing, draft === null]);
+  useEffect(() => {if (editing && sourceEditable && draft !== null) textarea.current?.focus();},
+    [editing, sourceEditable, draft === null]);
   async function mutate(request: ChatQueueInputRequest) {
     if (lock.current) return;
     lock.current = true; setBusy(true); setActionError(""); setMenu(false);
@@ -79,6 +81,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
     } finally {lock.current = false; setBusy(false); onInputChanged();}
   }
   function save() {
+    if (!sourceEditable) return;
     if (draft && [...draft].length > 12000) {
       setActionError(zh ? "待处理消息最多 12000 个字符，请缩短后保存。" : "Queued messages support up to 12000 characters. Shorten the text before saving."); return;
     }
@@ -121,7 +124,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
       else discard();
       return;
     }
-    if (editing) {
+    if (editing && (sourceEditable || event.target === textarea.current)) {
       if (composerKeyAction({...event, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode}, false) === "steer") {
         event.preventDefault(); event.stopPropagation(); save();
       }
@@ -161,14 +164,17 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
     </div> : null}</div></div>
     {editing ? <div className="personal-queue-editor">
       {draft === null ? <p role="status">{failed ? (zh ? "完整消息读取失败" : "Full message unavailable") : (zh ? "正在读取…" : "Reading…")}</p>
-        : <textarea ref={textarea} aria-label={zh ? `编辑待处理消息 ${index + 1}` : `Edit queued message ${index + 1}`}
-          maxLength={24000} value={draft} onChange={event => {
+        : <textarea ref={textarea} aria-label={sourceEditable
+          ? (zh ? `编辑待处理消息 ${index + 1}` : `Edit queued message ${index + 1}`)
+          : (zh ? "保留的编辑草稿" : "Retained edit draft")}
+          readOnly={!sourceEditable} maxLength={24000} value={draft} onChange={event => {
             setDraft(event.target.value);
             try {localStorage.setItem(draftKey, JSON.stringify({message: event.target.value, revision: editRevision}));}
             catch {setActionError(zh ? "草稿无法保存，切换前请保留文本。" : "Draft could not be saved. Retain the text before switching.");}
           }} onCompositionStart={() => {composing.current = true;}} onCompositionEnd={() => {composing.current = false;}}
           disabled={busy || Boolean(unresolved)} rows={3}/>}
-      <div><button type="button" onClick={save} disabled={busy || !draft?.trim() || Boolean(unresolved)}>{zh ? "保存" : "Save"}</button>
+      <div>{sourceEditable ? <button type="button" onClick={save}
+        disabled={busy || !draft?.trim() || Boolean(unresolved)}>{zh ? "保存" : "Save"}</button> : null}
         <button type="button" disabled={busy || Boolean(unresolved)} onClick={discard}>{zh ? "放弃修改" : "Discard edit"}</button></div>
     </div> : null}
     {unresolved ? <div className="personal-queue-feedback"><span>{zh ? "修改尚未确认" : "Change unconfirmed"}</span>

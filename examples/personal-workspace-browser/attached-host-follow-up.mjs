@@ -191,6 +191,17 @@ export const attachedHostFollowUpScenario = {
         || !await queueMenu.evaluate(element => element === document.activeElement)) {
         throw new Error("Escape must close the queue action menu and restore its trigger focus");
       }
+      // A saved edit can outlive a package that used to offer editing for a bound source.
+      page.__loopxRuntime.queuedTurns.set(attachedSessionId,
+        page.__loopxRuntime.queuedTurns.get(attachedSessionId).map(turn =>
+          turn.turn_id === "turn-queued-1" ? { ...turn, input_mutation_allowed: false } : turn));
+      await page.reload();
+      const boundDraft = queuedFollowUp.getByRole("textbox", {name: "保留的编辑草稿", exact: true});
+      await boundDraft.waitFor();
+      if (await boundDraft.isEditable() || await boundDraft.inputValue() !== retainedDraft
+        || await queuedFollowUp.getByRole("button", {name: "保存", exact: true}).count()) {
+        throw new Error("A bound queue reopened a retained draft as a writable change");
+      }
       await composer.fill("主输入框的另一份草稿");
       page.__loopxRuntime.queuedTurns.set(attachedSessionId,
         page.__loopxRuntime.queuedTurns.get(attachedSessionId).filter(turn => turn.turn_id !== "turn-queued-1"));
