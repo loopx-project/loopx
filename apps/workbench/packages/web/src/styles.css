@@ -10374,6 +10374,7 @@ div.file-card:hover { background: var(--surface); }
   font-size: 13px;
 }
 .model-back svg { transform: rotate(180deg); }
+.model-refresh { margin-left: auto; }
 
 .context-compact {
   border-top: 1px solid var(--border);

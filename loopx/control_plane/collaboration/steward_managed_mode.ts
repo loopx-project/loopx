@@ -1053,11 +1053,19 @@ function hasMatchingApprovedReviewerDeclaration(item: JsonObject, requiredTokens
   );
 }
 
+function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean): string {
+  if (authorReplyBypass) return "awaiting_maintainer_reply";
+  if (stalledAgeMs >= 168 * 3_600_000) return "7d_plus";
+  if (stalledAgeMs >= 72 * 3_600_000) return "72h_plus";
+  if (stalledAgeMs >= 24 * 3_600_000) return "24h_to_72h";
+  return "under_24h";
+}
+
 function filterScopedRepositoryItems(
   rawItems: unknown[],
   filter: JsonObject | null,
   observedAtValue: unknown,
-): JsonObject[] {
+): { items: JsonObject[]; observationIncomplete: boolean } {
   const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
   let observedAtMs = NaN;
   if (minStalledHours !== null) {
@@ -1100,16 +1108,90 @@ function filterScopedRepositoryItems(
       if (authorMode === "exclude" && login && authors.has(login)) continue;
     }
     if (minStalledHours !== null) {
-      const updatedMs = typeof item.updatedAt === "string" ? Date.parse(item.updatedAt) : NaN;
-      if (!Number.isFinite(updatedMs) || observedAtMs - updatedMs < minStalledHours * 3_600_000) {
+      const authorReplied = item.author_replied_after_request_changes === true
+        || reviewSummary?.author_replied_after_request_changes === true;
+      const hasExplicitStalledSince = Object.prototype.hasOwnProperty.call(item, "stalled_since")
+        || (reviewSummary !== null && Object.prototype.hasOwnProperty.call(reviewSummary, "stalled_since"));
+      const rawStalledSince = typeof item.stalled_since === "string"
+        ? item.stalled_since
+        : (typeof reviewSummary?.stalled_since === "string" ? reviewSummary.stalled_since : null);
+      if (
+        hasExplicitStalledSince
+        && rawStalledSince === null
+        && effectiveVerdicts !== null
+        && effectiveVerdicts.size === 1
+        && effectiveVerdicts.has("REQUEST_CHANGES")
+      ) {
         continue;
       }
-      matched.push({ ...item, stalled_threshold_met: true });
+      // Fail closed when comment pagination did not reach the stalled anchor or a newer
+      // author/maintainer reply, so evicted replies cannot drop awaiting_maintainer_reply.
+      const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
+        || reviewSummary?.comments_coverage_incomplete === true;
+      if (commentsCoverageIncomplete) {
+        return { items: [], observationIncomplete: true };
+      }
+      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
+      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
+      const authorReplyBypass = authorReplied && authorMode === "exclude";
+      const thresholdMet = Number.isFinite(basisMs) && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      if (!authorReplyBypass && !thresholdMet) {
+        continue;
+      }
+      const stalledAgeMs = Number.isFinite(basisMs) ? Math.max(0, observedAtMs - basisMs) : 0;
+      matched.push({
+        ...item,
+        stalled_threshold_met: thresholdMet,
+        stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
+      });
     } else {
       matched.push(item);
     }
   }
-  return matched;
+  return { items: matched, observationIncomplete: false };
+}
+
+const AGE_FILTER_ITEM_FIELDS = [
+  "stalled_since",
+  "author_replied_after_request_changes",
+  "comments_coverage_incomplete",
+  "stalled_threshold_met",
+  "stalled_bucket",
+] as const;
+
+const AGE_FILTER_REVIEW_SUMMARY_FIELDS = [
+  "latest_request_changes_review_id",
+  "stalled_since",
+  "author_replied_after_request_changes",
+  "comments_coverage_incomplete",
+] as const;
+
+function omitKeys(obj: JsonObject, keysToOmit: readonly string[]): JsonObject {
+  const omit = new Set(keysToOmit);
+  return Object.fromEntries(Object.entries(obj).filter(([key]) => !omit.has(key)));
+}
+
+function projectRepositoryItemForMaterialHash(rawItem: unknown, usesStalledAgeFilter: boolean): unknown {
+  const item = jsonObject(rawItem);
+  if (!item) return rawItem;
+  const reviewSummary = jsonObject(item.review_summary);
+  if (usesStalledAgeFilter) {
+    const hasStalledSinceClock = typeof item.stalled_since === "string"
+      || typeof reviewSummary?.stalled_since === "string";
+    const omittedItemFields = hasStalledSinceClock
+      ? ["comments_coverage_incomplete", "updatedAt"]
+      : ["comments_coverage_incomplete"];
+    const projectedItem = omitKeys(item, omittedItemFields);
+    if (reviewSummary !== null) {
+      projectedItem.review_summary = omitKeys(reviewSummary, ["comments_coverage_incomplete"]);
+    }
+    return projectedItem;
+  }
+  const projectedItem = omitKeys(item, AGE_FILTER_ITEM_FIELDS);
+  if (reviewSummary !== null) {
+    projectedItem.review_summary = omitKeys(reviewSummary, AGE_FILTER_REVIEW_SUMMARY_FIELDS);
+  }
+  return projectedItem;
 }
 
 /** Combine authorized local portfolio, inbox and optional repository signal
@@ -1119,40 +1201,54 @@ function filterScopedRepositoryItems(
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
+  const incompleteObservation: JsonObject = {
+    result_hash: previousHash,
+    material_change: false,
+    observation_incomplete: true,
+    own_monitor_bookkeeping_excluded: true,
+  };
   const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
   if (repo !== null && repo.status === "unavailable") {
-    return {
-      result_hash: previousHash,
-      material_change: false,
-      observation_incomplete: true,
-      own_monitor_bookkeeping_excluded: true,
-    };
+    return incompleteObservation;
   }
   const portfolio = params.portfolio_observation == null ? null
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
   const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
   const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
-  const scopedRepoItems = signalScope !== null && rawRepoItems !== null
+  const prFilter = signalScope === null ? null : jsonObject(signalScope.pr_filter);
+  const rawMinStalledHours = prFilter?.min_stalled_hours;
+  const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
+    && Number.isFinite(rawMinStalledHours)
+    && rawMinStalledHours > 0;
+  const scopedResult = signalScope !== null && rawRepoItems !== null
     ? filterScopedRepositoryItems(
       rawRepoItems,
-      signalScope.pr_filter === undefined ? null : jsonObject(signalScope.pr_filter),
+      prFilter,
       params.observed_at ?? repo?.observed_at,
     )
     : null;
+  if (scopedResult?.observationIncomplete) {
+    return incompleteObservation;
+  }
+  const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
+  const baseRepoItems = scopedRepoItems ?? rawRepoItems;
+  const hashedRepoItems = baseRepoItems === null
+    ? null
+    : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));
   const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
   const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
   const facts = signalScope === null
     ? {
       portfolio_hash: portfolio?.result_hash ?? null,
       inbox_items: inboxItems,
-      repository_items: rawRepoItems,
+      repository_items: hashedRepoItems,
     }
     : {
       signal_scope: signalScope,
       portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
       inbox_items: includeInbox ? inboxItems : [],
-      repository_items: scopedRepoItems,
+      repository_items: hashedRepoItems,
     };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
     "collection_completed_at", "generated_at", "evaluated_at", "age_seconds", "observed_at"]);

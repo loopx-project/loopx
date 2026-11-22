@@ -286,3 +286,12 @@ test('a CLI without a native catalog exposes no model or effort picker, includin
   assert.equal(renderToStaticMarkup(createElement(ModelPicker, props)), '');
   assert.equal(renderToStaticMarkup(createElement(ModelPicker, { ...props, quietFor: 'CLI instance' })), '');
 });
+
+test('a legacy combined model-effort id resolves to its model family and effort', () => {
+  const models = [
+    { id: 'gemini-4-argon', label: 'Gemini 4 Argon', efforts: ['low', 'medium', 'high'], isDefault: true },
+    { id: 'gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium)', efforts: [] },
+  ];
+  assert.equal(modelName(models, 'gemini-4-argon-high'), 'Gemini 4 Argon');
+  assert.deepEqual(effortsForModel(models, 'gemini-4-argon-high', []), ['low', 'medium', 'high']);
+});

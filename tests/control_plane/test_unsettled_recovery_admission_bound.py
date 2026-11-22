@@ -1,13 +1,22 @@
 """Recovery admissions are bounded per original debt, never treated as spend."""
-import json
+import argparse
 from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
+import shlex
+import sys
 from threading import Barrier
 
 import pytest
 
 from loopx.capabilities.manager_context import deliver
-from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+from loopx.rollout_event_log import (
+    append_rollout_event,
+    build_rollout_event,
+    load_rollout_events,
+    rollout_event_log_path,
+)
+from scripts import external_scheduler_worker as worker
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture,
@@ -448,3 +457,185 @@ def test_paused_goal_blocks_unsettled_recovery_without_fabricating_receipts(
     assert debt["settlement_effect_id"] == effect
     assert debt["admissions_without_progress"] == 0, debt
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_scheduler_observation_and_external_worker_enforce_recovery_admission_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2]))
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    cli = tmp_path / "loopx-cli"
+    cli.write_text(
+        f"#!{sys.executable}\nfrom loopx.entrypoint import main\nraise SystemExit(main())\n",
+        encoding="utf-8",
+    )
+    cli.chmod(0o700)
+
+    def observe() -> dict:
+        rc, payload = _run_cli(
+            registry, runtime, "quota", "should-run",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--runtime-profile", "generic_cli", "--scheduler-observation",
+            cwd=project, raw_guard=False,
+        )
+        assert rc == 0, payload
+        return payload
+
+    rc, original = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", "owed-original", "--todo-id", TODO_ID,
+        cwd=project,
+    )
+    assert rc == 0 and original["heartbeat_receipt"]["closeout_required"] is True, original
+    effect = original["heartbeat_receipt"]["settlement_identity"]["effect_id"]
+    log = rollout_event_log_path(runtime, GOAL_ID)
+
+    def _admission_receipts() -> list[dict]:
+        return [
+            event for event in load_rollout_events(log)
+            if event.get("run_id")
+            or (event.get("details") or {}).get("closeout_required")
+            or (event.get("details") or {}).get("recovery_checkpoint_schema")
+            or (event.get("details") or {}).get("turn_instance_id")
+        ]
+
+    for index in range(3):
+        receipts_before = _admission_receipts()
+        obs = observe()
+        assert _admission_receipts() == receipts_before
+        assert obs["should_run"] is True, obs
+        assert obs["decision"] == "unsettled_host_turn_recovery", obs
+        assert obs["effective_action"] == "unsettled_host_turn_recovery", obs
+        assert obs["interaction_contract"]["agent_channel"]["must_attempt"] is True
+        assert obs["scheduler_hint"]["action"] == "run_now"
+        recovery = obs["unsettled_host_turn_recovery"]
+        assert recovery["state"] == "recovery_required", recovery
+        assert recovery["prior_turn_instance_id"] == "owed-original"
+        assert recovery["settlement_effect_id"] == effect
+        assert recovery["binding_id"] == TODO_ID
+        assert recovery["admissions_without_progress"] == index
+        assert recovery["admission_limit"] == 3
+
+        if index == 0:
+            allowed_marker = tmp_path / "allowed-wake-ran"
+            allowed_args = argparse.Namespace(
+                cli_bin=str(cli), registry=str(registry), runtime_root=str(runtime),
+                runtime_profile="generic_cli", goal_id=GOAL_ID, agent_id=AGENT_ID,
+                state_file=str(tmp_path / "worker-allowed.json"),
+                wake_cmd=shlex.join([
+                    sys.executable, "-c",
+                    f"from pathlib import Path; Path({str(allowed_marker)!r}).touch()",
+                ]),
+                once=True, error_backoff_seconds=5.0,
+                quota_timeout_seconds=30.0, wake_timeout_seconds=10.0,
+            )
+            assert worker.run_worker(allowed_args) == 0
+            assert allowed_marker.exists()
+
+        rc, admitted = _run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", f"recovery-{index}", cwd=project,
+        )
+        assert rc == 0 and admitted["should_run"] is True, admitted
+
+    receipts_before = _admission_receipts()
+    exhausted = observe()
+    assert _admission_receipts() == receipts_before
+    assert exhausted["should_run"] is False, exhausted
+    assert exhausted["decision"] == "blocked_wait", exhausted
+    assert exhausted["effective_action"] == "blocked_wait", exhausted
+    assert exhausted["reason_code"] == "unsettled_recovery_admission_limit", exhausted
+    assert exhausted["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert exhausted["scheduler_hint"]["action"] == "backoff_waiting_for_user", exhausted
+    debt = exhausted["unsettled_host_turn_recovery"]
+    assert debt["state"] == "attention_required", debt
+    assert debt["reason_code"] == "unsettled_recovery_admission_limit", debt
+    assert debt["prior_turn_instance_id"] == "owed-original"
+    assert debt["settlement_effect_id"] == effect
+    assert debt["admissions_without_progress"] == 3
+    assert debt["admission_limit"] == 3
+
+    capsys.readouterr()
+    forbidden_marker = tmp_path / "forbidden-wake-ran"
+    sleeps: list[float] = []
+    held_args = argparse.Namespace(
+        cli_bin=str(cli), registry=str(registry), runtime_root=str(runtime),
+        runtime_profile="generic_cli", goal_id=GOAL_ID, agent_id=AGENT_ID,
+        state_file=str(tmp_path / "worker-held.json"),
+        wake_cmd=shlex.join([
+            sys.executable, "-c",
+            f"from pathlib import Path; Path({str(forbidden_marker)!r}).touch()",
+        ]),
+        once=False, error_backoff_seconds=5.0,
+        quota_timeout_seconds=30.0, wake_timeout_seconds=10.0,
+    )
+    assert worker.run_worker(held_args, sleep=sleeps.append) == 0
+    assert not forbidden_marker.exists()
+    assert len(sleeps) >= 1 and all(delay > 0 for delay in sleeps)
+    worker_log = capsys.readouterr().out
+    assert "status=waiting" in worker_log
+    assert "effective_action=blocked_wait" in worker_log
+    assert "status=stop_after_unchanged_limit" in worker_log
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_scheduler_observation_recovery_overrides_blocked_todo_wait_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    rc, blocked = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--status", "blocked", "--reason", "Await independent evidence.", cwd=project,
+    )
+    assert rc == 0, blocked
+    replan_id = "replan-1111111111111111"
+    prior_turn = "prior-replan-turn"
+    append_rollout_event(
+        rollout_event_log_path(runtime, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=prior_turn,
+            status="autonomous_replan_required",
+            summary="A previous autonomous replan Turn still requires closeout.",
+            details={
+                "replan_obligation_id": replan_id,
+                "settlement_effect_id": f"{GOAL_ID}:{AGENT_ID}:{replan_id}:{prior_turn}",
+                "closeout_required": True,
+            },
+        ),
+    )
+
+    rc, obs = _run_cli(
+        registry, runtime, "quota", "should-run",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--runtime-profile", "generic_cli", "--scheduler-observation",
+        cwd=project, raw_guard=False,
+    )
+    assert rc == 0, obs
+    assert obs["should_run"] is True, obs
+    assert obs["decision"] == "unsettled_host_turn_recovery", obs
+    assert obs["effective_action"] == "unsettled_host_turn_recovery", obs
+    assert obs["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert obs["scheduler_hint"]["action"] == "run_now", obs
+    assert obs["scheduler_hint"]["cadence_class"] == "active_work", obs
+    assert obs["scheduler_hint"]["unchanged_poll"].get("local_scheduler") != "stop", obs
+    assert obs["scheduler_hint"]["cold_path_detail"]["local_scheduler"]["after_limit"] == "continue", obs
+    recovery = obs["unsettled_host_turn_recovery"]
+    assert recovery["state"] == "recovery_required", recovery
+    assert recovery["prior_turn_instance_id"] == prior_turn
+    assert recovery["binding_kind"] == "autonomous_replan"
+    assert recovery["binding_id"] == replan_id

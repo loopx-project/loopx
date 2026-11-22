@@ -94,6 +94,7 @@ class BenchmarkCodex(CodexOffline):
         quiet_turn=False,
         epoch_prefetch_json=None,
         execution_yardstick_enabled=None,
+        official_stop_hook=False,
         **kwargs,
     ):
         if "research_loop" in kwargs:
@@ -118,6 +119,7 @@ class BenchmarkCodex(CodexOffline):
             compact_direct_read=compact_direct_read,
             quiet_turn=quiet_turn,
             epoch_prefetch_json=normalize_epoch_prefetch_json(epoch_prefetch_json),
+            official_stop_hook=official_stop_hook,
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -460,6 +462,7 @@ class BenchmarkCodex(CodexOffline):
                if self.execution_observation is not None else {}),
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
@@ -769,6 +772,7 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_COMPACT_DIRECT_READ": "1" if self.execution.compact_direct_read else "0",
                 "LOOPX_QUIET_TURN": "1" if self.execution.quiet_turn else "0",
                 "LOOPX_EPOCH_PREFETCH_JSON": self.execution.epoch_prefetch_json or "",
+                "LOOPX_OFFICIAL_STOP_HOOK": "1" if self.execution.official_stop_hook else "0",
                 # A trial's explicit None must not inherit a container opt-in.
                 "LOOPX_NATIVE_CHILD_LIMIT": (
                     str(self.execution.native_child_limit)
@@ -905,6 +909,7 @@ class BenchmarkCodex(CodexOffline):
             "task_entry": self.execution.task_entry,
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             **self._replan_receipt(),
@@ -971,7 +976,7 @@ class BenchmarkCodex(CodexOffline):
                 if entry["status"] == "blocked":
                     return
             remaining = int(deadline - time.monotonic())
-            reserve = phase_work_reserve(self.execution.mode)
+            reserve = phase_work_reserve(self.execution.mode, official_stop_hook=self.execution.official_stop_hook)
             if remaining <= reserve:
                 raise TimeoutError("Task budget exhausted before execution handoff")
             # Planning, admission and work share one absolute phase clock.
@@ -987,11 +992,12 @@ class BenchmarkCodex(CodexOffline):
                 resume_budget_stop=self._phase_number > 1,
             )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
+            supervisor_timeout = remaining + (30 if self.execution.official_stop_hook else 0)
             shell = (
                 "set +e; "
                 # Use the task environment's clock, including remote backends.
                 f"export LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + {remaining} )); "
-                f"timeout --signal=TERM --kill-after=30 {remaining}s "
+                f"timeout --signal=TERM --kill-after=30 {supervisor_timeout}s "
                 f"{shlex.join(command)} >> {shlex.quote(phase_log)} 2>&1; "
                 "rc=$?; "
                 # Budget exhaustion retains partial artifacts for native scoring.
@@ -1002,7 +1008,7 @@ class BenchmarkCodex(CodexOffline):
                 command=shell,
                 env=env,
                 cwd=cwd,
-                timeout_sec=remaining + 60,
+                timeout_sec=supervisor_timeout + 60,
             )
         finally:
             # Remote Harbor backends download logs after run(). Read them now

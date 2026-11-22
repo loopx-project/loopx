@@ -5,6 +5,7 @@ import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
 import test from "node:test";
 import {fileURLToPath} from "node:url";
+import {nodeTypescriptFlags} from "../../loopx/control_plane/runtime/node_version.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const contract = "loopx/control_plane/runtime/node_version.ts";
@@ -75,3 +76,19 @@ for (const [onPath, inNvm, allowed] of cases) {
     }
   });
 }
+
+test("nodeTypescriptFlags returns V8 baseline Wasm flags only on Linux x86_64/amd64", () => {
+  assert.deepEqual(nodeTypescriptFlags("linux", "x64"), [
+    "--liftoff-only",
+    "--no-wasm-tier-up",
+    "--no-wasm-dynamic-tiering",
+  ]);
+  assert.deepEqual(nodeTypescriptFlags("linux", "amd64"), [
+    "--liftoff-only",
+    "--no-wasm-tier-up",
+    "--no-wasm-dynamic-tiering",
+  ]);
+  assert.deepEqual(nodeTypescriptFlags("linux", "arm64"), []);
+  assert.deepEqual(nodeTypescriptFlags("darwin", "arm64"), []);
+  assert.deepEqual(nodeTypescriptFlags("darwin", "x64"), []);
+});

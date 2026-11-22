@@ -39,16 +39,27 @@ def test_dsh_plugin_publish_workflow_allows_tag_or_main_dispatch_with_relative_a
     assert "DSH_ARTIFACT=./output/${manifest.name}-${manifest.version}.tgz" in identity_run
     assert re.search(r"DSH_ARTIFACT=output/", raw) is None
 
+    download_step = next(
+        step for step in steps if step.get("name") == "Download the immutable GitHub package"
+    )
+    assert "DSH_NPM_PACKAGE_MISSING=" in download_step["run"]
+    assert "DSH_NPM_STAGING_PLACEHOLDER=" in download_step["run"]
+
     publish_step = next(
         step for step in steps if step.get("name") == "Publish the same bytes with npm trusted publishing"
     )
     assert 'npm publish "$DSH_ARTIFACT" --access public --tag latest --ignore-scripts --provenance' in publish_step["run"]
+    assert "Allow npm publish checked" in publish_step["run"]
+    assert "blank Environment name" in publish_step["run"]
 
     verify_step = next(
         step for step in steps if step.get("name") == "Read back npm bytes, latest, and marketplace repository discovery"
     )
+    assert "git show origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs > scripts/verify-distribution.mjs" in verify_step["run"]
     assert 'node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT"' in verify_step["run"]
 
     readme = README_PATH.read_text(encoding="utf-8")
-    assert "on the existing published plugin tag or on `main`" in readme
-    assert "refs/tags/<release_tag>" in readme
+    normalized_readme = " ".join(readme.split())
+    assert "on the existing published plugin tag or on `main`" in normalized_readme
+    assert "refs/tags/<release_tag>" in normalized_readme
+    assert "Allow npm publish" in normalized_readme

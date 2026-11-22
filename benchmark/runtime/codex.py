@@ -65,6 +65,7 @@ class Execution:
     compact_direct_read: bool = False
     quiet_turn: bool = False
     epoch_prefetch_json: str | None = None
+    official_stop_hook: bool = False
 
     def __post_init__(self) -> None:
         if self.native_child_limit is not None and (
@@ -97,6 +98,8 @@ class Execution:
             raise ValueError("epoch_prefetch_json requires heartbeat or turn execution")
         if normalized_prefetch is not None and self.mode == "heartbeat" and self.context_delivery != "on":
             raise ValueError("epoch_prefetch_json in heartbeat mode requires context_delivery=on")
+        if type(self.official_stop_hook) is not bool or (self.official_stop_hook and self.mode != "plain"):
+            raise ValueError("official_stop_hook requires plain execution and a boolean opt-in")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -275,6 +278,7 @@ def codex_settings(
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",
+            *(["hooks = true"] if execution.official_stop_hook else []),
             *(["[agents]", f"max_concurrent_threads_per_session = {execution.native_child_limit}"]
               if execution.native_child_limit is not None else []),
             "[memories]",

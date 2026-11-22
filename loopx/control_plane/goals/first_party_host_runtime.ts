@@ -140,6 +140,12 @@ function registryWitness(value: unknown): {path: string; sha256: string} | null 
     ? {path: witness.path, sha256: witness.sha256} : null;
 }
 
+/** Legacy registration follows the existing active-* Goal frontier vocabulary. */
+export function legacyGoalRegistrationIsActive(value: unknown): boolean {
+  const registration = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return registration === "active" || registration.startsWith("active-");
+}
+
 /** Launch rechecks the registry. An already dispatched Turn checks its running authority. */
 function legacyRuntime(facts: JsonObject): FirstPartyHostRuntimeDecision {
   const current = jsonObject(facts.authority);
@@ -148,9 +154,7 @@ function legacyRuntime(facts: JsonObject): FirstPartyHostRuntimeDecision {
     || current.goal_id !== facts.goal_id) return {kind: "reject", code: "goal_authority_unavailable"};
   // Legacy registration accepts the active-* variants used by the existing
   // Goal frontier. Source-session registration remains exact-only below.
-  const registration = typeof current.registration_status === "string"
-    ? current.registration_status.trim().toLowerCase() : "";
-  if (registration !== "active" && !registration.startsWith("active-")) {
+  if (!legacyGoalRegistrationIsActive(current.registration_status)) {
     return {kind: "reject", code: "goal_not_registered"};
   }
   if (current.activation_state === "stopped") return {kind: "reject", code: "goal_stopped"};
