@@ -496,10 +496,20 @@ def test_rejects_another_owner_and_stale_proof(tmp_path, monkeypatch, capsys, pr
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("owner", [OWNER, PEER])
+@pytest.mark.parametrize("runtime_root_alias", [
+    pytest.param(False, id="direct-path"),
+    pytest.param(True, id="runtime-root-alias", marks=pytest.mark.skipif(
+        sys.platform == "win32", reason="requires directory symlink privileges",
+    )),
+])
 def test_recovery_guides_self_claim_only_for_the_retained_assignee(
-    tmp_path, monkeypatch, capsys, provider, owner,
+    tmp_path, monkeypatch, capsys, provider, owner, runtime_root_alias,
 ):
-    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False,
+    fixture_path = tmp_path
+    if runtime_root_alias:
+        fixture_path = tmp_path / "storage-alias"
+        fixture_path.symlink_to(tmp_path, target_is_directory=True)
+    context = _fixture(fixture_path, monkeypatch, capsys, provider, source_profile=False,
                        replacement_owner=owner)
     lease = context["current_lease"]
     code, released = context["cli"](
