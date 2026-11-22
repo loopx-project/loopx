@@ -80,8 +80,13 @@ ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
 )
 
 
-def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list[tuple[int, dict[str, Any]]], int]:
-    """Read absolute native indices; some LS versions ignore range arguments."""
+_MISSING_STEPS = object()
+
+
+def _index_step_batch(steps: list[Any], requested_start: int, total: int) -> tuple[int, list[tuple[int, dict[str, Any]]], int]:
+    """Decode absolute step indices for one LS trajectory step page."""
+    if requested_start < 0 or total < requested_start:
+        raise ValueError("Antigravity trajectory coverage is incomplete")
     bases: set[int] = set()
     for offset, step in enumerate(steps):
         if not isinstance(step, dict):
@@ -97,18 +102,65 @@ def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list
             if type(index) is not int or index < 0:
                 raise ValueError("Antigravity returned an invalid trajectory index")
             bases.add(index - offset)
+    if not steps and requested_start < total:
+        raise ValueError("Antigravity trajectory coverage is incomplete")
     if len(bases) == 1:
         base = bases.pop()
-    elif not bases and len(steps) == total - start:
-        base = start  # Older servers honor the requested range without metadata.
+    elif not bases and len(steps) == total - requested_start:
+        base = requested_start  # Older servers honor the requested range without metadata.
     elif not bases and len(steps) == total:
         base = 0
     else:
         raise ValueError("Antigravity trajectory coverage is unknown")
-    current = [(base + offset, step) for offset, step in enumerate(steps) if start <= base + offset < total]
-    if base < 0 or [index for index, _ in current] != list(range(start, total)):
+    if base < 0:
         raise ValueError("Antigravity trajectory coverage is incomplete")
-    return current, base + len(steps)
+    indexed = [(base + offset, step) for offset, step in enumerate(steps)]
+    return base, indexed, base + len(steps)
+
+
+def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list[tuple[int, dict[str, Any]]], int]:
+    """Read absolute native indices; some LS versions ignore range arguments."""
+    _, indexed, covered = _index_step_batch(steps, start, total)
+    current = [(index, step) for index, step in indexed if start <= index < total]
+    if [index for index, _ in current] != list(range(start, total)):
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    return current, covered
+
+
+def _read_trajectory_steps(
+    fetch_page: Callable[[int, int], Any],
+    *,
+    start: int,
+    total: int,
+) -> tuple[list[tuple[int, dict[str, Any]]], int] | None:
+    """Fetch complete trajectory coverage across stepOffset-bounded LS pages."""
+    if start < 0 or total < start:
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    if start == total:
+        raw = fetch_page(start, total)
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError("Antigravity returned no trajectory coverage")
+        return _observed_turn_steps(raw, start, total)
+    cursor = start
+    collected: list[tuple[int, dict[str, Any]]] = []
+    max_covered = total
+    while cursor < total:
+        raw = fetch_page(cursor, total)
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError("Antigravity returned no trajectory coverage")
+        base, indexed, batch_end = _index_step_batch(raw, cursor, total)
+        if base > cursor or batch_end <= cursor:
+            raise ValueError("Antigravity trajectory coverage is incomplete")
+        collected.extend((index, step) for index, step in indexed if cursor <= index < total)
+        max_covered = max(max_covered, batch_end)
+        cursor = min(batch_end, total)
+    if [index for index, _ in collected] != list(range(start, total)):
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    return collected, max_covered
 
 
 _RUNNING_STEP_BODIES = {
@@ -561,15 +613,20 @@ class AntigravityAdapter:
             if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total <= start + 2
                     or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
-            raw = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps")
-            if not isinstance(raw, list):
+            def fetch_steps(offset: int, end: int) -> Any:
+                return read("GetCascadeTrajectorySteps", stepOffset=offset, startIndex=offset, endIndex=end).get("steps")
+            first_read = _read_trajectory_steps(fetch_steps, start=start, total=total)
+            if first_read is None:
                 return None
-            indexed, covered = _observed_turn_steps(raw, start, total)
+            indexed, covered = first_read
             if covered != total or not indexed or indexed[0][0] != start:
                 return None
             end = next((i for i, s in indexed if i > start and s.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"), total)
             current = [s for i, s in indexed if start <= i < end]
-            if len(current) > 128 or raw != read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps") or before != read("GetCascadeTrajectory"):
+            if len(current) > 128:
+                return None
+            second_read = _read_trajectory_steps(fetch_steps, start=start, total=total)
+            if second_read is None or [s for _, s in second_read[0]] != [s for _, s in indexed] or before != read("GetCascadeTrajectory"):
                 return None
             user, terminal = current[0], current[-1]
             # A cleared historical segment can retain visible answer text while
@@ -673,9 +730,9 @@ class AntigravityAdapter:
             if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total != start + 2
                     or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
-            raw = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total)["steps"]
+            raw = read("GetCascadeTrajectorySteps", stepOffset=start, startIndex=start, endIndex=total)["steps"]
             indexed, covered = _observed_turn_steps(raw, start, total)
-            again = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total)["steps"]
+            again = read("GetCascadeTrajectorySteps", stepOffset=start, startIndex=start, endIndex=total)["steps"]
             after = read("GetCascadeTrajectory")
             if covered != total or raw != again or before != after or len(indexed) != 2:
                 return None
@@ -734,12 +791,19 @@ class AntigravityAdapter:
                     or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
             start = max(0, total - 128)
-            steps, covered = _observed_turn_steps(read("GetCascadeTrajectorySteps",
-                {"cascadeId": cascade_id, "startIndex": start, "endIndex": total})["steps"], start, total)
+            def fetch_steps(offset: int, end: int) -> Any:
+                return read("GetCascadeTrajectorySteps",
+                    {"cascadeId": cascade_id, "stepOffset": offset, "startIndex": offset, "endIndex": end})["steps"]
+            loaded = _read_trajectory_steps(fetch_steps, start=start, total=total)
+            if loaded is None:
+                return None
+            steps, covered = loaded
             inputs = [i for i, step in steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
             if not inputs and start:
-                steps, covered = _observed_turn_steps(read("GetCascadeTrajectorySteps",
-                    {"cascadeId": cascade_id, "startIndex": 0, "endIndex": total})["steps"], 0, total)
+                loaded_full = _read_trajectory_steps(fetch_steps, start=0, total=total)
+                if loaded_full is None:
+                    return None
+                steps, covered = loaded_full
                 inputs = [i for i, step in steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
             if not inputs or covered != total:
                 return None
@@ -899,10 +963,22 @@ class AntigravityAdapter:
                 if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total < 2
                         or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                     return None
-                raw = read("GetCascadeTrajectorySteps", startIndex=0, endIndex=total).get("steps")
-                if not isinstance(raw, list):
+                scan_start = 0
+                if input_anchor is not None:
+                    anchored = input_anchor.get("start_step_index")
+                    if type(anchored) is not int or anchored < 0 or anchored >= total:
+                        return None
+                    scan_start = anchored
+                loaded = _read_trajectory_steps(
+                    lambda offset, end: read(
+                        "GetCascadeTrajectorySteps", stepOffset=offset, startIndex=offset, endIndex=end
+                    ).get("steps"),
+                    start=scan_start,
+                    total=total,
+                )
+                if loaded is None:
                     return None
-                indexed, covered = _observed_turn_steps(raw, 0, total)
+                indexed, covered = loaded
                 after = read("GetCascadeTrajectory")
                 if (covered != total or after.get("status") != before["status"]
                         or after.get("numTotalSteps") != total
@@ -1303,6 +1379,7 @@ class AntigravityAdapter:
         previous_progress: Any = None
         saw_running_or_new_step = False
         observed_native_errors: set[int] = set()
+        incomplete_running_polls = 0
 
         def timeout(kind: str) -> None:
             limit = self.hard_timeout_sec if kind == "hard" else ANTIGRAVITY_IDLE_TIMEOUT_SEC
@@ -1382,18 +1459,32 @@ class AntigravityAdapter:
                 else:
                     # Older and incomplete snapshots use the detailed read.
                     # Keep that proof for the idle boundary and final answer.
-                    steps_resp = observe("GetCascadeTrajectorySteps", {
-                        "startIndex": start_step_index, "endIndex": total_steps,
-                    }, final_read_deadline)
-                    if steps_resp is None:
-                        continue
-                    steps = steps_resp.get("steps")
+                    def _observe_steps_page(offset: int, end: int) -> Any:
+                        steps_resp = observe("GetCascadeTrajectorySteps", {
+                            "stepOffset": offset, "startIndex": offset, "endIndex": end,
+                        }, final_read_deadline)
+                        return None if steps_resp is None else steps_resp.get("steps", _MISSING_STEPS)
+
                     try:
-                        if not isinstance(steps, list):
-                            raise ValueError("Antigravity returned no trajectory coverage")
-                        current_steps, observed_total = _observed_turn_steps(steps, start_step_index, total_steps)
+                        loaded = _read_trajectory_steps(
+                            _observe_steps_page,
+                            start=start_step_index,
+                            total=total_steps,
+                        )
                     except (AttributeError, TypeError, ValueError) as exc:
+                        if (
+                            str(exc) == "Antigravity trajectory coverage is incomplete"
+                            and status == "CASCADE_RUN_STATUS_RUNNING"
+                            and final_read_deadline is None
+                            and incomplete_running_polls < 3
+                        ):
+                            incomplete_running_polls += 1
+                            continue
                         raise CodexChatAgentError(str(exc), gate=None, error_code="antigravity_rpc_error") from exc
+                    if loaded is None:
+                        continue
+                    incomplete_running_polls = 0
+                    current_steps, observed_total = loaded
                 if current_steps:
                     if sum(step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT" for _, step in current_steps) > 1:
                         # Another native input is not this invocation's result or

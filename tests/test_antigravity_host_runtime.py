@@ -366,3 +366,50 @@ def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):
         == "retired"
     )
     assert json.loads(path.read_text()) == {"personal-hook": unrelated}
+
+
+def test_native_input_paginates_with_step_offset_from_tail(tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", "127.0.0.1:1234")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "synthetic-token")
+    text = "Continue tail ask"
+    steps = [
+        {
+            "type": "CORTEX_STEP_TYPE_GENERIC",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {
+                "createdAt": "2026-01-01T00:00:00Z",
+                **({"sourceTrajectoryStepInfo": {"stepIndex": idx}} if idx > 0 else {}),
+            },
+        }
+        for idx in range(139)
+    ]
+    steps.append(
+        {
+            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {
+                "createdAt": "2026-01-01T00:05:00Z",
+                "sourceTrajectoryStepInfo": {"stepIndex": 139},
+            },
+            "userInput": {"userResponse": text},
+        }
+    )
+    step_offsets = []
+
+    def read(_url, _token, method, payload, **_):
+        if method == "GetCascadeTrajectorySteps":
+            offset = int(payload["stepOffset"])
+            step_offsets.append(offset)
+            return {"steps": steps[offset : offset + 60]}
+        return {
+            "trajectory": {"cascadeId": "native-chat"},
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "numTotalSteps": len(steps),
+        }
+
+    monkeypatch.setattr(provider, "_rpc_post", read)
+    result = runtime._native_input(bound(tmp_path), text)
+    assert result is not None and result[1:] == ("CASCADE_RUN_STATUS_IDLE", 140)
+    assert step_offsets == [12, 72, 132]

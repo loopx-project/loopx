@@ -1,0 +1,60 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "superseded",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 2,
+    "minor": 2,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "2.2.0",
+    "version_tag": "v2.2.0",
+    "git_commit": "2c3524857e8a3dd553335b79444333786f492c43",
+    "git_tree": "c1c404b9ff55d315413667ae737e8ff2488d2055",
+    "committed_at": "2026-11-02T02:21:45+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v2.2.0",
+      "last_tag": "v2.2.0",
+      "last_commit": "2c3524857e8a3dd553335b79444333786f492c43",
+      "last_committed_at": "2026-11-02T02:21:45+08:00",
+      "tag_count": 1
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v2.2.0"
+    ]
+  },
+  "a_scale": {
+    "score": 46.6,
+    "delta_from_prior": 5.3,
+    "domain_scores": {
+      "D1": 49.0,
+      "D2": 44.0,
+      "D3": 40.0,
+      "D4": 43.0,
+      "D5": 54.0,
+      "D6": 52.0,
+      "D7": 39.0,
+      "D8": 59.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 2,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Machine namespace isolation (#7838), sessionless context fallback hardening (#7833), and EdgeBench feedback source wiring (#7828).",
+  "summary_zh": "落地机器命名空间隔离（#7838）、无会话上下文回退（#7833）与 EdgeBench 反馈源接入（#7828）。"
+}
