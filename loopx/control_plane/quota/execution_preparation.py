@@ -18,7 +18,7 @@ from ..coordination.shadow_management import (
     require_shadow_primary_write_allowed,
     shadow_maintenance_lock_target,
 )
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS, effect_runtime_result
 from ..goals.activation import goal_is_stopped
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id
 from ..work_items.action_selection_contract import (
@@ -209,7 +209,11 @@ def commit_execution_loss_closeout(
                     "progress_observation": progress}, "control_writer_proof": dict(requested_proof) if requested_proof else None,
                 "requested_effects": dict(requested_effects), "observed_at": now_local_iso()}
             try:
-                result = effect_runtime_result("quota.execution_loss_closeout.commit", request)
+                result = effect_runtime_result(
+                    "quota.execution_loss_closeout.commit",
+                    request,
+                    timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+                )
             except EffectRuntimeRejected as exc:
                 error = RefreshTaskLeaseUnavailable(str(exc))
                 error.code = exc.diagnostic_code

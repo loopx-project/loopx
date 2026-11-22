@@ -479,3 +479,23 @@ def test_rejects_another_owner_and_stale_proof(tmp_path, monkeypatch, capsys, pr
     args = _closeout_args(context)
     args[args.index("--agent-id") + 1] = PEER
     _reject_without_effect(context, args)
+
+
+def test_execution_loss_closeout_uses_canonical_write_timeout(tmp_path, monkeypatch, capsys):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.quota import execution_preparation
+
+    context = _fixture(tmp_path, monkeypatch, capsys, "file", source_profile=False)
+    seen_timeouts: list[object] = []
+    real_call = effect_runtime.effect_runtime_result
+
+    def recording_call(method, request, *, timeout=None):
+        if method == "quota.execution_loss_closeout.commit":
+            seen_timeouts.append(timeout)
+        return real_call(method, request, timeout=timeout) if timeout is not None else real_call(method, request)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", recording_call)
+    monkeypatch.setattr(execution_preparation, "effect_runtime_result", recording_call)
+    code, closed = context["cli"](*_closeout_args(context))
+    assert code == 0, closed
+    assert seen_timeouts == [effect_runtime.CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS]
