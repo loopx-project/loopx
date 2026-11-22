@@ -1,0 +1,60 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "superseded",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "2.0.0",
+    "version_tag": "v2.0.0",
+    "git_commit": "774d0c5f768284c1b5bb5f665c5abad25755e5e2",
+    "git_tree": "cd47a8b3a7d8af9707092e1a2441cc5cd3348493",
+    "committed_at": "2026-10-20T15:44:05+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v2.0.0",
+      "last_tag": "v2.0.0",
+      "last_commit": "774d0c5f768284c1b5bb5f665c5abad25755e5e2",
+      "last_committed_at": "2026-10-20T15:44:05+08:00",
+      "tag_count": 1
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v2.0.0"
+    ]
+  },
+  "a_scale": {
+    "score": 37.5,
+    "delta_from_prior": 10.1,
+    "domain_scores": {
+      "D1": 42.0,
+      "D2": 33.0,
+      "D3": 32.0,
+      "D4": 34.0,
+      "D5": 44.0,
+      "D6": 42.0,
+      "D7": 31.0,
+      "D8": 48.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 2,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Generational cutover: TypeScript control-plane spine stabilization, manager executor/evidence root hardening, strict qualification baseline, and 1.x Markdown bridge retirement (#6396/#8431 trajectory).",
+  "summary_zh": "跨代切换：TypeScript 控制面主脊落地、管家执行根与证据域加固、严格发版验证基线及 1.x 旧桥退役起点。"
+}
