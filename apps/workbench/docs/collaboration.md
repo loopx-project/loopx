@@ -4,6 +4,15 @@
 
 ![桌面上的成员对话与输入区设置](images/collaboration-member-desktop.png)
 
+<details>
+<summary>从旧版升级：设置位置的变化</summary>
+
+原 main（`d316980c6`）把成员的模型和权限放在面板顶部；现在两项设置随成员自己的输入区显示，与主对话一致。
+
+![旧版成员面板的顶部设置](images/collaboration-member-before.png)
+
+</details>
+
 ## 成员回报
 
 成员最后一行的 `[进度]` 决定回报何时送达主控：
