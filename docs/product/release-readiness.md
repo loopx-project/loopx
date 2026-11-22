@@ -298,7 +298,16 @@ the archive identity. The builder probes the committed runtime before
 writing a descriptor. Qualification checks the installed candidate's
 ordinary quota writer in an isolated Goal with context delivery off.
 The publisher requires the compatibility descriptor and exact identity match
-before changing the channel.
+before uploading a candidate. The main publishers offer engineering-qualified
+candidates as immutable prereleases for explicit verification. Test a Runtime
+candidate with `loopx update check --ref <source-sha>` and the corresponding
+`apply` command in a qualification installation. A signed Desktop candidate
+uses the immutable release for its exact build.
+The automatic `runtime-main` and `desktop-main` feeds continue serving their
+published defaults until `public_channel` in
+`loopx/cli_commands/public_default_contract.json` names the reviewed profile.
+Promote C1 by reviewing that policy change with the supported installation,
+adoption, matched outcome, and complete-cost evidence under RFC §9.
 Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
@@ -315,7 +324,13 @@ comparison under [RFC §9](../architecture/rfcs/controller-executor-unified-cont
 归档身份和资格回执使用 `default_contract`。已有 v1 更新器可沿原 `loopx update`
 流程校验源码提交、归档摘要和字节数。当前读取端会归一化该声明，并核对归档身份。
 构建器在写入描述符前探测已提交的 runtime。安装资格检查在隔离 Goal 中关闭上下文传输后
-再次观察普通 quota writer。发布器在移动渠道前要求使用兼容描述符，并核对精确身份。
+再次观察普通 quota writer。发布器上传候选前要求使用兼容描述符，并核对精确身份。
+通过工程资格的 main 候选可从不可变预发布版本取得，供显式验证。用
+`loopx update check --ref <source-sha>` 和对应的 `apply` 命令在资格验证安装中测试
+Runtime 候选。签名 Desktop 候选使用其精确构建的不可变发布。
+`runtime-main` 和 `desktop-main` 自动更新渠道继续提供已发布的默认契约，直到
+`loopx/cli_commands/public_default_contract.json` 的 `public_channel` 指向通过评审的
+profile。推进 C1 时，按 RFC §9 一并评审受支持的安装、采用、匹配成果和完整成本。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
 已发布的 `v2.4.0` 标签保留 `quota_packet`。新的 runtime 和 Desktop 构建只为

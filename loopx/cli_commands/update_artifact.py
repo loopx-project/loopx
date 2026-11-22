@@ -160,6 +160,14 @@ def validate_published_manifest(value: dict[str, Any]) -> dict[str, Any]:
     return validate_manifest(value)
 
 
+def public_channel_allows_default(observed: dict[str, Any]) -> bool:
+    """Check the reviewed release profile independently of archive qualification."""
+    approved = _ARTIFACT_DEFAULT_CONTRACTS["public_channel"]
+    if approved not in ("current", "historical"):
+        raise ValueError("Unknown public channel default contract")
+    return observed == _ARTIFACT_DEFAULT_CONTRACTS[approved]
+
+
 def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
     if not REPOSITORY_PATTERN.fullmatch(repo):
         raise ValueError("Update repo must use GitHub owner/name syntax")
