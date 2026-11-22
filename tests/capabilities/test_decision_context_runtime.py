@@ -1473,6 +1473,39 @@ def test_review_settlement_rejects_gate_bound_to_another_proposal(
     assert not cursors.exists()
 
 
+@pytest.mark.parametrize("rebase", [
+    lambda _: DecisionEvidenceRecords(),
+    lambda _: DecisionEvidenceRecords(semantic_no_change=True),
+])
+@pytest.mark.parametrize("execute", [False, True])
+def test_observed_settlement_requires_material_review_before_any_write(
+    tmp_path: Path, rebase: Any, execute: bool,
+) -> None:
+    authority = tmp_path / "authority.md"
+    authority.write_text(PRIVATE_CONTENT, encoding="utf-8")
+    profile = write_profile(tmp_path / "profile.json", authority)
+    cursors = tmp_path / "cursors.json"
+    event_log = tmp_path / "events.jsonl"
+    _, assembly = assemble_profile_decision_evidence(
+        goal_id="example-decision-goal", agent_id="example-agent",
+        profile_path=profile, cursor_path=cursors,
+        decision_id="decision:adoption", observed_at=OBSERVED_AT,
+        before=BEFORE, rebase=rebase,
+    )
+    assert assembly is not None
+    with pytest.raises(ValueError, match="observed settlement lacks material review"):
+        settle_profile_decision_review(
+            goal_id="example-decision-goal", agent_id="example-agent",
+            profile_path=profile, cursor_path=cursors, assembly=assembly,
+            lifecycle_event_log_path=event_log,
+            actor_ref="agent:decision-advisor", reason_code="new_facts_reviewed",
+            summary="New facts were reviewed.", disposition="observed",
+            execute=execute,
+        )
+    assert not cursors.exists()
+    assert not event_log.exists()
+
+
 def test_prepare_and_settle_no_change_cli_crosses_turns_without_private_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

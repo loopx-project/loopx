@@ -2,12 +2,11 @@
 
 The private directory belongs to one native session/workspace. Completed reader
 pages establish an explicit continuity assumption; hooks invalidate known loss.
-This neither proves retained model input nor grants execution authority.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
-from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 import json
@@ -420,7 +419,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
                     ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
-                    if isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
+                    if isinstance(previous, dict) and isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
                         page.get("ok") is True
                         and ready_digest in (page.get("sha256"), page.get("source_sha256"))
                         for page in pages
@@ -560,12 +559,12 @@ def record_native_execution_preparation(
     event: dict[str, Any],
     *,
     source_sha256: str,
-    receipt: Mapping[str, Any],
+    receipt: Mapping[str, Any] | None,
 ) -> None:
-    """Record a ready receipt only while its source/session is still current."""
+    """Publish readiness, or retire a refused claim, for the same saved source."""
 
     if (directory is None or not native_context_event_eligible(event)
-            or receipt.get("event") != "host_execution_prepared"):
+            or (receipt is not None and receipt.get("event") != "host_execution_prepared")):
         return
     with _locked(directory) as root:
         state = _state(root)
@@ -577,6 +576,15 @@ def record_native_execution_preparation(
             or recovery.get("sha256") != source_sha256
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
+        if receipt is None:
+            recovery.pop("execution_preparation", None)
+            try:
+                _save(root, state)
+            except (OSError, ValueError, TypeError, RecursionError):
+                # Keep the saved capture available without retaining an
+                # apparent claim attempt when the retirement cannot be saved.
+                _discard_recovery(root)
+            return
         request = recovery.get("execution_preparation")
         claim_source_sha256 = request.get("claim_source_sha256") if isinstance(request, dict) else None
         ready_capture = None
@@ -731,9 +739,9 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any], captur
     previous = state.get("recovery")
     target = previous.get("target") if isinstance(previous, dict) else None
     if isinstance(target, dict) and target.get("capture_id") == capture_id:
-        # Publishing an offer does not mean a reader saw it. A retry may use
+        #  A retry may use
         # the original predecessor, but never this offer as its own baseline.
-        previous = previous.get("comparison_base")
+        previous = previous.get("comparison_base") if isinstance(previous, dict) else None
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
@@ -787,7 +795,7 @@ def _preserve_preparation_readback(state: dict[str, Any], recovery: dict[str, An
             or not isinstance(request, dict) or request.get("turn_instance_id") != previous.get("turn_instance_id")):
         return
     previous["retired_context_readback"] = {key: request[key]
-        for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route") if key in request}
+        for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route", "goal_ref") if key in request}
 
 
 def _retire_native_recovery_lookup(root: Path, state: dict[str, Any], *,
@@ -895,7 +903,7 @@ def _record_native_delivery(root: Path, state: dict[str, Any], result: dict[str,
             if pinned is not None:
                 reference, opening = pinned
                 state["pending"]["observed_first_read"] = reference
-                if opening is not None:
+                if opening is not None and read_plan is not None:
                     read_plan = {**read_plan, "observed_opening": opening}
         _save(root, state)
     if read_plan is None:
@@ -909,9 +917,11 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
                           selection_command_args_template: str | None = None,
-                          captured_decision_path: str | None = None,
+                          captured_decision: dict[str, str] | None = None,
                           hook_session: str | None = None,
-                          saved_capture: bool = False) -> NativeContextPreparation:
+                          saved_capture: bool = False,
+                          publication_guard: Callable[[], AbstractContextManager[None]] = nullcontext,
+                          ) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
 
     Serialization prevents invalidation from moving the epoch during preparation.
@@ -931,7 +941,12 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
         from .decision_capture import capture_progressive_context
 
         return NativeContextPreparation(capture_progressive_context(
-            payload, directory=capture_directory, surface=surface)[0])
+            payload,
+            directory=capture_directory,
+            surface=surface,
+            selection_command_args_template=selection_command_args_template,
+            captured_decision=captured_decision,
+        )[0])
     try:
         with _locked(directory) as root:
             recovery_committed = False
@@ -943,7 +958,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         or (native_session and session != native_session)):
                     if check_saved_source:
                         assert_complete_turn_decision(payload)
-                    return NativeContextPreparation(payload)  # Do not replace another session's recovery.
+                    with publication_guard():
+                        return NativeContextPreparation(payload)  # Do not replace another session's recovery.
                 # Native lifecycle events own workspace identity and epoch.
                 # A shell tool may run in another checkout without changing
                 # the host session or losing its previously delivered context.
@@ -996,18 +1012,15 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "source_path": recovery["path"],
                             **({"selection_command_args_template": selection_command_args_template}
                                 if selection_command_args_template is not None else {}),
-                            **({"captured_decision_path": captured_decision_path}
-                                if captured_decision_path is not None else {}),
+                            **({"captured_decision": captured_decision} if captured_decision is not None else {}),
                             **({"progressive_enabled": False} if not progressive else {}),
-                            "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                                page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                                + " --select '<supporting_material_pointer>/sources'",
+                            "command_template": recovery["command"] + " --select '<pointer>'",
                         } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive)
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
                     if check_saved_source and isinstance(exc, EffectRuntimeRejected):
                         raise QuotaDecisionTransportError(str(exc)) from exc
-                    if check_saved_source or (captured_decision_path is not None
+                    if check_saved_source or (captured_decision is not None
                             and isinstance(payload.get("replan_read_path"), str)):
                         raise QuotaDecisionTransportError(
                             "Saved context presentation could not be prepared. Read the original capture and do not rerun admission."
@@ -1019,12 +1032,13 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 if check_saved_source:
                     state.pop("candidate", None)
-                if check_saved_source or projected:
-                    publish_recovery(recovery)
                 result: dict[str, Any] = transaction["delivery"] if presentation else transaction
                 result["recovery"] = recovery
-                read_plan = _record_native_delivery(root, state, result, transaction, request,
-                    directory=directory, progressive=progressive)
+                with publication_guard():
+                    if check_saved_source or projected:
+                        publish_recovery(recovery)
+                    read_plan = _record_native_delivery(root, state, result, transaction, request,
+                        directory=directory, progressive=progressive)
                 return NativeContextPreparation(result, read_plan)
             except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
                 if check_saved_source:

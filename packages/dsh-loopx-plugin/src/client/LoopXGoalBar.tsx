@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import type { GoalBarSnapshotV1 } from '../goalbar/protocol.ts'
 import styles from './goalbar.module.css'
 import {
+  goalBarAdmissionCategoryKey,
   goalBarErrorKey,
   type GoalBarTranslate,
 } from './locale.ts'
@@ -22,9 +23,10 @@ export interface LoopXGoalBarProps {
 
 function visibleStatus(
   snapshot: GoalBarSnapshotV1,
-): 'active' | 'running' | 'paused' {
+): 'active' | 'running' | 'paused' | 'recovery' {
   if (snapshot.goalActivation === 'stopped') return 'paused'
-  return snapshot.agentStatus === 'running' ? 'running' : 'active'
+  if (snapshot.agentStatus === 'running') return 'running'
+  return snapshot.recoveryAttention ? 'recovery' : 'active'
 }
 
 function classes(...values: Array<string | undefined | false>): string {
@@ -47,6 +49,8 @@ export function LoopXGoalBar({
   if (snapshot === null) return null
 
   const status = visibleStatus(snapshot)
+  const admission = snapshot.continuationAdmission
+  const admissionBlocked = admission.state === 'failed'
   const empty = snapshot.progress.total === 0
   const progressLabel = empty
     ? t('progress.empty')
@@ -110,6 +114,18 @@ export function LoopXGoalBar({
             </button>
           )}
         </div>
+        {admissionBlocked && (
+          <p className={styles.error} role="status">
+            <span aria-hidden="true">!</span>
+            <span>
+              {t('continuation.blocked')}
+              {' '}
+              {t(goalBarAdmissionCategoryKey(admission.category))}
+              {' '}
+              {t('continuation.recovery')}
+            </span>
+          </p>
+        )}
         {goalBar.errorCode !== null && (
           <p className={styles.error} role="status">
             <span aria-hidden="true">!</span>

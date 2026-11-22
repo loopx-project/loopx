@@ -90,6 +90,15 @@ same operation ID is a conflict. No provider promotion or receipt rewrite occurs
 
 ## Write Contract
 
+When a Chat confirmation has recorded its Todo, the original card keeps the
+retry. It verifies the original create receipt and store history. Recovery
+can read a saved assignment or an already dispatched Turn. A pending dispatch
+also checks the current Goal, claimant and lease. A proposal that recorded a
+Todo cannot be regenerated.
+
+Chat 确认一旦记录 Todo，就从原卡重试，以验证原创建回执和存储历史。重试可取回已保存的
+指派或已启动的 Turn。仍待启动时须检查当前 Goal、认领者和租约。已记录 Todo 的确认不能重新生成。
+
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:
 
@@ -300,7 +309,41 @@ use `--clear-blocks-agent --global-gate`. Merely clearing scope in a multi-agent
 Goal is rejected; it must not turn an ambiguous gate into a global one.
 
 When a user gate only blocks one concrete action, add the blocked todo id with
-`unblocks_todo_id=<todo_id>`. When multiple todos share the same broad
+`unblocks_todo_id=<todo_id>`. If the gate was created first, its registered bound
+agent can attach the initial link while the gate is open:
+
+```bash
+loopx todo update --goal-id <goal-id> --role user --todo-id <gate-id> \
+  --agent-id <bound-agent> --unblocks-todo-id <agent-todo-id>
+```
+
+This is an administrative provider-CAS edit, including in `hard_lease`; it does
+not claim work or approve the gate. Optional note/evidence/reason may accompany
+the link. The target must already exist as an Agent Todo in the same provider
+snapshot and Goal, with `claimed_by` matching the gate's `bound_agent` /
+`blocks_agent`. It must be active, open or blocked, not done or superseded;
+completed/cancelled, archived and deferred work cannot receive this first link.
+The link must also describe one decision: a gate with a `decision_scope` only
+accepts a target whose `required_decision_scopes` include a scope it covers, and
+a gate without one only accepts a target that requires no scoped decision (a
+plain dependency link). A missing match is never read as a dependency.
+A target may declare no resume condition, or exactly `todo_done:<this gate>`. Any
+other condition (`todo_done:<other-id>`, `monitor_changed:<id>` even with this
+gate's id, `resume_at:<time>` or `capacity_available:<capability>`) waits for
+something approving this gate cannot satisfy, so it cannot receive this first link.
+Preview and write reject missing, inactive or out-of-scope targets without
+writing or consuming the first-link opportunity or operation ID; the same gate
+and operation ID can then be used for a valid target. Existing links, gate scope,
+actor bindings and explicit or unreleased lease proofs retain their ordinary
+admission. Complete the linked
+gate with the actual decision and evidence to consume the target's covered
+decision scopes.
+`todo_done:<gate-id>` checks dependency readiness only; it does not consume those
+scopes. If an unlinked gate was already completed, reconcile its decision through
+an explicit linked gate using the original owner evidence rather than treating
+dependency completion as approval.
+
+When multiple todos share the same broad
 `action_kind`, use the schema-backed decision-scope fields instead of relying
 on title/body token overlap:
 
@@ -915,6 +958,34 @@ fails closed with a typed `validation_blocked_completion` receipt instead of
 committing `done`. Todos without a declared command keep the unchanged fast
 path.
 
+Completion requests sharing a runtime root serialize validation for the same
+Todo, including requests from different completion entry points. If validation
+is still running, retry the original request once the first attempt finishes.
+If the terminal response is lost, use the reported `todo receipt` command or
+retry the same reviewed Chat proposal to recover the original operation. A
+committed completion replays its receipt without rerunning the validator. A
+missing receipt alone cannot determine whether the original writer has stopped.
+
+On POSIX, the supervisor retains the same execution lock until it stops the
+validator's process group, including when the caller exits or the validator
+leader exits with redirected descendants still running. The retry can then
+check the original completion receipt. This
+covers the caller's exit and descendants in the same process group. Windows
+continues to serialize while the caller is alive. Keep validation commands safe
+to retry. A command that already ran before a missing terminal commit may need
+to run again.
+
+共享运行时目录的完成请求按 Todo 串行执行校验，跨完成入口也使用同一把锁。校验进行
+中，可在首个请求结束后重试原操作。终态提交响应丢失时，使用返回的 `todo receipt`
+命令查询原操作，或重试同一已审核的 Chat 提案。已提交的操作直接重放回执，无需再次
+执行校验。未查到回执时，原写入仍可能在进行。
+
+在 POSIX 上，监督进程保留同一把执行锁，直到原校验进程组停止；调用方退出，或
+校验主进程退出而重定向输出的子进程仍运行时，也要完成清理。之后可重试原操作并
+检查完成回执。该机制覆盖调用方退出和同一
+进程组内的子进程。Windows 在调用方存活期间继续串行校验。校验命令应可安全
+重试。若命令已运行但终态尚未提交，重试时可能再次执行。
+
 ### Bind the first completion validator / 首次绑定完成验证
 
 An active, open canonical Todo imported without a completion validator can use
@@ -1328,6 +1399,33 @@ create/update/poll/terminal receipt is recovered before checking current source
 contents. Claim replay retains its current acceptance check and rejects a stale
 source while preserving `original_receipt`; this adds no new claim grant.
 
+Chat Task detail and reviewed actions resolve the Goal's source registry and
+runtime before reading or writing. The review basis carries the source identity,
+source registry digest and provider revision. A created Task checkpoint also
+retains the authority store identity and original operation.
+If an unrelated write advances the same store, assignment and managed claim can
+refresh their provider revision after the native owner rejects the previous one.
+The current Todo must match the record in the original native create receipt.
+Chat saves the new revision before dispatch so an interrupted response replays
+the same assignment.
+
+For an older Chat confirmation whose assignment evidence is missing, the card
+can show the verified creation and current assignee from the original store.
+A matching assignee and update reason do not establish that the original
+confirmation made the assignment. Open the existing Todo to review ownership
+when the card cannot verify that step.
+
+When a separate directory supplies the Goal route, Chat Task, Monitor and Gate
+mutations carry its byte witness as `registry_source.routing_registry`. The
+native transaction checks both registry files at admission and before commit.
+Restore the original source and inspect the retained Task when either source
+changes or the original Todo no longer matches.
+
+The local v3 Todo create and managed claim wires require both
+`expected_provider_revision` and `expected_registry_sha256`. The source check
+uses the existing registry witness. Earlier wire versions retain their original
+behavior.
+
 On `authority_source_changed`, inspect current registration and the Todo again
 before issuing new work. The rejected attempt writes no canonical head or receipt;
 an external validator already executed may have its own effects. This is an
@@ -1350,6 +1448,10 @@ registry 来源校验。Python 在采集注册/grant 事实前后比较来源摘
 该机制是乐观字节快照校验，不是跨资源原子事务或线性一致的撤权保证；provider CAS
 继续负责状态与回执的原子持久化，不改变默认 provider、promotion 或 PostgreSQL 的
 service-owned 认证边界。
+
+旧 Chat 确认缺少指派凭证时，原卡可以展示经核验的创建结果和原存储中的当前负责人。
+负责人和更新理由一致也无法证明指派来自原确认。原卡无法核验这一步时，可打开已有
+Todo 查看归属。
 
 ### Canonical nonterminal planning updates
 

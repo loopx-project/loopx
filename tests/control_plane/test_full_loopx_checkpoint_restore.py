@@ -102,6 +102,8 @@ def retained_point(tmp_path, monkeypatch, capsys, request, release_source_lease)
             "retained": ["Complete experiments and original acceptance"], "evidence_refs": ["validation:fixture"]}}))
     cli("refresh-state", *actor, "--classification", "validated_experiment", "--delivery-outcome", "outcome_progress",
         "--delivery-batch-scale", "multi_surface", "--agent-vision-json", str(vision),
+        "--task-lease-idempotency-key", lease["idempotency_key"],
+        "--task-lease-expected-version", str(lease["version"]),
         "--suppress-external-sinks", "--no-global-sync")
     cli("quota", "spend-slot", *actor, "--source", "heartbeat", "--execute")
     settled = read_heartbeat_settlement(runtime, goal_id="research", agent_id="researcher", todo_id=todo,

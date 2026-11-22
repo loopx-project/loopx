@@ -20,7 +20,6 @@ from ..control_plane.turn_driver import (
     build_loopx_turn_plan,
     load_loopx_turn_plan_from_journal,
 )
-from .turn_decision import build_fresh_turn_decision_owner
 from .turn_inspection import handle_turn_journal_inspection
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_rendering import (
@@ -95,14 +94,20 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        from .turn_cadence import managed_cadence_start, uses_effect_bound_start_identity
+
         preparation_admission: dict[str, Any] | None = None
         execution_preparer = native_execution_preparer
         preparation_error = "native task preparation did not make the same Todo ready"
         if (
             execution_preparer is None
             and args.turn_command == "run-once"
-            and args.host == "codex-cli"
             and bool(getattr(args, "execute", False))
+            and uses_effect_bound_start_identity(
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
+            )
         ):
             from ..control_plane.turn_driver.codex_execution_preparation import (
                 builtin_execution_preparation_claim,
@@ -110,17 +115,20 @@ def handle_turn_command(
             )
 
             from .turn_host_request import prepare_turn_host_arguments
-            from ..control_plane.turn_driver import build_loopx_turn_command_validator
-            from .turn_cadence import managed_cadence_start
+            from ..control_plane.turn_driver.command_validation import (
+                build_loopx_turn_command_validator, normalize_host_argv,
+            )
 
             project_cwd = Path(args.project).expanduser().resolve()
 
             def admit_preparation(identity):
                 nonlocal preparation_admission
-                prepare_turn_host_arguments(
+                _, raw_argv, _ = prepare_turn_host_arguments(
                     args, native_host_runner=None, native_session_binding_resolver=None,
                     native_task_validator=None, validator_builder=build_loopx_turn_command_validator,
                 )
+                if raw_argv is not None:
+                    normalize_host_argv(raw_argv)
                 args.turn_instance_id = identity.turn_instance_id
                 cadence = managed_cadence_start(
                     runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
@@ -271,7 +279,7 @@ def handle_turn_command(
             operator_inbox_urgency_projector = build_lark_operator_inbox_urgency_projector(
                 runtime_root_arg=runtime_root,
             )
-            operator_environ = operator_provider_environ()
+            operator_environ = operator_provider_environ(bound_runtime_root=runtime_root)
         else:
             # Planning and dry-run execution inspect existing admitted intents.
             # Only an executing wake may sync inboxes or reserve a calendar window.
@@ -318,6 +326,8 @@ def handle_turn_command(
             from ..capabilities.explore.turn_context import turn_context_projector
 
             def read_decision_owner():
+                from .turn_decision import build_fresh_turn_decision_owner
+
                 return build_fresh_turn_decision_owner(
                     args,
                     registry_path=registry_path,
@@ -412,7 +422,7 @@ def handle_turn_command(
                 # Turn keeps this locator and its original captured request.
                 payload["delegation_operation_locator"] = json.loads(args.delegation_context_json)
             # Resolve machine authentication once for the readback and host launch.
-            operator_environ = operator_provider_environ()
+            operator_environ = operator_provider_environ(bound_runtime_root=runtime_root)
             payload["managed_executor"] = managed_executor_cli_binding(args, environ=operator_environ)
             if (
                 args.turn_command == "run-once"

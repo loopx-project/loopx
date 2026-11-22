@@ -4,15 +4,19 @@ from __future__ import annotations
 import hashlib
 import json
 import queue
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from test_native_steward_private import finish, steward as steward
 
 from loopx.capabilities.native_chat import steward_triage
+from loopx.chat_action_store import ActionConflictError
 from loopx.extensions.lark import private_steward_triage
 from loopx.extensions.lark.conversation_identity import identity_ref
 from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
@@ -20,15 +24,43 @@ from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntim
 from loopx.file_lock import try_exclusive_file_lock
 
 
-def fixture_card_provider(provider, transport, monkeypatch):
-    """Model a Bot send UUID and exact provider message readback at the CLI seam."""
+def fixture_card_provider(provider, transport, monkeypatch, *, opaque_callback_values=False):
+    """Model a Bot send UUID and Lark's legacy user_card_content projection."""
     deliveries = {}
     sends = []
     lost = [False]
 
     def run(args, cwd=None, timeout=None):
         if "+messages-send" not in args or "--msg-type" not in args:
-            return provider(args, cwd, timeout)
+            result = provider(args, cwd, timeout)
+            if "GET" not in args or "--params" not in args:
+                return result
+            params = json.loads(args[args.index("--params") + 1])
+            if params.get("card_msg_content_type") != "user_card_content":
+                return result
+            payload = json.loads(result["stdout"])
+            for message in payload["data"]["items"]:
+                card = json.loads(message["body"]["content"])
+                card["header"]["title"]["i18n"] = {}
+                card["config"].pop("wide_screen_mode", None)
+                if card["config"].get("enable_forward") is False:
+                    del card["config"]["enable_forward"]
+                for row in card["elements"]:
+                    if row["tag"] == "div" and row["text"]["tag"] == "plain_text":
+                        row["text"]["tag"] = "lark_md"
+                    if row["tag"] == "action" and opaque_callback_values:
+                        for index, button in enumerate(row["actions"]):
+                            del button["value"]
+                            button["text"]["i18n"] = {}
+                            button["custom_action_id"] = f"opaque-callback-{index}"
+                            button["behaviors"] = [{"type": "callback"}]
+                # Preserve observed update metadata; it does not attest which
+                # parameters the provider omitted from this read projection.
+                if opaque_callback_values:
+                    message["updated"] = True
+                    message["update_time"] = str(int(message["create_time"]) + 10000)
+                message["body"] = {"content": json.dumps(card, ensure_ascii=False)}
+            return {**result, "stdout": json.dumps(payload, ensure_ascii=False)}
         key = args[args.index("--idempotency-key") + 1]
         card = json.loads(args[args.index("--content") + 1])
         chat = args[args.index("--chat-id") + 1]
@@ -43,12 +75,16 @@ def fixture_card_provider(provider, transport, monkeypatch):
                 "sender": {"id": provider.profile_apps[profile], "sender_type": "app"},
                 "body": {"content": json.dumps(card, ensure_ascii=False)},
                 "create_time": str(int(time.time() * 1000)),
+                "deleted": False, "updated": False,
             }
+            provider.messages[message_id]["update_time"] = provider.messages[message_id]["create_time"]
             if lost[0]:
                 lost[0] = False
                 # The child ran and the result was lost after committing the write.
                 import subprocess
                 raise subprocess.TimeoutExpired(args, timeout)
+        else:
+            assert card == json.loads(provider.messages[deliveries[key]]["body"]["content"])
         return {"returncode": 0, "stdout": json.dumps({"ok": True, "data": {"message_id": deliveries[key]}})}
 
     monkeypatch.setattr(transport, "runner", run)
@@ -67,13 +103,14 @@ def event_for(message_id, action, *, suffix="1", **changes):
             "timestamp": str(int(time.time() * 1000)), "action_value": action, **changes}
 
 
-def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch):
+@pytest.mark.parametrize("opaque_callback_values", [False, True])
+def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, monkeypatch, opaque_callback_values):
     store, runtime, provider, transport, binding, capture, _ = steward
     registry = json.loads(runtime.registry_path.read_text())
     registry["goals"] = [{"id": "demo-a"}, {"id": "demo-b"}]
     runtime.registry_path.write_text(json.dumps(registry))
     profile = "steward-app"
-    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=lambda: True)
     event = provider.event(profile, "before-menu", "Ordinary text still goes to the original agent.")
     assert transport.admit(profile, event)["status"] == "durably_accepted"
     original = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
@@ -81,7 +118,7 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     assert transport.reconcile() == 1
     before = capture.read_bytes(), store.messages(original["session_id"])
     native_refs = set(transport.core.root.glob("*.json"))
-    writes, lost = fixture_card_provider(provider, transport, monkeypatch)
+    writes, lost = fixture_card_provider(provider, transport, monkeypatch, opaque_callback_values=opaque_callback_values)
     reads = []
     unavailable = {"demo-a", "demo-b"}
 
@@ -176,6 +213,24 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
     ]:
         with pytest.raises(ValueError):
             service._handle_private_steward_callback(profile, bad, bad["action_value"])
+    original_card = provider.messages[picker_id]["body"]["content"]
+    altered = json.loads(original_card)
+    altered["elements"][0]["actions"][0]["value"]["goal"] = "unapproved"
+    forwarding = json.loads(original_card)
+    forwarding["config"]["enable_forward"] = True
+    for drifted in (altered, forwarding):
+        provider.messages[picker_id]["body"]["content"] = json.dumps(drifted)
+        if opaque_callback_values and drifted is altered:
+            # Parameters are absent from this read view. The actual click
+            # supplies the changed value, which the outbound record denies.
+            changed_action = drifted["elements"][0]["actions"][0]["value"]
+            changed_event = {**current, "action_value": changed_action}
+            with pytest.raises(ValueError, match="callback does not match the original Steward card"):
+                service._handle_private_steward_callback(profile, changed_event, changed_action)
+        else:
+            with pytest.raises(ValueError, match="original Steward card could not be verified"):
+                service._handle_private_steward_callback(profile, current, action)
+    provider.messages[picker_id]["body"]["content"] = original_card
     assert transport.reconcile() == 0
     assert writes == sends_before_denials
 
@@ -188,6 +243,88 @@ def test_menu_and_callbacks_use_private_ingress_without_a_model_turn(steward, mo
         service._handle_private_steward_callback(profile, current, action)
     assert transport.reconcile() == 0 and writes == sends_before_denials
     assert (capture.read_bytes(), store.messages(original["session_id"])) == before
+
+
+def test_visible_steward_card_can_be_clicked_during_sender_readback(steward, monkeypatch):
+    store, runtime, provider, transport, _, capture, _ = steward
+    profile = "steward-app"
+    receiving = threading.Event()
+    receiving.set()
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=receiving.is_set)
+    writes, lost = fixture_card_provider(provider, transport, monkeypatch)
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {"private_profiles": transport.profiles()},
+        runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport)
+
+    menu = provider.event(profile, "menu-slow-readback", "/triage")
+    assert service._admit_private(profile, menu)["status"] == "triage_queued"
+    path, = transport.pending_body_paths()
+    provider_runner = transport.runner
+    failed_once = False
+
+    def delay_first_card_readback(args, cwd=None, timeout=None):
+        nonlocal failed_once
+        if writes and not failed_once and f"/open-apis/im/v1/messages/{writes[0]}" in args:
+            failed_once = True
+            return {"returncode": 1, "stdout": ""}
+        return provider_runner(args, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", delay_first_card_readback)
+    try:
+        # A lost Send reply is still ambiguous even if the provider shows a card.
+        lost[0] = True
+        assert transport.reconcile_request(path) == 0
+        message_id, = writes
+        card = json.loads(provider.messages[message_id]["body"]["content"])
+        action = buttons(card)["待我处理"]
+        click = event_for(message_id, action)
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, click, action)
+        assert set(transport.root.glob("*.json")) == {path}
+
+        # Retry recovers the same provider id. The sender's separate verification
+        # temporarily fails, but the user can already see and click the card.
+        receiving.clear()
+        assert transport.reconcile_request(path) == 0
+        assert failed_once
+        original = json.loads(path.read_text())
+        assert original["status"] == "captured" and original["triage"]["message_id"] == message_id
+        receiving.set()
+
+        other_id = "om_fixture_copied_menu"
+        provider.messages[other_id] = {**provider.messages[message_id], "message_id": other_id}
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, {**click, "message_id": other_id}, action)
+        full_content = provider.messages[message_id]["body"]
+        provider.messages[message_id]["body"] = {"content": "unverified card projection"}
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, click, action)
+        provider.messages[message_id]["body"] = full_content
+        assert set(transport.root.glob("*.json")) == {path}
+
+        receipt = service._handle_private_steward_callback(profile, click, action)
+        assert receipt["status"] == "triage_callback_queued"
+        assert service._handle_private_steward_callback(profile, click, action)["status"] == "triage_callback_already_captured"
+        callback_path, = set(transport.pending_body_paths()) - {path}
+        assert transport.reconcile_request(callback_path) == 1
+        assert json.loads(path.read_text()) == original
+        assert len(writes) == 2 and writes[0] == message_id
+        result = provider.messages[writes[1]]
+        assert result["chat_id"] == menu["chat_id"]
+        assert json.loads(result["body"]["content"])["header"]["title"]["content"] == "待我处理"
+        assert transport.reconcile_request(path) == 1
+        assert json.loads(path.read_text())["status"] == "delivered"
+        assert transport.reconcile() == 0 and len(writes) == 2
+
+        snapshot = transport.bindings.read()
+        binding_id = original["binding_id"]
+        transport.bindings.disconnect(binding_id, expected_revision=snapshot["revision"])
+        with pytest.raises(ValueError):
+            service._handle_private_steward_callback(profile, {**click, "event_id": "revoked-click"}, action)
+        assert not transport.pending_body_paths() and len(writes) == 2
+        assert not store.list_sessions() and not capture.exists()
+        assert not list(transport.core.root.glob("*.json"))
+    finally:
+        service.close()
 
 
 def test_private_callback_consumer_dispatches_the_steward_action_on_its_original_stream(tmp_path: Path):
@@ -232,6 +369,185 @@ def test_private_callback_consumer_dispatches_the_steward_action_on_its_original
     )
     assert result["ok"] is True
     assert observed == [{**event, "action_value": action}]
+
+
+def test_one_callback_consumer_dispatches_both_card_protocols(tmp_path: Path):
+    from loopx.extensions.lark.goal_channel_operation import OPERATION_CARD_ACTION_SCHEMA_VERSION
+
+    actions = [
+        {"schema_version": private_steward_triage.TRIAGE_CARD_ACTION, "operation": "menu"},
+        {"schema_version": OPERATION_CARD_ACTION_SCHEMA_VERSION, "action": "confirm"},
+    ]
+    events = [event_for("om_fixture", json.dumps(action) if index == 0 else action, suffix=str(index))
+              for index, action in enumerate(actions)]
+    unknowns = [event_for("om_unknown", value) for value in
+                ({"schema_version": "unknown"}, [], 7, None, "broken-json")]
+    seen, observed, sources = threading.Event(), [], []
+    snapshot = {"private_profiles": {"steward-app": {
+        "cli_bin": "fixture-cli", "audience": "owner", "context_kind": "steward",
+    }}}
+
+    class Consumer:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def handler(payload):
+        observed.append(payload)
+        if len(observed) == 2:
+            seen.set()
+        return {"ok": True}
+
+    def messages():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        assert seen.wait(2)
+        yield "[event] exited — received 0 event(s) in 1s (reason: timeout)\n"
+
+    def process_factory(argv):
+        sources.append(argv[argv.index("consume") + 1])
+        if "card.action.trigger" in argv:
+            # Exercise the actual jq program, including its string/object
+            # normalization, rather than merely matching its schema literals.
+            lines = [json.dumps(event) for event in events]
+            if jq := shutil.which("jq"):
+                filtered = subprocess.run(
+                    [jq, "-c", argv[argv.index("--jq") + 1]],
+                    input="\n".join([*lines, *(json.dumps(event) for event in unknowns)]),
+                    capture_output=True, text=True, check=True,
+                )
+                lines = filtered.stdout.splitlines()
+                assert [json.loads(line) for line in lines] == events
+            # The dispatcher must also reject an unknown event if a provider
+            # delivers it despite the source filter.
+            return Consumer(iter([*lines, *(json.dumps(event) for event in unknowns)]))
+        return Consumer(messages())
+
+    result = stream_lark_goal_topic_profile(
+        profile="steward-app", snapshot_provider=lambda: snapshot, stop=threading.Event(),
+        runtime_root=tmp_path, answer=lambda *_: pytest.fail("ordinary turn started"),
+        process_factory=process_factory, review_callback_handler=handler,
+    )
+    assert result["ok"] is True
+    assert sorted(sources) == ["card.action.trigger", "im.message.receive_v1"]
+    assert observed == [{**event, "action_value": action} for event, action in zip(events, actions)]
+
+
+def test_chat_callback_service_preserves_operation_owner_and_private_session(steward, monkeypatch, tmp_path):
+    import test_lark_goal_channel_operation as operation_fixture
+    from datetime import datetime, timezone
+    from loopx.capabilities.native_chat.project_context import coordination_runtime_root
+    from loopx.extensions.lark import goal_channel_operation, goal_topic_runtime, goal_topic_runtime_service
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    profile = "steward-app"
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=lambda: True)
+    ordinary = provider.event(profile, "original-session", "Keep the original conversation.")
+    assert transport.admit(profile, ordinary)["status"] == "durably_accepted"
+    original = transport.core.read_request(identity_ref(binding["provider_ref"], ordinary["message_id"]))
+    assert finish(runtime, original)["status"] == "completed"
+    assert transport.reconcile() == 1
+    before = capture.read_bytes(), store.messages(original["session_id"])
+    writes, _ = fixture_card_provider(provider, transport, monkeypatch)
+    private_runner = transport.runner
+    assert transport.admit(profile, provider.event(profile, "menu", "/triage"))["status"] == "triage_queued"
+    assert transport.reconcile() == 1
+    menu_id = writes[-1]
+    action = buttons(json.loads(provider.messages[menu_id]["body"]["content"]))["总览"]
+    click = event_for(menu_id, action)
+
+    for name, value in (("APP_ID", "cli_steward_app"), ("CHAT_ID", "oc_steward_app"), ("OPERATOR_ID", "ou_steward_app")):
+        monkeypatch.setattr(operation_fixture, name, value)
+    operation_dir = tmp_path / "coordination-owner"
+    operation_dir.mkdir()
+    actions, registry, owner_root, channel_binding, target = operation_fixture._fixture(operation_dir)
+    runtime.coordination_runtime_root = coordination_runtime_root(registry, store.root.parent)
+    assert runtime.coordination_runtime_root == owner_root and owner_root != store.root
+    proposal = operation_fixture._prepare(actions, registry)
+    sent_cards, calls = {}, []
+    operation_runner = operation_fixture._runner(calls, sent_cards)
+
+    def run(argv, cwd=None, timeout=None):
+        operation_io = (
+            any("om_operation_card_fixture" in arg or "interactive/v1/card/update" in arg for arg in argv)
+            or ("--profile" in argv and argv[argv.index("--profile") + 1] == "operation-bot")
+            or "+chat-members-list" in argv or ("chats" in argv and "get" in argv)
+            or ("+messages-send" in argv and json.loads(argv[argv.index("--content") + 1]).get("schema") == "2.0")
+        )
+        return (operation_runner if operation_io else private_runner)(argv, cwd, timeout)
+
+    monkeypatch.setattr(transport, "runner", run)
+    delivered = goal_channel_operation.deliver_goal_channel_operation_card(
+        proposal_id=proposal["proposal_id"], action_store_root=actions.root, runtime_root=owner_root,
+        binding_path=channel_binding, target_path=target, execute=True, runner=run,
+        executor_binding_resolver=lambda *_: {"revision": "simulator-v0"},
+    )
+    assert delivered["status"] == "awaiting_confirmation" and delivered["readback_verified"] is True
+    durable = actions.load(proposal["proposal_id"])
+    operation_event = operation_fixture._event(durable, sent_cards[durable["operation"]["delivery"]["message_id"]])
+    operation_event["action_value"] = json.loads(operation_event["action_value"])
+    executed = []
+
+    def execute(claimed, *, runtime_root):
+        assert runtime_root == owner_root
+        executed.append(claimed["proposal_id"])
+        operation = claimed["operation"]
+        return {
+            "schema_version": "loopx_operation_outcome_v0", "outcome": "simulated_filled",
+            "projection_verified": True, "operation_id": operation["operation_id"],
+            "payload_digest": operation["payload_digest"], "claim_id": operation["claim"]["claim_id"],
+            "executor_revision": operation["executor_revision"], "summary": "Synthetic operation completed.",
+            "simulation": True, "external_write_performed": False,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    monkeypatch.setattr(goal_channel_operation, "_execute_claimed_operation", execute)
+    handlers, entered = [], threading.Event()
+
+    def stream(**kwargs):
+        handlers.append(kwargs["review_callback_handler"])
+        entered.set()
+        assert kwargs["stop"].wait(10)
+        return {"ok": True}
+
+    monkeypatch.setattr(goal_topic_runtime, "stream_lark_goal_topic_profile", stream)
+    monkeypatch.setattr(goal_topic_runtime_service, "try_exclusive_file_lock",
+                        lambda path, **kwargs: try_exclusive_file_lock(tmp_path / "consumer-locks" / path.name, **kwargs))
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": {
+            name: config for name, config in transport.profiles().items() if name == profile
+        }},
+        runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport,
+    )
+    try:
+        service.refresh()
+        assert entered.wait(3) and len(handlers) == 1
+        callback = handlers[0]
+        with pytest.raises(ActionConflictError):
+            callback({**operation_event, "chat_id": "oc_forwarded"})
+        assert not executed
+        first = callback(operation_event)
+        replay = callback(operation_event)
+        assert first["outcome"] == replay["outcome"] == "simulated_filled"
+        assert first["card_update_verified"] is True and replay["external_write_performed"] is False
+        assert executed == [proposal["proposal_id"]]
+        assert actions.load(proposal["proposal_id"])["operation"]["lifecycle_state"] == "outcome_observed"
+        assert transport.core.actions.store.load(proposal["proposal_id"]) is None
+        assert callback(click)["status"] == "triage_callback_queued"
+        assert transport.reconcile() == 1
+        assert callback(click)["status"] == "triage_callback_already_captured"
+        assert before == (capture.read_bytes(), store.messages(original["session_id"]))
+        snapshot = transport.bindings.read()
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=snapshot["revision"])
+        with pytest.raises(ValueError):
+            callback({**operation_event, "event_id": "after-revoke"})
+        assert executed == [proposal["proposal_id"]]
+    finally:
+        service.close()
 
 
 @pytest.mark.parametrize("authority_provider", ["file", "sqlite"])
@@ -280,7 +596,7 @@ def test_triage_reads_declared_source_before_shared_runtime(steward, monkeypatch
 
     writes, _ = fixture_card_provider(provider, transport, monkeypatch)
     profile = "steward-app"
-    transport.steward_callback_readiness[(profile, provider.profile_apps[profile])] = lambda: True
+    transport.steward_callback_streams[(profile, provider.profile_apps[profile])] = SimpleNamespace(ready=lambda: True)
     service = LarkGoalTopicRuntimeService(
         snapshot_provider=lambda: {"private_profiles": transport.profiles()},
         runtime_root=transport.runtime_root, runtime_controller=runtime, private_conversations=transport,
@@ -433,8 +749,11 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
             threading.Event().wait(0.01)
 
     def available():
-        probe = transport.steward_callback_readiness.get(ready_key)
-        return probe is not None and probe()
+        stream = transport.steward_callback_streams.get(ready_key)
+        return stream is not None and stream.ready()
+
+    def callback_error():
+        return service.health_snapshot()[profile].get("callback_error_code")
 
     def request(name, command):
         previous = len(writes)
@@ -462,8 +781,17 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
     try:
         messages.ready()
         assert failed_spawn.wait(5)
+        eventually(lambda: callback_error() == "lark_review_callback_source_start_failed")
+        rejected = callbacks.get(timeout=5)
+        rejected.emit({"ok": False, "error": {
+            "type": "validation", "subtype": "failed_precondition", "message": "private provider diagnostic",
+        }})
+        rejected.terminate()
+        eventually(lambda: callback_error() == "lark_review_callback_source_precondition_failed")
+        assert "private provider diagnostic" not in json.dumps(service.health_snapshot())
         first = callbacks.get(timeout=5)
-        menu, _ = request("before-callback-ready", "/triage")
+        first.lines.put("[event] ready event_key=im.message.receive_v1\n")
+        menu, old_menu_id = request("before-callback-ready", "/triage")
         assert not buttons(menu)
         assert all(cmd in json.dumps(menu) for cmd in ("/gates", "/todos", "/triage all"))
         first.ready()
@@ -501,6 +829,9 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         second.ready()
         eventually(available)
         menu, menu_id = request("recovered-menu", "/triage")
+        old_menu = json.loads(provider.messages[old_menu_id]["body"]["content"])
+        assert not buttons(old_menu)
+        assert "回调恢复后，发送 /triage 获取新卡片" in json.dumps(old_menu, ensure_ascii=False)
         action = buttons(menu)["总览"]
         callback = event_for(menu_id, action, suffix="recovered")
         index_path.touch()
@@ -522,14 +853,14 @@ def test_private_callback_recovers_without_restarting_messages(steward, monkeypa
         assert "Decide whether to accept the prepared report" in json.dumps(partial, ensure_ascii=False)
         assert "近期进展暂未读全" in json.dumps(partial, ensure_ascii=False)
         assert partial["header"]["template"] == "orange"
-        assert children == [messages, first, second]
+        assert children == [messages, rejected, first, second]
         assert messages.poll() is None
         health = service.health_snapshot()[profile]
         assert health["status"] == "listening" and health["restart_count"] == 0
         eventually(lambda: service.health_snapshot()[profile].get("callback_error_code") is None)
     finally:
         service.close()
-    assert not transport.steward_callback_readiness
+    assert not transport.steward_callback_streams
     assert all(child.poll() is not None for child in children)
     with try_exclusive_file_lock(lock_path, operation="next_listener") as lease:
         assert lease is not None

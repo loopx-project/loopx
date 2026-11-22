@@ -171,6 +171,13 @@ def refine_goal_outcome(
     }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
+def require_active_goal_for_objective_update(goal: Mapping[str, Any] | None) -> None:
+    if goal is None:
+        raise ValueError("Goal acceptance requires a registered Goal")
+    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+        raise ValueError("Objective updates require an active Goal")
+
+
 def update_goal_objective(
     *, registry_path: Path, goal_id: str, document: dict[str, Any], operation: str,
     expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
@@ -180,8 +187,7 @@ def update_goal_objective(
     from ..work_items.replan_context_codec import goal_context_facts
 
     registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
-        raise ValueError("Objective updates require an active Goal")
+    require_active_goal_for_objective_update(goal)
     return _result("goal.acceptance.objective", {**route, "actor_agent_id": agent_id,
         "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
         "operation": operation, "document": document, "dry_run": not execute,
@@ -289,21 +295,6 @@ def _criterion_effects(criteria: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def goal_task_validation_files_current(
-    *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
-) -> bool:
-    """Check declared validator assets without executing output validation."""
-    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    route["todo_id"] = todo_id
-    basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
-    if not isinstance(basis, dict) or not basis.get("criteria"):
-        return False
-    return validation_effect_files_current(
-        effects=_criterion_effects(basis["criteria"]), registry_path=registry_path,
-        goal_id=goal_id,
-    )
-
-
 def validation_effect_files_current(
     *, effects: list[dict[str, Any]], registry_path: Path, goal_id: str,
     delivery_workspace: Mapping[str, Any] | None = None,
@@ -326,29 +317,6 @@ def validation_effect_files_current(
         if not _acceptance_pins_match(pins, workspace):
             return False
     return True
-
-
-def validate_goal_task_acceptance(
-    *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
-) -> dict[str, Any]:
-    """Read-only Turn validator for a task's current owner-pinned criteria.
-
-    Completion still runs its own fresh validation and atomic TS commit. This
-    entrypoint cannot accept supplied commands, pass flags or saved receipts.
-    """
-    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    route["todo_id"] = todo_id
-    basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
-    if not isinstance(basis, dict) or not basis.get("criteria"):
-        raise ValueError("delegated task requires configured owner-bound checks")
-    results = run_goal_acceptance_effects(
-        effects=_criterion_effects(basis["criteria"]),
-        registry_path=registry_path, goal_id=goal_id,
-    )
-    current = _result(_INSPECT_METHOD, route).get("completion_requirements")
-    if current != basis:
-        raise ValueError("delegated task acceptance changed during validation")
-    return {"passed": all(row["passed"] for row in results), "results": results}
 
 
 def configure_goal_acceptance(

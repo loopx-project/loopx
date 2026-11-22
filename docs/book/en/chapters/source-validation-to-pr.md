@@ -47,7 +47,7 @@ PR.
 ## Six evidence layers
 
 The official
-[Testing and Quality](https://github.com/huangruiteng/loopx/blob/main/docs/development/testing-and-quality.md)
+[Testing and Quality](https://github.com/loopx-project/loopx/blob/main/docs/development/testing-and-quality.md)
 guide defines the current quality system. For external contributors, organize it around the job.
 
 ### 1. Unit and contract tests
@@ -64,8 +64,7 @@ ambiguous scope -> typed repair
 explicit global scope -> global Gate
 ```
 
-This layer is the closest proof of an invariant. It does not prove that CLI, projection, and scheduler are
-connected correctly.
+This layer is the closest proof of an invariant.
 
 ### 2. Focused deterministic smoke
 
@@ -444,7 +443,7 @@ What remains owner-held?
 ## Link public work, not local runtime state
 
 Nontrivial contributions should link
-the [Contributor Task Board](https://github.com/huangruiteng/loopx/blob/main/docs/development/contributor-tasks.md)
+the [Contributor Task Board](https://github.com/loopx-project/loopx/blob/main/docs/development/contributor-tasks.md)
 or a GitHub Issue:
 
 - state the intended slice before a large change;
@@ -555,7 +554,7 @@ semantic core. The final `APPROVE` applies only to the revalidated exact head.
 
 ## Distinguish merge, release, deployment, and observation
 
-A merged PR does not prove a release, deployment, or every external Host update. Follow-up may include:
+Follow-up may include:
 
 - full-public smoke on `main`;
 - release qualification;

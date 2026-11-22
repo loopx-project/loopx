@@ -17,6 +17,12 @@ the other behind silently.
 case-insensitive and up to 160 characters versus lowercase-led 3..128 -- so it is
 bounded-context reuse of one name, not a copy, and it is pinned as distinct here
 rather than merged away by renaming.
+
+The document schema tag and the item-visibility pair joined the owner later:
+``adapters.py`` and ``audience.py`` each stated the schema string and each listed
+the two visibilities, so a schema bump or a new visibility had two places to land.
+``adapters.DOCUMENT_SCHEMA`` stays importable from ``adapters`` because the
+bindings, archive and renderer faces read it from there.
 """
 
 from __future__ import annotations
@@ -26,3 +32,5 @@ import re
 SUPPORTING_CONTENT_KINDS = frozenset({"coverage", "delivery_receipt", "runtime"})
 REPORT_IDENTITY_PATTERN = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 REPORT_LANGUAGE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+DOCUMENT_SCHEMA = "periodic_report_document_v0"
+ITEM_VISIBILITIES = frozenset({"primary", "supporting"})

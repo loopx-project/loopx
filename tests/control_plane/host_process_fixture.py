@@ -17,6 +17,15 @@ def assert_host_task_context(model_input, source):
     assert model_input["source_schema_version"] == "loopx_turn_host_request_v1"
     assert not {"work_contract", "turn_envelope", "turn_authority"}.intersection(model_input)
     context = model_input["task_context"]
+    if source.get("effective_action") == "normal_run" and source.get("normal_delivery_allowed") is True:
+        source = dict(source)
+        for key in ("agent_todo_summary", "user_todo_summary"):
+            complete_summary, model_summary = source.get(key), context.get(key)
+            if not isinstance(complete_summary, dict) or not isinstance(model_summary, dict):
+                continue
+            omitted = complete_summary.keys() - model_summary.keys()
+            assert all(complete_summary[lane] == [] for lane in omitted), omitted
+            source[key] = {field: value for field, value in complete_summary.items() if field not in omitted}
     outer_fields = {"schema_version", "contract_binding", "projection_envelope", "scheduler_hint",
                     "automation_cadence_readback", "automation_liveness", "scheduler_execution_context"}
     assert set(context) == set(source) - outer_fields

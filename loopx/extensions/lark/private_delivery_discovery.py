@@ -1,13 +1,177 @@
-"""Read-only scheduling hints for the existing private-message reply worker."""
+"""Read-only source and scheduling checks for private-message delivery."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+import hashlib
+import json
+import re
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
+from ...chat.attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
-from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
-from .private_progress import legacy_recovery_repairs
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
+from ...capabilities.native_chat.file_discovery import (
+    REPLY_IMAGE_NAME_PATTERN,
+    FileChatDiscovery,
+    external_source_route_path,
+    file_change_fingerprint,
+    reply_image_workspace,
+)
+from ...file_lock import try_exclusive_file_lock
+from .identity_shapes import LARK_MESSAGE_ID_PATTERN
+from .outbound import present_lark_conversation_text as _presentation_text
+from .presentation.markdown_post import lark_markdown_readback_matches
+from .private_ingress import private_source_text
+from .private_progress import legacy_recovery_repairs, presentation_phase
+from .private_web_projection import _same_fields
+
+if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+
+
+_SOURCE_URL = re.compile(r"https://[^\s<>()\[\]\"，。；！？]+")
+
+
+_MARKDOWN_CODE_SPAN = re.compile(r"((?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\2(?!\x60))")
+_ANSWER_IMAGE = re.compile(r"""(?<!\\)!\[([^\]\n]*)\]\(\s*(?:<([^<>\n]+)>|([^\s<>()]+))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)""")
+
+
+def private_answer_images(text: str) -> tuple[str, list[str]]:
+    """Remove image previews from provider prose, leaving the canonical answer alone."""
+    lines, targets = [], []
+    fence = None
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(\x60{3,}|~{3,})(.*)$", line)
+        if marker and fence is None:
+            fence = marker[1]
+        elif marker and fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+            fence = None
+        elif not fence and not line.startswith(("    ", "\t")):
+            def link(match: re.Match[str]) -> str:
+                url = match[2] or match[3]
+                if url not in targets:
+                    targets.append(url)
+                caption = match[1] or f"图片 {targets.index(url) + 1}"
+                return f"[{caption}](<{url}>)" if url.startswith("https://") and " " in url else (
+                    f"[{caption}]({url})" if url.startswith("https://") else caption)
+
+            start, chunks = 0, []
+            for span in _MARKDOWN_CODE_SPAN.finditer(line):
+                chunks.extend((_ANSWER_IMAGE.sub(link, line[start:span.start()]), span[0]))
+                start = span.end()
+            line = "".join((*chunks, _ANSWER_IMAGE.sub(link, line[start:])))
+        lines.append(line)
+    return "".join(lines), targets
+
+def allowed_answer_image_urls(source: str, targets: list[str], *, deadline: float) -> set[str]:
+    """Authorize exact owner URLs and images listed by the original same-host article."""
+    from urllib.parse import urlsplit
+
+    from ..public_source_reader import article, public_url
+
+    def candidate(url: str) -> str | None:
+        try:
+            return public_url(url) if not urlsplit(url).query else None
+        except ValueError:
+            return None
+
+    owner_links = {url for link in _SOURCE_URL.findall(source) if (url := candidate(link))}
+    wanted = {candidate(target) for target in targets}
+    if None in wanted or not owner_links:
+        return set()
+    if wanted <= owner_links:
+        return owner_links
+    if len(owner_links) != 1:
+        return set()
+    [original] = owner_links
+    host = urlsplit(original).hostname
+    if any(urlsplit(url).hostname != host for url in wanted - owner_links):
+        return set()
+    observed = article(original, deadline=deadline, allowed_urls={original})
+    if observed.get("ok") is not True:
+        return set()
+    listed = {url for item in observed["images"]
+              if (url := candidate(item["url"])) and urlsplit(url).hostname == host}
+    allowed_urls = owner_links | listed
+    return allowed_urls if wanted <= allowed_urls else set()
+
+
+def answer_image_source_matches(message: Mapping | None, event: Mapping) -> bool:
+    if message is None or message.get("deleted") is True or message.get("chat_id") != event["chat_id"]:
+        return False
+    sender = message.get("sender")
+    return (isinstance(sender, Mapping) and sender.get("sender_type") == "user"
+            and bool(event["sender_id"]) and sender.get("id") == event["sender_id"]
+            and message.get("msg_type", message.get("message_type")) == "text"
+            and private_source_text(message) == event["content"])
+
+
+def historical_image_reply_matches(message: Mapping | None, chat_id: str, observation: Mapping,
+                                   text: str, keys: tuple[str, ...] = ()) -> bool:
+    if message is None or message.get("deleted") is True or message.get("chat_id") != chat_id:
+        return False
+    sender = message.get("sender")
+    if (not isinstance(sender, Mapping) or sender.get("sender_type") != "app"
+            or not sender.get("id") or sender["id"] not in (observation["bot_app_id"], observation["bot_open_id"])):
+        return False
+    raw_body = message.get("body")
+    if isinstance(raw_body, Mapping) and isinstance(raw_body.get("content"), str):
+        try:
+            body = json.loads(raw_body["content"])
+        except ValueError:
+            return False
+        # Raw mget keeps authored Markdown in content_v2 and a rendered preview
+        # in content. Match the authored body through the existing wire verifier.
+        if isinstance(body, Mapping) and "content_v2" in body:
+            locale = {"title": body.get("title", ""), "content": body["content_v2"]}
+            message = {**message, "body": {"content": {"zh_cn": locale}}}
+    return lark_markdown_readback_matches(text=text, message=message, image_keys=keys)
+
+
+def resumable_answer_image_session(
+    core: ChatExternalConversations, request: dict[str, Any], turn: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Apply source controls before reading the current Session."""
+    store = core.controller.store
+    session_id, turn_id = request["session_id"], request["turn_id"]
+    if (turn is None or turn.get("status") != "completed"
+            or core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))):
+        return None
+    session = store.load_session(session_id)
+    return session if session is not None and session.get("status") in RESUMABLE_SESSION_STATES else None
+
+
+@contextmanager
+def answer_media_dispatch(core: ChatExternalConversations, request: dict[str, Any],
+                          source_is_current: Callable[[], bool]) -> Iterator[None]:
+    """Check the provider source at dispatch under the original local controls."""
+    store = core.controller.store
+    session_id, turn_id = request["session_id"], request["turn_id"]
+    route = external_source_route_path(core.root, request["binding_id"], request["source"]["source_ref"])
+    # Ingress takes the route before its binding and Session operations.
+    # Contention leaves the original control writer free to finish first.
+    with ExitStack() as fences:
+        for path in (route, core.bindings.path, store._session_path(session_id)):
+            if fences.enter_context(try_exclusive_file_lock(path, operation="dispatch_external_answer_media")) is None:
+                raise ValueError("original media authority is being updated")
+        if not any(binding.get("enabled") is True and binding["binding_id"] == request["binding_id"]
+                   and binding["transport_ref"] == request["profile"] for binding in core.bindings.read()["bindings"]):
+            raise ValueError("original media binding unavailable")
+        native = core.read_request(request["request_ref"])
+        if (native.get("status") != "accepted"
+                or any(native.get(key) != request[key] for key in ("binding_id", "source", "session_id", "turn_id"))
+                or resumable_answer_image_session(core, native, store.load_turn(session_id, turn_id)) is None):
+            raise ValueError("original Session or source no longer authorizes an upload")
+        # Feishu has no conditional image upload tied to a message revision.
+        # Do the final provider read here, with these local locks held through
+        # CLI start. Edits made later are checked again before posting the images.
+        if not source_is_current():
+            raise ValueError("original upload source changed")
+        if resumable_answer_image_session(core, native, store.load_turn(session_id, turn_id)) is None:
+            raise ValueError("original Session or source changed during upload authorization")
+        yield
 
 
 def prepared_steward_binding_waits(
@@ -78,6 +242,12 @@ class PrivateDeliveryDiscovery:
         self._completed.pop(path, None)
         row = _read_json(path)
         if row["status"] != "delivered":
+            triage = row.get("triage")
+            if isinstance(triage, dict) and triage.get("retired"):
+                view = {"status": row["status"], "triage": {"retired": triage["retired"]}}
+                if before is not None and file_change_fingerprint(path) == before:
+                    self._completed[path] = (before, view, False)
+                return view, False
             return row, False
 
         repairs = bool(row.get("session_id") and row.get("turn_id") and legacy_recovery_repairs(row))
@@ -85,6 +255,99 @@ class PrivateDeliveryDiscovery:
                 ("status", "request_ref", "binding_id", "session_id", "turn_id")}
         view.update(agent_target=bool(row.get("agent_target")),
                     event={"chat_type": row.get("event", {}).get("chat_type")})
+        historic_images = row.get("historical_answer_images") or {}
+        if historic_images:
+            view["historical_images_admitted"] = True
+        if historic_images.get("status") == "pending":
+            view["historical_images_due_at"] = historic_images.get("next_check_at", 0)
         if before is not None and file_change_fingerprint(path) == before:
             self._completed[path] = (before, view, repairs)
         return view, repairs
+
+
+def failure_notice_receipt_unknown(record: Mapping[str, Any]) -> bool:
+    """Return True when the current terminal failure notice lost its provider receipt."""
+    if record.get("status") != "accepted" or "triage" in record:
+        return False
+    phase = presentation_phase(record, "terminal")
+    terminal = (record.get("deliveries") or {}).get(phase) or {}
+    return (
+        terminal.get("started") is True
+        and not terminal.get("attempt")
+        and terminal.get("verified") is not True
+        and terminal.get("blocker") == "provider_delivery_receipt_unknown"
+    )
+
+
+def is_answer_image_followup(record: Mapping[str, Any]) -> bool:
+    if record.get("status") != "accepted" or not isinstance(record.get("answer_images"), dict):
+        return False
+    terminal = record.get("deliveries", {}).get(presentation_phase(record, "terminal"), {})
+    return terminal.get("verified") is True
+
+
+def answer_image_retry_waits(record: Mapping[str, Any], now: float) -> bool:
+    if not is_answer_image_followup(record):
+        return False
+    state = record["answer_images"]
+    retry_at = state.get("next_check_at")
+    return state.get("status") != "delivered" and type(retry_at) in (int, float) and retry_at > now
+
+
+def historical_image_source(core: ChatExternalConversations, record: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:
+    event = record["event"]
+    terminal = record["deliveries"]["terminal"]
+    if (record["status"] != "delivered" or record.get("context_recovery")
+            or event.get("chat_type") != "p2p" or event.get("message_type") != "text"
+            or record["source"].get("private_human_message") is not True
+            or record["binding_id"] != plan["binding_id"] or record["turn_id"] != plan["turn_id"]
+            or terminal.get("verified") is not True or terminal.get("image_keys")
+            or terminal.get("attempt", {}).get("message_ref") != plan["message_id"]):
+        raise ValueError("original text-only reply unavailable")
+    native = core.read_request(record["request_ref"])
+    if (native.get("status") != "accepted" or native.get("origin") != "lark"
+            or native.get("command") is not None or native.get("agent_target")
+            or native.get("delivery_verified") is not True
+            or not _same_fields(native, record, "request_ref", "binding_id", "source", "session_id", "turn_id")):
+        raise ValueError("original request no longer matches")
+    turn = core.controller.store.load_turn(record["session_id"], record["turn_id"]) or {}
+    response = turn.get("response") or {}
+    if (not isinstance(answer := response.get("message"), str)
+            or hashlib.sha256(answer.encode()).hexdigest() != plan["answer_sha256"]
+            or terminal.get("text") != _presentation_text(answer)
+            or (session := resumable_answer_image_session(core, native, turn)) is None):
+        raise ValueError("original completed answer or its authority changed")
+    image_targets = private_answer_images(answer)[1]
+    if "captured_images" in plan:
+        if image_targets or response.get("answer_image_plan") or reply_image_workspace(session, turn) is None:
+            raise ValueError("original reply is not a qualified legacy project answer")
+    elif not image_targets:
+        raise ValueError("original remote image reply unavailable")
+    return session
+
+
+def historical_image_plan(core: ChatExternalConversations, record: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:
+    from ..public_source_reader import public_url
+
+    captured = "captured_images" in plan
+    image_field, reference_field = ("captured_images", "name") if captured else ("images", "url")
+    if set(plan) != {"binding_id", "turn_id", "message_id", "answer_sha256", image_field}:
+        raise ValueError("invalid original image repair fields")
+    if (not isinstance(plan["message_id"], str) or not LARK_MESSAGE_ID_PATTERN.fullmatch(plan["message_id"])
+            or not isinstance(plan["answer_sha256"], str)
+            or not BARE_SHA256_PATTERN.fullmatch(plan["answer_sha256"])
+            or not isinstance(plan[image_field], list) or not 1 <= len(plan[image_field]) <= CHAT_IMAGE_MAX_COUNT):
+        raise ValueError("invalid original image repair target")
+    images = []
+    for image in plan[image_field]:
+        if (not isinstance(image, dict) or set(image) != {reference_field, "sha256"}
+                or not isinstance(reference := image[reference_field], str)
+                or not isinstance(image["sha256"], str) or not BARE_SHA256_PATTERN.fullmatch(image["sha256"])):
+            raise ValueError("each original image requires a reference and its SHA-256")
+        if captured and not REPLY_IMAGE_NAME_PATTERN.fullmatch(reference):
+            raise ValueError("invalid original image snapshot name")
+        images.append({reference_field: reference if captured else public_url(reference), "sha256": image["sha256"]})
+    if len({image[reference_field] for image in images}) != len(images):
+        raise ValueError("duplicate original image reference")
+    historical_image_source(core, record, plan)
+    return {**plan, image_field: images}

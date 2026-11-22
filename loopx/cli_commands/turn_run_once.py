@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import sys as _sys
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
@@ -15,6 +17,10 @@ from ..cli_rollout import append_cli_rollout_event
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
+)
+from ..control_plane.quota.execution_preparation import (
+    prepared_lease_receipt_fields,
+    read_active_task_lease_epoch,
 )
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
@@ -40,22 +46,26 @@ from ..control_plane.turn_driver import (
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
-from .turn_cadence import managed_cadence_start
+from .turn_cadence import managed_cadence_start, uses_effect_bound_start_identity
 from .turn_host_request import build_codex_cli_host_runner, prepare_turn_host_request
 from .turn_decision import collect_turn_status_payload, current_turn_host_launch_decision
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
+from .turn_settlement_probes import (
+    EXACT_SETTLEMENT_READBACK_NOT_FOUND as EXACT_SETTLEMENT_READBACK_NOT_FOUND,
+    append_turn_settlement_event,
+    build_turn_settlement_resolvers,
+    finish_turn_explore_delivery,
+    require_settlement_effect_ref,
+)
 from .turn_todo_writeback import write_turn_validated_completion
+from .project_lifecycle_inputs import split_explore_result_input
 
 if _TYPE_CHECKING:
     from .turn_dsh_host import (
         build_dsh_host_runner as build_dsh_host_runner,
         build_dsh_operation_host_runner as build_dsh_operation_host_runner,
     )
-
-EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
-    "exact settlement readback unexpectedly returned not-found"
-)
 
 # Keep the existing import and patch seams without loading an unselected host.
 _DSH_HOST_EXPORTS = ("build_dsh_host_runner", "build_dsh_operation_host_runner")
@@ -110,6 +120,54 @@ def execute_turn_run_once(
         )
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
+        initial_lease_proof = execution_context.get("task_lease_proof") or None
+        initial_lease_epoch = execution_context.get("task_lease_epoch")
+        task_lease_proof = initial_lease_proof
+        task_lease_epoch = initial_lease_epoch
+        rebound_lease_active = False
+        cached_completion_lease: dict[str, Any] | None = None
+
+        def resolve_completion_lease() -> dict[str, Any]:
+            nonlocal cached_completion_lease
+            if cached_completion_lease is None:
+                if native_completion_lease_resolver is not None:
+                    cached_completion_lease = dict(native_completion_lease_resolver())
+                else:
+                    proof = execution_context.get("task_lease_proof") or {}
+                    cached_completion_lease = {
+                        "task_lease_idempotency_key": proof.get("idempotency_key"),
+                        "task_lease_expected_version": proof.get("expected_version"),
+                    }
+            return dict(cached_completion_lease)
+
+        def rebind_resumed_task_lease(*, bind_receipt: bool = True) -> None:
+            nonlocal task_lease_proof, task_lease_epoch, rebound_lease_active
+            if (
+                rebound_lease_active
+                or not args.execute
+                or not getattr(args, "resume_turn_key", None)
+                or native_completion_lease_resolver is None
+                or not selected_todo.get("todo_id")
+            ):
+                return
+            resolved_lease = resolve_completion_lease()
+            if resolved_lease.get("task_lease_idempotency_key") is None:
+                return
+            rebound_proof = {
+                "idempotency_key": resolved_lease["task_lease_idempotency_key"],
+                "expected_version": resolved_lease["task_lease_expected_version"],
+            }
+            task_lease_epoch = read_active_task_lease_epoch(
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                todo_id=str(selected_todo["todo_id"]),
+                agent_id=args.agent_id,
+                requested_proof=rebound_proof,
+            )
+            task_lease_proof = rebound_proof
+            rebound_lease_active = True
+            if bind_receipt:
+                bind_heartbeat_settlement_receipt()
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -160,11 +218,9 @@ def execute_turn_run_once(
             effect_ref: str,
             step_kind: SettlementStepKind,
         ) -> None:
-            expected = f"{settlement_identity.effect_id}#{step_kind.value}"
-            if effect_ref != expected:
-                raise ValueError(
-                    f"{step_kind.value} effect ref does not match Turn identity"
-                )
+            require_settlement_effect_ref(
+                effect_ref, step_kind, settlement_identity=settlement_identity
+            )
 
         def append_settlement_event(
             effect_payload: Mapping[str, object],
@@ -173,41 +229,19 @@ def execute_turn_run_once(
             status: str,
             details: Mapping[str, object],
         ) -> None:
-            event_payload = {
-                **dict(effect_payload),
-                "ok": True,
-                "goal_id": args.goal_id,
-                "runtime_root": str(runtime_root),
-            }
-            append_cli_rollout_event(
-                event_payload,
-                registry_path=registry_path,
-                runtime_root_arg=runtime_root_arg,
+            append_turn_settlement_event(
+                effect_payload,
                 event_kind=event_kind,
-                goal_ref=goal_ref,
-                agent_id=settlement_identity.agent_id,
-                todo_id=settlement_identity.todo_id,
-                run_id=settlement_identity.turn_instance_id,
                 status=status,
-                summary=f"Turn settlement {event_kind} recorded",
-                details={
-                    **dict(details),
-                    "settlement_effect_id": settlement_identity.effect_id,
-                    **({"replan_obligation_id": settlement_identity.replan_obligation_id}
-                       if settlement_identity.replan_obligation_id else {}),
-                },
-                idempotency_fields=[
-                    "goal_id",
-                    "event_kind",
-                    "agent_id",
-                    *(("todo_id",) if settlement_identity.todo_id else ()),
-                    "run_id",
-                    *(("goal_ref",) if goal_ref is not None else ()),
-                    *(("status",) if event_kind == "todo_complete" else ()),
-                ],
+                details=details,
+                goal_id=args.goal_id,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                runtime_root_arg=runtime_root_arg,
+                goal_ref=goal_ref,
+                settlement_identity=settlement_identity,
+                append_cli_rollout_event=append_cli_rollout_event,
             )
-            if event_payload.get("rollout_event_log_error"):
-                raise OSError(f"failed to persist {event_kind} settlement receipt")
 
         writeback_contract = execution_context["writeback"]
         delivery_workspace_path = (
@@ -229,6 +263,28 @@ def execute_turn_run_once(
             else None
         )
 
+        def finish_explore_delivery(refresh: dict[str, object]) -> dict[str, object]:
+            return finish_turn_explore_delivery(
+                refresh,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                settlement_identity=settlement_identity,
+            )
+
+        def split_candidate_vision(
+            result: dict[str, object],
+        ) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+            return split_explore_result_input(
+                dict(result["agent_vision"]) if isinstance(result.get("agent_vision"), dict) else None,
+                None,
+                scope_context=dict(
+                    registry_path=registry_path, runtime_root_override=str(runtime_root),
+                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id,
+                    turn_instance_id=settlement_identity.turn_instance_id,
+                ),
+            )
+
         def refresh_candidate(
             result: dict[str, object],
             *,
@@ -248,6 +304,21 @@ def execute_turn_run_once(
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
             progress_observation = result.get("progress_observation")
+            vision, explore_result = split_candidate_vision(result)
+            recovery_turn_instance_id = (
+                settlement_identity.turn_instance_id
+                if (
+                    bool(args.retry_failed_turn)
+                    and not dry_run
+                    and completion_turn_key == settlement_identity.turn_instance_id
+                )
+                else None
+            )
+            refresh_task_lease_proof = (
+                None
+                if completion_todo_id is not None and (recovery_turn_instance_id is None or rebound_lease_active)
+                else task_lease_proof
+            )
             return refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
@@ -273,11 +344,8 @@ def execute_turn_run_once(
                     dict(progress_observation)
                     if isinstance(progress_observation, dict) else None
                 ),
-                agent_vision_packet=(
-                    dict(result["agent_vision"])
-                    if isinstance(result.get("agent_vision"), dict)
-                    else None
-                ),
+                agent_vision_packet=vision,
+                explore_result=explore_result,
                 vision_unchanged_reason=(
                     str(result.get("vision_unchanged_reason") or "") or None
                 ),
@@ -286,8 +354,10 @@ def execute_turn_run_once(
                 dry_run=dry_run,
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
+                task_lease_proof=refresh_task_lease_proof,
+                allow_same_generation_lease_renewal=refresh_task_lease_proof is not None,
+                validation_recovery_turn_instance_id=recovery_turn_instance_id,
             )
-
         # A Todo-less native governance Turn has no business artifact/argv.
         # Its independent validator is the canonical semantic writeback preview,
         # with the same captured obligation and fresh authority as the commit.
@@ -309,6 +379,8 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            if args.execute and completion_todo_id is None:
+                rebind_resumed_task_lease(bind_receipt=True)
             refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (
@@ -316,12 +388,28 @@ def execute_turn_run_once(
                 or refresh.get("idempotent_replay")
                 or refresh.get("receipt_repair_required")
             ):
-                append_settlement_event(
-                    refresh,
-                    event_kind="refresh_state",
-                    status="appended",
-                    details={"command": "turn run-once"},
-                )
+                # Receipt repair returns the verified original Run without
+                # appending it again. Its committed payload can deliver the
+                # requested attachment before repairing the quota receipt.
+                refresh = finish_explore_delivery({
+                    **refresh, "appended": True,
+                    "idempotent_replay": bool(
+                        refresh.get("idempotent_replay") or refresh.get("receipt_repair_required")
+                    ),
+                })
+                if refresh.get("ok") is True:
+                    # The shared quota owner treats this receipt as proof of
+                    # completed writeback. Keep it absent while a requested
+                    # attachment is still pending, even though the Run exists.
+                    append_settlement_event(
+                        refresh,
+                        event_kind="refresh_state",
+                        status="appended",
+                        details={"command": "turn run-once"},
+                    )
+                    # Turn callbacks acknowledge committed data, including
+                    # the original primary record returned on receipt repair.
+                    return {**refresh, "appended": True}
             return refresh
 
         def completion_intent(_result: dict[str, object]) -> dict[str, object]:
@@ -366,10 +454,7 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
-                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {
-                    "task_lease_idempotency_key": execution_context.get("task_lease_proof", {}).get("idempotency_key"),
-                    "task_lease_expected_version": execution_context.get("task_lease_proof", {}).get("expected_version"),
-                }),
+                **resolve_completion_lease(),
             )
             if completion.get("ok") is not True:
                 return completion
@@ -431,9 +516,25 @@ def execute_turn_run_once(
             *,
             effect_ref: str,
         ) -> dict[str, object]:
+            nonlocal rebound_lease_active
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
             prior = completion_readback()
             if prior is None:
+                if args.execute:
+                    rebind_resumed_task_lease(bind_receipt=True)
+                # A rejected attachment must not leave the Todo completed.
+                # The primary writer still rechecks the same capability owner
+                # before commit; this preview authorizes no later effects.
+                _, attachment = split_candidate_vision(result)
+                if attachment is not None:
+                    from ..capabilities.explore.result_writeback import prepare_result_attachment
+
+                    prepare_result_attachment(
+                        attachment, registry_path=registry_path, runtime_root=runtime_root,
+                        goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                        todo_id=settlement_identity.todo_id,
+                        turn_instance_id=settlement_identity.turn_instance_id,
+                    )
                 completion = todo_completion(result, effect_ref=effect_ref)
             else:
                 # Completion may have atomically retired the execution lease
@@ -447,6 +548,26 @@ def execute_turn_run_once(
                     registry_path=registry_path, goal_ref=goal_ref)
                 if retained is None:
                     raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
+                if retained.prepared_lease is not None:
+                    if not isinstance(initial_lease_proof, Mapping):
+                        rebound_lease_active = True
+                    else:
+                        initial_epoch_int = (
+                            int(initial_lease_epoch)
+                            if isinstance(initial_lease_epoch, int)
+                            and not isinstance(initial_lease_epoch, bool)
+                            else None
+                        )
+                        initial_fields = prepared_lease_receipt_fields(
+                            initial_lease_proof, lease_epoch=initial_epoch_int,
+                        )
+                        if (
+                            retained.prepared_lease.get("prepared_lease_key_sha256")
+                            != initial_fields.get("prepared_lease_key_sha256")
+                            or retained.prepared_lease.get("prepared_lease_epoch")
+                            != initial_fields.get("prepared_lease_epoch")
+                        ):
+                            rebound_lease_active = True
                 if retained.completion_event is None:
                     append_settlement_event({"ok": True, "appended": True}, event_kind="todo_complete",
                         status="terminal_no_followup" if prior["continuation"] == "no_followup" else "completed",
@@ -475,7 +596,28 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
+            if args.host == "codex-cli":
+                # Builtin completion has already retired the original lease.
+                # Verify the exact terminal receipt; never start another completion.
+                observed = terminal_closeout_resolver(effect_ref)
+                receipt = observed.get("payload")
+                if observed.get("kind") == "committed" and isinstance(receipt, dict):
+                    return receipt
+                return {
+                    "ok": False,
+                    "appended": False,
+                    "reason": observed.get("reason") or "Builtin terminal completion receipt is missing",
+                }
             return todo_completion(result, effect_ref=effect_ref)
+
+        def codex_writeback(
+            result: dict[str, object], *, effect_ref: str,
+        ) -> dict[str, object]:
+            # Accountable refresh requires durable controller validation even for
+            # a predeclared terminal Todo. Other hosts keep their existing order.
+            if result.get("result_kind") == "validated_completion":
+                return completion_writeback(result, effect_ref=effect_ref)
+            return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -538,192 +680,22 @@ def execute_turn_run_once(
                 return {**spent, "appended": True, "effect_ref": effect_ref}
             return spent
 
-        def completion_readback() -> dict[str, object] | None:
-            todo_id = str(selected_todo.get("todo_id") or "")
-            if not todo_id:
-                return None
-            try:
-                _state_project, state_file = resolve_todo_state_path(
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    project=None,
-                    state_file=None,
-                )
-                return read_durable_completion_evidence(
-                    state_file, todo_id=todo_id, registry_path=registry_path,
-                    goal_id=args.goal_id, runtime_root=runtime_root, operation="outcome",
-                    completion_turn_key=settlement_identity.turn_instance_id,
-                )
-            except (OSError, ValueError):
-                return None
-
-        def terminal_completion_readback() -> dict[str, object] | None:
-            todo_id = str(selected_todo.get("todo_id") or "")
-            if not todo_id:
-                raise ValueError("terminal completion requires one selected Todo")
-            _state_project, state_file = resolve_todo_state_path(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                project=None,
-                state_file=None,
-            )
-            readback = read_durable_completion_evidence(
-                state_file, todo_id=todo_id, registry_path=registry_path,
-                goal_id=args.goal_id, runtime_root=runtime_root, operation="terminal",
-                completion_turn_key=settlement_identity.turn_instance_id,
-            )
-            if readback["kind"] == "absent":
-                return None
-            completion = readback.get("completion")
-            if not isinstance(completion, dict):
-                raise ValueError(
-                    "terminal completion readback is missing its completion"
-                )
-            return completion
-
-        def writeback_resolver(effect_ref: str) -> dict[str, object]:
-            try:
-                require_effect_ref(
-                    effect_ref,
-                    SettlementStepKind.DURABLE_WRITEBACK,
-                )
-                readback = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=settlement_identity.goal_id,
-                    agent_id=settlement_identity.agent_id,
-                    todo_id=settlement_identity.todo_id,
-                    turn_instance_id=settlement_identity.turn_instance_id,
-                    replan_obligation_id=settlement_identity.replan_obligation_id,
-                    registry_path=registry_path,
-                    goal_ref=goal_ref,
-                )
-                if readback is None:
-                    raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
-                run = readback.writeback_run
-                event = readback.writeback_event
-                if run is None and event is None:
-                    return {"kind": "absent"}
-                if run is None:
-                    return {
-                        "kind": "unknown",
-                        "reason": "refresh-state receipt has no durable run",
-                    }
-                if event is None:
-                    append_settlement_event(
-                        run,
-                        event_kind="refresh_state",
-                        status="receipt_repaired",
-                        details={"command": "turn recovery probe"},
-                    )
-                committed: dict[str, object] = {
-                    "ok": True,
-                    "appended": True,
-                    "effect_ref": effect_ref,
-                    "classification": run.get("classification"),
-                }
-                completion = completion_readback()
-                if completion is not None:
-                    committed["completion"] = completion
-                return {"kind": "committed", "payload": committed}
-            except (OSError, ValueError):
-                return {"kind": "unknown", "reason": "writeback readback failed"}
-
-        def spend_resolver(effect_ref: str) -> dict[str, object]:
-            try:
-                require_effect_ref(effect_ref, SettlementStepKind.QUOTA_SPEND)
-                readback = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=settlement_identity.goal_id,
-                    agent_id=settlement_identity.agent_id,
-                    todo_id=settlement_identity.todo_id,
-                    turn_instance_id=settlement_identity.turn_instance_id,
-                    replan_obligation_id=settlement_identity.replan_obligation_id,
-                    registry_path=registry_path,
-                    goal_ref=goal_ref,
-                )
-                if readback is None:
-                    raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
-                run = readback.spend_run
-                event = readback.spend_event
-                if run is not None and run.get("effect_ref") != effect_ref:
-                    run = None
-                if run is None and event is None:
-                    return {"kind": "absent"}
-                if run is None:
-                    return {
-                        "kind": "unknown",
-                        "reason": "quota receipt has no durable spend run",
-                    }
-                if event is None:
-                    append_settlement_event(
-                        run,
-                        event_kind="quota_spend",
-                        status="receipt_repaired",
-                        details={"command": "turn recovery probe"},
-                    )
-                return {
-                    "kind": "committed",
-                    "payload": {
-                        "ok": True,
-                        "appended": True,
-                        "effect_ref": effect_ref,
-                        "mode": "spend-slot",
-                    },
-                }
-            except (OSError, ValueError):
-                return {"kind": "unknown", "reason": "quota readback failed"}
-
-        def terminal_closeout_resolver(effect_ref: str) -> dict[str, object]:
-            try:
-                require_effect_ref(
-                    effect_ref,
-                    SettlementStepKind.TERMINAL_CLOSEOUT,
-                )
-                readback = read_heartbeat_settlement(
-                    runtime_root,
-                    goal_id=settlement_identity.goal_id,
-                    agent_id=settlement_identity.agent_id,
-                    todo_id=settlement_identity.todo_id,
-                    turn_instance_id=settlement_identity.turn_instance_id,
-                    replan_obligation_id=settlement_identity.replan_obligation_id,
-                    registry_path=registry_path,
-                    goal_ref=goal_ref,
-                )
-                if readback is None:
-                    raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
-                event = readback.completion_event
-                completion = terminal_completion_readback()
-                if event is None and completion is None:
-                    return {"kind": "absent"}
-                if (
-                    completion is None
-                    or completion.get("continuation") != "no_followup"
-                ):
-                    return {
-                        "kind": "unknown",
-                        "reason": "Todo state does not prove terminal no-followup",
-                    }
-                if event is None:
-                    append_settlement_event(
-                        {"ok": True, "appended": True},
-                        event_kind="todo_complete",
-                        status="terminal_no_followup",
-                        details={
-                            "command": "turn recovery probe",
-                            "no_followup": True,
-                        },
-                    )
-                return {
-                    "kind": "committed",
-                    "payload": {
-                        "ok": True,
-                        "appended": True,
-                        "effect_ref": effect_ref,
-                        "completion": completion,
-                    },
-                }
-            except (OSError, ValueError):
-                return {"kind": "unknown", "reason": "closeout readback failed"}
+        (
+            completion_readback,
+            writeback_resolver,
+            spend_resolver,
+            terminal_closeout_resolver,
+        ) = build_turn_settlement_resolvers(
+            goal_id=args.goal_id,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_ref=goal_ref,
+            selected_todo=selected_todo,
+            settlement_identity=settlement_identity,
+            require_effect_ref=require_effect_ref,
+            append_settlement_event=append_settlement_event,
+            finish_explore_delivery=finish_explore_delivery,
+        )
 
         def scheduler(_spend_payload: dict[str, object]) -> dict[str, object]:
             turn_scheduler_context = (
@@ -767,18 +739,24 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
-        if args.host == "codex-app-server":
-            def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                return current_turn_host_launch_decision(args, registry_path=current_registry,
-                    runtime_root=runtime_root, identity=settlement_identity,
-                    planned_effective_action=execution_context["effective_action"],
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
 
+        def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
+            # Native and stdio transports recheck the original work at launch.
+            # A global route checks its source even if the mirror is unchanged.
+            return current_turn_host_launch_decision(
+                args, registry_path=current_registry, runtime_root=runtime_root,
+                identity=settlement_identity,
+                planned_effective_action=execution_context["effective_action"],
+                planned_selected_work_basis=execution_context.get("selected_work_basis"),
+                scheduler_execution_context=payload.get("scheduler_execution_context") or {},
+                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref,
+            )
+
+        if args.host == "codex-app-server":
             native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
-            )).with_launch_decision(native_launch_decision)
+            )).with_launch_decision(current_launch_decision)
 
             def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
                 return native_host_runner(request, lambda: native_admission.launch_lifetime(
@@ -787,22 +765,6 @@ def execute_turn_run_once(
             host_runner = run_native_host
             session_binding_resolver = native_session_binding_resolver
         elif args.host == "codex-cli":
-
-            def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                # Revalidate the already admitted identity through the same
-                # owner. In a global route the source is checked first, even
-                # when its mirror still advertises old quota or health.
-                return current_turn_host_launch_decision(
-                    args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity,
-                    planned_effective_action=execution_context["effective_action"],
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    # Keep this Turn's already dispatched required reads at launch.
-                    turn_start_hook_dispatch=turn_start_hook_dispatch,
-                    goal_ref=goal_ref,
-                )
-
             host_runner = build_codex_cli_host_runner(
                 args, runtime_root=runtime_root, project=project,
                 registry_path=registry_path, goal_ref=goal_ref,
@@ -856,10 +818,20 @@ def execute_turn_run_once(
                 return request_settlement_lifetime(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
 
-        def on_managed_start_admitted() -> None:
-            if settlement_identity.request_subject is not None:
-                require_current_request_operation(request_locator, settlement_identity,
-                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+        if args.host == "codex-cli" and goal_admission is not None:
+            request_lifetime = settlement_admission or nullcontext
+
+            @contextmanager
+            def codex_settlement_admission():
+                with request_lifetime():
+                    # Independent validation can outlive the running Goal.
+                    # Check the original authority before any settlement effect.
+                    goal_admission.require_running(operation="codex_cli_turn_settle")
+                    yield
+
+            settlement_admission = codex_settlement_admission
+
+        def bind_heartbeat_settlement_receipt() -> None:
             replan_packet = execution_context["replan_action_packet"]
             capability_guard = (
                 replan_packet.get("capability_guard")
@@ -872,8 +844,22 @@ def execute_turn_run_once(
                 semantic_replan_guard_scoped=replan_guard_scoped,
                 semantic_replan_obligation_id=replan_obligation_id,
                 semantic_replan_capability_guard=capability_guard,
+                quota_spend_source=(
+                    quota_spend_source_for_execution_context(payload.get("scheduler_execution_context"))
+                    if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None
+                    else None
+                ),
                 goal_ref=goal_ref,
+                task_lease_proof=task_lease_proof,
+                task_lease_epoch=task_lease_epoch,
             )
+
+        def on_managed_start_admitted() -> None:
+            if settlement_identity.request_subject is not None:
+                require_current_request_operation(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+            rebind_resumed_task_lease(bind_receipt=False)
+            bind_heartbeat_settlement_receipt()
 
         managed_cadence = managed_cadence_start(
             runtime_root=runtime_root,
@@ -882,7 +868,11 @@ def execute_turn_run_once(
             automation_id=args.automation_id,
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
-            request_id=settlement_identity.effect_id if args.host == "codex-cli" else None,
+            request_id=settlement_identity.effect_id if uses_effect_bound_start_identity(
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
+            ) else None,
         )
 
         execution_started = bool(args.execute)
@@ -900,9 +890,11 @@ def execute_turn_run_once(
             timeout_seconds=args.timeout_seconds,
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
+            resume_existing_turn=args.host == "generic-cli" and bool(getattr(args, "resume_turn_key", None)),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
-            writeback=writeback if args.execute else None,
+            writeback=(codex_writeback if args.host == "codex-cli" else writeback)
+            if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
             terminal_closeout=terminal_closeout if args.execute else None,
@@ -919,6 +911,10 @@ def execute_turn_run_once(
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
+            host_launch_guard=(partial(
+                goal_admission.with_launch_decision(current_launch_decision).launch_lifetime,
+                operation="turn_external_host_launch",
+            ) if raw_argv is not None and goal_admission is not None else None),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(

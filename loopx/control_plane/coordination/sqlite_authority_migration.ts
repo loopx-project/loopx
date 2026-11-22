@@ -22,7 +22,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { JsonObject } from "../effect_program.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityObject,
   canonicalAuthorityObjectList, requireAuthorityStoreId } from "./authority_store_codec.ts";
-import { applyAuthorityStateDelta, authorityStateCheckpointCursor, authorityStateDelta,
+import { applyAuthorityStateDelta, authorityStateDelta,
   authorityStateDeltaReconstructs, authorityStateDigest, decodeAuthorityStateDelta,
   isAuthorityStateCheckpoint } from "./authority_state_log.ts";
 import {

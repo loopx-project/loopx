@@ -271,6 +271,7 @@ def _execution_obligation(
     external_evidence_observation: dict[str, Any] | None = None,
     user_gate_owns_frontier: bool = False,
     blocked_retry_wait: dict[str, Any] | None = None,
+    workspace_guard: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return build_execution_obligation(
         should_run=should_run,
@@ -280,6 +281,7 @@ def _execution_obligation(
         external_evidence_observation=external_evidence_observation,
         user_gate_owns_frontier=user_gate_owns_frontier,
         blocked_retry_wait=blocked_retry_wait,
+        workspace_guard=workspace_guard,
         successor_replan_mode=AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value,
     )
 
@@ -935,6 +937,7 @@ def _resolve_quota_should_run_route(
         registered_agent_ids=prepared.registered_agent_ids,
         goal_frontier_projection=prepared.goal_frontier_projection,
         task_orchestration_contract=prepared.task_orchestration_contract,
+        receipt_bound_replan_execution_pending=prepared.receipt_bound_replan_execution_pending,
         receipt_bound_replan_phase=(
             prepared.receipt_bound_replay_phase
             if prepared.receipt_bound_todo_id is None
@@ -1425,6 +1428,7 @@ def _build_active_quota_payload(
             prepared.user_todo_summary,
             prepared.agent_todo_summary,
         ),
+        workspace_guard=prepared.workspace_guard,
     )
     # Single-field mirror so heartbeat prompts can stay thin: agents key work
     # obligation off this boolean instead of parsing notify semantics.
@@ -1705,7 +1709,7 @@ def _build_quota_should_run_payload(
     selected_todo = payload.get("selected_todo")
     if isinstance(selected_todo, dict) and selected_todo.get("todo_id"):
         # Retain current facts across contract rebuilds for hooks and selection.
-        # This preview neither admits a workspace nor replaces refresh checks.
+
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
             prepared.item, selected_todo,
         )

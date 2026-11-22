@@ -18,7 +18,6 @@ import {STATE_RECOVERY_AUDIT_SCHEMA, decodeRecoveryMeasurements, decodeStateReco
 
 const MAX_GOALS = 128;
 const MAX_SQLITE_FILES = 128;
-const MAX_COMMITS = 20_000;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const digest = isRecoveryDigest;
 class RecoveryInputError extends Error {
@@ -72,11 +71,6 @@ function authorityCaptures(value: unknown, roots: Map<string, string | null> | n
     const goalId = String(row.goal_id);
     check(!rows.has(goalId) && roots !== null && row.runtime_archive_path === (roots.get(goalId) ?? null),
       "authority_capture_dependency_mismatch");
-    if (row.state === "readable") {
-      const archive = requireJsonObject(row.archive, "authority capture summary");
-      check(typeof archive.commits === "string" && /^[1-9]\d*$/.test(archive.commits) &&
-        BigInt(archive.commits) <= BigInt(MAX_COMMITS), "authority_history_capacity");
-    }
     rows.set(goalId, row);
   }
   return rows;
@@ -203,40 +197,48 @@ async function inspectGoal(root: string | null, goalId: string, standaloneSqlite
     const handle = await openLocalAuthorityStoreHandle(root, goalId, {}, {existingOnly: true});
     const loaded = await handle.store.loadAuthority();
     check(loaded.status === "loaded", "authority_head_unavailable");
-    check(parseAuthorityCursor(loaded.cursor) <= BigInt(MAX_COMMITS), "authority_history_capacity");
+    const frontier = parseAuthorityCursor(loaded.cursor);
+    check(frontier > 0n && frontier <= BigInt(Number.MAX_SAFE_INTEGER), "authority_history_count_unrepresentable");
+    const identity = await handle.store.storeIdentity();
+    check(identity.status === "available", "authority_identity_unavailable");
     // Byte-valid storage alone is not a readable Goal work model. Reuse the
     // same full-record, lease and acceptance decoder as canonical Todo reads.
     const collection = canonicalTodoCollection(loaded.head, goalId, true);
     let cursor: string | null = null;
-    let count = 0;
+    let count = 0n;
     let final: JsonObject | null = null;
     let finalRevision: string | null = null;
-    while (true) {
-      const page = await handle.store.scanCommitted(cursor, 200);
+    while (count < frontier) {
+      const limit = Number(frontier - count > 200n ? 200n : frontier - count);
+      const page = await handle.store.scanCommitted(cursor, limit);
       check(page.status === "page", "authority_history_unavailable");
-      count += page.transactions.length;
-      check(count <= MAX_COMMITS, "authority_history_capacity");
-      for (const row of page.transactions) { final = row.projection; finalRevision = row.provider_revision; }
-      if (!page.has_more) break;
-      check(page.next_cursor !== null && page.next_cursor !== cursor && page.transactions.length > 0,
+      check(page.transactions.length === limit, "authority_history_cursor_invalid");
+      for (const row of page.transactions) {
+        count += 1n;
+        check(parseAuthorityCursor(row.cursor) === count, "authority_history_cursor_invalid");
+        final = row.projection;
+        finalRevision = row.provider_revision;
+      }
+      check(page.next_cursor === count.toString() && page.has_more === (count < frontier),
         "authority_history_cursor_invalid");
       cursor = page.next_cursor;
     }
-    check(String(count) === loaded.cursor && final !== null && finalRevision === loaded.provider_revision
-      && canonicalAuthoritySha256(final) === canonicalAuthoritySha256(loaded.head), "authority_history_head_mismatch");
+    const headDigest = canonicalAuthoritySha256(loaded.head);
+    check(final !== null && finalRevision === loaded.provider_revision &&
+      canonicalAuthoritySha256(final) === headDigest, "authority_history_head_mismatch");
     const readback = await handle.store.loadAuthority();
-    check(readback.status === "loaded" && readback.provider_revision === loaded.provider_revision,
+    const readbackIdentity = await handle.store.storeIdentity();
+    check(readback.status === "loaded" && readback.cursor === loaded.cursor &&
+      readback.provider_revision === loaded.provider_revision && canonicalAuthoritySha256(readback.head) === headDigest &&
+      readbackIdentity.status === "available" && readbackIdentity.store_identity === identity.store_identity,
       "authority_changed_during_audit");
     return component(id, "coordination_authority", "readable", "historical_head_and_history_readable",
       "review_goal_identity_before_adoption", {...goalFacts, provider: handle.provider,
-        head_digest: canonicalAuthoritySha256(loaded.head), history_commits: count,
+        head_digest: headDigest, history_commits: Number(count),
         provider_revision: loaded.provider_revision, cursor: loaded.cursor,
         todo_count: collection.projection.todo_ids.length,
         historical_lease_count: collection.leaseIndex?.lease_todo_ids.length ?? 0}, ["configuration"]);
   } catch (error) {
-    // Inspection profile overflow aborts publication; it is not evidence that
-    // this owner's captured state is merely unknown or unreadable.
-    if (error instanceof RecoveryInputError && error.code === "authority_history_capacity") throw error;
     return component(id, "coordination_authority", "unknown",
       error instanceof RecoveryInputError ? error.code : "authority_source_unavailable",
       "inspect_captured_authority_with_owner", goalFacts, ["configuration"]);
@@ -327,11 +329,9 @@ async function auditOwners(value: unknown): Promise<JsonObject> {
           check(capture?.state === "readable", "authority_capture_unavailable");
           check(capture.configuration_sha256 === configuration.sha256, "authority_capture_dependency_mismatch");
           const facts = await inspectAuthorityBackup(dataRoot, capture);
-          check(Number(facts.history_commits) <= MAX_COMMITS, "authority_history_capacity");
           components.push(component(id, "coordination_authority", "readable", "historical_head_and_history_readable",
             "review_goal_identity_before_adoption", {...goalFacts, ...facts}, ["configuration"]));
         } catch (error) {
-          if (error instanceof RecoveryInputError && error.code === "authority_history_capacity") throw error;
           components.push(component(id, "coordination_authority", "unknown", "authority_capture_unavailable",
             "inspect_captured_authority_with_owner", goalFacts, ["configuration"]));
         }

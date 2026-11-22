@@ -223,17 +223,30 @@ CREDENTIAL_CATEGORIES: frozenset[str] = frozenset(
 
 # Refs #5136: relocated here from control_plane/runtime/public_safety.py so a
 # single owner defines each shape. public_safety re-exports these names, so its
-# ~8 direct importers and 30+ recursive-validation callers are unchanged. This
-# pattern is byte-identical to the one public_safety enforced before the move:
-# slice A is a behavior-preserving consolidation, so no existing consumer's
-# verdict changes.
+# ~8 direct importers and 30+ recursive-validation callers are unchanged. The
+# absolute-root arm keeps the whole path when one follows; the optional tail
+# preserves presentation's older rejection of a directory root such as
+# `/Users/` or `C:\\`.
 LOCAL_PATH_SURFACE_PATTERN = re.compile(
     r"(?<![:/A-Za-z0-9])(?:"
     r"/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/"
-    r"[^\s`'\"<>]+|"
-    r"[A-Za-z]:[\\/][^\s`'\"<>]+|"
+    r"(?:[^\s`'\"<>]+)?|"
+    r"[A-Za-z]:[\\/](?:[^\s`'\"<>]+)?|"
     r"\\\\[A-Za-z0-9_.-]+\\[^\s`'\"<>]+"
     r")",
+    re.IGNORECASE,
+)
+
+# Refs #5136, direction 3: a run of two or more leading slashes before a known
+# absolute root is the shape presentation and the public-output guards already
+# treat as a local reference. `LOCAL_PATH_SURFACE_PATTERN`'s negative lookbehind
+# excludes a preceding slash, so that shape needs this named arm. The lookbehind
+# also keeps a URI such as `https://Users/...` out: the character before the run
+# is `:`.
+MULTI_SLASH_LOCAL_PATH_PATTERN = re.compile(
+    r"(?<![:/A-Za-z0-9])(?:/{2,})"
+    r"(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/"
+    r"(?:[^\s`'\"<>]+)?",
     re.IGNORECASE,
 )
 # Refs #5136, direction 3: the local-path shapes this owner recognizes.
@@ -245,7 +258,9 @@ LOCAL_PATH_SURFACE_PATTERN = re.compile(
 # Typed public exports also reject file URLs, including host-qualified ones.
 # The internal text-owner classifier and legacy compactor retain their separate
 # policies; recognizing a locator here does not change those destinations.
-HOME_RELATIVE_PATH_PATTERN = re.compile(r"(?<![\w~])~[\\/][^\s`'\"<>]+")
+HOME_RELATIVE_PATH_PATTERN = re.compile(
+    r"(?<![\w~])~[\\/](?:[^\s`'\"<>]+)?"
+)
 PATH_PREFIX_LOCAL_PATTERN = re.compile(
     r"(?<![\w:])path:[\\/][^\s`'\"<>]+", re.IGNORECASE
 )
@@ -263,13 +278,47 @@ LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 FILE_URL_LOCAL_PATH_PATTERN = re.compile(r"\bfile://", re.IGNORECASE)
+HTTP_URL_SURFACE_PATTERN = re.compile(r"\bhttps?://[^\s`'\"<>]+", re.IGNORECASE)
 PUBLIC_SAFE_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     LOCAL_PATH_SURFACE_PATTERN,
+    MULTI_SLASH_LOCAL_PATH_PATTERN,
     HOME_RELATIVE_PATH_PATTERN,
     PATH_PREFIX_LOCAL_PATTERN,
     LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
     FILE_URL_LOCAL_PATH_PATTERN,
 )
+
+
+# An explicit ``path:`` locator owns the token that follows it, even when that
+# path contains an HTTP-shaped segment (``path:/https://example.com/doc``).
+EXPLICIT_PATH_PREFIX_AT_END_PATTERN = re.compile(
+    r"(?<![\w:])path:[\\/]$", re.IGNORECASE
+)
+
+
+def mask_http_url_paths(value: str) -> str:
+    """Blank ordinary HTTP(S) URLs before applying local-path detectors.
+
+    A public documentation link may legitimately contain a segment such as
+    ``/home/``, a query value that looks like an absolute path, or an IPv6
+    authority. Those are URL syntax, not references to the local filesystem.
+    Masking preserves character positions for callers that need a regex match,
+    while leaving ``file://`` and ``path:`` forms visible to their local-path
+    arms. An explicit ``path:`` locator keeps the whole reference: masking the
+    URL-shaped tail would erase the path tail its local-path arm matches.
+    Credential detection uses the original value.
+    """
+
+    def _mask(match: re.Match[str]) -> str:
+        if EXPLICIT_PATH_PREFIX_AT_END_PATTERN.search(
+            value, 0, match.start()
+        ):
+            return match.group(0)
+        return " " * len(match.group(0))
+
+    return HTTP_URL_SURFACE_PATTERN.sub(_mask, value)
+
+
 # Presentation redaction keeps its historical Unix-root boundary behavior (it
 # catches paths even after a colon), consumes the shared absolute, drive-letter
 # and UNC detector, and recognizes extended Windows device paths for display
@@ -293,6 +342,7 @@ PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN = re.compile(
 PRESENTATION_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"/(?:Users|home|private|tmp|var)/[^\s`|,)]+"),
     LOCAL_PATH_SURFACE_PATTERN,
+    MULTI_SLASH_LOCAL_PATH_PATTERN,
     PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN,
     PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN,
 )
@@ -330,6 +380,8 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
             + "|"
             + PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN.pattern
             + ")|"
+            + MULTI_SLASH_LOCAL_PATH_PATTERN.pattern
+            + "|"
             + PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN.pattern
         ),
     ),
@@ -577,6 +629,11 @@ def find_private_text_match(value: str | None) -> re.Pattern[str] | None:
 _SHAPE_DETECTORS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (SECRET_LIKE_SURFACE_PATTERN, CATEGORY_CREDENTIAL, "credential-like value shape"),
     (LOCAL_PATH_SURFACE_PATTERN, CATEGORY_LOCAL_PATH, "local filesystem path"),
+    # #5136 direction 3: the 2+ leading-slash shape presentation and the
+    # public-output guards already rejected. It stays a shape detector, so
+    # `find_private_text_match` keeps its narrower publication-tier set while
+    # `classify_private_text` and the public-output guard recognize it.
+    (MULTI_SLASH_LOCAL_PATH_PATTERN, CATEGORY_LOCAL_PATH, "local filesystem path"),
     (
         REMOTE_LOCATION_SURFACE_PATTERN,
         CATEGORY_REMOTE_LOCATION,
@@ -601,8 +658,9 @@ def find_public_safe_local_path(value: str | None) -> re.Pattern[str] | None:
 
     if not value:
         return None
+    masked = mask_http_url_paths(value)
     for pattern in PUBLIC_SAFE_LOCAL_PATH_PATTERNS:
-        if pattern.search(value):
+        if pattern.search(masked):
             return pattern
     return None
 
@@ -636,15 +694,23 @@ def classify_private_text(
 
     if not value:
         return None
+    local_path_value = mask_http_url_paths(value)
     for entry in _CATEGORIZED_PRIVATE_TEXT_PATTERNS:
-        if entry.category in categories and entry.pattern.search(value):
+        if entry.category not in categories:
+            continue
+        # A public URL may carry a ``/Users/`` segment; the local-path arms read
+        # the masked text so URL syntax cannot masquerade as a home-directory
+        # reference. Organization markers and credentials keep the raw value.
+        candidate = local_path_value if entry.category == CATEGORY_LOCAL_PATH else value
+        if entry.pattern.search(candidate):
             return PrivateTextMatch(entry.category, entry.reason, entry.pattern)
     for pattern, category, reason in _SHAPE_DETECTORS:
-        if category in categories and pattern.search(value):
+        candidate = local_path_value if category == CATEGORY_LOCAL_PATH else value
+        if category in categories and pattern.search(candidate):
             return PrivateTextMatch(category, reason, pattern)
     if include_path_gaps and CATEGORY_LOCAL_PATH in categories:
         for pattern in LOCAL_PATH_GAP_PATTERNS:
-            if pattern.search(value):
+            if pattern.search(local_path_value):
                 return PrivateTextMatch(
                     CATEGORY_LOCAL_PATH, "local path behind a relative/prefixed form", pattern
                 )

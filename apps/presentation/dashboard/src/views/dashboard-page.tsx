@@ -58,6 +58,7 @@ import {
   createChatSession,
   type ConversationContext,
   type BoundConversationTarget,
+  type ManagedConversationTarget,
   updateLoopXMode,
   type LoopXModeSettings,
   fetchChatCapabilities,
@@ -411,7 +412,7 @@ function quotaStateForShare(row?: GoalDirectoryRow) {
 
 function buildAgentManagementRows(
   rows: GoalDirectoryRow[],
-  todoIndex?: TodoIndexSummary | null,
+  _todoIndex?: TodoIndexSummary | null,
   projection?: AgentManagementProjection | null,
 ): AgentManagementRow[] {
   const items: TodoExplorerItem[] = [];
@@ -1324,7 +1325,7 @@ function PersonalGoalHome({
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
   onGoalDeleted: (goalId: string) => void;
-  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
+  onSelectGoal: (goalId: string, view?: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) => void;
   onSelectWorkspace: (projectRef: string | null) => void;
   onOpenOriginalConversation: (target: BoundConversationTarget) => void;
   boundConversation: BoundConversationTarget | null;
@@ -1443,8 +1444,8 @@ function PersonalGoalHome({
   const originalConversation = rootGoalId && boundConversation
     ? { session: undefined, source: undefined, error: "Original conversation is outside this Goal navigation scope.", retry: originalReadback.retry }
     : originalReadback;
-  const managedTarget = selectedWorkAgentId != null && selectedWorkSessionId?.startsWith("managed:") && selectedGoal
-    ? {goalId: selectedGoal.goalId, agentId: selectedWorkAgentId, sessionId: selectedWorkSessionId.slice(8)} : null;
+  const managedTarget = selectedWorkAgentId != null && selectedWorkSessionId?.startsWith("managed:") && requestedGoalId
+    ? {goalId: requestedGoalId, agentId: selectedWorkAgentId, sessionId: selectedWorkSessionId.slice(8)} : null;
   const managedConversation = useManagedConversation(managedTarget, !readOnly);
   const fixedSession = Boolean(boundConversation || managedTarget);
   const conversationContext: ConversationContext = managedTarget ? {kind: "managed", ...managedTarget} : boundConversation
@@ -3360,7 +3361,7 @@ function PersonalGoalHome({
           onSelectAgent: (agentId) => { onClearMessageFocus?.(); return chooseAgent(agentId); },
           onSelectAgentModel: chooseAgentModel,
           onSelectAgentReasoningEffort: chooseAgentReasoningEffort,
-          onSelectGoal: (goalId, view) => onSelectGoal(goalId ?? "", view),
+          onSelectGoal: (goalId, view, managedSession) => onSelectGoal(goalId ?? "", view, managedSession),
           onSelectView,
           onSelectWorkAgent,
           onSelectWorkSession,
@@ -3924,7 +3925,7 @@ export function DashboardPage() {
     }
   }, [search.goalId, isLoading, progress, source]);
 
-  function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
+  function selectGoal(goalId: string, view?: WorkspaceGoalTab, managedSession?: ManagedConversationTarget) {
     void navigate({
       hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
       search: (current) => {
@@ -3938,7 +3939,7 @@ export function DashboardPage() {
           conversationBinding: undefined,
           conversationSession: undefined,
           messageSession: undefined, message: undefined,
-          workAgent: undefined, workSession: undefined,
+          workAgent: managedSession?.agentId, workSession: managedSession ? `managed:${managedSession.sessionId}` : undefined,
           todo: undefined,
           view: view === "chat" ? "conversation" : view,
         });

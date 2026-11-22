@@ -40,7 +40,7 @@ def instrument_copied_runtime(root: Path) -> None:
     """Observe the private fixture copy; production modules are never edited."""
     server = root / "effect_runtime_server.ts"
     text = server.read_text()
-    text = _replace(text, 'const REQUEST_SCHEMA =', TRACE + '\nconst REQUEST_SCHEMA =')
+    text = _replace(text, 'const INFO_SCHEMA =', TRACE + '\nconst INFO_SCHEMA =')
     for before, after in (
         ('shutdownRequested = true;', 'shutdownRequested = true; fixtureTrace("shutdown_requested");'),
         ('server.on("close", () => {', 'server.on("close", () => { fixtureTrace("close", {pending: pendingRequests});'),

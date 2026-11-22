@@ -16,6 +16,48 @@ When the observed execution used the finding's tested input revision, result
 attachments can bind it once and select the evidence to reuse. Readback and
 standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
 
+## Read execution evidence in the App
+
+Open a Goal's **Research / 研究** view, select its question in the history,
+then expand **Read saved findings / 阅读已保存的结论** and select the finding. Expand
+**Actual execution and resource observations / 实际执行与资源观测** to compare
+the planned and executed methods, read the change reason, elapsed time and
+limit, iterations, stop reason, and the input, candidate and result references.
+The history detail uses the same reader.
+
+![Research history and saved evidence entry](assets/execution-feedback-entry.png)
+
+Keep execution detail closed while browsing conclusions; open it when checking
+whether a result belongs to the intended execution. The example below records
+a change from `broad-search` to `targeted-check`. Its elapsed time is measured,
+while the iteration count is unknown. **Not measured / 未测量** stays unknown;
+a finding without an observation has no execution detail. A rejected response
+shows an error and hides stale result facts; use **Refresh evidence / 刷新证据**
+after the source or transport is repaired.
+
+![Execution detail with measured and unknown values](assets/execution-feedback-detail.png)
+
+On a narrow screen, references wrap within the reader. The same controls and
+unknown-value distinctions remain available.
+
+![Execution evidence on a narrow screen](assets/execution-feedback-narrow.png)
+
+These illustrations use synthetic findings with a packaged App and isolated
+SQLite backend. Reading evidence does not run a method or enable a capability.
+Recorded execution alone does not prove model adoption, method effectiveness,
+or an independently accepted outcome.
+
+### A saved finding has no execution detail
+
+First check whether that finding's source actually records an observation.
+Omission is valid and must not be replaced with guessed values. Older App
+builds can also omit recorded observations in saved findings while retaining
+them in research history. If the same source has execution detail in history
+but the saved finding looks like this earlier reader, update the App and
+refresh the evidence. Updating a reader does not execute the method again.
+
+![Earlier saved-finding reader omitting recorded execution detail](assets/execution-feedback-legacy-reader.png)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing
@@ -192,6 +234,35 @@ original server commit is provably later than that decision and their canonical
 log position follows its original prefix. A delayed old delivery, tied time or
 unknown time does not become new work evidence. Original results and explicitly
 cited, verified prefix history remain available.
+The detail read also connects confirmed `execution_observation` records to the
+current or explicitly preceding decision through `previous_decision_followthrough`.
+An ordinary result can omit `work_yardstick_decision`, including when it has no
+quantitative measurements; the existing choice remains current. A later choice
+keeps the preceding execution's original finding reference. Attribution requires
+the same Goal/Agent/Todo, question and tested input, plus the original commit and
+visible work window. Foreign, tentative, stale and late-visible records cannot
+become that choice's execution. This reuses existing findings and readback;
+the association does not independently verify method adoption or benefit.
+A verified successor history prefix determines whether prior execution was
+already visible even when the successor clock moves backward. Captures without
+that prefix retain the strict timestamp bound; later delivery stays excluded.
+Ordinary `turn run-once` accepts the same inline `explore_result` inside the
+Host's existing `agent_vision_json`. It retains one decoded Vision packet,
+then uses the original attachment parser and delivery owner. A failed delivery
+leaves quota unspent and recovers from the original Run on the same Turn;
+
+Off mode with an omitted attachment creates no finding; supplied invalid or
+disabled attachments reject before Todo completion and primary writeback. The
+completion path uses the same capability preflight before lifecycle effects;
+the primary writer still checks it again at commit. An omitted attachment adds
+no capability preflight, and recovery retains already committed completion.
+The quota writeback receipt is published only after requested attachment delivery
+finishes in both `turn run-once` and `refresh-state`. The public quota CLI rejects
+a debit while that receipt is missing. Ordinary refresh and
+`refresh-state --settle-turn` recovery deliver the verified original Run before
+repairing its receipt; a failed attachment leaves the same recovery pending without a debit.
+Receipt repair preserves the original committed replay after Yardstick is disabled.
+Finish that delivery and settlement before starting the next Turn.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use
@@ -209,7 +280,6 @@ and, when linked to eligible work, its exact-source comparison cards. They need
 no `writeback-result` origin tag. Read the page before optionally binding a
 `selected_candidate`; normal source-revision, Todo-link and followthrough checks
 still apply. Unmeasured manual notes retain their existing summary/audit path.
-Reading or selecting a measured result does not certify adoption or execution.
 
 ## At a Glance
 
@@ -447,7 +517,7 @@ summary limit. This raises the previous 300/300 attachment and 1200 summary
 limits to preserve legal Goal route decisions and their last negative condition.
 The next-turn view preserves that entire summary, with the same three-result
 default and existing paginated detail reads. Short findings and off mode retain
-their behavior. This is a transport limit change, not evidence of model adoption.
+their behavior. This is a transport limit change.
 
 Alternatively, add `--explore-result-json result.json` to the ordinary admitted work
 writeback, retaining its Goal, Agent, Todo, Turn and delivery fields. When both
@@ -525,8 +595,7 @@ in the interpretation. Use the existing optional `question_update` to close an
 answered question independently of finding status or overall Goal completion.
 Existing recorded statuses and the CLI finding default are unchanged.
 
-Use `tentative` for inconclusive observations or prerequisite failures. Neither
-compilation failure nor a score alone supplies a scientific interpretation.
+Use `tentative` for inconclusive observations or prerequisite failures.
 Routine work without reusable evidence needs no attachment. Omitting the option
 preserves ordinary writeback behavior; disabled Explore rejects an attachment
 before committing it. Disable further ingestion through the existing
@@ -650,8 +719,7 @@ The command is read-only and sits behind the same effective Goal-mode gate as
 `worker-branch-plan` (see "Per-Goal Opt-In Gate" below): without
 `explore_harness.enabled=true` on the Goal's effective orchestration boundary it returns
 a disabled packet, and `--width` is capped by `max_children` in addition to
-its own ceiling. It does not claim todos, acquire leases, launch agents,
-spend quota, or change the active state. Instead it emits a prediction
+its own ceiling. Instead it emits a prediction
 packet with:
 
 - selected branches, confidence, hazards, and reason codes;
@@ -754,7 +822,7 @@ Declaring resource capacities is an explicit portfolio-fill mode: the requested
 overall width becomes the selection ceiling instead of the legacy confidence
 prefix, while existing scores, hazards, and typed evidence remain unchanged.
 An available slot therefore makes a ranked candidate eligible for the analysis
-packet; it is not evidence that the candidate is valuable enough to execute.
+packet.
 The agent must still apply the goal's evidence, serving-cost, quota, claim, and
 lease gates before launch.
 
@@ -892,15 +960,13 @@ Writeback replays the current canonical task links and exact page without
 replacing the original global stride basis or changing its review revision.
 Changed links, a missing/closed task or another agent's claim invalidate the
 scoped page. Restart the read after correcting the scope. Unscoped global reads
-and citations retain their existing behavior. This improves evidence delivery;
-it does not prove that the Agent used it or improved an outcome.
+and citations retain their existing behavior. This improves evidence delivery.
 
 Each comparison card retains every linked outcome on that result page, up to
 the same 20-result bound. Expanding `--result-limit` therefore also makes the
 fourth and later displayed outcomes available to `selected_candidate`; writeback
 replays the same page and exact source digest. The default three-result view
-and the separate number-of-cards limit remain unchanged. A larger page grants
-no execution permission and does not certify the quality of a selection.
+and the separate number-of-cards limit remain unchanged.
 
 Planning context also keeps a bounded `typed_evidence_audit` on suggested
 branches with explicit Todo/node links, and up to three existing exploring
@@ -939,8 +1005,7 @@ An authorized `refresh-state` fails when a configured sink cannot sync and
 read back; the caller must retry before claiming delivery. A suppressed run
 may still commit canonical local state, but its packet reports an unsatisfied,
 retryable postcondition and requires a concrete authorized-sync successor.
-With no configured sink, local projection satisfies the postcondition. This
-contract does not enable Explore Harness.
+With no configured sink, local projection satisfies the postcondition.
 
 #### Explore Harness planning gate
 
@@ -1036,8 +1101,7 @@ packets when `spawn_policy.explore_harness.enabled=true`:
 - `selected_gap`: the first pending gap (pending sorts before scheduled, then
   by input count descending, then by stable gap id); at most 3 gaps are
   projected (`MAX_PROJECTED_GAPS`).
-- This legacy projection only considers open experiments; dropping a closed
-  experiment or marking all gaps scheduled does not certify research closure.
+- This legacy projection only considers open experiments.
   The separate typed research shadow requires attributable terminal evidence
   and current input fingerprints. Evidence-backed dismissal and shared
   write-time enforcement remain RFC milestones.
@@ -1483,7 +1547,6 @@ fatal structural preflight, record-mode malformed-item isolation with resume
 continuity, aggregate metric projection, and episode-only adapters without a
 legacy `execute` method.
 
-
 ## Machine default
 
 In Settings → Device → Explore Harness, choose **Off**, **Evidence**, or
@@ -1559,10 +1622,8 @@ ingestion intent，并精确匹配来源、记录时间、canonical finding 与�
 此路径不写图或 Todo。未完成交付仍须遵守普通写入与归属检查，冲突附件重试仍拒绝。
 CLI 附件解析保留结构合法的历史输入，由既有 primary owner 精确匹配不可变重试；
 新 primary 写入和新 ingestion intent 仍在产生效果前检查执行与测量归属。
-解析成功不代表新写入合格，也不提供公开的绕过参数。
 
-`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录，不是恢复完整
-归档前缀。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
+`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
 快照；部分旧 finding 归因矛盾不会
 阻断其他合法结果恢复。计划通过 `blocked_event_count`、被阻断事件 id 的摘要和
 `blocked_reasons` 报告原因，Markdown 的 warnings 同时显示这些原因。被阻断记录

@@ -157,7 +157,7 @@ def test_model_effort_and_speed_are_separate_and_reversible_defaults(tmp_path, m
 
 
 def test_goal_codex_defaults_follow_chat_settings_when_coordination_uses_a_separate_root(tmp_path, monkeypatch):
-    from loopx import chat_providers
+    from loopx.chat import providers as chat_providers
 
     coordination = tmp_path / "coordination"
     registry = tmp_path / "registry.json"

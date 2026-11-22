@@ -8,7 +8,7 @@ export function researchRecordVersions(events: readonly ExploreHistoryEvent[], s
     && event.event_kind === selected.event_kind && event.result_id === selected.result_id);
 }
 
-// Local display fields, not a new evidence or lifecycle vocabulary.
+// Local display fields.
 export const researchComparisonFields = ["title", "summary", "status", "blocked_reason", "evidence_refs",
   "measurements", "confidence", "run_id", "agent_id", "node_kind", "node_id", "parent_id",
   "from_node", "to_node", "edge_type", "supersedes", "execution_observation"] as const;

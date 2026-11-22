@@ -151,6 +151,36 @@ def _buttons(card: Mapping[str, Any]) -> list[Mapping[str, Any]]:
             if element.get("tag") == "action" for button in element["actions"]]
 
 
+def _card_element_matches(observed: object, expected: Mapping[str, Any]) -> bool:
+    if observed == expected:
+        return True
+    if expected.get("tag") == "action":
+        if not isinstance(observed, Mapping) or set(observed) != {"tag", "actions"} or observed["tag"] != "action":
+            return False
+        actual, original = observed["actions"], expected.get("actions")
+        if not isinstance(actual, list) or not isinstance(original, list) or len(actual) != len(original):
+            return False
+        identifiers = []
+        for button, source in zip(actual, original):
+            if (not isinstance(button, Mapping)
+                    or set(button) != {"tag", "text", "type", "custom_action_id", "behaviors"}
+                    or set(source) != {"tag", "text", "type", "value"}
+                    or source.get("tag") != "button" or button["tag"] != "button"
+                    or button["type"] != source["type"]
+                    or button["text"] not in (source["text"], {**source["text"], "i18n": {}})
+                    or button["behaviors"] != [{"type": "callback"}]):
+                return False
+            identifier = button["custom_action_id"]
+            if not isinstance(identifier, str) or not identifier or len(identifier) > 200:
+                return False
+            identifiers.append(identifier)
+        return len(set(identifiers)) == len(identifiers)
+    text = expected.get("text")
+    if expected.get("tag") != "div" or not isinstance(text, Mapping) or text.get("tag") != "plain_text":
+        return False
+    return observed == {**expected, "text": {**text, "tag": "lark_md"}}
+
+
 def _read_exact_card(
     transport: LarkPrivateConversations, record: dict[str, Any], selected: dict[str, Any],
 ) -> bool:
@@ -160,17 +190,30 @@ def _read_exact_card(
         message_id=stamp["message_id"], chat_id=record["event"]["chat_id"],
         app_id=selected["observation"]["bot_app_id"],
     )
-    # A lossy visual projection cannot prove which callback values were sent.
     try:
         payload = json.loads(observed) if isinstance(observed, str) else observed
     except ValueError:
         return False
+    if not isinstance(payload, Mapping) or set(payload) - {"header", "elements", "config"}:
+        return False
+    config = payload.get("config", {})
+    if not isinstance(config, Mapping) or config.get("enable_forward", False) is not False:
+        return False
     expected = stamp["card"]
+    # The provider can elide callback values, add empty i18n maps and rewrite
+    # plain text div tags. This readback checks the exact App, message, chat
+    # and visible controls. It cannot attest omitted parameters: capture_callback
+    # independently matches the complete authenticated value to the outbound
+    # record and revalidates the current binding and permitted Goal scope.
+    header = expected["header"]
+    observed_header = payload.get("header")
+    if observed_header not in (header, {**header, "title": {**header["title"], "i18n": {}}}):
+        return False
+    elements = payload.get("elements")
     return (
-        isinstance(payload, Mapping) and payload.get("header") == expected["header"]
-        and payload.get("elements") == expected["elements"]
-        and (not isinstance(payload.get("config"), Mapping)
-             or payload["config"].get("enable_forward") is not True)
+        isinstance(elements, list) and len(elements) == len(expected["elements"])
+        and all(_card_element_matches(actual, original)
+                for actual, original in zip(elements, expected["elements"]))
     )
 
 
@@ -188,7 +231,10 @@ def capture_callback(
         raise ValueError("invalid Steward card reference")
     parent = _read_json(transport.root / f"{parent_ref}.json")
     stamp = parent.get("triage")
-    if not isinstance(stamp, dict) or parent["status"] != "delivered":
+    # A card can be visible as soon as Send returns an ID. Let the click use
+    # its own exact provider readback while the delivery worker verifies Send.
+    if (not isinstance(stamp, dict) or stamp.get("retired")
+            or parent["status"] not in {"captured", "delivered"} or not stamp.get("message_id")):
         raise ValueError("Steward card receipt is unavailable")
     if (
         parent["profile"] != profile or parent["event"]["chat_id"] != event["chat_id"]
@@ -299,7 +345,7 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
             # A transient identity/read failure remains recoverable without
             # changing the source or invoking the model.
             return 0
-        source = transport._source_message(record, selected=selected)
+        source = transport._source_message(record, selected=selected, report_private_recall=True)
         if source is None:
             return 0
         if source.get("deleted") is True or private_source_text(source) != stamp["source_text"]:
@@ -333,7 +379,7 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
         if stamp["scope"] != current["context"]["goal_ids"]:
             return retire("scope_changed_after_projection")
         if "message_id" not in stamp:
-            fresh_source = transport._source_message(record, selected=current)
+            fresh_source = transport._source_message(record, selected=current, report_private_recall=True)
             if fresh_source is None:
                 return 0
             if fresh_source.get("deleted") is True or private_source_text(fresh_source) != stamp["source_text"]:
@@ -352,8 +398,8 @@ def reconcile(transport: LarkPrivateConversations, path: Path) -> int:
                     return retire("provider_delivery_receipt_unknown")
                 if not previous and _buttons(stamp["card"]):
                     key = (record["profile"], current["observation"]["bot_app_id"])
-                    ready = transport.steward_callback_readiness.get(key)
-                    if ready is None or not ready():
+                    stream = transport.steward_callback_streams.get(key)
+                    if stream is None or not stream.ready():
                         stamp["card"] = steward_triage_without_buttons(
                             stamp["card"], query_result=stamp["action"]["operation"] == "query",
                         )

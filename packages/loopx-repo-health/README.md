@@ -72,8 +72,8 @@ Direct CLI:
 
 ```bash
 loopx-repo-health --doctor
-loopx-repo-health snapshot --owner huangruiteng --repo loopx --format json
-loopx-repo-health snapshot --owner huangruiteng --repo loopx --format md
+loopx-repo-health snapshot --owner loopx-project --repo loopx --format json
+loopx-repo-health snapshot --owner loopx-project --repo loopx --format md
 ```
 
 `schemas/request.schema.json` and `schemas/response.schema.json` are the

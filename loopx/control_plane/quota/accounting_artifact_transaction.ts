@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { access, lstat, readFile } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { access, lstat, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -109,6 +109,7 @@ export interface QuotaAccountingArtifactCommitRequest {
   expectedIndexDigest: string | null;
   goalRef?: JsonObject;
   indexLockHeld?: boolean;
+  matchesRetainedRequest?: (record: JsonObject) => boolean;
   prepare: (
     context: QuotaAccountingArtifactPrepareContext,
   ) =>
@@ -505,6 +506,121 @@ export function resolveQuotaAccountingEffect(
     if (resolution.kind !== "absent") return resolution;
   }
   return { kind: "absent" };
+}
+
+function spendIdentityMismatch(index: JsonObject, retained: JsonObject): boolean {
+  // The spend writers retain these bindings even before commit metadata was
+  // introduced. Missing historical fields are unknown; explicit conflicts are
+  // never authenticated by a matching timestamp or billing terms.
+  return ["agent_id", "effect_ref", "turn_instance_id", "todo_id",
+    "replan_obligation_id", "settlement_identity", "goal_ref"].some(field => {
+    const expected = index[field], actual = retained[field];
+    return expected !== undefined && expected !== null && expected !== "" &&
+      actual !== undefined && actual !== null && actual !== "" &&
+      canonicalJson(expected) !== canonicalJson(actual);
+  });
+}
+
+export async function readQuotaSpendEventFromRun(
+  runsDir: string,
+  run: JsonObject,
+  goalId: string,
+): Promise<JsonObject | null> {
+  const contract = contractFor("spend");
+  const indexCommit = run[contract.metadataField];
+  const inline = jsonObject(run.quota_event);
+  if (inline && indexCommit === undefined) {
+    if (spendIdentityMismatch(run, inline)) {
+      throw new EffectRuntimeRequestError(
+        "quota spend JSON artifact identity does not match its index row",
+      );
+    }
+    return inline;
+  }
+  if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
+  const runsDirReal = await realpath(runsDir);
+  const rawPath = run.json_path.trim();
+  const relocatedCandidate = (() => {
+    if (!isAbsolute(rawPath)) return null;
+    const normalized = resolve(rawPath);
+    const fileName = basename(normalized);
+    const runsParent = dirname(normalized);
+    const goalDir = dirname(runsParent);
+    const goalsDir = dirname(goalDir);
+    if (
+      !fileName || fileName === "." || fileName === ".." || extname(fileName) !== ".json" ||
+      basename(runsParent) !== "runs" || basename(goalDir) !== goalId || basename(goalsDir) !== "goals"
+    ) {
+      return null;
+    }
+    return join(runsDirReal, fileName);
+  })();
+  const initialRelative = relative(runsDirReal, resolve(rawPath));
+  const staysInsideInitial = Boolean(
+    initialRelative && initialRelative !== ".." &&
+    !initialRelative.startsWith(`..${sep}`) && !isAbsolute(initialRelative)
+  );
+  const candidatePath = staysInsideInitial || relocatedCandidate === null
+    ? resolve(rawPath)
+    : relocatedCandidate;
+  let targetPath: string;
+  try {
+    targetPath = await realpath(candidatePath);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  const relativePath = relative(runsDirReal, targetPath);
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    throw new EffectRuntimeRequestError(
+      "quota spend json_path must stay inside the goal runs directory",
+    );
+  }
+  let content: string;
+  try {
+    content = await readFile(targetPath, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new EffectRuntimeRequestError("quota spend JSON artifact is malformed");
+  }
+  const record = requiredObject(value, "quota spend JSON artifact");
+  const artifactCommit = jsonObject(record[contract.metadataField]);
+  // The writer repeats its commit identity in the index and artifact. An
+  // in-directory file can still describe a different debit for the same Goal.
+  const commitMismatch = indexCommit !== undefined && (
+    jsonObject(indexCommit) === null || artifactCommit === null ||
+    canonicalJson(indexCommit) !== canonicalJson(artifactCommit)
+  );
+  // A historical row without a commit reference can still have an explicit
+  // Run timestamp. Preserve omitted historical fields, but reject conflicts.
+  const timestampMismatch = typeof run.generated_at === "string" && run.generated_at !== "" &&
+    typeof record.generated_at === "string" && record.generated_at !== "" &&
+    run.generated_at !== record.generated_at;
+  const event = jsonObject(record.quota_event);
+  if (
+    record.classification !== contract.classification ||
+    (record.goal_id !== undefined && record.goal_id !== goalId) ||
+    commitMismatch || timestampMismatch || spendIdentityMismatch(run, record) ||
+    (event !== null && spendIdentityMismatch(run, event))
+  ) {
+    throw new EffectRuntimeRequestError(
+      "quota spend JSON artifact identity does not match its index row",
+    );
+  }
+  return event;
 }
 
 export async function lookupQuotaAccountingReplay(
@@ -920,7 +1036,8 @@ export async function commitQuotaAccountingArtifactTransaction(
       }
       if (
         existingReceipt.effect_id !== request.effectId ||
-        existingReceipt.request_digest !== request.requestDigest
+        (existingReceipt.request_digest !== request.requestDigest &&
+          request.matchesRetainedRequest?.(existingReceipt.record) !== true)
       ) {
         return {
           status: "conflict",

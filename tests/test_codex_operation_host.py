@@ -43,6 +43,10 @@ for line in sys.stdin:
         emit({"id": row["id"], "result": {}})
     elif method in {"thread/start", "thread/resume"}:
         assert row["params"]["sandbox"] == "read-only"
+        if config_log := os.environ.get("FAKE_OPERATION_MCP_LOG"):
+            servers = row["params"].get("config", {}).get("mcp_servers")
+            with open(config_log, "a") as log:
+                print(json.dumps(servers), file=log)
         if method == "thread/start":
             assert row["params"]["dynamicTools"][0]["name"] == "loopx_operation"
         emit({"id": row["id"], "result": {"thread": {"id": thread}, "model": "test-model", "reasoningEffort": "xhigh"}})
@@ -548,11 +552,13 @@ def test_registered_source_tokens_survive_owned_native_prepare_and_store_readbac
 
 @pytest.mark.parametrize("deadline", [None, 5])
 def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same_profile(
-    tmp_path: Path, deadline,
+    tmp_path: Path, deadline, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executable = tmp_path / "fake-codex-operation"
     executable.write_text(FAKE_SERVER)
     executable.chmod(0o700)
+    config_log = tmp_path / "mcp-config.jsonl"
+    monkeypatch.setenv("FAKE_OPERATION_MCP_LOG", str(config_log))
     options = {
         "runtime_root": tmp_path / "runtime",
         "registry_path": _registered_host_goal(tmp_path),
@@ -562,6 +568,11 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
         "reasoning_effort": "xhigh",
         "source_route": {"host_surface": "codex-app", "thread_id": "source-one"},
         "timeout_seconds": deadline,
+        "mcp_server": {
+            "schema_version": "codex_stdio_mcp_server_v0",
+            "name": "loopx_delegation",
+            "command": [sys.executable, "-m", "loopx.collaboration_mcp"],
+        },
     }
     first = run_codex_operation_host(_request(), **options)
     assert first["result_kind"] == "wait"
@@ -578,6 +589,16 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
         **{**options, "source_route": {"host_surface": "codex-app", "thread_id": "source-two"}},
     )
     assert second["turn_key"] == "sha256:" + "b" * 64
+    configs = [json.loads(line) for line in config_log.read_text().splitlines()]
+    assert [config["loopx_delegation"]["env"] for config in configs] == [
+        {
+            "LOOPX_TURN_KEY": "sha256:" + turn_character * 64,
+            "LOOPX_TURN_GOAL_ID": "fixture-goal",
+            "LOOPX_TURN_AGENT_ID": "codex-fixture",
+            "LOOPX_TURN_WORKSPACE": str(tmp_path.resolve()),
+        }
+        for turn_character in "ab"
+    ]
     assert (
         load_codex_cli_session(options["runtime_root"], lineage=_lineage(_request()))
         == binding

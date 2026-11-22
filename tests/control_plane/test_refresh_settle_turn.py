@@ -87,34 +87,28 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     validate, writeback, spend, terminal = plan["ordered_steps"]
     assert validate["command_condition"] == "todo_deliverable_complete"
     assert terminal["conditional"] is True and terminal["owner"] == "agent"
-    if not off or complete:
-        assert plan["schema_version"] == "quota_settlement_plan_v2"
-        assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
-        assert spend["owner"] == "runtime" and "command_template" not in spend
-        assert cli["next_cli_actions"] == [writeback["command_template"]]
-        if not off:
-            _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
-            projected = json.loads(Path(recovery["path"]).read_bytes())
-            assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
-        if case in {"combined", "after_claim"}:
-            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    assert cli["next_cli_actions"] == [writeback["command_template"]]
+    if not off:
+        _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
+        projected = json.loads(Path(recovery["path"]).read_bytes())
+        assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+    if case in {"combined", "after_claim"}:
+        from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
-            command, pages = guard["first_read_command"], []
-            while command:
-                words = shlex.split(command)
-                rc, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
-                assert rc == 0 and page["ok"] and page["offset"] == sum(len(body.encode()) for body in pages)
-                pages.append(page["content"])
-                command = page.get("next_command")
-            values = selected_context_values("".join(pages))
-            cli_path = "/interaction_contract/cli_channel"
-            assert cli_path + "/next_cli_actions" not in values
-            assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
-    else:
-        assert plan["schema_version"] == "quota_settlement_plan_v1"
-        assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
-        assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
-        assert spend["owner"] == "agent"
+        command, pages = guard["first_read_command"], []
+        while command:
+            words = shlex.split(command)
+            rc, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+            assert rc == 0 and page["ok"] and page["offset"] == sum(len(body.encode()) for body in pages)
+            pages.append(page["content"])
+            command = page.get("next_command")
+        values = selected_context_values("".join(pages))
+        cli_path = "/interaction_contract/cli_channel"
+        assert cli_path + "/next_cli_actions" not in values
+        assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
 
     vision = tmp_path / "vision.json"
     vision.write_text(json.dumps({
@@ -154,10 +148,6 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     else:
         rc, result = _run_generated_cli(command, registry_path=registry, cwd=project)
     assert rc == 0 and result["ok"] and result["settlement_identity"] == identity, result
-    if off and not complete:
-        assert result["settlement_owed"]["kind"] == "quota_spend" and _spend_run_count(runtime) == 0
-        rc, result = _run_generated_cli(spend["command_template"], registry_path=registry, cwd=project)
-        assert rc == 0 and result["ok"], result
     assert result["settlement_progress"]["state"] == "settled"
     assert result["settlement_identity"] == identity
     # Claim re-entry appends the readiness upgrade under the original Turn.
@@ -167,6 +157,229 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     rc, replay = _run_generated_cli(command, registry_path=registry, cwd=project)
     assert rc == 0 and replay["settlement_progress"]["state"] == "settled", replay
     assert replay["idempotent_replay"] and _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_exact_spend_and_combined_replay_reject_disagreeing_billing_terms(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    original = guard["heartbeat_receipt"]["settlement_identity"]
+    refresh = ["refresh-state", *binding, "--classification", "verified_billing_replay",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks"]
+    combined = [*refresh, "--settle-turn", "--settlement-receipt"]
+    spend = ["quota", "spend-slot", *binding, "--execute"]
+    debit = [*spend, "--slots", "1", "--source", "heartbeat"]
+    rc, delivery = _run_cli(registry, runtime, *refresh, cwd=project)
+    assert rc == 0 and delivery["settlement_progress"]["state"] == "spend_required", delivery
+    for slots, source in (("2", "heartbeat"), ("1", "visible-goal")):
+        rc, wrong = _run_cli(registry, runtime, *spend, "--slots", slots, "--source", source, cwd=project)
+        assert rc != 0 and not wrong["ok"] and not wrong["appended"], wrong
+        assert _spend_run_count(runtime) == 0
+
+    rc, settled = _run_cli(registry, runtime, *combined, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+    assert settled["settlement_identity"]["effect_id"] == original["effect_id"]
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    index = log.parent / "runs" / "index.jsonl"
+    receipt_log = log.read_text(encoding="utf-8")
+    initial_index = index.read_bytes()
+    debit_record, = (record for line in initial_index.splitlines()
+                     if (record := json.loads(line))["classification"] == "quota_slot_spent")
+    artifact = Path(debit_record["json_path"])
+    assert artifact.resolve().is_relative_to(runtime.resolve())
+    for field, bad_value in ((None, None), ("slots", 2), ("source", "visible-goal"),
+                              ("missing", None), ("legacy_empty", ""), ("legacy_empty", None),
+                              ("missing_artifact", None), ("missing", None), ("legacy_empty", None),
+                              ("slots", 2), ("source", "visible-goal"),
+                              ("unknown_admission_source", None), ("unknown_legacy_terms", None)):
+        rows = [json.loads(line) for line in receipt_log.splitlines()]
+        receipt, = (row for row in rows if row["event_kind"] == "quota_spend" and row["agent_id"] == AGENT_ID)
+        details = receipt["details"]
+        assert details["settlement_effect_id"] == original["effect_id"]
+        assert details["slots"] == 1 and details["source"] == "heartbeat"
+        if field == "missing":
+            details.pop("slots")
+            details.pop("source")
+        elif field == "legacy_empty":
+            details.update(slots=bad_value, source=bad_value)
+        elif field == "missing_artifact":
+            artifact.rename(tmp_path / "legacy-unavailable-spend.json")
+        elif field in ("unknown_admission_source", "unknown_legacy_terms"):
+            admission, = (row for row in rows if row["event_kind"] == "quota_should_run")
+            assert admission["details"].pop("quota_spend_source") == "heartbeat"
+            if field == "unknown_legacy_terms":
+                details.pop("slots")
+                details.pop("source")
+        elif field is not None:
+            details[field] = bad_value
+        log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        before = log.read_bytes()
+        missing_artifact = not artifact.exists()
+        # A caller cannot make a conflicting source valid by supplying that
+        # same source on replay once only the index and receipt remain.
+        commands = (combined, debit) if missing_artifact else (debit, combined)
+        if field == "source" and missing_artifact:
+            commands += ((*spend, "--slots", "1", "--source", bad_value),)
+        for command in commands:
+            rc, replay = _run_cli(registry, runtime, *command, cwd=project)
+            if field in ("slots", "source", "unknown_admission_source"):
+                assert rc != 0 and not replay["ok"], replay
+                basis = "original Turn admission" if missing_artifact else "recorded debit"
+                diagnostic = replay.get("reason") or replay.get("error") or ""
+                expected = ("original Turn admission has no verifiable billing source"
+                            if field == "unknown_admission_source"
+                            else f"{basis} and quota spend receipt disagree on {field}")
+                assert expected in diagnostic, replay
+                assert replay.get("settlement_progress", {}).get("state") != "settled", replay
+                assert not replay.get("settlement_owed"), replay
+            else:
+                assert rc == 0 and replay["ok"] and replay["idempotent_replay"], replay
+                assert replay["settlement_identity"]["effect_id"] == original["effect_id"]
+            assert not replay.get("appended"), replay
+            assert log.read_bytes() == before and index.read_bytes() == initial_index
+            assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("repair_entry", ["spend", "refresh"])
+def test_missing_spend_receipt_preserves_the_original_debit(tmp_path, monkeypatch, provider, repair_entry):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    original = guard["heartbeat_receipt"]["settlement_identity"]
+    combined = ["refresh-state", *binding, "--classification", "verified_billing_repair",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+    debit = ["quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute"]
+    rc, settled = _run_cli(registry, runtime, *combined, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    index = log.parent / "runs" / "index.jsonl"
+    original_index = index.read_bytes()
+    debit_record, = (row for line in original_index.splitlines()
+                     if (row := json.loads(line))["classification"] == "quota_slot_spent")
+    artifact = Path(debit_record["json_path"])
+    original_artifact = artifact.read_bytes()
+    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    receipt, = (row for row in records if row["event_kind"] == "quota_spend")
+    retained = [row for row in records if row is not receipt]
+    log.write_text("".join(json.dumps(row) + "\n" for row in retained), encoding="utf-8")
+
+    rc, repaired = _run_cli(registry, runtime, *(debit if repair_entry == "spend" else combined), cwd=project)
+    assert rc == 0 and repaired["ok"], repaired
+    assert repaired["settlement_progress"]["state"] == "settled", repaired
+    assert repaired["settlement_identity"]["effect_id"] == original["effect_id"]
+    assert not repaired.get("settlement_owed"), repaired
+    recovered_log = log.read_bytes()
+    after = [json.loads(line) for line in recovered_log.splitlines()]
+    assert [row for row in after if row["event_kind"] != "quota_spend"] == retained
+    recovered, = (row for row in after if row["event_kind"] == "quota_spend")
+    assert recovered["details"]["settlement_effect_id"] == original["effect_id"]
+    assert recovered["details"]["slots"] == receipt["details"]["slots"] == 1
+    assert recovered["details"]["source"] == receipt["details"]["source"] == "heartbeat"
+    for command in (debit, combined):
+        rc, replay = _run_cli(registry, runtime, *command, cwd=project)
+        assert rc == 0 and replay["ok"] and replay["idempotent_replay"], replay
+        assert replay["settlement_identity"]["effect_id"] == original["effect_id"]
+        assert not replay.get("appended") and not replay.get("settlement_owed"), replay
+    assert log.read_bytes() == recovered_log
+    assert index.read_bytes() == original_index and artifact.read_bytes() == original_artifact
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("artifact_format", ["current", "legacy"])
+def test_exact_spend_and_refresh_reject_another_turns_debit_file(
+    tmp_path, monkeypatch, provider, artifact_format,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    commands, identities = {}, {}
+    for turn in (TURN_ID, f"{TURN_ID}-second"):
+        binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                   "--todo-id", TODO_ID, "--turn-instance-id", turn]
+        rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+        assert rc == 0 and guard["should_run"], guard
+        identities[turn] = guard["heartbeat_receipt"]["settlement_identity"]
+        combined = ["refresh-state", *binding, "--classification", "verified_debit_identity",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+            "--settle-turn", "--settlement-receipt"]
+        spend = ["quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute", "--verbose"]
+        rc, settled = _run_cli(registry, runtime, *combined, cwd=project)
+        assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+        assert settled["settlement_identity"] == identities[turn]
+        commands[turn] = (combined, spend)
+
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    index = log.parent / "runs" / "index.jsonl"
+    rows = [json.loads(line) for line in index.read_bytes().splitlines()]
+    target, sibling = (row for row in rows if row["classification"] == "quota_slot_spent")
+    assert target["settlement_identity"] == identities[TURN_ID]
+    assert sibling["settlement_identity"] == identities[f"{TURN_ID}-second"]
+    artifacts = [Path(row["json_path"]) for row in (target, sibling)]
+    if artifact_format == "legacy":
+        # The historical Python writer retained Turn/effect bindings, but no
+        # commit metadata. Equal timestamps must not authenticate another Turn.
+        for row, path in zip((target, sibling), artifacts):
+            record = json.loads(path.read_bytes())
+            row.pop("quota_spend_commit")
+            record.pop("quota_spend_commit")
+            row["generated_at"] = record["generated_at"] = "2026-11-01T12:00:00Z"
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        index.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    original_artifacts = [path.read_bytes() for path in artifacts]
+    assert [(json.loads(data)["quota_event"]["slots"], json.loads(data)["quota_event"]["source"])
+            for data in original_artifacts] == [(1, "heartbeat"), (1, "heartbeat")]
+    original_index = index.read_bytes()
+    original_log = log.read_bytes()
+    target["json_path"] = sibling["json_path"]
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    redirected_index = index.read_bytes()
+
+    for receipt_kind in ("current", "legacy", "missing"):
+        if receipt_kind != "current":
+            retained = []
+            for line in original_log.splitlines():
+                row = json.loads(line)
+                if row["event_kind"] == "quota_spend" and row["run_id"] == TURN_ID:
+                    if receipt_kind == "missing":
+                        continue
+                    row["details"].pop("slots")
+                    row["details"].pop("source")
+                retained.append(row)
+            log.write_text("".join(json.dumps(row) + "\n" for row in retained), encoding="utf-8")
+        before = log.read_bytes()
+        for command in commands[TURN_ID]:
+            rc, rejected = _run_cli(registry, runtime, *command, cwd=project)
+            assert rc != 0 and not rejected["ok"], rejected
+            reason = (rejected.get("verbose_debug", {}).get("error")
+                      or rejected.get("error") or rejected.get("reason") or "")
+            assert "quota spend JSON artifact identity does not match its index row" in reason, rejected
+            assert rejected.get("settlement_progress", {}).get("state") != "settled", rejected
+            assert log.read_bytes() == before and index.read_bytes() == redirected_index
+            assert _spend_run_count(runtime) == 2
+
+    assert [path.read_bytes() for path in artifacts] == original_artifacts
+    index.write_bytes(original_index)
+    rc, recovered = _run_cli(registry, runtime, *commands[TURN_ID][0], cwd=project)
+    assert rc == 0 and recovered["settlement_progress"]["state"] == "settled", recovered
+    assert recovered["settlement_identity"] == identities[TURN_ID]
+    assert _spend_run_count(runtime) == 2 and index.read_bytes() == original_index
+
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -227,10 +440,11 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
     assert original_packet.get("schema_version") is None
     assert failed["heartbeat_receipt"]["settlement_identity"] == original_packet["heartbeat_receipt"]["settlement_identity"]
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+    page_bytes = min(8000, len(original) // 2)
     recovered_bytes, page_count = b"", 0
     while True:
         rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(saved),
-            "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", "8000",
+            "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", str(page_bytes),
             "--max-page-output-bytes", "12000", "--offset", str(len(recovered_bytes)), cwd=project)
         assert rc == 0 and page["ok"], page
         assert page["offset"] == len(recovered_bytes)
@@ -255,26 +469,26 @@ def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, comman
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_explicit_complete_soft_claim_reuses_the_original_legacy_receipt(tmp_path, provider):
+def test_compatibility_alias_soft_claim_reuses_the_original_default_receipt(tmp_path, provider):
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
     command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, legacy = _run_cli(registry, runtime, *command, cwd=project)
-    assert rc == 0 and legacy.get("schema_version") is None
-    original_cli = legacy["interaction_contract"]["cli_channel"]
-    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
+    rc, original = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc == 0 and original.get("schema_version") == "loopx_turn_envelope_v1"
+    original_cli = original["interaction_contract"]["cli_channel"]
+    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
     rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
     assert rc == 0 and complete["schema_version"] == "loopx_turn_envelope_v1", complete
     cli = complete["interaction_contract"]["cli_channel"]
     assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.
     assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
-    assert cli["settlement_plan"]["identity"] == legacy["heartbeat_receipt"]["settlement_identity"]
-    assert complete["goal_boundary"] == legacy["goal_boundary"]
-    assert complete["normal_delivery_allowed"] == legacy["normal_delivery_allowed"]
+    assert cli["settlement_plan"]["identity"] == original["heartbeat_receipt"]["settlement_identity"]
+    assert complete["goal_boundary"] == original["goal_boundary"]
+    assert complete["normal_delivery_allowed"] == original["normal_delivery_allowed"]
     assert len(cli["next_cli_actions"]) == 1
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
-    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
+    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
 
 
 def _read_selected_result(command):
@@ -588,7 +802,8 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
         command = command.replace(key, value)
     words = shlex.split(command)
     assert words[words.index("--delivery-boundary") + 1] == "semantic_closeout"
-    command += " " + shlex.join(["--settle-turn", "--no-global-sync", "--suppress-external-sinks",
+    assert '--settle-turn' in words and '--settlement-receipt' in words
+    command += " " + shlex.join(["--no-global-sync", "--suppress-external-sinks",
         "--delivery-workspace-path", str(project)])
     # A hostile ambient executable must not select another checkout/accounting owner.
     trap = tmp_path / "bin"
@@ -607,8 +822,8 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
                    for row in receipts)
         assert _spend_run_count(runtime) == 1
         assert result.get("idempotent_replay", False) is replay
-    ordinary_args = shlex.split(command)
-    ordinary_args.remove("--settle-turn")
+    ordinary_args = [word for word in shlex.split(command)
+                     if word not in {'--settle-turn', '--settlement-receipt'}]
     rc, ordinary = _run_generated_cli(shlex.join(ordinary_args), registry_path=registry)
     assert rc == 0 and ordinary["settlement_progress"]["state"] == "settled", ordinary
     assert [row["step_kind"] for row in ordinary["settlement_result"]["receipts"]] == [

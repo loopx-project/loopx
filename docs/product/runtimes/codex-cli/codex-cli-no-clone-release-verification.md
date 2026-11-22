@@ -15,12 +15,9 @@ The release verifier exercises the path as a fresh user would see it:
    mechanism used by the public no-clone command;
 3. confirm the installed `loopx` wrapper can run `doctor`;
 4. confirm the installed top-level help points at `loopx commands`, and the
-   installed command reference exposes the first-run commands:
-   `codex-cli-bootstrap-message`, `codex-cli-tui-bootstrap-smoke-bundle`, and
-   `codex-cli-visible-attach-acceptance`;
-5. generate the one-message TUI bootstrap text from the fresh project;
-6. generate the transcript-free bootstrap bundle from the fresh project;
-7. replay the public proof-capture fixture from the installed release snapshot.
+   installed command reference exposes the first-run command
+   `codex-cli-bootstrap-message`;
+5. generate the one-message TUI bootstrap text from the fresh project.
 
 The verifier does not launch Codex, read transcripts, read session files, read
 credentials, mutate a Codex session, or spend LoopX quota.
@@ -39,20 +36,16 @@ Ready:
 
 - the archive installer creates a stable release snapshot without requiring a
   local LoopX checkout;
-- the installed wrapper exposes the first-run TUI bootstrap, smoke bundle, and
-  visible-attach acceptance commands;
+- the installed wrapper exposes the first-run TUI bootstrap command;
 - the generated bootstrap text tells the agent to install, connect, run quota,
-  preserve the visible TUI, write back evidence, and avoid raw transcripts;
-- the smoke bundle confirms no Codex launch and no LoopX quota spend;
-- proof-capture fixtures are packaged into the release snapshot and can be
-  replayed by the installed wrapper.
+  preserve the visible TUI, write back evidence, and avoid raw transcripts.
 
 Boundary:
 
 - public install still depends on network access to GitHub archive endpoints
   unless the caller overrides `LOOPX_ARCHIVE_URL` with a trusted archive;
-- same-TUI automation is not the default path until visible proof plus runtime
-  idle evidence pass.
+- same-TUI automation is not the default path; bounded isolated-headless runs
+  use `loopx turn`.
 
 That means the archive route can remain a tested recovery option while PyPI is
 the default and contributor clone-plus-canary remains the development path.
@@ -64,14 +57,13 @@ Before promoting a new release snapshot, run:
 ```bash
 python3 examples/release/codex-cli-no-clone-release-verification-smoke.py
 python3 examples/codex-cli-first-run-rehearsal-smoke.py
-python3 examples/codex-cli-tui-bootstrap-smoke-bundle-smoke.py
-python3 examples/codex-cli-proof-capture-demo-fixtures-smoke.py
+python3 examples/codex-cli-bootstrap-message-smoke.py
 ```
 
 If the first command fails, do not advertise the archive fallback as qualified
 until the failure is reduced to a compact blocker: missing installer
-dependency, archive layout mismatch, missing installed command, broken
-bootstrap generation, or missing public proof fixture.
+dependency, archive layout mismatch, missing installed command, or broken
+bootstrap generation.
 
 ## Boundary
 
@@ -86,4 +78,4 @@ See also:
 
 - [Codex CLI packaged install path](codex-cli-packaged-install.md)
 - [Codex CLI first-run rehearsal](codex-cli-first-run-rehearsal.md)
-- [Codex CLI proof-capture demo](codex-cli-proof-capture-demo.md)
+- [LoopX Turn quickstart](loopx-turn-codex-cli-quickstart.md)

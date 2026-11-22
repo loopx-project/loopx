@@ -59,6 +59,11 @@ function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject | null)
  * This read model never relaxes an existing Turn binding or settlement fence.
  * Unknown dependencies retain their bounded observation/replan policy. */
 export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
+  if (request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP) {
+    // The automatic heartbeat must distinguish a proven future clock from a
+    // quiet Monitor result that still counts towards the blocked-wait limit.
+    return {required: projectSchedulerArbitration(request).scheduled_recheck_after_seconds === undefined};
+  }
   const wait = exactBlockedSuccessorWait(request);
   return {required: !!wait && pendingAutomaticSuccessor(request, wait) === null};
 }
@@ -270,7 +275,10 @@ export function selectPrimaryActionInstruction(value: unknown, mode: string): st
   if (["user_gate", "user_todo_blocker_push", "user_action_required"].includes(mode)) return "wait for user/owner action after surfacing the blocker or gate";
   if (mode === EffectiveAction.OUTCOME_FLOOR_RECOVERY) return "produce the required outcome-floor evidence artifact or write the concrete blocker";
   if (mode === EffectiveAction.CAPABILITY_BRIDGE_REPAIR) return "execute interaction_contract.agent_channel.next_task_action.operation once with its real task-facing tool and exact target_ref when projected; preflight_allowed is false, and the instruction is context rather than CLI text; on success execute cli_channel.next_cli_actions[0] in the same turn and continue only when quota allows";
-  if (mode === EffectiveAction.AGENT_WORKSPACE_REPAIR) return "create or switch to an independent worktree/branch, then rerun quota guard before file edits";
+  if (mode === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    return text(facts, "workspace_repair_action")
+      || "create or switch to an independent worktree/branch, then rerun quota guard before file edits";
+  }
   if (mode === "automation_prompt_upgrade") return "update the installed automation once using the stable migration id, run its completion ack, then rerun quota guard";
   if (mode === "control_plane_self_repair") return "repair the bounded control-plane/status projection fault exposed by quota";
   if (mode === EffectiveAction.BOUNDARY_PROJECTION_REPAIR) return "repair goal_boundary.write_scope projection before attempting the selected write";
@@ -793,7 +801,7 @@ export function selectedWorkTodoId(packet: JsonObject): string | null {
 
 // These are source-owned obligations; native material projection replaces only
 // this exact generated clause, preserving other independently applicable reads.
-const OUTCOME_MAINTENANCE_GUIDANCE = "When a direct user correction changes what counts as success, persist it in the matching outcome requirements before dependent work; chat, peer acknowledgements and Vision alone do not update acceptance. Use goal-acceptance refine and its complete readback. Revise the Goal objective through its existing owner route only when the overall purpose changes. Preserve unaffected requirements, permissions and stops; explicitly reconcile conflicting retained requirements rather than declaring both satisfied. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+const OUTCOME_MAINTENANCE_GUIDANCE = "When a direct user correction changes what counts as success, persist it in the matching outcome requirements before dependent work; chat, peer acknowledgements and Vision alone do not update acceptance. Use goal-acceptance refine and its complete readback. Use the owner revision route when direct user direction changes purpose or adds a new lasting responsibility in this Goal. Carry forward existing commitments and add or update its Todo in the same Goal. Use existing creation for an explicit new Goal. Surface scope conflicts. Preserve unaffected requirements, permissions and stops; explicitly reconcile conflicting retained requirements rather than declaring both satisfied. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
 export const FULL_OUTCOME_READ_GUIDANCE = "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. " + OUTCOME_MAINTENANCE_GUIDANCE;
 export const PROGRESSIVE_OUTCOME_READ_GUIDANCE = "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. Supporting source history, review reasoning and evidence references are available on demand from the same capture; read them when the next decision, verification or review depends on them. " + OUTCOME_MAINTENANCE_GUIDANCE;
 

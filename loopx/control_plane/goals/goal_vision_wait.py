@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
 from ..effect_runtime import effect_runtime_result
@@ -45,21 +43,6 @@ def exact_blocked_successor_wait_state(value: Any) -> dict[str, Any]:
     ):
         return {}
     return candidate
-
-
-def exact_blocked_successor_frontier_identity(value: Any) -> str | None:
-    wait = exact_blocked_successor_wait_state(value)
-    if not wait:
-        return None
-    parts = {
-        "agent_id": str(wait.get("agent_id") or "").strip(),
-        "reason_code": "exact_blocked_successor",
-        "selected_todo_id": normalize_todo_id(wait.get("selected_todo_id")),
-        "resume_when": str(wait.get("resume_when") or "").strip(),
-    }
-    return hashlib.sha256(
-        json.dumps(parts, ensure_ascii=True, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:16]
 
 
 def build_goal_vision_wait_state(

@@ -96,13 +96,6 @@ def scheduler_rrule_interval_minutes(value: Any) -> int | None:
     return interval
 
 
-def normalize_scheduler_host_update_failure(value: Any) -> dict[str, Any] | None:
-    failure = _operation_result("normalize_failure", value=value)
-    if failure is not None and not isinstance(failure, dict):
-        raise RuntimeError("TypeScript scheduler failure must be an object or null")
-    return failure
-
-
 def _failure_list(value: Any, *, operation: str) -> list[dict[str, Any]]:
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         raise RuntimeError(f"TypeScript scheduler {operation} must be an object list")
@@ -138,23 +131,6 @@ def retained_scheduler_host_update_failures(
             observed_host_rrule=observed_host_rrule,
         ),
         operation="retained failures",
-    )
-
-
-def merge_scheduler_host_update_failure(
-    value: Any,
-    failure: dict[str, Any],
-    *,
-    reference_time: datetime | str | None = None,
-) -> list[dict[str, Any]]:
-    return _failure_list(
-        _operation_result(
-            "merge_failure",
-            value=value,
-            failure=failure,
-            reference_time=_reference_time(reference_time),
-        ),
-        operation="merged failures",
     )
 
 
@@ -252,6 +228,7 @@ def _store_result(
     agent_id: str,
     surface: str,
     state_key: str,
+    migrate_legacy: bool | None = None,
 ) -> Mapping[str, Any]:
     params: dict[str, Any] = {
         "schema_version": SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
@@ -265,6 +242,8 @@ def _store_result(
     }
     if state is not None:
         params["state"] = state
+    if migrate_legacy is not None:
+        params["migrate_legacy"] = migrate_legacy
     try:
         result = effect_runtime_result(f"scheduler.state.{operation}", params)
     except EffectRuntimeRejected as exc:
@@ -287,6 +266,7 @@ def load_scheduler_state(
     surface: str = CODEX_APP_SURFACE,
     state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
     read_observer: SchedulerStateReadObserver | None = None,
+    migrate_legacy: bool | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return None
@@ -298,6 +278,7 @@ def load_scheduler_state(
         agent_id=agent_id,
         surface=surface,
         state_key=state_key,
+        migrate_legacy=migrate_legacy,
     )
     state = result.get("state")
     if state is not None and not isinstance(state, dict):
@@ -317,6 +298,8 @@ def load_app_automation_scheduler_state(
     surface: str,
     read_observer: SchedulerStateReadObserver | None = None,
 ) -> dict[str, Any] | None:
+    # Hint reconstruction may precede a preview or receipt rejection.
+    # Legacy migration belongs to the authorized native commit under lock.
     current = load_scheduler_state(
         runtime_root,
         goal_id=goal_id,
@@ -324,6 +307,7 @@ def load_app_automation_scheduler_state(
         surface=surface,
         state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
         read_observer=read_observer,
+        migrate_legacy=False,
     )
     if current is not None or surface != CODEX_APP_SURFACE:
         return current
@@ -337,6 +321,7 @@ def load_app_automation_scheduler_state(
         surface=surface,
         state_key=LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
         read_observer=read_observer,
+        migrate_legacy=False,
     )
 
 

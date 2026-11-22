@@ -210,6 +210,13 @@ Paired diffs do not certify translation accuracy.
     source-bound historical views and optional provider extensions. Source
     retention, original readback, actual adoption and complete-cost evidence
     remain unqualified; no runtime, default or experiment change.
+- [Sparse Working Memory at Context Compaction v0](sparse-compaction-working-memory-v0.md)
+  ([中文版](sparse-compaction-working-memory-v0.zh-CN.md))
+  - **Retired:** Kernel execution and Workbench activation removed after the
+    requester withdrew the unqualified experiment. Strict saved-settings
+    compatibility and existing exact capture references remain; see the
+    [retirement ledger](ledger/sparse-compaction-working-memory-v0/2026-11-17-retirement.md).
+
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.
@@ -244,7 +251,9 @@ Paired diffs do not certify translation accuracy.
     [#3798](https://github.com/huangruiteng/loopx/pull/3798)). In-process PostgreSQL
     service admission and identity rotation also exist;
     deployed authenticated remote service and provider promotion remain distinct
-    qualification gates.
+    qualification gates. [Cross-person shared access](shared-goal-authority-state-provider-v0.md#cross-person-shared-access)
+    defines the resource ACL and identity boundary. [R6 qualification](shared-goal-authority-state-provider-v0.md#cross-person-delivery-under-r6)
+    covers shared reading, collaborative research and the cloud worker.
 - [Shared Goal Alignment and Governed Amendment Protocol v0](shared-goal-alignment-and-governed-amendment-v0.md)
   ([中文版](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1/2 read-only alignment and proposal-admission
@@ -299,6 +308,16 @@ Paired diffs do not certify translation accuracy.
     owner inventory grants no activation, and R6 and D1–D3 retain their own gates.
 
 ## Planning, Research, And Adaptive Intelligence
+
+- [Mechanism Convergence and the Experience Reuse Loop v0](mechanism-convergence-and-learning-loop-v0.md)
+  ([中文版](mechanism-convergence-and-learning-loop-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; budgeted method feedback and structural convergence, with no runtime change.
+  - **Current boundary:** Reuses Controller C1/C4/C9 and Target/Stride/Explore to
+    connect prior expectations, execution, feedback and the next real choice.
+    Defines caller migration and duplicate-producer retirement, then staged
+    forecast calibration and policy learning. Memory/Skills carry qualified
+    knowledge; application receipts are optional adoption evidence, not the
+    first-loop prerequisite. No default, training or experiment is activated.
 
 - [LoopX × LayerFS — Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md)
   ([中文版](layerfs-engineering-exploration-evaluation-v0.zh-CN.md))

@@ -38,7 +38,11 @@ from .command_validation import (
     normalize_reward_memory_reflection_validation,
     reward_memory_reflection_digest,
 )
-from ..quota.turn_envelope import turn_plan_host_source
+from ..quota.turn_envelope import (
+    COMPLETE_TURN_HOST_REQUEST_SCHEMA,
+    captured_turn_host_input,
+    turn_plan_host_source,
+)
 from .driver import (
     COMPLETE_TURN_PLAN_SCHEMA_VERSION,
     selected_turn_todo, turn_host_lineage,
@@ -156,6 +160,10 @@ JournalPersist = Callable[[Mapping[str, Any]], None]
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     """Deliver the plan's original source; decode saved v0 plans as recorded."""
+    return _complete_loopx_turn_host_request(_assemble_loopx_turn_host_request(plan))
+
+
+def _assemble_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     boundary = plan.get("boundary")
     if isinstance(boundary, Mapping) and boundary.get("inspection_only") is True:
         raise ValueError("LoopX Turn CLI inspection requires the explicit run-once execution surface")
@@ -197,11 +205,29 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
 
     if configured_native_child_limit(request) is not None:
         request["turn_instance_id"] = transaction.get("turn_instance_id") or turn_key
+    return request
+
+
+def _complete_loopx_turn_host_request(request: dict[str, Any]) -> dict[str, Any]:
     if "work_contract" in request:
         from .host_candidate import complete_host_input
 
         return complete_host_input(request)
     return request
+
+
+def _build_staged_dispatch_request(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble staged input for the immediate mandatory dispatch check."""
+    request = _assemble_loopx_turn_host_request(plan)
+    if (plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
+            and request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+            and "work_contract" in request and "turn_envelope" not in request):
+        # All assembly guards and projections still run on the staged aliases.
+        # This carrier's existing conversion only copies the top-level mapping;
+        # host_context returns no facts used by it. The caller checks this exact
+        # source with host_dispatch_context before admission or publication.
+        return captured_turn_host_input(request)
+    return _complete_loopx_turn_host_request(request)
 
 
 def _bounded_public_text(
@@ -317,9 +343,9 @@ def _normalize_host_path_delta(
 
     agent_vision: dict[str, Any] | None = None
     if from_journal and "agent_vision" in result:
-        # The journal stores the typed owner's decoded packet. Revalidate it
-        # through that same owner, without treating derived budget diagnostics
-        # as a new Host wire string or widening the untrusted Host protocol.
+        # Keep one decoded packet for Goal fields and capability attachments.
+        # Revalidate Goal semantics through their owner; capability owners
+        # validate their existing inline payloads before durable writeback.
         try:
             if "agent_vision_json" in result:
                 raise ValueError("cached vision cannot carry both packet forms")
@@ -327,9 +353,12 @@ def _normalize_host_path_delta(
             if not isinstance(packet, dict):
                 raise TypeError("cached agent_vision must be a JSON object")
             lineage = turn_host_lineage(plan)
-            agent_vision = normalize_goal_vision_packet(
+            goal_vision = normalize_goal_vision_packet(
                 packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
             )
+            agent_vision = goal_vision
+            if "explore_result" in packet:
+                agent_vision = {**goal_vision, "explore_result": packet["explore_result"]}
         except (TypeError, ValueError, RuntimeError) as exc:
             errors.append(f"invalid cached agent_vision: {exc}")
     elif agent_vision_json:
@@ -344,9 +373,12 @@ def _normalize_host_path_delta(
                 if not isinstance(packet, dict):
                     raise TypeError("agent_vision_json must decode to a JSON object")
                 lineage = turn_host_lineage(plan)
-                agent_vision = normalize_goal_vision_packet(
+                goal_vision = normalize_goal_vision_packet(
                     packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
                 )
+                agent_vision = goal_vision
+                if "explore_result" in packet:
+                    agent_vision = {**goal_vision, "explore_result": packet["explore_result"]}
             except (json.JSONDecodeError, TypeError, ValueError, RuntimeError) as exc:
                 errors.append(f"invalid agent_vision_json: {exc}")
 
@@ -851,6 +883,7 @@ def _run_host(
     argv: Sequence[str],
     project: Path,
     timeout_seconds: float | None,
+    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
     # Dispatch has checked the source and its internal effect adapter before
     # journal/cadence admission. External stdin gets the same single complete
@@ -874,7 +907,10 @@ def _run_host(
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
             on_stderr=count_stderr,
+            launch_guard=launch_guard,
         )
+    except FirstPartyHostRuntimeRejected:
+        raise
     except (OSError, RuntimeError, ValueError) as exc:
         return {"ok": False, "reason": type(exc).__name__, "returncode": None}
     if observed["outcome"] == "output_limit":
@@ -985,6 +1021,7 @@ def _host_result_stage(
     confirm_start: Callable[[], None] | None = None,
     usage_runtime_root: Path | None = None,
     usage_goal_id: str = "",
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
     completed_phases = list(journal.get("completed_phases") or [])
     from_journal = "typed_result" in completed_phases
@@ -1007,22 +1044,32 @@ def _host_result_stage(
             confirm_start()
         from ...usage_goal import observe_goal_execution
 
-        with observe_goal_execution(
-            usage_runtime_root or project,
-            usage_goal_id,
-            host=str((plan.get("host") or {}).get("kind") or "unknown"),
-        ):
-            host_observation = (
-                _run_host_runner(request, runner=host_runner)
-                if host_runner is not None
-                else _run_host(
-                    request,
-                    argv=argv or [],
-                    project=project,
-                    timeout_seconds=timeout_seconds,
+        rejected_launch = None
+        try:
+            with observe_goal_execution(
+                usage_runtime_root or project,
+                usage_goal_id,
+                host=str((plan.get("host") or {}).get("kind") or "unknown"),
+            ):
+                host_observation = (
+                    _run_host_runner(request, runner=host_runner)
+                    if host_runner is not None
+                    else _run_host(
+                        request,
+                        argv=argv or [],
+                        project=project,
+                        timeout_seconds=timeout_seconds,
+                        launch_guard=host_launch_guard,
+                    )
                 )
-            )
-        effects["host_invoked"] = True
+        except FirstPartyHostRuntimeRejected as exc:
+            # Stdio checks the Goal only before spawn. A native Host can reject
+            # after dispatch too, so retain reconciliation for other failures.
+            if host_runner is not None and exc.code != "current_turn_work_changed":
+                raise
+            rejected_launch = exc.code
+            host_observation = {"ok": False, "reason": str(exc), "failure_kind": "contract_rejected"}
+        effects["host_invoked"] = rejected_launch is None
         if not host_observation.get("ok"):
             failure = _host_failure(
                 plan,
@@ -1048,17 +1095,10 @@ def _host_result_stage(
             else:
                 journal.pop("host_recovery", None)
             persist_journal(journal)
-            return (
-                None,
-                [],
-                execution_payload(
-                    plan,
-                    journal,
-                    execute=True,
-                    replayed=False,
-                    effects=effects,
-                ),
-            )
+            terminal = execution_payload(plan, journal, execute=True, replayed=False, effects=effects)
+            if rejected_launch is not None:
+                terminal["error_code"] = rejected_launch
+            return None, [], terminal
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
 
@@ -1486,12 +1526,14 @@ def _typed_settlement_stage(
 
 def _prepare_host_invocation(
     plan: Mapping[str, Any], *, host_argv: Sequence[str] | None,
-    host_runner: HostRunner | None,
+    host_runner: HostRunner | None, resume_existing_turn: bool,
 ) -> tuple[list[str] | None, dict[str, str | int]]:
     """Normalize the existing external or built-in transport before admission."""
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
+        if host_argv is None and resume_existing_turn:
+            return None, {}
         argv = normalize_host_argv(host_argv or [])
         return argv, {"executable": Path(argv[0]).name, "argv_count": len(argv)}
     planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
@@ -1518,6 +1560,34 @@ def _host_attempt_requirements(
     return needs_host, retry_validation, None
 
 
+def _turn_transport_refusal(
+    *,
+    argv: Sequence[str] | None,
+    host_runner: HostRunner | None,
+    needs_host: bool,
+    request_schema: str,
+    adapter_schema: str | None,
+    journal: Mapping[str, object] | None,
+    recovery: Mapping[str, object] | None,
+    task_validator: TaskValidator | None,
+) -> str | None:
+    """Check the selected transport against the locked journal before effects."""
+    if argv is not None:
+        return host_request_schema_mismatch(request_schema, adapter_schema) if needs_host else None
+    if host_runner is not None:
+        return None
+    if needs_host or recovery is None or recovery["reinvoke_host"]:
+        return "This Turn needs a host invocation. Supply --host-adapter-command-json."
+    if recovery["resume_from"] == "validation" and task_validator is None:
+        stored_result = journal.get("host_result") if journal is not None else None
+        if (
+            not isinstance(stored_result, Mapping)
+            or str(stored_result.get("result_kind")) not in STOP_HOST_RESULT_KINDS
+        ):
+            return "The saved result still needs independent validation. Supply --validation-command-json."
+    return None
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
@@ -1532,6 +1602,7 @@ def run_loopx_turn_once(
     timeout_seconds: float | None,
     execute: bool,
     retry_failed: bool = False,
+    resume_existing_turn: bool = False,
     decision_capture_payload: Mapping[str, Any] | None = None,
     require_decision_capture: bool = False,
     task_validator: TaskValidator | None = None,
@@ -1549,8 +1620,12 @@ def run_loopx_turn_once(
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
+    host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
-    argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
+    argv, host_projection = _prepare_host_invocation(
+        plan, host_argv=host_argv, host_runner=host_runner,
+        resume_existing_turn=resume_existing_turn,
+    )
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )
@@ -1687,8 +1762,10 @@ def run_loopx_turn_once(
 
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
-        if needs_host and argv is not None and (reason := host_request_schema_mismatch(
-            request["schema_version"], host_adapter_request_schema,
+        if (reason := _turn_transport_refusal(
+            argv=argv, host_runner=host_runner, needs_host=needs_host,
+            request_schema=request["schema_version"], adapter_schema=host_adapter_request_schema,
+            journal=journal, recovery=recovery_decision, task_validator=task_validator,
         )) is not None:
             return execution_payload(
                 plan, {"status": "unavailable", "host": host_projection, "reason": reason},
@@ -1706,7 +1783,7 @@ def run_loopx_turn_once(
             # must not put otherwise eligible work into an interval wait.
             # Saved typed results retain their original finalization path.
             complete_turn_host_source(
-                build_loopx_turn_host_request(capture.plan) if capture is not None else request,
+                _build_staged_dispatch_request(capture.plan) if capture is not None else request,
                 operation="host_dispatch_context",
             )
         admission = None
@@ -1820,6 +1897,7 @@ def run_loopx_turn_once(
             persist_journal=persist_journal,
             effects=effects,
             confirm_start=confirm_start if reserved_start else None,
+            host_launch_guard=host_launch_guard,
         )
         if terminal is not None:
             return finish_recovery(terminal)

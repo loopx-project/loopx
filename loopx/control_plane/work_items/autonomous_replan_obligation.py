@@ -27,6 +27,18 @@ AckRecorded = Callable[[dict[str, Any]], bool]
 
 MAX_AUTONOMOUS_REPLAN_TRIGGERS = 3
 AUTONOMOUS_REPLAN_STALL_THRESHOLD = 2
+AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID = "autonomous_replan_default_v0"
+AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION = (
+    "stop only the affected path when required access, destructive git, production actions, "
+    "or owner-only decisions exceed existing user authority. Keep authorized private reads "
+    "within their storage and publication boundaries; do not expose credentials or disclose "
+    "private material beyond that authority. Continue independent authorized replan work "
+    "while honoring explicit stops"
+)
+AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION = (
+    "stop this replan path until a compatible reader validates its digest-bound "
+    "review guard"
+)
 REPLAN_NOVELTY_POLICY_SCHEMA_VERSION = "replan_evidence_delivery_policy_v0"
 TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE = "todo_lifecycle_settlement"
 REPLAN_NOVELTY_GUIDANCE = (
@@ -642,13 +654,7 @@ def build_autonomous_replan_obligation(
             else ["keep", "split", "add", "retire", "ask_decision"]
         ),
         todo_actions=todo_actions[:3],
-        stop_condition=(
-            "stop only the affected path when required access, destructive git, production actions, "
-            "or owner-only decisions exceed existing user authority. Keep authorized private reads "
-            "within their storage and publication boundaries; do not expose credentials or disclose "
-            "private material beyond that authority. Continue independent authorized replan work "
-            "while honoring explicit stops"
-        ),
+        stop_condition=AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
         recommended_action=recommended_action,
         agent_id=replan_agent_id,
         extra_fields=extra_fields,

@@ -541,7 +541,6 @@ def checkpoint_destination_config(config_path: Path, source_sha256: str,
     credential-gateway route; that changes only the existing provider's base URL,
     never its protocol, credential contract, tools or permissions. The complete
     source and destination config digests remain in the transition provenance.
-    This does not authorize changing an active session or selecting a provider.
     """
     source = config_path.read_bytes()
     if hashlib.sha256(source).hexdigest() != source_sha256:

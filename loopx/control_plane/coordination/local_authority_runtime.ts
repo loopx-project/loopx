@@ -13,8 +13,7 @@ import {executeTodoContinuation} from "./todo_continuation.ts";
 import {canonicalAuthorityRouteFailure, requireCanonicalAuthority, withCanonicalWriter} from "./local_authority_write.ts";
 import { ShadowManagementError, withShadowMaintenanceLock } from "./shadow_management.ts";
 import { isAbsolute, join } from "node:path";
-import {readFile, realpath} from "node:fs/promises";
-import {createHash} from "node:crypto";
+import {realpath} from "node:fs/promises";
 
 import type { JsonObject } from "../effect_program.ts";
 import {decodeCompletionValidationRevision} from "../todos/completion_validation_revision.ts";
@@ -27,10 +26,6 @@ import {
   LOCAL_COORDINATION_PROMOTION_RESULT_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REVIEW_REQUEST_SCHEMA,
   LOCAL_COORDINATION_PROMOTION_REVIEW_RESULT_SCHEMA,
-  LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-  LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
-  LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA,
-  LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA,
 } from "./coordination_state_contract.generated.ts";
 import {
   indexCoordinationProjection,
@@ -107,12 +102,14 @@ export const LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_claim_request_v0";
 export const LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v1";
 export const LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2";
+const REVIEWED_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v3";
 export const LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA = "loopx_local_coordination_todo_update_request_v6";
 export const LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v4";
 export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
 export const LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v2";
+const SOURCE_BOUND_TODO_CREATE_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v3";
 export const LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_terminal_lifecycle_request_v3";
 export const LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA =
@@ -1051,20 +1048,28 @@ export async function claimLocalCoordinationTodo(
   let sourceAuthority = "file_v0";
   try {
     const input = requireJsonObject(value, "local coordination Todo claim request");
+    const reviewed = input.schema_version === REVIEWED_MANAGED_CLAIM_REQUEST_SCHEMA;
+    const managed = reviewed || input.schema_version === LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA;
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA &&
         input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA) {
+        !managed) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
-    if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
+    if (Object.hasOwn(input, "manage_execution") && !managed)
       throw new TypeError("Managed execution requires claim request v2");
+    if (reviewed ? input.manage_execution !== true || typeof input.expected_registry_sha256 !== "string"
+        : Object.hasOwn(input, "expected_registry_sha256"))
+      throw new TypeError("A Todo claim review basis requires a reviewed managed claim");
+    // Earlier claim wires did not bind caller-supplied provider revisions.
+    const expectedRevision = reviewed
+      ? requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision") : undefined;
     const worktree = input.write_worktree;
-    if (worktree !== undefined && (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
+    if (worktree !== undefined && (!managed ||
         input.manage_execution !== true || typeof worktree !== "string" || !isAbsolute(worktree))) {
       throw new TypeError("Worktree observation requires a managed claim and an absolute caller path");
     }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA, input.expected_registry_sha256);
     if (typeof input.dry_run !== "boolean") {
       throw new Error("dry_run must be a JSON boolean");
     }
@@ -1111,6 +1116,7 @@ export async function claimLocalCoordinationTodo(
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_request: leaseRequest,
         ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
+        ...(expectedRevision === undefined ? {} : {expected_provider_revision: expectedRevision}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
       }, authoritySourcesCurrent, claimWorkspaceObserver(worktree));
@@ -1149,17 +1155,21 @@ export async function createLocalCoordinationTodo(
   };
   try {
     const input = requireJsonObject(value, "local coordination Todo create request");
+    const sourceBound = input.schema_version === SOURCE_BOUND_TODO_CREATE_REQUEST_SCHEMA;
+    const reviewed = sourceBound || input.schema_version === LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA;
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA &&
         input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA) {
+        !reviewed) {
       throw new TypeError("local coordination Todo create request schema mismatch");
     }
-    const reviewed = input.schema_version === LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA;
     if (!reviewed && Object.hasOwn(input, "expected_provider_revision")) {
       throw new TypeError("expected_provider_revision requires Todo create request v2");
     }
+    if (sourceBound ? typeof input.expected_registry_sha256 !== "string" : Object.hasOwn(input, "expected_registry_sha256")) {
+      throw new TypeError("expected_registry_sha256 requires a source-bound Todo create request");
+    }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, input.expected_registry_sha256);
     const expectedRevision = reviewed
       ? requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision") : undefined;
     if (typeof input.dry_run !== "boolean") {

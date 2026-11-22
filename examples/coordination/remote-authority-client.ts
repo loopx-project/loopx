@@ -15,5 +15,5 @@ const result = await callRemoteAuthority(values.endpoint, process.env.LOOPX_AUTH
   decodeRemoteAuthorityRequest(JSON.parse(raw)), {mode: values.recover ? "recover" : "execute",
     ...(values.ca ? {ca: await readFile(values.ca)} : {})});
 process.stdout.write(`${JSON.stringify(result)}\n`);
-if (!["found", "missing", "result"].includes(String(result.status)) ||
+if (!["found", "missing", "result", "snapshot"].includes(String(result.status)) ||
     result.status === "result" && !["applied", "no_change", "replayed", "recovered"].includes(String((result.result as Record<string, unknown>)?.status))) process.exitCode = 1;

@@ -1,6 +1,6 @@
 import {ContextHelp} from "./context-help";
 import {ArrowRight, ChevronDown, Circle, CircleAlert, CircleCheck, CircleHelp, Clock, Hand, Info, List, Play, Plus, Search} from "lucide-react";
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from "react";
+import {Component, createRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import type {GoalWorkDisplayClass, GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import type {WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem} from "./personal-workspace-model";
 import {localizedSessionStatus, useWorkspaceI18n} from "./i18n";
@@ -223,7 +223,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
           </div> : null}
           {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={select}/> : null}
         </header>
-        <div className="goal-owner-groups" hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
+        <OwnerWorkGroups hidden={lens !== "owner"}>{digest.work.groups.map(group => <section className="goal-owner-group" key={group.ownerId ?? ""} data-owner-id={group.ownerId ?? ""}>
           <header><h3>{ownerName(group.ownerId)}</h3><span>{group.todoIds.length} {zh ? "项任务" : "tasks"} · {group.todoIds.filter(id => rows.get(id)?.displayClass === group.displayClass).length} {goalWorkClassLabel(group.displayClass, zh)}</span>
             {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}
           </header>
@@ -233,7 +233,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
             {group.todoIds.slice(3).map(id => task(id))}
           </RemainingWork> : null}
         </section>)}
-        </div>
+        </OwnerWorkGroups>
         {visited.has("board") || lens === "board" ? <div hidden={lens !== "board"}>{board}</div> : null}
         {visited.has("map") || lens === "map" ? <div hidden={lens !== "map"}>{map}</div> : null}
       </section>
@@ -254,8 +254,40 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   </div>;
 }
 
+type OwnerWorkGroupsProps = {hidden: boolean; children: ReactNode};
+
+class OwnerWorkGroups extends Component<OwnerWorkGroupsProps, object, string | null> {
+  private readonly groups = createRef<HTMLDivElement>();
+
+  getSnapshotBeforeUpdate(): string | null {
+    const groups = this.groups.current;
+    const focused = groups?.ownerDocument.activeElement;
+    return focused instanceof HTMLButtonElement && groups?.contains(focused)
+      ? focused.dataset.todoId ?? null : null;
+  }
+
+  componentDidUpdate(_previousProps: OwnerWorkGroupsProps, _previousState: object, todoId: string | null) {
+    // Crossing the summary boundary replaces the button. Restore its focus if
+    // the browser dropped it during this commit and the same task is still here.
+    const groups = this.groups.current;
+    if (!todoId || !groups || groups.closest("[hidden]") || groups.ownerDocument.activeElement !== groups.ownerDocument.body) return;
+    const row = groups.querySelector<HTMLButtonElement>(`button[data-todo-id="${CSS.escape(todoId)}"]`);
+    if (!row) return;
+    const disclosure = row.closest<HTMLDetailsElement>("details.goal-work-more");
+    if (disclosure) disclosure.open = true;
+    row.focus();
+  }
+
+  render() {
+    return <div className="goal-owner-groups" hidden={this.props.hidden} ref={this.groups}>{this.props.children}</div>;
+  }
+}
+
 function RemainingWork({selectedTodoId, label, children}: {selectedTodoId: string | null; label: string; children: ReactNode}) {
   const disclosure = useRef<HTMLDetailsElement>(null);
   useEffect(() => {if (selectedTodoId && disclosure.current) disclosure.current.open = true;}, [selectedTodoId]);
-  return <details className="goal-work-more" ref={disclosure}><summary>{label}</summary>{children}</details>;
+  return <details className="goal-work-more" ref={disclosure}>
+    <summary>{label}</summary>
+    <div>{children}</div>
+  </details>;
 }

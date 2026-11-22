@@ -8,6 +8,7 @@ from pathlib import Path
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
 )
+from ..capabilities.progress_review.context import external_progress_review_context
 from ..capabilities.repository_change_window import (
     repository_delivery_interaction_hook,
 )
@@ -69,6 +70,7 @@ def _build_scheduler_followup_decision(
         scheduler_execution_context=scheduler_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        progress_review_context_reader=external_progress_review_context,
         receipt_bound_todo_id=receipt_todo_id,
         receipt_bound_replan_obligation_id=receipt_replan_id,
         turn_instance_id=turn_instance_id,
@@ -76,6 +78,11 @@ def _build_scheduler_followup_decision(
             repository_delivery_interaction_hook(repo_path=Path.cwd()),
         ),
         goal_ref=goal_ref,
+        # The compatibility ACK/failure route writes scheduler cadence, not
+        # settlement facts: one damaged audit row must not turn a valid return
+        # into a failure before the tolerant native fence runs. Exact
+        # settlement branches keep the strict readback.
+        tolerate_malformed_settlement_history=True,
     )
 
 
@@ -105,35 +112,6 @@ def build_scheduler_followup_payload(
         if turn_instance_id
         else None
     )
-    if turn_instance_id and heartbeat_receipt is None:
-        return {
-            "ok": False,
-            "schema_version": "quota_scheduler_followup_receipt_failure_v0",
-            "mode": args.quota_command,
-            "goal_id": args.goal_id,
-            "agent_id": args.agent_id,
-            "turn_instance_id": turn_instance_id,
-            "decision": "skip",
-            "should_run": False,
-            "status": "heartbeat_receipt_missing",
-            "state": "blocked_receipt",
-            "error_code": "SCHEDULER_FOLLOWUP_HEARTBEAT_RECEIPT_MISSING",
-            "reason": (
-                "scheduler follow-up requires the originating heartbeat receipt; "
-                "refusing to rebuild authority from the current live frontier"
-            ),
-            "retry_guidance": (
-                "retry with the exact Turn id from a committed quota should-run "
-                "heartbeat receipt"
-            ),
-            "write_performed": False,
-            "appended": False,
-            "registry_mutated": False,
-            "scheduler_state_mutated": False,
-            "quota_spend_performed": False,
-            "delivery_outcome": "surface_only",
-        }
-
     observed_rrule = str(
         getattr(args, "app_automation_current_rrule", None)
         or getattr(args, "codex_app_current_rrule", None)
@@ -228,6 +206,9 @@ def build_scheduler_followup_payload(
             failed_rrule=args.failed_rrule,
             observed_host_rrule=observed_rrule,
             failure_kind=args.failure_kind,
+            turn_instance_id=turn_instance_id,
+            goal_ref=goal_ref,
+            registry_path=registry_path,
         )
     return record_quota_scheduler_ack(
         status_payload,
@@ -248,4 +229,7 @@ def build_scheduler_followup_payload(
         scheduler_execution_context=scheduler_context,
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         before_decision=before_decision,
+        turn_instance_id=turn_instance_id,
+        goal_ref=goal_ref,
+        registry_path=registry_path,
     )

@@ -177,7 +177,8 @@ for (const inputKind of ["boolean", "number", "select", "string_list"]) {
 }
 assert.match(tasks, /t\("tasks\.convertToTask"\)/, "Tasks offer an explicit preview-first bridge from a reply to task management");
 assert.match(page, /t\("home\.taskCount"/, "Home cards expose durable activity when a new Goal has Todos but no run timestamp yet");
-assert.match(page, /t\("proposal\.primary\.goalCreate"\)/, "Goal creation names the localized immediate first-turn effect");
+assert.match(page, /t\(reviewPlan\.creationExecution \? "proposal\.primary\.goalCreate" : "proposal\.primary\.goalCreateOnly"\)/,
+  "Goal creation describes starting only when the canonical plan has explicit execution intent");
 assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated proposals are grouped into a compact summary");
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
@@ -210,8 +211,8 @@ assert.match(page, /\.map\(\(\[key, value\]\) => \(\{[\s\S]*key,[\s\S]*label: fi
 assert.match(page, /field\.key === "cadence"[\s\S]*field\.key === "stop_condition"[\s\S]*field\.key === "timezone"/, "Applied Heartbeat readback consumes stable semantic keys");
 assert.doesNotMatch(page, /field\.label === "cadence"|field\.label === "stop condition"/, "Schedule semantics never depend on localized display labels");
 assert.match(page, /defaultTimeline\(model, managerProjectionId, t\)/, "Default schedule projection uses the active locale authority");
-assert.match(page, /onOpenGoal: \(goalId\) => \{\s*selectGoal\(goalId\);\s*void reconcileStatus\(\[goalId\]\)/, "Applied-action Goal navigation is immediate and reconciles that Goal in the background");
-assert.match(drawer, /onClose\(\); void callbacks\.onOpenGoal\?\.\(goalId\)/, "Applied-action Goal navigation closes its result drawer before asynchronous reconciliation");
+assert.match(page, /onOpenGoal: \(goalId, managedSession\) => \{\s*selectGoal\(goalId, managedSession \? "chat" : "overview", managedSession\);\s*void reconcileStatus\(\[goalId\]\)/, "Applied-action navigation carries the original managed Session and reconciles its Goal in the background");
+assert.match(drawer, /onClose\(\); void callbacks\.onOpenGoal\?\.\(goalId, selection\.item\.createdManagedSession\?\.target\)/, "Applied-action navigation closes its drawer before opening the original Session or legacy Goal");
 assert.match(tasks, /aria-busy=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)/, "Quick Todo completion exposes accessible pending state while its typed preview is prepared");
 assert.match(tasks, /disabled=\{quickCompletingTodoIds\?\.has\(todo\.todoId\)\}/, "Quick Todo completion rejects duplicate clicks while preview creation is pending");
 assert.match(page, /callbacks\.onGoalActivationStateChange\?\.\(lifecycleChange\.goalId, lifecycleChange\.next\)/, "Goal lifecycle apply projects the requested state before the server responds");
@@ -396,6 +397,14 @@ for (const contextGoalId of [null, "existing-research-goal"]) {
   assert.equal(request.context.goal_id, contextGoalId);
   assert.equal(request.normalizedParameters.goal_id, "goal-new-research");
   assert.notEqual(request.normalizedParameters.goal_id, contextGoalId);
+  assert.equal(Object.hasOwn(request.normalizedParameters, "start_execution"), false,
+    "Existing builder callers never infer execution intent from Create and start wording");
+}
+for (const permission of ["read_only", "workspace_write_on_confirmation"]) {
+  const fresh = goalCreateRequest({objective: "Repair the cart", completion: "Six checks pass", boundary: "Selected workspace",
+    agentId: "codex", permission, contextGoalId: null, startExecution: true}, key => key);
+  assert.equal(fresh.normalizedParameters.start_execution, true);
+  assert.equal(fresh.normalizedParameters.permission, permission, "Fresh execution preserves the explicit existing permission choice");
 }
 const explicitWorkspace = goalCreateRequest({
   objective: "Inspect the second project", completion: "A checked report", boundary: "Read only",
@@ -493,11 +502,12 @@ for (const capabilityId of [
   "pull_request_review",
   "reward_memory",
   "steward_executor",
+  "steward_memory",
 ]) {
   const matches = capabilityLocalization.match(new RegExp(`${capabilityId}:`, "g")) ?? [];
   assert.equal(matches.length, 2, `${capabilityId} has English and Simplified Chinese metadata`);
 }
-for (const fieldKey of ["agent_orders", "allowed_domains", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone"]) {
+for (const fieldKey of ["agent_orders", "allowed_domains", "auto_recall", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "recall_timeout_seconds", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone", "user_space"]) {
   const matches = capabilityLocalization.match(new RegExp(`^\\s+${fieldKey}:`, "gm")) ?? [];
   assert.equal(matches.length, 2, `${fieldKey} has English and Simplified Chinese field copy`);
 }
@@ -725,10 +735,12 @@ const overview = source("./goal-overview.tsx");
 const overviewCss = source("./goal-overview.css");
 const researchHistory = source("./goal-research-history.tsx");
 const researchHistoryCss = source("./goal-research-history.css");
+const yardstickReadback = source("./work-yardstick-readback.tsx");
 
 assert.match(overview, /goal-overview-worker-status[\s\S]*?<ContextHelp/, "WorkerReadback puts explanation into ContextHelp beside status");
 assert.match(overview, /details className="goal-overview-worker-details"/, "WorkerReadback technical details start collapsed");
 assert.match(overviewCss, /\.goal-overview-worker-status\s*\{[^}]*display:\s*flex/, "Worker status row is structured via flex");
 assert.match(overviewCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.goal-overview-worker-state dl/, "Worker state has narrow mobile grid rules");
-assert.match(researchHistory, /execution_observation[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
+assert.match(researchHistory, /execution_observation[\s\S]*?<ExecutionObservationReadback/, "Research history delegates execution_observation rendering to ExecutionObservationReadback");
+assert.match(yardstickReadback, /export function ExecutionObservationReadback[\s\S]*?<summary>[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
 assert.match(researchHistoryCss, /margin-inline-start:\s*0;\s*margin-top:\s*8px;/, "Research history mobile action wraps cleanly on 390px");

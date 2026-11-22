@@ -198,7 +198,7 @@ def offer_team_plan_confirmation(
     something the owner can act on, and it does exactly two things for a manager
     channel: it appends one typed pointer line naming the Goal and stores one
     provider-neutral proposal. Local and remote surfaces may then render that
-    exact proposal; neither surface gains authority to create a second action.
+    exact proposal.
 
     The steward's prose is preserved: the added line is an operational receipt
     from the channel, in the same way the delegation path states its own receipt,

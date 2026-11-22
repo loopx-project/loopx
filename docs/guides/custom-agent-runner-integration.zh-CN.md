@@ -79,7 +79,7 @@ packet 会返回当前 doctor/install、bootstrap command pack、quota guard 和
 `loopx-change-quality` 列为 active project skill；host 需要交付该 workflow，
 或注入等价的自包含 prepare packet 指令。随后 readback integration mode、
 loaded skill ids 和 source revision。不要假设未知 host 采用 Codex、Claude 或
-OpenCode 的目录布局。加载质量 skill 不代表启用，是否生效由当前 goal policy 决定。
+OpenCode 的目录布局。
 
 如果 host 没有 skill 系统，就注入等价的 `SKILL.md` 指令，并保留一段短
 re-entry instruction，要求 Agent：
@@ -116,7 +116,7 @@ loopx --format json \
    除非已有明确 assignment。
 4. **执行：** 只把当前 objective、selected todo、boundary、紧凑 evidence ref 和 writeback
    contract 交给 Agent，让它动态规划本轮有界动作。
-5. **验证：** 读取真实 repository、测试、CI、服务或 Provider 结果。Agent 自称完成不是 proof。
+5. **验证：** 读取真实 repository、测试、CI、服务或 Provider 结果。
 6. **写回：** complete、update、block、defer 或新增 successor todo，记录紧凑 evidence，
    再运行 `refresh-state`。
 7. **计费：** 只有验证通过并完成持久 writeback 后才 spend。validator 失败、cadence 更新、
@@ -156,7 +156,7 @@ cat ./guard-001/decision.json
 其他 CLI 结果可以由 runner 直接把 stdout 保存到新的私有文件，同时保留 stderr 和
 原始退出码。不要让管道或后续读文件操作掩盖失败，也不要仅为补存输出而重跑写操作。
 尤其是 spend，必须按当前结算合同只执行一次。原始结果不进入公开产物；宿主生命周期
-回执仍单独保留。本例不会自动给现有 worker 开启捕获，也不证明模型效率已经改善。
+回执仍单独保留。本例不会自动给现有 worker 开启捕获。
 
 ## 选择合适的执行边界
 
@@ -173,7 +173,7 @@ LoopX Turn:              决策 -> 执行 -> 验证 -> 提交
 | **LoopX Turn adapter（experimental）** | 希望由一条 typed command 完成 plan、调用一次 bounded host、验证和 commit | 使用 `turn run-once` 的内置 `codex-cli` adapter，或薄 `generic-cli` adapter |
 
 直接编排 CLI 是当前兼容基线；LoopX Turn 是 runner 内部 experimental 的
-transaction boundary，不是常驻 scheduler 或多 Agent 调度中枢。每个 tick 只能有一个
+transaction boundary。每个 tick 只能有一个
 decide、validate、writeback 和 spend owner；同一逻辑动作不能同时跑手工闭环与
 `turn run-once`。
 

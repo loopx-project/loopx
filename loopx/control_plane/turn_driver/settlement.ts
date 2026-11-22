@@ -260,7 +260,7 @@ function reductionWithTurnOutcome(
   state: TurnSettlementState,
   receipts: SettlementResult<unknown>["receipts"],
   terminalPayload: JsonObject | null,
-  identity: BoundSettlementIdentity,
+  _identity: BoundSettlementIdentity,
 ): TurnSettlementOutcome {
   validateTurnOutcomeKind(request);
   const result = settlementPure(state, receipts);

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "2.3.0"
+version = "2.4.0"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -81,6 +81,7 @@ include = ["loopx*"]
 
 [tool.setuptools.package-data]
 "loopx" = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
+"loopx.cli_commands" = ["public_default_contract.json"]
 "loopx.control_plane" = ["*.json", "*.ts", "presentation/*.ts"]
 "loopx.semantics" = ["*.json"]
 "loopx.control_plane.agents" = ["*.ts"]
@@ -98,7 +99,7 @@ include = ["loopx*"]
 "*" = ["README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]
 "loopx.capabilities.content_ops" = ["templates/*.json", "experiences/*.json"]
 "loopx.capabilities.pr_review_queue" = ["experiences/*/*/*.json", "experiences/*.md"]
-"loopx.capabilities.manager_context" = ["skills/loopx-manager/SKILL.md"]
+"loopx.capabilities.manager_context" = ["*.ts", "skills/loopx-manager/SKILL.md"]
 "loopx.extensions.lark" = ["extension.toml", "README.md", "docs/*.md"]
 "loopx.extensions.openviking_periodic_report" = ["extension.toml"]
 "loopx.extensions.openviking_semantic_preference" = ["extension.toml"]
@@ -202,7 +203,7 @@ include = ["loopx*"]
 [tool.pytest.ini_options]
 markers = ["stage2c_e2e: real process Stage 2C correctness and recovery acceptance"]
 # Private snapshots and packaging copies are not source tests; optional provider suites have dedicated workflows.
-norecursedirs = [".local", "build", "dist", "deprecate", "packages/loopx-ark-turn", "packages/loopx-memt-turn"]
+norecursedirs = [".*", "*.egg", ".local", "build", "dist", "deprecate", "node_modules", "venv", "packages/loopx-ark-turn", "packages/loopx-memt-turn"]
 
 [tool.coverage.run]
 source = ["loopx"]

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import build_parser
+from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
 from scripts.codex_app_apply_rrule import (
     _load_scheduler_hint,
     _now_ms,
@@ -165,6 +166,37 @@ def test_scheduler_hint_replays_parent_turn_without_synthetic_capabilities(
     assert len(replay_turn) <= 128
     assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", replay_turn)
     assert "--available-capability" not in calls[0]
+
+
+@pytest.mark.parametrize("has_canonical_hint", [True, False])
+def test_complete_hint_uses_only_canonical_scheduler_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, has_canonical_hint: bool
+) -> None:
+    payload = _hint_payload(apply_needed=True)
+    payload["schema_version"] = COMPLETE_TURN_DECISION_VERSION
+    canonical = {"stateful_backoff": {"apply_needed": False, "ack_needed": True}}
+    if has_canonical_hint:
+        payload["scheduler_hint"]["app_automation"] = canonical
+    bound_root = tmp_path / "original-runtime"
+
+    def fake_run(command, **kwargs):
+        option = command.index("--runtime-root")
+        assert command[option + 1] == str(bound_root)
+        assert command[option + 2 : option + 4] == ["quota", "should-run"]
+        return _FakeCompleted(payload)
+
+    monkeypatch.setattr("scripts.codex_app_apply_rrule.subprocess.run", fake_run)
+    app, state = _load_scheduler_hint(
+        loopx="loopx",
+        registry=tmp_path / "registry.json",
+        goal_id="loopx-meta",
+        agent_id="codex-fixture",
+        parent_turn_instance_id="original-turn",
+        capabilities=[],
+        runtime_root=bound_root,
+    )
+    assert app == (canonical if has_canonical_hint else {})
+    assert state.get("apply_needed") is not True
 
 
 def test_default_app_stores_follow_codex_home_and_capabilities_are_explicit(
@@ -404,6 +436,7 @@ def test_apply_creates_missing_automation_toml_and_sqlite(
     automations_root = tmp_path / "automations"
     db_path = tmp_path / "codex-dev.db"
     registry_path = tmp_path / "registry.json"
+    runtime_root = tmp_path / "original-runtime"
     sqlite3.connect(str(db_path)).close()
     registry_path.write_text(
         json.dumps(
@@ -429,6 +462,9 @@ def test_apply_creates_missing_automation_toml_and_sqlite(
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
+        if "should-run" in command or "heartbeat-prompt" in command:
+            option = command.index("--runtime-root")
+            assert command[option + 1] == str(runtime_root)
         if "should-run" in command:
             return _FakeCompleted(_hint_payload(apply_needed=True))
         if "heartbeat-prompt" in command:
@@ -454,6 +490,8 @@ def test_apply_creates_missing_automation_toml_and_sqlite(
             str(db_path),
             "--registry",
             str(registry_path),
+            "--runtime-root",
+            str(runtime_root),
             "--goal-id",
             "goal",
             "--agent-id",

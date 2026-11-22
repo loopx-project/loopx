@@ -91,6 +91,38 @@ class StewardReports:
             return {"turn_id": turn["turn_id"], "todo_id": request["todo_id"]}
         return None
 
+    def _cancellable_failed_window(self, actor: dict[str, Any], window: dict[str, Any]) -> dict[str, str] | None:
+        """Identify a terminal failed report attempt that owner cancel may retire."""
+        known = self._known_generation_failure(actor, window)
+        if known is not None:
+            return known
+        from .steward_turn import report_turn
+        folder = attempt_directory(self.root, window)
+        if any(path.is_symlink() or not path.is_file()
+                for path in (folder / "source.json", folder / "editorial-request.json")):
+            return None
+        for name in ("editorial-response.json", "generation-bundle.json", "report.md",
+                     "publication-candidate.json", "private-generation.json", "private-delivery.json"):
+            try:
+                (folder / name).lstat()
+            except FileNotFoundError:
+                continue
+            return None
+        turn = report_turn(self.controller.store, actor, window)
+        request = (turn or {}).get("loopx_request") or {}
+        native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
+        failure = native.get("host_failure") or {}
+        if (turn and turn.get("status") == "completed" and native.get("status") == "failed"
+                and native.get("result_kind") == "host_failure" and failure.get("retryable") is False
+                and native.get("effects") == {"host_invoked": True, "state_written": False,
+                    "quota_spent": False, "scheduler_acknowledged": False}
+                and request.get("actor") == actor and request.get("work_kind") == "report"
+                and request.get("report_window_id") == window["window_id"]
+                and request.get("report_subscription_revision") == window["subscription_revision"]
+                and isinstance(request.get("todo_id"), str) and bool(request["todo_id"])):
+            return {"turn_id": turn["turn_id"], "todo_id": request["todo_id"]}
+        return None
+
     def _execution_failed(self, actor: dict[str, Any], window: dict[str, Any]) -> bool:
         """Observe the current attempt; this grants no cancellation or retry."""
         from .steward_turn import report_turn
@@ -149,7 +181,7 @@ class StewardReports:
                     or turn.get("session_id") != sid or request.get("actor") != actor
                     or request.get("work_kind") != "report" or request.get("report_window_id") != window["window_id"]
                     or request.get("report_subscription_revision") != window["subscription_revision"]
-                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery"}
+                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery", operation + ".timeout-recovery"}
                     or not request.get("todo_id") or result.get("status") != "failed"
                     or result.get("result_kind") != "host_failure" or failure.get("retryable") is not False
                     or receipt.get("ok") is not True or receipt.get("failed_phase") != "host_execute"
@@ -183,7 +215,7 @@ class StewardReports:
         from ..periodic_report.cadence_journal import (
             _retire_failed_cadence_window_locked, retire_failed_cadence_window,
         )
-        if self._known_generation_failure(actor, window) != failure:
+        if self._cancellable_failed_window(actor, window) != failure:
             raise ValueError("the original failed report changed before cancellation")
         native_command(self.controller, ["todo", "update", "--goal-id", actor["goal_id"],
             "--todo-id", failure["todo_id"], "--agent-id", actor["agent_id"],
@@ -222,7 +254,7 @@ class StewardReports:
             pending = None
             failure = None
             if journal:
-                failure = self._known_generation_failure(actor, journal["window"])
+                failure = self._cancellable_failed_window(actor, journal["window"])
                 pending = {"subscription_revision": journal["window"]["subscription_revision"],
                     "prepared": (attempt_directory(self.root, journal["window"]) / "editorial-request.json").exists(),
                     "verified_publication": self._published_window(journal["window"]),
@@ -394,7 +426,8 @@ class StewardReports:
             rows = [row for row in StewardMonitor(self.controller).todos(actor) if row.get("target_key") == window["window_id"]]
         folder = attempt_directory(self.root, window)
         if len(rows) == 1 and (rows[0]["status"] == "done"
-                or rows[0]["status"] == "open" and (folder / "private-generation.json").exists()):
+                or rows[0]["status"] == "open" and ((folder / "private-generation.json").exists()
+                    or StewardTurnHost(self.controller).has_recoverable_stopped_report(actor, window, rows[0]))):
             StewardTurnHost(self.controller).recover_report_settlement(actor, window, rows[0])
             return None, False
         if len(rows) != 1 or rows[0]["status"] != "open":
@@ -406,7 +439,8 @@ class StewardReports:
         _, window = self.current_window(request["actor"]["goal_id"].removeprefix("steward-agent-"))
         if not window or window["window_id"] != request["report_window_id"]:
             raise ValueError("the admitted original report window is unavailable")
-        reader = getattr(adapter.session, "read_tool_handler", None)
+        reader = (getattr(adapter.session, "read_tool_handler", None)
+            if hasattr(adapter, "session") else getattr(adapter, "_steward_report_reader", None))
         if reader is None or not authorization_scope_id:
             raise ValueError("the original scoped report reader is unavailable")
         session = self.controller.store.load_session(request["actor"]["session_id"])
@@ -484,7 +518,9 @@ def session_report_configuration_guard(controller: Any, goal_id: str, proposed: 
                 after = {k: v for k, v in (proposed or {}).items() if k != "enabled"}
                 if before != after or not current and proposed is None:
                     actor = reports._frozen_actor(window)
-                    failure = reports._known_generation_failure(actor, window) if actor else None
+                    failure = (reports._cancellable_failed_window(actor, window)
+                        if hasattr(reports, "_cancellable_failed_window")
+                        else reports._known_generation_failure(actor, window)) if actor else None
                     if (proposed is not None or not failure) and (current or proposed is not None):
                         if window["profile_ref"]["profile_id"] == "session_task":
                             raise PendingStewardReportError("This calendar task is unfinished or its result is unconfirmed. Pause or restore its original plan; only a known failed independent validation can be cleared.")
@@ -546,10 +582,11 @@ class ManagedSessionReports(StewardReports):
         subscription, window = self.current_window(session_id)
         if subscription is None:
             return None, False
-        if window and (attempt_directory(self.root, window) / "private-generation.json").exists():
+        if window:
             todo = next((row for row in StewardMonitor(self.controller).todos(actor)
                 if row.get("target_key") == window["window_id"]), None)
-            if todo:
+            if todo and ((attempt_directory(self.root, window) / "private-generation.json").exists()
+                    or StewardTurnHost(self.controller).has_recoverable_stopped_report(actor, window, todo)):
                 StewardTurnHost(self.controller).recover_report_settlement(actor, window, todo)
                 self.publish(session_id, window)
         return self._frontier(session_id, actor)

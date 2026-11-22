@@ -160,23 +160,6 @@ def build_delivery_workspace_causality(
     )
 
 
-def normalize_delivery_workspace_causality(
-    value: Any,
-    *,
-    todo_id: str | None = None,
-) -> dict[str, str] | None:
-    prepared = _prepared_causality(value if isinstance(value, Mapping) else None)
-    if prepared is None:
-        return None
-    return _causality_result(
-        _runtime_result(
-            "normalize",
-            expected_todo_id=normalize_todo_id(todo_id),
-            causality=prepared,
-        )
-    )
-
-
 def delivery_workspace_causality_event_fields(
     causality: Mapping[str, Any] | None,
 ) -> dict[str, str]:

@@ -103,7 +103,7 @@ const APPROACH_KEYS = new Set(["approach", "outcome", "reason"]);
 const FILE_KEYS = new Set(["path", "action", "summary"]);
 const DECISION_KEYS = new Set(["decision", "rationale"]);
 
-function boundedString(value: unknown, name: string, max: number): value is string {
+function boundedString(value: unknown, _name: string, max: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;
 }
 

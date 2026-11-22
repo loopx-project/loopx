@@ -89,7 +89,7 @@ def _record_failure(
     generated_at: str,
     observed_host_rrule: str = HOST_30,
 ) -> dict:
-    app = decision["scheduler_hint"]["codex_app"]
+    app = decision["scheduler_hint"]["app_automation"]
     target_rrule = app["recommended_rrule"]
     result = record_quota_scheduler_failure_for_decision(
         decision,
@@ -124,7 +124,7 @@ def test_alternating_cadence_failures_remain_suppressed_until_host_changes(
         scheduler_state=None,
         host_rrule=HOST_30,
     )
-    assert active["scheduler_hint"]["codex_app"]["recommended_rrule"] == ACTIVE_3
+    assert active["scheduler_hint"]["app_automation"]["recommended_rrule"] == ACTIVE_3
     active_failure_state = _record_failure(
         active,
         runtime_root=tmp_path,
@@ -136,7 +136,7 @@ def test_alternating_cadence_failures_remain_suppressed_until_host_changes(
         scheduler_state=active_failure_state,
         host_rrule=HOST_30,
     )
-    assert monitor["scheduler_hint"]["codex_app"]["recommended_rrule"] == MONITOR_15
+    assert monitor["scheduler_hint"]["app_automation"]["recommended_rrule"] == MONITOR_15
     monitor_failure_state = _record_failure(
         monitor,
         runtime_root=tmp_path,
@@ -152,7 +152,7 @@ def test_alternating_cadence_failures_remain_suppressed_until_host_changes(
         scheduler_state=monitor_failure_state,
         host_rrule=HOST_30,
     )
-    active_backoff = active_replay["scheduler_hint"]["codex_app"]["stateful_backoff"]
+    active_backoff = active_replay["scheduler_hint"]["app_automation"]["stateful_backoff"]
     assert active_backoff["current_rrule"] == ACTIVE_3
     assert active_backoff["apply_needed"] is False
     assert active_backoff["state_status"] == "host_update_failure_suppressed"
@@ -162,7 +162,7 @@ def test_alternating_cadence_failures_remain_suppressed_until_host_changes(
         scheduler_state=monitor_failure_state,
         host_rrule=HOST_30,
     )
-    monitor_backoff = monitor_replay["scheduler_hint"]["codex_app"]["stateful_backoff"]
+    monitor_backoff = monitor_replay["scheduler_hint"]["app_automation"]["stateful_backoff"]
     assert monitor_backoff["current_rrule"] == MONITOR_15
     assert monitor_backoff["apply_needed"] is False
     assert monitor_backoff["state_status"] == "host_update_failure_suppressed"
@@ -172,7 +172,7 @@ def test_alternating_cadence_failures_remain_suppressed_until_host_changes(
         scheduler_state=monitor_failure_state,
         host_rrule=HOST_20,
     )
-    changed_app = changed_host["scheduler_hint"]["codex_app"]
+    changed_app = changed_host["scheduler_hint"]["app_automation"]
     assert changed_app["stateful_backoff"]["apply_needed"] is True
     assert changed_app["recommended_rrule"] == ACTIVE_3
     assert "host_update_failures" not in changed_app["stateful_backoff"]
@@ -195,7 +195,7 @@ def test_matching_host_ack_clears_the_failure_cache(tmp_path: Path) -> None:
         scheduler_state=failure_state,
         host_rrule=ACTIVE_3,
     )
-    backoff = host_matched["scheduler_hint"]["codex_app"]["stateful_backoff"]
+    backoff = host_matched["scheduler_hint"]["app_automation"]["stateful_backoff"]
     assert backoff["apply_needed"] is False
     assert backoff["ack_needed"] is True
 
@@ -233,7 +233,7 @@ def test_fallback_ack_retains_other_failed_target_for_same_host(
         scheduler_state=failure_state,
         host_rrule=MONITOR_15,
     )
-    fallback_app = fallback["scheduler_hint"]["codex_app"]
+    fallback_app = fallback["scheduler_hint"]["app_automation"]
     assert fallback_app["stateful_backoff"]["current_rrule"] == MONITOR_15
     assert fallback_app["stateful_backoff"]["apply_needed"] is False
     assert fallback_app["stateful_backoff"]["ack_needed"] is True
@@ -256,7 +256,7 @@ def test_fallback_ack_retains_other_failed_target_for_same_host(
         scheduler_state=fallback_state,
         host_rrule=MONITOR_15,
     )
-    fallback_replay_app = fallback_replay["scheduler_hint"]["codex_app"]
+    fallback_replay_app = fallback_replay["scheduler_hint"]["app_automation"]
     assert fallback_replay_app["stateful_backoff"]["apply_needed"] is False
     assert fallback_replay_app["stateful_backoff"]["ack_needed"] is False
     assert fallback_replay_app["host_action"] == "none"
@@ -266,7 +266,7 @@ def test_fallback_ack_retains_other_failed_target_for_same_host(
         scheduler_state=fallback_state,
         host_rrule=MONITOR_15,
     )
-    replay_app = active_replay["scheduler_hint"]["codex_app"]
+    replay_app = active_replay["scheduler_hint"]["app_automation"]
     assert replay_app["stateful_backoff"]["apply_needed"] is False
     assert replay_app["stateful_backoff"]["ack_needed"] is False
     assert replay_app["stateful_backoff"]["state_status"] == (

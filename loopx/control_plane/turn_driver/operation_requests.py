@@ -1,6 +1,6 @@
 """Invocation-local IO for an operator-frozen operation request.
 
-The locator is neither an actor nor approval. Only the already authenticated
+Only the already authenticated
 native tool handler resolves it; the existing operation service owns admission
 and every proposal/confirmation/consumption transition.
 """

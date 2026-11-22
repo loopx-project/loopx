@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from ...agent_registry import normalize_registered_agents
+from ...agent_registry import load_goal_from_registry, normalize_registered_agents
 from ...ark_managed_agent_host import build_ark_managed_agent_host_contract
 from ...execution_profile import (
     TURN_GRANULARITY_FINE,
@@ -18,6 +18,7 @@ from ..quota.spend_sources import (
     VISIBLE_GOAL_SLOT_SPEND_SOURCE,
 )
 from ..scheduler.execution_context import (
+    HostSurface,
     SchedulerRuntimeProfile,
     render_scheduler_execution_args,
 )
@@ -179,9 +180,7 @@ def _heartbeat_prompt_commands(
     codex_context_dir: str | None,
     codex_context_root: str | None,
     context_delivery: str | None,
-    turn_envelope: bool,
     delta_delivery: str | None = None,
-    complete_turn: bool = False,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
         goal_id,
@@ -297,13 +296,8 @@ def _heartbeat_prompt_commands(
     if delta_delivery == "off" or (context_delivery == "off" and delta_delivery == "auto"):
         capture_arg += " --delta-delivery " + shlex.quote(delta_delivery)
     if capture_arg:
-        display_arg = " --turn-envelope" if turn_envelope else ""
-        for key in ("quota_guard_command", "task_body_quota_guard_command"):
-            commands[key] = str(commands[key]) + display_arg + capture_arg
-        commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + display_arg + capture_arg
-    if complete_turn:
         for key in ("quota_guard_command", "task_body_quota_guard_command", "thin_prompt_command"):
-            commands[key] = str(commands[key]) + " --complete-turn"
+            commands[key] = str(commands[key]) + capture_arg
     return commands
 
 
@@ -325,6 +319,34 @@ def _heartbeat_context_capture_activation(*, context_delivery: str | None, delta
             codex_context_dir, codex_context_root)):
         effective = "off"  # Rendering a prompt does not start native transport.
     return activation, effective, codex_context_dir, codex_context_root
+
+
+def _finalize_heartbeat_task_body(
+    task_body: str,
+    *,
+    turn_instance_id: str | None,
+    fine_grained: bool,
+    native_goal_host: bool,
+    ark_managed_agent_goal: bool,
+    traex_visible_goal: bool,
+) -> str:
+    """Bind settlement and check the complete body against the host limit."""
+    task_body = bind_exact_turn_settlement_task_body(task_body, turn_instance_id=turn_instance_id)
+    if fine_grained:
+        task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"
+    if native_goal_host and len(task_body) > NATIVE_GOAL_HOST_MAX_CHARS:
+        host_limit = (
+            "Ark Managed Agent goal prompt"
+            if ark_managed_agent_goal
+            else "visible TraeX /goal task body"
+            if traex_visible_goal
+            else "visible Codex /goal task body"
+        )
+        raise ValueError(
+            f"generated {host_limit} exceeds the 4000-character host budget; "
+            "shorten agent scopes or project-specific prompt rules"
+        )
+    return task_body
 
 
 def build_heartbeat_prompt(
@@ -526,8 +548,6 @@ def build_heartbeat_prompt(
         codex_context_root=codex_context_root,
         context_delivery=context_delivery,
         delta_delivery=delta_delivery,
-        turn_envelope=turn_envelope,
-        complete_turn=complete_turn,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
     task_body_renderer = _select_task_body_renderer(
@@ -543,6 +563,14 @@ def build_heartbeat_prompt(
         reward_memory_enabled=reward_memory_enabled,
         native_goal_host=native_goal_host,
         ark_managed_agent_goal=ark_managed_agent_goal,
+    )
+    is_antigravity_app = (
+        runtime_profile == SchedulerRuntimeProfile.ANTIGRAVITY_APP.value
+        or (
+            isinstance(scheduler_execution_context, dict)
+            and scheduler_execution_context.get("host_surface")
+            == HostSurface.ANTIGRAVITY_APP.value
+        )
     )
     task_body = task_body_renderer(
         goal_id=goal_id,
@@ -563,29 +591,22 @@ def build_heartbeat_prompt(
         compact_prompt_command=str(commands["compact_prompt_command"]),
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
-        **({"captured_envelope": True} if turn_envelope else {}),
         **({"captured_context": True} if native_goal_host and effective_context_delivery == "on" else {}),
+        **(
+            {"antigravity_app": True}
+            if is_antigravity_app and not (traex_visible_goal or ark_managed_agent_goal or native_goal_host)
+            else {}
+        ),
         **reward_memory_rule_kwargs,
     )
-    task_body = bind_exact_turn_settlement_task_body(
+    task_body = _finalize_heartbeat_task_body(
         task_body,
         turn_instance_id=normalized_turn_instance_id,
-        captured_envelope=turn_envelope,
+        fine_grained=fine_grained,
+        native_goal_host=native_goal_host,
+        ark_managed_agent_goal=ark_managed_agent_goal,
+        traex_visible_goal=traex_visible_goal,
     )
-    if fine_grained:
-        task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"
-    if native_goal_host and len(task_body) > NATIVE_GOAL_HOST_MAX_CHARS:
-        host_limit = (
-            "Ark Managed Agent goal prompt"
-            if ark_managed_agent_goal
-            else "visible TraeX /goal task body"
-            if traex_visible_goal
-            else "visible Codex /goal task body"
-        )
-        raise ValueError(
-            f"generated {host_limit} exceeds the 4000-character host budget; "
-            "shorten agent scopes or project-specific prompt rules"
-        )
     payload = {
         "ok": True,
         "goal_id": goal_id,
@@ -651,7 +672,6 @@ def build_heartbeat_prompt(
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
-            captured_envelope=turn_envelope,
         ),
         "task_body": task_body,
     }
@@ -660,6 +680,14 @@ def build_heartbeat_prompt(
     if fine_grained:
         payload["turn_granularity"] = TURN_GRANULARITY_FINE
         payload["turn_mode"] = "fine_grained"
+    if registry_path:
+        from ..coordination.remote_authority_gateway import (
+            get_remote_authority_projection,
+            remote_authority_config,
+        )
+
+        if cfg := remote_authority_config(load_goal_from_registry(Path(registry_path), goal_id)):
+            payload["remote_authority"] = get_remote_authority_projection(goal_id, cfg)
     payload["agent_model"] = AgentRuntimeModel.PEER_V1.value
     return _prune_prompt_metadata(payload, thin=thin, brief=brief)
 

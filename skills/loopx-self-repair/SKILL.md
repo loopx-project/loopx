@@ -43,9 +43,13 @@ not only an apology or a one-off explanation.
      the matching durable outcome requirements through
      [outcome refinement](../loopx-project/references/outcome-refinement.md).
      Read back and reconcile affected work before dependent execution. Preserve
-     unaffected requirements; change the Goal objective only when its purpose
-     changes. Chat, a peer message, a report or Vision alone cannot update
-     acceptance. Do not invent a new approval, goal or text classifier.
+     unaffected requirements. A changed purpose or added lasting responsibility
+     in the current Goal uses its objective revision route. For an addition, keep
+     existing commitments and reconcile Todos in that Goal. Use existing creation
+     for an explicit separate Goal and reconcile scope conflicts before revising.
+     Chat, a peer message, a report or
+     Vision alone cannot update acceptance. Do not invent a new approval, goal
+     or text classifier.
    - If the corrected requirements also change the execution route, the agent
      missed the intended loop, or a product bottleneck is invisible in
      quota/status, write a bounded `goal_vision_replan_contract_v0` packet with
@@ -83,12 +87,11 @@ verify that the public entrypoint admits independent work before continuing it.
 Preserve actual authority, budget and stop conditions; when no useful authorized
 work remains, retain the evidenced wait rather than inventing activity. Never
 erase receipts or fabricate progress to escape a wait. See
-[settlement classification](../../docs/quota-allocation.md#allocation-contract).
+[settlement classification](https://github.com/loopx-project/loopx/blob/main/docs/quota-allocation.md#allocation-contract).
 
 ## Upstream Issue Escalation
 
-A public GitHub issue is an optional final escalation, not a default side
-effect of self-repair. Consider it only when the responsible layer is a
+A public GitHub issue is an optional final escalation. Consider it only when the responsible layer is a
 reusable LoopX product, CLI, skill, installer, or control-plane gap and durable
 upstream tracking adds value beyond the local repair or PR.
 
@@ -187,9 +190,9 @@ replan, or terminal closeout must return to the strict semantic checkpoint.
 - For guarded public GitHub issue escalation, read
   `references/upstream-issue-escalation.md`.
 - For user/agent/state channel semantics, read
-  `../../docs/state-interaction-model.md` and
-  `../../docs/concepts/interaction-pattern-catalog.md`.
+  [docs/state-interaction-model.md](https://github.com/loopx-project/loopx/blob/main/docs/state-interaction-model.md) and
+  [docs/concepts/interaction-pattern-catalog.md](https://github.com/loopx-project/loopx/blob/main/docs/concepts/interaction-pattern-catalog.md).
 - For quota and heartbeat decisions, read
-  `../../docs/quota-allocation.md` and
-  `../../docs/heartbeat-automation-prompt.md`.
-- For commit/PR hygiene failures, read `../../AGENTS.md`.
+  [docs/quota-allocation.md](https://github.com/loopx-project/loopx/blob/main/docs/quota-allocation.md) and
+  [docs/heartbeat-automation-prompt.md](https://github.com/loopx-project/loopx/blob/main/docs/heartbeat-automation-prompt.md).
+- For commit/PR hygiene failures, read [AGENTS.md](https://github.com/loopx-project/loopx/blob/main/AGENTS.md).

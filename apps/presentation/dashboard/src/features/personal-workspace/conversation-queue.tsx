@@ -5,6 +5,8 @@ import { ChatApiError, chatQueueInputRequestSchema, fetchQueuedChatInput, mutate
 import { composerKeyAction } from "./composer-keyboard";
 import { DocumentAttachment, isTextDocument } from "./document-attachment";
 import { ContextHelp } from "./context-help";
+import { ConversationReplyContext } from "./conversation-requests";
+import { MarkdownText } from "./markdown";
 import { queueInputKeys, readQueueInputRecovery, retireQueueInputRequest } from "./queue-input-recovery";
 import { RetainedQueueInputs } from "./retained-queue-inputs";
 import { useWorkspaceI18n } from "./i18n";
@@ -135,7 +137,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
     {open ? <div className="personal-queue-message">
       {failed ? <p role="alert">{zh ? "完整消息读取失败" : "Full message unavailable"}<button type="button" onClick={() => setRetry(value => value + 1)}>{zh ? "重试" : "Retry"}</button></p>
         : !message ? <p role="status">{zh ? "正在读取完整消息…" : "Reading the full message…"}</p>
-        : <><p>{message.message}</p>
+        : <><MarkdownText text={message.message}/><ConversationReplyContext context={message.reply_context} zh={zh}/>
           {message.attachments?.map(attachment => isTextDocument(attachment.mime_type)
             ? <DocumentAttachment key={attachment.id} dataUrl={attachment.data_url} name={attachment.name} size={attachment.size} zh={zh}/>
             : <img key={attachment.id} src={attachment.data_url} alt={attachment.name}/>)}</>}

@@ -5,7 +5,9 @@ here; the Chat controller continues to own Session/Turn admission and effects.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import logging
@@ -16,6 +18,7 @@ import subprocess
 import threading
 import time
 from typing import Any, Callable, Mapping, TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ...chat_agent import (
     CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError,
@@ -26,6 +29,7 @@ from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController
+    from .external_conversations import ChatExternalConversations
 
 
 # Keep each native import bounded independently of the model's available context.
@@ -99,7 +103,7 @@ class NativeWorkingContinuation:
 
 @dataclass
 class NativeHistoryRestoration:
-    """Live guards for unpublished model preparation, not a new work queue."""
+    """Live guards for unpublished model preparation."""
 
     controller: Any
     session: dict[str, Any]
@@ -172,6 +176,21 @@ class NativeHistoryRestoration:
             if isinstance(provider, str) and 1 <= len(provider) <= 128:
                 return provider
         return None
+
+    def resume_working_model(self, *, codex_home: Path) -> None:
+        """Keep the verified working thread when only its machine model changes."""
+        from .codex_auth import recorded_provider
+
+        checkpoint = self.session.get("native_working_checkpoint")
+        thread_id = self.session["upstream_thread_id"]
+        if (self.binding is None or str(codex_home) != self.session.get("codex_home")
+                or not checkpoint or checkpoint["thread_id"] != thread_id):
+            return
+        provider = recorded_provider(codex_home, thread_id)
+        if not provider or provider != checkpoint["provider"]:
+            raise CodexChatAgentError("The original Codex working checkpoint could not be verified.",
+                error_code="resume_failed", gate=None)
+        self.working_continuation = NativeWorkingContinuation(thread_id, provider, [])
 
     def park_working_context(self, stored: list[dict[str, Any]], *, provider: str | None,
                              affinity: str) -> dict[str, Any] | None:
@@ -311,10 +330,12 @@ class NativeHistoryRestoration:
                 )):
                     self.invalidated = True
                     raise CodexChatAgentError("Working route changed during native continuation", error_code="resume_failed", gate=None)
-                messages = controller.store.messages(sid, strict=True)
-                if self._working_suffix(messages, original["parked_native_working"]) != self.working_continuation.suffix:
-                    self.invalidated = True
-                    raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
+                parked = original.get("parked_native_working")
+                if parked is not None:
+                    messages = controller.store.messages(sid, strict=True)
+                    if self._working_suffix(messages, parked) != self.working_continuation.suffix:
+                        self.invalidated = True
+                        raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
             self.route_check()
 
     def finish(self) -> None:
@@ -426,6 +447,63 @@ def compact_native_history(
             return import_headroom
 
 
+def _loopback_api_fallback_auth_failure(error: Any) -> dict[str, Any] | None:
+    """Return the typed error payload only for local OpenAI relay 401 failures."""
+    info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
+    if not isinstance(info, dict) or len(info) != 1:
+        return None
+    variant, detail = next(iter(info.items()))
+    if (variant not in {"httpConnectionFailed", "responseStreamConnectionFailed"}
+            or not isinstance(detail, dict) or type(detail.get("httpStatusCode")) is not int
+            or detail.get("httpStatusCode") != 401):
+        return None
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str) or "OpenAI API fallback request could not complete., url: " not in message:
+        return None
+    _, url_part = message.rsplit(", url: ", 1)
+    url_token = url_part.split()[0] if url_part.split() else ""
+    parsed = urlsplit(url_token)
+    if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+            or parsed.port is None or not 1024 <= parsed.port <= 65535
+            or parsed.path not in {"/v1/responses", "/steward/v1/responses"}):
+        return None
+    return info
+
+
+def _loopback_relay_transport_ready(runtime_root: Path, codex_home: Path, consumer: str) -> tuple[bool, float]:
+    """Verify current native-account or relay health for recovering a relay-401 Turn."""
+    from loopx_codex_provider_routing import openai_relay
+    from loopx_codex_provider_routing.native import NativeAccounts
+    from loopx_codex_provider_routing.native_host import HostError
+
+    owner = NativeAccounts(runtime_root)
+    now = float(int(time.time()))
+    try:
+        state = owner._load()
+        adapter = state.get("adapter")
+        profile_home = adapter.get("profile", {}).get("home") if isinstance(adapter, dict) else None
+        if not isinstance(profile_home, str) or not profile_home:
+            return False, now
+        if Path(profile_home).expanduser().resolve() != codex_home.expanduser().resolve():
+            return False, now
+        transport = owner.model_transport(codex_home=codex_home, consumer=consumer)
+        if transport is not None:
+            relay = openai_relay.route(owner)
+            return bool(openai_relay.healthy(relay, consumer=consumer) and owner.api_keys().candidates("")), now
+        status = owner.status()
+        if status.get("available") is not True or status.get("recovery_required") is not False or status.get("login_matches") is not True:
+            return False, now
+        if status.get("api_active") is True:
+            relay = openai_relay.route(owner)
+            return bool(openai_relay.healthy(relay, consumer=consumer) and owner.api_keys().candidates("")), now
+        active_slot = status.get("active_slot")
+        accounts = {row.get("slot"): row for row in (status.get("accounts") or []) if isinstance(row, dict)}
+        return (isinstance(active_slot, str) and bool(active_slot)
+                and accounts.get(active_slot, {}).get("availability") == "available"), now
+    except (HostError, ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return False, now
+
+
 def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
     """Observe a historical pre-execution failure without resuming it.
 
@@ -463,6 +541,10 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             # can use the compaction exception to that inventory.
             return {"codex_error_info": "other", "pre_execution_routing_timeout": True,
                     "latest_routing_failure": ids[0] == turn_id}
+        loopback_auth_info = _loopback_api_fallback_auth_failure(selected.get("error"))
+        if loopback_auth_info is not None:
+            return {"codex_error_info": loopback_auth_info, "loopback_relay_auth_failure": True,
+                    "latest_routing_failure": ids[0] == turn_id}
         info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
         # `other` is evidence of a failed native request, not permission to
         # retry it. The typed admission owner separately decides whether
@@ -483,7 +565,8 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         if proof is None:
             return None
         items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
-        routing = proof.get("pre_execution_routing_timeout") is True
+        routing = (proof.get("pre_execution_routing_timeout") is True
+                   or proof.get("loopback_relay_auth_failure") is True)
         allowed = ({"userMessage", "contextCompaction"}
             if routing and proof["latest_routing_failure"] else {"userMessage"})
         ids: set[str] = set()
@@ -737,6 +820,16 @@ def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) ->
 class CodexAppServerAdapter:
     session: CodexChatAgentSession
     goal_driver: CodexGoalDriver | None = None
+    _managed_read_turn_guard: Callable[[], None] | None = field(default=None, repr=False)
+
+    @property
+    def team_plan_context(self) -> Mapping[str, Any] | None:
+        return self.session.team_plan_context
+
+    @team_plan_context.setter
+    def team_plan_context(self, context: Mapping[str, Any] | None) -> None:
+        # The native response parser runs inside the owning Session.
+        self.session.team_plan_context = context
 
     def completed_work_observation(self, *, thread_ids: list[str], turn_id: str,
                                    known_turn_ids: set[str] | None = None) -> dict[str, Any] | None:
@@ -780,7 +873,9 @@ class CodexAppServerAdapter:
                                    allow_untyped_result_review: bool = False,
                                    known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
-                                   model_auth_home: Path | None = None) -> dict[str, Any] | None:
+                                   model_auth_home: Path | None = None,
+                                   runtime_root: Path | None = None,
+                                   consumer: str = "worker") -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
         The initialized stdio client is not a listener or a model runner. It
@@ -817,8 +912,7 @@ class CodexAppServerAdapter:
                 if proof is not None:
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
-                        # neither a reset clock nor a generic successful RPC
-                        # establishes usable allowance. Absence fails closed.
+                        #  Absence fails closed.
                         try:
                             from loopx_codex_provider_routing.native import policy
                             from loopx_codex_provider_routing.native_host import read_usage
@@ -838,6 +932,14 @@ class CodexAppServerAdapter:
                                 quota_observed_at=now)
                         except (ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                             proof["quota_available"] = False
+                    elif proof.get("loopback_relay_auth_failure") is True:
+                        proof["relay_transport_ready"] = False
+                        if runtime_root is not None:
+                            try:
+                                ready, observed_at = _loopback_relay_transport_ready(runtime_root, codex_home, consumer)
+                                proof.update(relay_transport_ready=ready, relay_observed_at=observed_at)
+                            except (ImportError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                                proof["relay_transport_ready"] = False
                     return proof
                 if time.monotonic() >= deadline:
                     break
@@ -1003,8 +1105,35 @@ class CodexAppServerAdapter:
             "steering": True,
         }
 
-    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
-        return self.session.send(message, on_event=event_sink)
+    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None], *,
+                   reply_image_turn_id: str | None = None) -> dict[str, Any]:
+        return self.session.send(message, on_event=event_sink, **self._ordinary_turn_arguments(),
+            **({"reply_image_turn_id": reply_image_turn_id} if reply_image_turn_id is not None else {}))
+
+    def _ordinary_turn_arguments(self):
+        check = self._managed_read_turn_guard
+        if check is None:
+            return {}
+        previous_guard = self.session._launch_guard
+        @contextmanager
+        def read_turn():
+            check()
+            if previous_guard is None:
+                yield
+            else:
+                with previous_guard():
+                    check()
+                    yield
+        # Native sandboxPolicy is sticky across subsequent Turns. Reassert the
+        # current managed Chat read boundary without changing Session defaults.
+        return {"sandbox_policy": {"type": "readOnly", "networkAccess": False},
+            "turn_start_guard": read_turn}
+
+    def start_native_task_turn(self, message: str,
+            event_sink: Callable[[str, dict[str, Any]], None], policy: dict[str, object]) -> dict[str, Any]:
+        """Transport one Core-admitted Task through its existing launch fence."""
+        return self.session.send(message, on_event=event_sink, _native_task=True,
+            sandbox_policy=deepcopy(policy), turn_start_guard=self.session._launch_guard)
 
     def steer_turn(self, message: str, expected_turn_id: str, client_message_id: str | None = None) -> str:
         return self.session.steer(message, expected_turn_id=expected_turn_id,
@@ -1021,7 +1150,8 @@ class CodexAppServerAdapter:
         event_sink: Callable[[str, dict[str, Any]], None],
         attachments: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        return self.session.send(message, attachments=attachments, on_event=event_sink)
+        return self.session.send(message, attachments=attachments, on_event=event_sink,
+            **self._ordinary_turn_arguments())
 
     def interrupt_turn(self, turn_id: str | None = None) -> None:
         driver = self.goal_driver
@@ -1045,12 +1175,112 @@ class CodexAppServerAdapter:
 def start_attachment_turn(adapter: Any, session: dict[str, Any], turn: dict[str, Any], message: str,
                           event_sink: Callable[[str, dict[str, Any]], None], attachments: list[dict[str, Any]]) -> dict[str, Any]:
     """Keep attachment support and recovered source-route checks at the adapter."""
-    from ...chat_attachments import require_text_document_route
+    from ...chat.attachments import require_text_document_route
     from .antigravity_adapter import AntigravityAdapter
     require_text_document_route(session, attachments, origin=str(turn.get("origin") or "web"))
     if not isinstance(adapter, (CodexAppServerAdapter, AntigravityAdapter)):
         raise ValueError("attachments currently require the Codex or Antigravity Agent endpoint")
     return adapter.start_turn_with_attachments(message, event_sink, attachments)
+
+
+def start_bound_project_turn(external: ChatExternalConversations, adapter: Any, session: dict[str, Any],
+                             turn: dict[str, Any], message: str,
+                             event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any] | None:
+    from .file_discovery import reply_image_workspace
+
+    review = external._checked_completed_result_review(session, turn)
+    if review is not None:
+        if not isinstance(adapter, CodexAppServerAdapter) or not adapter.session.read_only_review:
+            raise ValueError("a completed result review requires its original read-only project adapter")
+        response = adapter.start_turn(message, event_sink)
+        external._checked_completed_result_review(session, turn)
+        if any(response.get(key) for key in
+               ("proposals", "context_handoff", "protected_action", "goal_draft", "unfinished_work")):
+            raise ValueError("a result review cannot admit actions or replace the retained work obligation")
+        return response
+    workspace = reply_image_workspace(session, turn)
+    if (workspace is not None and isinstance(adapter, CodexAppServerAdapter)
+            and not adapter.session.read_only_review and adapter.session.work_dir.resolve() == workspace):
+        return adapter.start_turn(message, event_sink, reply_image_turn_id=turn["turn_id"])
+    return None
+
+
+def native_turn_response(session: CodexChatAgentSession, raw: str, *, output_schema: dict | None,
+                         reply_image_turn_id: str | None) -> dict[str, Any]:
+    if output_schema is not None:
+        try:
+            result = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise session._runtime_error("Codex Turn did not return structured output.") from exc
+        if not isinstance(result, dict):
+            raise session._runtime_error("Codex Turn output is not an object.")
+        return result
+
+    from ...chat import parse_agent_response
+    from .file_discovery import capture_reply_image_plan
+
+    image_targets: list[str] | None = [] if reply_image_turn_id is not None else None
+    response = parse_agent_response(raw, protected_paths=[session.work_dir],
+        team_plan_context=getattr(session, "team_plan_context", None), image_targets=image_targets)
+    if image_targets and reply_image_turn_id is not None:
+        plan = capture_reply_image_plan(session.work_dir.resolve(), reply_image_turn_id, image_targets)
+        if plan:
+            response["answer_image_plan"] = plan
+    return response
+
+
+def prepare_native_turn_text(session: CodexChatAgentSession, user_message: str, *,
+        output_schema, project_collaboration: bool, native_task: bool,
+        sandbox_policy, turn_start_guard):
+    """Preserve Chat input validation; adapt only the fenced Task invocation.
+
+    The Core caller owns Task/lease/permission admission. This transport cannot
+    manufacture that grant from a policy dictionary or a model/browser payload.
+    """
+    text = str(user_message or "")
+    if not text.strip():
+        raise ValueError("user message is required")
+    if native_task:
+        workspace_policy = {"type": "workspaceWrite", "writableRoots": [str(session.work_dir.resolve())],
+            "networkAccess": False, "excludeTmpdirEnvVar": True, "excludeSlashTmp": True}
+        if (turn_start_guard is None or session._launch_guard is None
+                or turn_start_guard is not session._launch_guard
+                or sandbox_policy not in ({"type": "readOnly", "networkAccess": False}, workspace_policy)
+                or session.execution_mode or session.read_only_review or session.project_context is not None
+                or session.permissions_profile is not None or session.sandbox != "read-only"):
+            raise ValueError("native Task transport requires the original read-only Session, bound workspace policy and current host launch guard")
+    elif sandbox_policy is not None and sandbox_policy != {"type": "readOnly", "networkAccess": False}:
+        raise ValueError("an ordinary Chat Turn cannot install a native execution policy")
+    if sandbox_policy is not None and session.permissions_profile is not None:
+        raise ValueError("a native sandbox policy cannot replace an existing named permissions profile")
+    if session.read_only_review and not session.metadata_review and not session.answer_review:
+        text = (
+            "Review the existing results of the interrupted original request below. "
+            "Its earlier execution may have already changed files or external systems. "
+            "Use the original native history and current local artifacts to verify what actually happened. "
+            "This Turn is read-only: do not re-execute the business request, write, send, delegate or start background work. "
+            "Return a clear answer to the original user, distinguishing verified results from remaining gaps. "
+            "If verification is incomplete, report the concrete limitation; do not claim completion. "
+            "Original request: " + text
+        )
+    if project_collaboration:
+        if (session.execution_mode or session.read_only_review or output_schema is not None
+                or not session.project_context or session.project_context.get("audience") != "bound_owner"):
+            raise ValueError("original project collaboration requires its existing bound project session")
+        from ...control_plane.effect_runtime import effect_runtime_result
+        output_schema = effect_runtime_result("collaboration.project.response_schema", {})
+    if output_schema is not None and not session.execution_mode and not project_collaboration and not native_task:
+        raise ValueError("structured Turn output requires an execution session")
+    return text, output_schema
+
+
+def native_runtime_context(controller: ChatRuntimeController, *, goal_id: str | None,
+        objective: str, manager_profile: Mapping[str, object] | None,
+        project_coordination: bool, execution_mode: bool) -> dict[str, str]:
+    """Compose the shared native adapter inputs in their construction owner."""
+    return {"objective": controller._session_objective(goal_id=goal_id, objective=objective,
+                project_coordination=project_coordination and not execution_mode),
+        "runtime_profile": str(manager_profile["runtime_profile"]) if manager_profile else "restricted"}
 
 
 def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, goal_id: str | None,
@@ -1061,13 +1291,16 @@ def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, 
         read_only_review: bool, metadata_review_context: dict[str, object] | None,
         answer_review_context: dict[str, object] | None,
         history_check: Callable[[], None] | None = None,
-        working_continuation: NativeWorkingContinuation | None = None) -> CodexAppServerAdapter:
+        working_continuation: NativeWorkingContinuation | None = None,
+        check_preparation: bool = False,
+        managed_read_default: bool = False) -> CodexAppServerAdapter:
     """Build the native adapter from already-authorized runtime arguments."""
     from ...chat_manager import MANAGER_AGENT_GOAL_ID
     from ..manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
     from ...chat_loopx_mode import TOOL as COLLABORATION_TOOL
+    from ...chat.coordination import check_preparation_tool
     review_context = metadata_review_context or answer_review_context
-    return CodexAppServerAdapter.start(
+    adapter = CodexAppServerAdapter.start(
         codex_bin=controller.codex_bin,
         account_runtime_root=controller.coordination_runtime_root,
         account_consumer="steward" if manager_profile is not None or review_context is not None else "worker",
@@ -1101,8 +1334,13 @@ def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, 
         service_tier=model_config.get("service_tier"),
         dynamic_tools=[READ_TOOL] if answer_review_context else (
             [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
-            else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
+            else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else
+                [check_preparation_tool()] if check_preparation and resume_thread_id is None
+                    and working_continuation is None else [])]
         ) if not execution_mode and not read_only_review and (
             goal_id == MANAGER_AGENT_GOAL_ID or project_coordination
         ) else None,
     )
+    if managed_read_default:
+        adapter.session._managed_goal_read_default = True
+    return adapter

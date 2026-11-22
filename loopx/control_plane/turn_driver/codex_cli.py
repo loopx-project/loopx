@@ -56,8 +56,10 @@ from .transaction import (
 
 
 CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION = "codex_stdio_mcp_server_v0"
+LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME = "loopx_delegation"
 CODEX_CLI_RESULT_KINDS = (
     "validated_progress",
+    "validated_completion",
     "repair_required",
     "replan_required",
     "user_action_required",
@@ -175,8 +177,28 @@ def normalize_codex_stdio_mcp_server(
     }
 
 
+def collaboration_mcp_turn_environment(
+    server: Mapping[str, Any] | None,
+    *,
+    turn_key: str,
+    lineage: Mapping[str, str],
+    project: Path,
+) -> dict[str, str]:
+    """Bind the built-in collaboration server to this invocation only."""
+    if not server or server["name"] != LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME:
+        return {}
+    return {
+        "LOOPX_TURN_KEY": turn_key,
+        "LOOPX_TURN_GOAL_ID": lineage["goal_id"],
+        "LOOPX_TURN_AGENT_ID": lineage["agent_id"],
+        "LOOPX_TURN_WORKSPACE": str(project.resolve()),
+    }
+
+
 def _codex_mcp_config_arguments(
     value: Mapping[str, Any] | None,
+    *,
+    turn_environment: Mapping[str, str],
 ) -> list[str]:
     server = normalize_codex_stdio_mcp_server(value)
     if server is None:
@@ -192,6 +214,10 @@ def _codex_mcp_config_arguments(
         f"mcp_servers.{name}.startup_timeout_sec=30",
         f"mcp_servers.{name}.tool_timeout_sec=60",
     ]
+    pairs.extend(
+        f"mcp_servers.{name}.env.{key}={json.dumps(value, ensure_ascii=False)}"
+        for key, value in turn_environment.items()
+    )
     return [item for pair in pairs for item in ("-c", pair)]
 
 
@@ -395,7 +421,7 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         ("Use task_context for the admitted work. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; the outer adapter retains the complete original source and Core effect instructions. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
         + "Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
-        "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
+        "Return only the schema-constrained result. Use validated_completion when the selected Todo's full requirements are met; the adapter runs its declared completion validation and durably completes it before accountable writeback. Use validated_progress for partial work; progress alone never completes a Todo. Neither result proves Goal closure. For validated_progress, validated_completion, repair_required, or replan_required, fill every material field with public-safe evidence.",
         "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate non-empty arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. For legacy requests without execution_profile, use null when evidence is not supplied. For stop results, set both evidence fields to null.",
         "For those material results, set path_delta_mode=material_replan and result_kind=replan_required only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
         "For routine continuation, retry, successor creation, or no-change replanning, explicitly set path_delta_mode=unchanged. Reuse the current checkpoint with vision_unchanged_reason and empty agent_vision_json, or record new progress/completion evidence in a fresh agent_vision_json packet with path_delta.outcome continue or no_change and empty vision_unchanged_reason.",
@@ -771,6 +797,7 @@ def _codex_command(
     reasoning_effort: str | None,
     session_id: str | None,
     mcp_server: Mapping[str, Any] | None,
+    mcp_turn_environment: Mapping[str, str],
 ) -> list[str]:
     if session_id:
         command = [
@@ -808,7 +835,9 @@ def _codex_command(
                 f"model_reasoning_effort={json.dumps(reasoning_effort)}",
             ]
         )
-    command.extend(_codex_mcp_config_arguments(mcp_server))
+    command.extend(_codex_mcp_config_arguments(
+        mcp_server, turn_environment=mcp_turn_environment,
+    ))
     if session_id:
         command.append(session_id)
     command.append("-")
@@ -982,6 +1011,9 @@ def run_codex_cli_host(
             reasoning_effort=reasoning_effort,
             session_id=session_id,
             mcp_server=mcp_server,
+            mcp_turn_environment=collaboration_mcp_turn_environment(
+                mcp_server, turn_key=request["turn_key"], lineage=lineage, project=project,
+            ),
         )
         observed_session: list[str] = []
         failures = CodexFailureObservation()

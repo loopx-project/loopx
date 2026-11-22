@@ -1,4 +1,4 @@
-"""Codex lifecycle-hook executor for the typed execution-preparation action.
+"""Managed Host lease preparation and the Codex lifecycle-hook adapter.
 
 The TypeScript control plane remains the decision owner.  This adapter accepts
 only its exact ordinary claim, executes it through the public CLI, and proves
@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from time import monotonic
 from typing import Any, TYPE_CHECKING
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from ..quota.effect_program import SettlementIdentity
@@ -33,6 +36,14 @@ class LegacyNativePreparationCapture(ValueError):
             "If preparation is still needed, run the current quota should-run for the original Goal, "
             "Agent, Todo and Turn with a fresh capture and follow its preparation only if eligible."
         )
+
+
+class NativeRecoveryLeaseUnavailable(RuntimeError):
+    """The original lease could not authorize recovery publication."""
+
+
+class NativePreparationTurnUnavailable(ValueError):
+    """The original Turn cannot authorize a new host claim."""
 
 
 def compact_execution_preparation_request(
@@ -74,6 +85,7 @@ def compact_execution_preparation_request(
     if claim_args != expected_claim:
         return None
     receipt = payload.get("heartbeat_receipt")
+    goal_ref = payload.get("goal_ref")
     turn_instance_id = (
         str(receipt.get("turn_instance_id") or "").strip()
         if isinstance(receipt, Mapping)
@@ -97,6 +109,7 @@ def compact_execution_preparation_request(
             "runtime_root": str(runtime_root),
         },
         **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
+        **({"goal_ref": dict(goal_ref)} if isinstance(goal_ref, Mapping) else {}),
         **claim_binding,
     }
 
@@ -352,6 +365,7 @@ def builtin_execution_preparation_claim(
                 settlement_identity,
                 semantic_replan_guard_scoped=False,
                 semantic_replan_obligation_id=None,
+                prepared_lease_required=True,
                 goal_ref=goal_ref,
                 **({"before_bind": before_bind} if admit_start is not None else {}),
             )
@@ -408,12 +422,131 @@ def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
     return f"todo-claim:codex-capture:{digest}"
 
 
-def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> str | None:
-    """Expose only existing receipt, lease and ready-capture readers after an interrupted preparation."""
+def _native_context_argv(scenario: str, directory: Path, *, progressive_enabled: bool) -> list[str]:
+    return [
+        *(["--codex-app"] if scenario == "codex_app_heartbeat" else ["--runtime-profile", scenario]),
+        *(["--context-delivery", "on"] if progressive_enabled else
+          ["--context-delivery", "off", "--delta-delivery", "auto"]),
+        "--codex-context-dir", str(directory),
+    ]
+
+
+def _native_readiness_guard(
+    goal: str, agent: str, todo: str, turn: str, *, context_argv: Sequence[str],
+    goal_ref: Mapping[str, Any] | None = None,
+) -> list[str]:
+    instance = []
+    if goal_ref is not None:
+        instance_id = _exact_identity(goal_ref.get("goal_instance_id"))
+        if goal_ref.get("goal_id") != goal or instance_id is None:
+            raise ValueError("Native readiness requires the original Goal instance.")
+        instance = ["--goal-instance-id", instance_id]
+    return [
+        "quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+        *context_argv, "--defer-context-presentation",
+        "--todo-id", todo, "--turn-instance-id", turn,
+        *instance,
+    ]
+
+
+
+def require_native_recovery_lease(
+    payload: Mapping[str, Any], *, claim_operation_id: str,
+    registry_path: Path, runtime_root: Path,
+) -> None:
+    """Read the original claim and its current lease before publishing ready context."""
+    from ..coordination.local_authority import local_authority_is_promoted
+    from ..effect_runtime import CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS, effect_runtime_result
+    from ..work_items.task_lease import inspect_task_lease
+
+    goal = payload.get("goal_id")
+    preparation = payload.get("execution_preparation")
+    if (not isinstance(preparation, Mapping) or payload.get("normal_delivery_allowed") is not True
+            or preparation.get("schema_version") != "execution_preparation_v0"
+            or preparation.get("state") != "ready" or preparation.get("delivery_allowed") is not True
+            or not _exact_identity(goal)
+            or payload.get("registry") != str(registry_path)
+            or payload.get("runtime_root") != str(runtime_root)
+            or not claim_operation_id.startswith("todo-claim:codex-capture:")
+            or not BARE_SHA256_PATTERN.fullmatch(claim_operation_id.removeprefix("todo-claim:codex-capture:"))):
+        raise ValueError("Native readiness recovery requires the original bound claim.")
+
+    agent, todo = preparation.get("agent_id"), preparation.get("todo_id")
+    proof = preparation.get("lease_proof")
+    if (preparation.get("handoff_mode") != "hard_lease"
+            or not all(_exact_identity(part) for part in (agent, todo))
+            or not isinstance(proof, Mapping)
+            or not _exact_identity(proof.get("idempotency_key"))
+            or type(proof.get("expected_version")) is not int
+            or not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal)):
+        raise ValueError("Native readiness recovery requires an authoritative lease proof.")
+
+    def matches(lease: object) -> bool:
+        return (isinstance(lease, Mapping)
+                and lease.get("status") == "active"
+                and (lease.get("goal_id"), lease.get("todo_id"), lease.get("owner")) == (goal, todo, agent)
+                and lease.get("idempotency_key") == proof["idempotency_key"]
+                and lease.get("version") == proof["expected_version"])
+
+    original = effect_runtime_result("coordination.local_authority.operation_receipt", {
+        "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+        "runtime_root": str(runtime_root), "goal_id": goal, "operation_id": claim_operation_id,
+    }, timeout=CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS)
+    records = original.get("receipts") if isinstance(original, Mapping) and original.get("status") == "found" else None
+    record = records[0] if isinstance(records, list) and len(records) == 1 else None
+    result = record.get("result") if isinstance(record, Mapping) else None
+    if (not isinstance(result, Mapping)
+            or record.get("schema_version") != "loopx_coordination_todo_claim_receipt_v0"
+            or record.get("goal_id") != goal or record.get("operation_id") != claim_operation_id
+            or result.get("claim_operation_id") != claim_operation_id
+            or result.get("execution_managed") is not True
+            or not matches(result.get("lease"))):
+        raise ValueError("Saved readiness does not match the original claim receipt.")
+
+    current = inspect_task_lease(registry_path=registry_path, runtime_root=runtime_root, goal_id=goal, todo_id=todo)
+    if current.get("active") is not True or not matches(current.get("lease")):
+        raise ValueError("The original task lease is no longer current for native readiness recovery.")
+
+
+@contextmanager
+def guard_native_recovery_publication(
+    payload: Mapping[str, Any], *, claim_operation_id: str,
+    registry_path: Path, runtime_root: Path,
+) -> Iterator[None]:
+    """Serialize the local journal commit with the canonical lease writer."""
+    from ...file_lock import exclusive_mutation_file_lock
+    from ..coordination.shadow_management import (
+        require_shadow_primary_write_allowed,
+        shadow_maintenance_lock_target,
+    )
+
+    goal = payload["goal_id"]
+    with ExitStack() as locks:
+        try:
+            locks.enter_context(exclusive_mutation_file_lock(
+                shadow_maintenance_lock_target(runtime_root, goal),
+                operation="native-recovery-publication",
+            ))
+            require_shadow_primary_write_allowed(runtime_root, goal)
+            require_native_recovery_lease(
+                payload, claim_operation_id=claim_operation_id,
+                registry_path=registry_path, runtime_root=runtime_root,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            raise NativeRecoveryLeaseUnavailable(str(exc)) from exc
+        yield
+
+
+def codex_execution_preparation_readback_context(
+    request: Mapping[str, Any], *, scenario: str, context_directory: str | None, progressive_enabled: bool,
+) -> str | None:
+    """Expose the original receipt and the continuation for its exact native Turn."""
     goal, agent, todo, turn = (request.get(key) for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id"))
     route = request.get("authority_route")
-    if not isinstance(route, Mapping) or not all(
-        isinstance(part, str) and part for part in (goal, agent, todo, turn)
+    if (
+        not isinstance(route, Mapping)
+        or not all(_exact_identity(part) for part in (goal, agent, todo, turn))
+        or normalize_turn_instance_id(turn) != turn
     ):
         return None
     registry_path, runtime_root = route.get("registry_path"), route.get("runtime_root")
@@ -431,7 +564,44 @@ def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> 
         "receipt_command": shlex.join([*base, "todo", "receipt", "--goal-id", goal, "--operation-id", operation_id]),
         "lease_command": shlex.join([*base, "task-lease", "inspect", "--goal-id", goal, "--todo-id", todo]),
     }
+    guidance = (
+        "If a verified ready capture is available, follow its recovery command after matching the original active lease. "
+        "The ready projection checks the current lease before delivery. Follow its reader after success. "
+    )
     ready_capture = request.get("ready_capture")
+    if (
+        ready_capture is None
+        and request.get("readback_only") is True
+        and scenario in {"codex_app_heartbeat", "codex_app_ssh_goal"}
+        and context_directory is not None
+        and (session_directory := Path(context_directory)).is_absolute()
+        and operation_id == _native_claim_operation_id(request)
+    ):
+        # A lost readiness result must not replace the live session's claim
+        # source if the fresh guard finds a retired lease or a different gate.
+        # The existing capture writer creates this private staging directory.
+        staged = session_directory / f"readiness-{uuid4().hex}"
+        guard_context = _native_context_argv(scenario, staged, progressive_enabled=progressive_enabled)
+        goal_ref = request.get("goal_ref")
+        facts["readiness_command"] = shlex.join([
+            *base, *_native_readiness_guard(goal, agent, todo, turn, context_argv=guard_context,
+                goal_ref=goal_ref if isinstance(goal_ref, Mapping) else None),
+            "--decision-output-dir", str(staged), "--prepared-capture-reference",
+        ])
+        facts["ready_context_command_template"] = shlex.join([
+            *base, "quota", "context-project", "--goal-id", goal, "--agent-id", agent,
+            "--turn-instance-id", turn, "--capture-file", str(staged / "decision.json"),
+            "--capture-sha256", "<capture_sha256>", "--prepared-claim-operation-id", operation_id,
+            *_native_context_argv(scenario, session_directory, progressive_enabled=progressive_enabled),
+        ])
+        guidance = (
+            "Run readiness_command once from the original workspace after the original claim and active lease "
+            "match in Goal, Todo, owner, key and version. Require normal_delivery_allowed=true and "
+            "execution_preparation.state=ready for this same Goal, Agent, Todo and Turn, with lease_proof "
+            "matching the original key and version. Only then substitute the returned capture_sha256 for "
+            "<capture_sha256> in this receipt's ready_context_command_template. The projection rechecks the lease. "
+            "Follow the returned reader before work. "
+        )
     if isinstance(ready_capture, Mapping):
         ready_path = ready_capture.get("path")
         ready_sha256 = ready_capture.get("sha256")
@@ -460,6 +630,7 @@ def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> 
                         *base, "quota", "context-project", "--capture-file", str(path),
                         "--capture-sha256", ready_sha256, "--goal-id", goal, "--agent-id", agent,
                         "--turn-instance-id", turn, "--context-delivery", "off", "--delta-delivery", "off",
+                        "--prepared-claim-operation-id", operation_id,
                     ])
                 facts["capture_sha256"] = ready_sha256
                 facts["context"] = {
@@ -469,8 +640,7 @@ def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> 
     return (
         "Automatic preparation started for this captured Turn and may still be finishing. "
         "Read the original claim receipt and current lease before deciding how to recover. "
-        "With the matching active lease, follow the current captured same-Todo and same-Turn readiness check before work. "
-        "If the recovery command returns a projection, follow its reader after the projection succeeds. "
+        f"{guidance}"
         "For an authorized retry of this claim, pass the original --claim-operation-id. "
         "A retired lease requires a fresh eligible capture. "
         "Receipt: " + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
@@ -484,6 +654,7 @@ def execute_codex_execution_preparation(
     scenario: str,
     capture_directory: Path,
     context_directory: Path,
+    progressive_enabled: bool = True,
     timeout: float = 8,
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
@@ -493,11 +664,15 @@ def execute_codex_execution_preparation(
     subprocess.  The ordinary claim remains the authority and rechecks all
     ownership, lease-generation, workspace and write-scope constraints.
     """
+    from ..quota.accounting_admission import quota_accounting_admission
+    from ..quota.effect_program import ReceiptBoundReplayPhase
+    from ..quota.settlement import read_heartbeat_settlement
 
     goal_id = str(request.get("goal_id") or "").strip()
     agent_id = str(request.get("agent_id") or "").strip()
     todo_id = str(request.get("todo_id") or "").strip()
     turn_instance_id = str(request.get("turn_instance_id") or "").strip()
+    goal_ref = request.get("goal_ref")
     authority_route = request.get("authority_route")
     registry_path = Path(
         str(authority_route.get("registry_path") or "")
@@ -542,34 +717,60 @@ def execute_codex_execution_preparation(
     expected_claim += ["--claim-operation-id", claim_operation_id]
     if request.get("claim_args") != expected_claim:
         raise ValueError("invalid Codex execution-preparation claim arguments")
+    if goal_ref is not None and not isinstance(goal_ref, Mapping):
+        raise ValueError("invalid Codex execution-preparation Goal instance")
+    guard = [
+        *_native_readiness_guard(
+            goal_id, agent_id, todo_id, turn_instance_id,
+            context_argv=_native_context_argv(scenario, context_directory, progressive_enabled=progressive_enabled),
+            goal_ref=goal_ref,
+        ),
+        "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
+    ]
     invoke = runner or _default_runner
-    claimed = _run_json(
-        expected_claim,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        cwd=workspace,
-        timeout=timeout / 2,
-        runner=invoke,
-    )
+    deadline = monotonic() + timeout
+    # Use the same index fence as writeback and spend. An immutable pre-claim
+    # capture can outlive a manually settled Turn and its released lease.
+    with quota_accounting_admission(
+        runtime_root=runtime_root, registry_path=registry_path, goal_id=goal_id,
+        goal_ref=goal_ref, operation="codex-native-execution-preparation",
+        handoff_legacy_index=True,
+    ) as admission:
+        original = read_heartbeat_settlement(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+            turn_instance_id=turn_instance_id, registry_path=registry_path,
+            goal_ref=goal_ref, source_admission=admission,
+            borrow_source_admission=admission is not None, include_record_bodies=False,
+        )
+        if original is None or original.identity.value is None:
+            raise NativePreparationTurnUnavailable(
+                "Automatic preparation needs the original bound Turn receipt. Read that receipt before continuing."
+            )
+        if original.replay_phase is not ReceiptBoundReplayPhase.OPEN:
+            raise NativePreparationTurnUnavailable(
+                "The original Turn is already settling or settled. Read its receipt for any remaining settlement. "
+                "New work requires a fresh eligible Turn."
+            )
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Native execution preparation deadline elapsed before the claim")
+        claimed = _run_json(
+            expected_claim, registry_path=registry_path, runtime_root=runtime_root,
+            cwd=workspace, timeout=min(timeout / 2, remaining), runner=invoke,
+        )
     claim_reference = claimed.get("claim_operation_id")
     if claim_reference != claim_operation_id:
         raise RuntimeError("Native execution preparation did not recover its original managed claim")
-    guard = [
-        "quota", "should-run",
-        "--goal-id", goal_id,
-        "--agent-id", agent_id,
-        *( ["--codex-app"] if scenario == "codex_app_heartbeat" else
-           ["--runtime-profile", "codex_app_ssh_goal"] ),
-        "--context-delivery", "on", "--codex-context-dir", str(context_directory), "--defer-context-presentation",
-        "--todo-id", todo_id, "--turn-instance-id", turn_instance_id,
-        "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
-    ]
+    # Reserve time for readiness and give it the time the claim left unused.
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Native execution preparation deadline elapsed before the ready check")
     after = _run_json(
         guard,
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=workspace,
-        timeout=timeout / 2,
+        timeout=remaining,
         runner=invoke,
     )
     preparation = after.get("execution_preparation")

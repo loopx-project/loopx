@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from ..contract import scan_public_boundary
 from .planner import REPO_ROOT, resolve_canary_catalog_path
-from .runner import build_canary_smoke_suite_run
+from .runner import MAINTAINABILITY_RATCHET_SCRIPT, build_canary_smoke_suite_run, check_output_tail
 
 
 PREMERGE_GATE_SCHEMA_VERSION = "loopx_premerge_validation_gate_v0"
@@ -19,10 +19,11 @@ PREMERGE_TIERS = {"quick", "standard", "deep"}
 
 # These paths need the existing exact-head visual/publication review. This is
 # local premerge coverage classification, not a public-boundary allowlist:
-# every matching file keeps the overall merge gate held, including image-only
+# every matching file keeps the overall merge gate held, including media-only
 # changes. SVG remains text-scanned. Unknown binary formats still fail closed.
 _VISUAL_REVIEW_SUFFIXES = frozenset({
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".avif",
+    ".mp4", ".webm", ".mov",
 })
 
 CONTROL_PLANE_TOKENS = (
@@ -94,11 +95,6 @@ CHANGE_QUALITY_TOKENS = (
     "tests/capabilities/test_change_quality.py",
     "examples/change-quality-qualification-smoke.py",
 )
-INHERITED_BASELINE_COMMANDS = (
-    "control-plane-maintainability-ratchet-smoke.py",
-)
-
-
 def _synthetic_smoke_suite_run(
     *,
     suite: str,
@@ -162,12 +158,31 @@ def _empty_smoke_suite_run(
 
 
 def _visual_review_paths(changed_files: list[str], repo_root: Path) -> list[str]:
-    return [
-        path for path in _dedupe(changed_files)
-        if Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
-        and (repo_root / path).is_file()
-        and not (repo_root / path).is_symlink()
-    ]
+    visual_paths = []
+    for path in _dedupe(changed_files):
+        target = repo_root / path
+        suffix = target.suffix.lower()
+        if suffix not in _VISUAL_REVIEW_SUFFIXES or not target.is_file() or target.is_symlink():
+            continue
+        if suffix in {".mp4", ".mov", ".webm"}:
+            # Preserve image routing; new video types need a container header, not just a suffix.
+            try:
+                with target.open("rb") as stream:
+                    header = stream.read(16)
+                file_size = target.stat().st_size
+            except OSError:
+                continue  # Unreadable inputs stay in the fail-closed text scan.
+            if suffix == ".webm":
+                if not header.startswith(b"\x1a\x45\xdf\xa3"):
+                    continue
+            elif (
+                len(header) < 16
+                or header[4:8] != b"ftyp"
+                or not 16 <= int.from_bytes(header[:4], "big") <= file_size
+            ):
+                continue
+        visual_paths.append(path)
+    return visual_paths
 
 
 def _public_boundary_changed_files_run(
@@ -198,7 +213,7 @@ def _public_boundary_changed_files_run(
         "tier": "default",
         "command": " ".join(display_argv),
         "reason": (
-            "scans changed text for private material; binary images require visual review"
+            "scans changed text for private material; binary media require visual review"
             if visual_paths else "scans changed public-boundary files for private material"
         ),
         "normalized": {
@@ -217,7 +232,7 @@ def _public_boundary_changed_files_run(
                     "ok": True,
                     "duration_seconds": 0.0,
                     "stdout_tail": (
-                        "no changed text files; binary images require visual review"
+                        "no changed text files; binary media require visual review"
                         if visual_paths else "no existing changed public-boundary files to scan"
                     ),
                 }
@@ -267,7 +282,7 @@ def _public_boundary_changed_files_run(
         note=(
             "Premerge public-boundary validation scans the changed public text files "
             "directly. The full fresh-directory contract smoke remains available "
-            "through the canary catalog/profile suites. Binary images require the "
+            "through the canary catalog/profile suites. Binary media require the "
             "existing exact-head visual review; text success does not qualify them."
             if visual_paths else
             "Premerge public-boundary validation scans the changed public files "
@@ -359,7 +374,7 @@ def classify_premerge_surfaces(
             "kind": "visual_evidence",
             "path": path,
             "reason": (
-                f"{path}: binary image is outside text-scan coverage; inspect pixels, "
+                f"{path}: binary media is outside text-scan coverage; inspect content, "
                 "metadata and source for private material in the existing exact-head "
                 "PR review. This hold is not a passing privacy check or merge authority."
             ),
@@ -471,8 +486,8 @@ def _run_gate_check(
                 "status": "timed_out",
                 "returncode": None,
                 "duration_seconds": round(time.monotonic() - started, 3),
-                "stdout_tail": (exc.stdout or "")[-800:] if isinstance(exc.stdout, str) else "",
-                "stderr_tail": (exc.stderr or "")[-800:] if isinstance(exc.stderr, str) else "",
+                "stdout_tail": check_output_tail(exc.stdout),
+                "stderr_tail": check_output_tail(exc.stderr),
             }
         )
         if progress_callback:
@@ -497,8 +512,8 @@ def _run_gate_check(
             "status": "passed" if completed.returncode == 0 else "failed",
             "returncode": completed.returncode,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "stdout_tail": completed.stdout[-800:],
-            "stderr_tail": completed.stderr[-800:],
+            "stdout_tail": check_output_tail(completed.stdout),
+            "stderr_tail": check_output_tail(completed.stderr),
         }
     )
     if progress_callback:
@@ -834,7 +849,7 @@ def downgrade_inherited_baseline_failures(
     *,
     changed_files: list[str],
 ) -> dict[str, Any] | None:
-    """Downgrade known repo-baseline failures when they do not mention changed files."""
+    """Apply the baseline exception only to attributable findings in a completed report."""
 
     if not isinstance(run, dict):
         return run
@@ -847,16 +862,21 @@ def downgrade_inherited_baseline_failures(
 
     changed_any = False
     for check in run.get("selected_checks", []):
-        if not isinstance(check, dict) or check.get("ok"):
+        if not isinstance(check, dict) or check.get("ok") or check.get("status") != "failed":
             continue
-        command = str(check.get("command") or "")
-        if not any(token in command for token in INHERITED_BASELINE_COMMANDS):
+        if check.get("returncode") != 1 or check.get("tracked_side_effects"):
             continue
-        evidence = "\n".join(
-            str(check.get(key) or "")
-            for key in ("stdout_tail", "stderr_tail")
-        )
-        if any(needle and needle in evidence for needle in changed_mentions):
+        normalized = check.get("normalized")
+        if not isinstance(normalized, dict) or normalized.get("script") != MAINTAINABILITY_RATCHET_SCRIPT:
+            continue
+        # The runner derives these paths from the complete JSON report before
+        # clipping display output. A traceback or incomplete report has none.
+        paths = check.get("maintainability_failure_paths")
+        if not isinstance(paths, list) or not paths or not all(isinstance(path, str) and path.strip() for path in paths):
+            continue
+        finding_paths = {_norm_path(path) for path in paths}
+        finding_mentions = finding_paths | {Path(path).name for path in finding_paths if Path(path).suffix}
+        if not changed_mentions.isdisjoint(finding_mentions):
             continue
         check.update(
             {
@@ -864,7 +884,7 @@ def downgrade_inherited_baseline_failures(
                 "status": "advisory_inherited_failure",
                 "inherited_baseline_failure": True,
                 "advisory_reason": (
-                    "known baseline smoke failure did not mention changed files; "
+                    "completed maintainability findings did not involve changed files; "
                     "record it in the PR comment but do not block this diff"
                 ),
             }

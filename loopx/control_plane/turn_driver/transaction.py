@@ -1,7 +1,7 @@
 """Typed LoopX Turn transaction planning and receipt validation."""
 
 from __future__ import annotations
-from .turn_contract_generated import LoopXTurnResultKind  # compatibility re-export
+from .turn_contract_generated import LoopXTurnResultKind as LoopXTurnResultKind  # compatibility re-export
 
 import json
 from collections.abc import Mapping

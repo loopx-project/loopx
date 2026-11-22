@@ -1,7 +1,7 @@
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {searchResearchRecords, type ResearchRecordDisplay} from "./research-record-search.ts";
 
-/** A portable reading snapshot, not an import format or an acceptance receipt.
+/** A portable reading snapshot.
  * Export canonical records, never translated/analysed display replacements.
  * Source endpoints are deliberately absent: opening a file needs no connection.
  */

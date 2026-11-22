@@ -24,9 +24,7 @@ before the loop ends.
 - `/goal clear` cancels the active goal. A running goal is steered in place
   rather than read back — the host advertises no goal status subcommand.
 - The `goal` tool's `complete` command enforces a completion contract: each
-  success criterion needs cited tool output, and belief or narrative
-  confidence is explicitly not evidence — the same standard LoopX writeback
-  wants.
+  success criterion needs cited tool output.
 
 The contracted surface is checked against the host itself, not transcribed. The
 installed binary advertises its own command registry over ACP, so the shape can
@@ -160,7 +158,7 @@ and the `loopx` entry only while it still matches what LoopX wrote.
 
 Kiro CLI also ships an ACP agent (`kiro-cli acp`), so `loopx dashboard` and
 `loopx chat` list **Kiro CLI** as a built-in Agent alongside Codex and Claude
-Code. It reuses `loopx.chat_acp.ACPStdioAdapter` rather than a second
+Code. It reuses `loopx.chat.acp.ACPStdioAdapter` rather than a second
 transport: probed on 2.21.1, the host answers `initialize` with
 `protocolVersion: 1` and `loadSession: true`, and `session/new` returns a
 session id, which is exactly what that adapter expects.
@@ -178,8 +176,7 @@ Two boundaries this does **not** cross:
   without asking when its user, workspace, or agent permission rules already
   say `allow`; LoopX cannot turn those persistent host rules into a read-only
   sandbox. The capability therefore advertises `workspace_write`, and the
-  owner must configure Kiro permissions for the desired boundary. A planning
-  prompt or a cancelled request is not an authority gate.
+  owner must configure Kiro permissions for the desired boundary.
 - **Not the governed loop.** A dashboard Chat session is one bounded
   conversation. The `/goal` loop above is entered from a Kiro CLI session
   through the installed skill facade; the two surfaces share the host, not the

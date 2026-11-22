@@ -17,7 +17,7 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import (
-    exclusive_file_lock, try_exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
+    exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
     LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED,
     LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE, LockAcquisitionPolicy, LockAcquireTimeoutError,
 )
@@ -74,6 +74,7 @@ from .control_plane.collaboration.peers import (
     read_inbox,
     request,
     require_operation_id,
+    read_turn_peer_returns,
 )
 from .presentation.answer_instruction import (
     collaboration_answer_instruction,
@@ -205,6 +206,23 @@ def _mcp_module_command() -> list[str]:
     )
 
 
+def _bound_work_turn_identity(goal_id: str, agent_id: str, workspace: Path) -> str | None:
+    """Read the host-owned Turn identity without exposing it as a model argument."""
+    from .turn_identity import normalize_turn_instance_id
+
+    host_turn_key = os.environ.get("LOOPX_TURN_KEY", "").strip()
+    turn_instance_id = normalize_turn_instance_id(host_turn_key or None)
+    if turn_instance_id is None:
+        return None
+    bound_workspace = os.environ.get("LOOPX_TURN_WORKSPACE")
+    if (os.environ.get("LOOPX_TURN_GOAL_ID") != goal_id
+            or os.environ.get("LOOPX_TURN_AGENT_ID") != agent_id
+            or not bound_workspace
+            or Path(bound_workspace).resolve() != workspace.resolve()):
+        raise ValueError("host-bound work Turn scope does not match the collaboration server")
+    return turn_instance_id
+
+
 def create_server(
     root: Path, registry: Path, goal_id: str, agent_id: str, workspace: Path,
     execution_config: Path | None = None,
@@ -212,7 +230,15 @@ def create_server(
     from mcp.server.fastmcp import FastMCP
 
     server = FastMCP("loopx-collaboration")
-    register_collaboration_tools(server, root, registry, goal_id, agent_id, workspace)
+    register_collaboration_tools(
+        server,
+        root,
+        registry,
+        goal_id,
+        agent_id,
+        workspace,
+        turn_instance_id=_bound_work_turn_identity(goal_id, agent_id, workspace),
+    )
     if execution_config is not None:
         register_delegation_tools(server, Delegations(
             root, registry, goal_id, agent_id, execution_config, reuse_preview=True,
@@ -221,7 +247,8 @@ def create_server(
 
 
 def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, goal_id: str,
-                                 agent_id: str, workspace: Path) -> None:
+                                 agent_id: str, workspace: Path, *,
+                                 turn_instance_id: str | None = None) -> None:
     caller_goal_ref = capture_collaboration_goal_ref(
         registry,
         goal_id=goal_id,
@@ -248,6 +275,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
                 agent_id,
                 workspace=workspace,
                 cursor=cursor,
+                turn_instance_id=turn_instance_id,
                 caller_goal_ref=caller_goal_ref,
             )
         except InboxReadResponseAmbiguous as exc:
@@ -256,6 +284,18 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             raise ToolError(json.dumps(exc.result, ensure_ascii=False)) from exc
         result["instruction"] += " " + collaboration_answer_instruction()
         return result
+
+    if turn_instance_id is not None:
+        @server.tool()
+        def read_peer_returns(cursor: str | None = None) -> dict:
+            """Read only peer results for this bound work Turn.
+            Follow next_cursor in this Turn, or omit it to start a fresh scan.
+            Repeat the same page after an ambiguous read. After evaluating the result,
+            pass its read_token to consume_peer_result to accept, defer or reject it.
+            """
+            return {"peer_returns": read_turn_peer_returns(
+                root, registry, goal_id, agent_id,
+                turn_instance_id=turn_instance_id, caller_goal_ref=caller_goal_ref, cursor=cursor)}
 
     @server.tool()
     def assess_request(
@@ -339,7 +379,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
                       remaining_work: dict[str, str] | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
-        Neither a blocker nor a returned result certifies completion of the work.
+
         For a partial result, remaining_work contains summary and resume_when;
         the receiving Agent still owns this remainder. It creates no Todo or wakeup.
         """
@@ -405,17 +445,29 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             operation=operation, parameters=parameters, chat_url=chat_url, caller_goal_ref=caller_goal_ref)
 
     @server.tool()
-    def consume_peer_result(request_id: str, result_key: str = "conclusion") -> dict:
-        """Acknowledge a read peer result, using its result_key for a later update.
-        This consumes only that result and never changes work state.
+    def consume_peer_result(
+        request_id: str,
+        disposition: Literal["accepted", "deferred", "rejected"],
+        result_key: str = "conclusion",
+        read_token: str | None = None,
+    ) -> dict:
+        """Acknowledge a peer result supplied to this exact work Turn.
+        Pass the result's read_token when supplied. Deferred
+        results remain visible on the next Turn. Accepted or rejected results
+        are consumed idempotently and never change work state.
         """
         check_scope()
+        if turn_instance_id is None:
+            raise ValueError("peer result acknowledgement requires a host-bound work Turn")
         return consume_return(
             root,
             goal_id,
             agent_id,
             request_id,
             result_key=result_key,
+            turn_instance_id=turn_instance_id,
+            disposition=disposition,
+            read_token=read_token,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
         )
@@ -429,6 +481,7 @@ DELEGATION_STOP_TERMINAL_PHASES = frozenset({"settled", "unknown"})
 # How long a signalled same-host worker may take to acknowledge before SIGKILL.
 DELEGATION_STOP_GRACE_SECONDS = 10.0
 DELEGATION_STOPPED_MESSAGE = "delegation operation was stopped; start a new operation id"
+_DELEGATION_STATUS_READ = "delegation_status_read"
 
 
 def execution_row_path(root: Path, goal_id: str, agent_id: str, operation_id: str) -> Path:
@@ -676,7 +729,7 @@ class Delegations:
         return self.read(operation_id)
 
     def wait(self, operation_id: str) -> dict:
-        """Observe for at most 15 seconds; waiting neither starts nor resumes work."""
+        """Observe for at most 15 seconds;"""
         for _ in range(5):
             result = self.read(operation_id)
             if (result["status"] in DELEGATION_TERMINAL_STATUSES or result["recovery_required"]
@@ -688,9 +741,13 @@ class Delegations:
     def revalidate(self, operation_id: str) -> dict:
         """Explicitly rerun the original postcondition; never repeat Host work."""
         path = self.path(require_operation_id(operation_id))
-        with try_exclusive_file_lock(path) as acquired:
-            if acquired is None:
-                # Terminal publication can precede the original worker's release.
+        with ExitStack() as locks:
+            # A reader can hold the kernel fence before it publishes its
+            # holder record. Use one short acquisition window for either case.
+            try:
+                locks.enter_context(exclusive_file_lock(path, timeout_seconds=0.25))
+            except LockAcquireTimeoutError:
+                # An active worker can publish rejection before releasing.
                 return self.read(operation_id)
             if self._read_stop(path) is not None:
                 raise ValueError(DELEGATION_STOPPED_MESSAGE)
@@ -771,7 +828,9 @@ class Delegations:
         row = _read(path)
         binding = self._bound(row)
         try:
-            with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+            with exclusive_file_lock(
+                path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT, operation=_DELEGATION_STATUS_READ
+            ):
                 active = False
         except LockAcquireTimeoutError:
             active = True
@@ -1322,9 +1381,11 @@ class Delegations:
                      "--workspace", binding["workspace"], "--operation-id", operation_id]
         native_tools: list[str] = []
         if turn_host_arg_option(binding["host_args"], "--host") == "codex-cli":
+            from .control_plane.turn_driver.codex_cli import LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME
+
             mcp_server = {
                 "schema_version": "codex_stdio_mcp_server_v0",
-                "name": "loopx_delegation",
+                "name": LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME,
                 "command": [*_mcp_module_command(),
                     "--runtime-root",
                     str(self.root),

@@ -765,7 +765,7 @@ def _reconcile_outbound_input_reactions(
 ) -> dict[str, Any]:
     """Reuse reaction receipts for an independently verified outbound input.
 
-    This is not an Inbox capture or settlement. The private-conversation
+    The private-conversation
     caller supplies fresh canonical/source and provider-message verification.
     """
     config = load_lark_event_inbox_config(project=project, config_path=config_path)

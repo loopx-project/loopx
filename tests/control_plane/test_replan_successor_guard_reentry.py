@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -105,6 +108,124 @@ def _add(call, obligation_id: str):
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
         "--operation-id", "periodic-source-successor", "--replan-obligation-id", obligation_id)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_successor_closeout_guard_executes_original_turn(tmp_path, monkeypatch, provider):
+    from loopx.command_invocation import loopx_cli_route
+    from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+    from loopx.control_plane.work_items.interaction_contract import interaction_next_cli_actions
+    from loopx.control_plane.work_items.progress_observation import build_replan_action_packet
+
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = _guard(call)
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    # Exercise the existing bounded-research successor projection over a real guard.
+    original["replan_action_packet"] = build_replan_action_packet(
+        original["autonomous_replan_obligation"], goal_id=GOAL, agent_id=AGENT,
+        bounded_research_frontier={"selected_gap": {
+            "successor_summary": "Independently verify the source artifact",
+            "successor_binding": {"action_kind": "validate", "target_key": "independent-source-artifact"},
+        }},
+    )
+    cli = Path(sys.executable).parent / ("loopx.exe" if os.name == "nt" else "loopx")
+    with loopx_cli_route(str(cli)):
+        actions = interaction_next_cli_actions(
+            original, mode="autonomous_replan", capability_reentry_resolved=True,
+            settlement_plan=original["interaction_contract"]["cli_channel"]["settlement_plan"],
+            scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"),
+            runtime_root=original["runtime_root"], registry_path=str(tmp_path / "registry.json"),
+            turn_instance_id=TURN,
+        )
+    command = actions[1]
+    tokens = shlex.split(command)
+    if os.name == "nt":
+        assert tokens.pop(0) == "&"
+    _add(call, identity["replan_obligation_id"])
+    result = subprocess.run(
+        [*tokens, "--context-delivery", "off"],
+        capture_output=True, text=True, timeout=60,
+    )
+    reread = json.loads(result.stdout)
+    assert result.returncode == 0, reread.get("error") or reread.get("reason") or reread
+    assert reread["heartbeat_receipt"]["settlement_identity"] == identity
+    assert reread["replan_action_packet"]["settlement_only"] is True
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        assert shell is not None
+        result = subprocess.run(
+            [shell, "-NoProfile", "-Command", command + "; exit $LASTEXITCODE"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]},
+        )
+        native = read_cli_policy_payload(result.stdout, returncode=result.returncode)
+        assert result.returncode == 0, native
+        assert native["heartbeat_receipt"]["settlement_identity"] == identity
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_terminal_replan_fields_execute_without_guessed_flags(tmp_path, monkeypatch, provider):
+    from copy import deepcopy
+    from loopx.install_contract import render_host_cli_command
+
+    call, _, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    call("configure-goal", "--goal-id", GOAL, "--execution-stride-strategy", "off", "--execute")
+    # The complete delivery has no remaining Todo; retain its accepted mainline.
+    rows = [json.loads(row) for row in index.read_text().splitlines()]
+    vision = deepcopy(next(row["agent_vision"] for row in rows if "agent_vision" in row))
+    original = _guard(call)
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    contract = original["replan_action_packet"]["writeback_contract"]
+    context = original["autonomous_replan_obligation"]["replan_context"]
+    assert context["evidence"]
+    for row in context["evidence"]:
+        read = row.get("read_action") or context["evidence_read_action_template"].replace("{evidence_ref}", row["evidence_ref"])
+        detail = call(*shlex.split(read)[1:])
+        assert detail["evidence"]["evidence_ref"] == row["evidence_ref"]
+    terminal = contract["no_followup_requirements"]
+    assert terminal["cli_args"] == ["--progress-result-class", "no_followup",
+        "--progress-coverage-scope-id", "<coverage-scope-id>", "--progress-evidence-id", "<evidence-id>",
+        "--agent-vision-json", "<file>"]
+    assert terminal["vision_fields"] == {"state": "no_followup", "path_delta.outcome": "stop"}
+    assert "vision_patch" in terminal["preserve"]
+    vision["state"] = terminal["vision_fields"]["state"]
+    vision["path_delta"] = {
+        "schema_version": "goal_path_delta_v0", "outcome": terminal["vision_fields"]["path_delta.outcome"],
+        "prior_assumption": "The bounded source scope could need more work.",
+        "observed_reality": "Independent validation covers the complete source scope.",
+        "stopped": ["Repeated source checks"], "evidence_refs": ["validation:complete-source"],
+    }
+    path = tmp_path / "author's terminal.json"
+    path.write_text(json.dumps(vision), encoding="utf-8")
+    command = next(action for action in original["interaction_contract"]["cli_channel"]["next_cli_actions"]
+                   if "refresh-state" in action)
+    argv = shlex.split(command)
+    # Replace only the caller-authored values in the projected template.
+    argv[argv.index("--agent-vision-json") + 1] = str(path)
+    values = {"<file>": str(path), "<coverage-scope-id>": "scope:complete-source",
+              "<evidence-id>": "validation:complete-source"}
+    for flag, value in zip(terminal["cli_args"][::2], terminal["cli_args"][1::2], strict=True):
+        if flag in argv:
+            argv[argv.index(flag) + 1] = values.get(value, value)
+        else:
+            argv.extend([flag, values.get(value, value)])
+    argv.extend(["--no-global-sync", "--suppress-external-sinks"])
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        assert shell is not None
+        # Exercise the native shell, including a quoted executable and apostrophe.
+        argv[0] = str(Path(sys.executable).parent / "loopx.exe")
+        invocation = [shell, "-NoProfile", "-Command", render_host_cli_command(argv) + "; exit $LASTEXITCODE"]
+    else:
+        invocation = [sys.executable, "-m", "loopx.cli", *argv[1:]]
+    result = subprocess.run(invocation, capture_output=True, text=True, timeout=60)
+    written = json.loads(result.stdout)
+    assert result.returncode == 0, json.dumps(written, ensure_ascii=False)
+    assert written["settlement_identity"] == identity
+    assert written["autonomous_replan_ack"]["semantic_delta"]["satisfying_outcomes"] == ["coverage_backed_no_followup"]
+    spent = call(*shlex.split(written["settlement_owed"]["command"])[1:])
+    assert spent["settlement_progress"]["state"] == "settled"
+    assert call(*shlex.split(written["settlement_owed"]["command"])[1:])["idempotent_replay"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -276,9 +397,11 @@ def test_real_guard_uses_strict_microsecond_vision_ack(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("later_vision", [False, True])
+@pytest.mark.parametrize("later_vision,interleaved_ack", [
+    (False, False), (True, False), (True, "precise"), (True, "same_second"),
+])
 def test_successor_guard_returns_original_settlement_not_repeated_planning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, later_vision: bool, interleaved_ack: bool | str,
 ) -> None:
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, later_vision=later_vision)
     original = _guard(call)
@@ -287,6 +410,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
         assert original["decision"] == "autonomous_replan_required"
         assert original["execution_obligation"]["must_attempt_work"] is True
         assert original["autonomous_replan_obligation"]["triggers"][0]["kind"] == "vision_acceptance_gap"
+        assert original["autonomous_replan_obligation"]["rearmed_after_obligation_id"] == "replan-1111111111111111"
     core_goal = original["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert core_goal["objective"] == "Deliver the independently accepted source outcome."
     assert core_goal["objective_source"] == "active_state"
@@ -296,6 +420,23 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     added = _add(call, obligation_id)
     assert added["replan_transition"]["recorded"] is True
     assert added["replan_transition"]["outcome"] == "new_runnable_successor"
+
+    if interleaved_ack:
+        # A distinct newer review is source history, not settlement proof for
+        # this Turn. It must not replace the original predecessor/digest.
+        prior = next(
+            row for row in reversed([json.loads(line) for line in index.read_text().splitlines()])
+            if row.get("autonomous_replan_ack")
+        )
+        newer = json.loads(json.dumps(prior))
+        admitted = datetime.fromisoformat(original["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
+        newer["generated_at"] = (
+            admitted.replace(microsecond=0) if interleaved_ack == "same_second"
+            else admitted + timedelta(microseconds=1)
+        ).isoformat()
+        newer["autonomous_replan_ack"]["semantic_delta"]["obligation_id"] = "replan-2222222222222222"
+        with index.open("a") as stream:
+            stream.write(json.dumps(newer) + "\n")
 
     # This same-Turn read is a closeout query, not permission for the new work.
     reread = _guard(call)
@@ -318,8 +459,10 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
                     "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
     assert envelope["replan_action_packet"]["settlement_only"] is True
-    assert envelope["writeback"]["next_cli_actions"] == actions
-    assert envelope["action_signature"]["matches"] is True
+    assert envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == actions
+    assert envelope["contract_binding"]["source_decision_hash"]
+    assert envelope["contract_binding"]["content_hash"]
+    assert envelope["heartbeat_receipt"]["settlement_identity"] == identity
     premature_spend = call(*shlex.split(actions[1])[1:], expected_code=1)
     assert premature_spend.get("appended") is not True
     assert not any(json.loads(line).get("classification") == "quota_slot_spent"
@@ -344,9 +487,11 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert pending_plan["ordered_steps"] == [cli["settlement_plan"]["ordered_steps"][-1]]
     pending_envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
-    assert pending_envelope["writeback"]["next_cli_actions"] == spend_actions
-    assert pending_envelope["writeback"]["settlement_plan"] == pending_plan
-    assert pending_envelope["action_signature"]["matches"] is True
+    assert pending_envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == spend_actions
+    assert pending_envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == pending_plan
+    assert pending_envelope["contract_binding"]["source_decision_hash"]
+    assert pending_envelope["contract_binding"]["content_hash"]
+    assert pending_envelope["heartbeat_receipt"]["settlement_identity"] == identity
     spent = call(*shlex.split(spend_actions[0])[1:])
     assert spent["settlement_progress"]["state"] == "settled"
     assert spent["appended"] is True

@@ -25,8 +25,14 @@ def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
             raise ValueError(f"{key} must be finite and positive")
     from .research_probe import runtime_execution_guidance
 
+    batch = ""
+    if env.get("LOOPX_TASK_STAGE") == "plan":
+        from .planning_batch import planning_batch_guidance
+
+        batch = planning_batch_guidance()
     return ("$loopx\n\n"
             + runtime_execution_guidance(env)
+            + batch
             + "Host-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
 
 

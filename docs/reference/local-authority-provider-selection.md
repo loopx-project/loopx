@@ -44,9 +44,8 @@ authenticated service or grant an Agent database access.
 
 The default profile is a routing decision, not a migration. Existing Markdown
 state, writer fences, qualification gates, and explicit File/SQLite promotion
-holds remain unchanged. The released SQLite profile remains opt-in until the
-shared-authority RFC's D2 evidence and owner approval are complete. PostgreSQL
-remains an independent service-provider qualification path.
+holds remain unchanged. Moving an existing Goal to SQLite requires a reviewed
+migration. PostgreSQL remains an independent service-provider qualification path.
 
 ## Validation
 
@@ -62,16 +61,16 @@ See [reviewed promotion and recovery](reviewed-coordination-promotion.md) for th
 ## New Goal authority (machine setting)
 
 **Settings → Capability Center → Device defaults → New Goal authority** selects
-File or SQLite independently of the execution policy. In the new-Goal default
-candidate, a device without a `goal_storage` namespace creates canonical SQLite
-with `hard_lease`; CLI bootstrap and App creation reuse the same configuration
-and typed initialization owner. **Create canonical authority** can be disabled
-explicitly, or used with File and either `soft_claim` or `hard_lease`. Agents
-inherit the Goal policy; this grants no tool, repository,
-scheduler, account or network permission and does not migrate existing data.
+File or SQLite independently of the execution policy. A device without a
+`goal_storage` namespace creates new Goals with canonical SQLite and
+`hard_lease`. CLI bootstrap and App creation share this configuration and the
+typed initialization owner. For new Goals, choose File or SQLite and either
+`soft_claim` or `hard_lease`. Agents inherit the Goal policy. This setting
+affects only future Goals and grants no tool, repository, scheduler, account,
+or network permission.
 
-The candidate changes only unconfigured new creation. Released v0 settings and
-v1 with `canonical_creation=false` retain the post-promotion target behavior.
+Previously saved v0 settings and v1 settings with
+`canonical_creation=false` remain readable and block new Goal creation.
 Opening v0 in the guided editor previews a v1 envelope upgrade with creation
 still disabled; switching editor modes cannot enable it through the new default.
 The CLI continues to accept v0. Existing Goals keep their recorded target,

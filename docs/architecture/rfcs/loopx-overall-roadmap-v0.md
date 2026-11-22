@@ -8,8 +8,9 @@
   separately in Section 8. The history working-set RFC inventory addition uses
   `701795db2` on 2026-11-09; goal-oriented slice selection, zero-ceremony
   progressive entry, structural moats, and selected priority/RFC boundaries are
-  reconciled through 2026-11-11 against `bf8a66eb9c`, without re-auditing every
-  historical subsystem.
+  reconciled through 2026-11-11 against `bf8a66eb9c`, with Bitter-Lesson
+  subtraction discipline and six compounding structural moats refined against
+  `e235cde9c8`, without re-auditing every historical subsystem.
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
@@ -101,29 +102,67 @@ and routine uncontested single-Agent turns:
   Mandatory per-Turn schema forms, extra RPC round trips, or verbose governance
   prompts when nothing material changed degrade net long-horizon efficiency and
   must be rejected.
+- **Bitter-Lesson subtraction discipline:** as frontier base models strengthen,
+  reject brittle hand-written prompt micro-scheduling, speculative compatibility
+  shims, and mid-trajectory dynamic prompt surgery that stronger models absorb
+  natively or that induce context gravity
+  ([Subtraction Gate](controller-executor-unified-contract-v0.md#subtraction-gate)).
+  Invest only in verifiable deterministic invariants outside a single model
+  forward pass, and retire superseded wrappers and unreferenced adapters when a
+  single typed owner replaces them.
 
-### Three compounding structural moats
+<a id="three-compounding-structural-moats"></a>
 
-As frontier base models strengthen, LoopX avoids investing in brittle hand-written
-prompt micro-scheduling—prescribed tool sequences, rigid per-Turn checklists or
-verbose tactical reminders—that stronger models absorb natively. Engineering and
-research focus concentrates on three structural capabilities outside a single
-model forward pass:
+### Six compounding structural moats
 
-1. **Heterogeneous local/cloud continuity and authority boundaries (`S2/S4/S9`, `R5/R6`):**
-   bridging local personal context, interactive logins and owner confirmation
-   gates with unattended or cloud execution workers under single-owner
-   transactional leases, fencing and revocable grants.
-2. **Deterministic quiescent checkpoints and same-state counterfactual continuation (`S4/S10/S11`, `R5`, `T01/T03`):**
-   restoring exact task, session, authority, incumbent and evaluator-cooldown
-   state at elapsed budget $t_0$ so candidate strategies and harness mechanisms
-   are evaluated via matched same-state continuations ($\tau_B(s; a, a_0, \pi)$)
-   rather than confounded observational action logs.
-3. **Closed-loop trajectory-to-memory and budgeted allocation flywheel (`S6/S7/S11`, `T01–T04`):**
-   turning verified trajectory outcomes, scoped neighborhood yardstick fidelity
-   and same-checkpoint counterfactual evidence into procedural recall and
-   calibrated `Target/Yardstick/Stride` continuation choices (`current-model
-   pilot -> calibrated estimates -> learned allocation`).
+As frontier base models strengthen, LoopX applies the Bitter-Lesson subtraction
+discipline above—avoiding brittle hand-written prompt micro-scheduling,
+prescribed tool sequences, rigid per-Turn checklists or verbose tactical
+reminders that stronger models absorb natively
+([Research Bitter-Lesson boundary](long-horizon-harness-benchmark-research-program-v0.md#22-bitter-lesson-boundary-raw-artifact-resets-versus-governed-control)).
+Engineering and research focus concentrates on **six compounding structural
+moats** outside a single model forward pass:
+
+1. **Non-scalar Yardstick calibration (`S3/S6/S11`, `T01–T04`):**
+   co-discovering `Target/Yardstick/Stride` decisions (`grow / switch / verify`)
+   backed by multi-evidence, decision-local neighborhood fidelity rather than
+   uncalibrated scalar proxies, and compounding verified trajectory outcomes
+   into closed-loop recall and calibrated allocation
+   (`current-model pilot -> calibrated estimates -> learned allocation`;
+   [Joint decisions](target-yardstick-stride-decisions-v0.md)).
+2. **Out-of-tree deterministic Merge, Visual, and Boundary gates (`S5/S8/S11/S12`):**
+   enforcing host- and process-isolated verification outside the solver's
+   write boundary—`benchmark_integrity_audit_v0` verifier/mount isolation and
+   anti-reward-hacking root-cause certification, public/private boundary scans,
+   exact-head `loopx pr-review` and merge-readiness contracts, and populated
+   first-screen visual/behavioral evidence that an agent cannot rewrite, spoof,
+   or self-certify in prose.
+3. **Single-owner `AuthorityStore` + CAS + default-deny ACL (`S2/S3/S9`, `R4/R5/R6`):**
+   anchoring Goal/Todo/effect truth in transactional event, projection and
+   receipt commits with conditional revision `CAS`, exclusive `claim/lease` and
+   generation fencing, explicit ambiguous-commit handling, once-only idempotent
+   settlement, and default-deny audience, credential and capability ACL
+   boundaries across File/SQLite/NoKV/PostgreSQL providers.
+4. **Steward async inbox closure (`S1/S3/S4/S5`, `R1–R3`):**
+   delivering cross-Agent delegation and original-route return via scoped
+   `collaboration_brief_v0` payloads, bounded `remaining_work` projections and
+   typed `resume_when` continuation predicates, keeping steward and controller
+   sessions asleep until verified wake triggers fire (**zero polling loops**).
+5. **Prefix-KV-cache-preserving context delivery (`S2/S6/S7`, `T02`):**
+   maintaining monotonic append-only canonical prefix stability and exact
+   full/delta transport (`progressive_context.ts` / `context_delivery.ts` with
+   receipt-gated `KeepRaw` / `FoldToReceipt` / `EpochReset` transitions;
+   [History working sets](history-working-set-context-policy-v0.md#51-one-projection-owner))
+   to avoid mid-trajectory cache-busting rewrites while pricing cached versus
+   uncached prefix tokens separately.
+6. **Durable state vs. ephemeral sandbox separation (`S2/S4/S10/S11`, `R5/R6`):**
+   isolating persistent `AuthorityStore`, capture and quiescent checkpoint
+   state—restorable at elapsed budget $t_0$ for heterogeneous local/cloud
+   continuity and same-state counterfactual continuation ($\tau_B(s; a, a_0, \pi)$)
+   rather than confounded observational logs—from disposable worker sandboxes
+   and worktrees (`--worker turn-resume`, isolated containers, normalized patch
+   delivery) so sandbox resets or failures never corrupt control authority or
+   expose host credentials.
 
 ### App-first conversation delivery
 
@@ -1469,6 +1508,7 @@ full lifecycle.
 
 ### R6: Local/Cloud Convergence
 
+- **Cross-person product path** See [Shared Authority R6 qualification](shared-goal-authority-state-provider-v0.md#cross-person-delivery-under-r6). M1 exercises default-deny resource access and shared reading. M2 exercises cross-computer work and return together with Live Team L1/L2. M3 retains the full G3/R6 exit below.
 - **Owner:** shared-authority provider/service, session host adapters and collaboration. Extend existing PostgreSQL admission/identity-rotation foundations; do not rebuild the store.
 - **Delivery:** authenticated transport, tenant/Goal/actor authorization, host identity and capability admission. Cross-host request/receipt/wake flows use their owners. Handle disconnection, lease expiry, stale workers, service restart/restore incarnation and ambiguous commit.
 - **Exit:** at least two real hosts, including one cloud worker, collaborate in an isolated tenant; wrong-tenant/actor, revocation and split-brain negatives pass. Shared budgets/admission have explicit ownership; local quota is not a distributed resource reservation.

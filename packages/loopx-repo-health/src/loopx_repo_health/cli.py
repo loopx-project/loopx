@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from .contract import SNAPSHOT_SCHEMA_VERSION, validate_snapshot
+from .contract import validate_snapshot
 from .github import GitHubRepoHealthCollector
 from .render import render_markdown
 

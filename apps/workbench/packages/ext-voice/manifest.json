@@ -1,0 +1,36 @@
+{
+  "id": "voice",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "name": {
+    "zh": "实时语音",
+    "en": "Realtime Voice",
+    "ja": "リアルタイム音声"
+  },
+  "description": {
+    "zh": "在当前会话中通过 WebRTC 进行低延迟双向实时语音交流。依赖本机的原生语音提供方（如 Codex）。",
+    "en": "Low-latency two-way realtime voice in the current thread via WebRTC. Requires a local native voice provider (such as Codex).",
+    "ja": "WebRTC による現在のスレッドでの低遅延双方向リアルタイム音声。ローカルのネイティブ音声プロバイダー（Codex など）が必要です。"
+  },
+  "permissions": [
+    "voice.control"
+  ],
+  "requires": {
+    "agentCapabilities": [
+      "realtimeVoice"
+    ]
+  },
+  "contributes": {
+    "composerActions": [
+      {
+        "id": "voice",
+        "title": {
+          "zh": "实时语音",
+          "en": "Realtime Voice",
+          "ja": "リアルタイム音声"
+        },
+        "icon": "mic"
+      }
+    ]
+  }
+}

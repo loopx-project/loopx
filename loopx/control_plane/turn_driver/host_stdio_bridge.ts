@@ -1,8 +1,7 @@
 /** Raw stdio relay for SDKs that detach their children from the managed Host.
  * EOF is loss of the owning client, not permission to finish pending tool work.
  * All termination, descendant drain and process-group decisions stay in the
- * existing runHostProcess owner. This transport neither parses MCP nor grants
- * authority to the selected command.
+ * existing runHostProcess owner.
  */
 import {once} from "node:events";
 import {StringDecoder} from "node:string_decoder";

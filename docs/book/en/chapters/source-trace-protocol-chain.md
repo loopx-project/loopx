@@ -134,7 +134,7 @@ This simplified shape is explanatory, not an importable LoopX configuration:
 }
 ```
 
-[`decision_scope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
+[`decision_scope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/decision-scope-v0.md)
 owns coverage semantics. The important facts are:
 
 - the Gate declares kind, granularity, and scope key;
@@ -165,7 +165,7 @@ Todo and Gate facts feed several read models:
 - attention queue;
 - quota input.
 
-[`task_graph_projection_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
+[`task_graph_projection_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/task-graph-projection-v0.md)
 may display `blocks`, `requires_decision`, `validates`, and handoff relations. It does not create authority.
 
 The scenario needs this relationship:
@@ -226,7 +226,7 @@ For this scenario:
 - `repair-link-checker` remains runnable;
 - the Gate remains visible in the user channel.
 
-This is not a Gate bypass. The selected fallback never performs the protected action.
+The selected fallback never performs the protected action.
 
 ### Ordered policy, not scattered booleans
 
@@ -256,8 +256,8 @@ Rules need an explainable first match, suppression conditions, and a reason. Neg
 
 ### Policy-reading breakpoints
 
-Use [State Machines](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
-and the [Rule Seam Map](https://github.com/huangruiteng/loopx/blob/main/docs/product/core-control-plane/rule-seam-map.md)
+Use [State Machines](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/state-machine.md)
+and the [Rule Seam Map](https://github.com/loopx-project/loopx/blob/main/docs/product/core-control-plane/rule-seam-map.md)
 to verify:
 
 1. input facts are normalized;
@@ -302,7 +302,7 @@ After `interaction_contract` arbitrates the turn, the Host must not reread statu
 
 ## Stop 5: TurnEnvelope carries an already-decided turn
 
-[`turn_envelope_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
+[`turn_envelope_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/turn-envelope-v0.md)
 is a bounded read model over the quota decision. It carries enough information for execution:
 
 - Goal, Agent, and selected Todo;
@@ -322,7 +322,7 @@ If the Envelope selects `repair-link-checker`, the Turn remains bound to that ca
 
 ## Stop 6: LoopX Turn creates one bounded effect
 
-[`loopx_turn_v0`](https://github.com/huangruiteng/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
+[`loopx_turn_v0`](https://github.com/loopx-project/loopx/blob/main/docs/reference/protocols/loopx-turn-v0.md)
 constrains execution:
 
 ```text
@@ -491,7 +491,7 @@ For a control-plane failure, verify in order:
 After a trace, these should hold on their own:
 
 1. **Every renamed or redefined field comes with a full consumer list.** Updating producers alone is incomplete, and a missing-field fallback counts as a consumer.
-2. **Success at every layer is not evidence that the chain is correct.** The test is the first boundary that violates the invariant, not the final return value.
+2. The test is the first boundary that violates the invariant, not the final return value.
 3. **A missing field's default participates in the decision.** So the contract must state whether absence means reject, repair, or compatibility fallback.
 4. **Authority has exactly one canonical source.** Several places may read a field and only one owns it; mistaking a reader for the owner is the most common leftover from a cross-layer change.
 5. **Judging authority follows the protocol document; judging current behavior follows the source.** When they conflict, pick by conflict type and make this change update the other side.

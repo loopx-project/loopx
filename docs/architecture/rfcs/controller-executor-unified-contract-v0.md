@@ -7,8 +7,8 @@
 - **Delivery maturity:** The single-worker EdgeBench entry is merged. #8484 qualifies a generic dual-role Turn on C1. Cross-admission continuity, multi-case benefit and conversation adoption remain open.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-11-13
-- **Source revisions:** main `9508f4de93`, C1 `9d283862e3`. Section 11 distinguishes implementation-PR evidence, original controls and open qualification.
+- **Last normative revision:** 2026-11-17
+- **Source revisions:** main `f15ebdd16b` (`9508f4de93` for §4–10 baseline, C1 `9d283862e3`). Section 11 distinguishes implementation-PR evidence, original controls, subtraction governance and open qualification.
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
 
@@ -55,7 +55,7 @@ flowchart TB
 | How does the controller inspect workers and read/write their environment? | [Session discovery and evidence](#worker-session-discovery), [shared workspace and tools](#shared-workspace-and-tools) |
 | What keeps work advancing without another user message? | [Primary execution loop](#controller-worker-main-loop) |
 | How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [attention / preemption](#controller-attention-and-preemption), [failure isolation](#router-failure-recovery) |
-| What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), sections 8–11 |
+| What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), [Subtraction Gate](#subtraction-gate), sections 8–11 |
 | Where are C1 field, context, wire and baseline details? | [Technical annex](controller-executor-unified-contract-v0/contract-and-context.md) |
 
 English and Chinese are semantic mirrors. This main document owns current design;
@@ -223,10 +223,10 @@ management tree.
 
 | Role / owner | Decisions and behavior it owns | Responsibilities it does not own |
 | --- | --- | --- |
-| Router / steward | Understand intent, discover context-affine capable units, propose reuse/creation, pass revisions, synthesize results and cross-task tradeoffs | Micromanage worker tools, claim/accept for receivers, copy Goal task stores or budgets |
-| Controller / within a unit | Select work from Goal, planning horizon and evidence; maintain continuity, discover/inspect worker sessions, read/write and validate in the shared environment, interact with user/router, assess correction and acceptance, call Core | Become another authority or replace durable work with chat notes; approve every local tool step |
-| Worker / within a unit | Autonomously use tools, experiment, produce artifacts and report evidence/questions within admitted scope | Consume Core packets, author settlement or directly hold Core write access |
-| Core + managed execution + Host adapter | Existing typed rules, persistence, identity, dispatch, observation, stop and recovery | Infer authority/completion from prose or choose domain solutions for the model |
+| Router / steward | Understand intent, discover context-affine capable units, propose reuse/creation, dispatch scoped `collaboration_brief_v0` contracts, track bounded `remaining_work` and typed `resume_when` continuation predicates, synthesize results and close the original-route async inbox without polling loops | Micromanage worker tools, poll workers in loops, claim/accept for receivers, copy Goal task stores or budgets |
+| Controller / within a unit | Select work from Goal, planning horizon and evidence; emit/consume upward adaptive stride and receipt-gated context policy proposals (`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`); maintain continuity, discover/inspect worker sessions, read/write and validate in the shared environment, interact with user/router, assess correction and acceptance, call Core | Become another `AuthorityStore` writer, bypass CAS/lease fencing, replace durable work with chat notes, or approve every local tool step |
+| Worker / within a unit | Autonomously use tools, experiment, produce patches/artifacts and report evidence/questions inside an isolated **sandboxed executor worktree** within admitted scope | Consume Core packets, author settlement, access hidden verifiers/credentials, or directly hold Core write access |
+| Core (`AuthorityStore` + CAS + lease) + Host adapter | Sole deterministic owner of `AuthorityStore` transactions, conditional revision `CAS`, single-writer `claim/lease` fencing, once-only receipts, default-deny ACLs, sandbox isolation, observation, stop and recovery | Infer authority/completion from prose, rewrite active KV-cache prefixes without receipts, or choose domain solutions for the model |
 
 The router may answer simple questions from sufficient existing evidence without
 creating a unit. Prefer reuse of an Agent whose current context and authority fit;
@@ -235,6 +235,24 @@ ambiguous bindings rather than taking over by title similarity or recent presenc
 A router's priority is a request: the controller assesses local commitments and
 dependencies, returns adoption, deferral or refusal with reasons, and Core applies
 legal changes.
+
+Keep three architectural planes strictly separated across every unit:
+
+1. **Deterministic Kernel (`AuthorityStore` + CAS + single-writer lease ownership):**
+   holds authoritative Goal, Todo, `claim/lease`, generation fence, `remaining_work` /
+   `resume_when`, and once-only settlement receipts under default-deny ACLs and
+   out-of-tree deterministic validation gates.
+2. **Sandboxed Executor Worktrees:** host-enforced execution sandboxes (`linked
+   worktrees` / containers with normalized patch delivery and credential exclusion)
+   where workers experiment freely without Core credentials or write authority;
+   resetting or losing a sandbox leaves `AuthorityStore` state uncorrupted.
+3. **Upward Adaptive Stride and Context Policy Decisions:** sits beside the
+   controller and `control_plane/work_items` / `progressive_context.ts` to select
+   `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` proposals
+   ([History working sets §5.1](history-working-set-context-policy-v0.md#51-one-projection-owner),
+   [Joint decisions §5.9](target-yardstick-stride-decisions-v0.md#policy-evolution));
+   these proposals remain strictly advisory until Core validates deterministic
+   receipts, CAS preconditions, and budget bounds.
 
 <a id="agent-binding-unit"></a>
 
@@ -387,9 +405,14 @@ dependency, user-action, budget, stop or terminal condition remains effective;
 otherwise useful authorized work must not wait for the user to say “continue”.
 
 This logical loop is event-driven, not a blocking wait that occupies the
-controller session. Persist dispatch, observations, pending assessment and
-continuation through their existing owners. The host/runtime resumes eligible
-processing after a result or recorded wake; it does not keep a model polling.
+controller session. Persist dispatch, observations, pending assessment, bounded
+`remaining_work`, typed `resume_when` continuation predicates (`todo_done`,
+`pr_merged`, `capacity_available`, `monitor_changed`, `resume_at`), and
+continuation state inside the Core `AuthorityStore` owner. The host/runtime
+wakes eligible processing only when a verified result, `collaboration_brief_v0`
+return, or satisfied `resume_when` trigger arrives; it **never keeps a steward or
+controller model running polling loops**, and closes the steward async inbox
+back to the original requester upon completion or actionable blocker.
 On recovery, reconcile the original attempt and unfinished decision/effect before
 continuing, without dispatching another worker merely to restart the loop.
 
@@ -713,10 +736,14 @@ additional design choice here is **where decisions and attention are spent**:
 | What the executor must know | Deliver the task's full constraints, relevant contrary evidence, original materials and unresolved reads; explain the decision in task language | A summary is not an alternate contract or proof of source reading. Unknown relevance requires more material before dependent work |
 | What a result changes | Distinguish a finding, verified artifact, blocked attempt and accepted outcome; decide whether to continue, investigate or replan | Independent validation and current Core receipts, rather than either session's narrative, determine acceptance and settlement |
 
-Keep three operations separate. The deterministic composition owner combines
-domain facts without inventing policy; the existing codec encodes an exactly
-recoverable full/delta input; the controller performs task-dependent semantic
-selection and reasoning. A natural-language task can omit irrelevant control
+Keep three operations separate. The deterministic composition and `AuthorityStore`
+owner combines domain facts, enforces CAS/single-writer lease fencing, and gates
+`FoldToReceipt` / `EpochReset` transitions on deterministic receipts without
+inventing policy; the existing codec encodes an exactly recoverable full/delta
+input while preserving monotonic `KeepRaw` KV-cache prefixes between epochs; the
+controller performs task-dependent semantic selection, reasoning, and upward
+`{grow, switch, verify}` stride proposals over the isolated worker's sandboxed
+worktree results. A natural-language task can omit irrelevant control
 syntax and cannot promise bit-for-bit equivalence. Its adequacy is tested by
 preserved constraints, actual executor decisions and accepted outcomes, with
 the original authorized material reachable. Do not replace these operations
@@ -1373,6 +1400,15 @@ and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
 
+Public-distribution isolation now reuses the runtime artifact metadata owner:
+runtime qualification observes the installed ordinary writer, desktop packaging
+observes its archived writer, and publication requires their declared supported
+contract to match. The existing quota-packet default remains supported; the
+unqualified complete-contract default cannot pass on installation checks alone.
+This does not qualify §9 outcomes/costs, replace an installed writer, add another
+current producer or retire historical readers. Extending the supported profile
+still requires the original adoption evidence. See the [release boundary](../../product/release-readiness.md).
+
 Native launch rechecks use the original `SettlementIdentity` as their sole
 Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing
 `current_turn_host_launch_decision` owner; an observed replan packet is context,
@@ -1468,6 +1504,87 @@ settings screens. Changed caller-facing operations/readback retain C8's packaged
 frontend failure/recovery journey and first-screen evidence. C1/default-adoption
 complete-cost and benefit qualification remain unchanged; a bounded refactor is
 not full RFC acceptance.
+
+<a id="subtraction-gate"></a>
+
+### Subtraction Gate & Anti-Context-Gravity Rules
+
+Empirical audits on `main@f15ebdd16b` and C1 PR `#8266` (`+26,672 / -4,561`
+across `289` files, net `+22,111` LOC) show that nominal "unification" work
+defaults to net codebase growth unless bounded by an explicit subtraction gate.
+
+#### 1. Why "unification" PRs grew net LOC (four measured drivers)
+
+In `#8266`, every major tree expanded instead of shrinking:
+
+| Measured driver in `#8266` | Diff footprint | Observed root mechanism |
+| --- | --- | --- |
+| Append-only bilingual RFC & ledger logs | `+9,564` net in `docs/` (`+9,715 / -151`, incl. `+7,749` across `14` `ledger/` files and `+1,218 / -35` in RFC/annex diffs; `+5,874` in `2026-10-30-c1-source-convergence.{md,zh-CN.md}` alone) | Treating multi-thousand-line chronological execution diaries as convergence proof instead of compact boundary tables. |
+| Combinatorial old × new mode matrix tests | `+9,976` net in `tests/` (`+12,074 / -2,098` across `142` files) | Multiplying full end-to-end fixtures over `loopx_turn_envelope_v0`, `--context-delivery off`, and the unified schema instead of sharing invariant oracles. |
+| Additive compatibility adapters in runtime/CLI | `+2,236` net in `loopx/` (`+4,224 / -1,988` across `92` files) | Adding derivation shims (`raw_quota_turn_view`, `compose_turn_decision_with_raw_envelope`, `--context-delivery off` branches across `loopx/cli_commands/quota.py`, `quota_presentation.py`, `quota_capture.py`, `quota_context_reader.py`) instead of retiring replaced producers. |
+| Cross-language Python ↔ TS wrapper retention | `loopx/cli_commands/` (`+1,639 / -645`), `loopx/control_plane/*.py` (`+1,167 / -685`), `loopx/control_plane/*.ts` (`+1,080 / -532`) | Preserving Python projection/orchestration wrappers beside TypeScript owners. |
+
+The same additive-facade dynamics appear in open unification PRs `#8484`
+(`+1,979 / -174`, `41` files) and `#7568` (`+6,230 / -349`, `56` files), in
+contrast to concise normative changes such as `#8749` (`+538 / -2`, merged) and
+the structural hygiene tracked under `#5072` and `#8787`.
+
+#### 2. Context gravity vs. scar-preserving subtraction
+
+On `main@f15ebdd16b`, tracked code/script files total `~1.79M` LOC (`1,785,239`
+lines across `loopx/`: `1,864` files / `~658k` LOC; `tests/`: `1,956` files /
+`~727k` LOC; `examples/`: `688` files / `~204k` LOC; plus `apps/`, `packages/`,
+`scripts/`, and `benchmark/`), alongside `152` files (`~11.5k` LOC) under
+`docs/architecture/rfcs/ledger/` and `~3,990` lines of historical Appendix A logs
+in [the small-kernel RFC](monorepo-distribution-split-v0.md).
+
+- **Context gravity:** Frontier models operating inside a `1.79M`-LOC tree infer
+  that existing modules, CLI flags, and legacy projections are immutable
+  prerequisites, so they layer unified facades and compatibility shims on top
+  of old paths rather than simplifying.
+- **Scar-preserving subtraction:** LoopX's durable moat is not its wrapper
+  surface or raw line count; it is **four irreplaceable kernel invariants** —
+  (1) exclusive leases and writer/generation fencing, (2) default-deny authority
+  and ACL/scope isolation, (3) once-only idempotent settlement receipts, and
+  (4) same-origin counterfactual checkpoints and evaluation ledgers — together
+  with its **failure-counterexample test corpus** (negative, mutation, and
+  recovery cases). Valid subtraction deletes dead pilots, redundant wrappers,
+  and unreferenced scripts while keeping every kernel invariant and failure
+  counterexample intact.
+
+#### 3. Normative retirement backlog and ratchet rules
+
+All C1–C9 and related convergence PRs enforce the following gates (paired with
+[the small-kernel subtraction gate](monorepo-distribution-split-v0.md#subtraction-gate)):
+
+1. **Retire pre-Turn pilot CLI subcommands and top-level modules.** Delete the
+   superseded pre-Turn `codex-cli-*` pilot/proof subcommands (`15` pilot/proof
+   commands superseded by `loopx turn` via `turn_driver/codex_cli.py`,
+   `start-goal`, and `codex_app` heartbeat — `14` with zero non-pilot production
+   callers plus `codex-cli-session-probe` referenced only as a prompt hint in
+   `loopx/project_prompt.py`), the `4` top-level `loopx/codex_cli_*.py` modules
+   (`3,767` LOC), and their `6` `loopx/cli_commands/starter_*.py` wrappers (`859`
+   LOC), keeping live `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py`.
+2. **Consolidate remaining top-level packages and ratchet strictly downward.**
+   Migrate the remaining `20` top-level `loopx/chat_*.py` modules (`20,562` LOC)
+   into `loopx/chat/` and `9` `loopx/*_goal_mode/` packages (`59` files /
+   `17,655` lines; `33` `.py` / `7,062` LOC) into `loopx/hosts/`, decrementing
+   `max_top_level_modules` in [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   (currently `127`) in the same PR as every deleted or moved top-level module.
+3. **Prune unreferenced `examples/` and source-text-pinning smokes.** Remove
+   unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
+   `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
+   `main@f15ebdd16b`) and retire the `14` source-text-pinning
+   `examples/cli-*-command-modularization-smoke.py` checks that assert internal
+   Python names instead of shipped CLI behavior per [good-smokes](../../development/good-smokes.md).
+4. **Bound RFC and ledger growth.** Record changes as compact normative
+   boundary, invariant, retirement, and evidence tables rather than
+   multi-thousand-line chronological diaries.
+5. **Exit-gate every compatibility view.** Any transitional `v0` projection
+   (`loopx_turn_envelope_v0`, `raw_quota_turn_view`), `legacy_fallback` path, or
+   off-mode flag (`--context-delivery off`) MUST name its active consumer,
+   observability counter, and deletion milestone. C1/C9 convergence is incomplete
+   until duplicate normal producers and combinatorial flags are deleted.
 
 ## 12. Open decisions
 

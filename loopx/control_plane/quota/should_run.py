@@ -194,6 +194,7 @@ def _attach_quota_should_run_envelope(
 
 def _app_scheduler_state_read_observer(
     direct_sources: dict[str, dict[str, Any]],
+    observe_state: Callable[[Mapping[str, Any]], None] | None,
 ) -> Callable[[Mapping[str, Any]], None]:
     def record(readback: Mapping[str, Any]) -> None:
         previous = direct_sources.get("app_scheduler_state", {})
@@ -211,6 +212,8 @@ def _app_scheduler_state_read_observer(
             item_count=item_count,
             unreadable_count=unreadable_count,
         )
+        if observe_state is not None:
+            observe_state(readback)
 
     return record
 
@@ -293,8 +296,7 @@ def _apply_selected_todo_guards(
             and no_executable_work
         ):
             # An empty generic Goal recommendation cannot replace the owner's
-            # current acceptance scope with another paid work attempt. A local
-            # accepted scope also does not certify the entire Goal as complete.
+            # current acceptance scope with another paid work attempt.
             # Original receipt recovery, admitted replan and actual independent
             # work retain their own routes; this only removes new empty delivery.
             prepared.normal_delivery_allowed = False
@@ -566,6 +568,7 @@ def build_quota_should_run(
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
     receipt_bound_replan_guard_scoped: bool = False,
+    receipt_bound_replan_execution_pending: bool = False,
     receipt_bound_successor_replan: bool = False,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
@@ -576,6 +579,7 @@ def build_quota_should_run(
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     direct_sources: dict[str, dict[str, Any]] = {}
@@ -663,6 +667,7 @@ def build_quota_should_run(
             receipt_bound_replay_phase=receipt_bound_replay_phase,
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+            receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
             receipt_bound_successor_replan=receipt_bound_successor_replan,
             authoritative_fallback_todo_items=authoritative_fallback_todo_items,
             replan_explore_reader=tracked_replan_explore_reader,
@@ -685,7 +690,7 @@ def build_quota_should_run(
             runtime_root=runtime_root,
             goal_ref=goal_ref,
             scheduler_state_read_observer=_app_scheduler_state_read_observer(
-                direct_sources
+                direct_sources, app_scheduler_state_observer,
             ),
         )
         _apply_missing_state_health_guidance(

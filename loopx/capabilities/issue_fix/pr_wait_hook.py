@@ -13,7 +13,6 @@ from ...control_plane.capability_hooks import (
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     TurnStartHookRegistration,
 )
-from .pr_wait_reconcile import reconcile_pr_wait_dependencies
 
 
 PR_WAIT_OBSERVATION_HOOK_ID = "issue_fix.pr_wait_observation"
@@ -91,6 +90,9 @@ def turn_start_hook(*, registry_path: Path, runtime_root: Path, goal_id: str,
                         "external_read_count": 0, "state_written": False,
                         "summary_lines": ["Observation permission source is unavailable; provider not contacted."]}}
         try:
+            # Optional provider loading follows the invocation-time permission recheck.
+            from .pr_wait_reconcile import reconcile_pr_wait_dependencies
+
             readback = reconcile_pr_wait_dependencies(registry_path=registry_path,
                 runtime_root_arg=str(runtime_root), goal_id=goal_id, agent_id=agent_id,
                 fetch_timeout_seconds=fetch_timeout_seconds)

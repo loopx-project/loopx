@@ -10,7 +10,6 @@ dispatch branch move together, so the public invocation is unchanged.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -26,11 +25,6 @@ from ..control_plane.effect_runtime import effect_runtime_request_scope
 from ..control_plane.goals.goal_vision_policy import (
     GOAL_VISION_ADVANCEMENT_POLICY_CHOICES,
 )
-from ..control_plane.goals.first_party_host_admission import (
-    capture_first_party_host_goal_ref,
-)
-from ..control_plane.goals.source_session_registry_state import exact_goal_ref
-from ..control_plane.goals.vision_checkpoint import prepare_vision_refresh
 from ..control_plane.quota.settlement import (
     attach_settlement_progress,
     read_heartbeat_settlement,
@@ -44,12 +38,6 @@ from ..control_plane.work_items.progress_observation import ProgressResultClass
 from ..control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
     project_replan_writeback_rejection,
-)
-from ..extensions.lark.goal_channel_lifecycle import (
-    goal_channel_gate_sync_failure,
-    sync_human_gate_after_refresh,
-    blocked_notice_sync_failure,
-    sync_blocked_notice_after_refresh,
 )
 from ..history import load_registry
 from ..paths import resolve_runtime_root
@@ -65,15 +53,17 @@ from .post_writeback import (
     PostWritebackProjectionBuilder,
     dispatch_committed_cli_post_writeback_hooks,
 )
+from .project_lifecycle_checkpoint_context import (
+    configure_checkpoint_context_parser,
+    handle_checkpoint_context_command,
+)
 from .project_lifecycle_inputs import (
-    inline_agent_vision_packet,
-    inline_progress_observation,
-    reject_non_standard_json_constant,
-    split_explore_result_input,
+    parse_refresh_state_inputs,
 )
 from .project_lifecycle_sinks import (
     apply_external_sink_postcondition,
     lark_explore_graph_syncer,
+    sync_goal_channel_notifications_after_refresh,
 )
 from .quota_reward_memory import (
     attach_reward_memory_ingest_after_spend,
@@ -98,24 +88,21 @@ def register_refresh_state_command(
             "reuse the original Turn identity."
         ),
     )
-    add_subcommand_format(context_parser)
-    for option in ("goal-id", "agent-id", "turn-instance-id"):
-        context_parser.add_argument(f"--{option}", required=True)
-    binding = context_parser.add_mutually_exclusive_group(required=True)
-    binding.add_argument("--todo-id")
-    binding.add_argument("--replan-obligation-id")
-    context_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
-    context_parser.add_argument("--project")
-    context_parser.add_argument("--state-file")
-    context_parser.add_argument("--dependency-todo-id", action="append", default=[],
-        help="Additional upstream Todo result used in the judgment; declared dependencies are included automatically.")
+    configure_checkpoint_context_parser(context_parser, add_subcommand_format)
     refresh_state_parser = subparsers.add_parser(
         "refresh-state",
         help="Append a read-only run from active goal state after state-only updates.",
     )
     add_subcommand_format(refresh_state_parser)
-    refresh_state_parser.add_argument("--goal-outcome-update-json", type=Path,
-        help="Optional changed outcome/Agent review envelope (operation_id, expected_provider_revision, refinement). Apply once before normal writeback; unchanged work needs no update. Independent checks remain separate.")
+    refresh_state_parser.add_argument(
+        "--goal-outcome-update-json",
+        help=(
+            "Inline JSON object or file path (@path supported) for an optional changed "
+            "outcome/Agent review envelope (operation_id, expected_provider_revision, "
+            "refinement). Apply once before normal writeback; unchanged work needs no "
+            "update. Independent checks remain separate."
+        ),
+    )
     refresh_state_parser.add_argument(
         "--goal-id",
         required=True,
@@ -213,6 +200,8 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-todo-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-turn-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument(
@@ -257,7 +246,7 @@ def register_refresh_state_command(
     )
     refresh_state_parser.add_argument(
         "--explore-result-json",
-        help="Path to an explicit explore_result_attachment_v0; ingest and link after committed work writeback.",
+        help="Inline JSON object or file path (@path supported) for an explicit explore_result_attachment_v0; ingest and link after committed work writeback.",
     )
     refresh_state_parser.add_argument(
         "--reward-memory-reflection-json",
@@ -283,9 +272,9 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument(
         "--agent-vision-json",
         help=(
-            "Path to a complete generated goal_vision_replan_contract_v0 update. "
-            "The CLI enforces budgets; any autonomous replan that changes durable "
-            "mainline fields requires goal_path_delta_v0."
+            "Inline JSON object or file path (@path supported) for a complete generated "
+            "goal_vision_replan_contract_v0 update. The CLI enforces budgets; any "
+            "autonomous replan that changes durable mainline fields requires goal_path_delta_v0."
         ),
     )
     refresh_state_parser.add_argument(
@@ -451,34 +440,12 @@ def handle_refresh_state_command(
     post_writeback_projection_builder: PostWritebackProjectionBuilder | None = None,
 ) -> int | None:
     if args.command == "checkpoint-context":
-        from ..control_plane.goals.checkpoint_context_io import read_checkpoint_context, render_checkpoint_context
-        try:
-            goal_instance_id = str(
-                getattr(args, "goal_instance_id", None) or ""
-            ).strip()
-            goal_ref = (
-                exact_goal_ref(args.goal_id, goal_instance_id)
-                if goal_instance_id
-                else capture_first_party_host_goal_ref(
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                )
-            )
-            payload = read_checkpoint_context(
-                registry_path=registry_path, runtime_root_override=args.runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
-                turn_instance_id=args.turn_instance_id, replan_obligation_id=args.replan_obligation_id,
-                project=Path(args.project).expanduser() if args.project else None,
-                state_file=Path(args.state_file).expanduser() if args.state_file else None,
-                dependency_todo_ids=args.dependency_todo_id,
-                goal_ref=goal_ref,
-            )
-        except Exception as exc:
-            payload = {"ok": False, "error": str(exc),
-                **({"error_code": exc.code, **getattr(exc, "payload", {})}
-                   if isinstance(getattr(exc, "code", None), str) else {})}
-        print_payload(payload, output_format(args), render_checkpoint_context)
-        return 0 if payload.get("ok") else 1
+        return handle_checkpoint_context_command(
+            args,
+            registry_path=registry_path,
+            print_payload=print_payload,
+            output_format=output_format,
+        )
     if args.command != "refresh-state":
         return None
     fmt = output_format(args)
@@ -489,94 +456,23 @@ def handle_refresh_state_command(
     outcome_update = None
     outcome_update_result = None
     goal_acceptance_preview = None
+    task_lease_proof = None
     try:
-        if getattr(args, "settlement_receipt", False) and (not args.settle_turn or fmt != "json"):
-            raise ValueError("--settlement-receipt requires --settle-turn and --format json")
-        if getattr(args, "settle_turn", False) and not (
-            args.agent_id and args.turn_instance_id and bool(args.todo_id) != bool(args.replan_obligation_id)
-        ):
-            raise ValueError("--settle-turn requires --agent-id, --turn-instance-id and exactly one Todo/obligation binding")
-        outcome_path = getattr(args, "goal_outcome_update_json", None)
-        if outcome_path:
-            if not args.agent_id:
-                raise ValueError("--goal-outcome-update-json requires the bound --agent-id")
-            path = Path(outcome_path).expanduser()
-            if path.stat().st_size > 262144:
-                raise ValueError("outcome update exceeds 256 KiB")
-            outcome_update = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(outcome_update, dict) or set(outcome_update) != {"operation_id", "expected_provider_revision", "refinement"} or not isinstance(outcome_update["refinement"], dict):
-                raise ValueError("outcome update requires operation_id, expected_provider_revision and refinement")
-        inline_vision_packet = inline_agent_vision_packet(args)
-        if args.agent_vision_json and inline_vision_packet:
-            raise ValueError(
-                "--agent-vision-json cannot be combined with inline --vision-* fields"
-            )
-        if args.agent_vision_json:
-            agent_vision_packet = json.loads(
-                Path(args.agent_vision_json).expanduser().read_text(encoding="utf-8")
-            )
-        elif inline_vision_packet:
-            agent_vision_packet = inline_vision_packet
-            merge_agent_vision_patch = True
-        agent_vision_packet, explore_result = split_explore_result_input(
-            agent_vision_packet, getattr(args, "explore_result_json", None),
-            scope_context=dict(
-                registry_path=registry_path, runtime_root_override=args.runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
-                turn_instance_id=args.turn_instance_id,
-            ),
-        )
-        if agent_vision_packet is not None and (
-            outcome_update is not None or not merge_agent_vision_patch
-        ):
-            # Reject malformed complete input before any history lock or outcome
-            # refinement. Inline patches without an outcome update still merge
-            # with current history first. Reuse the typed owner; this preflight
-            # cannot authorize a transition or replace the original packet.
-            # Refresh still checks merged history and policy against current
-            # state, including whether a terminal stride is actually enabled.
-            prepare_vision_refresh(
-                agent_vision_packet, goal_id=args.goal_id, agent_id=args.agent_id,
-                existing_agent_vision=None, merge_patch=False,
-                require_path_delta_for_durable_change=False,
-                allow_terminal_stride_path=True,
-            )
-        progress_observation = inline_progress_observation(args)
-        reward_memory_reflection_json = str(
-            getattr(args, "reward_memory_reflection_json", None) or ""
-        ).strip()
-        if reward_memory_reflection_json and not (
-            args.agent_id
-            and getattr(args, "todo_id", None)
-            and getattr(args, "turn_instance_id", None)
-        ):
-            raise ValueError(
-                "--reward-memory-reflection-json requires --agent-id, "
-                "--todo-id, and --turn-instance-id"
-            )
-        usage_measurement: dict[str, object] | None = None
-        if getattr(args, "usage_json", None):
-            loaded_usage = json.loads(
-                args.usage_json,
-                parse_constant=reject_non_standard_json_constant,
-            )
-            if not isinstance(loaded_usage, dict):
-                raise ValueError("--usage-json must be a JSON object")
-            usage_measurement = loaded_usage
-        goal_instance_id = str(
-            getattr(args, "goal_instance_id", None) or ""
-        ).strip()
-        if goal_instance_id and not getattr(args, "turn_instance_id", None):
-            raise ValueError("--goal-instance-id requires --turn-instance-id")
-        if getattr(args, "turn_instance_id", None):
-            goal_ref = (
-                exact_goal_ref(args.goal_id, goal_instance_id)
-                if goal_instance_id
-                else capture_first_party_host_goal_ref(
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                )
-            )
+        key = getattr(args, "task_lease_idempotency_key", None)
+        version = getattr(args, "task_lease_expected_version", None)
+        if key is not None or version is not None:
+            if key is None or not key or version is None or version < 1:
+                raise ValueError("First writeback requires the task lease key and positive version together.")
+            task_lease_proof = {"idempotency_key": key, "expected_version": version}
+        inputs = parse_refresh_state_inputs(args, fmt=fmt, registry_path=registry_path)
+        outcome_update = inputs.outcome_update
+        agent_vision_packet = inputs.agent_vision_packet
+        merge_agent_vision_patch = inputs.merge_agent_vision_patch
+        explore_result = inputs.explore_result
+        progress_observation = inputs.progress_observation
+        reward_memory_reflection_json = inputs.reward_memory_reflection_json
+        usage_measurement = inputs.usage_measurement
+        goal_ref = inputs.goal_ref
     except Exception as exc:
         payload = {
             "ok": False,
@@ -654,6 +550,7 @@ def handle_refresh_state_command(
             dry_run=bool(args.dry_run),
             sync_global=not bool(args.no_global_sync),
             goal_ref=goal_ref,
+            task_lease_proof=task_lease_proof,
             **({"goal_acceptance_preview": goal_acceptance_preview}
                if goal_acceptance_preview is not None else {}),
         )
@@ -747,6 +644,28 @@ def handle_refresh_state_command(
             or getattr(args, "replan_obligation_id", None)
         )
     )
+    if (material_refresh_ready or settlement_receipt_repair) and payload.get("explore_result") is not None:
+        from ..capabilities.explore.result_writeback import deliver_result_attachment
+
+        # Receipt repair carries the verified original Run, without appending
+        # it again. Both receipt writers must finish its requested delivery
+        # before recording proof that the original writeback can be settled.
+        # Preserve replay semantics when the original receipt is missing;
+        # disabling guidance must not turn its committed capture into new work.
+        delivery = deliver_result_attachment(
+            payload={**payload, "appended": True,
+                     "idempotent_replay": bool(payload.get("idempotent_replay") or settlement_receipt_repair)},
+            registry_path=registry_path,
+            runtime_root=Path(payload["runtime_root"]),
+            goal_id=args.goal_id, agent_id=args.agent_id,
+            todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
+        )
+        payload["explore_result_delivery"] = delivery
+        if not delivery["ok"]:
+            payload["ok"] = False
+            payload["error"] = "Primary writeback committed; replay this exact refresh to retry Explore result delivery"
+            material_refresh_ready = False
+            settlement_receipt_repair = False
     if material_refresh_ready or settlement_receipt_repair:
         append_cli_rollout_event(
             payload,
@@ -822,6 +741,11 @@ def handle_refresh_state_command(
                 replan_obligation_id=getattr(
                     args, "replan_obligation_id", None
                 ),
+                # The write may be addressed through the retained Todo while
+                # quota should-run bound this Turn to its semantic replan.
+                # Read back the immutable guard identity instead of treating
+                # that supported command shape as a second binding.
+                resolve_original_binding=True,
                 registry_path=registry_path,
                 goal_ref=goal_ref,
             )
@@ -893,18 +817,6 @@ def handle_refresh_state_command(
             attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
             print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
-        if payload.get("explore_result") is not None:
-            from ..capabilities.explore.result_writeback import deliver_result_attachment
-            delivery = deliver_result_attachment(
-                payload=payload, registry_path=registry_path,
-                runtime_root=Path(payload["runtime_root"]),
-                goal_id=args.goal_id, agent_id=args.agent_id,
-                todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
-            )
-            payload["explore_result_delivery"] = delivery
-            if not delivery["ok"]:
-                payload["ok"] = False
-                payload["error"] = "Primary writeback committed; replay this exact refresh to retry Explore result delivery"
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,
@@ -931,54 +843,12 @@ def handle_refresh_state_command(
                 "refresh; retry it before delivery"
             ),
         )
-        try:
-            gate_sync = sync_human_gate_after_refresh(
-                registry_path=registry_path,
-                runtime_root_override=args.runtime_root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                external_sink_delivery_authorized=payload["external_sink_delivery_authorized"] is True,
-            )
-        except Exception as error:
-            gate_sync = goal_channel_gate_sync_failure(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                exception=error,
-            )
-        try:
-            blocked_sync = sync_blocked_notice_after_refresh(
-                registry_path=registry_path,
-                runtime_root_override=args.runtime_root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                external_sink_delivery_authorized=payload[
-                    "external_sink_delivery_authorized"
-                ]
-                is True,
-            )
-        except Exception as error:
-            blocked_sync = blocked_notice_sync_failure(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                exception=error,
-            )
-        payload["goal_channel_blocked_notice_sync"] = blocked_sync
-        payload["goal_channel_gate_sync"] = gate_sync
-        apply_external_sink_postcondition(
+        sync_goal_channel_notifications_after_refresh(
             payload,
-            sink_result=gate_sync,
-            warning=(
-                "enabled Goal Channel human-gate delivery postcondition is "
-                "unsatisfied; the notification remains retryable"
-            ),
-            error=(
-                "enabled Goal Channel human-gate notification/readback failed "
-                "after the refresh; retry it before delivery"
-                + (
-                    "; " + gate_sync["failure_summary"]
-                    if gate_sync.get("failure_summary") else ""
-                )
-            ),
+            registry_path=registry_path,
+            runtime_root_arg=args.runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
         )
     settle_requested_refresh(payload, args, registry_path, goal_ref)
     attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)

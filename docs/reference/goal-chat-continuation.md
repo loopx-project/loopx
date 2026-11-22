@@ -58,6 +58,44 @@ delivery readback verifies what was sent, not source truth or recipient access.
 产物时才使用本地文件链接，否则保留文件／章节说明，并指出重要的访问或版本缺口。
 引用需要可用，不构成上传或发布授权；此指导不替代来源核验或渠道实际验收。
 
+## Correct an active bound Lark conversation
+
+In an already authorized project-assistant or steward conversation, a native
+`@` of that App's Bot sends a text correction to the Turn observed when the
+message entered intake. It keeps the original Session and freezes that Turn
+before reading the provider message. If no Turn was active, the message follows
+the ordinary queue. Plain `@name` prose, mentions of another identity and quoted
+mentions do not select steering. An `@` never changes the existing grant.
+The steward's active-Turn authorization must still match the current Goal
+scope. A stale authorization cannot be renewed by mentioning the Bot.
+
+When the canonical provider message cannot be verified, the captured input
+waits for the existing worker to verify it again. Unknown addressing does not
+become permission to queue a possible correction for a later Turn.
+
+The correction retains its full body and verified reply context. Live steering
+accepts text only; a message with images is retained with its attachments rather
+than executing its caption alone. A switched Turn or unsupported host receives
+an explicit failure instead of silently queueing the correction for later work.
+
+“已送达当前回合” confirms native delivery, not the model's semantic adoption or
+business completion. “送达状态待核实” keeps the original receipt pending: recovery
+can settle matching native readback, but cannot resend an uncertain operation or
+retarget a newer Turn. Reconnects and duplicate events reuse the original input
+identity. The existing conversation worker returns these receipts to the source
+message; no separate listener or message consumer is needed.
+
+已授权的项目助手或管家会话支持原生 `@Bot` 纠偏：忙时将完整文字送给接收时的
+原回合，读取飞书消息前即固定 Session 和 Turn；空闲时走普通队列。文字中的
+`@名称`、引用里的 @ 或 @ 其他身份不会触发，@ 本身也不增加权限。回复上下文随
+原文保留；带图消息不能只取文字执行，原文和附件一起保留。回合已切换或宿主不支持
+时明确说明失败，不改投后续工作。
+管家活动回合的授权必须仍与当前 Goal 范围匹配；@ 不能续签失效授权。原始飞书消息
+暂不可核验时，保留原输入由既有 worker 重新核验，不把未知 @ 当成后续任务执行。
+
+“已送达”只证明原生送达，不等于模型已经采纳或业务完成。“状态待核实”保留原回执，
+仅在匹配的原生读回出现后收口；断线、重投和恢复均不能盲目重发或绑定新回合。
+
 ## Enable LoopX mode
 
 On a local managed Codex Goal conversation, choose **Enable LoopX** in the

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 import json
 
+from ..markdown import render_json_object_block
+
 
 def work_context_lines(context: dict[str, Any]) -> list[str]:
     """Complete source content once; arbitrary source text stays JSON-escaped."""
@@ -42,10 +44,17 @@ def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
     ]
 
 
+def render_turn_context_markdown(payload: dict[str, Any]) -> str:
+    """Render the complete carrier or its same-source recovery reference."""
+    return "# LoopX Turn Envelope\n\n" + render_json_object_block(payload)
+
+
 def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
     from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        return render_turn_context_markdown(payload)
     action_value = payload.get("action")
     user_value = payload.get("user")
     writeback_value = payload.get("writeback")

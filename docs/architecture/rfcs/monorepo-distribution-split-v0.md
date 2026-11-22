@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-10-29
+- **Last normative revision:** 2026-11-19
 - **Implementation baseline:** packaging inventory `2f3d13ae9`; runtime composition audit `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -35,7 +35,7 @@ retain their original baselines.
    wheel is replaced over time by `loopx-core`, `loopx-workspace`, and
    per-capability packages under `packages/`, with `loopx` retained as a
    meta-package that depends on all of them.
-3. **Top-level regrouping happens before any packaging change.** `loopx/chat_*`
+3. **Regroup the selected dependency closure as needed for independent packaging.** `loopx/chat_*`
    moves to `loopx/chat/`, `loopx/*_goal_mode/` moves to `loopx/hosts/`, with
    compatibility re-exports for established public imports for at least one minor
    release. Internal-only callers move together and the old internal entry is deleted.
@@ -62,6 +62,20 @@ activated services and model-visible context. The package table defines what
 can be installed, not what every command must load. Installing standard grants
 no service activation or permission. Existing defaults and machine-enforced
 work obligations remain until a qualified, explicitly disclosed migration.
+
+The immediate outcome is an independently installed core that executes a task,
+recovers its original result and returns evidence. Unrelated directory moves,
+workspace packaging or another model session do not block that core-artifact
+slice; full M3 retains its complete distribution acceptance. Ordinary callers
+supply a task and consequential constraints, without first learning Vision,
+Quota, Lease or method names. The host carries bookkeeping; relevant permission,
+budget, uncertainty and recovery decisions remain visible when needed.
+
+The **10% complexity / 90% current-function coverage** target remains an unproven
+hypothesis. Fix a versioned journey denominator and compare necessary concepts,
+mandatory steps, loaded/activated code, model reads, complete costs and accepted
+outcomes. Report kernel-only and assembled coverage; do not drop specialized
+journeys from the denominator or treat code counts as model benefit.
 
 ## 2. Problem and motivation
 
@@ -269,6 +283,19 @@ contract into prose guidance. The kernel is a cohesive set of domains, not one
 large file. The adjacent refactor should localize the next change and preserve
 characterized behavior.
 
+### Required mechanisms and optional task methods
+
+Core owns legal scoped work, durable evidence, stop, budget and original-attempt
+recovery. Bench, workbench and manager compose specialized workflows around the
+same owners. Their absence must not block unrelated authorized core work.
+**Yardstick is an independently optional decision method, not a provider or a
+mandatory kernel stage.** Methods choose how to reason or measure; providers
+supply execution, storage or concrete external operations. Reuse existing
+capability owners and `yardstick_enabled`; add no method registry, provider id
+or enable switch. Ordinary result validation remains required when a method is
+off. Existing records, configured obligations, authority and defaults survive;
+method/dependency removal needs its own absence, parity and recovery evidence.
+
 ### Presets over the distribution tiers
 
 | Composition | Required content | Explicit optional content |
@@ -282,6 +309,16 @@ content is not an activation list. Minimal is an executable composition, not a
 flag applied after standard fully initializes. A host-free read-only kernel
 library does not qualify that executable preset. Exact contents and the first
 supported host/authority combination are D2/D5 decisions.
+
+The initial proposed **Standard** selection is `agent-turn-recall` for relevant
+prior guidance, `issue-fix` for validated repository changes, and
+`pull-request-review` for delivery review. These retain their existing capability
+owners and default-off settings; installation grants no source access, starts
+no watcher and authorizes no publication or merge. Load only the selected task's
+implementation. Basic recovery stays in Minimal without advisory recall.
+Yardstick, Stride, research/benchmark machinery and manager routing remain
+separate optional additions. This selects the R2 target; the current monolithic
+and core-candidate wheels do not yet implement that isolated package selection.
 
 Keep composition, managed/attached mode, host provider, one/two model sessions,
 storage provider and benchmark arm independent. Minimal does not imply attached,
@@ -419,6 +456,11 @@ contract explicitly requires their receipt. Batch best-effort telemetry only;
 do not defer authoritative receipt persistence, weaken fsync/transaction
 guarantees or cache stale permission/lease decisions to meet a timing target.
 
+For an admitted ordinary task, the built-in Worker view omits known empty
+Todo summary lanes. The selected task, nonempty lanes, counts, references and
+upstream truncation remain visible. The signed source and original reader
+retain the complete summaries for recovery and diagnosis.
+
 ### Governed lifecycle and external effects
 
 Use existing Goal/Agent/work/Turn identities, revisions, leases, effect ids and
@@ -428,12 +470,25 @@ and persist evidence, settle once, then deliver/read back through the owning
 channel. Each step uses its existing legal transitions and replay rules;
 this description adds no competing status enum or transaction coordinator.
 
+An explicit `turn run-once --execute` with a compatible generic CLI adapter
+and an independent validator can prepare an eligible Todo's missing lease.
+The Host reuses the ordinary claim and reads back that same Todo before
+dispatch. The claim and launch share one Turn identity. Recovery uses the
+lease generation captured by the original attempt.
+
 An executor crash, a lost effect acknowledgement and a lost result-delivery
 acknowledgement are different recovery cases. An operation provider must expose
 whether an effect can be reconciled and retried safely. Unknown external state
 holds further dependent effects for readback or intervention; “not observed”
 does not mean “not executed.” Device idempotency, physical interlocks and
 compensation remain provider responsibilities, not invented kernel guarantees.
+
+After a generic CLI result is durably recorded, the original Turn can resume
+validation or settlement without the adapter command or its request schema.
+The caller retains the approved workspace and supplies the independent checker
+if validation is pending. An already settled Turn reads back its saved result.
+If the recovery owner requires a Host attempt, the caller must supply the
+adapter before admission can advance.
 
 Model cancellation, process termination and confirmed device stop are separate
 facts. A stopped model must not produce a “device stopped” claim without device
@@ -488,6 +543,13 @@ Borrow the explicit boundaries, without adopting Cordis, upstream permission
 defaults or a new LoopX model loop. Pinned sources are in Appendix C.
 
 ## 7. Safety, privacy, and compatibility
+
+Ordinary C1 composition and replay use shared Explore guidance and exact
+context references. An empty read with graph and planning disabled returns
+the existing disabled view before loading the graph projector. A scoped
+Explore read loads Yardstick when its graph is available and the Goal enables
+evaluation. Settings, evidence identities, and recovery remain with the
+current Goal and Explore owners.
 
 - **Default-off / feature-off parity:** absent `loopx-workspace` or capability
   packages behave like the existing extension off state (I4). No command
@@ -610,6 +672,97 @@ journey qualification slices in this same plan. R0 can ship before directory
 moves; it does not qualify the kernel. R3/R4 are optional and do not block a
 qualified CLI or managed task. No unused provider, field or framework is added
 ahead of its real caller. Report the applied/deferred adjacent refactor in each PR.
+
+- Checkpoint moved to the execution ledger: [Core discovery checkpoint (2026-11-19)](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.md).
+
+<a id="subtraction-gate"></a>
+
+### Subtraction Gate & Anti-Context-Gravity Rules
+
+Empirical measurements at `main@f15ebdd16b` and on C1 PR `#8266` (`+26,672 / -4,561`
+across `289` files, net `+22,111` LOC) show that module splitting and execution
+unification fail to shrink the repository unless every delivery slice passes an
+explicit subtraction gate (paired with [the Controller RFC subtraction gate](controller-executor-unified-contract-v0.md#subtraction-gate)).
+
+#### 1. Why "unification" PRs grew net LOC (four measured drivers)
+
+In `#8266`, net code and documentation expanded across every layer:
+
+- **Append-only bilingual RFC and ledger logs (`+9,564` net lines in `docs/`):**
+  `+9,715 / -151` under `docs/`, including `+7,749` across `14` files in
+  `docs/architecture/rfcs/ledger/` and `+1,218 / -35` in RFC/annex diffs (`+5,874`
+  in `2026-10-30-c1-source-convergence.{md,zh-CN.md}` alone), turning chronological
+  logs into pseudo-proof.
+- **Combinatorial old × new mode matrix tests (`+9,976` net lines in `tests/`):**
+  `+12,074 / -2,098` across `142` test files multiplying full fixtures over
+  `loopx_turn_envelope_v0`, `--context-delivery off`, and the unified schema.
+- **Additive compatibility adapters in runtime/CLI (`+2,236` net lines in `loopx/`):**
+  `+4,224 / -1,988` across `92` files adding shims (`raw_quota_turn_view`,
+  `compose_turn_decision_with_raw_envelope`, `--context-delivery off` branches in
+  `loopx/cli_commands/quota.py`, `quota_presentation.py`, `quota_capture.py`, and
+  `quota_context_reader.py`) that reconstruct legacy `v0`/ordinary views instead of
+  retiring replaced producers.
+- **Cross-language Python ↔ TS wrapper duplication:** `loopx/cli_commands/`
+  (`+1,639 / -645`), `loopx/control_plane/*.py` (`+1,167 / -685`), and
+  `loopx/control_plane/*.ts` (`+1,080 / -532`) retaining Python orchestration
+  wrappers alongside TypeScript owners.
+
+Open unification PRs `#8484` (`+1,979 / -174`, `41` files) and `#7568`
+(`+6,230 / -349`, `56` files) exhibit the same additive-facade bias, in contrast
+to focused spec updates (`#8749`, `+538 / -2`, merged) and the structural/CI
+burden tracked under `#5072` and `#8787`.
+
+#### 2. Context gravity vs. scar-preserving subtraction
+
+At `main@f15ebdd16b`, tracked code/script files total `~1.79M` LOC (`1,785,239`
+lines across `loopx/`: `1,864` files / `~658k` LOC; `tests/`: `1,956` files /
+`~727k` LOC; `examples/`: `688` files / `~204k` LOC; plus `apps/`, `packages/`,
+`scripts/`, and `benchmark/`), alongside `152` files (`~11.5k` LOC) under
+`docs/architecture/rfcs/ledger/` and `~3,990` lines of historical Appendix A
+diaries in this RFC.
+
+- **Context gravity:** Placed inside a `1.79M`-LOC tree, frontier models treat
+  stale top-level files, historical flags, and transitional shims as fixed
+  infrastructure and wrap new facades around them rather than deleting old paths.
+- **Scar-preserving subtraction:** LoopX's durable moat is not line count or
+  wrapper breadth; it is **four irreplaceable kernel invariants** — (1) exclusive
+  leases and writer/generation fencing, (2) default-deny authority and ACL/scope
+  isolation, (3) once-only idempotent settlement receipts, and (4) same-origin
+  counterfactual checkpoints and evaluation ledgers — plus its
+  **failure-counterexample test corpus**. Small-kernel splits must preserve those
+  invariants and failure counterexamples while actively deleting dead pilots,
+  top-level wrappers, and unreferenced scripts.
+
+#### 3. Concrete retirement backlog and ratchet rules
+
+1. **Pre-Turn pilot CLI retirement.** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   retired 15 superseded pilot commands and four flat `loopx/codex_cli_*.py`
+   modules, and lowered the top-level budget from 127 to 124. The live
+   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py` still have callers.
+2. **Remaining top-level `chat_*` and `*_goal_mode` migrations.** M1 places
+   the internal action normalization and Goal lifecycle action modules under
+   `loopx/chat/`. This removes two flat names and lowers the budget from 124
+   to 122. M1 still needs to migrate the remaining Chat modules under I3.
+   M2 still moves host mode packages under `loopx/hosts/`. Each net removal
+   lowers [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   by the same count in that PR. The Core wheel already excludes both Chat
+   paths, so this move reduces the source directory count.
+3. **Unreferenced `examples/` scripts and source-text-pinning smokes.** Prune
+   unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
+   `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
+   `main@f15ebdd16b`) and retire the `14` `examples/cli-*-command-modularization-smoke.py`
+   files that pin internal Python import/helper text instead of shipped CLI
+   invariants per [good-smokes](../../development/good-smokes.md).
+4. **Bounded RFC and ledger discipline.** Retain Appendix A below as frozen
+   historical context only; new normative specifications and `ledger/` entries
+   must be compact boundary, invariant, retirement, and evidence tables rather than
+   multi-thousand-line chronological logs.
+5. **Exit-gated compatibility views and I3 shims.** Beyond I3's bounded one-minor
+   public-import window, any transitional `v0` projection (`loopx_turn_envelope_v0`,
+   `raw_quota_turn_view`), `legacy_fallback` path, or off-mode flag
+   (`--context-delivery off`) must name its active consumer and deletion
+   milestone. Distribution or mechanism convergence is incomplete until duplicate
+   producers and combinatorial flags are retired.
 
 ## 12. Open decisions
 
@@ -4114,3 +4267,532 @@ File/SQLite negative cases guard this boundary without changing valid activation
   actual model/Host context adoption, progressive controls, comparable complete
   costs, full V1–V5/V10, R1/M3 and C1 default cutover remain unqualified. The
   process Host and native context events are synthetic fixtures.
+
+### 2026-11-14 — Current-model task result survives Core recovery
+
+- **Sources:** `main@83809355f84a` and C1 #8266 at `6a31d83497a6`,
+  each in a separate installed Core environment. The executed entrypoint,
+  Turn driver/executor, complete-source owner and recall entrypoints match
+  their declared source bytes.
+- **Observed outcome:** the current interactive model adopted each actual
+  generic Host request and used tools to produce JSON and readable Markdown
+  inventory reports from isolated synthetic input. An independent input-derived
+  Decimal oracle checks duplicate merging, zero stock, over-reservation, a
+  non-ASCII SKU, ordering, each group and the totals.
+- **Recovery:** after the model result reached the durable `typed_result`
+  phase, the owning CLI process was killed with SIGKILL. Both original Turns
+  resumed without another Host invocation, completed independent validation
+  and Todo readback, and retained exactly one debit after replay. On C1,
+  a damaged report was rejected with the Todo still open and zero debit;
+  restoring the checked report allowed the same Turn to finish.
+- **Owner boundary:** a private rendezvous adapter only transports the current
+  model's request/result. C1 and the existing Turn driver retain composition,
+  identity, admission, validation, capture, recovery and settlement. No new
+  execution pipeline, schema, product default or capability activation is added.
+- **Remaining:** this strengthens task-result recovery evidence. It does not
+  qualify an installed native model/App adapter, natural-language onboarding,
+  model retention through native compaction, progressive product controls,
+  complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or C1 default
+  cutover. The model reused its report generator between the two checks;
+  these are not independent inference trials or an outcome/cost comparison.
+
+### 2026-11-15 — One confirmation for a complete conversational Goal draft
+
+- **Gap:** a complete draft skipped the form but still required a preview click
+  followed by drawer confirmation. The user could not see the resolved executor
+  and workspace until taking the first of those actions.
+- **Delta:** the Dashboard prepares a visible complete draft's existing typed action,
+  displays its server-resolved Agent and workspace, and offers one explicit
+  `Create and start` confirmation. Incomplete drafts and read-only views cannot
+  prepare creation; Edit and typed availability/stale/recovery gates remain.
+  Existing locale-scoped operation identities are read before preparation;
+  reload, language changes and repeated clicks retain the original operation.
+  The visible draft owns one confirmation/recovery entry; the canonical proposal
+  stays available when its draft is not loaded. Collapsed unseen history does
+  not initiate preparation.
+- **Evidence:** `goal-draft` covers preparation failure, no Goal writes before
+  confirmation, Edit/cancel, repeated clicks, reload, locale and narrow views.
+  `goal-draft-live` uses the real discovery and action store on isolated state
+  for resolved scope, lost-response readback, original-operation retry and
+  unavailable-Agent refusal. Its conversation is synthetic and its stub Agent
+  fails the first Turn; that failure is preserved rather than called success.
+- **Boundary:** this is a V4/R1 entry increment using the existing Goal draft,
+  typed review/apply and creation/recovery owners. It adds no shared schema,
+  authority grant, alternate execution pipeline or C1 composition owner.
+  Full task-artifact success through this entry, installed native App/model
+  adoption, compaction retention, complete D2/D5 closure, comparable total cost,
+  V1–V5/V10, R1/M3 and C1 default cutover remain unqualified.
+
+### 2026-11-15 — First-Goal reply adopted by the original governed Task
+
+- **Source:** `main@74ca883d5bd3`. The same source combines without conflict
+  with C1 #8266 at `2c099be41e68`; the isolated combined tree passes 287
+  native-session, work-context, first-read and Turn-settlement tests using
+  isolated state and synthetic provider/model fixtures. This does not approve
+  C1 or qualify its default cutover.
+- **Observed product path:** the real Chat discovery/action/store creates one
+  Goal and its initial Task from a synthetic reviewed request. The current
+  Host model reads the retained request and input through a temporary stdio
+  relay, produces an eight-group read-only report, and the real packaged Goal
+  conversation renders it. Independent CSV/Decimal checks verify groups and
+  totals. A real Chat restart preserves the original Session, reply and action;
+  retrying that action dispatches no new Chat Turn.
+- **Governed adoption:** the fixture caller declares an independent argv
+  validator through the existing Task owner, then the current model adopts
+  that original reply through the existing Core + SQLite + generic Host route.
+  It uses the same Goal, Agent and initial Task. SIGKILL after durable
+  `typed_result` resumes the original Turn without another Core Host invocation.
+  A damaged reply fails validation with the Task open and zero debit; restoring
+  the checked reply completes that Task with one debit, retained on replay.
+- **Remaining entry gap:** the first Chat request is still a read-only planning
+  conversation with a separate explicit LoopX-mode control. Its observed model
+  input is 24,372 UTF-8 bytes; this is one observation, not a cost comparison.
+  The fixture's explicit validation declaration and governed adoption are not
+  automatic product behavior. Reuse the registered managed-session, Task
+  validation/admission and C1 owners for that missing integration; do not infer
+  write authority or weaken independent validation to activate it.
+- **Boundary:** these source and transport checks strengthen first-result
+  readback and original-Task recovery evidence. They do not qualify one-goal
+  native onboarding, installed native App/model adoption, model compaction
+  retention, complete D2/D5 closure, comparable full costs, V1–V5/V10, R1/M3 or
+  C1 cutover. No runtime, schema, activation, permission or public evidence
+  policy changes; one-run relay/validator files remain private qualification
+  artifacts rather than a new shipped execution pipeline or CI fixture.
+
+### 2026-11-15 — First-Goal admission failure preserves creation and confirmed work
+
+- **Gap:** a failed first-Goal admission read or decision was converted into
+  permission to dispatch. Conversely, retrying a lost submit response could
+  apply a later admission failure or denial to already dispatched work.
+- **Delta:** the existing creation owner retains Goal, initial Tasks and
+  completion requirements before checking admission. An unverifiable admission
+  now returns a safe retryable action failure without opening a Session or
+  sending model work. Creation without an executable Host does not read work
+  admission. Recovery first reads the original Session/client operation through
+  the existing Task-start reader, verifies its request and first-Turn state,
+  and retains dispatched work without new admission. Queued work still requires
+  admission; foreign Sessions and terminal-before-start work remain refused.
+- **Evidence:** on `main@58cc5817e35e`, the real Chat HTTP/action/store path with
+  synthetic Codex protocol passes 36 creation-completion cases and 11 existing
+  Session/checkpoint recovery cases. Independent review identified two recovery
+  defects in the first candidate; their failing cases were retained and the
+  final candidate resolves both. The final runtime/test files also pass 22
+  selected File/SQLite and creation-only cases in an isolated combination with
+  C1 #8266 at `b8ac1ec5443b`, with exact source-byte readback. These are bounded
+  source and synthetic-Host checks, not current native-model qualification.
+- **Boundary:** this repairs V2/V4/R1 admission and recovery using existing
+  Session, Task and quota owners; it adds no shared vocabulary, authority grant,
+  validator installation or alternate C1 pipeline. Automatic original-Task
+  adoption, selected D2/D5 closure, native App/model and compaction retention,
+  progressive controls, comparable complete costs, full V1–V5/V10, R1/M3 and
+  C1 cutover remain unqualified. Preserve original requirements and earlier
+  negative evidence; run full original-goal regression before completion.
+
+### 2026-11-15 — Native Tasks consume existing owner Goal checks
+
+- **Gap:** a managed Native Task refused to execute with owner-configured Goal
+  acceptance alone, requiring a duplicate Task argv declaration.
+- **Delta:** the existing canonical Task validation plan now serves Native and
+  Delegation. Native reads current Goal scope and private Task declarations from
+  their existing owners, runs cumulative Goal and required Task checks, and
+  rechecks definition, work, claim, lifecycle and checker assets before and after
+  validation. Required declarations, applicable unbound/stale checks and changed
+  sources cannot fall back to a weaker check. Task argv keeps typed-result stdin
+  and the existing Turn receipt; legacy non-argv declarations retain refusal.
+- **Evidence:** the Goal-only refusal is reproduced on the prior Native consumer.
+  Shared TypeScript behavior matches the immutable baseline in 54 compatibility
+  vectors. Real isolated Chat/Core/canonical tests cover Goal-only and combined
+  execution, HTTP readback/replay, independent failures, corrupt declarations,
+  source changes before and after checks, and unrelated progress observations.
+- **Boundary:** this removes duplicate validation setup for already configured
+  Goal checks on V2/V4/R1. It does not install a trusted checker for a new natural
+  language Goal, authorize model/browser commands, or complete automatic first
+  Task adoption. Full V1–V5/V10, native-model/context retention, D2/D5 closure,
+  progressive controls, comparable complete costs, R1/M3 and C1 cutover remain
+  unqualified; preserve original acceptance and full-goal regression gates.
+
+### 2026-11-15 — First Goal retains its original registered conversation
+
+- **Gap:** default Codex Goal creation opened an unassigned Goal conversation.
+  Re-entry could open another legacy conversation; a lost opening response
+  could select a later Session, and the receipt did not re-read stored identity.
+- **Delta:** the existing TypeScript presentation owner selects the registered
+  Agent identity for a new default Codex Session. The Chat owner binds opening
+  to the original creation operation, reuses only that published Session and
+  rechecks the actual Goal, Agent, route, lifetime and workspace before dispatch
+  and receipt delivery. Unknown reservations and unidentified or ambiguous
+  historical originals hold recovery. Existing recorded legacy Sessions, explicit native token budgets and
+  other endpoints retain their paths. The frontend enters the original Agent
+  conversation through existing directory, Session and history readers; invalid
+  receipts expose recovery instead of opening another conversation.
+- **Evidence:** isolated real Chat/Core/File/SQLite tests exercise original-Task
+  adoption with explicit owner checks, missing/failed-check refusal, retained
+  history, concurrent published-Session opening, lost responses, original-action
+  replay and changed identities. The unchanged runtime compatibility corpus
+  passes 106 cases on both the immutable base and candidate. The presentation
+  reducer passes its 27-case suite and preserves all non-routing fields in
+  56 base/head vectors. Browser checks cover populated desktop/narrow views,
+  reload, invalid receipts and one reconnect restoring original history.
+- **Maintainability:** Session readback is shared in the existing Chat Session
+  entry owner. The Runtime coordinator grows from 2,503 to 2,524 lines for the
+  exact opening seam and early identity fence; its reviewed ceiling records that bounded change rather
+  than duplicating readback or adding another execution pipeline. This is no
+  latency, default-closure or complete-cost qualification.
+- **Boundary:** ordinary first and subsequent messages remain ordinary read-only
+  Chat. An explicitly checked original Task uses the existing Native owner;
+  this does not automatically provide a trusted checker or adopt every reply.
+  Recovery evidence covers published Sessions, not an unrecorded native
+  thread-start effect. A real native attempt failed: its configured model is
+  unsupported by the selected account. Synthetic success and account-read
+  readiness do not override that negative result. Full V1–V5/V10, model/context
+  retention, D2/D5 closure, progressive controls, comparable complete costs,
+  R1/M3 and C1 cutover remain unqualified. Preserve the original ten requirements
+  and run full original-goal regression before completion.
+
+The current entry design keeps the original reply and message input together.
+Re-entry follows the recorded Session rather than selecting a new conversation.
+These desktop and narrow references show the packaged frontend with its real
+SQLite/Chat owners and synthetic replies; the unverified acceptance remains
+visible. They illustrate the presentation boundary, not model or outcome
+qualification.
+
+![Original Goal conversation on desktop](assets/goal-entry-original-session-desktop.webp)
+
+![Original Goal conversation at a narrow viewport](assets/goal-entry-original-session-narrow.webp)
+
+### 2026-11-15 — Prepare existing checks and execute the original authorized Task
+
+- **Gap:** the original registered conversation could read work but could not
+  prepare its existing acceptance proposal without entering legacy coordinator
+  mode. Its frontend also lacked a caller for the existing native Task endpoint.
+  A scripted repair exposed an additional gap: native work inherited the
+  conversation's read-only prompt and sandbox without requesting Task permissions.
+- **Delta:** new managed Codex conversations advertise only the existing
+  `prepare_check` action. The host rechecks the original Session, active owner
+  Turn, registration, lifetime and workspace, and pins the actual existing
+  checker source. The existing acceptance owner resolves retained requirements
+  and the original Task. Owner check adoption remains separate from Task launch.
+  The existing primary control starts that Task in the original Session, using
+  its current checks, lease and allowance; lost replies retain the same operation.
+  An idle page reads once instead of adding continuous empty polling. Creation
+  shows the confirmed objective while retaining the internal execution request;
+  recorded historical display messages remain unchanged on recovery.
+- **Authority:** check preparation and adoption grant no writes. The existing
+  native Session owner maps an already approved whole-workspace boundary to the
+  host policy; absent or narrower approval remains read-only. Network and
+  temporary-directory writes remain disabled on this bounded native path.
+  Subsequent ordinary sends explicitly restore read-only policy, including after
+  uncertain native publication and direct callers. Session defaults and native
+  thread identity are preserved; older threads receive no new dynamic tools.
+- **Evidence:** real HTTP/Chat/Core/File/SQLite cases prepare a repository's
+  unchanged six-behavior cart checker, confirm its initial failure, then execute
+  the original Task after a separate existing owner workspace approval. The
+  repaired artifact passes those independent checks. Unconfirmed checks, changed
+  source, wrong output and missing write approval preserve an open Task without
+  debit. Packaged desktop/narrow journeys cover the same result, original history,
+  repeated operations, ordinary follow-up and bounded idle reads. Models and
+  editing are scripted; this does not qualify live-model or OS sandbox behavior.
+- **Maintainability:** identity, acceptance, native admission and settlement
+  retain their existing owners, including C1 composition. Prompt/input adaptation
+  stays in the native adapter; attached attachment refusal moves to its queue
+  owner. Runtime and Chat Agent stay within their existing reviewed ceilings.
+- **Boundary:** this delivers an existing-checker, already-authorized original
+  Task path for V2/V4/R1. It does not infer arbitrary validation from natural
+  language, promote a new Goal's write authority, support unenforceable narrow
+  write scopes, or qualify unsupported source-inspection hosts. The original ten
+  requirements, live model/account and context retention, D2/D5 closure,
+  progressive Standard journeys, comparable complete costs, full V1–V5/V10,
+  R1/M3 and C1 cutover remain open. Full original-goal regression still precedes
+  completion and the subsequent external benchmark work.
+
+These current design references show the packaged frontend with real SQLite and
+Chat owners, an explicit prior workspace approval and scripted model work. The
+desktop view exposes the original Task control after check adoption; the narrow
+view shows its independently checked result in the same conversation.
+
+![Original checked Task on desktop](assets/goal-entry-original-task-desktop.webp)
+
+![Original checked Task result at a narrow viewport](assets/goal-entry-original-task-narrow.webp)
+
+### 2026-11-15 — Confirmed creation continues through its original Task
+
+- **Gap:** “Create Goal and start first run” created a read-only conversation
+  without retaining an executable original-Task request. The permission choice
+  did not publish the selected workspace approval through its authority owner.
+- **Delta:** an explicit supported Codex creation intent retains its original
+  Goal, lifetime, Agent, Task, Session and native-thread provenance in the
+  existing action checkpoint and receipt. The confirmed workspace choice uses
+  the existing boundary-authority owner once. The existing Session queue consumes
+  that saved request only after current independent checks and admission permit
+  work; check confirmation and Task GET/UI observation cannot invent execution.
+- **Authority and recovery:** current Goal approval and the actual Task lease
+  must cover the whole original workspace. Narrow scopes remain read-only. One
+  guarded native frame supplies the direct workspace policy and pins its only
+  runtime workspace root; subsequent ordinary Chat reasserts read-only. Unknown
+  native publication is not replayed. Restart may resume only the same proven
+  unstarted queued operation; changed sources, threads and unfinished acceptance
+  hold recovery. Pending requests re-read after signals, not periodic polling.
+  An initial quota hold keeps creation retryable instead of publishing an
+  immutable success without its requested start. Terminalization during a
+  queue re-read cannot strand already queued ordinary follow-ups. A saved
+  request whose current Task admission is held stays pending; preparation and
+  dispatch re-read the existing typed admission, and the native launch guard
+  still decides execution after that observation.
+  The Task view distinguishes waiting from actual running and retains the
+  source address returned by the existing Goal navigation.
+- **Evidence:** the packaged UI with real Chat/Core/SQLite and scripted native
+  protocol completes the original cart Task against its unchanged six-behavior
+  oracle, retains readonly failure and rejected completion, and resumes remaining
+  work through the existing Continue control. Creation replay/reload adds no
+  Task dispatch or approval. Desktop/narrow populated conversation and result
+  readback are qualified. Source review of Codex 0.142.2 and independent OS
+  controls support root replacement and outside/symlink/home/tmp/network refusal;
+  those controls do not execute a model tool in that same Turn. Named-profile
+  deep-merge counterexamples remain negative evidence, not a shipped mechanism.
+- **Composition and boundary:** reuse the C1 identity, validation, admission,
+  context and settlement owners; preserve source and installed-Core combination
+  evidence separately from installed Chat/native-model qualification. Historical
+  creation does not load the new execution adapter. The
+  [current user guide](../../guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)
+  explains the approved scope, waiting and recovery journey. This advances
+  V2/V4/R1 integration without completing the original ten requirements. Live
+  model/context continuity, D2/D5 closure, progressive Standard journeys,
+  comparable full costs, full V1–V5/V10, R1/M3 and C1 cutover remain open. Run full
+  original-goal regression before completion and subsequent EdgeBench preparation.
+
+### 2026-11-15 — Defer material inventory behind its explicit operation
+
+- **Gap:** static content configuration discovery imported Material Lifecycle's
+  inventory package, loading its apply, intake, ranking and revision owners
+  before any material operation was requested.
+- **Delta:** the existing reference adapter loads that provider only when
+  `inspect_reference_materials` is called. Configuration descriptors, content
+  search/capture/draft, the TypeScript reference owner and the existing Python
+  inventory owner keep their contracts.
+- **Evidence:** fresh source processes on `main@35c5efbd4b90` retain identical
+  descriptor output while reducing its LoopX import graph from 108 to 88 modules;
+  the 18 material modules and two project-skill modules are no longer loaded.
+  `configure-goal --help` remains identical at 39 modules. Explicit inventory
+  still uses the same source bytes, validation and private-artifact boundaries.
+- **Boundary:** this reduces configuration loading, not installed package size
+  or execute/replay imports. It reuses C1's existing composition and owners;
+  complete D2/D5 closure, actual-model adoption, comparable full costs, R1/M3,
+  C1 cutover and full original-goal regression remain open.
+
+### 2026-11-15 — Defer fresh decisions and report production on Turn reads
+
+- **Gap:** journal inspection imported the fresh Turn decision owner, while
+  pending-report inspection imported progress snapshots and publication helpers
+  before those operations were selected.
+- **Delta:** retain the existing decision and report owners, loading them at
+  their actual call sites. Approval retries still read the original Todo source;
+  publication imports occur only on execution, before any report artifact write.
+  Report admission, subscription checks, recovery and public exports retain
+  their existing contracts. No new dispatcher, state vocabulary or decision
+  owner is introduced.
+- **Evidence:** fresh source-checkout CLI processes on `main@c5ff8fdc32b6`,
+  running the existing Core workload on File and SQLite with `checkpoint=None`,
+  reduce execution imports from 515 to
+  512, replay from 432 to 429, and journal inspection from 363 to 211 LoopX
+  modules. Execution RPC counts remain 223 for File and 222 for SQLite; replay
+  remains 12 and inspection remains one. Replay still loads the original Turn
+  decision module. These are measured loading deltas, not a total latency or
+  complete-cost improvement or standalone/split-package qualification.
+- **Composition and boundary:** the slice composes with C1 #8266 at
+  `638b7e3c23f0` through its existing complete-source, selected-work, admission,
+  context and settlement owners. Installed package size, model adoption,
+  complete D2/D5 closure, comparable full costs, R1/M3 and C1 cutover remain
+  unqualified. Preserve prior failures and the original ten requirements; full
+  original-goal regression still precedes completion and EdgeBench preparation.
+
+### 2026-11-15 — Require installed Core provenance before qualification
+
+- **Gap:** the Core test fixture trusted its interpreter environment variable;
+  selecting an ordinary editable checkout could pass an execution test even
+  though no standalone Core was installed.
+- **Delta:** every opt-in Core qualification now checks version agreement,
+  rejects an ordinary co-install or editable Core, and matches the actual
+  imported package to its recorded Core installation before Task preparation.
+  Existing identity checks are shared through that fixture; namespace, help,
+  manifest and doctor coverage remain. No opt-in still reports an explicit skip.
+- **Evidence:** the old ordinary-checkout case passed and dispatched ten CLI
+  calls. Ordinary, co-installed, source-shadowed, missing `loopx/__init__.py`
+  RECORD entry and PEP660 editable counterexamples now fail fixture setup before
+  any Task/CLI dispatch.
+  A true Core wheel passes identity plus File/SQLite execution, replay and
+  inspection. Original host, validator and execution oracles are unchanged.
+- **Boundary:** this protects qualification provenance; it neither changes
+  production admission nor authenticates wheel bytes or model execution.
+  Pinned-source/artifact checks, actual-model adoption, complete D2/D5 costs,
+  R1/M3 and the original ten requirements remain separate. Preserve earlier
+  failures and run full original-goal regression before completion.
+
+### 2026-11-15 — Reuse the final staged Host source check
+
+- **Gap:** the temporary request built after capture staging repeated
+  `host_context` immediately before `host_dispatch_context`. Its complete
+  assembly still matters: frozen captures retain mutable nested plan aliases.
+- **Delta:** the public request builder and staged dispatch share the original
+  inspection, turn-key and route guards, source assembly, optional context,
+  subagent and native-child metadata. Only a staged complete-v1 plan producing
+  a Host-v1 request with `work_contract` and no `turn_envelope` omits the nested
+  `host_context`; the existing carrier conversion and final dispatch check stay
+  before admission and publication. Other shapes retain the original finish.
+  No checked result is retained across admission, publication or later effects.
+- **Evidence:** matched File/SQLite source checks cover 42 guard, alias, carrier,
+  numeric/text, interval-wait and bridge-failure cases on the baseline and
+  candidate. Exact startup, transport-permission and offloaded-snapshot-size
+  diagnostics preserve the original carrier and zero publication/ledger effects.
+  A deliberately dropped goal reference fails the independent value oracle.
+  The staged operation trace removes one `host_context` and retains one
+  `host_dispatch_context`. Separate true Core wheels pass 15 identity,
+  execution/checkpoint, replay, journal inspection, process-loss/stale-lease and
+  invalid-artifact checks each on the candidate and the clean `main@37a79decfe99`
+  plus C1 #8266 at `638b7e3c23f0` composition. The C1 source comparison uses its
+  direct-complete-source planner API on both arms; the earlier incompatible
+  keyword setup failure is preserved. These checks use Python 3.13.5 and Node
+  26.0.0; wheel, RECORD, source and runtime origins are independently bound.
+- **Boundary:** this avoids one redundant bridge projection, without changing
+  the typed source owner, default activation, capture publication, recovery or
+  settlement boundaries. It does not establish total latency, complete-cost or
+  actual-model improvements, full D2/D5 closure, R1/M3 or C1 default cutover.
+  Preserve prior failures and the original ten requirements; full original-goal
+  regression still precedes completion and EdgeBench preparation.
+
+### 2026-11-15 — Load PR wait observation after permission recheck
+
+- **Gap:** composing an executing Turn imported PR reconciliation and its
+  metadata/content providers before resolving observation permission, even
+  when the hook was unavailable. A provider import failure escaped the optional
+  observation failure boundary.
+- **Delta:** the existing producer imports the reconciler inside its provider
+  `try`, after the invocation-time capability check succeeds. Registration and
+  invocation retain their separate permission checks and revocation behavior.
+  No wrapper, cached decision, new activation flag or policy owner is added.
+  Python remains the stable GitHub provider/transport adapter; typed selection,
+  permissions, authority and observation cadence retain their existing owners.
+- **Evidence:** fresh-process blocked-provider cases cover denied, revoked and
+  unavailable permission, plus import failure with unknown reads/effects.
+  Eight matched hook scenarios use a frozen clock to compare deterministic
+  returns, permission checks and provider calls;
+  source File/SQLite checks retain provider success, failure, response loss,
+  cadence and full-source diagnostics. Separate installed Core wheels execute
+  authorized File/SQLite observation and canonical Todo readback, alongside
+  execution, replay, process-loss and invalid-artifact checks. The original
+  consumer suite retains four matching setup failures on both arms; a separate
+  current-carrier protocol fixture does not replace those records.
+- **Boundary:** unavailable observation avoids loading its provider closure;
+  granted observation keeps the existing behavior. This is a bounded default
+  closure increment. The first granted invocation now includes deferred imports
+  in the existing `duration_ms` observation window; real timing equivalence or
+  performance gains are not qualified. It does not establish full D2/D5,
+  actual-model/context adoption, complete-cost
+  improvement, original-ten acceptance or C1 cutover. Preserve prior sources,
+  failures and seals; full original-goal regression still precedes completion
+  and EdgeBench preparation.
+
+### 2026-11-15 — Resolve provider options for the requested capability editor
+
+- **Gap:** resolving even a disabled periodic-report subscription constructed
+  every editor definition and queried unselected `codex_chat` profile and
+  steward options. Unavailable unrelated providers could block its metadata.
+- **Delta:** the existing editor queries the original profile owner only for
+  `codex_chat`, and the original steward vocabulary helper only for
+  `codex_chat` or `steward_executor`. Selected fields, scopes, nullable options,
+  helper ordering/errors, configuration precedence and detached outputs retain
+  their contracts; unknown editors remain read-only without provider discovery.
+- **Evidence:** all 20 registered editor definitions and unknown/empty inputs
+  have complete baseline/candidate comparisons, including nullable resolution
+  and detached outputs. Fresh unavailable-provider counterexamples and selected
+  owner positive/negative checks pass. Earlier Core evidence from
+  `main@2b156284c4f4` and C1 #8266 snapshot `1a3740cf9e6e` plus only an editor
+  overlay is preserved within that original scope. Requalification builds
+  separate installed Core wheels from `main@fef679d18192` plus this editor and
+  its conflict-free merge with current C1 `1a3740cf9e6e`; both pass metadata
+  checks and File/SQLite execution, replay and readback.
+- **Boundary:** this narrows metadata discovery, not installed capability
+  contents or activation. Full Settings journeys, actual-model adoption, total
+  cost, natural process drain, complete D2/D5 closure, R1/M3, full C1 acceptance
+  and its default cutover remain unqualified.
+
+### 2026-11-15 — Ship the selected manager discovery projection
+
+- **Gap:** an ordinary wheel omitted the existing
+  `manager_context/discovery_projection.ts` resource. Authorized Agent discovery
+  across multiple sources reached `manager.discovery.project` and failed when
+  its lazy handler imported that missing file. Source checkouts and Core already
+  contained the original typed projection.
+- **Delta:** ordinary distribution package data includes the package's existing
+  TypeScript resource alongside its skill. The original projection, callers,
+  authorization and lazy dispatch keep their ownership; no parallel decision
+  owner or new activation setting is introduced.
+- **Validation:** the real setuptools build regression fails with the original
+  package data and passes with the resource included. Installed ordinary and C1
+  #8266 at `1c578cfe85c23db40605843a0afc1d9d37caad39` plus this patch are qualified
+  separately against their source, wheel and RECORD. Selected projection checks
+  cover bounded source-qualified results, unavailable-source readback and invalid
+  bounds; unselected dispatch retains lazy loading.
+- **Boundary:** this repairs a selected distribution resource. It does not
+  establish complete D2/D5 closure, actual-model/context adoption, total-cost
+  improvement, full R1/M3 acceptance or C1 default cutover. Earlier failures,
+  budgets and checkpoints retain their original scopes.
+
+### 2026-11-15 — Skip automatic usage observers for existing opt-outs
+
+- **Gap:** Python observation hints recognized fewer environment opt-outs than
+  the existing TypeScript usage owner. `LOOPX_USAGE_PING=off`, `CI=1` or
+  `DO_NOT_TRACK=yes` could still schedule observers, including binding/native
+  metadata discovery, before TypeScript rejected sending.
+- **Delta:** one negative-only host hint preserves the owner's per-variable
+  trim/case semantics and skips automatic CLI, Host, quota, direct-cycle and
+  detached observation earlier. `LOOPX_USAGE_PING=yes` and `CI=false` remain
+  permitted by that hint; `DO_NOT_TRACK=false` remains blocked. TypeScript
+  retains positive decisions, notice, consent, generation, state and sending;
+  allowed payloads and business errors retain their original contracts.
+- **Evidence:** against source baseline
+  `main@2e52541f909089181e7415e0d796f6d413c83dbf`, the real CLI counterexample
+  starts six detached Node children, two for each of the three opt-outs; all
+  return blocked. The same candidate replay starts zero, preserving CLI results
+  and fixture state. Source validation passes 107 Python and 55 TypeScript
+  tests. Eight permitted environment cases retain 48 complete observation
+  requests and Host error behavior under fixed fixture/clocks; this payload
+  comparison captures dispatch locally, alongside the real transport tests.
+- **Installed scope:** fresh, non-editable only-Core installations of the
+  candidate and its actual composition with C1 #8266 at
+  `1a3740cf9e6ebad337f17967452693a9050edc81` each pass the same three real
+  selected `version`-CLI opt-out cases with zero observer children and unchanged
+  business JSON and fixture state. Each also passes 22 metadata cases and three
+  original Core correctness cases using real File/SQLite authority, retaining
+  31 raw CLI command records. The cold metadata scope is one fresh process containing 20
+  unselected IDs per composition; it is not 20 cold processes. Product payloads
+  are independently bound through source, wheel, RECORD and installed files.
+- **Boundary:** this qualifies the tested source and installed-Core automatic
+  observer isolation, including the current-C1 composition. It does not
+  establish whole process/network closure, natural process drain, measured
+  overhead or complete-cost benefit, actual-model adoption, full D2/D5,
+  R1/M3, Goal completion or C1 default cutover. Preserve earlier checkpoints,
+  failures, budgets and acceptance requirements.
+
+
+### 2026-11-16 — Standalone lifecycle commands reach the existing owner
+
+- **Gap:** standalone Core bundled the existing Goal activation implementation
+  but omitted `goal-lifecycle` from selected CLI loading. A supported stop/resume
+  request fell through to the intentionally absent full CLI before reaching its
+  owner.
+- **Delta:** select only the existing command, registrar and handler. Actor,
+  source identity, expected fingerprint, preview, partial-write readback and
+  errors remain on the original activation service and typed state owner.
+  Unrelated commands and top-level help retain lazy loading; App and messaging
+  controls retain their existing owner.
+- **Ownership boundary:** the existing native outer-controller guard now
+  recognizes lifecycle execution for its managed Goal. Owner/controller labels
+  cannot bypass that guard; preview, other Goals and ordinary execution remain
+  available. The same guard protects selected and full CLI entrypoints.
+- **Source evidence:** owner-only command help, complete-parser comparison,
+  source stop/resume and anonymous/stale-fingerprint refusal regressions protect
+  V2/V3 reachability and ordinary CLI parity. Planned activation timestamps are
+  validated independently rather than compared across separate invocations.
+- **Boundary:** this is a source wiring repair. Installed Core and composition
+  qualification, interrupted original-Task recovery, complete context/closure,
+  actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.

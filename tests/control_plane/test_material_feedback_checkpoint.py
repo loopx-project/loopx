@@ -53,6 +53,15 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         assert code == 0, packet
         return packet
 
+    def read_stage(command):
+        argv = shlex.split(command)
+        assert argv[:3] == [sys.executable, "-m", "loopx.entrypoint"]
+        assert argv[3:6] == ["--format", "json", "quota"]
+        assert argv[6] in {"replan-view", "context-read"}
+        assert argv[7] == ("--decision-file" if argv[6] == "replan-view" else "--reference-file")
+        result = subprocess.run(argv, cwd=project, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "1",
         "--execution-stride-strategy", strategy, "--explore-graph-enabled", "--execute")
     if handoff_mode == "hard_lease":
@@ -142,14 +151,26 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     assert fixture._spend_run_count(runtime) == 0
     refreshed = execute(result_command, validated_progress="route_feedback_verified",
         scale="implementation", outcome="outcome_progress", file=vision)
-    execute(result_command, validated_progress="route_feedback_verified",
+    replayed = execute(result_command, validated_progress="route_feedback_verified",
         scale="implementation", outcome="outcome_progress", file=vision)
     assert fixture._classification_count(runtime, "route_feedback_verified") == 1
-    persisted = json.loads(Path(refreshed["json_path"]).read_text())
+    assert refreshed["settlement_progress"]["state"] == "settled"
+    assert refreshed["settlement_result"]["ok"] is True
+    assert replayed["idempotent_replay"] is True
+    if "json_path" in refreshed:
+        persisted_path = refreshed["json_path"]
+    else:
+        selected_result = subprocess.run(
+            shlex.split(refreshed["result_details"]["command"] + " --select /json_path"),
+            cwd=project, capture_output=True, text=True, check=True,
+        )
+        selected_page = json.loads(selected_result.stdout)
+        persisted_path = json.loads(selected_page["content"])["selections"][0]["value"]
+    persisted = json.loads(Path(persisted_path).read_text())
     assert persisted["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert persisted["agent_vision"]["path_delta"]["evidence_refs"] == [evidence]
-    execute(plan["ordered_steps"][2]["command_template"])
-    execute(plan["ordered_steps"][2]["command_template"])
+    assert plan["ordered_steps"][2]["owner"] == "runtime"
+    assert "command_template" not in plan["ordered_steps"][2]
     assert fixture._spend_run_count(runtime) == 1
     retained_todo = cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]
     assert retained_todo["status"] == "open" and retained_todo["completion_validation_required"]
@@ -171,7 +192,15 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     selection = review["interaction_contract"]["cli_channel"]["selection_command"]
     review = execute(selection["route_prefix"] + " "
         + selection["command_args_template"].format(todo_id=fixture.TODO_ID))
-    control = review["replan_action_packet"].get("stride_control")
+    # The ordinary selection route delivers staged readers. Follow their
+    # captured review/evidence/writer rather than expecting the raw guard shape.
+    reviewed = read_stage(review["replan_action_packet"]["review"])
+    writer = read_stage(reviewed["next"]["writeback"])
+    assert writer["context_id"] == reviewed["context_id"]
+    review_plan = writer["writeback"]["settlement_plan"]
+    assert review_plan["identity"] == review["heartbeat_receipt"]["settlement_identity"]
+    assert fixture._spend_run_count(runtime) == 1  # Reading does not settle.
+    control = writer.get("stride_control")
     packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "active", "vision_patch": patch,
         "todo_delta": ["retain:" + fixture.TODO_ID], "path_delta": {"outcome": "continue",
             "prior_assumption": "A feasible candidate may still leave useful optimization work.",
@@ -182,7 +211,8 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         assert control is None
     else:
         assert control
-        finding = next(row for row in control["explore_basis"]["finding_refs"]
+        explore = read_stage(reviewed["capabilities"]["explore"]["read_action"])["explore_basis"]
+        finding = next(row for row in explore["finding_refs"]
             if row.get("execution_observation", {}).get("candidate_sha256") == observed["candidate_sha256"])
         decision = control["minimal_example"]
         decision.update(action="switch", next_probe={"scope": "Compare the permitted direct route.",
@@ -190,16 +220,18 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
             "adoption_criterion": "Same graph, valid endpoints and a lower actual route cost.",
             "cost_bound": "One local process and existing settlement; no new evaluation authority.",
             "minimum_evidence": "Exact route bytes and evaluator output."})
-        decision["explore_review"] = {"revision": control["explore_basis"]["revision"], "disposition": "used",
+        decision["explore_review"] = {"revision": explore["revision"], "disposition": "used",
             "considered_refs": [finding["finding_id"]], "reason": "The measured feasible candidate leaves the direct edge untested."}
         packet["stride_decision"] = decision
     vision.write_text(json.dumps(packet))
-    review_plan = review["interaction_contract"]["cli_channel"]["settlement_plan"]
     acknowledged = execute(review_plan["ordered_steps"][1]["command_template"]
         + " --agent-vision-json " + shlex.quote(str(vision)) + " --no-global-sync --suppress-external-sinks",
         validated_progress="route_comparison_decided", scale="implementation", outcome="outcome_progress")
     assert acknowledged["autonomous_replan_ack"]["semantic_delta"]["accepted"]
-    execute(review_plan["ordered_steps"][2]["command_template"])
+    if "command_template" in review_plan["ordered_steps"][2]:
+        execute(review_plan["ordered_steps"][2]["command_template"])
+    else:
+        assert acknowledged["settlement_progress"]["state"] == "settled"
     next_guard = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
         "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-2")
     assert next_guard["should_run"] and next_guard["selected_todo"]["todo_id"] == fixture.TODO_ID
