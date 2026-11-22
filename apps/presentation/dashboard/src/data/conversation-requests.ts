@@ -9,7 +9,8 @@ const rowSchema = z.object({request_id: z.string(), goal_id: z.string(), agent_i
   control_state: z.string().nullable(),
   brief: requestBriefSchema.nullable().optional(), source_question: z.string(), request_revision: z.number().int().positive().nullable(),
   read_status: z.string(), decision: z.string(), decision_reason: z.string().nullable().optional(),
-  returns: z.array(z.object({phase: z.string(), status: z.string(), request_revision: z.number().nullable().optional()})),
+  returns: z.array(z.object({phase: z.string(), status: z.string(), request_revision: z.number().nullable().optional(),
+    error: z.string().nullable().optional()})),
   linked_todos: z.array(z.object({todo_id: z.string(), title: z.string().nullable().optional(), status: z.string().optional()})),
   evidence_refs: z.array(z.string()), warnings: z.array(z.string()),
   source_session_id: z.string(), source_turn_id: z.string(), last_event_at: z.string().nullable()});

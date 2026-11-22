@@ -17,7 +17,7 @@ import queue
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Mapping, TYPE_CHECKING
+from typing import Any, Callable, Iterator, Mapping, TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from ...chat_agent import (
@@ -945,6 +945,29 @@ class CodexAppServerAdapter:
             return False
 
     @staticmethod
+    @contextmanager
+    def _persisted_thread_observer(
+        *, codex_bin: str, codex_home: Path, work_dir: Path | None = None,
+    ) -> Iterator[CodexChatAgentSession]:
+        """Initialize a stdio client for persisted item reads."""
+        from ...chat_agent import _reader
+
+        process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
+            cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", bufsize=1)
+        native = CodexChatAgentSession(process=process, messages=queue.Queue(), thread_id="",
+            work_dir=work_dir or codex_home, response_timeout_sec=5)
+        try:
+            threading.Thread(target=_reader, args=(process.stdout, native.messages), daemon=True).start()
+            native._request("initialize", {"clientInfo": {"name": "loopx_chat", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True}})
+            native._notify("initialized", {})
+            yield native
+        finally:
+            native.close()
+
+    @staticmethod
     def failed_request_observation(*, codex_bin: str, codex_home: Path,
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
@@ -963,23 +986,13 @@ class CodexAppServerAdapter:
         uses the same native dispatcher as authentication/control and never
         calls thread/start, resume, inject or turn/start.
         """
-        from ...chat_agent import _reader
-
         if completed_result_review and not read_only_review:
             raise ValueError("a completed result observation permits only read-only review")
         if allow_untyped_result_review and not (completed_result_review and read_only_review):
             raise ValueError("untyped result evidence permits only a completed read-only review")
-        process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
-            cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding="utf-8", bufsize=1)
-        native = CodexChatAgentSession(process=process, messages=queue.Queue(), thread_id="",
-            work_dir=work_dir or codex_home, response_timeout_sec=5)
-        try:
-            threading.Thread(target=_reader, args=(process.stdout, native.messages), daemon=True).start()
-            native._request("initialize", {"clientInfo": {"name": "loopx_chat", "version": "0.1.0"},
-                "capabilities": {"experimentalApi": True}})
-            native._notify("initialized", {})
+        with CodexAppServerAdapter._persisted_thread_observer(
+            codex_bin=codex_bin, codex_home=codex_home, work_dir=work_dir,
+        ) as native:
             deadline = time.monotonic() + 5
             in_progress_contradiction: dict[str, Any] | None = None
             for thread_id in dict.fromkeys(thread_ids):
@@ -1056,8 +1069,6 @@ class CodexAppServerAdapter:
                 if time.monotonic() >= deadline:
                     break
             return in_progress_contradiction
-        finally:
-            native.close()
 
     @property
     def current_model_id(self) -> str | None:
@@ -1255,6 +1266,13 @@ class CodexAppServerAdapter:
         """Read every native item page without dispatching or resuming a Turn."""
         return list(self.session._control_items("thread/items/list", {"turnId": turn_id},
                     time.monotonic() + min(self.session.response_timeout_sec, 5.0)))
+
+    @staticmethod
+    def persisted_steering_delivery_readback(*, codex_bin: str, codex_home: Path,
+                                             thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+        with CodexAppServerAdapter._persisted_thread_observer(codex_bin=codex_bin, codex_home=codex_home) as native:
+            native.thread_id = thread_id
+            return CodexAppServerAdapter(native).steering_delivery_readback(turn_id)
 
     def start_turn_with_attachments(
         self,
