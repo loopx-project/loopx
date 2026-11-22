@@ -40,6 +40,32 @@ def register_canary_release_qualification_command(
             "every receipt. Defaults to the current directory."
         ),
     )
+    parser.add_argument(
+        "--evaluations-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional release evaluation ledger directory (e.g. docs/product/releases/evaluations) "
+            "to run the deterministic a/b/c evaluation gate alongside receipt checks."
+        ),
+    )
+    parser.add_argument(
+        "--prior-stable-version",
+        type=str,
+        default=None,
+        help="Optional prior stable SemVer (e.g. 2.3.0) for Major/Minor/Patch transition gating.",
+    )
+    parser.add_argument(
+        "--evaluation-json",
+        type=Path,
+        default=None,
+        help="Optional explicit candidate release evaluation JSON overriding evaluations-dir lookup.",
+    )
+    parser.add_argument(
+        "--verify-git-tags",
+        action="store_true",
+        help="Verify evaluation tag commit/tree bindings against the Git repository.",
+    )
 
 
 def build_canary_release_qualification_payload(args: argparse.Namespace) -> dict[str, object]:
@@ -47,9 +73,24 @@ def build_canary_release_qualification_payload(args: argparse.Namespace) -> dict
         raw = json.loads(args.manifest_json.expanduser().read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("--manifest-json must contain a JSON object")
+        evaluations_dir = (
+            args.evaluations_dir.expanduser()
+            if getattr(args, "evaluations_dir", None) is not None
+            else None
+        )
+        evaluation_json = (
+            args.evaluation_json.expanduser()
+            if getattr(args, "evaluation_json", None) is not None
+            else None
+        )
         payload = build_exact_release_commit_qualification(
             raw,
             observed_source=collect_release_source_identity(args.repo_root),
+            evaluations_dir=evaluations_dir,
+            prior_stable_version=getattr(args, "prior_stable_version", None),
+            evaluation_json=evaluation_json,
+            repo_root=args.repo_root if evaluations_dir is not None else None,
+            verify_git_tags=bool(getattr(args, "verify_git_tags", False)),
         )
         payload["ok"] = payload.get("ready_for_release") is True
         return payload
