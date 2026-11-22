@@ -602,7 +602,9 @@ class ChatActionNormalizationMixin:
             if result.get("agent_id"):
                 # A creation's Agent is refused as a typed gate, so a fresh install
                 # learns which Agent is missing instead of reading a protocol sentence.
-                self._creation_agent_eligibility(str(result["agent_id"]))
+                self._creation_agent_eligibility(
+                    str(result["agent_id"]), host_session=result.get("open_session") is False
+                )
             if values.get("heartbeat") is not None:
                 if not isinstance(values["heartbeat"], Mapping):
                     raise ValueError("heartbeat must be an object")

@@ -77,7 +77,7 @@ function harness(fail: Manager['fail'] = 'none', opts: { dataDir?: string; manag
   const dataDir = opts.dataDir ?? mkdtempSync(join(tmpdir(), 'loopx-data-'));
   const service = new LoopxService({
     dataDir, core,
-    adapters: new Map([['codex', { id: 'codex' }], ['claude', { id: 'claude' }]]) as never,
+    adapters: new Map([['codex', { id: 'codex', capabilities: { permissionModes: ['ask', 'auto_edit', 'full_access'] } }], ['claude', { id: 'claude', capabilities: { permissionModes: ['ask', 'auto_edit', 'full_access'] } }]]) as never,
     dirs: { all: () => [root] } as never,
     cli: { command: [process.execPath, fake], registry },
   });

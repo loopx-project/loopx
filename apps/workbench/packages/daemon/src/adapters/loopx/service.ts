@@ -6,7 +6,7 @@ import { HttpError } from '../../errors.js';
 import type { AgentAdapter, ApprovalRequest } from '../types.js';
 import { isWithinWorkdirs, type Workdirs } from '../../workdirs.js';
 import type { ThreadManager } from '../../threads.js';
-import { corePermission, fromCorePermission, goalAgentFor, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type LoopxBinding, type LoopxPermission } from './binding.js';
+import { corePermission, fromCorePermission, goalAgentFor, goalThreadMode, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type GoalAdapter, type LoopxBinding, type LoopxPermission } from './binding.js';
 import { goalContextBlock } from './context.js';
 import { applyProposal, CoreError, coreJson, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, registeredGoalRoot, workspaceRef, type GoalDraft } from './core.js';
 import { coreUrl } from './proxy.js';
@@ -31,6 +31,12 @@ export interface LoopxHooks {
   /** A Goal conversation never asks the person: its boundary is the sandbox, not a prompt. */
   refuse(threadId: string, request: ApprovalRequest): { optionId: string } | { cancelled: true } | null;
 }
+
+/** createThread's permission field for a Goal conversation; an agent with no permission levels gets none. */
+const threadMode = (adapter: GoalAdapter, permission: LoopxPermission) => {
+  const mode = goalThreadMode(adapter, permission);
+  return mode ? { permissionMode: mode } : {};
+};
 
 const asText = (v: unknown, field: string, max = 4000): string => {
   if (typeof v !== 'string' || !v.trim()) throw new HttpError(400, `${field} is required`);
@@ -157,7 +163,7 @@ export class LoopxService implements LoopxHooks {
       if (!adapter || !goalAgentId) continue;
       const earlier = this.bindings.threadsOf(info.goalId).map((id) => this.bindings.get(id)!).at(-1);
       // The core's grant is read from an earlier conversation of the Goal; a Goal with none joins read-only.
-      const permission: LoopxPermission = earlier?.permission === 'workspace_auto' && permissionAvailable(adapter.id, 'workspace_auto').ok ? 'workspace_auto' : 'read_only';
+      const permission: LoopxPermission = earlier?.permission === 'workspace_auto' && permissionAvailable(adapter, 'workspace_auto').ok ? 'workspace_auto' : permissionAvailable(adapter, 'read_only').ok ? 'read_only' : 'workspace_auto';
       let workspace = thread.cwd;
       const root = await registeredGoalRoot(info.goalId, this.cli).catch(() => null);
       try { if (root) workspace = realpathSync(root); } catch { /* the root is gone; the thread's own directory stands */ }
@@ -192,8 +198,8 @@ export class LoopxService implements LoopxHooks {
         agent,
         available: goalAgent !== null,
         ...(goalAgent === null ? { reason: '该 agent 还不能承载 LoopX Goal' } : {}),
-        permissions: LOOPX_PERMISSIONS.map((id) => ({ id, ...(goalAgent ? permissionAvailable(adapter.id, id) : { ok: false, reason: '该 agent 还不能承载 LoopX Goal' }) }))
-          .map(({ id, ok, reason }) => ({ id, available: ok, ...(reason ? { reason } : {}), isDefault: id === (adapter.id === 'codex' ? 'workspace_auto' : 'read_only') })),
+        permissions: LOOPX_PERMISSIONS.map((id) => ({ id, ...(goalAgent ? permissionAvailable(adapter, id) : { ok: false, reason: '该 agent 还不能承载 LoopX Goal' }) }))
+          .map(({ id, ok, reason }) => ({ id, available: ok, ...(reason ? { reason } : {}), isDefault: id === 'workspace_auto' })),
       };
     });
   }
@@ -204,7 +210,7 @@ export class LoopxService implements LoopxHooks {
     const goalAgentId = goalAgentFor(adapter.id);
     if (!goalAgentId) throw new HttpError(400, '该 agent 还不能承载 LoopX Goal');
     if (!(LOOPX_PERMISSIONS as readonly string[]).includes(permission as string)) throw new HttpError(400, 'permission must be read_only or workspace_auto');
-    const allowed = permissionAvailable(adapter.id, permission as LoopxPermission);
+    const allowed = permissionAvailable(adapter, permission as LoopxPermission);
     if (!allowed.ok) throw new HttpError(400, allowed.reason ?? 'permission unavailable');
     return { adapter, goalAgentId, permission: permission as LoopxPermission };
   }
@@ -315,7 +321,7 @@ export class LoopxService implements LoopxHooks {
       const ids = done.receipt.resource_ids ?? {};
       const goalId = String(ids.goal_id ?? params.goal_id);
       const thread = await manager.createThread({
-        agent: asked.agent, cwd: asked.path, title: String(params.title ?? goalId), permissionMode: 'ask',
+        agent: asked.agent, cwd: asked.path, title: String(params.title ?? goalId), ...threadMode(adapter, asked.permission),
         ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
         ...(typeof input.effort === 'string' && input.effort ? { effort: input.effort } : {}),
       });
@@ -374,9 +380,10 @@ export class LoopxService implements LoopxHooks {
     const goalId = asText(input.goalId, 'goalId', 200);
     const earlier = this.bindings.threadsOf(goalId).map((id) => this.bindings.get(id)!).at(-1);
     const ceiling: LoopxPermission = earlier?.permission ?? 'read_only';
-    const asked = input.permission ?? (ceiling === 'workspace_auto' && this.deps.adapters.get(input.agent)?.id === 'codex' ? 'workspace_auto' : 'read_only');
+    const joining = this.deps.adapters.get(input.agent);
+    const asked = input.permission ?? (ceiling === 'workspace_auto' || (joining && !permissionAvailable(joining, 'read_only').ok) ? 'workspace_auto' : 'read_only');
     if (asked === 'workspace_auto' && ceiling !== 'workspace_auto') throw new HttpError(409, '这个 Goal 不是以工作区写入权限创建的，只能只读加入', { code: 'permission_mismatch' });
-    const { goalAgentId, permission } = this.pick(input.agent, asked);
+    const { adapter, goalAgentId, permission } = this.pick(input.agent, asked);
     let state: GoalState;
     try { state = await this.states.get(goalId, true); }
     catch (err) { throw new HttpError(404, err instanceof Error && err.message === 'goal_not_found' ? 'LoopX 核心里没有这个 Goal' : `读不到这个 Goal：${err instanceof Error ? err.message : err}`, { code: 'goal_not_found' }); }
@@ -390,7 +397,7 @@ export class LoopxService implements LoopxHooks {
     if (input.cwd !== undefined && input.cwd !== null && input.cwd !== '' && this.allowedDir(input.cwd) !== workspace) throw new HttpError(409, '只能在 Goal 登记的工作目录里加入', { code: 'workspace_mismatch', workspace });
     try {
       const thread = await manager.createThread({
-        agent: input.agent, cwd: workspace, title: state.title !== goalId ? state.title : goalId, permissionMode: 'ask',
+        agent: input.agent, cwd: workspace, title: state.title !== goalId ? state.title : goalId, ...threadMode(adapter, permission),
         ...(typeof input.model === 'string' && input.model ? { model: input.model } : {}),
         ...(typeof input.effort === 'string' && input.effort ? { effort: input.effort } : {}),
       });
