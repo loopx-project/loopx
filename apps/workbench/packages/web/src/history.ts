@@ -189,6 +189,8 @@ export async function watchHistory(api: Api, id: string, signal: AbortSignal, ca
   error: (error: unknown) => void;
   connection?: (connected: boolean) => void;
   minimumSeq?: number;
+  /** A historical segment ends before this sequence; it never subscribes to later events. */
+  maximumSeq?: number;
   chain?: boolean;
 }) {
   let after = 0;
@@ -207,10 +209,11 @@ export async function watchHistory(api: Api, id: string, signal: AbortSignal, ca
     while (!signal.aborted) {
       try {
         if (!loaded) {
-          const page = await historyPage(api, id, undefined, callbacks.minimumSeq, callbacks.chain);
+          const page = await historyPage(api, id, callbacks.maximumSeq, callbacks.minimumSeq, callbacks.chain);
           if (signal.aborted) return;
           after = page.snapshotSeq; callbacks.page(page); loaded = true;
         }
+        if (callbacks.maximumSeq !== undefined) return;
         callbacks.connection?.(true);
         await api.stream(`/api/threads/${id}/stream?view=history&after=${after}${callbacks.chain ? '&chain=1' : ''}`, (ev: StoredEvent) => {
           after = Math.max(after, ev.seq);

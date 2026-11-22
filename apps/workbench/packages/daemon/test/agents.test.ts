@@ -189,7 +189,7 @@ test('discover finds extra CLIs on PATH and leaves lookalikes alone', async () =
     const found = await new AgentRegistry(defaults, null).discover();
     // 'pi' is already a configured instance; 'ping' and 'pix' only look like pi. Other CLIs may
     // exist elsewhere on this machine's PATH, so only the ones from our bin directory count here.
-    const ours = found.filter((f) => f.command.startsWith(bin));
+    const ours = found.filter((f) => f.command?.startsWith(bin));
     assert.deepEqual(
       ours.map((f) => f.id),
       ['agy2', 'claude2', 'traecli'],
@@ -219,7 +219,7 @@ test('discover lists one row per executable and skips aliases an instance alread
   try {
     // Without a TRAE instance, the aliases collapse to the CLI's own name.
     const fresh = new AgentRegistry(defaults.filter((i) => i.adapter !== 'traex'), null);
-    const offered = (await fresh.discover()).filter((f) => f.command.startsWith(bin));
+    const offered = (await fresh.discover()).filter((f) => f.command?.startsWith(bin));
     assert.deepEqual(offered.map((f) => f.id), ['traex']);
 
     // Once an instance runs that executable, none of its aliases are offered.
@@ -227,7 +227,7 @@ test('discover lists one row per executable and skips aliases an instance alread
       ...defaults.filter((i) => i.adapter !== 'traex'),
       { id: 'traex', adapter: 'traex', command: [target, 'acp', 'serve'] },
     ], null);
-    assert.deepEqual((await used.discover()).filter((f) => f.command.startsWith(bin)), []);
+    assert.deepEqual((await used.discover()).filter((f) => f.command?.startsWith(bin)), []);
   } finally {
     process.env.PATH = oldPath;
   }
@@ -244,7 +244,7 @@ test('discover offers zcode for existing installations and add makes it availabl
   process.env.PATH = `${bin}:${oldPath}`;
   try {
     const registry = new AgentRegistry(defaults.filter((i) => i.adapter !== 'zcode'), null);
-    const found = (await registry.discover()).filter((f) => f.command.startsWith(bin));
+    const found = (await registry.discover()).filter((f) => f.command?.startsWith(bin));
     assert.deepEqual(found.map((f) => [f.id, f.adapter]), [['zcode', 'zcode'], ['zcode-2', 'zcode']]);
     await registry.add({ id: found[0].id, adapter: found[0].adapter, command: [found[0].command] });
     assert.equal(await registry.adapters.get('zcode')!.available(), true);
@@ -372,12 +372,13 @@ test('account discovery skips accounts an instance already links, and ids keep c
 test('supported lists all built-in adapters with labels and install guides', () => {
   const registry = new AgentRegistry(defaults, null);
   const supported = registry.supported();
-  assert.equal(supported.length, 7);
+  assert.equal(supported.length, 16);
   const adapters = supported.map((s) => s.adapter);
-  assert.deepEqual(adapters, ['claude', 'codex', 'pi', 'agy', 'traex', 'zcode', 'dsh']);
+  assert.deepEqual(adapters, ['claude', 'codex', 'pi', 'agy', 'traex', 'zcode', 'dsh', 'cursor', 'codebuddy', 'devin', 'factory', 'grok', 'kimi', 'opencode', 'qoder', 'qwen']);
   for (const item of supported) {
     assert.ok(item.label, `adapter ${item.adapter} has a label`);
-    assert.ok(item.icon, `adapter ${item.adapter} has an icon`);
+    if (['claude', 'codex', 'pi', 'agy', 'traex', 'zcode', 'dsh'].includes(item.adapter)) assert.ok(item.icon, `adapter ${item.adapter} has an icon`);
+    else assert.ok(item.installGuide?.includes('Node.js 24'), 'OAR requirements remain discoverable');
   }
   assert.equal(supported.find((s) => s.adapter === 'claude')?.installGuide, 'npm install -g @anthropic-ai/claude-code');
   assert.equal(supported.find((s) => s.adapter === 'codex')?.installGuide, 'npm install -g @openai/codex');

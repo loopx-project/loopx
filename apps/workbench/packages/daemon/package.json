@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.89.0",
+    "@botiverse/oar": "0.128.1",
+    "@cursor/sdk": "1.4.1",
     "node-pty": "^1.1.0",
     "playwright-core": "1.58.0",
     "tar": "^7.5.22",
