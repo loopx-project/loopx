@@ -202,6 +202,8 @@ def register_refresh_state_command(
     refresh_state_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--execution-loss-closeout", action="store_true",
+        help="Close an original prepared Turn after its execution generation is lost, without debit.")
     refresh_state_parser.add_argument("--completion-todo-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-turn-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument(
@@ -449,6 +451,31 @@ def handle_refresh_state_command(
     if args.command != "refresh-state":
         return None
     fmt = output_format(args)
+    if args.execution_loss_closeout:
+        from ..control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+        from ..control_plane.quota.execution_preparation import commit_execution_loss_closeout
+        from .project_lifecycle_inputs import inline_progress_observation
+
+        try:
+            ref = (exact_goal_ref(args.goal_id, args.goal_instance_id) if args.goal_instance_id
+                   else capture_first_party_host_goal_ref(registry_path=registry_path, goal_id=args.goal_id))
+            payload = commit_execution_loss_closeout(
+                registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id or "", todo_id=args.todo_id or "",
+                turn_instance_id=args.turn_instance_id or "", goal_ref=ref,
+                requested_proof={"idempotency_key": args.task_lease_idempotency_key,
+                                 "expected_version": args.task_lease_expected_version},
+                progress_observation=inline_progress_observation(args),
+                delivery_outcome=args.delivery_outcome, delivery_boundary=args.delivery_boundary,
+                requested_effects=vars(args), dry_run=args.dry_run,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            code = getattr(exc, "code", None)
+            payload = {"ok": False, "goal_id": args.goal_id, "appended": False, "error": str(exc),
+                       **({"error_code": code} if isinstance(code, str) else {})}
+        print_payload(payload, fmt, render_state_refresh_markdown)
+        return 0 if payload["ok"] is True else 1
     agent_vision_packet: dict[str, object] | None = None
     progress_observation: dict[str, object] | None = None
     merge_agent_vision_patch = False
