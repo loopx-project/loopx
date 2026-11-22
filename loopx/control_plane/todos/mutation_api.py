@@ -313,6 +313,7 @@ def update_goal_todo(
     routing_registry_witness: dict[str, str] | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    ttl_seconds: int | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
     dry_run: bool = False,
@@ -349,7 +350,16 @@ def update_goal_todo(
         raise ValueError(
             "--task-lease-expected-version requires --task-lease-idempotency-key"
         )
+    if not claim_only and ttl_seconds is not None:
+        raise ValueError("ttl_seconds is supported only by todo claim")
     if claim_only:
+        if ttl_seconds is not None and (
+            isinstance(ttl_seconds, bool)
+            or not isinstance(ttl_seconds, int)
+            or ttl_seconds <= 0
+            or ttl_seconds > 86400
+        ):
+            raise ValueError("ttl seconds must be between 1 and 86400")
         unsupported_claim_values = (
             text, priority, clear_priority or None, status, note,
             validation_command, validation_command_json, validation_label,
@@ -390,6 +400,7 @@ def update_goal_todo(
             routing_registry_witness=routing_registry_witness,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
+            ttl_seconds=ttl_seconds,
             project=project,
             state_file=state_file,
         )
