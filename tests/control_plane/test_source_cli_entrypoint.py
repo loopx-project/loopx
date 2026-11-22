@@ -135,10 +135,13 @@ subprocess.call = lambda argv: replace_process(argv[0], argv)
     result = run_entry(entry, native_argv(), setup=setup, assertions="""
 assert len(seen) == 1
 assert seen[0][0] == "/fixture/node"
-assert seen[0][1][1:3] == ["--no-warnings", "--experimental-strip-types"]
+from loopx.control_plane.runtime.node_probe import node_typescript_flags
+expected_flags = list(node_typescript_flags())
+script_index = 3 + len(expected_flags)
+assert seen[0][1][1:script_index] == ["--no-warnings", "--experimental-strip-types", *expected_flags]
 from pathlib import Path
-assert Path(seen[0][1][3]).parts[-2:] == ("scheduler", "heartbeat_followup_cli.ts")
-assert seen[0][1][4:] == sys.argv[1:]
+assert Path(seen[0][1][script_index]).parts[-2:] == ("scheduler", "heartbeat_followup_cli.ts")
+assert seen[0][1][script_index + 1:] == sys.argv[1:]
 assert "loopx.cli_runtime" not in sys.modules
 assert "loopx.cli" not in sys.modules
 """)

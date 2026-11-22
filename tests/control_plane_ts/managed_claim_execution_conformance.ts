@@ -249,6 +249,45 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       assert.equal((await execute({...original, claim_operation_id: String(prepared.claim_operation_id)})).status, "applied");
     }
   });
+  test(`${provider} managed execution: explicit ttl_seconds controls expiry, final-third renewal, bounds and replay identity`, async t => {
+    const {store, request, progress} = await setup(t);
+    const before = await loaded(store);
+    for (const invalid of [0, 86401]) {
+      const rejected = await claim(store, {...request, operation_id: `bad-ttl-${invalid}`, ttl_seconds: invalid});
+      assert.equal(rejected.status, "failed");
+      assert.equal(rejected.reason_code, "invalid_coordination_todo_claim");
+      assert.match(String(rejected.reason), /ttl seconds must be between 1 and 86400/);
+      assert.deepEqual(await loaded(store), before);
+    }
+    const longClaim = await claim(store, {...request, operation_id: "claim-long-ttl", ttl_seconds: 7200});
+    assert.equal(longClaim.status, "applied", JSON.stringify(longClaim));
+    const lease = longClaim.lease as JsonObject;
+    assert.equal(lease.acquire_ttl_seconds, 7200);
+    assert.equal(lease.expires_at, "2026-09-13T12:00:00Z");
+    const unchangedReplay = await claim(store, {
+      ...request, operation_id: "claim-long-ttl", ttl_seconds: 7200, now: new Date("2026-09-13T10:30:00Z"),
+    });
+    assert.equal(unchangedReplay.status, "replayed");
+    assert.equal((unchangedReplay.lease as JsonObject).acquire_ttl_seconds, 7200);
+    const mismatchedReplay = await claim(store, {
+      ...request, operation_id: "claim-long-ttl", ttl_seconds: 3600, now: new Date("2026-09-13T10:30:00Z"),
+    });
+    assert.equal(mismatchedReplay.status, "failed");
+    assert.equal(mismatchedReplay.reason_code, "coordination_operation_identity_mismatch");
+    // 10:31 is outside the final third of a 7200s lease (only 4440s left, > 2400s), so early update never renews;
+    // 11:25 (only 2100s <= 2400s left) renews with the same 7200s TTL.
+    assert.equal((await update(store, {...progress, claim_operation_id: "claim-long-ttl",
+      operation_id: "early-long-progress", now: new Date("2026-09-13T10:31:00Z")})).status, "applied");
+    let current = await loaded(store);
+    assert.equal((current.head.leases as JsonObject[])[0]!.version, 1);
+    assert.equal((await update(store, {...progress, claim_operation_id: "claim-long-ttl",
+      operation_id: "late-long-progress", now: new Date("2026-09-13T11:25:00Z")})).status, "applied");
+    current = await loaded(store);
+    const renewed = (current.head.leases as JsonObject[])[0]!;
+    assert.equal(renewed.version, 2);
+    assert.equal(renewed.acquire_ttl_seconds, 7200);
+    assert.equal(renewed.expires_at, "2026-09-13T13:25:00Z");
+  });
   test(`${provider} managed execution: changed identity requires reconciliation instead of claim adoption`, async t => {
     for (const change of [{owner: "agent-b"}, {lease_epoch: 2, version: 2},
       {idempotency_key: "different-execution"}, {write_repository: "git:github.com/example/other"},

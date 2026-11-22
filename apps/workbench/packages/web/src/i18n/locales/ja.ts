@@ -2050,6 +2050,7 @@ export const ja: Messages = {
   'pickers.noModels': '選択できるモデルがありません',
   'pickers.noModelsHint': 'このインスタンスからモデルをまだ取得できていません。インスタンスのモデル設定とログイン状態を確認し、設定後にページを再読み込みしてください。',
   'pickers.diagnose': 'インスタンスを確認',
+  'pickers.refreshModels': 'モデル一覧を更新',
   'pickers.modelsLoadFailed': 'モデル一覧を読み込めませんでした',
   'pickers.preferenceFailed': 'モデル設定を読み込めませんでした',
   'pickers.modelAndEffort': 'モデルと思考の強さ',

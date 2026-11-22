@@ -87,6 +87,19 @@ FULLY_MERGED: dict[str, tuple[object, tuple[object, ...]]] = {
     ),
 }
 
+RETIRED_FACADE_REEXPORTS: tuple[str, ...] = (
+    "AUTONOMOUS_REPLAN_SCHEMA_VERSION",
+    "BACKLOG_HYGIENE_BULLET_PATTERN",
+    "BACKLOG_HYGIENE_HINT_PATTERN",
+    "BACKLOG_HYGIENE_SECTION_HEADINGS",
+    "DEAD_MONITOR_REPEAT_SCHEMA_VERSION",
+    "MINIMUM_DASHBOARD_STATUS_CONTRACT_SCHEMA_VERSION",
+    "MONITOR_DISPLAY_SCHEMA_VERSION",
+    "SECTION_HEADING_PATTERN",
+    "STATUS_CONTRACT_SCHEMA_VERSION",
+    "STATUS_CONTRACT_SIGNAL_LIMIT",
+)
+
 # Nothing is left forked outside the facade. The last recorded name,
 # AGENT_LANE_PROGRESS_SCOPE, was single-sourced into
 # ``loopx/control_plane/progress_scope.py``; it is asserted as a fully merged name
@@ -200,6 +213,8 @@ def test_the_facade_and_its_projections_share_one_object() -> None:
             assert getattr(importer, name) is getattr(owner, name), (
                 f"{name} via {importer}"
             )
+    for name in RETIRED_FACADE_REEXPORTS:
+        assert not hasattr(status, name), name
 
 
 def test_merging_the_copies_changed_no_value() -> None:

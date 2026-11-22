@@ -2052,6 +2052,7 @@ export const zh = {
   'pickers.noModels': '暂无可选模型',
   'pickers.noModelsHint': '还没有从这个实例读到可选模型。请检查实例的模型配置与登录状态，配置完成后刷新页面。',
   'pickers.diagnose': '检查实例',
+  'pickers.refreshModels': '刷新模型列表',
   'pickers.modelsLoadFailed': '模型列表读取失败',
   'pickers.preferenceFailed': '模型偏好读取失败',
   'pickers.modelAndEffort': '模型与思考强度',

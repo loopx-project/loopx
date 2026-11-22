@@ -521,6 +521,7 @@ def handle_todo_command(
                 claim_operation_id=args.claim_operation_id,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
+                ttl_seconds=args.ttl_seconds,
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
@@ -560,10 +561,22 @@ def handle_todo_command(
                 ]
                 payload["instruction"] = (
                     "Continue the task. Use this original claim reference for progress "
-                    "or completion; retain normal Turn settlement when applicable."
+                    "or completion; pass --ttl-seconds on claim (1..86400) for long "
+                    "(>45m) execution wakes or renew via `loopx task-lease renew` "
+                    "before lease_expires_at, and retain normal Turn settlement "
+                    "(omitting --next-action on completed-Todo semantic_closeout "
+                    "refresh-state)."
                 )
-                # Normal callers need the accepted task reference, not lease
-                # counters or a second inline copy of the native receipt.
+                # Extract compact lease deadline/TTL scalars before removing
+                # internal lease CAS counters or a second copy of the receipt.
+                lease = payload.get("lease")
+                if isinstance(lease, dict):
+                    expires_at = lease.get("expires_at")
+                    if isinstance(expires_at, str) and expires_at:
+                        payload["lease_expires_at"] = expires_at
+                    acquire_ttl = lease.get("acquire_ttl_seconds")
+                    if isinstance(acquire_ttl, int) and not isinstance(acquire_ttl, bool):
+                        payload["lease_ttl_seconds"] = acquire_ttl
                 for internal in (
                     "lease",
                     "lease_changed",

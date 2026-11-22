@@ -163,7 +163,9 @@ Goal 完成；要求／工作变化使依据过期，产物修改后须重新核
 
 Native `goal-acceptance` and outcome-update `refresh-state` rejections retain
 their stable error code. A known outcome validation rule also supplies optional
-`error_detail`, such as `source ref must be an opaque identifier`, in JSON and
+`error_detail`, such as
+`source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`,
+in JSON and
 Markdown. This detail contains fixed rule text and validator-measured byte
 counts, never the rejected value or provider/IO context. Validation rejection
 writes nothing: after confirming that result, correct the document and retry
@@ -183,7 +185,7 @@ other available Goals.
 
 中文：原生 `goal-acceptance` 和成果更新 `refresh-state` 拒绝保留稳定错误码。
 已知成果校验规则还会在 JSON 与 Markdown 中提供可选 `error_detail`，例如
-`source ref must be an opaque identifier`。详情只包含固定规则及校验器实测字节数，不回显被拒值或
+`source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`。详情只包含固定规则及校验器实测字节数，不回显被拒值或
 provider/IO 上下文。校验拒绝不写入状态；确认这一结果后，修正文档并沿用原操作和
 仍有效的 provider revision 重试。写入结果不确定时继续遵循原有回执与恢复规则。
 成功操作和未标记错误保持既有行为。
