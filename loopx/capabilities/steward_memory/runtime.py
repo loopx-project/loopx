@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +16,7 @@ from typing import Any
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...paths import PATH_SEGMENT_UNSAFE_RE
 from ..context_providers.openviking_scope import classify_openviking_scope
 from .machine_defaults import (
     DEFAULT_RECALL_TIMEOUT_SECONDS,
@@ -35,7 +35,6 @@ OWNER_PREFERENCE_CHAR_LIMIT = 3000
 SPEAKER_PREFERENCE_CHAR_LIMIT = 1500
 EVENT_SNIPPET_CHAR_LIMIT = 600
 COMMIT_TIMEOUT_SECONDS = 3.0
-_SAFE_TURN_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -572,7 +571,7 @@ def recall_steward_memory_for_turn(
 
 
 def _safe_event_filename(turn_id: str) -> str:
-    cleaned = _SAFE_TURN_SEGMENT_RE.sub("-", str(turn_id or "").strip()).strip("-.")[:64]
+    cleaned = PATH_SEGMENT_UNSAFE_RE.sub("-", str(turn_id or "").strip()).strip("-.")[:64]
     if not cleaned:
         cleaned = f"turn-{int(time.time())}"
     return f"{cleaned}.md"

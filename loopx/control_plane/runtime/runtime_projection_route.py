@@ -484,15 +484,17 @@ def _route_projection_is_current(
     rows, _ = load_index(
         target_runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
     )
-    return any(
-        isinstance(row.get(marker_field), dict)
-        and row[marker_field].get("runtime_projection_route_id")
-        == route_id
-        and row[marker_field].get("source_generated_at") == source_generated_at
-        and row.get("json_exists") is True
-        and row.get("markdown_exists") is True
-        for row in rows
-    )
+    for row in rows:
+        marker = row.get(marker_field)
+        if (
+            isinstance(marker, dict)
+            and marker.get("runtime_projection_route_id") == route_id
+            and marker.get("source_generated_at") == source_generated_at
+            and row.get("json_exists") is True
+            and row.get("markdown_exists") is True
+        ):
+            return True
+    return False
 
 
 def _source_routes_for_registry(

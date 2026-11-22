@@ -108,6 +108,179 @@ def _registered_host_goal(tmp_path: Path) -> Path:
     return registry
 
 
+def _managed_writeback_args(
+    project: Path, runtime: Path, registry: Path, executable: Path,
+) -> list[str]:
+    return [
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--project", str(project), "--no-global-sync", "--codex-operation-tools",
+        "--codex-bin", str(executable), "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
+        "--codex-sandbox", "read-only", "--iteration-context", "fresh", "--execute",
+        "--turn-instance-id", "isolated-writeback", "--timeout-seconds", "30",
+        "--validation-command-json", json.dumps([sys.executable, "-c", "import json,sys; json.load(sys.stdin)"]),
+    ]
+
+
+@pytest.mark.parametrize("another_todo", [False, True], ids=["single-terminal", "multiple-open"])
+def test_isolated_core_rechecks_goal_before_todo_completion(tmp_path, monkeypatch, another_todo):
+    from loopx.cli import main as cli_main
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+    from loopx.control_plane.turn_driver import codex_worker_identity, executor
+
+    other_todo = (
+        "- [ ] [P1] Validate the next fixture.",
+        "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+        "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture priority=P1 -->",
+    )
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        todo_metadata_extra="" if another_todo else "no_followup=true",
+        extra_agent_todo_lines=other_todo if another_todo else (),
+    )
+    executable = tmp_path / "codex-worker-fixture"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    monkeypatch.setenv("FAKE_OPERATION_RESULT_FIELDS", json.dumps({
+        "result_kind": "validated_completion",
+        "classification": "isolated_completion_fixture",
+        "recommended_action": "Review the next fixture.",
+        "next_action": "Review the next fixture.",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_progress",
+        "vision_unchanged_reason": "The goal remains active after this fixture.",
+        "work_evidence": ["artifact:completion-fixture"],
+        "validation_evidence": ["check:completion-fixture"],
+    }))
+    # Exercise the Core decision with an ordinary local fixture process.
+    # The Linux launcher test below qualifies the OS identity transition.
+    monkeypatch.setattr(codex_worker_identity, "worker_isolation_requested", lambda: True)
+    monkeypatch.setattr(codex_worker_identity, "load_worker_identity", lambda *_: None)
+
+    original_check = FirstPartyHostGoalAdmission.require_running
+    checks = []
+
+    def stop_at_writeback(admission, *, operation):
+        if operation == "isolated_codex_durable_writeback":
+            checks.append(operation)
+            set_goal_activation_state(
+                registry_path=registry, goal_id="loopx-turn-fixture", state="stopped",
+                reason="Fixture stops before completion", actor_kind="owner", execute=True,
+            )
+        return original_check(admission, operation=operation)
+
+    original_requirement = executor.terminal_closeout_requirement
+    closeouts = []
+
+    def record_closeout(**kwargs):
+        result = original_requirement(**kwargs)
+        closeouts.append(result)
+        return result
+
+    monkeypatch.setattr(FirstPartyHostGoalAdmission, "require_running", stop_at_writeback)
+    monkeypatch.setattr(executor, "terminal_closeout_requirement", record_closeout)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        status = cli_main(_managed_writeback_args(project, runtime, registry, executable))
+    payload = json.loads(output.getvalue())
+    assert closeouts == [(not another_todo, None)], payload
+    assert checks == ["isolated_codex_durable_writeback"], payload
+    assert status == 1 and not payload["effects"]["state_written"] and not payload["effects"]["quota_spent"], payload
+    index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    assert not index.exists() or "isolated_completion_fixture" not in index.read_text()
+
+
+@pytest.mark.skipif(sys.platform != "linux" or (hasattr(os, "geteuid") and os.geteuid() != 0),
+                    reason="requires a Linux setuid launcher")
+@pytest.mark.parametrize("stop_before_write", [False, True])
+def test_isolated_codex_worker_cannot_publish_or_override_core(monkeypatch, stop_before_write):
+    import pwd
+    import shutil
+    import tempfile
+
+    from loopx.cli import main as cli_main
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
+
+    if shutil.which("setpriv", path=os.defpath) is None:
+        pytest.skip("system setpriv is unavailable")
+    try:
+        worker = pwd.getpwnam("nobody")
+    except KeyError:
+        pytest.skip("nobody fixture account is unavailable")
+    with tempfile.TemporaryDirectory(prefix="loopx-isolated-operation-", dir="/var/tmp") as directory:
+        area = Path(directory)
+        area.chmod(0o755)
+        project, runtime, registry = _write_live_fixture(area)
+        runtime.chmod(0o700)
+        registry.parent.chmod(0o700)
+        worker_home = area / "worker"
+        worker_home.mkdir(mode=0o700)
+        codex_home = worker_home / ".codex"
+        codex_home.mkdir(mode=0o700)
+        for path in (worker_home, codex_home):
+            os.chown(path, worker.pw_uid, worker.pw_gid)
+        monkeypatch.setenv("LOOPX_CODEX_OPERATION_WORKER_USER", worker.pw_name)
+        monkeypatch.setenv("LOOPX_CODEX_OPERATION_WORKER_HOME", str(worker_home))
+        monkeypatch.setenv("LOOPX_CORE_TEST_SECRET", "only-in-core")
+        marker = worker_home / "isolation-observed"
+        probe = f'''
+from pathlib import Path
+assert os.geteuid() == {worker.pw_uid} and os.getgroups() == []
+assert "LOOPX_CORE_TEST_SECRET" not in os.environ
+assert "NoNewPrivs:\\t1" in Path("/proc/self/status").read_text()
+for path in ({str(registry)!r}, {str(runtime / 'worker-write')!r}):
+    try:
+        Path(path).write_text("worker attempted a direct write")
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("worker wrote to Core authority")
+Path({str(marker)!r}).touch()
+'''
+        executable = area / "codex-worker-fixture"
+        answer = {"result_kind": "validated_progress", "classification": "isolated_fixture",
+                  "recommended_action": "Continue validation", "next_action": "Continue validation",
+                  "delivery_batch_scale": "implementation", "delivery_outcome": "outcome_progress",
+                  "vision_unchanged_reason": "Fixture remains open",
+                  "work_evidence": ["artifact:isolated-fixture"], "validation_evidence": ["check:fixture-validation"]}
+        executable.write_text(FAKE_SERVER.replace('\nimport os\n', '\nimport os\n' + probe, 1).replace(
+            'answer.update(json.loads(os.environ.get("FAKE_OPERATION_RESULT_FIELDS", "{}")))',
+            f"answer.update({answer!r})"))
+        executable.chmod(0o755)
+        original_check = FirstPartyHostGoalAdmission.require_running
+        checks = []
+
+        def check_at_writeback(admission, *, operation):
+            if operation == "isolated_codex_durable_writeback":
+                checks.append(operation)
+                if stop_before_write:
+                    set_goal_activation_state(registry_path=registry, goal_id="loopx-turn-fixture",
+                        state="stopped", reason="Fixture stop at writeback", actor_kind="owner", execute=True)
+            return original_check(admission, operation=operation)
+
+        monkeypatch.setattr(FirstPartyHostGoalAdmission, "require_running", check_at_writeback)
+        args = _managed_writeback_args(project, runtime, registry, executable)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = cli_main(args)
+        payload = json.loads(output.getvalue())
+        assert marker.is_file() and marker.stat().st_uid == worker.pw_uid, payload
+        assert checks == ["isolated_codex_durable_writeback"], json.dumps(payload, indent=2)
+        index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+        if stop_before_write:
+            assert status == 1 and not payload["effects"]["quota_spent"] and not payload["effects"]["state_written"], payload
+            assert not index.exists() or "isolated_fixture" not in index.read_text()
+        else:
+            assert status == 0 and payload["effects"]["quota_spent"] and payload["effects"]["state_written"], payload
+            before = index.read_bytes()
+            assert b"isolated_fixture" in before
+            with contextlib.redirect_stdout(io.StringIO()):
+                cli_main(args)
+            assert index.read_bytes() == before
+
+
 def _claimed_native_fixture(tmp_path: Path):
     from examples import operation_action_fixtures as fixtures
     from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler

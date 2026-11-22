@@ -38,6 +38,11 @@ quoted side-chat model selection from `80eb16edbd3e2cc3e2a3c887a2560fe39b6ab209`
 including the current local SideChat preference/catalog refinements. Existing Loochat
 message-draft protections and machine-scoped provenance are retained.
 
+Antigravity model-family/effort selection and legacy preference compatibility are adapted from
+Calli `d89d2656d707ba9b152178be4343f9112fd87c72`; the ACP conversation transport and
+its protocol fixtures from `96f3dade4c603778d48a494f53753b888b5e1c26`. The port retains
+Loochat's typed login recovery and prompt-submission lifecycle.
+
 Collaboration mail batching and progress semantics are adapted from Calli
 `edf2708` and `2ee2853`; member composer controls from `26ad76d`; the shared
 conversation panel from `556dc46`; collaboration handover diagnostics from

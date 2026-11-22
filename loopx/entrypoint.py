@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .control_plane.runtime.node_probe import node_typescript_flags
 
 
 def pin_utf8_stdio() -> None:
@@ -123,6 +124,7 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
         node,
         "--no-warnings",
         "--experimental-strip-types",
+        *node_typescript_flags(),
         str(entry),
         *raw_argv,
     ]

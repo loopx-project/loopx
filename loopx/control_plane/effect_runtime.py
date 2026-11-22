@@ -32,6 +32,7 @@ from .runtime.node_probe import (
     MINIMUM_NODE_VERSION_TEXT as MINIMUM_NODE_VERSION_TEXT,
     STARTUP_READY_TIMEOUT_SECONDS as STARTUP_READY_TIMEOUT_SECONDS,
     node_probe_remediation,
+    node_typescript_flags as _node_typescript_flags,
     probe_node as _probe_node,
 )
 from .content_digest import BARE_SHA256_PATTERN
@@ -1337,6 +1338,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                         _node_executable(),
                         "--no-warnings",
                         "--experimental-strip-types",
+                        *_node_typescript_flags(),
                         "--import",
                         # ESM specifiers require file URLs on Windows; encode
                         # reserved path characters on every platform as well.
@@ -1453,6 +1455,7 @@ def _start_stdio_runtime(fingerprint: str) -> _StdioRuntime:
                 _node_executable(),
                 "--no-warnings",
                 "--experimental-strip-types",
+                *_node_typescript_flags(),
                 str(_control_plane_root() / "effect_runtime_stdio.ts"),
                 fingerprint,
             ],
