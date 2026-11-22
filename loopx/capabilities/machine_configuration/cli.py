@@ -276,9 +276,6 @@ def handle_machine_configuration_command(
                     namespace=args.namespace,
                     namespace_configuration=configuration,
                     registry=registry,
-                    # The local operator CLI is the trusted writer for fields
-                    # the loopback Dashboard may only read.
-                    allow_local_only=True,
                 )
             payload = configure_machine_configuration(
                 runtime_root=runtime_root,
@@ -293,9 +290,6 @@ def handle_machine_configuration_command(
                     namespace=args.namespace,
                     namespace_configuration=configuration,
                     registry=registry,
-                    # The local operator CLI is the trusted writer for fields
-                    # the loopback Dashboard may only read.
-                    allow_local_only=True,
                 )
             payload = configure_machine_configuration(
                 runtime_root=runtime_root,

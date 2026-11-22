@@ -10,7 +10,6 @@ from pathlib import Path
 
 from .history import load_registry
 from .paths import (
-    goal_state_file_from_record,
     resolve_runtime_root,
     validate_goal_id_path_segment as validate_goal_id_path_segment,
 )
@@ -99,72 +98,6 @@ def _archive_source_goal_refs(
     return tuple(refs)
 
 
-def _archive_closeout_payload(
-    *,
-    runtime_root: Path,
-    goal_id: str,
-    goal_record: dict[str, Any],
-    registry_path: Path,
-    archive_path: Path,
-) -> dict[str, Any]:
-    """Run the archive hook after the committed move, best effort only.
-
-    Nothing here may fail the archive: the directory already moved. When no
-    hook is configured the record's state file is never resolved at all, so a
-    stale operator path cannot turn a finished archive into an error.
-    """
-
-    from .lifecycle.goal_closeout import (
-        GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
-        goal_closeout_configuration,
-        run_goal_closeout,
-    )
-
-    unconfigured = {
-        "schema_version": GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
-        "goal_id": goal_id,
-        "trigger": "archive-runtime",
-        "terminal_reason": "archived",
-        "status": "not_configured",
-        "ledger_recorded": False,
-    }
-    try:
-        configuration, configuration_error = goal_closeout_configuration(runtime_root)
-        if configuration_error is None and not (configuration or {}).get("command"):
-            return unconfigured
-        state_file: str | None = None
-        archived_state_file = archive_path / "ACTIVE_GOAL_STATE.md"
-        try:
-            if archived_state_file.exists():
-                # The archived copy wins so the consumer reads the file where
-                # the committed move put it.
-                state_file = str(archived_state_file)
-            else:
-                declared = goal_state_file_from_record(
-                    goal_record,
-                    registry_path=registry_path,
-                )
-                state_file = str(declared) if declared is not None else None
-        except Exception:  # an unusable declared path is not worth a failure
-            state_file = None
-        repo = goal_record.get("repo")
-        return run_goal_closeout(
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            repo=str(repo) if repo else None,
-            state_file=state_file,
-            terminal_reason="archived",
-            trigger="archive-runtime",
-            ledger_dir=archive_path,
-        )
-    except Exception as exc:  # the terminal command already finished
-        return {
-            **unconfigured,
-            "status": "preparation_error",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-
-
 def archive_runtime_goal(
     *,
     registry_path: Path,
@@ -205,8 +138,6 @@ def archive_runtime_goal(
     destination = unique_archive_path(archive_base, safe_goal_id, timestamp)
     _validate_archive_destination(source, destination)
 
-    closeout: dict[str, Any] | None = None
-    closeout_facts: dict[str, Any] | None = None
     if execute:
         from .control_plane.coordination.shadow_management import (
             runtime_artifact_lock_target,
@@ -306,29 +237,6 @@ def archive_runtime_goal(
             _validate_archive_destination(source, destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
-            # The move is irreversible. Only plain copies of already confirmed
-            # facts happen before the canonical locks release; every fallible
-            # hook-only step waits for the best-effort boundary below.
-            locked_archive_goal = next(
-                (
-                    goal
-                    for goal in registry_goals(locked_registry)
-                    if str(goal.get("id")) == safe_goal_id
-                ),
-                None,
-            )
-            closeout_facts = {
-                "goal_record": dict(locked_archive_goal) if locked_archive_goal else {},
-                "archive_path": destination,
-            }
-    if closeout_facts is not None:
-        closeout = _archive_closeout_payload(
-            runtime_root=runtime_root,
-            goal_id=safe_goal_id,
-            goal_record=closeout_facts["goal_record"],
-            registry_path=registry_path,
-            archive_path=closeout_facts["archive_path"],
-        )
 
     return {
         "ok": True,
@@ -342,7 +250,6 @@ def archive_runtime_goal(
         "dry_run": not execute,
         "archived": execute,
         "action": "moved" if execute else "would-move",
-        "closeout": closeout,
         "checks": [
             "goal id is a single path segment",
             "source runtime goal directory exists",

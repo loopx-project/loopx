@@ -347,86 +347,6 @@ def test_real_chat_http_invalid_namespace_has_safe_repair_path(
         server.server_close()
 
 
-def test_goal_closeout_http_update_cannot_write_a_command(tmp_path: Path) -> None:
-    from loopx.capabilities.machine_configuration.builtins import (
-        build_builtin_machine_configuration_registry,
-    )
-
-    handler = _Handler(
-        tmp_path,
-        body={
-            "namespace": "goal_closeout",
-            "namespace_configuration": {
-                "schema_version": "loopx_goal_closeout_configuration_v0",
-                "command": ["/bin/sh", "-c", "id > /tmp/pwned"],
-            },
-        },
-    )
-    registry = build_builtin_machine_configuration_registry()
-
-    with pytest.raises(ValueError, match="local CLI: command"):
-        handler._machine_configuration_namespace_update(
-            handler.body, registry=registry
-        )
-    assert not (tmp_path / "machine" / "configuration.json").exists()
-
-    timeout_only = _Handler(
-        tmp_path,
-        body={
-            "namespace": "goal_closeout",
-            "namespace_configuration": {
-                "schema_version": "loopx_goal_closeout_configuration_v0",
-                "timeout_seconds": 12,
-            },
-        },
-    )
-    configuration = timeout_only._machine_configuration_namespace_update(
-        timeout_only.body, registry=registry
-    )
-    assert configuration["namespaces"]["goal_closeout"] == {
-        "schema_version": "loopx_goal_closeout_configuration_v0",
-        "command": [],
-        "timeout_seconds": 12,
-    }
-
-
-def test_goal_closeout_real_http_rejects_a_command_update(tmp_path: Path) -> None:
-    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-
-    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.runtime_root = tmp_path
-    server.verbose = False
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
-    try:
-        connection.request(
-            "POST",
-            CHAT_MACHINE_CONFIGURATION_PREVIEW_PATH,
-            body=json.dumps(
-                {
-                    "namespace": "goal_closeout",
-                    "namespace_configuration": {
-                        "schema_version": "loopx_goal_closeout_configuration_v0",
-                        "command": ["/bin/sh", "-c", "id > /tmp/pwned"],
-                    },
-                }
-            ),
-            headers={"Content-Type": "application/json"},
-        )
-        response = connection.getresponse()
-        assert response.status == 400
-        body = json.loads(response.read())
-        assert body["ok"] is False
-        assert "local CLI: command" in body["error"]
-        assert not (tmp_path / "machine" / "configuration.json").exists()
-    finally:
-        connection.close()
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-
-
 def test_inspection_lists_registered_namespaces_without_local_refs(
     tmp_path: Path,
 ) -> None:
@@ -441,7 +361,6 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "codex_chat",
         "context_delivery",
         "explore_harness",
-        "goal_closeout",
         "goal_storage",
         "manager_runtime",
         "periodic_report",
@@ -467,14 +386,6 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "planning_horizon_goal": True,
         "yardstick_enabled": False,
     }
-    assert namespace_catalog["goal_closeout"]["configuration_template"] == {
-        "schema_version": "loopx_goal_closeout_configuration_v0",
-        "configured": False,
-        "timeout_seconds": 30,
-    }
-    assert namespace_catalog["goal_closeout"]["configuration_template"].get(
-        "command"
-    ) is None
     assert namespace_catalog["change_quality_qualification"][
         "configuration_template"
     ] == {
@@ -555,16 +466,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
     # manager profile, native host defaults, steward executor and storage target.
-    machine_only = {
-        "manager_runtime",
-        "steward_executor",
-        "steward_memory",
-        "goal_storage",
-        "codex_chat",
-        "context_delivery",
-        "goal_closeout",
-    }
-    assert set(machine) - machine_only == {
+    assert set(machine) - {"manager_runtime", "steward_executor", "steward_memory", "goal_storage", "codex_chat", "context_delivery"} == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -580,7 +482,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in machine_only:
+        if capability_id in {"manager_runtime", "steward_executor", "steward_memory", "goal_storage", "codex_chat", "context_delivery"}:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]

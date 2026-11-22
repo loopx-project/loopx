@@ -125,14 +125,6 @@ def capability_configuration_editor(
                 _field("max_trials", "Maximum proposed trials", "number", minimum=0, maximum=2, required=True),
             ],
         },
-        "goal_closeout": {
-            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
-            "fields": [
-                _field("timeout_seconds", "Closeout timeout (seconds)", "number",
-                       minimum=1, maximum=600, required=True,
-                       description="Bounds one terminal hook invocation. The command itself is local-private: configure it with the machine-config CLI, never through the Dashboard."),
-            ],
-        },
         "goal_storage": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [_field("new_goal_provider", "New Goal storage provider", "select",
