@@ -298,27 +298,30 @@ Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
 contract identity to its metadata. Historical v1 descriptors remain readable.
-The immutable `v2.4.0` release declares `quota_packet`. Current `main` artifacts
-declare `complete_turn` (`loopx_turn_envelope_v1`) as the engineering default.
-Every active writer in those artifacts follows that contract. Context-delivery
-configuration and historical recovery remain supported. Record actual adoption
-for each supported Host and verify the original matched single-session outcome
-and full-cost comparison before qualifying it under [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.md#9-validation-and-acceptance).
+The published `v2.4.0` tag and public artifact allowlist retain `quota_packet`.
+The C1 source checkout defaults to `complete_turn` (`loopx_turn_envelope_v1`).
+The existing release qualification rejects that observed writer until the
+publisher and Desktop updater adopt the matching supported contract together.
+Keep the current channel pointer while that dependency is open. Record actual
+Host adoption and the matched single-session outcome and full-cost comparison
+under [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.md#9-validation-and-acceptance).
 
 新 runtime 描述符记录实际观测到且受支持的 `default_contract`。构建器在写入渠道描述符
 或替换已有制品之前探测已提交的 runtime。安装资格检查在隔离的原始 Goal 中关闭
 上下文传输后再次观察普通 quota writer。发布器要求安装后的观察与不可变描述符一致。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
-已发布的 `v2.4.0` 标签声明 `quota_packet`。当前 `main` 制品以 `complete_turn`
-（`loopx_turn_envelope_v1`）为工程默认，所有活跃 writer 使用这一契约。上下文传输配置
-和历史恢复继续受支持。按 [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#9-验证与验收)
-记录各受支持 Host 的实际采用，并完成原同单会话匹配成果和完整成本对照后，再确认采用资格。
+已发布的 `v2.4.0` 标签和公开制品支持列表保留 `quota_packet`。C1 源码检出的默认值
+是 `complete_turn`（`loopx_turn_envelope_v1`）。发布器与桌面更新器须同步采用对应的
+支持契约，否则现有资格检查会拒绝该 writer，保留当前渠道指针。按
+[RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#9-验证与验收)
+记录受支持 Host 的实际采用，并完成同单会话匹配成果和完整成本对照。
 
 #### macOS preview upgrade across the C1 cutover
 
-The last quota-packet-only macOS updater rejects a C1 archive at the contract
-check. For that installed App, use the manual replacement path once:
+The quota-packet-only macOS updater rejects a C1 archive at the contract
+check. Once a compatible signed preview is published, use this one-time manual
+replacement path from the older App:
 
 1. Download `LoopX.app.tar.gz` and `LoopX.app.tar.gz.sig` from the same official
    `desktop-main-*` [release](https://github.com/loopx-project/loopx/releases)
@@ -344,8 +347,8 @@ check. For that installed App, use the manual replacement path once:
    with the compatible backup as needed. The standalone CLI has its own update
    and rollback path.
 
-仅支持 quota-packet 的上一版 macOS updater 会在契约校验处拒绝 C1 归档。首次跨越
-此边界时，按上面的手动流程操作。从同一官方 `desktop-main-*` 发行版下载归档和签名，
+仅支持 quota-packet 的 macOS updater 会在契约校验处拒绝 C1 归档。兼容的签名预览版
+发布后，首次跨越此边界时按上面的手动流程操作。从同一官方 `desktop-main-*` 发行版下载归档和签名，
 用已信任的旧版 updater 公钥校验归档，再解包并校验 App 签名。退出 LoopX，备份旧
 App 与兼容状态后再替换。启动后读回版本、同一 Goal、原回执及已安装 runtime 的 v1
 默认值。检查失败时，退出并恢复已验证旧 App，需要时恢复兼容状态备份。独立 CLI

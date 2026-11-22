@@ -12,9 +12,9 @@ benchmark heartbeat callers when no machine preference is saved. Saved or explic
 off disables it; ordinary CLI, other hosts and unsupported platforms inherit full
 delivery.
 
-Current `main` artifacts use the C1 wire contract for both inline and staged
-delivery. The evidence below qualifies actual Host adoption, model outcomes,
-and complete cost.
+C1 source uses one wire contract for both inline and staged delivery. Public
+artifacts follow the [release qualification](../product/release-readiness.md).
+The evidence below qualifies actual Host adoption, model outcomes, and complete cost.
 
 - To understand a work session, start with [the example](#one-task-four-situations).
 - To operate it, see [enable, verify and roll back](#enable-verify-and-roll-back).

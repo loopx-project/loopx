@@ -1014,8 +1014,9 @@ comparison and cannot explain away a C1 regression.
 ### Default adoption and retirement qualification
 
 The [context-delivery guide](../../guides/context-delivery.md#qualify-default-adoption-and-retirement)
-turns this comparison into an operator plan. Current `main` artifacts default
-to C1 for all active writers and retire the older format selectors. Qualifying
+turns this comparison into an operator plan. The C1 source defaults to one
+writer and retires the older format selectors. Public artifacts follow the
+existing release qualification. Qualifying
 adoption for a supported profile requires both a declared DeepSeek model and a
 declared strong model to support the claimed effectiveness and complete-cost scope.
 Record exact model/provider/version/effort and fixed task, source, host, tools,
@@ -1401,9 +1402,11 @@ Public-distribution isolation now reuses the runtime artifact metadata owner:
 runtime qualification observes the installed ordinary writer, desktop packaging
 observes its archived writer, and publication requires their declared supported
 contract to match. The immutable `v2.4.0` tag retains its quota-packet writer.
-Current `main` packages ship the single C1 writer. For each supported profile,
-record actual installation and adoption evidence, and evaluate outcomes and
-full cost under §9. See the [release boundary](../../product/release-readiness.md).
+C1 source cutover and public distribution qualify separately. The publisher and
+Desktop updater must support the observed contract before a C1 artifact can be
+published. For each supported profile, record actual installation and adoption
+evidence, and evaluate outcomes and full cost under §9. See the
+[release boundary](../../product/release-readiness.md).
 
 Native launch rechecks use the original `SettlementIdentity` as their sole
 Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing

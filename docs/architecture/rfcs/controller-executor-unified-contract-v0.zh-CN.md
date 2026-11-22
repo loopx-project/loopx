@@ -813,7 +813,7 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 ### 默认采用与退役资格
 
 [上下文交付指南](../../guides/context-delivery.zh-CN.md#默认化与退役的验收) 把此比较落实为
-操作方案。当前 `main` 制品的所有活跃 writer 默认使用 C1，旧格式选择器已退役。
+操作方案。C1 源码默认使用统一 writer，旧格式选择器已退役。公开制品仍走现有发布门。
 确认受支持 profile 的采用资格时，须用明确版本的 DeepSeek 与强模型验证所声明的
 效果和完整成本范围。记录精确 model/provider/version/effort，固定 task、source、host、
 tools、反馈、evaluator、预算与停止条件。除原生任务成果、约束遗漏、错误动作和
@@ -1103,8 +1103,9 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 
 公开分发隔离现在复用 runtime 制品元数据 owner：runtime 资格检查观察已安装的普通
 writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。已发布的
-`v2.4.0` 标签保留 quota-packet writer。当前 `main` 制品只交付 C1 writer。逐一
-记录受支持 profile 的安装和实际采用证据，并按第 9 节验证成果和完整成本。
+`v2.4.0` 标签保留 quota-packet writer。发布器和桌面更新器都支持观测到的契约后，
+C1 制品才具备发布条件。逐一记录受支持 profile 的安装和实际采用证据，并按第 9 节
+验证成果和完整成本。
 详见[发布边界](../../product/release-readiness.md)。
 
 原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
