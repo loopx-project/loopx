@@ -65,6 +65,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | Accepted | none | — |
 | [RFC: Provider-side authorization at effect acceptance (v0)](provider-effect-acceptance-v0.md) | Accepted | none | — |
 | [RFC: Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.md) | Accepted | none | — |
+| [RFC: Provider-Neutral Sandbox Snapshot and Fork SPI (v0)](provider-neutral-sandbox-snapshot-fork-spi-v0.md) | Accepted | none | — |
 | [RFC: Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | Accepted | none | — |
 | [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Accepted | none | — |
 | [Preserve the selected runtime during rollback](self-update-explicit-runtime-route-v0.md) | Accepted | none | — |
