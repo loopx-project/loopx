@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
+import {isDeepStrictEqual} from "node:util";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {EXECUTION_LOSS_CLOSEOUT_SCHEMA, isExecutionLossCloseout} from "./execution_loss_closeout_record.ts";
 
 import { readReceiptLogSnapshot } from "../runtime/receipt_log_snapshot.ts";
 import {
@@ -66,6 +69,7 @@ import {
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
   heartbeatPreparedLease,
+  heartbeatPreparedWorkAdmission,
   isHeartbeatLeaseReadiness,
   type HeartbeatReceiptFact,
 } from "./heartbeat_receipt_identity.ts";
@@ -86,6 +90,7 @@ import {
 } from "../work_items/replan_semantics.ts";
 import {
   parseQuotaAccountingOwner,
+  quotaGoalRef,
   quotaOwnerOwnsProjection,
   withBorrowedQuotaAccountingOwner,
   withQuotaAccountingOwner,
@@ -1384,6 +1389,7 @@ function readQuotaSettlementFromRequest(
   snapshot: QuotaSettlementReadbackSnapshot,
   nameOwedPriorTurn = true,
   matchedSpend?: MatchedSpendRecords,
+  includeOriginalPreparedReceipt = false,
 ): JsonObject {
   if (
     snapshot.runtimeRoot !== request.runtime_root ||
@@ -1482,6 +1488,45 @@ function readQuotaSettlementFromRequest(
   }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
+  const executionLoss = writebackRun !== null && (
+    writebackRun.classification === "execution_loss_closeout" ||
+    writebackRun.execution_loss_closeout !== undefined || writebackRun.execution_loss_commit !== undefined ||
+    jsonObject(writebackRun.blocked_retry)?.schema_version === EXECUTION_LOSS_CLOSEOUT_SCHEMA);
+  const originalPreparedReceipt = executionLoss || includeOriginalPreparedReceipt
+    ? heartbeatValidationEvent(events, heartbeatReceipt, identity) : null;
+  if (executionLoss && writebackRun !== null) {
+    const closeout = jsonObject(writebackRun.execution_loss_closeout);
+    const commit = jsonObject(writebackRun.execution_loss_commit);
+    const permittedRunFields = ["generated_at", "goal_id", "agent_id", "todo_id", "turn_instance_id",
+      "settlement_identity", "classification", "delivery_outcome", "delivery_batch_scale", "delivery_boundary",
+      "progress_observation", "blocked_retry", "execution_loss_closeout", "json_path", "markdown_path",
+      "execution_loss_commit", ...(request.owner.kind === "exact_source" ? ["goal_ref"] : [])];
+    if (!closeout || !isExecutionLossCloseout(closeout, identity.todo_id)
+        || Object.keys(writebackRun).sort().join("|") !== permittedRunFields.sort().join("|")
+        || writebackRun.classification !== "execution_loss_closeout"
+        || writebackRun.delivery_outcome !== "outcome_gap" || writebackRun.delivery_boundary !== "semantic_closeout"
+        || writebackRun.delivery_batch_scale !== "single_surface" || writebackRun.generated_at !== closeout.observed_at
+        || closeout.effect_id !== identity.effect_id
+        || originalPreparedReceipt === null
+        || closeout.original_receipt_event_id !== originalPreparedReceipt.event_id
+        || !isDeepStrictEqual(closeout.original_prepared, heartbeatPreparedWorkAdmission(originalPreparedReceipt, identity))
+        || jsonObject(closeout.current_control_writer)?.owner !== identity.agent_id
+        || closeout.observation_fingerprint !== jsonObject(writebackRun.progress_observation)?.fingerprint
+        || !isDeepStrictEqual(writebackRun.blocked_retry, closeout)
+        || !commit || Object.keys(commit).sort().join("|") !== ["schema_version", "request_sha256",
+          "original_receipt_sha256", "event"].sort().join("|")
+        || commit.schema_version !== "quota_execution_loss_closeout_commit_v0"
+        || commit.original_receipt_sha256 !== canonicalAuthoritySha256(originalPreparedReceipt)
+        || commit.request_sha256 !== canonicalAuthoritySha256({identity: settlementIdentityPayload(identity),
+          goal_ref: quotaGoalRef(request.owner), intent: {delivery_outcome: "outcome_gap", delivery_boundary: "semantic_closeout",
+            progress_observation: writebackRun.progress_observation}})
+        || !isDeepStrictEqual(jsonObject(commit.event)?.details,
+          {settlement_effect_id: identity.effect_id, execution_loss_closeout: closeout})
+        || (writebackEvent !== null && !isDeepStrictEqual(writebackEvent, commit.event))) {
+      throw new EffectRuntimeRequestError("administrative execution-loss receipt differs from original admission",
+        "malformed_settlement_state");
+    }
+  }
   const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
     .some((receipt) => receipt !== null);
 
@@ -1603,7 +1648,7 @@ function readQuotaSettlementFromRequest(
     settlement: bundle(settled, includeRecords),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
-    progress,
+    progress: executionLoss && noSpendKind ? {...progress, no_spend: true} : progress,
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
     writeback_run: includeRecords ? writebackRun : null,
@@ -1614,6 +1659,9 @@ function readQuotaSettlementFromRequest(
     ),
     spend_run: includeRecords ? spendRun : null,
     heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    ...(includeOriginalPreparedReceipt && originalPreparedReceipt &&
+      heartbeatPreparedWorkAdmission(originalPreparedReceipt, identity)
+      ? {original_prepared_receipt: originalPreparedReceipt} : {}),
     ...(preparedLease === null ? {} : {prepared_lease: preparedLease}),
     ...(receiptDetails.prepared_lease_required === true ? {prepared_lease_required: true} : {}),
     admission_recorded_at: typeof admissionReceipt?.recorded_at === "string"
@@ -1660,8 +1708,10 @@ export function readQuotaSettlementFromSnapshot(
 export function readAdmittedQuotaSettlementFromSnapshot(
   value: unknown,
   snapshot: QuotaSettlementReadbackSnapshot,
+  options: {includeOriginalPreparedReceipt?: boolean} = {},
 ): JsonObject {
-  return readQuotaSettlementFromRequest(decodeRequest(value), snapshot);
+  return readQuotaSettlementFromRequest(decodeRequest(value), snapshot, true, undefined,
+    options.includeOriginalPreparedReceipt);
 }
 
 /** Read under the parsed owner already admitted by the enclosing transaction. */
@@ -1669,8 +1719,10 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
   value: unknown,
   owner: QuotaAccountingOwner,
   snapshot: QuotaSettlementReadbackSnapshot,
+  options: {includeOriginalPreparedReceipt?: boolean} = {},
 ): JsonObject {
-  return readQuotaSettlementFromRequest(decodeRequest(value, owner), snapshot);
+  return readQuotaSettlementFromRequest(decodeRequest(value, owner), snapshot, true, undefined,
+    options.includeOriginalPreparedReceipt);
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {

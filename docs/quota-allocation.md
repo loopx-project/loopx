@@ -276,6 +276,26 @@ Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复
 重新判定。未绑定的等待 Turn 在恢复后取得资格时，在同一把锁内追加首次准入回执，
 后续重放复用该回执。
 
+If the canonical File or SQLite lease has replaced the original prepared
+generation and neither writeback nor debit has started, recovery reports
+`execution_loss_closeout` for the original Turn. Read the current Todo lease
+and use the projected `refresh-state --execution-loss-closeout --dry-run` with
+the original Goal, Agent, Todo and Turn plus the current control-writer proof.
+The preview checks the same fences as commit. Execute the same command without
+`--dry-run` after the preview qualifies, then read back
+`typed_blocked_writeback_no_spend`. The original work admission stays intact
+and the Todo remains open for a separately admitted Turn. An absent or
+foreign control-writer proof holds settlement. A replacement lease cannot
+authorize business delivery for the old Turn.
+
+原准入租约已被 File 或 SQLite 权威确认换代，且原 Turn 的写回与扣额都尚未开始时，
+恢复决策会指向该 Turn 的 `execution_loss_closeout`。先读当前 Todo 租约，用原
+Goal、Agent、Todo 与 Turn 身份及当前控制写入凭据运行投影的
+`refresh-state --execution-loss-closeout --dry-run`。预览通过后再去掉
+`--dry-run` 提交，读回 `typed_blocked_writeback_no_spend`。原准入回执保留，
+Todo 仍可由新 Turn 依法接续。当前控制写入凭据缺失或归属其他 Agent 时保持等待，
+新租约不授予旧 Turn 的业务交付权。
+
 An admitted advancement Todo can also become persistently `blocked` through
 its ordinary owner-authorized lifecycle. Its original Turn then offers the
 same blocked writeback command. The settlement owner freezes the current

@@ -1043,7 +1043,8 @@ def _admitted_interaction_next_cli_actions(
             lifecycle_actor_args=lifecycle_actor_args,
             typed_quota_guard=typed_quota_guard,
         )
-    if mode == "unsettled_host_turn_recovery":
+    recovery = _as_mapping(payload.get("unsettled_host_turn_recovery"))
+    if mode == "unsettled_host_turn_recovery" or recovery.get("repair") == "execution_loss_closeout":
         return recovery_cli_actions(
             payload,
             command_prefix=command_prefix,
