@@ -157,7 +157,9 @@ function todoMetadataDiagnostics(row: JsonObject, status: string, terminal: Read
   if (ownership.includes("claim_excluded")) codes.push("todo_claimed_by_excluded_agent");
   const archivedTerminal = row.archive_state === "archive" && terminal.has(status);
   if (ownership.includes("exclusion_role") && !archivedTerminal) codes.push("todo_executor_exclusion_scope_invalid");
-  if (row.role === "agent" && agents.length && exclusions.some(agent => !agents.includes(agent))) {
+  // Completed archive exclusions describe execution at the time.
+  const archivedCompleted = archivedTerminal && status === "done";
+  if (row.role === "agent" && !archivedCompleted && agents.length && exclusions.some(agent => !agents.includes(agent))) {
     codes.push("todo_excludes_unregistered_agent");
   }
   return codes;
