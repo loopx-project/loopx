@@ -737,6 +737,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="interactive local dashboard launched explicitly by the operator",
     ),
     CliOutputCommandClassification(
+        command_id="workbench",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="optional Workbench lifecycle launched explicitly by the operator",
+    ),
+    CliOutputCommandClassification(
         command_id="dsh-launch",
         qualification="explicit_cold_path_exception",
         surface_id=None,
