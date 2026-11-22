@@ -16,6 +16,8 @@ import {canonicalAuthoritySha256, canonicalAuthorityJson} from "../coordination/
 import {decodeTodoReadSource} from "./read_codec.ts";
 import {projectTodoQuotaPlanning} from "./quota_selection.ts";
 import type {LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
+import {TODO_CANONICAL_READ_RECORD_FIELDS, TODO_DOMAIN_READ_RECORD_SCHEMA,
+  TODO_DOMAIN_RECORD_CONTRACT} from "../coordination/coordination_state_contract.ts";
 
 const includesArchivedRows = (query: JsonObject): boolean =>
   query.read_scope === "completed_history" || query.include_archived === true;
@@ -30,7 +32,11 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
     !Array.isArray(contractFields) || !contractFields.length || new Set(contractFields).size !== contractFields.length ||
     contractFields.some(key => typeof key !== "string" || !/^[a-z][a-z0-9_]*$/.test(key))
   )) throw new EffectRuntimeRequestError("Todo contract fields require a read-only canonical summary");
-  const canonical = await collectCanonicalTodoSource(source, dependencies);
+  // Only a list query opts into retained inspection. Quota, execution
+  // preparation and query-free summaries keep the strict execution contract.
+  const canonical = await collectCanonicalTodoSource(
+    source, dependencies, input.query != null && input.read_pipeline === undefined,
+  );
   if (canonical.status !== "loaded") return {schema_version: TODO_READ_RESULT, canonical};
   const todos = canonical.todos;
   const guards = canonical.goal_acceptance_work_guards ?? {};
@@ -195,13 +201,14 @@ export async function readCanonicalQuotaProjection(input: JsonObject, dependenci
   return {schema_version: TODO_READ_RESULT, quota_wires: wires};
 }
 
-async function collectCanonicalTodoSource(source: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+async function collectCanonicalTodoSource(source: JsonObject,
+  dependencies: LocalAuthorityProviderDependencies = {}, retainedInspection = false): Promise<JsonObject> {
   const todos: unknown[] = [], leases: unknown[] = [], guards: JsonObject = {};
   let after: unknown = null, first: JsonObject | null = null;
   do {
     const page = await readCanonicalSnapshot({schema_version: LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
       runtime_root: source.runtime_root, goal_id: source.goal_id, include_leases: source.include_leases === true,
-      projection_readback: source.projection_readback ?? null, after}, dependencies);
+      projection_readback: source.projection_readback ?? null, after}, dependencies, retainedInspection);
     if (page.status !== "page") return {
       ...page, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA};
     if (first === null) first = page;
@@ -296,7 +303,13 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
   let todos = projection.todos as JsonObject[];
   // Restore only already-selected bodies. Scope, status, archive and limits
   // remain the existing owner's decisions; all bodies share this source head.
-  if (fullText) {
+  const exact = Boolean(query.todo_id) && todos.length === 1;
+  if (fullText || exact) {
+    // The source reader already validated this exact declaration.
+    const readModel = requireJsonObject(canonical.todo_read_model, "Todo read model");
+    const currentFields = readModel.schema_version === TODO_DOMAIN_READ_RECORD_SCHEMA
+      ? TODO_DOMAIN_RECORD_CONTRACT.fields : TODO_CANONICAL_READ_RECORD_FIELDS;
+    const retained = canonicalAuthorityJson(readModel.contract_fields) !== canonicalAuthorityJson(currentFields);
     const identity = (row: JsonObject) => JSON.stringify([row.todo_id, row.role, row.archive_state ?? "active"]);
     const bodies = new Map<string, JsonObject | null>();
     for (const row of original) {
@@ -307,13 +320,11 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
       const source = bodies.get(identity(item));
       if (!source) throw new Error("Todo detail cannot recover an unambiguous full source body");
       item.text = String(source.text ?? "");
+      if (retained) {
+        if (exact) Object.assign(item, source);
+        else if (Object.hasOwn(source, "title")) item.title = source.title;
+      }
     }
-  } else if (query.todo_id && todos.length === 1) {
-    const item = todos[0]!;
-    const matching = original.filter(row => row.todo_id === query.todo_id && row.role === item.role &&
-      (row.archive_state ?? "active") === (item.archive_state ?? "active"));
-    if (matching.length !== 1) throw new Error("Todo detail cannot recover an unambiguous full source body");
-    item.text = String(matching[0]!.text ?? "");
   }
   const matchedCount = todos.length;
   const hot = !fullText && !includeArchived && query.agent_id && query.limit == null &&

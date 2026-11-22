@@ -93,6 +93,28 @@ an unreadable identity remains an identity failure. Selected SQLite and
 PostgreSQL profiles retain their existing identity checks and provider failures.
 No failure path falls back to a display file.
 
+### Retained Todo inspection
+
+`todo list` can inspect the frozen retained Todo declaration recognized by the
+typed projection reader, in both canonical and domain record forms. Recognition
+requires the complete ordered field declaration; unknown, reordered, duplicated
+or partial declarations are not compatibility versions. Record identity,
+required values, declared fields, count and digest remain validated.
+
+Exact `--todo-id` reads preserve the original declared fields, including archived
+records, dependency and review metadata, and historical receipt references.
+This also applies when Manager requests full text. A full-text list used for
+Manager search keeps the stored titles of the selected retained records.
+Reading does not migrate the head, rewrite Markdown, or change history, receipts
+or leases. It does not restore retired execution semantics.
+
+This is an internal list-query opt-in, not a new wire flag or a relaxation of
+the default validator. Mutation owners, execution preparation, quota reads and
+query-free summaries retain strict validation and refuse this retained shape.
+Current contracts and previously supported executable historical declarations
+keep their existing behavior.
+
+
 A single record or metadata envelope that cannot fit a fallback page is rejected with
 `canonical_snapshot_record_too_large` or
 `canonical_snapshot_metadata_too_large`. These explicit limits do not qualify

@@ -19,8 +19,10 @@ import {completionTurnOperationId,
 /** Shared admission for full and paged collection reads. Pagination changes
  * transport only; retained records, read-model validation and acceptance keep
  * this same owner. */
-export function canonicalTodoCollection(head: JsonObject, goalId: string, includeLeases: boolean) {
-  const read = new CoordinationProjectionRead(head, goalId);
+export function canonicalTodoCollection(
+  head: JsonObject, goalId: string, includeLeases: boolean, retainedInspection = false,
+) {
+  const read = new CoordinationProjectionRead(head, goalId, retainedInspection);
   const acceptanceRead = new GoalAcceptanceRead(head, goalId, read);
   const acceptance = acceptanceRead.contract();
   return {
