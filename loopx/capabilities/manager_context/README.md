@@ -553,7 +553,11 @@ model/effort environment overrides remain supported). It receives a compact
 authorized Goal directory, then uses
 `loopx_manager_read` to choose registered Agent, portfolio, current Todo and recent delivery reads.
 The packaged `loopx-manager` skill is installed in its dedicated workspace and
-included in its operating instructions. This reuses Core providers and the
+included in its operating instructions alongside the repository-maintained
+companion specifications (`templates/REPORTING.md` and `templates/FOLLOWTHROUGH.md`,
+plus `templates/SESSION_REPORTING.md` as the default single-Goal session report
+specification; local owner edits without managed markers are preserved across
+refreshes). This reuses Core providers and the
 existing manager-context delegation contract; it does not create another source
 of progress or expose a general shell.
 
