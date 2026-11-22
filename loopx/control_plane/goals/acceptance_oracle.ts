@@ -50,12 +50,15 @@ export function normalizeAcceptanceOracle(value: unknown, criterion: JsonObject)
   // point directly. The interpreter/environment remain trusted host inputs.
   const executableName = argv[0]?.split(/[\\/]/).at(-1) ?? "";
   const hostInterpreterPath = executableName === argv[0] || /^(?:\/|[A-Za-z]:[\\/])/.test(argv[0] ?? "");
-  const pythonScript = hostInterpreterPath && /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(executableName)
-    && typeof argv[1] === "string" && !argv[1].startsWith("-")
+  const pinnedScript = typeof argv[1] === "string" && !argv[1].startsWith("-")
     && pins.some(pin => pin.path === argv[1]);
+  const pythonScript = hostInterpreterPath && /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(executableName)
+    && pinnedScript;
+  const runtimePythonScript = argv[0] === "loopx:python" && argv.length === 2
+    && pinnedScript && argv[1].endsWith(".py");
   const directSource = typeof argv[0] === "string" && argv[0].includes("/")
     && pins.some(pin => pin.path === argv[0]);
-  requireThat(directSource || pythonScript,
+  requireThat(directSource || pythonScript || runtimePythonScript,
     "oracle requires a pinned relative executable path containing '/' or a pinned script immediately after a supported Python interpreter; arbitrary commands and interpreter options are unsupported");
   requireThat(!pins.some(pin => input_refs.includes(pin.path) || output_refs.includes(pin.path)),
     "oracle source and checked artifacts must be distinct");

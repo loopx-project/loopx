@@ -123,7 +123,12 @@ def registered_evidence_hosts(root, config_path=None) -> list[str]:
     return hosts
 
 
-def sources(root, channel, owner, config_path=None):
+def sources(
+    root: Path | str,
+    channel: str | None,
+    owner: bool,
+    config_path: Path | None = None,
+) -> list[dict[str, Any]]:
     """Declare the evidence sources; declaring a source never reads it."""
 
     allowed = sorted(grants(root, channel))

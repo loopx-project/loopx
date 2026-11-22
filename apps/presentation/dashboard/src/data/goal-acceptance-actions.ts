@@ -24,7 +24,7 @@ const preparedDocument = z.object({objective: z.string().min(1),
     oracle: z.object({output_refs: z.array(z.string())}).passthrough().optional(),
   }).passthrough()).min(1),
 }).passthrough();
-export function preparedAcceptancePlan(proposals: TypedActionProposal[], goalId: string) {
+export function preparedAcceptancePlan(proposals: TypedActionProposal[], goalId: string, originalTodoId?: string) {
   // Never resurrect an older draft after the newest plan was applied, cancelled
   // or invalidated. Ambiguous creation order requires a fresh Agent proposal.
   const matching = proposals.filter(proposal => proposal.action_kind === "goal.acceptance.check"
@@ -38,5 +38,9 @@ export function preparedAcceptancePlan(proposals: TypedActionProposal[], goalId:
       || !proposal.available_transitions.includes("apply")) return null;
   const input = proposal.normalized_parameters.document as Record<string, unknown> | undefined;
   const parsed = preparedDocument.safeParse(input?.outcome_id === undefined ? input : proposal.normalized_parameters.resolved_document);
-  return parsed.success ? {proposal, document: parsed.data} : null;
+  if (!parsed.success) return null;
+  const {scope} = parsed.data;
+  if (originalTodoId !== undefined && (scope.kind !== "selected_work"
+      || scope.todo_ids.length !== 1 || scope.todo_ids[0] !== originalTodoId)) return null;
+  return {proposal, document: parsed.data};
 }

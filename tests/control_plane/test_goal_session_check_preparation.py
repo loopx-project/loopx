@@ -8,6 +8,7 @@ from copy import deepcopy
 from contextlib import contextmanager, nullcontext
 import hashlib
 import json
+import os
 import queue
 import sys
 from types import SimpleNamespace
@@ -19,8 +20,10 @@ from loopx.chat_agent import CodexChatAgentSession
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_store import ChatSessionStore
 from loopx.chat_action_store import ChatActionStore
+from loopx.chat_actions import ChatActionService
 from loopx.control_plane.collaboration import conversation_scope
 from loopx.control_plane.goals.acceptance import refine_goal_outcome
+from loopx.control_plane.goals.acceptance_actions import prepare_acceptance_check
 from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 
 
@@ -161,7 +164,7 @@ def test_original_read_only_turn_prepares_one_host_pinned_proposal(original_chec
     assert parameters["goal_id"] == fixture.session["goal_id"]
     assert parameters["prepared_by"] == "agent-a"
     criterion = parameters["document"]["criteria"][0]
-    assert criterion["validation_argv"] == ["python3", "check.py"]
+    assert criterion["validation_argv"] == ["loopx:python", "check.py"]
     assert criterion["validation_files"] == [
         {"path": "check.py", "sha256": hashlib.sha256(source_before).hexdigest()}
     ]
@@ -380,17 +383,59 @@ def test_changed_source_retry_preserves_saved_intent_and_original_pin(original_c
     assert fixture.call()["proposal"] == original
 
 
-@pytest.mark.parametrize("interpreter", [None, "/usr/bin/another-python"])
-def test_unavailable_host_interpreter_refuses_preparation(
-    original_check, monkeypatch, interpreter
-):
-    monkeypatch.setattr(
-        "loopx.chat.coordination.shutil.which", lambda _name: interpreter
+def test_prepared_python_checker_does_not_execute_a_path_shadow(original_check, monkeypatch):
+    fixture = original_check
+    path_bin = fixture.root / "bin"
+    path_bin.mkdir()
+    shadow = path_bin / "python3"
+    witness = fixture.root / "shadow-executed"
+    shadow.write_text('#!/bin/sh\n: > "$LOOPX_TEST_SHADOW_WITNESS"\nexit 0\n')
+    shadow.chmod(0o755)
+    monkeypatch.setenv("PATH", str(path_bin) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("LOOPX_TEST_SHADOW_WITNESS", str(witness))
+    result = fixture.call()
+    assert result.get("prepared"), result
+    artifact = fixture.project / "artifact.txt"
+    artifact.write_text("rejected")
+    service = ChatActionService(
+        store=ChatActionStore(fixture.root / "chat/actions"), registry_path=fixture.registry
     )
+    proposal = service.apply(result["proposal"]["proposal_id"])["proposal"]
+    assert proposal["status"] == "applied"
+    assert fixture.cli("inspect")[1]["goal_acceptance_contract"]["status"] == "failed"
+    artifact.write_text("accepted")
+    code, verified = fixture.cli("verify", "--agent-id", "agent-a", "--execute")
+    assert code == 0 and verified["checks_passed"], verified
+    assert not witness.exists()
+
+
+def test_unavailable_host_interpreter_refuses_preparation(original_check, monkeypatch):
+    from loopx.chat import coordination
+
+    def unavailable():
+        raise FileNotFoundError
+
+    monkeypatch.setattr(coordination, "oracle_host_python", unavailable)
     result = original_check.call()
     assert result["error"] == "collaboration_request_rejected"
-    assert "host interpreter" in result["next_action"]
+    assert "runtime's Python is unavailable" in result["next_action"]
     assert ChatActionStore(original_check.root / "chat/actions").list() == []
+
+
+def test_lost_reply_recovers_legacy_python_proposal(original_check):
+    fixture = original_check
+    legacy = deepcopy(fixture.document)
+    source = fixture.checker
+    legacy["criteria"][0]["validation_files"] = [
+        {"path": source.name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    ]
+    saved = prepare_acceptance_check(
+        registry_path=fixture.registry, runtime_root=str(fixture.root),
+        goal_id=fixture.session["goal_id"], agent_id="agent-a", document=legacy,
+        operation_id="original-check", execute=True,
+    )["proposal"]
+    assert fixture.call()["proposal"] == saved
+    assert ChatActionStore(fixture.root / "chat/actions").list() == [saved]
 
 
 @pytest.mark.parametrize("direct", [False, True])
@@ -509,7 +554,7 @@ def test_direct_existing_checker_and_matching_claimed_pin_are_supported(original
     assert result["proposal"]["normalized_parameters"]["document"] == document
 
 
-@pytest.mark.parametrize("token", ["python", sys.executable])
+@pytest.mark.parametrize("token", ["python", sys.executable, "loopx:python"])
 def test_supported_python_aliases_resolve_to_public_safe_host_token(
     original_check, token
 ):
@@ -518,7 +563,7 @@ def test_supported_python_aliases_resolve_to_public_safe_host_token(
     result = original_check.call(document=document)
     assert result["prepared"] and result["executed"] is False, result
     row = result["proposal"]["normalized_parameters"]["document"]["criteria"][0]
-    assert row["validation_argv"] == ["python3", "check.py"]
+    assert row["validation_argv"] == ["loopx:python", "check.py"]
 
 
 def test_outer_dispatcher_preserves_read_owner_and_rejects_actor_override_in_document(
