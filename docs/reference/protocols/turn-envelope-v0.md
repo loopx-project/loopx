@@ -338,6 +338,10 @@ In JSON, a failed spend's response is available under `quota_spend`, including
 any `workspace_guard` remediation or bounded child reader. For a workspace
 refusal, use the guard's required action and the original `settlement_owed`
 command. Use the parent's verified receipts to determine what committed.
+When the first writeback fails for a Turn that requires a delivery workspace,
+`settlement_recovery.delivery_workspace_path` retains an available directory
+explicitly supplied to the failed command. Run the recovery guard from that
+directory so it can recheck the original Todo's worktree authority.
 
 Callers that need a compact result can add `--settlement-receipt` to
 `refresh-state --settle-turn`. A successful settled result provides its exact
@@ -374,6 +378,9 @@ Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重�
 JSON 的 `quota_spend` 保留子扣额的失败响应，包括工作区 guard 的恢复动作和已有的
 分页读取入口。工作区拒绝时，按 guard 的要求和原 `settlement_owed` 命令恢复，并以父层
 核验的回执判断已提交的效果。
+如果原轮次需要交付工作区，且首次写回失败时明确提供了可用目录，
+`settlement_recovery.delivery_workspace_path` 会保留该路径。从该目录运行恢复
+guard，由 guard 重新核对原 Todo 的工作树权限。
 
 需要紧凑回执时，在 `refresh-state --settle-turn` 后加 `--settlement-receipt`。
 结算成功后可直接核对本次身份和回执，用 `result_details.command` 读取完整结果。
