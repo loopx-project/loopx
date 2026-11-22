@@ -543,6 +543,7 @@ class BenchmarkCodex(CodexOffline):
 
     async def _prepare_phase(
         self, environment: BaseEnvironment, instruction: str, *, cwd: str, verify: bool = True,
+        verify_explore: bool = True,
     ) -> None:
         key, option, expected = self._replan_configuration()
         stride_args = (["--execution-stride-strategy", self.stride_strategy]
@@ -636,9 +637,11 @@ class BenchmarkCodex(CodexOffline):
             await self._seed_phase(environment, cwd=cwd)
 
         if verify:
-            await self._verify_phase_configuration(environment, cwd=cwd)
+            await self._verify_phase_configuration(environment, cwd=cwd, verify_explore=verify_explore)
 
-    async def _verify_phase_configuration(self, environment: BaseEnvironment, *, cwd: str) -> None:
+    async def _verify_phase_configuration(
+        self, environment: BaseEnvironment, *, cwd: str, verify_explore: bool = True,
+    ) -> None:
         """Read the treatment without reconfiguring a restored Goal or its queue."""
         key, _, expected = self._replan_configuration()
         cadence = await self._loopx(
@@ -663,7 +666,7 @@ class BenchmarkCodex(CodexOffline):
             actual_yardstick = configured_state.get("execution_profile", {}).get("yardstick_enabled")
             if type(actual_yardstick) is not bool or actual_yardstick != self.execution_yardstick_enabled:
                 raise RuntimeError("execution_yardstick_enabled readback mismatch")
-            if self.execution_yardstick_enabled is True:
+            if verify_explore and self.execution_yardstick_enabled is True:
                 turn_context = await self._loopx(
                     environment,
                     ["explore", "turn-context", "--goal-id", self.goal_id, "--agent-id", self.agent_id],

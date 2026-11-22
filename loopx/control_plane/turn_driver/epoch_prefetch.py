@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -1391,6 +1392,67 @@ def attach_epoch_metadata_to_journal(
         journal["quiet_turn"] = dict(quiet_meta)
 
 
+_WORKSPACE_ONLY_PROBE_EXES = frozenset({"git", "ls", "pwd", "wc", "stat", "find"})
+_LOOPX_STATE_PROBE_SUBCOMMANDS = frozenset({"status", "doctor", "version"})
+
+
+def _parse_prefetch_argv(command: Any) -> list[str]:
+    if isinstance(command, str):
+        stripped = command.strip()
+        if not stripped:
+            return []
+        try:
+            return shlex.split(stripped)
+        except ValueError:
+            return stripped.split()
+    if isinstance(command, (list, tuple)):
+        return [str(part) for part in command]
+    return []
+
+
+def _loopx_subcommand_tokens(argv: list[str], *, python_mode: bool) -> list[str]:
+    args = argv[1:]
+    if python_mode:
+        if len(args) < 2 or args[0] != "-m":
+            return []
+        args = args[2:]
+    cursor = 0
+    while cursor < len(args) and args[cursor].startswith("-"):
+        flag = args[cursor]
+        if flag in {"--registry", "--runtime-root", "--format"}:
+            cursor += 2
+            continue
+        cursor += 1
+    return args[cursor:]
+
+
+def _command_binds_capture_source(command: Any, capture_path: str) -> bool:
+    """Return True when prefetch_command targets the compact capture or reads files directly."""
+    argv = _parse_prefetch_argv(command)
+    if not argv:
+        return True
+    capture_name = Path(capture_path).name if capture_path else ""
+    if capture_path and any(capture_path in tok or (capture_name and capture_name in tok) for tok in argv):
+        return True
+    for idx in range(len(argv) - 1):
+        if argv[idx] == "quota" and argv[idx + 1] == "context-read":
+            return True
+    exe = Path(argv[0]).name
+    if exe in _WORKSPACE_ONLY_PROBE_EXES:
+        return False
+    if exe == "loopx" or exe.startswith("python"):
+        sub = _loopx_subcommand_tokens(argv, python_mode=exe.startswith("python"))
+        if not sub:
+            return True
+        if sub[:2] == ["quota", "context-read"]:
+            return True
+        if sub[0] in _LOOPX_STATE_PROBE_SUBCOMMANDS:
+            return False
+        if len(sub) >= 2 and (sub[0], sub[1]) in {("turn", "inspect"), ("todo", "list"), ("task-lease", "inspect")}:
+            return False
+    return True
+
+
 def resolve_codex_context_epoch_prefetch_hook(
     *,
     directory: str,
@@ -1414,32 +1476,55 @@ def resolve_codex_context_epoch_prefetch_hook(
     )
     if not (isinstance(cfg, Mapping) and cfg.get("enabled") is True):
         return None
-    source_ref = (
+    recovery_ref = (
         {"path": str(recovery["path"]), "sha256": str(recovery["sha256"])}
         if isinstance(recovery.get("path"), str) and isinstance(recovery.get("sha256"), str)
         else None
     )
     baseline_bytes = cfg.get("baseline_bytes")
-    if baseline_bytes is None and source_ref is not None:
+    if baseline_bytes is None and recovery_ref is not None:
         try:
-            baseline_bytes = Path(source_ref["path"]).stat().st_size
+            baseline_bytes = Path(recovery_ref["path"]).stat().st_size
         except OSError:
             baseline_bytes = None
-    goal_label = str(state.get("goal_id") or event.get("goal_id") or "default")
-    agent_label = str(state.get("agent_id") or event.get("agent_id") or "default")
-    context_epoch = str(state.get("context_epoch") or "epoch-0")
     with lock_ctx(directory) as root:
         current_state = read_state_fn(root)
+        locked_cfg = (
+            event.get("epoch_prefetch")
+            if isinstance(event.get("epoch_prefetch"), Mapping)
+            else current_state.get("epoch_prefetch_policy")
+            if isinstance(current_state.get("epoch_prefetch_policy"), Mapping)
+            else cfg
+        )
+        if not (isinstance(locked_cfg, Mapping) and locked_cfg.get("enabled") is True):
+            return None
+        if baseline_bytes is None and isinstance(locked_cfg.get("baseline_bytes"), int):
+            baseline_bytes = locked_cfg.get("baseline_bytes")
+        explicit_source_ref = locked_cfg.get("source_ref")
+        if isinstance(explicit_source_ref, Mapping):
+            source_ref: dict[str, str] | None = {
+                "path": str(explicit_source_ref.get("path") or ""),
+                "sha256": str(explicit_source_ref.get("sha256") or ""),
+            }
+        elif recovery_ref is not None and _command_binds_capture_source(
+            locked_cfg.get("prefetch_command"), recovery_ref["path"],
+        ):
+            source_ref = recovery_ref
+        else:
+            source_ref = None
+        goal_label = str(current_state.get("goal_id") or state.get("goal_id") or event.get("goal_id") or "default")
+        agent_label = str(current_state.get("agent_id") or state.get("agent_id") or event.get("agent_id") or "default")
+        context_epoch = str(current_state.get("context_epoch") or state.get("context_epoch") or "epoch-0")
         receipt = resolve_or_execute_epoch_prefetch(
-            epoch_prefetch=cfg,
+            epoch_prefetch=locked_cfg,
             scope_key=f"codex_context:{goal_label}:{agent_label}",
             context_epoch=context_epoch,
             file_store_dir=root / "epoch_prefetch",
             sqlite_path=root / "epoch_prefetch.sqlite",
-            reclaimed_turns=int(event.get("reclaimed_turns") or cfg.get("reclaimed_turns") or 0),
-            dropped_failures=int(event.get("dropped_failures") or cfg.get("dropped_failures") or 0),
-            failure_facts=list(event.get("failure_facts") or cfg.get("failure_facts") or ()),
-            open_obligations=list(event.get("open_obligations") or cfg.get("open_obligations") or ()),
+            reclaimed_turns=int(event.get("reclaimed_turns") or locked_cfg.get("reclaimed_turns") or 0),
+            dropped_failures=int(event.get("dropped_failures") or locked_cfg.get("dropped_failures") or 0),
+            failure_facts=list(event.get("failure_facts") or locked_cfg.get("failure_facts") or ()),
+            open_obligations=list(event.get("open_obligations") or locked_cfg.get("open_obligations") or ()),
             source_ref=source_ref,
             baseline_bytes=baseline_bytes,
             cwd=event.get("cwd"),

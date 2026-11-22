@@ -628,7 +628,7 @@ def test_combined_compact_direct_read_and_epoch_prefetch_generated_hook_lifecycl
     capture.write_text(json.dumps({
         "goal_id": "g-combo",
         "selected_todo": {"todo_id": "todo_combo", "title": "Preserve direct read and prefetch"},
-        "padding": "y" * 2048,
+        "padding": "y" * 4096,
     }), encoding="utf-8")
     capture.chmod(0o600)
     digest = hashlib.sha256(capture.read_bytes()).hexdigest()
@@ -788,3 +788,272 @@ def test_read_json_pointers_paginated_fails_closed_over_pointer_cap(tmp_path: Pa
     assert result["eof"] is False
     assert result["reason"] == "too_many_json_pointers"
     assert result["requested_count"] == direct_read.MAX_POINTERS_PER_HOOK + 1
+
+
+def test_epoch_rotation_passes_effective_state_and_commits_prefetch_under_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix 1: Rotated context_epoch on updated state (not stale pre-lifecycle state) governs prefetch key and replay."""
+    from loopx.control_plane.turn_driver import codex_context as ctx
+    from loopx.control_plane.turn_driver import epoch_prefetch as ep_mod
+
+    repo = tmp_path / "repo-rot"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    (repo / "base.txt").write_text("v1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=repo, capture_output=True, check=True,
+    )
+    (repo / "changed.txt").write_text("dirty\n", encoding="utf-8")
+
+    cap = tmp_path / "rot-cap.json"
+    cap.write_text(json.dumps({"goal_id": "g-rot", "selected_todo": {"todo_id": "t-rot"}, "pad": "x" * 4096}), encoding="utf-8")
+    cap.chmod(0o600)
+    dig = hashlib.sha256(cap.read_bytes()).hexdigest()
+
+    journal_dir = tmp_path / "ctx-rot"
+    journal_dir.mkdir(mode=0o700)
+    ctx._save(journal_dir, {
+        "session_id": "s-rot",
+        "cwd": str(repo),
+        "context_epoch": "epoch-1",
+        "goal_id": "g-rot",
+        "agent_id": "a-rot",
+        "recovery": {"path": str(cap), "sha256": dig, "command": f"loopx quota context-read --capture-file {cap}"},
+    })
+
+    # Rotate epoch inside _reduce_hook_lifecycle on call 1 (simulating same-turn lifecycle epoch rotation).
+    real_reduce = ctx._reduce_hook_lifecycle
+    rotations = {"n": 0}
+
+    def rotating_reduce(*args, **kwargs):
+        res = real_reduce(*args, **kwargs)
+        rotations["n"] += 1
+        if rotations["n"] == 1:
+            res = {**res, "context_epoch": "epoch-2", "goal_id": "g-rot-updated"}
+        return res
+
+    monkeypatch.setattr(ctx, "_reduce_hook_lifecycle", rotating_reduce)
+
+    exec_calls = {"count": 0}
+    real_subproc = ep_mod.run_bounded_prefetch_subprocess
+
+    def counting_subproc(*args, **kwargs):
+        exec_calls["count"] += 1
+        return real_subproc(*args, **kwargs)
+
+    monkeypatch.setattr(ep_mod, "run_bounded_prefetch_subprocess", counting_subproc)
+
+    evt = {
+        "session_id": "s-rot",
+        "cwd": str(repo),
+        "hook_event_name": "SessionStart",
+        "source": "compact",
+        "epoch_prefetch": {
+            "enabled": True,
+            "prefetch_command": ["git", "status", "--short"],
+            "baseline_bytes": cap.stat().st_size,
+            "min_net_savings_bytes": 1,
+        },
+    }
+    first = ctx.codex_context_hook(str(journal_dir), evt)
+    ep1 = first["hookSpecificOutput"]["epochPrefetch"]
+    assert ep1["operator"] == "EpochReset"
+    assert ep1["context_epoch"] == "epoch-2"
+    assert ep1["executed"] is True
+    assert ep1["replayed"] is False
+    assert exec_calls["count"] == 1
+
+    persisted = ctx._state(journal_dir)
+    assert persisted["context_epoch"] == "epoch-2"
+    assert persisted["epoch_prefetch"]["context_epoch"] == "epoch-2"
+
+    # Identical retry MUST replay the committed epoch-2 receipt rather than re-executing prefetch_command.
+    second = ctx.codex_context_hook(str(journal_dir), evt)
+    ep2 = second["hookSpecificOutput"]["epochPrefetch"]
+    assert ep2["operator"] == "EpochReset"
+    assert ep2["context_epoch"] == "epoch-2"
+    assert ep2["executed"] is False
+    assert ep2["replayed"] is True
+    assert exec_calls["count"] == 1
+
+    # Even if a direct caller passes stale state["context_epoch"], resolve_codex_context_epoch_prefetch_hook
+    # reads locked disk current_state["context_epoch"] ("epoch-2") under the file lock.
+    direct_res = ep_mod.resolve_codex_context_epoch_prefetch_hook(
+        directory=str(journal_dir),
+        hook_name="SessionStart",
+        state={"context_epoch": "epoch-1", "goal_id": "stale-g", "agent_id": "a-rot"},
+        event=evt,
+        recovery={"path": str(cap), "sha256": dig, "command": f"loopx quota context-read --capture-file {cap}"},
+        lock_ctx=ctx._locked,
+        read_state_fn=ctx._state,
+        save_state_fn=ctx._save,
+        continuation_text="read capture",
+        raw_guidance_text="guidance",
+    )
+    assert direct_res is not None
+    direct_ep = direct_res["hookSpecificOutput"]["epochPrefetch"]
+    assert direct_ep["context_epoch"] == "epoch-2"
+    assert direct_ep["replayed"] is True
+    assert direct_ep["executed"] is False
+    assert exec_calls["count"] == 1
+
+
+def test_combined_hook_enforces_delivered_utf8_byte_budget_and_four_arm_comparison(
+    tmp_path: Path,
+) -> None:
+    """Fix 2: Composition enforces combined delivered UTF-8 byte budget + compares all 4 H1 arms."""
+    from loopx.control_plane.turn_driver import codex_context as ctx
+
+    repo = tmp_path / "repo-budget"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    (repo / "base.txt").write_text("v1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=repo, capture_output=True, check=True,
+    )
+    (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    # 1. Small capture (cap_bytes ~ 387): combined hook MUST fail closed epochPrefetch instead of inflating
+    #    additionalContext by 9x while falsely claiming EpochReset + positive bytes_saved.
+    small_cap = tmp_path / "small-cap.json"
+    small_cap.write_text(json.dumps({
+        "goal_id": "g-small",
+        "selected_todo": {"todo_id": "t-small", "title": "Small capture"},
+        "padding": "p" * 290,
+    }), encoding="utf-8")
+    small_cap.chmod(0o600)
+    small_bytes = small_cap.stat().st_size
+    assert 350 <= small_bytes <= 430, small_bytes
+    small_dig = hashlib.sha256(small_cap.read_bytes()).hexdigest()
+
+    def _run_small(mode_name: str, extra_evt: dict) -> dict:
+        d = tmp_path / f"ctx-small-{mode_name}"
+        d.mkdir(mode=0o700)
+        ctx._save(d, {
+            "session_id": f"s-{mode_name}",
+            "cwd": str(repo),
+            "context_epoch": "epoch-small-1",
+            "goal_id": "g-small",
+            "agent_id": "a1",
+            "recovery": {"path": str(small_cap), "sha256": small_dig, "command": f"loopx quota context-read --capture-file {small_cap}"},
+        })
+        return ctx.codex_context_hook(str(d), {
+            "session_id": f"s-{mode_name}",
+            "cwd": str(repo),
+            "hook_event_name": "SessionStart",
+            "source": "compact",
+            **extra_evt,
+        })["hookSpecificOutput"]
+
+    small_direct_only = _run_small("direct", {"compact_direct_read": {"enabled": True}})
+    small_combo = _run_small("combo", {
+        "compact_direct_read": {"enabled": True},
+        "epoch_prefetch": {
+            "enabled": True,
+            "prefetch_command": ["git", "status", "--short"],
+            "baseline_bytes": small_bytes,
+            "min_net_savings_bytes": 1,
+        },
+    })
+    assert small_combo["epochPrefetch"]["operator"] == "KeepRaw"
+    assert small_combo["epochPrefetch"]["fallback_reason"] == "composed_budget_exceeded"
+    assert small_combo["epochPrefetch"]["superseded"] is True
+    assert small_combo["epochPrefetch"]["bytes_saved"] == 0
+    assert small_combo["epochPrefetch"]["round_trips_saved"] == 0
+    assert len(small_combo["additionalContext"].encode("utf-8")) == len(
+        small_direct_only["additionalContext"].encode("utf-8")
+    )
+
+    # 2. Explicit tight max_output_bytes on a large capture bounds total delivered UTF-8 bytes strictly <= budget.
+    big_cap = tmp_path / "big-cap.json"
+    big_cap.write_text(json.dumps({
+        "goal_id": "g-big",
+        "selected_todo": {"todo_id": "t-big", "title": "Realistic large capture"},
+        "padding": "z" * 8192,
+    }), encoding="utf-8")
+    big_cap.chmod(0o600)
+    big_bytes = big_cap.stat().st_size
+    big_dig = hashlib.sha256(big_cap.read_bytes()).hexdigest()
+
+    tight_dir = tmp_path / "ctx-tight"
+    tight_dir.mkdir(mode=0o700)
+    ctx._save(tight_dir, {
+        "session_id": "s-tight",
+        "cwd": str(repo),
+        "context_epoch": "epoch-tight-1",
+        "goal_id": "g-big",
+        "agent_id": "a1",
+        "recovery": {"path": str(big_cap), "sha256": big_dig, "command": f"loopx quota context-read --capture-file {big_cap}"},
+    })
+    tight_cap_bytes = 1850
+    tight_out = ctx.codex_context_hook(str(tight_dir), {
+        "session_id": "s-tight",
+        "cwd": str(repo),
+        "hook_event_name": "SessionStart",
+        "source": "compact",
+        "compact_direct_read": {"enabled": True, "max_output_bytes": tight_cap_bytes},
+        "epoch_prefetch": {
+            "enabled": True,
+            "prefetch_command": ["git", "status", "--short"],
+            "baseline_bytes": big_bytes,
+            "min_net_savings_bytes": 1,
+        },
+    })["hookSpecificOutput"]
+    assert len(tight_out["additionalContext"].encode("utf-8")) <= tight_cap_bytes
+    assert tight_out["epochPrefetch"]["operator"] == "KeepRaw"
+    assert tight_out["epochPrefetch"]["fallback_reason"] == "composed_budget_exceeded"
+    assert tight_out["epochPrefetch"]["bytes_saved"] == 0
+
+    # 3. 4-arm comparison (off, direct_read, epoch_prefetch, combined) on an 8KB capture.
+    def _run_big(arm: str, extra_evt: dict) -> tuple[dict, int]:
+        d = tmp_path / f"ctx-arm-{arm}"
+        d.mkdir(mode=0o700)
+        ctx._save(d, {
+            "session_id": f"s-arm-{arm}",
+            "cwd": str(repo),
+            "context_epoch": f"epoch-arm-{arm}",
+            "goal_id": "g-big",
+            "agent_id": "a1",
+            "recovery": {"path": str(big_cap), "sha256": big_dig, "command": f"loopx quota context-read --capture-file {big_cap}"},
+        })
+        out = ctx.codex_context_hook(str(d), {
+            "session_id": f"s-arm-{arm}",
+            "cwd": str(repo),
+            "hook_event_name": "SessionStart",
+            "source": "compact",
+            **extra_evt,
+        })["hookSpecificOutput"]
+        return out, len(out["additionalContext"].encode("utf-8"))
+
+    arm_off, bytes_off = _run_big("off", {})
+    arm_direct, bytes_direct = _run_big("direct", {"compact_direct_read": {"enabled": True}})
+    ep_cfg_big = {
+        "enabled": True,
+        "prefetch_command": ["git", "status", "--short"],
+        "baseline_bytes": big_bytes,
+        "min_net_savings_bytes": 1,
+    }
+    arm_ep, bytes_ep = _run_big("prefetch", {"epoch_prefetch": ep_cfg_big})
+    arm_combo, bytes_combo = _run_big("combined", {
+        "compact_direct_read": {"enabled": True},
+        "epoch_prefetch": ep_cfg_big,
+    })
+
+    assert "compactDirectRead" not in arm_off and "epochPrefetch" not in arm_off
+    assert arm_direct["compactDirectRead"]["operator"] == "EpochReset"
+    assert "epochPrefetch" not in arm_direct
+    assert arm_ep["epochPrefetch"]["operator"] == "EpochReset"
+    assert arm_ep["epochPrefetch"]["bytes_saved"] <= big_bytes - bytes_ep
+    assert arm_combo["compactDirectRead"]["operator"] == "EpochReset"
+    assert arm_combo["epochPrefetch"]["operator"] == "EpochReset"
+    assert arm_combo["epochPrefetch"]["superseded"] is False
+    assert bytes_direct < big_bytes and bytes_ep < big_bytes and bytes_combo < big_bytes
+    assert bytes_combo < bytes_direct + bytes_ep
+    assert arm_combo["epochPrefetch"]["bytes_saved"] <= big_bytes - bytes_combo
+    assert arm_combo["epochPrefetch"]["bytes_saved"] > 0
+    assert bytes_off > 0

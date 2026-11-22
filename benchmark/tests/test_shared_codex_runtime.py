@@ -1972,3 +1972,137 @@ def test_sforge_worker_h2_warm_start_and_cold_explore_yardstick(tmp_path, monkey
     worker_warm.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(tmp_path))
     readback2 = asyncio.run(cli(None, ["configure-goal", "--goal-id", worker_warm.runtime.goal_id]))
     assert readback2["after"]["execution_profile"]["yardstick_enabled"] is True
+
+
+def test_sforge_worker_default_off_opt_ins_and_base_verification_before_explore(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    from loopx.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(auth_file))
+    monkeypatch.setenv("LOOPX_COMPACT_DIRECT_READ", "1")
+    monkeypatch.setenv("LOOPX_QUIET_TURN", "1")
+    monkeypatch.setenv("LOOPX_EPOCH_PREFETCH_JSON", '{"enabled":true}')
+    monkeypatch.setattr("benchmark.runtime.harbor.BenchmarkCodex.install", lambda self, env: asyncio.sleep(0))
+    monkeypatch.setattr(SForgeWorker, "_warm_command", lambda *a, **kw: None)
+
+    class DummyEnv:
+        async def exec(self, command, **_kw):
+            if command.startswith("cat "):
+                return SimpleNamespace(return_code=0, stdout="Solve the task.\n")
+            return SimpleNamespace(return_code=1, stdout="")
+
+        async def upload_file(self, *a, **kw):
+            return None
+
+    async def noop(*a, **kw):
+        return None
+
+    dummy_backend = SimpleNamespace(
+        exec_run=lambda *a, **kw: SimpleNamespace(exit_code=0, output=""),
+        exec_run_with_exit_code=lambda *a, **kw: SimpleNamespace(timed_out=False, exit_code=0, output=""),
+        copy_to_container=lambda *a: None,
+    )
+
+    # 1. Default-off SForgeWorker ignores ambient H1 host env vars and never enables H1/H2/Explore by default.
+    off_dir = tmp_path / "off"
+    off_dir.mkdir()
+    reg_off = tmp_path / "off-reg.json"
+    rt_off = tmp_path / "off-rt"
+    logs_off = tmp_path / "off-logs"
+    logs_off.mkdir()
+    w_off = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"), profile="heartbeat-resume", cwd=str(off_dir))
+    assert w_off.execution.compact_direct_read is False
+    assert w_off.execution.quiet_turn is False
+    assert w_off.execution.epoch_prefetch_json is None
+    assert w_off.execution_yardstick_enabled is None
+    w_off.backend = dummy_backend
+    w_off.install_stop_hook(w_off.backend, None, logs_off, None)
+    assert w_off.runtime._worker_env(cwd=str(off_dir))["LOOPX_COMPACT_DIRECT_READ"] == "0"
+    assert w_off.runtime._worker_env(cwd=str(off_dir))["LOOPX_QUIET_TURN"] == "0"
+    assert w_off.runtime._worker_env(cwd=str(off_dir))["LOOPX_EPOCH_PREFETCH_JSON"] == ""
+    assert "yardstick_enabled" not in w_off.runtime._replan_receipt()
+    turn_receipt = w_off.runtime._turn_envelope_receipt()
+    assert "compact_direct_read" not in turn_receipt
+    assert "quiet_turn" not in turn_receipt
+    assert "epoch_prefetch" not in turn_receipt
+
+    calls_off = []
+
+    async def cli_off(environment, args, **kwargs):
+        import contextlib
+        import io
+        calls_off.append(list(args))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["--format", "json", "--registry", str(reg_off), "--runtime-root", str(rt_off), *args])
+        assert code == 0, buf.getvalue()
+        return json.loads(buf.getvalue())
+
+    monkeypatch.chdir(off_dir)
+    w_off.environment = DummyEnv()
+    w_off.runtime.environment = DummyEnv()
+    monkeypatch.setattr(w_off.runtime, "_loopx", cli_off)
+    monkeypatch.setattr(w_off.runtime, "_write_task_document", noop)
+    monkeypatch.setattr(w_off.runtime, "_registry_exists", lambda *a, **kw: asyncio.sleep(0, result=reg_off.is_file()))
+    w_off.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(off_dir))
+    assert not (logs_off / "explore-activation.json").exists()
+    off_state = asyncio.run(cli_off(None, ["configure-goal", "--goal-id", w_off.runtime.goal_id]))
+    assert off_state["after"]["execution_profile"].get("yardstick_enabled") in (None, False)
+    assert not any("--execution-yardstick-enabled" in call or "--explore-graph-enabled" in call for call in calls_off)
+
+    # 2. Stale base replan configuration on cold heartbeat-explore MUST fail BEFORE activating Explore or writing explore-activation.json.
+    stale_dir = tmp_path / "stale"
+    stale_dir.mkdir()
+    monkeypatch.chdir(stale_dir)
+    reg_stale = tmp_path / "stale-reg.json"
+    rt_stale = tmp_path / "stale-rt"
+    logs_stale = tmp_path / "stale-logs"
+    logs_stale.mkdir()
+    w_stale = SForgeWorker(
+        SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore",
+        cwd=str(stale_dir),
+        execution_yardstick_enabled=True,
+    )
+    w_stale.backend = dummy_backend
+    w_stale.install_stop_hook(w_stale.backend, None, logs_stale, None)
+    w_stale.environment = DummyEnv()
+    w_stale.runtime.environment = DummyEnv()
+
+    seen_args = []
+
+    async def stale_base_cli(environment, args, **kwargs):
+        import contextlib
+        import io
+        seen_args.append(list(args))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["--format", "json", "--registry", str(reg_stale), "--runtime-root", str(rt_stale), *args])
+        assert code == 0, buf.getvalue()
+        payload = json.loads(buf.getvalue())
+        if args[:2] == ["configure-goal", "--goal-id"] and "--execute" not in args:
+            payload = {
+                **payload,
+                "after": {
+                    **payload.get("after", {}),
+                    "execution_profile": {
+                        **payload.get("after", {}).get("execution_profile", {}),
+                        "replan_after_effective_turns": 99,
+                    },
+                },
+            }
+        return payload
+
+    monkeypatch.setattr(w_stale.runtime, "_loopx", stale_base_cli)
+    monkeypatch.setattr(w_stale.runtime, "_write_task_document", noop)
+    monkeypatch.setattr(w_stale.runtime, "_registry_exists", lambda *a, **kw: asyncio.sleep(0, result=reg_stale.is_file()))
+    with pytest.raises(RuntimeError, match="replan cadence readback mismatch"):
+        w_stale.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(stale_dir))
+    assert not any("--explore-graph-enabled" in call for call in seen_args)
+    assert not (logs_stale / "explore-activation.json").exists()

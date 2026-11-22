@@ -458,6 +458,95 @@ def _epoch_prefetch_is_configured(state: Mapping[str, Any], event: Mapping[str, 
     return isinstance(cfg, Mapping) and cfg.get("enabled") is True
 
 
+def _utf8_prefix_text(text: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    clipped = raw[:max_bytes]
+    while clipped and (clipped[-1] & 0xC0) == 0x80:
+        clipped = clipped[:-1]
+    return clipped.decode("utf-8", errors="replace")
+
+
+def _extract_epoch_prefetch_part(
+    prefetch_text: str,
+    ep_meta: Mapping[str, Any],
+    *,
+    direct_operator: str | None,
+    continuation_text: str,
+) -> str:
+    part = prefetch_text
+    if ep_meta.get("operator") == "EpochReset":
+        if "\n[Stage-then-Swap EpochReset Receipt" in part:
+            part = part[part.index("[Stage-then-Swap EpochReset Receipt"):]
+        suffix = f"\nOriginal saved capture remains available at: {continuation_text}"
+        if continuation_text and suffix in part:
+            part = part.replace(suffix, "", 1).rstrip()
+        elif continuation_text and continuation_text in part:
+            part = part.replace(continuation_text, "", 1).rstrip()
+        return part
+    if ep_meta.get("operator") == "KeepRaw" and direct_operator == "EpochReset":
+        for marker in ("\nPreserved failure facts:", "\nPrefetch fallback notice (KeepRaw):"):
+            idx = part.find(marker)
+            if idx != -1:
+                return part[idx + 1:].strip()
+    return part
+
+
+def _composition_budgets(
+    *,
+    has_direct: bool,
+    has_prefetch: bool,
+    direct_read_cfg: Mapping[str, Any] | None,
+    epoch_prefetch_cfg: Mapping[str, Any] | None,
+    baseline_bytes: int | None,
+) -> tuple[int | None, int | None, int | None]:
+    direct_cap: int | None = None
+    if has_direct and isinstance(direct_read_cfg, Mapping):
+        val = direct_read_cfg.get("max_output_bytes")
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+            direct_cap = val
+    epoch_caps: list[int] = [direct_cap] if direct_cap is not None else []
+    if has_prefetch and isinstance(epoch_prefetch_cfg, Mapping):
+        val = epoch_prefetch_cfg.get("max_output_bytes")
+        epoch_caps.append(val if isinstance(val, int) and not isinstance(val, bool) and val > 0 else 16_384)
+    epoch_output_cap = min(epoch_caps) if epoch_caps else None
+    baseline_ceiling: int | None = None
+    if baseline_bytes is not None:
+        raw_min = epoch_prefetch_cfg.get("min_net_savings_bytes") if isinstance(epoch_prefetch_cfg, Mapping) else None
+        min_net = int(raw_min) if isinstance(raw_min, int) and not isinstance(raw_min, bool) else 1
+        baseline_ceiling = max(0, int(baseline_bytes) - min_net)
+    return direct_cap, epoch_output_cap, baseline_ceiling
+
+
+def _fail_closed_epoch_prefetch_meta(
+    ep_meta: dict[str, Any],
+    *,
+    superseded: bool,
+    delivered_bytes: int,
+    budget_bytes: int | None,
+) -> dict[str, Any]:
+    return {
+        **ep_meta,
+        "configured": True,
+        "superseded": superseded,
+        "superseded_by": "compact_direct_read" if superseded else None,
+        "composed_with_compact_direct_read": superseded,
+        "operator": "KeepRaw",
+        "status": "fallback_keep_raw",
+        "fallback_reason": "composed_budget_exceeded",
+        "preserves_raw_state": True,
+        "reclaimed_turns": 0,
+        "dropped_failures": 0,
+        "round_trips_saved": 0,
+        "bytes_saved": 0,
+        "delivered_bytes": delivered_bytes,
+        "composed_budget_bytes": budget_bytes,
+    }
+
+
 def _compose_direct_read_and_epoch_prefetch(
     direct_reply: dict[str, Any] | None,
     prefetch_hook: dict[str, Any] | None,
@@ -466,10 +555,47 @@ def _compose_direct_read_and_epoch_prefetch(
     epoch_prefetch_configured: bool,
     recovery_needed: bool,
     has_recovery_command: bool,
+    direct_read_cfg: Mapping[str, Any] | None = None,
+    epoch_prefetch_cfg: Mapping[str, Any] | None = None,
+    baseline_bytes: int | None = None,
+    continuation_text: str = "",
 ) -> dict[str, Any] | None:
-    """Keep compact direct-read and EpochReset prefetch composition explicit in hook receipts."""
+    """Keep compact direct-read and EpochReset prefetch composition within delivered UTF-8 byte budgets."""
+    direct_cap, epoch_output_cap, baseline_ceiling = _composition_budgets(
+        has_direct=direct_reply is not None,
+        has_prefetch=prefetch_hook is not None,
+        direct_read_cfg=direct_read_cfg,
+        epoch_prefetch_cfg=epoch_prefetch_cfg,
+        baseline_bytes=baseline_bytes,
+    )
     if direct_reply is None:
-        return prefetch_hook
+        if prefetch_hook is None:
+            return None
+        prefetch_out = dict(prefetch_hook.get("hookSpecificOutput") or {})
+        ep_meta = dict(prefetch_out.get("epochPrefetch") or {})
+        add_text = prefetch_out.get("additionalContext")
+        if isinstance(add_text, str) and ep_meta.get("operator") == "EpochReset":
+            delivered_bytes = len(add_text.encode("utf-8"))
+            epoch_bounds = [b for b in (epoch_output_cap, baseline_ceiling) if b is not None]
+            effective_budget = min(epoch_bounds) if epoch_bounds else None
+            if effective_budget is not None and delivered_bytes > effective_budget:
+                ep_meta = _fail_closed_epoch_prefetch_meta(
+                    ep_meta, superseded=False, delivered_bytes=delivered_bytes, budget_bytes=effective_budget,
+                )
+                notice = (
+                    f"[Stage-then-Swap EpochReset Fallback | operator=KeepRaw | reason=composed_budget_exceeded "
+                    f"| delivered_bytes={delivered_bytes} | budget_bytes={effective_budget}]"
+                )
+                prefetch_out["additionalContext"] = notice
+                prefetch_out["epochPrefetch"] = ep_meta
+                return {"hookSpecificOutput": prefetch_out}
+            if baseline_bytes is not None:
+                if isinstance(ep_meta.get("bytes_saved"), int) and not isinstance(ep_meta.get("bytes_saved"), bool):
+                    ep_meta["bytes_saved"] = min(int(ep_meta["bytes_saved"]), max(0, int(baseline_bytes) - delivered_bytes))
+            ep_meta["delivered_bytes"] = delivered_bytes
+            prefetch_out["epochPrefetch"] = ep_meta
+        return {"hookSpecificOutput": prefetch_out}
+
     direct_out = dict(direct_reply.get("hookSpecificOutput") or {})
     if prefetch_hook is None:
         if epoch_prefetch_configured:
@@ -496,25 +622,78 @@ def _compose_direct_read_and_epoch_prefetch(
                 "reason": reason,
             }
         return {"hookSpecificOutput": direct_out}
+
     prefetch_out = dict(prefetch_hook.get("hookSpecificOutput") or {})
-    parts = [
-        part
-        for part in (direct_out.get("additionalContext"), prefetch_out.get("additionalContext"))
-        if isinstance(part, str) and part.strip()
-    ]
-    composed: dict[str, Any] = {
-        "hookEventName": hook_name,
-        **({"additionalContext": "\n\n".join(parts)} if parts else {}),
-        "compactDirectRead": {
-            **dict(direct_out.get("compactDirectRead") or {}),
-            "composed_with_epoch_prefetch": True,
-        },
-        "epochPrefetch": {
-            **dict(prefetch_out.get("epochPrefetch") or {}),
+    direct_meta = dict(direct_out.get("compactDirectRead") or {})
+    ep_meta = dict(prefetch_out.get("epochPrefetch") or {})
+    raw_direct_text = direct_out.get("additionalContext")
+    direct_part = raw_direct_text if isinstance(raw_direct_text, str) and raw_direct_text.strip() else None
+    raw_prefetch_text = prefetch_out.get("additionalContext")
+    prefetch_part: str | None = None
+    if isinstance(raw_prefetch_text, str) and raw_prefetch_text.strip():
+        prefetch_part = (
+            _extract_epoch_prefetch_part(
+                raw_prefetch_text,
+                ep_meta,
+                direct_operator=str(direct_meta.get("operator") or ""),
+                continuation_text=continuation_text,
+            )
+            if direct_part is not None
+            else raw_prefetch_text
+        )
+
+    parts = [part for part in (direct_part, prefetch_part) if part]
+    composed_text = "\n\n".join(parts)
+    delivered_bytes = len(composed_text.encode("utf-8"))
+    epoch_bounds = [b for b in (epoch_output_cap, baseline_ceiling) if b is not None]
+    epoch_budget = min(epoch_bounds) if epoch_bounds else None
+
+    if ep_meta.get("operator") == "EpochReset" and epoch_budget is not None and delivered_bytes > epoch_budget:
+        ep_meta = _fail_closed_epoch_prefetch_meta(
+            ep_meta, superseded=True, delivered_bytes=delivered_bytes, budget_bytes=epoch_budget,
+        )
+        composed_text = direct_part or ""
+        delivered_bytes = len(composed_text.encode("utf-8"))
+    elif direct_cap is not None and delivered_bytes > direct_cap and prefetch_part:
+        ep_meta = {
+            **ep_meta,
+            "configured": True,
+            "superseded": True,
+            "superseded_by": "compact_direct_read",
+            "composed_with_compact_direct_read": True,
+            "fallback_reason": ep_meta.get("fallback_reason") or "composed_budget_exceeded",
+            "round_trips_saved": 0,
+            "bytes_saved": 0,
+            "delivered_bytes": delivered_bytes,
+            "composed_budget_bytes": direct_cap,
+        }
+        composed_text = direct_part or ""
+        delivered_bytes = len(composed_text.encode("utf-8"))
+    else:
+        ep_meta = {
+            **ep_meta,
             "configured": True,
             "superseded": False,
             "composed_with_compact_direct_read": True,
+            "delivered_bytes": delivered_bytes,
+        }
+        if ep_meta.get("operator") == "EpochReset" and baseline_bytes is not None:
+            if isinstance(ep_meta.get("bytes_saved"), int) and not isinstance(ep_meta.get("bytes_saved"), bool):
+                ep_meta["bytes_saved"] = min(int(ep_meta["bytes_saved"]), max(0, int(baseline_bytes) - delivered_bytes))
+
+    if direct_cap is not None and delivered_bytes > direct_cap and direct_meta.get("operator") == "EpochReset":
+        direct_meta["operator"] = "KeepRaw"
+        direct_meta["fallback_reason"] = "composed_budget_exceeded"
+        composed_text = _utf8_prefix_text(composed_text, direct_cap)
+
+    composed: dict[str, Any] = {
+        "hookEventName": hook_name,
+        **({"additionalContext": composed_text} if composed_text else {}),
+        "compactDirectRead": {
+            **direct_meta,
+            "composed_with_epoch_prefetch": True,
         },
+        "epochPrefetch": ep_meta,
     }
     return {"hookSpecificOutput": composed}
 
@@ -560,6 +739,8 @@ def _maybe_resolve_compact_direct_read(
     )
     if reply is not None and direct_state != updated:
         _save(root, direct_state)
+        updated.clear()
+        updated.update(direct_state)
     return reply
 
 
@@ -590,7 +771,9 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     if name == "PostToolUse" and not pages:
         return {}  # ordinary tool use neither invalidates nor rewrites the journal
     state: dict[str, Any] = {}
+    effective_state: dict[str, Any] = state
     recovery = None
+    direct_read_cfg: Mapping[str, Any] | None = None
     direct_reply: dict[str, Any] | None = None
     try:
         with _locked(directory) as root:
@@ -646,6 +829,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                         }
                 if updated != state:
                     _save(root, updated)
+                effective_state = updated
                 saved = updated.get("recovery")
                 current_file_epoch = (isinstance(saved, dict)
                     and saved.get("continuity_basis") == "captured_file"
@@ -670,7 +854,31 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 raise
     except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         recovery_needed = True
-    epoch_prefetch_configured = _epoch_prefetch_is_configured(state, event)
+    ep_cfg = (
+        event.get("epoch_prefetch")
+        if isinstance(event.get("epoch_prefetch"), Mapping)
+        else effective_state.get("epoch_prefetch_policy")
+        if isinstance(effective_state.get("epoch_prefetch_policy"), Mapping)
+        else None
+    )
+    epoch_prefetch_configured = _epoch_prefetch_is_configured(effective_state, event)
+    continuation_text = (
+        _context_continuation_instructions(recovery["command"])
+        if isinstance(recovery, dict) and recovery.get("command")
+        else ""
+    )
+    baseline_bytes: int | None = None
+    if (
+        isinstance(ep_cfg, Mapping)
+        and isinstance(ep_cfg.get("baseline_bytes"), int)
+        and not isinstance(ep_cfg.get("baseline_bytes"), bool)
+    ):
+        baseline_bytes = int(ep_cfg["baseline_bytes"])
+    elif isinstance(recovery, Mapping) and isinstance(recovery.get("path"), str):
+        try:
+            baseline_bytes = Path(recovery["path"]).stat().st_size
+        except OSError:
+            baseline_bytes = None
     prefetch_hook: dict[str, Any] | None = None
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
@@ -679,13 +887,13 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         prefetch_hook = resolve_codex_context_epoch_prefetch_hook(
             directory=directory,
             hook_name=name,
-            state=state,
+            state=effective_state,
             event=event,
             recovery=recovery,
             lock_ctx=_locked,
             read_state_fn=_state,
             save_state_fn=_save,
-            continuation_text=_context_continuation_instructions(recovery["command"]),
+            continuation_text=continuation_text,
             raw_guidance_text=(
                 CONTEXT_CAPTURE_SELECTION_GUIDANCE
                 + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
@@ -693,7 +901,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 + CONTEXT_CAPTURE_PAGE_GUIDANCE
             ),
         )
-    if direct_reply is not None:
+    if direct_reply is not None or prefetch_hook is not None:
         return _compose_direct_read_and_epoch_prefetch(
             direct_reply,
             prefetch_hook,
@@ -701,14 +909,16 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
             epoch_prefetch_configured=epoch_prefetch_configured,
             recovery_needed=recovery_needed,
             has_recovery_command=bool(isinstance(recovery, dict) and recovery.get("command")),
+            direct_read_cfg=direct_read_cfg,
+            epoch_prefetch_cfg=ep_cfg,
+            baseline_bytes=baseline_bytes,
+            continuation_text=continuation_text,
         ) or {}
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
-        if prefetch_hook is not None:
-            return prefetch_hook
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX model-context baseline invalidated. Saved files remain available. "
-            + _context_continuation_instructions(recovery["command"])
+            + continuation_text
             + CONTEXT_CAPTURE_SELECTION_GUIDANCE
             + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
             + "If you choose to read an entire file: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
@@ -716,7 +926,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
 
     quiet_hook = resolve_codex_context_quiet_turn_hook(
         hook_name=name,
-        state=state,
+        state=effective_state,
         event=event,
         recovery=recovery,
         root_dir=_private_root(directory),
