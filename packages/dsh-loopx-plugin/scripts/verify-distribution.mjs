@@ -14,18 +14,20 @@ const args = process.argv.slice(2)
 let tarball
 let registry = 'https://registry.npmjs.org/'
 let searchTimeoutMs = 45_000
+let searchPollMs = 3_000
 for (let index = 0; index < args.length; index += 2) {
   const [flag, value] = args.slice(index, index + 2)
   assert(
-    value && (flag === '--tarball' || flag === '--registry' || flag === '--search-timeout-ms'),
-    'usage: verify-distribution.mjs --tarball PATH [--registry URL] [--search-timeout-ms MS]',
+    value && (flag === '--tarball' || flag === '--registry' || flag === '--search-timeout-ms' || flag === '--search-poll-ms'),
+    'usage: verify-distribution.mjs --tarball PATH [--registry URL] [--search-timeout-ms MS] [--search-poll-ms MS]',
   )
   if (flag === '--tarball') tarball = resolve(value)
   else if (flag === '--registry') registry = `${value.replace(/\/+$/u, '')}/`
   else {
     const parsed = Number(value)
-    assert(Number.isFinite(parsed) && parsed >= 0, '--search-timeout-ms must be a non-negative number')
-    searchTimeoutMs = parsed
+    assert(Number.isFinite(parsed) && parsed >= 0, `${flag} must be a non-negative number`)
+    if (flag === '--search-timeout-ms') searchTimeoutMs = parsed
+    else searchPollMs = parsed
   }
 }
 assert(tarball, '--tarball is required: compare the exact package approved for publication')
@@ -81,18 +83,25 @@ async function searchRepositoryCandidates() {
     repoSlug(pkg.repository?.url ?? pkg.links?.repository).includes(`github.com/${repo.toLowerCase()}`))
 }
 
+function selectPluginCandidate(candidates) {
+  return candidates.find(({ package: pkg }) =>
+    pkg.keywords?.some(keyword => typeof keyword === 'string' && keyword.toLowerCase() === 'dsh-plugin'))
+    ?? candidates[0]
+}
+
 // Match the market's repository-and-keyword discovery contract while retrying
-// brief npm OpenSearch indexing delays and falling back to maintainer queries
-// because npm's public search API does not restrict repository: qualifiers.
+// brief npm OpenSearch indexing delays (including while other repository
+// packages are indexed first) and falling back to maintainer queries because
+// npm's public search API does not restrict repository: qualifiers.
 const deadline = Date.now() + searchTimeoutMs
 let candidates = await searchRepositoryCandidates()
-while (candidates.length === 0 && Date.now() < deadline) {
-  await new Promise(resolveDelay => setTimeout(resolveDelay, Math.min(3_000, deadline - Date.now())))
+let selected = selectPluginCandidate(candidates)
+while (selected?.package.name !== manifest.name && Date.now() < deadline) {
+  const delayMs = Math.min(searchPollMs, Math.max(0, deadline - Date.now()))
+  if (delayMs > 0) await new Promise(resolveDelay => setTimeout(resolveDelay, delayMs))
   candidates = await searchRepositoryCandidates()
+  selected = selectPluginCandidate(candidates)
 }
-const selected = candidates.find(({ package: pkg }) =>
-  pkg.keywords?.some(keyword => typeof keyword === 'string' && keyword.toLowerCase() === 'dsh-plugin'))
-  ?? candidates[0]
 assert.equal(selected?.package.name, manifest.name,
   'DSH Hub repository search does not yet select this plugin; publication is not marketplace-ready')
 process.stdout.write(`verified ${manifest.name}@${manifest.version}: latest, artifact integrity, repository discovery\n`)

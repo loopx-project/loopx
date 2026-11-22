@@ -40,6 +40,7 @@ const metadata = {
 }
 let repositorySearchObjects = searchObjects
 let maintainerSearchObjects = []
+let delayedRepoSearchAttemptsRemaining = 0
 const server = createServer((request, response) => {
   const url = new URL(request.url, registry)
   requested.add(url.pathname)
@@ -52,7 +53,15 @@ const server = createServer((request, response) => {
   } else if (url.pathname === '/-/v1/search') {
     response.setHeader('Content-Type', 'application/json')
     const query = url.searchParams.get('text') ?? ''
-    const objects = query.startsWith('maintainer:') ? maintainerSearchObjects : repositorySearchObjects
+    let objects
+    if (query.startsWith('maintainer:')) {
+      objects = maintainerSearchObjects
+    } else if (delayedRepoSearchAttemptsRemaining > 0) {
+      delayedRepoSearchAttemptsRemaining -= 1
+      objects = [searchObjects[1]]
+    } else {
+      objects = repositorySearchObjects
+    }
     response.end(JSON.stringify({ objects }))
   } else {
     // DSH still resolves its own real host dependencies through the registry.
@@ -116,8 +125,13 @@ try {
   maintainerSearchObjects = [searchObjects[2]]
   await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
     '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '0'])
-  repositorySearchObjects = searchObjects
+  // Retry until the plugin itself appears even when non-plugin packages under
+  // the same repository are already indexed on early search polls.
+  delayedRepoSearchAttemptsRemaining = 1
   maintainerSearchObjects = []
+  repositorySearchObjects = searchObjects
+  await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '2000', '--search-poll-ms', '50'])
   // Existing publication metadata cannot hide a wrong tag or discovery target.
   distTags.latest = '0.0.0'
   await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),

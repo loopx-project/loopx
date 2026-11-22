@@ -196,6 +196,7 @@ def test_fixture_online_classifies_npm_bootstrap_staging_and_published(
                 "available": True,
                 "exists": True,
                 "is_draft": False,
+                "body": "## Release Decision\nGuide: https://my.feishu.cn/docx/FixtureDoc123\n\n### 升级决策\n验证完成。\n",
                 "asset_names": [
                     "DESKTOP-SHA256SUMS",
                     "LoopX.app.tar.gz",
@@ -229,12 +230,21 @@ def test_fixture_online_classifies_npm_bootstrap_staging_and_published(
     def fake_http(url: str) -> tuple[int | None, str, str | None]:
         if "pypi.org/pypi/loopx/json" in url:
             return 200, json.dumps({"releases": {"2.4.0": []}}), None
+        if "desktop-updater.json" in url:
+            return (
+                200,
+                json.dumps(
+                    {
+                        "version": "2.4.0",
+                        "platforms": {"darwin-aarch64": {"url": "https://example.com/LoopX.app.tar.gz"}},
+                    }
+                ),
+                None,
+            )
         if "registry.npmjs.org/dsh-loopx-plugin" in url:
             return npm_status, json.dumps(npm_payload), None
         if "awesome-dsh-plugin" in url:
             return 200, f"tarball: {expected_dsh_tarball}\n", None
-        if "feishu.cn/docx/" in url:
-            return 200, "ok", None
         return 404, "", "HTTP 404"
 
     result = run_preflight(
@@ -247,6 +257,8 @@ def test_fixture_online_classifies_npm_bootstrap_staging_and_published(
     )
     assert result["surfaces"]["dsh"]["online"]["npm"]["state"] == expected_state
     assert result["surfaces"]["dsh"]["published_ok"] is expected_published
+    assert result["surfaces"]["desktop"]["online"]["updater_feed_version"] == "2.4.0"
+    assert result["surfaces"]["notes"]["online"]["feishu_doc_verification"] == "requires_authenticated_lark_cli"
     assert result["published_complete"] is expected_published
     assert result["ok"] is expected_published
     codes = [item["code"] for item in result["remediations"]]
@@ -259,3 +271,78 @@ def test_fixture_online_classifies_npm_bootstrap_staging_and_published(
                 item["action"] for item in result["remediations"] if item["code"] == "npm_bootstrap_required"
             )
             assert "Allow npm publish" in bootstrap_msg
+
+
+def test_fixture_detects_bilingual_note_gap_updater_version_skew_and_keep_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = runpy.run_path(str(SCRIPT_PATH))
+    run_preflight = mod["run_preflight"]
+    build_parser = mod["build_parser"]
+    repo = _create_fixture_repo(tmp_path)
+
+    # 1. Missing bilingual Chinese heading emits explicit remediation
+    note = repo / "docs" / "product" / "releases" / "v2.4.0.md"
+    note.write_text("## Release Decision\nGuide: https://my.feishu.cn/docx/FixtureDoc123\n", encoding="utf-8")
+    bilingual_gap = run_preflight(repo_root=repo, selected_surfaces=("notes",))
+    assert bilingual_gap["surfaces"]["notes"]["local_ok"] is False
+    assert any(r["code"] == "release_note_bilingual_sections_incomplete" for r in bilingual_gap["remediations"])
+
+    # Restore valid local note, verify stale desktop-updater.json & release body without Feishu link fail online
+    note.write_text(
+        "## Release Decision\nGuide: https://my.feishu.cn/docx/FixtureDoc123\n\n### 升级决策\n通过。\n",
+        encoding="utf-8",
+    )
+
+    def stale_gh(_gh_repo: str, tag: str) -> dict[str, Any]:
+        if tag == "v2.4.0":
+            return {
+                "available": True,
+                "exists": True,
+                "is_draft": False,
+                "body": "## Release Decision\n\n### 升级决策\nMissing feishu link.\n",
+                "asset_names": [
+                    "DESKTOP-SHA256SUMS",
+                    "LoopX.app.tar.gz",
+                    "LoopX.app.tar.gz.sig",
+                    "LoopX.app.zip",
+                    "LoopX_2.4.0_aarch64.dmg",
+                    "LoopX_2.4.0_x64-setup.exe",
+                    "LoopX_2.4.0_x64_en-US.msi",
+                    "desktop-updater.json",
+                ],
+            }
+        if tag == "desktop-stable":
+            return {"available": True, "exists": True, "is_draft": False, "asset_names": ["desktop-updater.json"]}
+        return {"available": True, "exists": False, "asset_names": []}
+
+    def stale_http(url: str) -> tuple[int | None, str, str | None]:
+        if "desktop-updater.json" in url:
+            return 200, json.dumps({"version": "2.3.0", "platforms": {"darwin-aarch64": {"url": "https://example.com"}}}), None
+        return 404, "", "HTTP 404"
+
+    bad_online = run_preflight(
+        repo_root=repo,
+        selected_surfaces=("desktop", "notes"),
+        online=True,
+        require_published=True,
+        http_get=stale_http,
+        gh_release=stale_gh,
+    )
+    assert bad_online["ok"] is False
+    assert bad_online["surfaces"]["desktop"]["published_ok"] is False
+    assert bad_online["surfaces"]["notes"]["published_ok"] is False
+    codes = {item["code"] for item in bad_online["remediations"]}
+    assert "desktop_updater_feed_version_mismatch" in codes
+    assert "github_release_notes_incomplete" in codes
+
+    # 2. --keep-proxy preserves ambient proxy env while default strips it
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    assert build_parser().parse_args(["--keep-proxy"]).keep_proxy is True
+    assert build_parser().parse_args([]).keep_proxy is False
+    mod["main"](["--repo-root", str(repo), "--surface", "core", "--keep-proxy", "--format", "json"])
+    import os
+
+    assert os.environ.get("HTTPS_PROXY") == "http://127.0.0.1:7890"
+    mod["main"](["--repo-root", str(repo), "--surface", "core", "--format", "json"])
+    assert "HTTPS_PROXY" not in os.environ

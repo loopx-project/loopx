@@ -458,24 +458,26 @@ out four independent qualification lanes in parallel:
    `loopx check --scan-root .`, `examples/release/*-smoke.py`, manpage + dev-book
    smokes, `dsh-loopx-plugin` unit tests & registry smoke.
 2. **Lane B (Low-Frequency Live Model Behavior):**
-   `uv run --extra test python scripts/qualify-doubao-model-behavior-live.py --execute`
+   `uv run --extra test python scripts/qualify-doubao-model-behavior-live.py --qualification-id <release-qual-id> --repo-root .`
    against the exact commit (and optional DeepSeek/Ark smoke).
 3. **Lane C (Wheel Install, Upgrade, Runtime Probe & Packaged UI):**
    Build `wheel`/`sdist`, install in a clean environment, verify
    `runtime_activation_qualification`, upgrade from `origin/stable`, and run
-   `npm run smoke:personal-workspace-packaged`.
+   `npm --prefix apps/presentation/dashboard run smoke:personal-workspace-packaged`.
 4. **Lane D (Single-Wave Sharded Pytest & Release Receipt):**
-   `uv run --extra test python scripts/qualify_release_commit.py --execute`
+   `uv run --extra test python scripts/qualify_release_commit.py --repo-root . --output-dir .local/release-qualification --preflight-since <previous-tag> --resume`
    (using single-wave shard concurrency via `default_pytest_parallelism`), then
-   settle with `loopx canary release-qualification`.
+   settle with `uv run --extra test loopx canary release-qualification --manifest-json <release-qualification-manifest.json> --repo-root .`.
 
 ### Stage 2: Concurrent Tag Fan-Out & Reactive Waiting
 
 1. Fast-forward/push annotated tags (`vX.Y.Z` for Core + Desktop, and
-   `dsh-loopx-plugin-vA.B.C` when the DSH plugin changed) and dispatch or trigger
-   all remote release workflows concurrently (`release-artifacts.yml`,
-   `desktop-release-artifacts.yml` -> `desktop-updater.yml`,
-   `dsh-plugin-publish.yml`).
+   `dsh-loopx-plugin-vA.B.C` when the DSH plugin changed) to trigger
+   `release-artifacts.yml` and `desktop-release-artifacts.yml`; once the
+   non-draft `vX.Y.Z` and `dsh-loopx-plugin-vA.B.C` GitHub Releases are
+   published, `desktop-updater.yml` runs on release publication (or
+   `workflow_dispatch`) and `dsh-plugin-publish.yml` is dispatched via
+   `workflow_dispatch`.
 2. Never busy-poll workflow runs with `sleep` loops. While GitHub Actions builds
    and notarizes binaries, immediately author the companion
    [Personal Feishu Release Guide](#personal-feishu-release-guide) (using real
@@ -515,8 +517,8 @@ before it exists on `registry.npmjs.org` (`HTTP 404` catch-22):
 完整发布协同 **Core CLI / PyPI 与 `stable` 分支**、**Desktop 应用与签名热更新**、**`dsh-loopx-plugin`（GitHub Release + npm + `awesome-dsh-plugin`）** 及 **双语 Release Notes 与个人飞书使用指南**，按 5 个阶段并行推进：
 
 1. **阶段 0（5 秒前置巡检）：** 先跑 `uv run --extra test python scripts/release_multi_surface_preflight.py --online`，在耗时资格化前暴露版本漂移、桌面配置缺失或 npm 首包前置门禁。
-2. **阶段 1（本地四路并行资格化）：** 在同一冻结提交上并发执行静态/边界/文档/DSH smoke、低频模型行为门禁、Wheel+Upgrade+Packaged UI 全链路，以及单波多片 `qualify_release_commit.py`，汇总至 `loopx canary release-qualification`。
-3. **阶段 2（远端并发触发与响应式等待）：** 并发推注核心 tag（`vX.Y.Z`）与插件 tag（`dsh-loopx-plugin-vA.B.C`），触发 `release-artifacts.yml`、`desktop-release-artifacts.yml`（级联 `desktop-updater.yml`）与 `dsh-plugin-publish.yml`；等待构建/公证期间并行编写[个人飞书指南](#personal-feishu-release-guide)与 `awesome-dsh-plugin` 目录 PR（禁止用轮询 `sleep` 干等）。
+2. **阶段 1（本地四路并行资格化）：** 在同一冻结提交上并发执行静态/边界/文档/DSH smoke、低频模型行为门禁（`scripts/qualify-doubao-model-behavior-live.py --qualification-id <release-qual-id>`）、Wheel+Upgrade+Packaged UI（`npm --prefix apps/presentation/dashboard run smoke:personal-workspace-packaged`）全链路，以及单波多片 `qualify_release_commit.py --resume`，汇总至 `loopx canary release-qualification`。
+3. **阶段 2（远端并发触发与响应式等待）：** 并发推注核心 tag（`vX.Y.Z`）与插件 tag（`dsh-loopx-plugin-vA.B.C`）触发 `release-artifacts.yml` 与 `desktop-release-artifacts.yml`；非草稿 Release 发布后，`desktop-updater.yml` 按发布事件（或 `workflow_dispatch`）运行、`dsh-plugin-publish.yml` 经 `workflow_dispatch` 执行。等待构建/公证期间并行编写[个人飞书指南](#personal-feishu-release-guide)与 `awesome-dsh-plugin` 目录 PR（禁止用轮询 `sleep` 干等）。
 4. **阶段 3（npm 首包建档与 Trusted Publisher 一次性引导）：** 若 `registry.npmjs.org` 尚无包档（`404`），先开启 `auth-and-writes` 2FA，取 GitHub Release 同字节 `.tgz` 经网页 2FA 执行一次 `npm publish --access public --tag latest --ignore-scripts` 后立即 `npm logout`；再到包 Access 页添加 `GitHub Actions`（`loopx-project` / `loopx` / `dsh-plugin-publish.yml`、`Environment name` 留空、必须勾选 **`Allow npm publish`**），随后重跑 `dsh-plugin-publish.yml` 验签。
 5. **阶段 4（全端回读与 `stable` 推广）：** 运行 `release_multi_surface_preflight.py --online --require-published` 与 `verify-distribution.mjs`，核对全部校验和/证明/更新清单/飞书链接/Release 正文哈希无误后推广 `origin/stable`。
 

@@ -77,7 +77,7 @@ def _gh_release_view(github_repo: str, tag: str) -> dict[str, Any]:
             "--repo",
             github_repo,
             "--json",
-            "tagName,isDraft,isPrerelease,targetCommitish,assets",
+            "tagName,isDraft,isPrerelease,targetCommitish,body,assets",
         ],
         check=False,
         capture_output=True,
@@ -108,6 +108,7 @@ def _gh_release_view(github_repo: str, tag: str) -> dict[str, Any]:
         "tag_name": payload.get("tagName"),
         "is_draft": payload.get("isDraft"),
         "is_prerelease": payload.get("isPrerelease"),
+        "body": str(payload.get("body") or ""),
         "asset_names": sorted(a["name"] for a in assets if isinstance(a.get("name"), str)),
         "assets": assets,
     }
@@ -248,6 +249,7 @@ def _check_desktop(
     core_version: str,
     github_repo: str,
     online: bool,
+    http_get: Callable[[str], tuple[int | None, str, str | None]],
     gh_release: Callable[[str, str], dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     remediations: list[dict[str, str]] = []
@@ -319,12 +321,29 @@ def _check_desktop(
         checksum_present = "DESKTOP-SHA256SUMS" in asset_names
         updater_info = gh_release(github_repo, "desktop-stable")
         updater_assets = set(updater_info.get("asset_names") or [])
-        updater_feed_ok = bool(
+        updater_assets_present = bool(
             updater_info.get("exists")
             and "desktop-updater.json" in updater_assets
             and "desktop-updater.json" in asset_names
             and "LoopX.app.tar.gz" in asset_names
             and "LoopX.app.tar.gz.sig" in asset_names
+        )
+        feed_url = f"https://github.com/{github_repo}/releases/download/desktop-stable/desktop-updater.json"
+        feed_code, feed_body, feed_err = http_get(feed_url)
+        feed_version: str | None = None
+        feed_platforms_non_empty = False
+        if feed_code == 200 and feed_body:
+            try:
+                feed_payload = json.loads(feed_body)
+                if isinstance(feed_payload, dict):
+                    raw_ver = feed_payload.get("version")
+                    feed_version = str(raw_ver) if isinstance(raw_ver, str) else None
+                    platforms = feed_payload.get("platforms")
+                    feed_platforms_non_empty = isinstance(platforms, dict) and bool(platforms)
+            except json.JSONDecodeError as exc:
+                feed_err = f"invalid updater json: {exc}"
+        updater_feed_ok = bool(
+            updater_assets_present and feed_code == 200 and feed_platforms_non_empty and feed_version == core_version
         )
         surface["online"] = {
             "release_tag": expected_tag,
@@ -332,6 +351,9 @@ def _check_desktop(
             "missing_installer_assets": missing_assets,
             "checksum_manifest_present": checksum_present,
             "desktop_stable_feed_ok": updater_feed_ok,
+            "updater_feed_version": feed_version,
+            "updater_feed_http_status": feed_code,
+            "updater_feed_error": feed_err,
         }
         surface["published_ok"] = (
             bool(gh_info.get("exists"))
@@ -347,12 +369,20 @@ def _check_desktop(
                     "action": f"Dispatch desktop-release-artifacts.yml for tag {expected_tag} (missing: {missing_assets}).",
                 }
             )
-        if not updater_feed_ok:
+        if not updater_assets_present or feed_code != 200 or not feed_platforms_non_empty:
             remediations.append(
                 {
                     "surface": "desktop",
                     "code": "desktop_updater_feed_incomplete",
                     "action": "Verify desktop-updater.yml published desktop-updater.json under desktop-stable and LoopX.app.tar.gz(.sig) + desktop-updater.json under the versioned release tag.",
+                }
+            )
+        elif feed_version != core_version:
+            remediations.append(
+                {
+                    "surface": "desktop",
+                    "code": "desktop_updater_feed_version_mismatch",
+                    "action": f"Refresh desktop-stable/desktop-updater.json so version {feed_version!r} matches {core_version!r}.",
                 }
             )
     return surface, remediations
@@ -530,8 +560,9 @@ def _check_notes(
     repo_root: Path,
     *,
     version: str,
+    github_repo: str,
     online: bool,
-    http_get: Callable[[str], tuple[int | None, str, str | None]],
+    gh_release: Callable[[str, str], dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     remediations: list[dict[str, str]] = []
     note_rel = f"docs/product/releases/v{version}.md"
@@ -574,6 +605,14 @@ def _check_notes(
                 "action": f"Remove forbidden strings {boundary_hits} from {note_rel}.",
             }
         )
+    elif not has_en_decision or not has_zh_decision:
+        remediations.append(
+            {
+                "surface": "notes",
+                "code": "release_note_bilingual_sections_incomplete",
+                "action": f"Ensure {note_rel} contains both '## Release Decision' and '### 升级决策'.",
+            }
+        )
 
     surface: dict[str, Any] = {
         "local_ok": local_ok,
@@ -586,19 +625,43 @@ def _check_notes(
         "feishu_guide_urls": feishu_urls,
     }
     if online:
-        feishu_checks: list[dict[str, Any]] = []
-        for url in feishu_urls:
-            code, _, err = http_get(url)
-            feishu_checks.append({"url": url, "http_status": code, "reachable": bool(code and code < 400), "error": err})
-        feishu_present = bool(feishu_checks)
-        surface["online"] = {"feishu_guides": feishu_checks}
-        surface["published_ok"] = local_ok and feishu_present and all(item["reachable"] for item in feishu_checks)
+        expected_tag = f"v{version}"
+        gh_info = gh_release(github_repo, expected_tag)
+        body = str(gh_info.get("body") or "")
+        release_exists = bool(gh_info.get("exists") and gh_info.get("is_draft") is False)
+        release_bilingual = "## Release Decision" in body and "### 升级决策" in body
+        release_boundary_hits = [needle for needle in FORBIDDEN_NOTE_PATTERNS if needle in body]
+        feishu_present = bool(feishu_urls)
+        release_links_feishu = feishu_present and all(url in body for url in feishu_urls)
+        release_notes_ok = (
+            release_exists
+            and release_bilingual
+            and not release_boundary_hits
+            and release_links_feishu
+        )
+        surface["online"] = {
+            "release_tag": expected_tag,
+            "release_exists": release_exists,
+            "release_has_bilingual_decisions": release_bilingual,
+            "release_public_boundary_clean": not release_boundary_hits,
+            "release_body_links_feishu": release_links_feishu,
+            "feishu_doc_verification": "requires_authenticated_lark_cli",
+        }
+        surface["published_ok"] = local_ok and release_notes_ok
         if not feishu_present:
             remediations.append(
                 {
                     "surface": "notes",
                     "code": "feishu_guide_link_missing",
                     "action": "Publish the companion Personal Feishu Release Guide and link its URL in bilingual sections.",
+                }
+            )
+        if not (release_exists and release_bilingual and not release_boundary_hits and (not feishu_present or release_links_feishu)):
+            remediations.append(
+                {
+                    "surface": "notes",
+                    "code": "github_release_notes_incomplete",
+                    "action": f"Publish non-draft {expected_tag} GitHub Release body containing bilingual decision sections, zero forbidden paths, and the Feishu guide link.",
                 }
             )
     return surface, remediations
@@ -638,6 +701,7 @@ def run_preflight(
             core_version=core_meta["version"],
             github_repo=github_repo,
             online=online,
+            http_get=http_get,
             gh_release=gh_release,
         )
         surfaces["desktop"] = surf
@@ -657,8 +721,9 @@ def run_preflight(
         surf, rem = _check_notes(
             repo_root,
             version=core_meta["version"],
+            github_repo=github_repo,
             online=online,
-            http_get=http_get,
+            gh_release=gh_release,
         )
         surfaces["notes"] = surf
         remediations.extend(rem)
@@ -737,6 +802,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--github-repo", default=DEFAULT_GITHUB_REPO)
     parser.add_argument("--awesome-dsh-repo", default=DEFAULT_AWESOME_DSH_REPO)
+    parser.add_argument(
+        "--keep-proxy",
+        action="store_true",
+        help="Preserve ambient HTTP(S)_PROXY/ALL_PROXY environment variables instead of clearing them.",
+    )
     parser.add_argument("--format", choices=("json", "markdown"), default="markdown")
     return parser
 
@@ -744,9 +814,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     online = bool(args.online or args.require_published)
-    # Strip ambient proxy vars unless caller opted out explicitly; public registries work direct.
-    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-        os.environ.pop(key, None)
+    if not args.keep_proxy:
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            os.environ.pop(key, None)
     payload = run_preflight(
         repo_root=args.repo_root.resolve(),
         selected_surfaces=_parse_surfaces(args.surface),
