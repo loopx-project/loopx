@@ -4,8 +4,16 @@ from copy import deepcopy
 import pytest
 
 from benchmark.runtime.research_artifacts import (
-    RESEARCH_COMPONENT, RESEARCH_DIRECTORY, selected_research_components,
-    validate_research_scope, with_research_capture,
+    CORE_DUMP_EXCLUDE_PATTERN,
+    RESEARCH_COMPONENT,
+    RESEARCH_DIRECTORY,
+    is_confirmed_core_dump_header,
+    is_excluded_research_relpath,
+    is_excluded_tar_member,
+    research_component_exclusions,
+    selected_research_components,
+    validate_research_scope,
+    with_research_capture,
 )
 
 
@@ -116,3 +124,70 @@ def test_native_entry_installs_identical_research_scope_and_declares_checkpoint_
     with pytest.raises(RuntimeError, match="synthetic launch boundary"):
         run.main(argv)
     assert json.loads(source.read_bytes()) == request
+
+
+def _elf_bytes(e_type: int, *, little_endian: bool = True) -> bytes:
+    buf = bytearray(64)
+    buf[0:4] = b"\x7fELF"
+    buf[4] = 2
+    buf[5] = 1 if little_endian else 2
+    buf[16:18] = e_type.to_bytes(2, "little" if little_endian else "big")
+    return bytes(buf)
+
+
+def _macho_bytes(filetype: int, *, little_endian: bool = True) -> bytes:
+    buf = bytearray(32)
+    if little_endian:
+        buf[0:4] = b"\xcf\xfa\xed\xfe"
+        buf[12:16] = filetype.to_bytes(4, "little")
+    else:
+        buf[0:4] = b"\xfe\xed\xfa\xcf"
+        buf[12:16] = filetype.to_bytes(4, "big")
+    return bytes(buf)
+
+
+def test_core_dump_filter_preserves_normal_core_dirs_and_plain_files():
+    import io
+    import tarfile
+
+    assert research_component_exclusions([{"id": RESEARCH_COMPONENT, "source_path": RESEARCH_DIRECTORY}]) == {
+        RESEARCH_COMPONENT: ["*.raw.gz", CORE_DUMP_EXCLUDE_PATTERN, "target/", ".cargo-target/"],
+    }
+    assert is_confirmed_core_dump_header(_elf_bytes(4, little_endian=True))
+    assert is_confirmed_core_dump_header(_elf_bytes(4, little_endian=False))
+    assert is_confirmed_core_dump_header(_macho_bytes(4, little_endian=True))
+    assert is_confirmed_core_dump_header(_macho_bytes(4, little_endian=False))
+    assert not is_confirmed_core_dump_header(_elf_bytes(2))
+    assert not is_confirmed_core_dump_header(_macho_bytes(2))
+    assert not is_confirmed_core_dump_header(b"core-dump text")
+    assert not is_excluded_research_relpath(("core", "analysis.md"), is_dir=False, read_header=lambda: b"# notes")
+    assert not is_excluded_research_relpath(("topic", "core"), is_dir=False, read_header=lambda: b"text")
+    assert is_excluded_research_relpath(("core",), is_dir=False, read_header=lambda: _elf_bytes(4))
+    assert is_excluded_research_relpath(("sub", "core.77"), is_dir=False, read_header=lambda: _macho_bytes(4))
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as archive:
+        entries = (
+            ("loopx-benchmark-research/core/analysis.md", b"# analysis\n"),
+            ("loopx-benchmark-research/topic/core", b"ordinary topic notes\n"),
+            ("loopx-benchmark-research/bin/core", _elf_bytes(2)),
+            ("loopx-benchmark-research/core", _elf_bytes(4)),
+            ("loopx-benchmark-research/sub/core.123", _macho_bytes(4)),
+            ("loopx-benchmark-research/dump.raw.gz", b"gz"),
+            ("loopx-benchmark-research/target/release/app", b"elf"),
+        )
+        for name, data in entries:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as archive:
+        kept = [
+            m.name for m in archive.getmembers()
+            if not is_excluded_tar_member(archive, m, tuple(m.name.split("/")[1:]))
+        ]
+    assert kept == [
+        "loopx-benchmark-research/core/analysis.md",
+        "loopx-benchmark-research/topic/core",
+        "loopx-benchmark-research/bin/core",
+    ]

@@ -104,16 +104,66 @@ function normalizeComponentExclusions(
   }
   return map;
 }
-function isExcludedEntry(relativeName: string, isDirectory: boolean, patterns: readonly string[]): boolean {
+const CORE_DUMP_EXCLUSION_PATTERN = "core-dump:elf-macho";
+
+function isCoreDumpName(base: string): boolean {
+  return base === "core" || base.startsWith("core.");
+}
+
+function isConfirmedCoreDumpHeader(header: Uint8Array): boolean {
+  if (header.length >= 18 &&
+      header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46 &&
+      (header[4] === 1 || header[4] === 2)) {
+    if (header[5] === 1) return header[16] === 0x04 && header[17] === 0x00;
+    if (header[5] === 2) return header[16] === 0x00 && header[17] === 0x04;
+    return false;
+  }
+  if (header.length >= 16) {
+    const beMagic = header[0] === 0xfe && header[1] === 0xed && header[2] === 0xfa &&
+      (header[3] === 0xce || header[3] === 0xcf);
+    if (beMagic) {
+      return header[12] === 0x00 && header[13] === 0x00 && header[14] === 0x00 && header[15] === 0x04;
+    }
+    const leMagic = (header[0] === 0xce || header[0] === 0xcf) &&
+      header[1] === 0xfa && header[2] === 0xed && header[3] === 0xfe;
+    if (leMagic) {
+      return header[12] === 0x04 && header[13] === 0x00 && header[14] === 0x00 && header[15] === 0x00;
+    }
+  }
+  return false;
+}
+
+async function isConfirmedCoreDumpFile(filePath: string): Promise<boolean> {
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const header = Buffer.alloc(20);
+      const {bytesRead} = await handle.read(header, 0, 20, 0);
+      return isConfirmedCoreDumpHeader(header.subarray(0, bytesRead));
+    } finally {await handle.close();}
+  } catch {
+    return false;
+  }
+}
+
+async function isExcludedEntry(
+  fullPath: string,
+  relativeName: string,
+  isDirectory: boolean,
+  patterns: readonly string[],
+): Promise<boolean> {
   if (relativeName === "" || patterns.length === 0) return false;
   const slash = relativeName.lastIndexOf("/");
   const base = slash === -1 ? relativeName : relativeName.slice(slash + 1);
   for (const pattern of patterns) {
     if (pattern.endsWith("/")) {
       if (isDirectory && base === pattern.slice(0, -1)) return true;
+    } else if (pattern === CORE_DUMP_EXCLUSION_PATTERN || pattern === "core") {
+      const matchesName = pattern === "core" ? base === "core" : isCoreDumpName(base);
+      if (!isDirectory && matchesName && await isConfirmedCoreDumpFile(fullPath)) return true;
     } else if (pattern.startsWith("*.")) {
       if (!isDirectory && base.endsWith(pattern.slice(1))) return true;
-    } else if (base === pattern) {
+    } else if (!isDirectory && base === pattern) {
       return true;
     }
   }
@@ -141,7 +191,7 @@ async function members(
         if (sourceObservation && name !== "" && stat.isFile() &&
             (await sqliteSidecar(path, ["-shm"]) ||
              (stat.size === 0 && await sqliteSidecar(path, ["-wal"])))) return [];
-        if (sourceObservation && isExcludedEntry(name, stat.isDirectory(), excludePatterns)) return [];
+        if (sourceObservation && await isExcludedEntry(path, name, stat.isDirectory(), excludePatterns)) return [];
         if (stat.isDirectory()) {
           node.member = {path: name, kind: "directory", mode: stat.mode & 0o777};
           return (await readdir(path)).sort().map(child => {
@@ -261,7 +311,7 @@ async function copyComponent(
       // Directory participants seal their databases through the existing WAL
       // snapshot owner rather than copying those databases' live sidecars.
       if (snapshotDatabases && nested && await sqliteSidecar(source, ["-wal", "-shm", "-journal"])) return [];
-      if (isExcludedEntry(relativeName, stat.isDirectory(), excludePatterns)) return [];
+      if (await isExcludedEntry(source, relativeName, stat.isDirectory(), excludePatterns)) return [];
       if (stat.isDirectory()) {
         await mkdir(destination, {mode: 0o700});
         return (await readdir(source)).sort().map(child => ({source: join(source, child),

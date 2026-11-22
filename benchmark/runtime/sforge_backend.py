@@ -17,7 +17,7 @@ from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
 from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 from .provider_failure import observe_terminal_provider_failure
-from .research_artifacts import is_excluded_research_relpath
+from .research_artifacts import is_excluded_tar_member
 
 _RESEARCH_DISK_HEADROOM_FLOOR_BYTES = 10 * 1024**3
 
@@ -30,12 +30,21 @@ def _minimum_free_bytes(*paths: Path) -> int:
     return min(shutil.disk_usage(path).free for path in paths)
 
 
-def _filter_research_members(members: list[tarfile.TarInfo]) -> list[tarfile.TarInfo]:
-    """Keep real research outputs while omitting ephemeral large dumps/build dirs."""
+def _filter_research_members(
+    archive: tarfile.TarFile,
+    members: list[tarfile.TarInfo],
+) -> list[tarfile.TarInfo]:
+    """Keep real research outputs while omitting confirmed dumps and ephemeral build dirs."""
     kept: list[tarfile.TarInfo] = []
+    excluded_paths: set[str] = set()
     for member in members:
-        parts = PurePosixPath(member.name).parts
-        if len(parts) > 1 and is_excluded_research_relpath(parts[1:], is_dir=member.isdir()):
+        path = PurePosixPath(member.name)
+        parts = path.parts
+        if member.islnk() and str(PurePosixPath(member.linkname)) in excluded_paths:
+            excluded_paths.add(str(path))
+            continue
+        if len(parts) > 1 and is_excluded_tar_member(archive, member, parts[1:]):
+            excluded_paths.add(str(path))
             continue
         kept.append(member)
     return kept
@@ -256,7 +265,7 @@ class RecordingDockerBackend(DockerBackend):
                     if not research_cleanup:
                         archive.extractall(target, filter="data")
                     else:
-                        members = _filter_research_members(archive.getmembers())
+                        members = _filter_research_members(archive, archive.getmembers())
                         extract_bytes = sum(m.size for m in members if m.isfile())
                         if (
                             free_before is not None

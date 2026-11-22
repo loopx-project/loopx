@@ -166,12 +166,19 @@ def test_native_cleanup_error_keeps_original_capacity_release_rule(tmp_path, mon
 
 
 def test_research_collection_respects_disk_floor_and_filters_ephemeral_dumps(tmp_path, monkeypatch):
+    elf_core = b"\x7fELF\x02\x01" + b"\x00" * 10 + (4).to_bytes(2, "little") + b"\x00" * 46
+    elf_exec = b"\x7fELF\x02\x01" + b"\x00" * 10 + (2).to_bytes(2, "little") + b"\x00" * 46
+    macho_core = b"\xcf\xfa\xed\xfe" + b"\x00" * 8 + (4).to_bytes(4, "little") + b"\x00" * 16
     payload_buf = io.BytesIO()
     with tarfile.open(fileobj=payload_buf, mode="w") as archive:
         for rel, body in (
             ("loopx-benchmark-research/candidate.py", b"print('ok')\n"),
+            ("loopx-benchmark-research/core/analysis.md", b"# real notes\n"),
+            ("loopx-benchmark-research/topic/core", b"plain topic evidence\n"),
+            ("loopx-benchmark-research/exec_dir/core", elf_exec),
             ("loopx-benchmark-research/dump.raw.gz", b"gz" * 100),
-            ("loopx-benchmark-research/core", b"coredump"),
+            ("loopx-benchmark-research/core", elf_core),
+            ("loopx-benchmark-research/sub/core.99", macho_core),
             ("loopx-benchmark-research/target/release/bin", b"elf"),
             ("loopx-benchmark-research/.cargo-target/x.rlib", b"rlib"),
         ):
@@ -210,7 +217,7 @@ def test_research_collection_respects_disk_floor_and_filters_ephemeral_dumps(tmp
         "reason": "insufficient_host_disk_headroom",
     }
 
-    # Above 10 GiB floor: collect candidate.py while stripping *.raw.gz / core / target / .cargo-target.
+    # Above 10 GiB floor: keep real notes/non-dump files named core while stripping confirmed dumps/build dirs.
     ok_backend = build_backend("ok-disk")
     monkeypatch.setattr(
         transport, "_minimum_free_bytes", lambda *_: transport._RESEARCH_DISK_HEADROOM_FLOOR_BYTES + 100_000_000
@@ -218,7 +225,11 @@ def test_research_collection_respects_disk_floor_and_filters_ephemeral_dumps(tmp
     ok_backend.cleanup_container("owned-container")
     root = ok_backend.log_dir / "research" / "loopx-benchmark-research"
     assert (root / "candidate.py").read_bytes() == b"print('ok')\n"
+    assert (root / "core/analysis.md").read_bytes() == b"# real notes\n"
+    assert (root / "topic/core").read_bytes() == b"plain topic evidence\n"
+    assert (root / "exec_dir/core").read_bytes() == elf_exec
     assert not (root / "dump.raw.gz").exists()
-    assert not (root / "core").exists()
+    assert not (root / "core").is_file()
+    assert not (root / "sub/core.99").exists()
     assert not (root / "target").exists()
     assert not (root / ".cargo-target").exists()

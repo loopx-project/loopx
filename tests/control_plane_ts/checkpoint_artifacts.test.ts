@@ -410,22 +410,62 @@ test("committed semantic replan can capture before work selection without invent
     agent_identity: {...quota.agent_identity, registered: false}}}));
 });
 
+function elfHeader(eType: number, littleEndian = true): Buffer {
+  const buf = Buffer.alloc(64);
+  buf[0] = 0x7f; buf[1] = 0x45; buf[2] = 0x4c; buf[3] = 0x46;
+  buf[4] = 2; // ELFCLASS64
+  buf[5] = littleEndian ? 1 : 2;
+  if (littleEndian) buf.writeUInt16LE(eType, 16);
+  else buf.writeUInt16BE(eType, 16);
+  return buf;
+}
+
+function machoHeader(filetype: number, littleEndian = true): Buffer {
+  const buf = Buffer.alloc(32);
+  if (littleEndian) {
+    buf.writeUInt32BE(0xcffaedfe, 0); // MH_CIGAM_64
+    buf.writeUInt32LE(filetype, 12);
+  } else {
+    buf.writeUInt32BE(0xfeedfacf, 0); // MH_MAGIC_64
+    buf.writeUInt32BE(filetype, 12);
+  }
+  return buf;
+}
+
 test("component_exclusions skips ephemeral research outputs in probe and capture without weakening verify", async t => {
   const {root, request} = await fixture(t);
   const research = join(root, "research");
   await mkdir(join(research, "target/release"), {recursive: true});
   await mkdir(join(research, ".cargo-target/debug"), {recursive: true});
+  await mkdir(join(research, "core"), {recursive: true});
+  await mkdir(join(research, "topic"), {recursive: true});
+  await mkdir(join(research, "bin"), {recursive: true});
+  await mkdir(join(research, "nested"), {recursive: true});
   await writeFile(join(research, "dump.raw.gz"), "ephemeral");
-  await writeFile(join(research, "core"), "core-dump");
+  await writeFile(join(research, "core.4242"), elfHeader(4)); // ELF ET_CORE
+  await writeFile(join(research, "nested/core.9001"), machoHeader(4)); // Mach-O MH_CORE
+  await writeFile(join(research, "core/analysis.md"), "# real research notes\n");
+  await writeFile(join(research, "topic/core"), "ordinary text notes\n");
+  await writeFile(join(research, "bin/core"), elfHeader(2)); // ELF ET_EXEC (not ET_CORE)
   await writeFile(join(research, "target/release/bin"), "compiled");
   await writeFile(join(research, ".cargo-target/debug/lib.rlib"), "compiled");
   await writeFile(join(research, "candidate.py"), "score = 1\n");
 
   const components = [...request.components, {id: "benchmark_research", source_path: research}];
-  const exclusions = {benchmark_research: ["*.raw.gz", "core", "target/", ".cargo-target/"]};
+  const exclusions = {benchmark_research: ["*.raw.gz", "core-dump:elf-macho", "target/", ".cargo-target/"]};
   const probe = await checkpointArtifacts({action: "probe", components, component_exclusions: exclusions});
   const names = (probe.source_witness as Record<string, Array<{path: string}>>).benchmark_research.map(m => m.path);
-  assert.deepEqual(names, ["", "candidate.py"]);
+  assert.deepEqual(names, [
+    "",
+    "bin",
+    "bin/core",
+    "candidate.py",
+    "core",
+    "core/analysis.md",
+    "nested",
+    "topic",
+    "topic/core",
+  ]);
 
   const captured = await checkpointArtifacts({
     ...request,
@@ -434,7 +474,43 @@ test("component_exclusions skips ephemeral research outputs in probe and capture
     component_exclusions: exclusions,
   });
   assert.equal(captured.integrity_verified, true);
-  assert.deepEqual(await readdir(join(root, "captured/components/benchmark_research")), ["candidate.py"]);
+  assert.deepEqual(
+    (await readdir(join(root, "captured/components/benchmark_research"))).sort(),
+    ["bin", "candidate.py", "core", "nested", "topic"],
+  );
+  const restored = await checkpointArtifacts({
+    action: "materialize",
+    root: request.destination,
+    expected_sha256: captured.sha256,
+    destination: join(root, "restored"),
+  });
+  assert.equal(restored.integrity_verified, true);
+  assert.equal(
+    await readFile(join(root, "restored/components/benchmark_research/core/analysis.md"), "utf8"),
+    "# real research notes\n",
+  );
+  assert.equal(
+    await readFile(join(root, "restored/components/benchmark_research/topic/core"), "utf8"),
+    "ordinary text notes\n",
+  );
+  assert.deepEqual(
+    await readFile(join(root, "restored/components/benchmark_research/bin/core")),
+    elfHeader(2),
+  );
+
+  // Even a direct bare "core" exclusion must preserve core/ dirs and non-dump topic/core files,
+  // excluding only a confirmed ELF/Mach-O dump named "core".
+  await writeFile(join(research, "nested/core"), elfHeader(4, false)); // ELF ET_CORE (big-endian)
+  const bareProbe = await checkpointArtifacts({
+    action: "probe",
+    components,
+    component_exclusions: {benchmark_research: ["core"]},
+  });
+  const bareNames = (bareProbe.source_witness as Record<string, Array<{path: string}>>).benchmark_research.map(m => m.path);
+  assert.ok(bareNames.includes("core/analysis.md"));
+  assert.ok(bareNames.includes("topic/core"));
+  assert.ok(bareNames.includes("bin/core"));
+  assert.ok(!bareNames.includes("nested/core"));
 
   await assert.rejects(
     checkpointArtifacts({action: "verify", root: request.destination, expected_sha256: captured.sha256,

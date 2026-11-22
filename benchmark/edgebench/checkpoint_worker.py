@@ -24,7 +24,7 @@ from benchmark.runtime.checkpoint import _participant_id
 from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 from benchmark.runtime.research_artifacts import (
     RESEARCH_COMPONENT,
-    is_excluded_research_relpath,
+    is_excluded_tar_member,
     research_component_exclusions,
 )
 
@@ -182,18 +182,23 @@ def _archive(
                 members = []
                 root = PurePosixPath(remote).name
                 names = {}
-                for member in archive:
+                excluded_paths = set()
+                for member in archive.getmembers():
                     check()
                     path = PurePosixPath(member.name)
                     if (path.is_absolute() or ".." in path.parts or not path.parts or
                             path.parts[0] != root or str(path) in names or
                             not (member.isfile() or member.isdir() or member.islnk())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
+                    if exclude_research and member.islnk() and str(PurePosixPath(member.linkname)) in excluded_paths:
+                        excluded_paths.add(str(path))
+                        continue
                     if (
                         exclude_research
                         and len(path.parts) > 1
-                        and is_excluded_research_relpath(path.parts[1:], is_dir=member.isdir())
+                        and is_excluded_tar_member(archive, member, path.parts[1:])
                     ):
+                        excluded_paths.add(str(path))
                         continue
                     names[str(path)] = member
                     members.append(member)
