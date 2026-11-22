@@ -2673,3 +2673,141 @@ def test_unbounded_idle_still_bounds_stuck_idle_cascade_and_dead_ls_transport(
         adapter.start_turn("dead ls task")
     assert raised_tx.value.error_code == "antigravity_transport_error"
     assert now_box[0] >= 60.0
+
+
+def test_daemon_discovery_connects_standalone_hub_without_ps_token_and_rejects_unsafe_files(
+    tmp_path, language_server, monkeypatch
+) -> None:
+    from urllib.parse import urlsplit
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    port = urlsplit(language_server["url"]).port
+    assert port is not None
+    home_dir = tmp_path / "home"
+    daemon_dir = home_dir / ".gemini" / "antigravity" / "daemon"
+    daemon_dir.mkdir(parents=True)
+    # Stale PID and symlinked discovery metadata must be ignored.
+    (daemon_dir / "hub_99999.json").write_text(
+        json.dumps({"pid": 99999, "httpPort": port, "csrfToken": "synthetic-csrf-token"}),
+        encoding="utf-8",
+    )
+    target_meta = tmp_path / "external.json"
+    target_meta.write_text(
+        json.dumps({"pid": 81414, "httpPort": port, "csrfToken": "synthetic-csrf-token"}),
+        encoding="utf-8",
+    )
+    (daemon_dir / "hub_symlink.json").symlink_to(target_meta)
+    (daemon_dir / f"hub_{port}.json").write_text(
+        json.dumps({"pid": 81414, "httpPort": port, "csrfToken": "synthetic-csrf-token"}),
+        encoding="utf-8",
+    )
+
+    calls: list[str] = []
+    ps_stdout = (
+        "81414 /Applications/Antigravity.app/Contents/Resources/bin/language_server "
+        "--standalone --override_ide_name antigravity --app_data_dir antigravity\n"
+    )
+
+    def fake_check_output(command, **kwargs):
+        calls.append(command[0])
+        if command[0] == "ps":
+            return ps_stdout
+        raise AssertionError(f"unexpected subprocess {command}")
+
+    monkeypatch.setattr(provider.subprocess, "check_output", fake_check_output)
+    discovered = provider.discover_antigravity_language_server(env={"HOME": str(home_dir)})
+    assert discovered == {
+        "url": language_server["url"],
+        "csrf_token": "synthetic-csrf-token",
+        "pid": 81414,
+        "source": "daemon_discovery",
+    }
+    assert calls == ["ps"]
+
+    # Path traversal app_data_dir values in ps are ignored safely.
+    ps_stdout = (
+        "81414 /Applications/Antigravity.app/Contents/Resources/bin/language_server "
+        "--standalone --app_data_dir ../escape\n"
+    )
+    assert provider.discover_antigravity_language_server(env={"HOME": str(home_dir)}) is None
+
+
+def test_probe_cascade_idle_uses_summary_and_falls_back_on_rpc_error(monkeypatch) -> None:
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+    from loopx.chat_agent import CodexChatAgentError
+
+    seen_methods: list[tuple[str, float]] = []
+    mode = {"behavior": "summary_idle"}
+
+    def fake_rpc(_url, _token, method, _payload, *, timeout=15.0):
+        seen_methods.append((method, timeout))
+        if method == "GetAllCascadeTrajectories":
+            if mode["behavior"] == "rpc_unsupported":
+                raise CodexChatAgentError("unsupported", gate=None, error_code="antigravity_rpc_error")
+            if mode["behavior"] == "summary_idle":
+                return {"trajectorySummaries": {"c-1": {"status": "CASCADE_RUN_STATUS_IDLE"}}}
+            return {"trajectorySummaries": {"c-1": {"status": "CASCADE_RUN_STATUS_RUNNING"}}}
+        if method == "GetCascadeTrajectory":
+            return {"status": "CASCADE_RUN_STATUS_IDLE"}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(provider, "_rpc_post", fake_rpc)
+    assert provider.probe_cascade_idle("http://127.0.0.1:1", "tok", "c-1") is True
+    assert seen_methods == [("GetAllCascadeTrajectories", 2.5)]
+
+    seen_methods.clear()
+    mode["behavior"] = "summary_running"
+    assert provider.probe_cascade_idle("http://127.0.0.1:1", "tok", "c-1") is False
+    assert seen_methods == [("GetAllCascadeTrajectories", 2.5)]
+
+    seen_methods.clear()
+    mode["behavior"] = "rpc_unsupported"
+    assert provider.probe_cascade_idle("http://127.0.0.1:1", "tok", "c-1", timeout=2.5) is True
+    assert seen_methods == [("GetAllCascadeTrajectories", 2.5), ("GetCascadeTrajectory", 5.0)]
+
+
+def test_antigravity_start_rolls_over_via_summary_when_trajectory_read_times_out(tmp_path, monkeypatch) -> None:
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+    from loopx.chat_agent import CodexChatAgentError
+
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", "http://127.0.0.1:55999")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "tok")
+    monkeypatch.setenv("LOOPX_ANTIGRAVITY_MAX_CASCADE_STEPS", "500")
+    summary_state = {"status": "CASCADE_RUN_STATUS_IDLE", "stepCount": 600}
+
+    def fake_rpc(_url, _token, method, _payload, *, timeout=15.0):
+        if method == "GetCascadeModelConfigData":
+            return {"clientModelConfigs": [{"modelId": "gemini-4-argon-high", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]}
+        if method == "GetCascadeTrajectory":
+            raise CodexChatAgentError("timed out", gate=None, error_code="antigravity_transport_error")
+        if method == "GetAllCascadeTrajectories":
+            return {"trajectorySummaries": {"old-c": dict(summary_state)}}
+        if method == "StartCascade":
+            return {"cascadeId": "new-rotated-c"}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(provider, "_rpc_post", fake_rpc)
+    adapter = provider.AntigravityAdapter.start(
+        work_dir=tmp_path,
+        objective="Steward",
+        resume_thread_id="old-c",
+        history=[{"role": "user", "content": "prior req"}],
+    )
+    assert adapter.upstream_thread_id == "new-rotated-c"
+
+    # Running or undersized cascades still fail closed instead of rotating.
+    summary_state.update(status="CASCADE_RUN_STATUS_RUNNING", stepCount=600)
+    with pytest.raises(CodexChatAgentError) as running_err:
+        provider.AntigravityAdapter.start(
+            work_dir=tmp_path, objective="Steward", resume_thread_id="old-c",
+            history=[{"role": "user", "content": "prior req"}],
+        )
+    assert running_err.value.error_code == "resume_failed"
+
+    summary_state.update(status="CASCADE_RUN_STATUS_IDLE", stepCount=120)
+    with pytest.raises(CodexChatAgentError) as small_err:
+        provider.AntigravityAdapter.start(
+            work_dir=tmp_path, objective="Steward", resume_thread_id="old-c",
+            history=[{"role": "user", "content": "prior req"}],
+        )
+    assert small_err.value.error_code == "resume_failed"

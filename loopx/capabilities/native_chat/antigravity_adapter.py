@@ -432,6 +432,79 @@ def _rpc_post(
         ) from exc
 
 
+def _daemon_discovery_candidates(
+    daemon_pids: Mapping[int, str], source_env: Mapping[str, str],
+) -> list[tuple[int, int, str]]:
+    """Read verified standalone LS hub/daemon metadata files for live PIDs."""
+    raw_home = str(source_env.get("HOME") or "").strip()
+    home = Path(raw_home).expanduser() if raw_home else Path.home()
+    files: list[tuple[float, str, Path]] = []
+    for app_dir in dict.fromkeys(daemon_pids.values()):
+        if app_dir in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", app_dir):
+            continue
+        daemon_dir = home / ".gemini" / app_dir / "daemon"
+        if daemon_dir.is_symlink() or not daemon_dir.is_dir():
+            continue
+        for pat in ("hub_*.json", "ls_*.json"):
+            for path in daemon_dir.glob(pat):
+                try:
+                    if not path.is_symlink() and path.is_file():
+                        files.append((path.stat().st_mtime, app_dir, path))
+                except OSError:
+                    continue
+    seen: set[tuple[int, int]] = set()
+    resolved: list[tuple[int, int, str]] = []
+    for _, app_dir, path in sorted(files, key=lambda item: item[0], reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        pid, port, token = data.get("pid"), data.get("httpPort"), data.get("csrfToken")
+        if (type(pid) is not int or daemon_pids.get(pid) != app_dir
+                or type(port) is not int or not (1 <= port <= 65535)
+                or not isinstance(token, str) or not token.strip()
+                or (pid, port) in seen):
+            continue
+        seen.add((pid, port))
+        resolved.append((pid, port, token.strip()))
+    return resolved
+
+
+def _probe_model_config(
+    url: str, token: str, *, pid: int | None, source: str, timeout: float, include_model_config: bool,
+) -> dict[str, Any]:
+    model_data = _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=timeout)
+    return {
+        "url": url, "csrf_token": token, "pid": pid, "source": source,
+        **({"model_config_data": model_data} if include_model_config else {}),
+    }
+
+
+def _cascade_summary_entry(resp: Any, cascade_id: str) -> dict[str, Any] | None:
+    summaries = resp.get("trajectorySummaries") if isinstance(resp, dict) else None
+    entry = summaries.get(cascade_id) if isinstance(summaries, dict) else None
+    return entry if isinstance(entry, dict) else None
+
+
+def probe_cascade_idle(url: str, csrf_token: str, cascade_id: str, *, timeout: float = 2.5) -> bool:
+    """Return whether `cascade_id` is idle using summary polling with trajectory fallback."""
+    try:
+        resp = _rpc_post(url, csrf_token, "GetAllCascadeTrajectories", {}, timeout=timeout)
+        entry = _cascade_summary_entry(resp, cascade_id)
+        if entry is not None:
+            return entry.get("status") == "CASCADE_RUN_STATUS_IDLE"
+    except CodexChatAgentError as exc:
+        if exc.error_code != "antigravity_rpc_error":
+            return False
+    try:
+        traj = _rpc_post(url, csrf_token, "GetCascadeTrajectory", {"cascadeId": cascade_id}, timeout=max(timeout, 5.0))
+    except CodexChatAgentError:
+        return False
+    return isinstance(traj, dict) and traj.get("status") == "CASCADE_RUN_STATUS_IDLE"
+
+
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None,
     *, deadline: float | None = None, include_model_config: bool = False,
@@ -457,20 +530,10 @@ def discover_antigravity_language_server(
             timeout = 2.5 if deadline is None else min(2.5, deadline - time.monotonic())
             if timeout <= 0:
                 return None
-            model_data = _rpc_post(
-                explicit_url,
-                explicit_token,
-                "GetCascadeModelConfigData",
-                {},
-                timeout=timeout,
+            return _probe_model_config(
+                explicit_url.rstrip("/"), explicit_token, pid=None, source="environment",
+                timeout=timeout, include_model_config=include_model_config,
             )
-            return {
-                "url": explicit_url.rstrip("/"),
-                "csrf_token": explicit_token,
-                "pid": None,
-                "source": "environment",
-                **({"model_config_data": model_data} if include_model_config else {}),
-            }
         except (CodexChatAgentError, ValueError):
             return None
 
@@ -480,28 +543,27 @@ def discover_antigravity_language_server(
     try:
         ps_out = subprocess.check_output(
             ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stderr=subprocess.DEVNULL,
-            timeout=process_timeout,
+            text=True, encoding="utf-8", errors="replace",
+            stderr=subprocess.DEVNULL, timeout=process_timeout,
         )
     except Exception:
         return None
 
     candidates: list[tuple[int, str]] = []
+    daemon_pids: dict[int, str] = {}
     for line in ps_out.splitlines():
-        if ("language_server" not in line or "antigravity" not in line.lower()
-                or "--csrf_token" not in line):
+        if "language_server" not in line or "antigravity" not in line.lower():
             continue
         match = re.match(r"^\s*(\d+)\s+(.*)$", line)
         if not match:
             continue
-        pid = int(match.group(1))
-        cmd = match.group(2)
+        pid, cmd = int(match.group(1)), match.group(2)
         token_match = re.search(r"--csrf_token(?:=|\s+)([A-Za-z0-9._-]+)", cmd)
         if token_match:
             candidates.append((pid, token_match.group(1)))
+            continue
+        dir_match = re.search(r"--app_data_dir(?:=|\s+)([A-Za-z0-9._-]+)", cmd)
+        daemon_pids[pid] = dir_match.group(1) if dir_match else "antigravity"
 
     discovery_deadline = time.monotonic() + 4.0
     deadline = min(discovery_deadline, deadline) if deadline is not None else discovery_deadline
@@ -511,33 +573,36 @@ def discover_antigravity_language_server(
         try:
             lsof_out = subprocess.check_output(
                 ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stderr=subprocess.DEVNULL,
-                timeout=max(0.1, deadline - time.monotonic()),
+                text=True, encoding="utf-8", errors="replace",
+                stderr=subprocess.DEVNULL, timeout=max(0.1, deadline - time.monotonic()),
             )
         except Exception:
             continue
-        ports: list[int] = []
         for line in lsof_out.splitlines():
             port_match = re.search(r":(\d+)\s+\(LISTEN\)", line)
-            if port_match:
-                ports.append(int(port_match.group(1)))
-        for port in ports:
+            if not port_match:
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                return _probe_model_config(
+                    f"http://127.0.0.1:{int(port_match.group(1))}", token, pid=pid,
+                    source="process_discovery", timeout=min(1.5, remaining),
+                    include_model_config=include_model_config,
+                )
+            except CodexChatAgentError:
+                continue
+    if daemon_pids:
+        for pid, port, token in _daemon_discovery_candidates(daemon_pids, source_env):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            url = f"http://127.0.0.1:{port}"
             try:
-                model_data = _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=min(1.5, remaining))
-                return {
-                    "url": url,
-                    "csrf_token": token,
-                    "pid": pid,
-                    "source": "process_discovery",
-                    **({"model_config_data": model_data} if include_model_config else {}),
-                }
+                return _probe_model_config(
+                    f"http://127.0.0.1:{port}", token, pid=pid, source="daemon_discovery",
+                    timeout=min(1.5, remaining), include_model_config=include_model_config,
+                )
             except CodexChatAgentError:
                 continue
     return None
@@ -1252,33 +1317,18 @@ class AntigravityAdapter:
         _check_hard_timeout(hard_timeout_sec)
         # Validate user intent before creating an upstream cascade.
         requested = dict(executor_model or {})
-        resolve_antigravity_model_placeholder(requested.get("model"), requested.get("reasoning_effort"))
+        req_model = str(requested.get("model") or "").strip() or None
+        req_effort = str(requested.get("reasoning_effort") or "").strip() or None
+        resolve_antigravity_model_placeholder(req_model, req_effort)
         discovered = discover_antigravity_language_server(env=env, include_model_config=True)
         if discovered is None:
             raise CodexChatAgentError(
                 "Antigravity local language_server is not running or reachable",
-                gate=None,
-                error_code="antigravity_unavailable",
+                gate=None, error_code="antigravity_unavailable",
             )
-        ls_url = str(discovered["url"])
-        csrf_token = str(discovered["csrf_token"])
-
-        dynamic_configs = _discovered_model_configs(discovered)
-
-        requested_model = (
-            str(executor_model.get("model") or "").strip()
-            if isinstance(executor_model, Mapping)
-            else None
-        )
-        requested_effort = (
-            str(executor_model.get("reasoning_effort") or "").strip()
-            if isinstance(executor_model, Mapping)
-            else None
-        )
+        ls_url, csrf_token = str(discovered["url"]), str(discovered["csrf_token"])
         model_id, model_placeholder = resolve_antigravity_model_placeholder(
-            requested_model,
-            requested_effort,
-            dynamic_configs=dynamic_configs,
+            req_model, req_effort, dynamic_configs=_discovered_model_configs(discovered),
         )
 
         cascade_id = str(resume_thread_id or "").strip()
@@ -1286,32 +1336,32 @@ class AntigravityAdapter:
         rotated = False
         max_steps = _max_cascade_steps(env)
         if cascade_id:
+            rotate_now = False
             try:
-                traj = _rpc_post(
-                    ls_url,
-                    csrf_token,
-                    "GetCascadeTrajectory",
-                    {"cascadeId": cascade_id},
-                    timeout=10.0,
-                )
+                traj = _rpc_post(ls_url, csrf_token, "GetCascadeTrajectory", {"cascadeId": cascade_id}, timeout=10.0)
                 if isinstance(traj, dict) and traj.get("trajectory"):
                     resumed = True
-                    total_steps = int(
-                        traj.get("numTotalSteps")
-                        or len((traj.get("trajectory") or {}).get("steps") or ())
+                    total_steps = int(traj.get("numTotalSteps") or len((traj.get("trajectory") or {}).get("steps") or ()))
+                    rotate_now = (
+                        max_steps > 0 and total_steps >= max_steps
+                        and traj.get("status") != "CASCADE_RUN_STATUS_RUNNING" and history is not None
                     )
-                    if (
-                        max_steps > 0
-                        and total_steps >= max_steps
-                        and traj.get("status") != "CASCADE_RUN_STATUS_RUNNING"
-                        and history is not None
-                    ):
-                        cascade_id = _start_cascade(ls_url, csrf_token, work_dir)
-                        resumed = False
-                        rotated = True
-                        history = _rollover_history(history)
-            except CodexChatAgentError:
+            except CodexChatAgentError as exc:
                 resumed = False
+                if exc.error_code == "antigravity_transport_error" and max_steps > 0 and history is not None:
+                    try:
+                        entry = _cascade_summary_entry(
+                            _rpc_post(ls_url, csrf_token, "GetAllCascadeTrajectories", {}, timeout=5.0),
+                            cascade_id,
+                        )
+                    except CodexChatAgentError:
+                        entry = None
+                    if (entry is not None and int(entry.get("stepCount") or 0) >= max_steps
+                            and entry.get("status") != "CASCADE_RUN_STATUS_RUNNING"):
+                        rotate_now = True
+            if rotate_now:
+                cascade_id = _start_cascade(ls_url, csrf_token, work_dir)
+                resumed, rotated, history = False, True, _rollover_history(history)
 
         if cascade_id and not resumed and not rotated:
             raise CodexChatAgentError(
@@ -1585,45 +1635,32 @@ class AntigravityAdapter:
                 self._interrupted.wait(wait_sec)
                 self._check_interrupted()
             traj: dict[str, Any] | None = None
-            if (
-                start_step_index >= ANTIGRAVITY_LARGE_CASCADE_POLL_THRESHOLD
-                and final_read_deadline is None
-                and not summary_probe_unsupported
-            ):
+            if (start_step_index >= ANTIGRAVITY_LARGE_CASCADE_POLL_THRESHOLD
+                    and final_read_deadline is None and not summary_probe_unsupported):
                 try:
-                    summaries_resp = observe(
-                        "GetAllCascadeTrajectories", {}, None, include_cascade_id=False
-                    )
+                    summaries_resp = observe("GetAllCascadeTrajectories", {}, None, include_cascade_id=False)
                 except CodexChatAgentError as exc:
                     if exc.error_code != "antigravity_rpc_error":
                         raise
-                    summary_probe_unsupported = True
-                    summaries_resp = None
+                    summary_probe_unsupported, summaries_resp = True, None
                 if summaries_resp is None and not summary_probe_unsupported:
                     continue
-                if isinstance(summaries_resp, dict) and not summary_probe_unsupported:
-                    summaries = summaries_resp.get("trajectorySummaries")
-                    summary = summaries.get(target_cascade_id) if isinstance(summaries, dict) else None
-                    if isinstance(summary, dict):
-                        s_status = str(summary.get("status") or "")
-                        s_total = int(summary.get("stepCount") or summary.get("numTotalSteps") or 0)
-                        mod_key = (s_status, s_total, summary.get("lastModifiedTime"))
-                        now = time.monotonic()
-                        if s_status == "CASCADE_RUN_STATUS_RUNNING":
-                            idle_status_since = None
-                            if (
-                                last_summary_key == mod_key
-                                and saw_running_or_new_step
-                                and now - last_steps_poll_at < 5.0
-                            ):
-                                if deadline is not None and now >= deadline:
-                                    timeout("hard")
-                                continue
-                            last_summary_key = mod_key
-                            last_steps_poll_at = now
-                            traj = {"status": s_status, "numTotalSteps": s_total}
-                        else:
-                            last_summary_key = mod_key
+                summary = _cascade_summary_entry(summaries_resp, target_cascade_id)
+                if summary is not None:
+                    s_status = str(summary.get("status") or "")
+                    s_total = int(summary.get("stepCount") or summary.get("numTotalSteps") or 0)
+                    mod_key = (s_status, s_total, summary.get("lastModifiedTime"))
+                    now = time.monotonic()
+                    if s_status == "CASCADE_RUN_STATUS_RUNNING":
+                        idle_status_since = None
+                        if last_summary_key == mod_key and saw_running_or_new_step and now - last_steps_poll_at < 5.0:
+                            if deadline is not None and now >= deadline:
+                                timeout("hard")
+                            continue
+                        last_summary_key, last_steps_poll_at = mod_key, now
+                        traj = {"status": s_status, "numTotalSteps": s_total}
+                    else:
+                        last_summary_key = mod_key
             if traj is None:
                 traj = observe("GetCascadeTrajectory", {}, final_read_deadline)
                 if traj is None:
