@@ -31,6 +31,7 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
 from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
+QUALIFIED_DEFAULT_CONTRACT_FIELD = "qualified_default_contract"
 _ARTIFACT_DEFAULT_CONTRACTS = json.loads(
     Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
 )
@@ -137,11 +138,26 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         raise ValueError("Runtime artifact has no bounded download sources")
     for url in urls:
         safe_url(url)
-    # Published v1 snapshots can omit the attestation or carry the old default.
-    # New archives must pass validate_default_contract on their observed writer.
-    if "default_contract" in value and value["default_contract"] != HISTORICAL_DEFAULT_CONTRACT:
-        validate_default_contract(value["default_contract"])
-    return dict(value)
+    manifest = dict(value)
+    if QUALIFIED_DEFAULT_CONTRACT_FIELD in manifest:
+        if "default_contract" in manifest:
+            raise ValueError("Runtime artifact declares two default contracts")
+        # The v1 manifest reserves default_contract for old readers' known
+        # profile. New readers normalize the publication attestation so the
+        # existing archive identity comparison still binds the exact contract.
+        manifest["default_contract"] = validate_default_contract(
+            manifest.pop(QUALIFIED_DEFAULT_CONTRACT_FIELD)
+        )
+    elif "default_contract" in manifest and manifest["default_contract"] != HISTORICAL_DEFAULT_CONTRACT:
+        validate_default_contract(manifest["default_contract"])
+    return manifest
+
+
+def validate_published_manifest(value: dict[str, Any]) -> dict[str, Any]:
+    """Require the compatible, qualified descriptor before publishing a new archive."""
+    if not isinstance(value, dict) or QUALIFIED_DEFAULT_CONTRACT_FIELD not in value:
+        raise ValueError("Runtime publication requires a qualified default contract attestation")
+    return validate_manifest(value)
 
 
 def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:

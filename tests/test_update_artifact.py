@@ -28,6 +28,11 @@ value=json.load(sys.stdin)
 assert module['validate_manifest'](value)==value
 profile = module['PUBLIC_DEFAULT_CONTRACT']
 assert module['validate_manifest']({**value, 'default_contract':profile})['default_contract']==profile
+published = {**value, module['QUALIFIED_DEFAULT_CONTRACT_FIELD']: profile}
+assert module['validate_published_manifest'](published)=={**value, 'default_contract':profile}
+try:module['validate_manifest']({**published, 'default_contract':profile})
+except ValueError:pass
+else:raise AssertionError('ambiguous contract accepted by bootstrap')
 history = module['HISTORICAL_DEFAULT_CONTRACT']
 assert module['validate_manifest']({**value, 'default_contract':history})['default_contract']==history
 for invalid in [None, {}, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
@@ -121,7 +126,8 @@ def test_qualified_scope_and_historical_metadata_remain_readable():
     assert update.validate_manifest(current) == current
 
 
-def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch):
+@pytest.mark.parametrize("contract_field", ["default_contract", update.QUALIFIED_DEFAULT_CONTRACT_FIELD])
+def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch, contract_field):
     archive = tmp_path / "runtime.tar.gz"
     identity = json.dumps({"source_revision": "a" * 40, "package_version": "1.2.3",
                            "default_contract": {"surface": "complete_turn"}}).encode()
@@ -131,7 +137,7 @@ def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch)
             member.size = len(content)
             target.addfile(member, io.BytesIO(content))
     descriptor = {**manifest(archive.read_bytes(), "https://publisher.invalid/runtime"),
-                  "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
+                  contract_field: dict(update.PUBLIC_DEFAULT_CONTRACT)}
     monkeypatch.setattr(update, "download_artifact", lambda *_a, **_kw: archive)
     calls = []
     monkeypatch.setattr(update, "run_installer", lambda *_a, **_kw: calls.append("activate"))

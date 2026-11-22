@@ -99,10 +99,10 @@ jobs:
           import re
           import sys
           sys.path.insert(0, str(Path.cwd()))
-          from loopx.cli_commands.update_artifact import validate_default_contract
+          from loopx.cli_commands.update_artifact import validate_published_manifest
           root = Path("runtime")
           manifest_bytes = (root / "loopx-runtime.json").read_bytes()
-          manifest = json.loads(manifest_bytes)
+          manifest = validate_published_manifest(json.loads(manifest_bytes))
           revision = manifest["source_revision"]
           if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
               raise SystemExit("Invalid runtime source revision")
@@ -111,8 +111,7 @@ jobs:
                     "frontend_http", "no_frontend_build_tools", "license_notices", "activation_failure_restored")
           if any(qualification.get(check) is not True for check in checks):
               raise SystemExit("Runtime installation qualification is missing or failed")
-          default_contract = validate_default_contract(manifest.get("default_contract"))
-          if qualification.get("default_contract") != default_contract:
+          if qualification.get("default_contract") != manifest["default_contract"]:
               raise SystemExit("Runtime default-contract qualification is missing or mismatched")
           if manifest["channel"] != "main" or any(qualification.get(key) != manifest[key]
                   for key in ("source_revision", "channel", "sha256")):

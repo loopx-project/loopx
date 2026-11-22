@@ -289,11 +289,16 @@ main 运行时发布器在任何远端写入前，将下载的安装资格与源
 证据缺失、失败或不匹配时，保留已有发布及渠道。按 RFC §9 单独记录受支持 profile 的
 采用、匹配的模型成果和完整成本。
 
-New runtime descriptors carry the observed, supported `default_contract`.
-The builder probes the committed runtime before writing a channel descriptor
-or replacing existing output. Qualification checks the installed candidate's
-ordinary quota writer in an isolated original Goal with context delivery off.
-The publisher requires that observation to match the immutable descriptor.
+New public runtime descriptors carry the observed C1 contract in
+`qualified_default_contract`. The archive identity and qualification receipt
+retain `default_contract`. Existing v1 updaters can use the same ordinary
+`loopx update` flow to verify the source revision, archive digest and byte
+count. Current readers normalize the attestation and verify that it matches
+the archive identity. The builder probes the committed runtime before
+writing a descriptor. Qualification checks the installed candidate's
+ordinary quota writer in an isolated Goal with context delivery off.
+The publisher requires the compatibility descriptor and exact identity match
+before changing the channel.
 Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
@@ -306,9 +311,11 @@ readback separate from publication, which requires the current default.
 Record actual Host adoption and the matched single-session outcome and full-cost
 comparison under [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.md#9-validation-and-acceptance).
 
-新 runtime 描述符记录实际观测到且受支持的 `default_contract`。构建器在写入渠道描述符
-或替换已有制品之前探测已提交的 runtime。安装资格检查在隔离的原始 Goal 中关闭
-上下文传输后再次观察普通 quota writer。发布器要求安装后的观察与不可变描述符一致。
+新的公开 runtime 描述符将实测的 C1 契约写入 `qualified_default_contract`，
+归档身份和资格回执使用 `default_contract`。已有 v1 更新器可沿原 `loopx update`
+流程校验源码提交、归档摘要和字节数。当前读取端会归一化该声明，并核对归档身份。
+构建器在写入描述符前探测已提交的 runtime。安装资格检查在隔离 Goal 中关闭上下文传输后
+再次观察普通 quota writer。发布器在移动渠道前要求使用兼容描述符，并核对精确身份。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
 已发布的 `v2.4.0` 标签保留 `quota_packet`。新的 runtime 和 Desktop 构建只为

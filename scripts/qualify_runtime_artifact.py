@@ -13,7 +13,12 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from loopx.cli_commands.update_artifact import extract_artifact, file_hash, validate_default_contract, validate_manifest
+from loopx.cli_commands.update_artifact import (
+    extract_artifact,
+    file_hash,
+    validate_default_contract,
+    validate_published_manifest,
+)
 
 
 def observe_default_contract(source: Path) -> dict:
@@ -63,7 +68,7 @@ finally:
 
 
 def qualify(directory: Path) -> dict:
-    manifest = validate_manifest(json.loads((directory / "loopx-runtime.json").read_text()))
+    manifest = validate_published_manifest(json.loads((directory / "loopx-runtime.json").read_text()))
     archive = directory / f"loopx-runtime-{manifest['source_revision']}.tar.gz"
     assert archive.stat().st_size == manifest["size"] and file_hash(archive) == manifest["sha256"]
     with tempfile.TemporaryDirectory(prefix="loopx-runtime-qualification-") as raw:
