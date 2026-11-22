@@ -415,7 +415,8 @@ require separate run evidence.
 For an empty planning frontier, the model can save the same requirement
 declaration and ordered advancement Todos in one JSON proposal and invoke
 `python -m benchmark.runtime.planning_batch PROPOSAL.json` during the planning
-wake. Use the checkpoint's exact input digest and acceptance provider revision.
+wake (`--schema` prints the full JSON proposal schema and field limits). Use the
+checkpoint's exact input digest and acceptance provider revision.
 The command declares requirements, writes Todos and binds their actual IDs
 through public LoopX operations. Each write has its own receipt. If the command
 is interrupted, reuse the unchanged proposal so the original effects can be

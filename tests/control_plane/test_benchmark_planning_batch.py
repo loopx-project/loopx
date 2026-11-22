@@ -139,3 +139,183 @@ raise SystemExit(response.returncode)
     events = fixture._heartbeat_receipt_events(runtime, "batch-fixture-execution")
     assert [entry["event_id"] for entry in events] == [admitted["heartbeat_receipt"]["event_id"]]
     assert fixture._spend_run_count(runtime) == 0
+
+
+def test_planning_batch_cli_help_and_schema_are_self_contained():
+    import subprocess
+    from benchmark.runtime.planning_batch import planning_batch_guidance, planning_batch_schema
+
+    help_proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.runtime.planning_batch", "--help"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert help_proc.returncode == 0, help_proc.stderr
+    assert "--schema" in help_proc.stdout
+    assert "outcome.source.ref" in help_proc.stdout
+
+    schema_proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.runtime.planning_batch", "--schema"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert schema_proc.returncode == 0, schema_proc.stderr
+    schema = json.loads(schema_proc.stdout)
+    assert schema == planning_batch_schema()
+    assert schema["fields"]["outcome"]["properties"]["source"]["ref"]["max_chars"] == 128
+    assert schema["fields"]["outcome"]["properties"]["requirements"]["max_items"] == 32
+    guidance = planning_batch_guidance()
+    assert "--schema" in guidance
+    assert 'status="ready"' in guidance
+
+
+def _base_proposal():
+    return {
+        "input_digest": "digest-1",
+        "expected_provider_revision": "rev-1",
+        "outcome": {
+            "objective": "Deliver fix",
+            "requirements": [{"id": "req-1", "description": "Requirement passes"}],
+            "source": {"ref": "checkpoint:init", "summary": "Initial planning checkpoint"},
+        },
+        "todos": [{"text": "[P0] Implement fix", "action_kind": "implement"}],
+    }
+
+
+@pytest.mark.parametrize(("mutate", "expected_substrings", "forbidden"), [
+    (
+        lambda p: p["outcome"]["source"].__setitem__("ref", "/frontier/task/repo/SECRET_REF/" + "x" * 120),
+        ("outcome.source.ref", "got 151 chars, max 128", "no '/' paths or spaces"),
+        "SECRET_REF",
+    ),
+    (
+        lambda p: p["outcome"]["requirements"][0].__setitem__("id", "bad id with spaces"),
+        ("outcome.requirements[0].id", "opaque identifier"),
+        "bad id with spaces",
+    ),
+    (
+        lambda p: p["todos"][0].__setitem__("action_kind", "do invalid action"),
+        ("todos[0].action_kind", "^[a-z][a-z0-9_-]{0,63}$"),
+        "do invalid action",
+    ),
+    (
+        lambda p: p["outcome"].__setitem__("PRIVATE_EXTRA_KEY", "SECRET_VAL"),
+        ("outcome", "unsupported field count: 1", "allowed: objective, requirements, source"),
+        "PRIVATE_EXTRA_KEY",
+    ),
+    (
+        lambda p: p["outcome"]["source"].__setitem__("summary", "S" * 513),
+        ("outcome.source.summary", "got 513 chars, max 512"),
+        "SSSSSSSS",
+    ),
+    (
+        lambda p: p["outcome"].__setitem__("objective", "O" * 1025),
+        ("outcome.objective", "got 1025 chars, max 1024"),
+        "OOOOOOOO",
+    ),
+    (
+        lambda p: p["outcome"]["requirements"][0].__setitem__("description", "D" * 2001),
+        ("outcome.requirements[0].description", "got 2001 chars, max 2000"),
+        "DDDDDDDD",
+    ),
+    (
+        lambda p: p["outcome"].__setitem__(
+            "requirements",
+            [{"id": f"r-{i}", "description": f"desc {i}"} for i in range(33)],
+        ),
+        ("outcome.requirements exceeds capacity", "got 33 items, max 32"),
+        None,
+    ),
+])
+def test_planning_batch_upfront_validation_rejects_invalid_proposals_without_loopx(
+    tmp_path, mutate, expected_substrings, forbidden,
+):
+    import subprocess
+    from benchmark.runtime.planning_batch import apply_initial_plan
+
+    proposal = _base_proposal()
+    mutate(proposal)
+    env = {"LOOPX_TASK_STAGE": "plan", "LOOPX_CLI": str(tmp_path / "missing-loopx")}
+    with pytest.raises(ValueError) as exc_info:
+        apply_initial_plan(env, proposal)
+    message = str(exc_info.value)
+    for snippet in expected_substrings:
+        assert snippet in message, message
+    if forbidden:
+        assert forbidden not in message
+
+    proposal_path = tmp_path / "bad-proposal.json"
+    proposal_path.write_text(json.dumps(proposal))
+    proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.runtime.planning_batch", str(proposal_path)],
+        env={"PATH": "", "PYTHONPATH": str(Path(__file__).resolve().parents[2]), "LOOPX_TASK_STAGE": "plan"},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    for snippet in expected_substrings:
+        assert snippet in payload["error"], payload
+    if forbidden:
+        assert forbidden not in proc.stdout
+
+
+def test_planning_batch_preserves_upstream_error_detail_on_refine_rejection(tmp_path, monkeypatch):
+    from benchmark.runtime import planning_batch
+
+    fake_cli = write_python_host_fixture(tmp_path / "fake-loopx", f"""#!{sys.executable}
+import json, sys
+args = sys.argv[1:]
+if "todo" in args and "plan" in args:
+    print(json.dumps({{
+        "ok": True,
+        "schema_version": "loopx_task_planning_v0",
+        "goal_id": "goal-1",
+        "agent_id": "agent-1",
+        "execution_handoff": {{"owner": "caller"}},
+        "input_digest": "digest-1",
+        "existing_todos": [],
+        "goal_waiting_on": [],
+        "blocking_todo_ids": [],
+        "goal_acceptance": {{
+            "provider_revision": "rev-1",
+            "goal_acceptance_contract": {{}},
+        }},
+    }}))
+    raise SystemExit(0)
+if "goal-acceptance" in args and "refine" in args:
+    print(json.dumps({{
+        "ok": False,
+        "error": "goal_acceptance_invalid_request",
+        "error_code": "goal_acceptance_invalid_request",
+        "error_detail": "source ref must be bounded nonempty text (got 144 chars, max 128)",
+    }}))
+    raise SystemExit(1)
+raise AssertionError(args)
+""")
+    proposal_path = tmp_path / "proposal.json"
+    proposal = _base_proposal()
+    # Allow explicit null optional target_key cleanly in normalized payload too.
+    proposal["todos"][0]["target_key"] = None
+    proposal_path.write_text(json.dumps(proposal))
+    monkeypatch.setenv("LOOPX_TASK_STAGE", "plan")
+    monkeypatch.setenv("LOOPX_CLI", str(fake_cli))
+    monkeypatch.setenv("LOOPX_GOAL_ID", "goal-1")
+    monkeypatch.setenv("LOOPX_AGENT_ID", "agent-1")
+    monkeypatch.setenv("LOOPX_PROJECT", str(tmp_path))
+    monkeypatch.setenv("LOOPX_REGISTRY", str(tmp_path / "registry.json"))
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    task_doc = tmp_path / "task.md"
+    task_doc.write_text("Task description\n")
+    monkeypatch.setenv("LOOPX_TASK_DOC", str(task_doc))
+
+    import contextlib
+    import io
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        code = planning_batch.main([str(proposal_path)])
+    assert code == 1
+    payload = json.loads(stdout.getvalue())
+    assert payload["ok"] is False
+    assert payload["stage"] == "goal-acceptance refine"
+    assert payload["error_code"] == "goal_acceptance_invalid_request"
+    assert payload["error_detail"] == "source ref must be bounded nonempty text (got 144 chars, max 128)"
+    assert payload["error_detail"] in payload["error"]

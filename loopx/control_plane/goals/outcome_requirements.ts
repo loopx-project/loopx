@@ -32,30 +32,62 @@ interface OutcomeState extends JsonObject {
  * Caller values and arbitrary provider/IO errors must never use this marker. */
 export class GoalOutcomeValidationError extends AuthorityStoreProtocolError {}
 
+const OPAQUE_ID_MAX = 128;
+const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/;
+const OPAQUE_ID_HINT = "ASCII letters/digits and . _ : @ -, no '/' paths or spaces";
+
 function requireValue(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new GoalOutcomeValidationError(reason);
 }
+function describeTextFailure(value: unknown, max: number): string {
+  if (typeof value !== "string") {
+    const kind = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
+    return `expected string, got ${kind}; max ${max} chars`;
+  }
+  if (value.length === 0) return `must not be empty; max ${max} chars`;
+  if (value.includes("\0")) return `NUL characters are not allowed; max ${max} chars`;
+  if (value !== value.trim()) return `no leading/trailing whitespace; max ${max} chars`;
+  return `got ${value.length} chars, max ${max}`;
+}
 function text(value: unknown, label: string, max = 512): string {
-  requireValue(typeof value === "string" && value === value.trim() && !!value && value.length <= max && !value.includes("\0"), `${label} must be bounded nonempty text`);
+  if (typeof value !== "string" || value !== value.trim() || !value || value.length > max || value.includes("\0")) {
+    throw new GoalOutcomeValidationError(`${label} must be bounded nonempty text (${describeTextFailure(value, max)})`);
+  }
   return value;
 }
 export function isGoalOutcomeIdentifier(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 128 && value === value.trim()
-    && /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(value);
+  return typeof value === "string" && value.length <= OPAQUE_ID_MAX && value === value.trim()
+    && OPAQUE_ID_PATTERN.test(value);
 }
 function id(value: unknown, label: string): string {
-  const result = text(value, label, 128);
-  requireValue(
-    isGoalOutcomeIdentifier(result),
-    `${label} must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`,
-  );
-  return result;
+  if (typeof value !== "string" || value !== value.trim() || !value || value.length > OPAQUE_ID_MAX || value.includes("\0")) {
+    const textDetail = describeTextFailure(value, OPAQUE_ID_MAX);
+    const idNote = typeof value === "string" && value.length > OPAQUE_ID_MAX
+      ? `; must also be an opaque identifier (${OPAQUE_ID_HINT})`
+      : "";
+    throw new GoalOutcomeValidationError(`${label} must be bounded nonempty text (${textDetail})${idNote}`);
+  }
+  requireValue(isGoalOutcomeIdentifier(value), `${label} must be an opaque identifier (${OPAQUE_ID_HINT})`);
+  return value;
 }
 function keys(row: JsonObject, required: string[], optional: string[] = []): void {
-  requireValue(required.every(key => Object.hasOwn(row, key)) && Object.keys(row).every(key => [...required, ...optional].includes(key)), "outcome fields are missing or unsupported");
+  const allowed = [...required, ...optional];
+  const missing = required.filter(key => !Object.hasOwn(row, key));
+  const unsupportedCount = Object.keys(row).filter(key => !allowed.includes(key)).length;
+  if (missing.length > 0 || unsupportedCount > 0) {
+    const details = [
+      ...(missing.length > 0 ? [`missing: ${missing.join(", ")}`] : []),
+      ...(unsupportedCount > 0 ? [`unsupported field count: ${unsupportedCount}`] : []),
+      `allowed: ${allowed.join(", ")}`,
+    ];
+    throw new GoalOutcomeValidationError(`outcome fields are missing or unsupported (${details.join("; ")})`);
+  }
 }
 function list(value: unknown, label: string, max: number): unknown[] {
-  requireValue(Array.isArray(value) && value.length <= max, `${label} exceeds its supported capacity`);
+  if (!Array.isArray(value)) {
+    throw new GoalOutcomeValidationError(`${label} must be an array (max ${max} items)`);
+  }
+  requireValue(value.length <= max, `${label} exceeds its supported capacity (got ${value.length} items, max ${max})`);
   return value;
 }
 function unique(values: string[], label: string): void {requireValue(new Set(values).size === values.length, `${label} contains duplicate ids`);}
