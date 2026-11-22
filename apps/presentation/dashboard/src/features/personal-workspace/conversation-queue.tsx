@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { CornerUpLeft, MoreHorizontal, Pencil, RefreshCw, X } from "lucide-react";
 import { ChatApiError, chatQueueInputRequestSchema, fetchQueuedChatInput, mutateQueuedChatTurn, steerQueuedChatTurn,
   type ChatQueueInputRequest, type ChatQueuedInput, type ChatQueuedTurn } from "../../data/chat";
@@ -40,6 +40,8 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   const [draft, setDraft] = useState<string | null>(recovery.editor?.message ?? null);
   const [editRevision, setEditRevision] = useState<number | null>(recovery.editor?.revision ?? null);
   const textarea = useRef<HTMLTextAreaElement>(null), menuButton = useRef<HTMLButtonElement>(null);
+  const summary = useRef<HTMLElement>(null);
+  const sourceDescriptionId = useId();
   const composing = useRef(false);
   const held = turn.steering?.status === "pending" ? turn.steering : null;
   const sourceEditable = turn.origin === "web" && turn.input_mutation_allowed !== false;
@@ -90,7 +92,13 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   }
   function discard() {
     try {localStorage.removeItem(draftKey);} catch {setActionError(zh ? "草稿恢复信息无法清除，请保留文本。" : "Draft recovery could not be cleared. Retain the text."); return;}
-    setEditing(false); setDraft(null); setEditRevision(null); setMenu(false); menuButton.current?.focus();
+    setEditing(false); setDraft(null); setEditRevision(null); setMenu(false);
+    if (sourceEditable) menuButton.current?.focus();
+    else summary.current?.focus();
+  }
+  function closeRetainedDraft() {
+    setEditing(false);
+    summary.current?.focus();
   }
   async function steer() {
     if (lock.current || !canSteer) return;
@@ -118,10 +126,11 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   }, [open, editing, message, sessionId, turn.turn_id, turn.input_revision, retry]);
   return <li onKeyDown={event => {
     if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-    if (event.key === "Escape" && !busy && !unresolved) {
+    if (event.key === "Escape" && !busy && !unresolved && (menu || editing)) {
       event.preventDefault(); event.stopPropagation();
       if (menu) {setMenu(false); menuButton.current?.focus();}
-      else discard();
+      else if (sourceEditable) discard();
+      else closeRetainedDraft();
       return;
     }
     if (editing && (sourceEditable || event.target === textarea.current)) {
@@ -133,8 +142,9 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
     if (composerKeyAction({...event, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode}, false) === "steer" && canSteer) {
       event.preventDefault(); event.stopPropagation(); void steer();
     }
-  }}><div className="personal-queue-row"><details onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary aria-label={`${zh ? "待处理消息" : "Queued message"} ${index + 1}`}>
+  }}><div className="personal-queue-row"><div className="personal-queue-content"><details onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary ref={summary} aria-label={`${zh ? "待处理消息" : "Queued message"} ${index + 1}`}
+      aria-describedby={sourceEditable ? undefined : sourceDescriptionId}>
       <span>{turn.preview || (zh ? "附件消息" : "Attachments")}</span>
       {turn.attachment_count ? <small>{zh ? `${turn.attachment_count} 个附件` : `${turn.attachment_count} attachments`}</small> : null}
     </summary>
@@ -146,7 +156,15 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
             ? <DocumentAttachment key={attachment.id} dataUrl={attachment.data_url} name={attachment.name} size={attachment.size} zh={zh}/>
             : <img key={attachment.id} src={attachment.data_url} alt={attachment.name}/>)}</>}
     </div> : null}
-  </details><button type="button" className="personal-queue-steer" onClick={() => void steer()}
+  </details>
+    {!sourceEditable ? <p id={sourceDescriptionId} className="personal-queue-source">
+      {zh ? "请在原协作入口编辑或取消排队。" : "Edit or cancel this queued message in its original conversation."}
+    </p> : null}
+    {!sourceEditable && (editing || draft !== null) ? <button type="button" aria-expanded={editing}
+      onClick={() => { if (editing) closeRetainedDraft(); else setEditing(true); }}>
+      {editing ? (zh ? "关闭草稿" : "Close draft") : (zh ? "查看保留的草稿" : "View retained draft")}
+    </button> : null}
+  </div><button type="button" className="personal-queue-steer" onClick={() => void steer()}
     disabled={busy || !canSteer} aria-label={zh ? `插入本轮：待处理消息 ${index + 1}` : `Steer with queued message ${index + 1}`}
     title={turn.attachment_count ? (zh ? "原生本轮插入仅支持文本；附件仍在队列中" : "Native steering supports text only; attachments stay queued")
       : !targetTurnId && !held ? (zh ? "当前回合或执行器不支持插入，消息仍在队列中" : "This turn or executor cannot be steered; the message stays queued")
@@ -156,6 +174,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
     aria-label={!sourceEditable
       ? (zh ? `编辑或取消不可用：待处理消息 ${index + 1}` : `Editing or cancelling unavailable for queued message ${index + 1}`)
       : (zh ? `更多操作：待处理消息 ${index + 1}` : `More actions for queued message ${index + 1}`)}
+    aria-describedby={sourceEditable ? undefined : sourceDescriptionId}
     aria-expanded={menu && editable} onClick={() => setMenu(!menu)}><MoreHorizontal size={16}/></button>
     {menu && editable ? <div className="personal-queue-menu">
       <button type="button" onClick={() => {setMenu(false); setEditing(true); setOpen(true);}}><Pencil size={14}/>{zh ? "编辑" : "Edit"}</button>

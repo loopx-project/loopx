@@ -3,10 +3,10 @@
 .personal-conversation-queue > ol { max-height: min(28dvh, 220px); overflow: auto; overscroll-behavior: contain; list-style: none; padding: 0; margin: 0; border: 1px solid var(--pw-line-strong); border-radius: 12px; background: #fff; }
 .personal-conversation-queue > ol > li + li { border-top: 1px solid var(--pw-line-strong); }
 .personal-queue-row { display: flex; align-items: start; gap: 8px; padding: 8px 10px; }
-.personal-queue-row details { min-width: 0; flex: 1; }
+.personal-queue-content { min-width: 0; flex: 1; }
 .personal-queue-row summary { cursor: pointer; }
 .personal-queue-row summary > span { display: -webkit-inline-box; max-width: calc(100% - 16px); vertical-align: top; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
-.personal-queue-row summary small { display: block; margin: 4px 0 0 16px; color: var(--pw-muted); }
+.personal-queue-row summary small, .personal-queue-source { display: block; margin: 4px 0 0 16px; color: var(--pw-muted); overflow-wrap: anywhere; }
 .personal-conversation-queue button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px; padding: 4px 6px; border: 0; border-radius: 6px; color: var(--pw-muted); background: transparent; cursor: pointer; }
 .personal-conversation-queue button:hover { background: var(--pw-blue-soft); color: var(--pw-blue-ink); }
 .personal-conversation-queue button:disabled { opacity: .45; cursor: default; }

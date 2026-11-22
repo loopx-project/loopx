@@ -202,6 +202,31 @@ export const attachedHostFollowUpScenario = {
         || await queuedFollowUp.getByRole("button", {name: "保存", exact: true}).count()) {
         throw new Error("A bound queue reopened a retained draft as a writable change");
       }
+
+      for (const [width, height] of [[1440, 900], [390, 844]]) {
+        await page.setViewportSize({width, height});
+        const description = queuedFollowUp.getByText("请在原协作入口编辑或取消排队。", {exact: true});
+        const summary = queuedFollowUp.locator(".personal-queue-row summary");
+        await page.screenshot({path: resolve(outputDir, `bound-queue-review-draft-${width}.png`), fullPage: false});
+        const canReadOrigin = await description.isVisible()
+          && (await summary.getAttribute("aria-describedby")) === await description.getAttribute("id");
+        const reopen = queuedFollowUp.getByRole("button", {name: "查看保留的草稿", exact: true});
+        if (width === 1440) {
+          await boundDraft.press("Escape");
+        } else {
+          await queuedFollowUp.getByRole("button", {name: "关闭草稿", exact: true}).click();
+        }
+        await boundDraft.waitFor({state: "hidden"});
+        if (!canReadOrigin || !await reopen.isVisible()
+          || !await summary.evaluate(element => element === document.activeElement)) {
+          throw new Error(`Bound queue source and preserved draft must remain reachable after closing (${width}px)`);
+        }
+        await reopen.click();
+        if (await boundDraft.inputValue() !== retainedDraft || posts.length !== 2) {
+          throw new Error("Closing a read-only draft deleted it or sent another message");
+        }
+      }
+      await page.setViewportSize({width: 1440, height: 900});
       await composer.fill("主输入框的另一份草稿");
       page.__loopxRuntime.queuedTurns.set(attachedSessionId,
         page.__loopxRuntime.queuedTurns.get(attachedSessionId).filter(turn => turn.turn_id !== "turn-queued-1"));
