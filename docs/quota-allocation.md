@@ -406,9 +406,19 @@ When a quota spend remains owed after verified writeback,
 obligation, Turn, registry/runtime route and spend source. Execute it unchanged.
 The typed blocked no-spend closeout has no spend command. In
 `spend_receipt_required`, the same idempotent spend
-writer restores the receipt without another debit. Refresh and recovery never
-spend automatically. JSON and normal/recovery Markdown expose the same step.
-Rejected recovery reports observed progress without offering a spend command.
+writer restores the receipt without another debit. Ordinary refresh and recovery
+report the remaining step. An explicit `refresh-state --settle-turn` may execute
+that command after verified writeback. A definitive `index_digest_conflict` with
+`appended=false` allows one retry of the same command within the original timeout.
+The retry rereads the original Turn and can replay a concurrent settlement. For
+an ambiguous outcome, the adapter reads the receipts and returns any step still
+owed. JSON and normal/recovery Markdown expose the same step. Rejected recovery
+reports observed progress without offering a spend command.
+
+普通刷新与恢复返回原轮次剩余操作。显式指定 `refresh-state --settle-turn` 时，写回
+核验后可执行原结算命令。若确认 `index_digest_conflict` 且 `appended=false`，则在
+原超时窗口内用同一命令重试一次，重新读取原轮次，也可回读并发完成的结算。结果不明
+时读取回执并返回仍待执行的步骤。
 The raw Python refresh API returns `writeback_receipt_required` until its CLI
 caller appends the refresh receipt and rereads the chain; it must not offer a
 spend command before that point. Older guards without a persisted spend source

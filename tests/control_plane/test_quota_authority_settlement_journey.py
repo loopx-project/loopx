@@ -16,10 +16,12 @@ from canonical_authority_fixture import initialize_canonical_authority
 from codex_checkpoint_fixture import selected_context_values
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.control_plane.quota import slot_accounting
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
-from loopx.rollout_event_log import rollout_event_log_path
+from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.entrypoint import main as cli_main
 from loopx.presentation.renderers.quota_event_markdown import render_quota_slot_preview_markdown
+from loopx.rollout_event_log import rollout_event_log_path
 from loopx.state_refresh import render_state_refresh_markdown
 from loopx.todos import list_goal_todos
 
@@ -901,3 +903,52 @@ def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp
     assert code == 0, next_wake
     assert next_wake["effective_action"] != "unsettled_host_turn_recovery"
     assert cli._spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_spend_index_conflict_keeps_its_diagnostic_and_retries_the_same_turn(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0, guard
+    code, refreshed = _refresh(project, runtime, registry)
+    assert code == 0, refreshed
+    command = refreshed["settlement_owed"]["command"]
+
+    commit = slot_accounting.record_quota_slot_spend_from_preview
+
+    def spend_with_competing_write(preview, status, **kwargs):
+        # Commit another real spend after the original preview captured its basis.
+        code, competing = cli._run_cli(
+            registry, runtime, "quota", "spend-slot", "--execute", "--source", "controller",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, cwd=project,
+        )
+        assert code == 0 and competing["appended"] is True, competing
+        return commit(preview, status, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.chdir(project)
+        patch.setattr(
+            slot_accounting, "record_quota_slot_spend_from_preview", spend_with_competing_write,
+        )
+        code = cli_main(shlex.split(command)[1:])
+    rejected = json.loads(capsys.readouterr().out)
+    assert code == 1 and rejected["ok"] is False, rejected
+    assert cli._spend_run_count(runtime) == 1
+    assert rejected["error_code"] == "index_digest_conflict", rejected
+    assert rejected["status"] == "index_digest_conflict"
+    assert rejected["appended"] is False
+    assert "same Turn" in rejected["recommended_action"]
+
+    code, still_owed = _refresh(project, runtime, registry)
+    assert code == 0 and still_owed["settlement_owed"]["command"] == command, still_owed
+    code, recovered = _execute(command, project, runtime, registry)
+    assert code == 0 and recovered["settlement_progress"]["state"] == "settled", recovered
+    assert recovered["settlement_identity"] == refreshed["settlement_identity"]
+    assert recovered["appended"] is True
+    code, replay = _execute(command, project, runtime, registry)
+    assert code == 0 and replay["appended"] is False, replay
+    assert replay["settlement_identity"] == recovered["settlement_identity"]
+    assert cli._spend_run_count(runtime) == 2
