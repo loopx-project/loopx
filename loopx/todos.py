@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
 
+from .control_plane.todos.completed_archive import (
+    ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE as ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+)
 from .control_plane.todos.mutation_api import (
     add_goal_todo as add_goal_todo,
     update_goal_todo as update_goal_todo,
     complete_goal_todo as complete_goal_todo,
     supersede_goal_todo as supersede_goal_todo,
     archive_completed_todos as archive_completed_todos,
-    ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE as ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
 )
 from .control_plane.todos.list_readback import list_goal_todos as list_goal_todos
 from .control_plane.todos.active_state_editing import (
@@ -111,7 +112,7 @@ _EXPORTS = {
     "effective_runtime_root": "loopx.paths",
     "supersede_goal_todo": "loopx.control_plane.todos.mutation_api",
     "archive_completed_todos": "loopx.control_plane.todos.mutation_api",
-    "ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE": "loopx.control_plane.todos.mutation_api",
+    "ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE": "loopx.control_plane.todos.completed_archive",
     "resolve_todo_state": "loopx.control_plane.todos.path_resolution",
 }
 
@@ -123,7 +124,7 @@ _ALIASES = {
 }
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     owner = _EXPORTS.get(name)
     if owner is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
