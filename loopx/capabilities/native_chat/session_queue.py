@@ -84,9 +84,10 @@ def _drain_session_queue_events(controller: Any, *, session_id: str, work_dir: P
                     # normal preparation and execution fences below.
                     turn = active
                 else:
-                    if not _is_observation_only_monitor_turn(active):
-                        with controller.lock:
-                            attached = controller.adapters.get(session_id)
+                    with controller.lock:
+                        attached = controller.adapters.get(session_id)
+                        live_worker = controller._has_live_turn_worker(session, active)
+                    if not live_worker and not _is_observation_only_monitor_turn(active):
                         if attached is None or not attached.healthcheck():
                             try:
                                 controller._ensure_adapter(
