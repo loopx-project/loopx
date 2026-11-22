@@ -470,6 +470,7 @@ def execute_quota_should_run(
                 turn_instance_id=heartbeat_turn_id,
                 existing=execution.heartbeat_receipt_existing,
                 goal_ref=goal_ref,
+                scheduler_execution_context=context.scheduler_context,
             )
         else:
             (

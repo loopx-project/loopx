@@ -14,12 +14,21 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import time
 from typing import Any
 
+from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
+from .report_failure_proof import (
+    build_report_quota_request,
+    build_report_timeout_request,
+    is_report_failure_contradicted,
+    observe_report_failure,
+    verify_report_window_failure,
+)
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
@@ -72,12 +81,20 @@ def report_turn(store: Any, actor: Mapping[str, Any], window: Mapping[str, Any])
     """Read the one bounded continuation, retaining the original failed Turn."""
     operation = "report." + window["window_id"]
     original = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation))
-    continued = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
-    if continued is not None:
+    quota = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
+    timeout_retry = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".timeout-recovery"))
+    if quota is not None and timeout_retry is not None:
+        raise ValueError("conflicting report continuations exist")
+    for suffix, key, label, continued in (
+        (".quota-recovery", "report_quota_recovery", "quota", quota),
+        (".timeout-recovery", "report_timeout_recovery", "timeout", timeout_retry),
+    ):
+        if continued is None:
+            continue
         request = continued.get("loopx_request") or {}
-        if (not original or (request.get("report_quota_recovery") or {}).get("original_turn_id") != original["turn_id"]
-                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + ".quota-recovery"):
-            raise ValueError("the report quota continuation changed its original identity")
+        if (not original or (request.get(key) or {}).get("original_turn_id") != original["turn_id"]
+                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + suffix):
+            raise ValueError(f"the report {label} continuation changed its original identity")
         return continued
     return original
 
@@ -92,6 +109,128 @@ def _normalize_report_kernel_candidate(candidate: Mapping[str, Any]) -> dict[str
     if normalized.get("delivery_batch_scale") == "multi_surface_or_implementation":
         normalized["delivery_batch_scale"] = "multi_surface"
     return normalized
+
+
+def _split_evidence_text_chunks(text: str, max_item_chars: int) -> list[str]:
+    """Split a single normalized evidence string cleanly at natural boundaries."""
+    if len(text) <= max_item_chars:
+        return [text]
+    chunks: list[str] = []
+    rest = text
+    delimiters = ("; ", ". ", "；", "。", ", ", "，", " ")
+    while len(rest) > max_item_chars:
+        split_at = -1
+        matched_delim = ""
+        for delim in delimiters:
+            pos = rest.rfind(delim, 1, max_item_chars)
+            if pos > 0:
+                split_at = pos
+                matched_delim = delim
+                break
+        if split_at <= 0:
+            chunks.append(rest[:max_item_chars])
+            rest = rest[max_item_chars:].lstrip()
+        elif matched_delim in ("；", "。", "，"):
+            end = min(split_at + len(matched_delim), max_item_chars)
+            chunks.append(rest[:end].strip())
+            rest = rest[end:].lstrip()
+        else:
+            head = rest[:split_at].rstrip()
+            if matched_delim == ". " and len(head) + 1 <= max_item_chars:
+                head += "."
+            chunks.append(head)
+            rest = rest[split_at + len(matched_delim) :].lstrip()
+    if rest:
+        chunks.append(rest)
+    return [chunk for chunk in chunks if chunk]
+
+
+def _append_bounded_ellipsis(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if limit <= 3:
+        return text[:limit]
+    if len(text) + 3 <= limit and not text.endswith("..."):
+        return text + "..."
+    trimmed = text[: max(1, limit - 3)].rstrip()
+    return (trimmed or text[: max(1, limit - 3)]) + "..."
+
+
+def _split_bounded_evidence_items(
+    raw: Any,
+    *,
+    max_items: int = 8,
+    max_item_chars: int = 240,
+    max_total_chars: int = 1_200,
+) -> Any:
+    """Split over-long Steward evidence strings without masking invalid shapes."""
+    if not isinstance(raw, list) or not raw:
+        return raw
+    if not all(isinstance(item, str) and item.strip() for item in raw):
+        return raw
+    chunks: list[str] = []
+    for item in raw:
+        normalized = " ".join(item.split()).strip()
+        chunks.extend(_split_evidence_text_chunks(normalized, max_item_chars))
+    if len(chunks) > max_items:
+        merged: list[str] = []
+        for chunk in chunks:
+            if merged and len(merged[-1]) + 2 + len(chunk) <= max_item_chars:
+                merged[-1] = f"{merged[-1]}; {chunk}"
+            else:
+                merged.append(chunk)
+        chunks = merged
+    clipped = len(chunks) > max_items
+    if clipped:
+        chunks = chunks[:max_items]
+    bounded: list[str] = []
+    used = 0
+    for idx, chunk in enumerate(chunks):
+        remaining = max_total_chars - used
+        if remaining <= 0:
+            clipped = True
+            break
+        if len(chunk) > remaining or len(chunk) > max_item_chars:
+            cap = min(max_item_chars, remaining)
+            bounded.append(_append_bounded_ellipsis(chunk, cap))
+            used += len(bounded[-1])
+            clipped = True
+            break
+        bounded.append(chunk)
+        used += len(chunk)
+    if clipped and bounded and not bounded[-1].endswith("..."):
+        room = min(max_item_chars, len(bounded[-1]) + (max_total_chars - used))
+        bounded[-1] = _append_bounded_ellipsis(bounded[-1], room)
+    return bounded
+
+
+def _normalize_steward_advancement_kernel_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep Steward advancement evidence within kernel per-item and total limits."""
+    normalized = dict(candidate)
+    if normalized.get("delivery_batch_scale") == "multi_surface_or_implementation":
+        normalized["delivery_batch_scale"] = "multi_surface"
+    for field in ("work_evidence", "validation_evidence"):
+        if field in normalized:
+            normalized[field] = _split_bounded_evidence_items(normalized[field])
+    return normalized
+
+
+def _is_zero_effect_replan_selection_deferral(result: Mapping[str, Any]) -> bool:
+    """Identify a zero-effect pre-host autonomous_replan selection refusal."""
+    if result.get("ok") is not False or result.get("error_code") != "turn_todo_selection_deferred":
+        return False
+    refusal = result.get("selection_rejection")
+    if (not isinstance(refusal, Mapping) or refusal.get("state") != "deferred"
+            or refusal.get("reason_code") != "autonomous_replan"
+            or refusal.get("recovery_action") != "reenter_guard_without_selection"):
+        return False
+    effects = result.get("effects")
+    if not isinstance(effects, Mapping):
+        return False
+    return all(
+        effects.get(key) is False
+        for key in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")
+    )
 
 
 class StewardTurnHost:
@@ -194,6 +333,7 @@ class StewardTurnHost:
             **({"report_launch_recovery": launch_recovery} if launch_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **self.report_quota_basis(request),
+            **self.report_timeout_basis(request),
             **self.monitor_restart_basis(request),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
@@ -289,9 +429,10 @@ class StewardTurnHost:
             next_client_id = base + "." + carrier["turn_id"]
         return {"request": request, "client_id": next_client_id}
 
-    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def _report_continuation_basis(self, request: Mapping[str, Any], *,
+                                   recovery_key: str, basis_key: str) -> dict[str, Any]:
         """Transport original journal observations; the typed owner admits work."""
-        recovery = request.get("report_quota_recovery")
+        recovery = request.get(recovery_key)
         if recovery is None:
             return {}
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
@@ -303,54 +444,52 @@ class StewardTurnHost:
         reports, owner = report_service(self.controller, actor)
         _, window = reports.current_window(owner)
         folder = attempt_directory(reports.root, window) if window else None
-        return {"report_quota_basis": {"original": original,
+        return {basis_key: {"original": original,
             "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                 agent_id=actor["agent_id"], turn_key=result["resume_turn_key"]),
             "generation_present": folder is None or any((folder / name).exists() for name in
                 ("editorial-response.json", "private-generation.json", "private-delivery.json")),
             "observed_at": time.time()}}
 
+    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._report_continuation_basis(request, recovery_key="report_quota_recovery",
+            basis_key="report_quota_basis")
+
+    def report_timeout_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._report_continuation_basis(request, recovery_key="report_timeout_recovery",
+            basis_key="report_timeout_basis")
+
     def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Read the original native failure without starting or resuming work."""
-        result = (original.get("response") or {}).get("native_loopx") or {}
-        request = original.get("loopx_request") or {}
-        if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or result.get("result_kind") != "host_failure" or not original.get("upstream_turn_id")):
-            return None
-        from .codex_adapter import CodexAppServerAdapter
-        from .codex_context import checked_session_home
-        session = self.store.load_session(original["session_id"])
-        if not session or not session.get("codex_home") or not session.get("upstream_thread_id"):
-            return None
-        history = session.get("upstream_context_history") or []
-        if not isinstance(history, list) or any(not isinstance(item, dict)
-                or not isinstance(item.get("thread_id"), str) or not item["thread_id"]
-                for item in history):
-            return None
-        # Context replacement retains native provenance on this same Session.
-        # Read the original refusal there; never resume a historical thread.
-        threads = [session["upstream_thread_id"], *(item["thread_id"] for item in reversed(history))]
-        proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
-            codex_home=Path(session["codex_home"]),
-            model_auth_home=checked_session_home(self.controller.codex_home, session),
-            thread_ids=list(dict.fromkeys(threads)), turn_id=original["upstream_turn_id"])
-        if (not proof or proof.get("turn_id") != original["upstream_turn_id"]
-                or proof.get("thread_id") not in threads or proof.get("only_original_user_item") is not True
-                or not proof.get("codex_error_info")):
-            return None
-        return proof
+        return observe_report_failure(self.controller, self.store, original)
 
-    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+    def report_window_failure_verified(
+        self, original: Mapping[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
+        """Query live provider history first; fall back to retained proof only if unavailable."""
+        return verify_report_window_failure(
+            self.controller, self.store, original, window, generation_locked=generation_locked,
+        )
+
+    def report_failure_contradicted(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+        """Return True when a prior live observation contradicted this Turn's failure proof."""
+        return is_report_failure_contradicted(self.controller.coordination_runtime_root, original, window)
+
+    def report_quota_request(self, original: Mapping[str, Any], *,
+                             report_window: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Observe quota recovery, never resume or rewrite the failed native Turn."""
-        request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None:
-            return None
-        proof = self.report_failure_observation(original)
-        if (not proof or proof.get("only_original_user_item") is not True
-                or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
-            return None
-        return {**request, "turn_instance_id": request["turn_instance_id"] + ".quota-recovery",
-            "report_quota_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+        fallback = (
+            None
+            if getattr(self.report_failure_observation, "__func__", None) is _DEFAULT_REPORT_FAILURE_OBSERVATION
+            else self.report_failure_observation
+        )
+        return build_report_quota_request(
+            self.controller, self.store, original, report_window=report_window, fallback_observe_fn=fallback,
+        )
+
+    def report_timeout_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Observe idle Antigravity timeout for one bounded isolated-cascade retry."""
+        return build_report_timeout_request(original, observe_fn=self.report_failure_observation)
 
     def report_selection_recovery(self, original: dict[str, Any], *,
                                   probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1024,7 +1163,11 @@ class StewardTurnHost:
         quota_observation = None
         if "quota_probe" in prepared:
             quota_observation = prepared["quota_probe"]
-            quota_observation["request"] = self.report_quota_request(quota_observation["original"])
+            original_turn = quota_observation["original"]
+            quota_observation["request"] = (
+                self.report_quota_request(original_turn, report_window=report_window)
+                or self.report_timeout_request(original_turn)
+            )
             prepared = inspect_submission(quota_observation)
         if "turn" in prepared:
             return prepared["turn"], False
@@ -1127,10 +1270,89 @@ class StewardTurnHost:
         payload["prior_handoff_receipts"] = prior[:40]
         return payload
 
+    def _governance_replan_context(self, actor: Mapping[str, Any], authority: Mapping[str, Any]) -> dict[str, Any]:
+        """Project public-safe review/writeback/vision context for text-only Steward replanning."""
+        from ...cli import build_parser
+        from ...cli_commands.quota_native_context import read_replan_view
+        from ...control_plane.goals.goal_frontier import latest_agent_vision_from_status_payload
+        from ...control_plane.todos.list_readback import list_goal_todos
+        from .steward_commands import NativeStewardCommandError, native_command
+
+        model_input = authority.get("_model_input")
+        detail_ref = model_input.get("detail_ref") if isinstance(model_input, Mapping) else None
+        packet = authority.get("replan_action_packet") or (
+            detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        )
+
+        def _read_stage(cmd_str: Any) -> dict[str, Any] | None:
+            if not isinstance(cmd_str, str) or not cmd_str.strip():
+                return None
+            try:
+                tokens = shlex.split(cmd_str)
+                q_idx = tokens.index("quota")
+                parsed = build_parser().parse_args(tokens[q_idx:])
+                view = read_replan_view(parsed)
+                if isinstance(view, Mapping) and view.get("ok") is True:
+                    return dict(view)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError, EffectRuntimeRejected, SystemExit):
+                return None
+            return None
+
+        payload: dict[str, Any] = {}
+        if isinstance(packet, Mapping):
+            review_view = _read_stage(packet.get("review"))
+            if review_view is not None:
+                core_goal = review_view.get("core_goal")
+                payload["review"] = {
+                    "obligation_id": review_view.get("obligation_id"),
+                    "context_id": review_view.get("context_id"),
+                    "objective": core_goal.get("objective") if isinstance(core_goal, Mapping) else None,
+                    "triggers": review_view.get("triggers"),
+                    "recent_evidence": list(review_view.get("evidence") or [])[:12],
+                    "decision_followthrough": review_view.get("decision_followthrough"),
+                }
+            writeback_view = _read_stage(packet.get("writeback"))
+            if writeback_view is not None:
+                payload["writeback"] = {
+                    "obligation_id": writeback_view.get("obligation_id"),
+                    "context_id": writeback_view.get("context_id"),
+                    "required_outcome": writeback_view.get("required_outcome"),
+                    "writeback_contract": writeback_view.get("writeback_contract"),
+                    "stride_control": writeback_view.get("stride_control"),
+                }
+        try:
+            status_payload = native_command(self.controller, ["status", "--goal-id", actor["goal_id"]])
+            latest_vision = latest_agent_vision_from_status_payload(
+                status_payload, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            )
+            if isinstance(latest_vision, Mapping):
+                payload["current_agent_vision"] = {
+                    k: latest_vision.get(k)
+                    for k in ("schema_version", "state", "vision_patch", "todo_delta")
+                    if latest_vision.get(k) is not None
+                }
+        except (NativeStewardCommandError, OSError, ValueError, KeyError, TypeError, RuntimeError):
+            pass
+        try:
+            agent_todos = list_goal_todos(
+                registry_path=self.controller.registry_path,
+                runtime_root_arg=str(self.controller.coordination_runtime_root),
+                goal_id=actor["goal_id"],
+                role="agent",
+            ).get("todos", [])
+            payload["open_agent_todos"] = [
+                {k: row.get(k) for k in ("todo_id", "task_class", "priority", "target_key", "title")}
+                for row in agent_todos
+                if row.get("status") == "open"
+            ][:16]
+        except (NativeStewardCommandError, OSError, ValueError, KeyError, TypeError, RuntimeError):
+            pass
+        return payload
+
     @staticmethod
     def _normalize_steward_actions(candidate: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
         from ...control_plane.collaboration.inbox import normalize_handoff
-        state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
+        state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "owner_report": None, "validation_error": None}
         allowed_targets = {
             (row["goal_id"], row["agent_id"])
             for row in ((context.get("context_delegation") or {}).get("targets") or [])
@@ -1171,6 +1393,17 @@ class StewardTurnHost:
                 seen_keys.add(key)
                 cleaned.append({"dedupe_key": key, "priority": prio, "text": text})
             state["user_actions"] = cleaned
+        raw_report = candidate.get("steward_owner_report")
+        if raw_report is not None:
+            markdown = raw_report.get("markdown") if isinstance(raw_report, Mapping) else raw_report
+            if not isinstance(markdown, str):
+                state["validation_error"] = "steward_owner_report must be a markdown string or {markdown}"
+                return state
+            normalized_report = markdown.strip()
+            if not normalized_report or len(normalized_report) > 24000:
+                state["validation_error"] = "steward_owner_report markdown must be 1..24000 characters"
+                return state
+            state["owner_report"] = normalized_report
         return state
 
     def _apply_steward_user_actions(self, actor: Mapping[str, Any], actions: Sequence[Mapping[str, str]],
@@ -1269,7 +1502,7 @@ class StewardTurnHost:
         managed_answer = ""
         managed_lease, managed_lease_request = None, None
         preparation_status = None
-        steward_actions_state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "validation_error": None}
+        steward_actions_state: dict[str, Any] = {"context_handoff": None, "user_actions": [], "owner_report": None, "validation_error": None}
 
         def report_lease_proof():
             return self._task_lease_proof(request, report_lease)
@@ -1351,11 +1584,18 @@ class StewardTurnHost:
             # it is data alongside the signed native work, never a new actor.
             prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn or steward_advancement) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if governance_work:
+                gov_ctx = self._governance_replan_context(actor, authority)
                 prompt += (
-                    "\nGovernance contract reminder: Settle the pending autonomous replan by returning `result_kind='replan_required'` (or `'wait'`). "
+                    "\nGovernance contract reminder: Settle the pending autonomous replan by returning `result_kind='replan_required'` (or `'wait'` only if required evidence is genuinely unavailable). "
                     "If you emit `delivery_outcome='outcome_gap'`, you MUST also supply `progress_result_class='blocked'`, `progress_blocker_id`, and `progress_evidence_id`; "
-                    "otherwise use `'outcome_progress'` or omit `delivery_outcome`."
+                    "otherwise use `'outcome_progress'` or omit `delivery_outcome`. "
+                    "Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 public-safe items, <=1200 chars total per field) with zero local file paths. "
+                    "When `Steward governance replan context` supplies `writeback`: set `agent_vision_json` (JSON string of `goal_vision_replan_contract_v0`) keeping total counted text <=1400 chars (hard cap 1800; keep each `stride_decision` plan/reason/probe field <=60 chars), and omit `vision_unchanged_reason`. "
+                    "If keeping `current_agent_vision.vision_patch` identical, set `path_delta_mode='unchanged'` and `path_delta.outcome='continue'` (or `'no_change'`); if updating any `vision_patch` field or creating an initial baseline, set `path_delta_mode='material_replan'` and `path_delta.outcome='replan'`. "
+                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null)."
                 )
+                if gov_ctx:
+                    prompt += "\nSteward governance replan context (data):\n" + json.dumps(gov_ctx, ensure_ascii=False)
             if report_work and not governance_work:
                 prompt += report_context
             if steward_advancement and not governance_work:
@@ -1367,10 +1607,11 @@ class StewardTurnHost:
                 followup_ctx = self._steward_followup_context(actor, session_id, request, authority)
                 prompt += (
                     "\nSteward advancement instructions: Evaluate the monitor prompt and signal snapshot against authorized recipients (`context_delegation.targets`), prior receipts (`prior_handoff_receipts`, avoid duplicate delivery for unchanged PR@headRefOid), and open user todos (`open_user_todos`). "
-                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
+                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, `stalled_since`, `author_replied_after_request_changes`, optional `stalled_bucket` (`awaiting_maintainer_reply` | `under_24h` | `24h_to_72h` | `72h_plus` | `7d_plus`), and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `latest_request_changes_review_id`, `stalled_since`, `author_replied_after_request_changes`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
                     "You may include optional top-level JSON fields alongside the normal kernel fields: "
                     "`context_handoff` (single object or array <=32 of {goal_id, agent_id, brief} with `schema_version='collaboration_brief_v0'` and `inputs=[]` when referencing URLs/PRs, restricted to `context_delegation.targets`), "
-                    "and `steward_user_actions` (array <=16 of {dedupe_key, priority:'P0'|'P1'|'P2', text}). Set `result_kind='validated_completion'` when triage/handoff/user-action preparation is complete.\n"
+                    "`steward_owner_report` (optional non-empty Markdown string <=24000 chars or `{markdown}` delivered once directly to the bound Steward App and Feishu conversation; omit or set `null` when silent/no report should be sent), "
+                    "and `steward_user_actions` (array <=16 of {dedupe_key, priority:'P0'|'P1'|'P2', text}; do NOT emit per-PR `steward_user_actions` when the monitor prompt asks for an aggregated report). Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 items, <=1200 chars total per field). Set `result_kind='validated_completion'` when triage/handoff/report/user-action preparation is complete.\n"
                     "Steward monitor & dedupe context (data):\n" + json.dumps(followup_ctx, ensure_ascii=False)
                 )
             if request.get("work_kind") == "scheduled_task":
@@ -1419,7 +1660,22 @@ class StewardTurnHost:
                         "validation": managed_turn.validation_basis["plan"], "task_lease": managed_lease})
                     response = adapter.start_native_task_turn(prompt, event_sink, policy)
                 else:
-                    response = adapter.start_turn(prompt, event_sink)
+                    # Inline governance (.replan) shares the outer Chat turn_id; suppress
+                    # terminal answer and native-result capture so the primary turn keeps
+                    # the sole immutable native-results/{turn_id}.json and visible stream.
+                    invocation_sink = (
+                        (
+                            lambda kind, payload: event_sink(kind, payload)
+                            if kind not in {"answer.delta", "answer.final", "turn.native_result"}
+                            else None
+                        )
+                        if (governance_work and event_sink is not None)
+                        else event_sink
+                    )
+                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                        response = adapter.start_turn(prompt, invocation_sink, isolated_cascade=True)
+                    else:
+                        response = adapter.start_turn(prompt, invocation_sink)
             finally:
                 guard_owner._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.
@@ -1429,6 +1685,13 @@ class StewardTurnHost:
                 steward_actions_state.update(self._normalize_steward_actions(kernel_candidate, context))
                 kernel_candidate.pop("context_handoff", None)
                 kernel_candidate.pop("steward_user_actions", None)
+                kernel_candidate.pop("steward_owner_report", None)
+                kernel_candidate = _normalize_steward_advancement_kernel_candidate(kernel_candidate)
+            elif governance_work and kernel_candidate is not None:
+                kernel_candidate.pop("context_handoff", None)
+                kernel_candidate.pop("steward_user_actions", None)
+                kernel_candidate.pop("steward_owner_report", None)
+                kernel_candidate = _normalize_steward_advancement_kernel_candidate(kernel_candidate)
             if governance_work and kernel_candidate and kernel_candidate.get("result_kind") not in {"replan_required", "wait", "user_action_required", "iteration_failed"}:
                 kernel_candidate = {"result_kind": "wait", "classification": "report_replan_not_settled",
                     "next_action": "Retain the original report until its native semantic replan is settled."}
@@ -1534,18 +1797,55 @@ class StewardTurnHost:
                 return {"status": "passed", "validator_kind": "callback",
                     "summary": "steward advancement non-completion result recorded"}
 
-            handle_turn_command(args, registry_path=self.controller.registry_path,
-                runtime_root_arg=str(self.controller.coordination_runtime_root),
-                output_format=lambda *_a, **_kw: "json",
-                print_payload=lambda value, *_a: result.update(value),
-                native_host_runner=run, native_session_binding_resolver=session_binding,
-                native_execution_preparer=prepare_native_task if not report_work else None,
-                **({"native_completion_lease_resolver": report_lease_proof,
-                    "native_task_validator": self._report_validator(request)} if report_work else
-                   {"native_task_validator": managed_turn.validator(request, turn_id=turn_id),
-                    "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if managed_turn else
-                   {"native_task_validator": steward_validator,
-                    "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if steward_advancement else {}))
+            def run_primary_turn() -> None:
+                result.clear()
+                handle_turn_command(args, registry_path=self.controller.registry_path,
+                    runtime_root_arg=str(self.controller.coordination_runtime_root),
+                    output_format=lambda *_a, **_kw: "json",
+                    print_payload=lambda value, *_a: result.update(value),
+                    native_host_runner=run, native_session_binding_resolver=session_binding,
+                    native_execution_preparer=prepare_native_task if not report_work else None,
+                    **({"native_completion_lease_resolver": report_lease_proof,
+                        "native_task_validator": self._report_validator(request)} if report_work else
+                       {"native_task_validator": managed_turn.validator(request, turn_id=turn_id),
+                        "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if managed_turn else
+                       {"native_task_validator": steward_validator,
+                        "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if steward_advancement else {}))
+
+            run_primary_turn()
+            if (steward_advancement and request.get("todo_id") and not request.get("resume_turn_key")
+                    and _is_zero_effect_replan_selection_deferral(result)):
+                governance_args = type(args)(**vars(args))
+                governance_args.todo_id, governance_args.validation_command_json = None, None
+                governance_args.turn_instance_id = request["turn_instance_id"] + ".replan"
+                governance: dict[str, Any] = {}
+                governance_work = True
+                try:
+                    handle_turn_command(governance_args, registry_path=self.controller.registry_path,
+                        runtime_root_arg=str(self.controller.coordination_runtime_root),
+                        output_format=lambda *_a, **_kw: "json",
+                        print_payload=lambda value, *_a: governance.update(value),
+                        native_host_runner=run, native_session_binding_resolver=session_binding)
+                finally:
+                    governance_work = False
+                self.store.append_event(session_id, turn_id, kind="native_loopx.replan_result", payload=governance)
+                replan_cleared = (
+                    governance.get("status") == "committed"
+                    and governance.get("result_kind") == "replan_required"
+                ) or (
+                    governance.get("status") == "stopped"
+                    and isinstance(governance.get("host_result"), Mapping)
+                    and governance["host_result"].get("classification") == "report_replan_not_admitted"
+                    and self._cleared_replan_guard(actor) is not None
+                )
+                if replan_cleared:
+                    run_primary_turn()
+                elif isinstance(governance.get("effects"), Mapping):
+                    merged_effects = dict(result.get("effects") or {})
+                    for key in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"):
+                        if governance["effects"].get(key) is True:
+                            merged_effects[key] = True
+                    result["effects"] = merged_effects
         if preparation_status is not None:
             # Validation stopped preparation before the claim or model call.
             result["status"] = preparation_status
@@ -1587,13 +1887,36 @@ class StewardTurnHost:
                             observed=observed, selection_recovery=selection_recovery)
                 user_action_receipts = self._apply_steward_user_actions(
                     actor, steward_actions_state["user_actions"], request["turn_instance_id"])
+        owner_report = (steward_actions_state["owner_report"]
+            if steward_advancement and result.get("status") == "committed" else None)
+        if owner_report:
+            from ...registry import atomic_write_json
+            from .steward_monitor import steward_monitor_delivery_dir
+            delivery_path = steward_monitor_delivery_dir(self.controller.coordination_runtime_root, actor["goal_id"]) / f"{turn_id}.json"
+            atomic_write_json(delivery_path, {
+                "schema_version": "steward_monitor_report_delivery_v0",
+                "goal_id": actor["goal_id"],
+                "agent_id": actor["agent_id"],
+                "session_id": actor["session_id"],
+                "turn_id": turn_id,
+                "turn_instance_id": request["turn_instance_id"],
+                "todo_id": (managed_lease_request or request).get("todo_id"),
+                "markdown": owner_report,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "delivery_status": "pending",
+                "deliveries": {},
+            })
         committed_handoff = (steward_actions_state["context_handoff"]
             if steward_advancement and result.get("status") == "committed" else None)
         return {"schema_version": "loopx_chat_agent_response_v0", "message":
             "当前没有可执行且已配置独立验收的原生任务，尚未启动模型；请检查原任务的验收配置。" if managed_turn and managed_turn.validation_unavailable else
-            (managed_answer or "本轮任务已完成结果回写。") if result.get("status") == "committed" else
+            (owner_report or managed_answer or "本轮任务已完成结果回写。") if result.get("status") == "committed" else
             "本轮等待后续执行条件。" if result.get("status") == "stopped" and result.get("result_kind") == "wait" else
             "本轮任务尚未完成；执行状态已保留。",
             "proposals": [], "gate": None, "native_loopx": result,
             **({"context_handoff": committed_handoff} if committed_handoff else {}),
+            **({"steward_owner_report_queued": True} if owner_report else {}),
             **({"steward_user_action_receipts": user_action_receipts} if user_action_receipts else {})}
+
+
+_DEFAULT_REPORT_FAILURE_OBSERVATION = StewardTurnHost.report_failure_observation

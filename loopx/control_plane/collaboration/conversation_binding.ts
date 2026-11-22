@@ -9,7 +9,7 @@ import {boundConversationExecutorMatches, normalizeProjectContext, normalizeStew
 import {bindStewardManagedActor, normalizeStewardManagedActor} from "./steward_managed_mode.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
- * opaque identity observations;
+ * opaque identity observations.
  * Ordinary project bindings carry no Goal. A verified personal steward can
  * read the registered owner portfolio; legacy selected scopes stay bounded.
  */
@@ -1648,23 +1648,33 @@ function legacyImagePreparation(recovery: JsonObject, failed: JsonObject): boole
  */
 function planRuntimePreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, version: number): JsonObject | null {
-  const expectedError = new Map([
-    ["model_auth_unavailable", "Native account API transport is unavailable."],
-    ["resume_failed", "The previous Agent conversation could not be restored."],
-    ["execution_worker_exited_before_dispatch", "The LoopX Chat worker exited before the original request was dispatched."],
+  const expectedErrors = new Map<string, string[]>([
+    ["model_auth_unavailable", ["Native account API transport is unavailable."]],
+    ["resume_failed", [
+      "The previous Agent conversation could not be restored.",
+      ...(current.agent_id === "antigravity"
+        ? ["The original Antigravity conversation is still active. Stop it in Antigravity before retrying."]
+        : []),
+    ]],
+    ["execution_worker_exited_before_dispatch", ["The LoopX Chat worker exited before the original request was dispatched."]],
   ]).get(String(failed.error_code));
-  if (expectedError === undefined) return null;
+  if (expectedErrors === undefined) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const lostWorker = failed.error_code === "execution_worker_exited_before_dispatch";
+  const stewardManagerContext = !lostWorker && row.origin === "lark" && current.steward_context != null
+    && failed.execution_dispatch == null && failed.loopx_request == null && !failed.loopx_execution
+    && (failed.attachments === undefined || Array.isArray(failed.attachments) && failed.attachments.length === 0)
+    && typeof failed.started_at === "string" && Number.isFinite(Date.parse(failed.started_at))
+    && typeof failed.first_event_at === "string" && Number.isFinite(Date.parse(failed.first_event_at));
   const beforeDispatch = lostWorker
     ? row.origin === "lark" && current.steward_context != null && failed.execution_dispatch === "pending"
       && failed.loopx_request == null && !failed.loopx_execution
       && (failed.attachments === undefined || Array.isArray(failed.attachments) && failed.attachments.length === 0)
       && typeof failed.started_at === "string" && Number.isFinite(Date.parse(failed.started_at))
-    : failed.started_at === null && failed.first_event_at === null;
+    : (failed.started_at === null && failed.first_event_at === null) || stewardManagerContext;
   if (!["codex", "antigravity"].includes(String(current.agent_id))
       || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
-      || failed.status !== "failed" || failed.error !== expectedError || !beforeDispatch
+      || failed.status !== "failed" || !expectedErrors.includes(String(failed.error)) || !beforeDispatch
       || failed.response !== null || failed.upstream_turn_id !== null
       || failed.delta_count !== 0 || failed.message !== row.message || failed.origin !== row.origin
       || recovery.attachments_present !== false || recovery.steering_observed !== false
@@ -1673,13 +1683,16 @@ function planRuntimePreparationRecovery(recovery: JsonObject, row: JsonObject, c
     : requireJsonObject(recovery.preparation_observation, "runtime preparation readback");
   if (observed?.kind !== "core_runtime_preparation_failure" || observed.session_id !== failed.session_id
       || observed.turn_id !== failed.turn_id || !Array.isArray(observed.events)
-      || observed.events.length < 2 || (!lostWorker && observed.events.length !== 2)) return no;
+      || observed.events.length < 2
+      || (!lostWorker && !stewardManagerContext && observed.events.length !== 2)
+      || (stewardManagerContext && observed.events.length <= 2)) return no;
   const events = observed.events.map(value => requireJsonObject(value, "runtime preparation event"));
   const failure = events.at(-1)!;
   if (!events.every(item => typeof item.event_id === "string" && item.event_id.length > 0)
       || new Set(events.map(item => item.event_id)).size !== events.length || events[0].kind !== "turn.queued"
       || events[0].delivery_mode !== "session_queue" || failure.kind !== "turn.failed"
-      || failure.error_code !== failed.error_code || failure.message !== expectedError
+      || failure.error_code !== failed.error_code || failure.message !== failed.error
+      || (stewardManagerContext && !events.slice(1, -1).some(item => item.kind === "manager.context"))
       || events.slice(1, -1).some(item => item.kind !== "manager.context"
         && !(item.kind === "agent.phase" && item.phase === "manager_context"))) return no;
   const original = `external-${ref(row.request_ref, "original request")}`;

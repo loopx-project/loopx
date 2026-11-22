@@ -470,12 +470,25 @@ and persist evidence, settle once, then deliver/read back through the owning
 channel. Each step uses its existing legal transitions and replay rules;
 this description adds no competing status enum or transaction coordinator.
 
+An explicit `turn run-once --execute` with a compatible generic CLI adapter
+and an independent validator can prepare an eligible Todo's missing lease.
+The Host reuses the ordinary claim and reads back that same Todo before
+dispatch. The claim and launch share one Turn identity. Recovery uses the
+lease generation captured by the original attempt.
+
 An executor crash, a lost effect acknowledgement and a lost result-delivery
 acknowledgement are different recovery cases. An operation provider must expose
 whether an effect can be reconciled and retried safely. Unknown external state
 holds further dependent effects for readback or intervention; “not observed”
 does not mean “not executed.” Device idempotency, physical interlocks and
 compensation remain provider responsibilities, not invented kernel guarantees.
+
+After a generic CLI result is durably recorded, the original Turn can resume
+validation or settlement without the adapter command or its request schema.
+The caller retains the approved workspace and supplies the independent checker
+if validation is pending. An already settled Turn reads back its saved result.
+If the recovery owner requires a Host attempt, the caller must supply the
+adapter before admission can advance.
 
 Model cancellation, process termination and confirmed device stop are separate
 facts. A stopped model must not produce a “device stopped” claim without device
@@ -722,23 +735,18 @@ diaries in this RFC.
 
 #### 3. Concrete retirement backlog and ratchet rules
 
-1. **Pre-Turn pilot CLI subcommands and top-level modules.** Retire the `15`
-   superseded pre-Turn `codex-cli-*` pilot/proof subcommands replaced by
-   `loopx turn` (`turn_driver/codex_cli.py`), `start-goal`, and `codex_app`
-   heartbeat (`14` with zero non-pilot callers plus `codex-cli-session-probe`
-   referenced only as a hint in `loopx/project_prompt.py`), along with the `4`
-   top-level `loopx/codex_cli_*.py` modules (`3,767` LOC) and `6`
-   `loopx/cli_commands/starter_*.py` wrappers (`859` LOC). Keep live
-   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py`.
-2. **Remaining top-level `chat_*` and `*_goal_mode` migrations with strict
-   downward ratchet.** Complete M1/M2 by migrating the remaining `20` top-level
-   `loopx/chat_*.py` modules (`20,562` LOC) into `loopx/chat/` and the `9`
-   `loopx/*_goal_mode/` directories (`59` files / `17,655` lines; `33` `.py` /
-   `7,062` LOC) into `loopx/hosts/`. Every PR deleting or moving top-level
-   modules must ratchet `max_top_level_modules` in
-   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
-   (currently `127`) strictly downward; keeping permanent top-level shim files
-   that freeze the count does not clear M1/M2.
+1. **Pre-Turn pilot CLI retirement.** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   retired 15 superseded pilot commands and four flat `loopx/codex_cli_*.py`
+   modules, and lowered the top-level budget from 127 to 124. The live
+   `codex-cli-bootstrap-message` and `turn_driver/codex_cli.py` still have callers.
+2. **Remaining top-level `chat_*` and `*_goal_mode` migrations.** M1 places
+   the internal action normalization and Goal lifecycle action modules under
+   `loopx/chat/`. This removes two flat names and lowers the budget from 124
+   to 122. M1 still needs to migrate the remaining Chat modules under I3.
+   M2 still moves host mode packages under `loopx/hosts/`. Each net removal
+   lowers [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
+   by the same count in that PR. The Core wheel already excludes both Chat
+   paths, so this move reduces the source directory count.
 3. **Unreferenced `examples/` scripts and source-text-pinning smokes.** Prune
    unreferenced scripts under `examples/` (`200` unreferenced `.py` scripts /
    `45,504` LOC; `209` scripts / `47,325` LOC across `.py/.sh/.mjs/.js/.ts` on
@@ -4788,3 +4796,21 @@ view shows its independently checked result in the same conversation.
 - **Boundary:** this is a source wiring repair. Installed Core and composition
   qualification, interrupted original-Task recovery, complete context/closure,
   actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.
+
+### 2026-11-22 — Checkpoint replay returns the selected runtime's artifacts
+
+- **Gap:** replaying a committed checkpoint from a copied runtime validated the
+  relocated artifacts through the existing typed owner, but the public
+  `refresh-state` response still returned paths from the original runtime.
+- **Delta:** the Python transport retains that validated replay result and uses
+  its JSON and Markdown paths in the idempotent response. Path selection,
+  artifact validation and refusal remain on the existing TypeScript checkpoint
+  owner; no new path authority or historical-record migration is introduced.
+- **Source evidence:** ten real CLI cases cover File and SQLite, dry-run and
+  repeated replay, and missing or symlinked JSON/Markdown artifacts. They verify
+  the relocated bytes, unchanged original/copied history and checkpoint proofs,
+  preserved settlement identity, no appended replay and zero spend. The fixed
+  main baseline reproduced the stale public path before this repair.
+- **Boundary:** this is a bounded V2/V4/R1 recovery repair. Full original-Goal
+  regression, installed composition, complete default closure and costs, real
+  model adoption, R1/M3 acceptance and C1 cutover remain separate gates.

@@ -314,6 +314,7 @@ class ManagedSessionTurn:
             **({"report_frozen_contract_recovery": frozen_contract_recovery} if frozen_contract_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
+            **StewardTurnHost(self.controller).report_timeout_basis(request),
             **StewardTurnHost(self.controller).monitor_restart_basis(request),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
@@ -362,8 +363,7 @@ class ManagedSessionTurn:
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
-        Native
-        submit still rechecks current admission and every validation source.
+        Native submit still rechecks current admission and every validation source.
         """
         from ...control_plane.effect_runtime import effect_runtime_result
         from ...control_plane.goals.acceptance import inspect_goal_acceptance
@@ -451,10 +451,14 @@ class ManagedSessionTurn:
                     retained = report_turn(self.store, request["actor"], report_window)
                     if retained is not None and retained["turn_id"] != existing["turn_id"]:
                         return retained, False
-                    quota_request = host.report_quota_request(existing)
-                    if quota_request is not None:
-                        request = quota_request
-                        client_id += ".quota-recovery"
+                    recovery_request = host.report_quota_request(existing, report_window=report_window)
+                    suffix = ".quota-recovery"
+                    if recovery_request is None:
+                        recovery_request = host.report_timeout_request(existing)
+                        suffix = ".timeout-recovery"
+                    if recovery_request is not None:
+                        request = recovery_request
+                        client_id += suffix
                         existing = None
                 selection_recovery = host.report_selection_recovery(existing) if existing is not None and report_window is not None else None
                 recovery = (host.monitor_restart_carrier(existing, client_id)

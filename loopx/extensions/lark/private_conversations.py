@@ -29,7 +29,7 @@ from ...capabilities.native_chat.external_conversations import (
 from ...capabilities.native_chat.file_discovery import (
     FileChatDiscovery, optional_file_fingerprint, reply_image_workspace,
 )
-from ...chat_attachments import CHAT_IMAGE_MAX_COUNT
+from ...chat.attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
@@ -1144,7 +1144,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             **({"image_keys": image_keys} if image_keys else {}),
             **({"reply_placement": reply_placement} if reply_placement is not None else {}),
             **({"delivery_id": delivery_id} if delivery_id is not None else {}),
-            finalize_reactions=finalize_source and not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
+            finalize_reactions=finalize_source and not edit_only and kind not in {"admission", "progress", "periodic_report", "steward_monitor_report"} and not (kind == "terminal" and record.get("commission_resources")),
             source_authority_verifier=lambda profile, chat, message: (
                 source_authority(profile, chat, message)
                 if authorization_check is None or authorization_check() else (None, False)))

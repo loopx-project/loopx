@@ -12,6 +12,68 @@ from tests.control_plane.test_quota_settlement_cli import _run_cli
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle as machine_reference_oracle
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_stateless_saved_work_keeps_the_captured_preparation_and_readback(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
+        _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    turn = "stateless-read-scope"
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", turn]
+    captures = []
+    for phase in ("unprepared", "ready"):
+        if phase == "ready":
+            code, claim = _run_cli(registry, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+                "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, cwd=project)
+            assert code == 0 and claim["ok"], claim
+        directory = tmp_path / phase
+        code, source = _run_cli(registry, runtime, "quota", "should-run", *binding, "--complete-turn",
+            "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
+        assert code == 0, source
+        assert source["normal_delivery_allowed"] is (phase == "ready")
+        captures.append(directory / "decision.json")
+
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    original_state = state.read_bytes()
+    original_receipts = _heartbeat_receipt_count(runtime, turn)
+    for path in captures:
+        raw = path.read_bytes()
+        original = json.loads(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+            "--context-delivery", "auto", "--delta-delivery", "off"]
+        code, view = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0 and view["ok"], view
+        presented = read_cli_policy_payload(json.dumps(view), returncode=code)
+        assert presented["goal_id"] == GOAL_ID
+        assert presented["normal_delivery_allowed"] is original["normal_delivery_allowed"]
+        assert presented["heartbeat_receipt"]["settlement_identity"] == original["heartbeat_receipt"]["settlement_identity"]
+        current = presented["interaction_contract"]["cli_channel"]
+        captured = original["interaction_contract"]["cli_channel"]
+        assert current["execution_preparation"] == captured["execution_preparation"]
+        assert ("settlement_plan" in current) == ("settlement_plan" in captured)
+        assert current.get("settlement_plan") == captured.get("settlement_plan")
+        # A historical unprepared source stays unprepared after the live claim;
+        # presentation cannot adopt today's lease or perform another admission.
+        assert path.read_bytes() == raw
+        bad = args.copy()
+        bad[bad.index("--capture-sha256") + 1] = "0" * 64
+        code, rejected = _run_cli(registry, runtime, *bad, cwd=project)
+        assert code != 0 and rejected["ok"] is False, rejected
+    assert state.read_bytes() == original_state
+    assert _heartbeat_receipt_count(runtime, turn) == original_receipts
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
 @pytest.mark.parametrize("setting", [None, "auto", "off"])
 def test_saved_projection_checks_original_before_any_publication(tmp_path, failure, setting):

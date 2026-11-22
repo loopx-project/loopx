@@ -533,8 +533,15 @@ export const projectMapSchema = z.object({
 });
 
 export const runRecordSchema = z.object({
+  agent_id: z.string().nullish().catch(null),
   generated_at: z.string(),
   goal_id: z.string(),
+  turn_instance_id: z.string().nullish().catch(null),
+  agent_vision: z.record(z.string(), z.unknown()).nullish().catch(null),
+  vision_checkpoint: z.object({
+    schema_version: z.literal("vision_checkpoint_v0"),
+    decision: z.string(),
+  }).nullish().catch(null),
   classification: z.string().optional().nullable(),
   lifecycle_phase: z.string().optional().nullable(),
   lifecycle_flags: z.array(z.string()).optional().default([]),

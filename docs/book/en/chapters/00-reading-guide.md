@@ -142,7 +142,7 @@ Operators need not run source tests first; prospective contributors can use
 Command categories remain explicit. **Runnable** requires the stated version, inputs, and authorization.
 **Based on the official scaffold** follows the existing teaching package without inventing a runtime.
 **Simplified for explanation** tables, labels, and data shapes must not be pasted into production
-configuration.
+configuration. Record preview, execution, readback, and test results separately.
 
 ## Four questions for an accountable explanation {#judgment-standard}
 

@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..runtime.node_probe import node_typescript_flags
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -302,7 +304,15 @@ def advance_fixture_authority(
         "process.stdout.write(JSON.stringify(result));"
     )
     process = subprocess.run(
-        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-strip-types",
+            *node_typescript_flags(),
+            "--input-type=module",
+            "-e",
+            script,
+        ],
         input=json.dumps({"root": str(runtime_root), "goal": goal_id,
                          "projection": projection, "operation_id": operation_id}),
         capture_output=True, text=True, encoding="utf-8", check=False, timeout=45,

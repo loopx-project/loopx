@@ -732,3 +732,74 @@ test("report recovery paths tolerate host Python executable drift in validation_
     ...launchInput, request: {...launchInput.request, validation_command: badTargetCmd},
   }));
 });
+
+test("idle Antigravity report timeout admits one isolated-cascade continuation", () => {
+  const p = original();
+  const prior = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: ["python", "validate.py"],
+    work_kind: "report", report_window_id: "cadence_original", report_subscription_revision: "sha256:original"};
+  const effects = {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const result = {schema_version: "loopx_turn_execution_v0", ok: false, mode: "run_once",
+    status: "failed", result_kind: "host_failure", host_failure: {schema_version: "loopx_turn_host_failure_v0", attempt: 1},
+    effects, receipt: {ok: true, failed_phase: "host_execute", status: "failed", completed_phases: [],
+      lineage: {goal_id: p.actor.goal_id, agent_id: "steward", todo_id: prior.todo_id}}};
+  const source = {turn_id: "1".repeat(32), session_id: p.session.session_id, status: "completed",
+    origin: "native_loopx", loopx_execution: true, delta_count: 0, upstream_turn_id: "agy_turn_timeout1",
+    loopx_request: prior, response: {native_loopx: result}};
+  const observation = {adapter_kind: "antigravity_ls", thread_id: "ephemeral-cascade-1",
+    turn_id: source.upstream_turn_id, cascade_idle: true, no_final_response: true,
+    native_timeout: true, quota_available: true, quota_observed_at: 100};
+  const recovery = {original_turn_id: source.turn_id, native_observation: observation};
+  const request = {...prior, turn_instance_id: prior.turn_instance_id + ".timeout-recovery",
+    report_timeout_recovery: recovery};
+  const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "failed", completed_phases: [], recorded_effects: {...effects, host_invoked: null}};
+  const basis = {original: source, inspection, generation_present: false, observed_at: 101};
+  const input = {
+    ...p,
+    session: {
+      ...p.session,
+      agent_id: "antigravity",
+      executor_endpoint_id: "antigravity",
+      adapter_kind: "antigravity_ls",
+      upstream_thread_id: "main-cascade",
+      upstream_context_history: [{agent_id: "codex", thread_id: "codex-orig-thread"}],
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "antigravity",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_primary_available",
+        configuration_revision: "rev-2",
+        eligible_endpoints: ["antigravity", "codex"],
+      },
+    },
+    request, report_timeout_basis: basis,
+    report_window: {window_id: prior.report_window_id, subscription_revision: prior.report_subscription_revision,
+      goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: prior.report_subscription_revision},
+    report_todo: {todo_id: prior.todo_id, target_key: prior.report_window_id,
+      claimed_by: "steward", action_kind: "generate_periodic_report", status: "open"}};
+  assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  for (const invalid of [
+    {...input, report_timeout_basis: null},
+    {...input, request: {...request, report_timeout_recovery: null}},
+    {...input, request: {...request, report_quota_recovery: {original_turn_id: source.turn_id, native_observation: {}}}},
+    {...input, request: {...request, turn_instance_id: prior.turn_instance_id}},
+    {...input, request: {...request, validation_command: ["python", "-c", "bad"]}},
+    ...["cascade_idle", "no_final_response", "native_timeout", "quota_available"].map(key => ({
+      ...input, request: {...request, report_timeout_recovery: {...recovery,
+        native_observation: {...observation, [key]: false}}},
+    })),
+    {...input, request: {...request, report_timeout_recovery: {...recovery,
+      native_observation: {...observation, adapter_kind: "codex"}}}},
+    {...input, request: {...request, report_timeout_recovery: {...recovery,
+      native_observation: {...observation, quota_observed_at: 0}}}},
+    {...input, report_timeout_basis: {...basis, generation_present: true}},
+    {...input, report_timeout_basis: {...basis, original: {...source, delta_count: 1}}},
+    {...input, report_timeout_basis: {...basis, original: {...source,
+      loopx_request: {...prior, report_timeout_recovery: recovery}}}},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
+});

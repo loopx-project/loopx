@@ -158,7 +158,7 @@ and the `loopx` entry only while it still matches what LoopX wrote.
 
 Kiro CLI also ships an ACP agent (`kiro-cli acp`), so `loopx dashboard` and
 `loopx chat` list **Kiro CLI** as a built-in Agent alongside Codex and Claude
-Code. It reuses `loopx.chat_acp.ACPStdioAdapter` rather than a second
+Code. It reuses `loopx.chat.acp.ACPStdioAdapter` rather than a second
 transport: probed on 2.21.1, the host answers `initialize` with
 `protocolVersion: 1` and `loadSession: true`, and `session/new` returns a
 session id, which is exactly what that adapter expects.

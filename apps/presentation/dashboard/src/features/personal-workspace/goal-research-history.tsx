@@ -1,10 +1,10 @@
-import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {ExecutionObservationReadback, WorkYardstickReadback} from "./work-yardstick-readback";
 import {GoalSourceStrategies, useGoalStrategyLocation} from "./goal-source-strategies";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {ResearchRecordSearch} from "./research-record-browser";
+import {ResearchRecordSearch, useResearchRecordsLocation} from "./research-record-browser";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, ResearchCaseReading, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, latestExploreFindingInPhase, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
@@ -123,7 +123,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const [selection, setSelection] = useState(() => selectedFromUrl(goalId));
   // The same finding can be read directly or as part of its complete question.
   const questionExpanded = selection.question ?? !selection.finding;
-  const [recordsOpen, setRecordsOpen] = useState(false);
+  const recordReading = useResearchRecordsLocation(historySource);
+  const recordsOpen = recordReading.value.open;
+  const setRecordsOpen = (open: boolean) => recordReading.update({open});
   const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
   const [requestedPhase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);
@@ -181,19 +183,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     </dl> : <p>{finding.summary}</p>;
   };
   const findingBody = (finding: ExploreHistoryEvent) => {
-    const execution = finding.execution_observation;
-    const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
-    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{finding.work_yardstick ? <WorkYardstickReadback capture={finding.work_yardstick} zh={zh}/> : null}{execution ? <details><summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
-      <dl className="research-finding-sections">
-        <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
-        {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
-        <dt>{zh ? "运行秒数 / 上限秒数" : "Elapsed / limit seconds"}</dt><dd>{measured(execution.elapsed_seconds)} / {measured(execution.limit_seconds)}</dd>
-        <dt>{zh ? "搜索次数" : "Search iterations"}</dt><dd>{measured(execution.search_iterations)}</dd>
-        <dt>{zh ? "结束原因" : "Termination reason"}</dt><dd>{measured(execution.stop_reason)}</dd>
-        <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(execution.candidate_sha256)}</code></dd>
-        {execution.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(execution.result_ref)}</code></dd></> : null}
-      </dl>
-    </details> : null}</>;
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{finding.work_yardstick ? <WorkYardstickReadback capture={finding.work_yardstick} zh={zh}/> : null}{finding.execution_observation ? <ExecutionObservationReadback observation={finding.execution_observation} zh={zh}/> : null}</>;
   };
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
   const findingElement = (finding: ExploreHistoryEvent) => {
@@ -725,8 +715,11 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     </ContextHelp> : null}
-    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
+    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => {
+      const open = event.currentTarget.open;
+      if (open !== recordsOpen) setRecordsOpen(open);
+    }}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
+      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} reading={recordReading} goalId={originalGoalId} events={history.canonical?.events ?? []}
         nodes={history.canonical?.nodes ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}

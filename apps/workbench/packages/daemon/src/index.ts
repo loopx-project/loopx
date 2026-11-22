@@ -1,3 +1,10 @@
+import { serveLifecycle } from './workbench-lifecycle.js';
+import { once } from 'node:events';
+import { dirname, delimiter } from 'node:path';
+import { isWorkbenchDependency } from './adapters/session-location.js';
+import { fileURLToPath } from 'node:url';
+import type { Server } from 'node:http';
+import { coreUrl } from './adapters/loopx/proxy.js';
 import { personalServer } from './personal.js';
 import { PushService } from './push.js';
 import { FeishuChat } from './feishu-chat.js';
@@ -40,6 +47,11 @@ async function main(): Promise<void> {
   adoptLegacyEnv();
   loadDotEnv();
   adoptLegacyEnv();
+  // Launch authority belongs to this daemon, never to agent/tool children.
+  const lifecycleSocket = process.env.LOOCHAT_LIFECYCLE_SOCKET;
+  delete process.env.LOOCHAT_LIFECYCLE_SOCKET;
+  // npm adds server dependency bins to PATH; they must not replace the user's native agents.
+  process.env.PATH = (process.env.PATH ?? '').split(delimiter).filter(directory => !isWorkbenchDependency(directory)).join(delimiter);
   const config = loadConfig();
 
   // Empty LOOCHAT_WORKDIRS means "only the directory the daemon was started in".
@@ -94,6 +106,7 @@ async function main(): Promise<void> {
   const localSessions: LocalSessions = new LocalSessions({
     adapters,
     workdirs: () => manager.allowedWorkdirs,
+    hidden: () => config.hiddenSessionDirs,
     importedSessions: () => store.agentSessionOwners(),
     instances: () => registry.list().map((instance) => ({ id: instance.id, hidden: !!instance.hidden, store: sessionStoreKey(instance) })),
     enricher: new SessionEnricher({ bindings: () => loopx.lookup().bindings(), goal: (goalId) => loopx.lookup().goal(goalId) }),
@@ -114,15 +127,18 @@ async function main(): Promise<void> {
   // Directories added from the page are kept next to the hub's data; threads in no project work in
   // a scratch area there too.
   const dirs = new Workdirs(workdirs, join(config.dataDir, 'workdirs.json'), join(config.dataDir, 'scratch'));
-  const manager = new ThreadManager(store, adapters, dirs, new AttachmentStore(config.dataDir), () => registry.list());
-  // The session list scans once here (it asks the manager for the allowed directories) and then
-  // only when a request finds it stale; the meter keeps its own timer, files only. Stopped in
-  // shutdown with everything else.
+  const manager = new ThreadManager(store, adapters, dirs, new AttachmentStore(config.dataDir), () => registry.list().map((item) => {
+    const activeLogin = registry.activeLogin(item.id);
+    return activeLogin ? { ...item, activeLogin } : item;
+  }));
+  // The session list scans once here and then only when a request finds it stale; the meter keeps
+  // its own timer, files only. Stopped in shutdown with everything else.
   // LoopX Goal conversations: bindings, the core client and the Goal context; ordinary threads never touch it.
   const loopx = new LoopxService({ dataDir: config.dataDir, adapters, dirs });
   loopx.attach(manager);
   manager.loopx = loopx;
   manager.sessionIndex = (sessionId) => localSessions.find(sessionId);
+  manager.hiddenSessionDirs = config.hiddenSessionDirs;
   localSessions.start();
   machineUsage?.start();
   manager.recoverInterrupted();
@@ -247,6 +263,7 @@ async function main(): Promise<void> {
     }
   }, 3000).unref();
 
+  let lifecycle: Server | undefined;
   const shutdown = async (signal: string) => {
     console.log(`${signal} received, shutting down`);
     server.close();
@@ -279,10 +296,24 @@ async function main(): Promise<void> {
     terminals.dispose();
     desktop.dispose();
     store.close();
+    lifecycle?.close();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  if (lifecycleSocket) {
+    if (!server.listening) await once(server, 'listening');
+    const host = config.host === '0.0.0.0' || config.host === '::' ? '127.0.0.1' : config.host;
+    const url = `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
+    lifecycle = await serveLifecycle(lifecycleSocket, {
+      url, appDir: dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))),
+      dataDir: config.dataDir, coreUrl: coreUrl().toString(),
+      running: () => [...manager.listThreads(), ...manager.listThreads({ archived: true })]
+        .filter(thread => thread.status === 'running').length,
+      loginLink: async () => `${url}/#token=${(await linkTokens.issue()).token}`,
+      shutdown: () => shutdown('workbench stop'),
+    });
+  }
 }
 
 main().catch((err) => {

@@ -288,11 +288,16 @@ for (const profile of ["legacy", "exact"] as const) {
     writeFileSync(join(f.base, "roundtrips", row.request_id + ".json"), JSON.stringify(identity));
     const remaining_work = {summary: "Validate the packaged repair", resume_when: "The isolated package is available"};
     const key = (n: number) => n ? "conclusion-" + String(n).padStart(8, "0") : "conclusion";
+    function confirmDelivery(n: number) {
+      const hash = createHash("sha256").update(`["${row.request_id}", "${key(n)}"]`).digest("hex");
+      writeFileSync(join(replies, key(n) + ".delivery.json"),
+        JSON.stringify({status: "delivered", message_id: "handoff." + hash}));
+    }
     for (let n = 0; n < 4; n++) {
       writeFileSync(join(replies, key(n) + ".json"), JSON.stringify({...identity, phase: "conclusion", decision: "adopt",
         text: "Recorded evidence " + n + "😀".repeat(2000), remaining_work,
         ...(n ? {result_key: key(n), previous_result_key: key(n - 1), update_id: "evidence-" + n} : {})}));
-      writeFileSync(join(replies, key(n) + ".delivery.json"), JSON.stringify(deliveredMessage(row.request_id, key(n))));
+      confirmDelivery(n);
     }
     const original = sourceBytes(replies);
     const pending = (await f.call("pending")).result as JsonObject;
@@ -322,7 +327,7 @@ for (const profile of ["legacy", "exact"] as const) {
       text: "The requested package passed validation.", result_key: key(4), previous_result_key: key(3), update_id: "validated"}));
     const queued = (await f.call("turn_context")).unfinished_delegations as JsonObject;
     assert.equal((queued.items as JsonObject[])[0].step, "await_return_delivery");
-    writeFileSync(join(replies, key(4) + ".delivery.json"), JSON.stringify({status: "delivered"}));
+    confirmDelivery(4);
     assert.deepEqual(((await f.call("turn_context")).unfinished_delegations as JsonObject).items, []);
     for (let n = 2; n <= 22; n++) f.publish(n);
     const first = (await f.call("pending", {attention_only: true})).result as JsonObject;

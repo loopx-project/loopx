@@ -8,7 +8,9 @@ on:
       - "apps/presentation/dashboard/**"
       - "examples/desktop-icon-alpha-smoke.py"
       - "examples/desktop-release-workflow-smoke.py"
+      - "scripts/desktop_macos_signing.py"
       - "scripts/desktop_release_artifacts.py"
+      - "tests/desktop/test_desktop_signing_workflow.py"
   release:
     types: [published]
   workflow_dispatch:
@@ -75,6 +77,19 @@ jobs:
           fi
           echo "release-tag=${release_tag}" >> "${GITHUB_OUTPUT}"
 
+      - name: Resolve macOS signing mode
+        id: macos-signing
+        if: github.event_name != 'pull_request' && runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 scripts/desktop_macos_signing.py resolve-mode
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
@@ -125,11 +140,19 @@ jobs:
         working-directory: apps/desktop/loopx-control-plane
         run: npm run build -- --bundles ${{ matrix.bundles }} --no-sign
 
-      - name: Build integrity-signed macOS release bundles
+      - name: Build macOS release bundles
         if: github.event_name != 'pull_request' && runner.os == 'macOS'
         working-directory: apps/desktop/loopx-control-plane
         env:
           RELEASE_TAG: ${{ steps.identity.outputs.release-tag }}
+          EXPECTED_SIGNING_MODE: ${{ steps.macos-signing.outputs.signing-mode }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           release_version="${RELEASE_TAG#v}"
@@ -137,8 +160,22 @@ jobs:
             echo "::error title=Invalid desktop release version::${RELEASE_TAG} is not a supported release tag"
             exit 1
           fi
-          npm run build -- --bundles ${{ matrix.bundles }} \
-            --config "{\"version\":\"${release_version}\",\"bundle\":{\"macOS\":{\"signingIdentity\":\"-\"}}}"
+          python3 ../../../scripts/desktop_macos_signing.py build \
+            --version "${release_version}" \
+            --bundles ${{ matrix.bundles }} \
+            --expected-mode "${EXPECTED_SIGNING_MODE}"
+
+      - name: Notarize macOS disk image
+        if: github.event_name != 'pull_request' && runner.os == 'macOS' && steps.macos-signing.outputs.signing-mode == 'developer_id'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dmg_path="$(find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "${dmg_path}"
+          python3 scripts/desktop_macos_signing.py notarize-dmg --dmg "${dmg_path}"
 
       - name: Build Windows release bundles
         if: github.event_name != 'pull_request' && runner.os == 'Windows'
@@ -159,15 +196,17 @@ jobs:
       - name: Verify macOS desktop bundles
         if: github.event_name != 'pull_request' && runner.os == 'macOS'
         shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.macos-signing.outputs.signing-mode }}
         run: |
           set -euo pipefail
           app_path="apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/macos/LoopX.app"
           dmg_path="$(find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "${dmg_path}"
-          codesign --verify --deep --strict --verbose=2 "${app_path}"
-          codesign --display --verbose=4 "${app_path}" 2>&1 \
-            | grep -q '^Signature=adhoc$'
-          hdiutil verify "${dmg_path}"
+          python3 scripts/desktop_macos_signing.py verify \
+            --signing-mode "${SIGNING_MODE}" \
+            --app "${app_path}" \
+            --dmg "${dmg_path}"
 
       - name: Collect macOS desktop bundles
         if: runner.os == 'macOS'

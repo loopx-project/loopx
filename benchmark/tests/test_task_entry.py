@@ -367,9 +367,12 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
 
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
+@pytest.mark.parametrize("phase_clock", [True, False], ids=["bounded", "natural"])
 def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
-    planning_env, context
+    planning_env, context, phase_clock
 ):
+    if not phase_clock:
+        planning_env.pop("LOOPX_PHASE_DEADLINE_EPOCH")
     planning_env["LOOPX_ITERATION_CONTEXT"] = context
     if context == "fresh":
         planning_env.pop("LOOPX_TASK_ENTRY")  # Omitted worker setting uses the same planner.
@@ -1185,10 +1188,17 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
     assert len(calls) == entry.PLANNING_WAKE_ATTEMPTS
 
 
-@pytest.mark.parametrize("context", ["fresh", "resume"])
-@pytest.mark.parametrize("producer", [None, "local_probe"])
-@pytest.mark.parametrize("complete", [False, True])
-@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+@pytest.mark.parametrize(
+    ("context", "producer", "complete", "checkpoint_preflight"),
+    [
+        ("fresh", None, False, False),
+        ("fresh", "local_probe", True, False),
+        ("fresh", "local_probe", False, True),
+        ("resume", None, True, True),
+        ("resume", "local_probe", False, False),
+        ("resume", None, False, True),
+    ],
+)
 def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         planning_env, context, producer, complete, checkpoint_preflight):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""

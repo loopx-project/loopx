@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 import json
 
+from ..markdown import render_json_object_block
+
 
 def work_context_lines(context: dict[str, Any]) -> list[str]:
     """Complete source content once; arbitrary source text stays JSON-escaped."""
@@ -44,12 +46,7 @@ def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
 
 def render_turn_context_markdown(payload: dict[str, Any]) -> str:
     """Render the complete carrier or its same-source recovery reference."""
-    fields = ",\n".join(
-        json.dumps(key, ensure_ascii=False) + ":"
-        + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        for key, value in payload.items()
-    )
-    return "# LoopX Turn Envelope\n\n```json\n{\n" + fields + "\n}\n```"
+    return "# LoopX Turn Envelope\n\n" + render_json_object_block(payload)
 
 
 def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:

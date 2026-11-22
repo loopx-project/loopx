@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from loopx import chat_dsh
+from loopx.chat import dsh as chat_dsh
 from loopx.chat import CHAT_REVIEW_CLOSE_TAG, CHAT_REVIEW_OPEN_TAG
 from loopx.chat_agent import CodexChatAgentError
-from loopx.chat_dsh import (
+from loopx.chat.dsh import (
     HISTORY_LIMIT,
     MANAGED_HOST_CHAT_FAILED,
     MANAGED_HOST_CHAT_SEGMENT_IN_FLIGHT,

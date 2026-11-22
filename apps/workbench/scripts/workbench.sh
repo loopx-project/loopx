@@ -5,6 +5,57 @@
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+# Non-login shells (systemd-run, cron, service launchers) often start with /usr/bin:/bin only.
+# Append standard user and system CLI directories so node, codex, claude and lark-cli are reachable.
+add_runtime_path(){
+  local dir
+  for dir in "$@"; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    case ":$PATH:" in
+      *":$dir:"*) ;;
+      *) PATH="${PATH:+$PATH:}$dir" ;;
+    esac
+  done
+  export PATH
+}
+resolve_nvm_node_bin(){
+  if [ -n "${NVM_BIN:-}" ] && [ -d "${NVM_BIN}" ]; then
+    printf '%s\n' "${NVM_BIN}"
+    return 0
+  fi
+  local nvm_root="${NVM_DIR:-$HOME/.nvm}" candidate="" version_name=""
+  local major=0 minor=0 patch=0 best="" best_major=-1 best_minor=-1 best_patch=-1
+  for candidate in "$nvm_root"/versions/node/*/bin; do
+    [ -d "$candidate" ] || continue
+    version_name="$(basename "$(dirname "$candidate")")"
+    [[ "$version_name" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+) ]] || continue
+    major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"; patch="${BASH_REMATCH[3]}"
+    if (( major > best_major || (major == best_major && minor > best_minor) || (major == best_major && minor == best_minor && patch > best_patch) )); then
+      best="$candidate"; best_major="$major"; best_minor="$minor"; best_patch="$patch"
+    fi
+  done
+  [ -n "$best" ] && printf '%s\n' "$best"
+}
+resolve_agent_binary(){
+  local binary_name="$1" discovered=""
+  if command -v "$binary_name" >/dev/null 2>&1; then
+    printf '%s\n' "$binary_name"
+    return 0
+  fi
+  for discovered in \
+    "$HOME/.npm-global/bin/$binary_name" \
+    "$HOME/.local/bin/$binary_name" \
+    "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/"$binary_name" \
+    "/opt/homebrew/bin/$binary_name" \
+    "/usr/local/bin/$binary_name"; do
+    if [ -x "$discovered" ]; then
+      printf '%s\n' "$discovered"
+      return 0
+    fi
+  done
+  printf '%s\n' "$binary_name"
+}
+add_runtime_path "$(resolve_nvm_node_bin || true)" "$HOME/.local/bin" "$HOME/.npm-global/bin" /opt/homebrew/bin /usr/local/bin
 STATE="${WORKBENCH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/loochat-workbench}"
 PORT="${WORKBENCH_PORT:-8796}"
 mkdir -p "$STATE"
@@ -30,11 +81,15 @@ CORE_PORT="${LOOPX_CORE_PORT:-8792}"
 CORE_PIDF="$STATE/core.pid"
 core_alive(){ [ -f "$CORE_PIDF" ] && kill -0 "$(cat "$CORE_PIDF")" 2>/dev/null; }
 core_start(){
-  local WS="${LOOPX_GOAL_WORKSPACES:-$REPO_ROOT/loopx}" scan=() assets=() item
+  local WS="${LOOPX_GOAL_WORKSPACES:-$REPO_ROOT/loopx}" scan=() assets=() lark_args=() item
+  local codex_bin="${LOOPX_CODEX_BIN:-$(resolve_agent_binary codex)}"
+  local claude_bin="${LOOPX_CLAUDE_BIN:-$(resolve_agent_binary claude)}"
   [ -n "${LOOPX_CHAT_ASSETS:-}" ] && assets=(--assets-dir "$LOOPX_CHAT_ASSETS")
+  [ -n "${LOOPX_LARK_CLI_BIN:-}" ] && lark_args=(--lark-cli-bin "$LOOPX_LARK_CLI_BIN")
   IFS=',' read -ra items <<< "$WS"
   for item in "${items[@]}"; do [ -n "$item" ] && scan+=(--scan-path "$item"); done
   ( cd "$REPO_ROOT"; LOOPX_USAGE_PING=0 detach python3 -m loopx.cli chat --global-registry --host 127.0.0.1 --port "$CORE_PORT" --no-open \
+      --codex-bin "$codex_bin" --claude-bin "$claude_bin" "${lark_args[@]}" \
       "${assets[@]}" "${scan[@]}" --project-workspace-grant workspace_read \
       > "$STATE/core.log" 2>&1 < /dev/null & echo $! > "$CORE_PIDF" )
   sleep 6; core_alive || { tail -20 "$STATE/core.log"; return 1; }

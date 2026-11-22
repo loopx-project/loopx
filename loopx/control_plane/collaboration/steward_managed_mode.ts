@@ -184,7 +184,9 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
     }
     return requireNonEmptyString(item.thread_id, "original native context thread");
   })];
-  if (request.work_kind !== "report" || prior.work_kind !== "report" || prior.report_quota_recovery !== undefined
+  if (request.work_kind !== "report" || prior.work_kind !== "report"
+      || prior.report_quota_recovery !== undefined || prior.report_timeout_recovery !== undefined
+      || request.report_timeout_recovery !== undefined
       || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
       || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
       || typeof original.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(original.turn_id)
@@ -215,6 +217,69 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || accepting && (basis.generation_present !== false
         || basis.observed_at < observation.quota_observed_at || basis.observed_at - observation.quota_observed_at > 60)) {
     throw new EffectRuntimeRequestError("report continuation requires its original native user-only quota refusal and current usable allowance");
+  }
+}
+
+/** One new report Turn in an isolated cascade after an untouched Antigravity timeout.
+ * Preserves the failed Turn and its immutable artifacts without rewriting or resuming it.
+ */
+function admitReportTimeoutRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
+  if (request.report_timeout_recovery === undefined) {
+    if (params.report_timeout_basis != null) throw new EffectRuntimeRequestError("timeout recovery lacks its original report");
+    return;
+  }
+  if (request.report_quota_recovery !== undefined) {
+    throw new EffectRuntimeRequestError("report continuation cannot combine quota and timeout recovery");
+  }
+  const recovery = requireJsonObject(request.report_timeout_recovery, "report timeout continuation");
+  const observation = requireJsonObject(recovery.native_observation, "native timeout observation");
+  const basis = requireJsonObject(params.report_timeout_basis, "original timeout failure basis");
+  const original = requireJsonObject(basis.original, "original failed Chat Turn");
+  const prior = requireJsonObject(original.loopx_request, "original report request");
+  const result = requireJsonObject(requireJsonObject(original.response, "original response").native_loopx, "original failure");
+  const failure = requireJsonObject(result.host_failure, "original host failure");
+  const effects = requireJsonObject(result.effects, "original effects");
+  const receipt = requireJsonObject(result.receipt, "original native receipt");
+  const inspection = requireJsonObject(basis.inspection, "original native inspection");
+  const recorded = requireJsonObject(inspection.recorded_effects, "original recorded effects");
+  const actor = requireJsonObject(request.actor, "original report actor");
+  const lineage = requireJsonObject(receipt.lineage, "original report lineage");
+  const keys = Object.keys(request).filter(key => key !== "report_timeout_recovery");
+  const accepting = params.turn == null && params.report_settlement_recovery == null;
+  if (request.work_kind !== "report" || prior.work_kind !== "report"
+      || prior.report_timeout_recovery !== undefined || prior.report_quota_recovery !== undefined
+      || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
+      || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
+      || typeof original.turn_id !== "string" || !/^[a-f0-9]{32}$/.test(original.turn_id)
+      || recovery.original_turn_id !== original.turn_id || original.session_id !== session.session_id
+      || original.origin !== "native_loopx" || original.loopx_execution !== true || original.status !== "completed"
+      || original.delta_count !== 0 || typeof original.upstream_turn_id !== "string" || !original.upstream_turn_id
+      || Object.keys(prior).length !== keys.length
+      || keys.some(key => !Object.hasOwn(prior, key) || (key === "turn_instance_id"
+        ? request[key] !== String(prior[key]) + ".timeout-recovery"
+        : !sameReportRequestField(key, prior[key], request[key])))
+      || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false || result.mode !== "run_once"
+      || result.status !== "failed" || result.result_kind !== "host_failure"
+      || failure.schema_version !== "loopx_turn_host_failure_v0" || failure.attempt !== 1
+      || effects.host_invoked !== true
+      || ["state_written", "quota_spent", "scheduler_acknowledged"].some(key => effects[key] !== false || recorded[key] !== false)
+      || receipt.ok !== true || receipt.failed_phase !== "host_execute" || receipt.status !== "failed"
+      || JSON.stringify(receipt.completed_phases) !== "[]" || JSON.stringify(inspection.completed_phases) !== "[]"
+      || lineage.goal_id !== actor.goal_id || lineage.agent_id !== actor.agent_id || lineage.todo_id !== request.todo_id
+      || inspection.schema_version !== "loopx_turn_journal_inspection_v1" || inspection.ok !== true
+      || ["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].some(key => inspection[key] !== true)
+      || inspection.journal_status !== "failed"
+      || ![null, true].includes(recorded.host_invoked as null | boolean)
+      || observation.adapter_kind !== "antigravity_ls"
+      || typeof observation.thread_id !== "string" || !observation.thread_id
+      || observation.turn_id !== original.upstream_turn_id
+      || observation.cascade_idle !== true || observation.no_final_response !== true
+      || observation.native_timeout !== true || observation.quota_available !== true
+      || typeof observation.quota_observed_at !== "number" || !Number.isFinite(observation.quota_observed_at)
+      || typeof basis.observed_at !== "number" || !Number.isFinite(basis.observed_at)
+      || accepting && (basis.generation_present !== false
+        || basis.observed_at < observation.quota_observed_at || basis.observed_at - observation.quota_observed_at > 60)) {
+    throw new EffectRuntimeRequestError("report timeout continuation requires its original idle Antigravity timeout observation and current usable allowance");
   }
 }
 
@@ -384,7 +449,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
     ...(request.creation_request === undefined ? [] : ["creation_request"]),
     ...(observationOnly ? ["monitor_deadline", "monitor_lease_version", "monitor_restart_recovery"] : []),
-    ...(reportWork ? ["report_window_id", "report_subscription_revision", "report_quota_recovery"] : []),
+    ...(reportWork ? ["report_window_id", "report_subscription_revision", "report_quota_recovery", "report_timeout_recovery"] : []),
     ...(scheduledWork ? ["schedule_window_id", "schedule_subscription_revision"] : [])];
   if (Object.keys(request).some(key => !requestFields.includes(key))
       || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor", "report", "scheduled_task"].includes(String(request.work_kind))
@@ -486,6 +551,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   }
   admitReportSelectionRecovery(params, request, session.session_id);
   admitReportQuotaRecovery(params, request, session);
+  admitReportTimeoutRecovery(params, request, session);
   return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: observationOnly};
 }
 
@@ -634,7 +700,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   }
   const request = requireJsonObject(params.request, "native steward Turn request");
   const fields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
-    "monitor_deadline", "monitor_lease_version", "monitor_restart_recovery", "report_window_id", "report_subscription_revision", "resume_turn_key", "report_quota_recovery"];
+    "monitor_deadline", "monitor_lease_version", "monitor_restart_recovery", "report_window_id", "report_subscription_revision", "resume_turn_key", "report_quota_recovery", "report_timeout_recovery"];
   if (Object.keys(request).some(key => !fields.includes(key))
       || request.operation !== "native_turn" || request.host !== "codex-app-server"
       || ![undefined, "native_turn", "monitor", "report"].includes(request.work_kind as string | undefined)
@@ -650,6 +716,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   }
   admitReportSelectionRecovery(params, request, current.sessionId);
   admitReportQuotaRecovery(params, request, current.session);
+  admitReportTimeoutRecovery(params, request, current.session);
   admitMonitorRestartRecovery(params, request, current.session);
   if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
@@ -853,6 +920,280 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
   return {result_hash: resultHash, material_change: previousHash != null && previousHash !== resultHash};
 }
 
+const PR_SIGNAL_VERDICTS = new Set(["APPROVE", "REQUEST_CHANGES", "NONE"]);
+const PR_AUTHOR_MODES = new Set(["include", "exclude"]);
+const SIGNAL_SCOPE_SCHEMA = "steward_signal_monitor_scope_v0";
+
+export function normalizeStewardSignalMonitorScope(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const scope = requireJsonObject(value, "steward monitor signal scope");
+  const allowedKeys = new Set(["schema_version", "include_portfolio", "include_inbox", "pr_filter"]);
+  for (const key of Object.keys(scope)) {
+    if (!allowedKeys.has(key)) {
+      throw new EffectRuntimeRequestError(`unsupported signal_scope field: ${key}`);
+    }
+  }
+  if (scope.schema_version !== SIGNAL_SCOPE_SCHEMA) {
+    throw new EffectRuntimeRequestError(`signal_scope requires schema_version=${SIGNAL_SCOPE_SCHEMA}`);
+  }
+  const includePortfolio = scope.include_portfolio === undefined ? true : scope.include_portfolio;
+  const includeInbox = scope.include_inbox === undefined ? true : scope.include_inbox;
+  if (typeof includePortfolio !== "boolean" || typeof includeInbox !== "boolean") {
+    throw new EffectRuntimeRequestError("signal_scope include_portfolio and include_inbox must be booleans");
+  }
+  let normalizedFilter: JsonObject | null = null;
+  if (scope.pr_filter !== undefined && scope.pr_filter !== null) {
+    const rawFilter = requireJsonObject(scope.pr_filter, "PR signal filter");
+    const allowedFilterKeys = new Set([
+      "exclude_drafts",
+      "exclude_conflicting",
+      "effective_verdicts",
+      "required_approver_declarations",
+      "author_mode",
+      "authors",
+      "min_stalled_hours",
+    ]);
+    for (const key of Object.keys(rawFilter)) {
+      if (!allowedFilterKeys.has(key)) {
+        throw new EffectRuntimeRequestError(`unsupported pr_filter field: ${key}`);
+      }
+    }
+    const nextFilter: JsonObject = {};
+    for (const boolKey of ["exclude_drafts", "exclude_conflicting"] as const) {
+      if (rawFilter[boolKey] !== undefined) {
+        if (typeof rawFilter[boolKey] !== "boolean") {
+          throw new EffectRuntimeRequestError(`pr_filter.${boolKey} must be a boolean`);
+        }
+        nextFilter[boolKey] = rawFilter[boolKey];
+      }
+    }
+    if (rawFilter.required_approver_declarations !== undefined) {
+      if (!Array.isArray(rawFilter.required_approver_declarations) || rawFilter.required_approver_declarations.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.required_approver_declarations must be a non-empty array");
+      }
+      const tokens = rawFilter.required_approver_declarations.map((entry) =>
+        requireNonEmptyString(entry, "pr_filter.required_approver_declarations[]").toLowerCase(),
+      );
+      nextFilter.required_approver_declarations = [...new Set(tokens)].sort();
+    }
+    if (rawFilter.effective_verdicts !== undefined) {
+      if (!Array.isArray(rawFilter.effective_verdicts) || rawFilter.effective_verdicts.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.effective_verdicts must be a non-empty array");
+      }
+      const verdicts = rawFilter.effective_verdicts.map((item) => {
+        if (typeof item !== "string" || !PR_SIGNAL_VERDICTS.has(item)) {
+          throw new EffectRuntimeRequestError(`invalid pr_filter.effective_verdicts entry: ${String(item)}`);
+        }
+        return item;
+      });
+      nextFilter.effective_verdicts = [...new Set(verdicts)];
+    }
+    if (rawFilter.author_mode !== undefined || rawFilter.authors !== undefined) {
+      if (typeof rawFilter.author_mode !== "string" || !PR_AUTHOR_MODES.has(rawFilter.author_mode)) {
+        throw new EffectRuntimeRequestError("pr_filter.author_mode must be include or exclude");
+      }
+      if (!Array.isArray(rawFilter.authors) || rawFilter.authors.length === 0) {
+        throw new EffectRuntimeRequestError("pr_filter.authors must be a non-empty array when author_mode is set");
+      }
+      const authors = rawFilter.authors.map((entry) => requireNonEmptyString(entry, "pr_filter.authors[]").toLowerCase());
+      nextFilter.author_mode = rawFilter.author_mode;
+      nextFilter.authors = [...new Set(authors)].sort();
+    }
+    if (rawFilter.min_stalled_hours !== undefined) {
+      if (
+        typeof rawFilter.min_stalled_hours !== "number"
+        || !Number.isFinite(rawFilter.min_stalled_hours)
+        || rawFilter.min_stalled_hours <= 0
+      ) {
+        throw new EffectRuntimeRequestError("pr_filter.min_stalled_hours must be a positive finite number");
+      }
+      nextFilter.min_stalled_hours = rawFilter.min_stalled_hours;
+    }
+    normalizedFilter = nextFilter;
+  }
+  return {
+    schema_version: SIGNAL_SCOPE_SCHEMA,
+    include_portfolio: includePortfolio,
+    include_inbox: includeInbox,
+    ...(normalizedFilter !== null ? { pr_filter: normalizedFilter } : {}),
+  };
+}
+
+function prAuthorLogin(item: JsonObject): string {
+  const authorObj = jsonObject(item.author);
+  const raw = authorObj ? authorObj.login : item.author;
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function hasMatchingApprovedReviewerDeclaration(item: JsonObject, requiredTokens: string[]): boolean {
+  const reviewSummary = jsonObject(item.review_summary);
+  if (!reviewSummary || reviewSummary.effective_verdict !== "APPROVE" || reviewSummary.has_review_conflict === true) {
+    return false;
+  }
+  const exactReviews = Array.isArray(reviewSummary.exact_head_reviews) ? reviewSummary.exact_head_reviews : [];
+  const latestByActor = new Map<string, { verdict: string; declaration: string }>();
+  for (const entry of exactReviews) {
+    const review = jsonObject(entry);
+    if (!review) continue;
+    const actorKey = `${String(review.author_login ?? "").trim().toLowerCase()}\0${String(review.reviewer_declaration ?? "").trim().toLowerCase()}`;
+    if (review.state === "DISMISSED") {
+      latestByActor.delete(actorKey);
+    } else if (
+      review.valid_verdict_review === true
+      && (review.verdict === "APPROVE" || review.verdict === "REQUEST_CHANGES")
+    ) {
+      latestByActor.set(actorKey, {
+        verdict: review.verdict,
+        declaration: String(review.reviewer_declaration ?? "").toLowerCase(),
+      });
+    }
+  }
+  return Array.from(latestByActor.values()).some(
+    (entry) => entry.verdict === "APPROVE" && requiredTokens.some((tok) => entry.declaration.includes(tok)),
+  );
+}
+
+function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean): string {
+  if (authorReplyBypass) return "awaiting_maintainer_reply";
+  if (stalledAgeMs >= 168 * 3_600_000) return "7d_plus";
+  if (stalledAgeMs >= 72 * 3_600_000) return "72h_plus";
+  if (stalledAgeMs >= 24 * 3_600_000) return "24h_to_72h";
+  return "under_24h";
+}
+
+function filterScopedRepositoryItems(
+  rawItems: unknown[],
+  filter: JsonObject | null,
+  observedAtValue: unknown,
+): { items: JsonObject[]; observationIncomplete: boolean } {
+  const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
+  let observedAtMs = NaN;
+  if (minStalledHours !== null) {
+    observedAtMs = typeof observedAtValue === "string" ? Date.parse(observedAtValue) : NaN;
+    if (!Number.isFinite(observedAtMs)) {
+      throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
+    }
+  }
+  const effectiveVerdicts = Array.isArray(filter?.effective_verdicts)
+    ? new Set(filter.effective_verdicts.map(String))
+    : null;
+  const requiredApprovers = Array.isArray(filter?.required_approver_declarations)
+    ? filter.required_approver_declarations.map(String)
+    : null;
+  const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
+  const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
+
+  const matched: JsonObject[] = [];
+  for (const rawItem of rawItems) {
+    const item = jsonObject(rawItem);
+    if (!item) continue;
+    if (filter?.exclude_drafts === true && item.isDraft === true) continue;
+    const reviewSummary = jsonObject(item.review_summary);
+    if (
+      filter?.exclude_conflicting === true
+      && (String(item.mergeable ?? "").toUpperCase() === "CONFLICTING" || reviewSummary?.has_review_conflict === true)
+    ) {
+      continue;
+    }
+    if (effectiveVerdicts !== null) {
+      const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
+      if (!effectiveVerdicts.has(verdict)) continue;
+    }
+    if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
+      continue;
+    }
+    if (authorMode !== null && authors !== null) {
+      const login = prAuthorLogin(item);
+      if (authorMode === "include" && (!login || !authors.has(login))) continue;
+      if (authorMode === "exclude" && login && authors.has(login)) continue;
+    }
+    if (minStalledHours !== null) {
+      const authorReplied = item.author_replied_after_request_changes === true
+        || reviewSummary?.author_replied_after_request_changes === true;
+      const hasExplicitStalledSince = Object.prototype.hasOwnProperty.call(item, "stalled_since")
+        || (reviewSummary !== null && Object.prototype.hasOwnProperty.call(reviewSummary, "stalled_since"));
+      const rawStalledSince = typeof item.stalled_since === "string"
+        ? item.stalled_since
+        : (typeof reviewSummary?.stalled_since === "string" ? reviewSummary.stalled_since : null);
+      if (
+        hasExplicitStalledSince
+        && rawStalledSince === null
+        && effectiveVerdicts !== null
+        && effectiveVerdicts.size === 1
+        && effectiveVerdicts.has("REQUEST_CHANGES")
+      ) {
+        continue;
+      }
+      // Fail closed when comment pagination did not reach the stalled anchor or a newer
+      // author/maintainer reply, so evicted replies cannot drop awaiting_maintainer_reply.
+      const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
+        || reviewSummary?.comments_coverage_incomplete === true;
+      if (commentsCoverageIncomplete) {
+        return { items: [], observationIncomplete: true };
+      }
+      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
+      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
+      const authorReplyBypass = authorReplied && authorMode === "exclude";
+      const thresholdMet = Number.isFinite(basisMs) && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      if (!authorReplyBypass && !thresholdMet) {
+        continue;
+      }
+      const stalledAgeMs = Number.isFinite(basisMs) ? Math.max(0, observedAtMs - basisMs) : 0;
+      matched.push({
+        ...item,
+        stalled_threshold_met: thresholdMet,
+        stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
+      });
+    } else {
+      matched.push(item);
+    }
+  }
+  return { items: matched, observationIncomplete: false };
+}
+
+const AGE_FILTER_ITEM_FIELDS = [
+  "stalled_since",
+  "author_replied_after_request_changes",
+  "comments_coverage_incomplete",
+  "stalled_threshold_met",
+  "stalled_bucket",
+] as const;
+
+const AGE_FILTER_REVIEW_SUMMARY_FIELDS = [
+  "latest_request_changes_review_id",
+  "stalled_since",
+  "author_replied_after_request_changes",
+  "comments_coverage_incomplete",
+] as const;
+
+function omitKeys(obj: JsonObject, keysToOmit: readonly string[]): JsonObject {
+  const omit = new Set(keysToOmit);
+  return Object.fromEntries(Object.entries(obj).filter(([key]) => !omit.has(key)));
+}
+
+function projectRepositoryItemForMaterialHash(rawItem: unknown, usesStalledAgeFilter: boolean): unknown {
+  const item = jsonObject(rawItem);
+  if (!item) return rawItem;
+  const reviewSummary = jsonObject(item.review_summary);
+  if (usesStalledAgeFilter) {
+    const hasStalledSinceClock = typeof item.stalled_since === "string"
+      || typeof reviewSummary?.stalled_since === "string";
+    const omittedItemFields = hasStalledSinceClock
+      ? ["comments_coverage_incomplete", "updatedAt"]
+      : ["comments_coverage_incomplete"];
+    const projectedItem = omitKeys(item, omittedItemFields);
+    if (reviewSummary !== null) {
+      projectedItem.review_summary = omitKeys(reviewSummary, ["comments_coverage_incomplete"]);
+    }
+    return projectedItem;
+  }
+  const projectedItem = omitKeys(item, AGE_FILTER_ITEM_FIELDS);
+  if (reviewSummary !== null) {
+    projectedItem.review_summary = omitKeys(reviewSummary, AGE_FILTER_REVIEW_SUMMARY_FIELDS);
+  }
+  return projectedItem;
+}
+
 /** Combine authorized local portfolio, inbox and optional repository signal
  * snapshots into one deterministic change gate for custom Steward monitors.
  * Unavailable external signal reads fail closed so transient provider errors
@@ -860,23 +1201,55 @@ function monitorObservation(facts: unknown, previousHash: unknown): JsonObject {
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
+  const incompleteObservation: JsonObject = {
+    result_hash: previousHash,
+    material_change: false,
+    observation_incomplete: true,
+    own_monitor_bookkeeping_excluded: true,
+  };
+  const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
   if (repo !== null && repo.status === "unavailable") {
-    return {
-      result_hash: previousHash,
-      material_change: false,
-      observation_incomplete: true,
-      own_monitor_bookkeeping_excluded: true,
-    };
+    return incompleteObservation;
   }
   const portfolio = params.portfolio_observation == null ? null
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
   const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
-  const facts = {
-    portfolio_hash: portfolio?.result_hash ?? null,
-    inbox_items: inboxItems,
-    repository_items: repo === null ? null : (Array.isArray(repo.items) ? repo.items : []),
-  };
+  const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
+  const prFilter = signalScope === null ? null : jsonObject(signalScope.pr_filter);
+  const rawMinStalledHours = prFilter?.min_stalled_hours;
+  const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
+    && Number.isFinite(rawMinStalledHours)
+    && rawMinStalledHours > 0;
+  const scopedResult = signalScope !== null && rawRepoItems !== null
+    ? filterScopedRepositoryItems(
+      rawRepoItems,
+      prFilter,
+      params.observed_at ?? repo?.observed_at,
+    )
+    : null;
+  if (scopedResult?.observationIncomplete) {
+    return incompleteObservation;
+  }
+  const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
+  const baseRepoItems = scopedRepoItems ?? rawRepoItems;
+  const hashedRepoItems = baseRepoItems === null
+    ? null
+    : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));
+  const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
+  const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
+  const facts = signalScope === null
+    ? {
+      portfolio_hash: portfolio?.result_hash ?? null,
+      inbox_items: inboxItems,
+      repository_items: hashedRepoItems,
+    }
+    : {
+      signal_scope: signalScope,
+      portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
+      inbox_items: includeInbox ? inboxItems : [],
+      repository_items: hashedRepoItems,
+    };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
     "collection_completed_at", "generated_at", "evaluated_at", "age_seconds", "observed_at"]);
   function canonical(value: unknown): unknown {
@@ -892,6 +1265,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     material_change: previousHash !== resultHash,
     observation_incomplete: false,
     own_monitor_bookkeeping_excluded: true,
+    ...(scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
   };
 }
 

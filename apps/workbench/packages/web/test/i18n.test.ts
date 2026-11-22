@@ -98,7 +98,7 @@ test('no Chinese is written into the interface outside the dictionaries', () => 
     /^i18n\//,
     /^demo\/data\.ts$/,
   ];
-  const parsed = /来自 |状态：|注释|评论：|文件：|来源：|交接前的会话|（接手）|〔补〕|【待补|\[进度\]|'失败'|'结果'|进行中|待验收|需要你|keywords: \[|^const (?:NEXT_STEP_HEADING|PERSONAL_CONFIRMATION_TEXT|LEGACY_ACCOUNT_QUOTA_SCOPE|SYSTEM_ANSWERS)\b/;
+  const parsed = /来自 |状态：|注释|评论：|文件：|来源：|交接前的会话|（接手）|〔补〕|【待补|\[进度\]|'失败'|'结果'|进行中|待验收|需要你|keywords: \[|^const (?:NEXT_STEP_HEADING|PERSONAL_CONFIRMATION_TEXT|LEGACY_ACCOUNT_QUOTA_SCOPE|SYSTEM_ANSWERS|NOTE_ELSEWHERE)\b/;
   const offenders: string[] = [];
   const walk = (dir: string, rel = ''): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

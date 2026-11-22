@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.quota.turn_envelope import (
     COMPLETE_TURN_DECISION_VERSION, TURN_ENVELOPE_SCHEMA_VERSION,
@@ -113,48 +112,47 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
-    def pin_initial_selection(plan: dict[str, Any]) -> None:
+    def pin_initial_selection(plan: dict[str, Any], *, opening_context_instruction: str | None = None) -> None:
         nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
-                current_document, selections)
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(
+                Path(current["path"]), current["sha256"], current_document, selections,
+                opening_context_instruction=opening_context_instruction)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
             # metadata is optional and never a read/authority receipt.
             pass
 
-    interaction = current_document.get("interaction_contract")
-    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
-    stateless_ready = (
+    stateless_navigation = (
         progressive_enabled and initial_read_plan is None and context_directory is None and not page_attached
-        and current_document.get("effective_action") == EffectiveAction.NORMAL_RUN.value
-        and current_document.get("normal_delivery_allowed") is True
-        and isinstance(channel, dict) and channel.get("delivery_allowed") is True
     )
-    if stateless_ready:
+    if stateless_navigation:
         try:
             navigation_plan = _turn_envelope_result("context_select", context=current_document,
-                select=[""], list_fields=True, include_initial_read_plan=True)
+                select=[""], list_fields=True, include_initial_read_plan=True, normal_work_initial_read=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass
         else:
             selection = navigation_plan.get("initial_read_plan")
-            initial_read_plan = {"initial": selection is not None,
-                                 "plan": navigation_plan if selection is None else selection}
+            if selection is not None:
+                initial_read_plan = {"initial": True, "plan": selection}
+            else:
+                field_index = _context_index_fields(current_document, navigation_plan["selections"][0]["children"])
+                initial_read_pointers = navigation_plan.get("initial_read_pointers")
 
     if progressive_enabled and initial_read_plan is not None:
         try:
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
             if initial:
-                pin_initial_selection(plan)
+                pin_initial_selection(plan, opening_context_instruction=initial_read_plan.get("opening_context_instruction"))
             else:
                 field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             # Optional discovery cannot invalidate the immutable file reference.
             pass
-    elif progressive_enabled and not stateless_first_read and not stateless_ready:
+    elif progressive_enabled and not stateless_first_read and not stateless_navigation:
         try:
             plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -310,7 +308,8 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         surface=quota_context_surface(payload),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
         progressive_enabled=progressive_enabled,
-        captured_decision=decision_ref)
+        captured_decision=decision_ref,
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,

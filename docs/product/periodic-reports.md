@@ -678,8 +678,12 @@ an ambiguous later scope change remains retained, without another model run.
 
 The existing idle Chat wake producer admits one calendar window and creates
 one native finite generation Todo for it. The original Chat worker and native
-thread author the report, using complete frozen source records and the owner's
-`REPORTING.md` criteria. Public-safe Turn fields remain separate from private
+thread author the report, using complete frozen source records and the
+workspace `REPORTING.md` criteria (seeded from the repository-maintained
+`loopx/capabilities/manager_context/templates/REPORTING.md` for steward
+workspaces, or `SESSION_REPORTING.md` when a local Goal workspace has no
+custom `REPORTING.md`, while preserving any owner-customized workspace file).
+Public-safe Turn fields remain separate from private
 editorial content. A report-specific opt-in allows the kernel's existing
 `validated_completion`; its original task lease and independent artifact
 validator must pass before the generation Todo closes. Ordinary host prompts
@@ -734,6 +738,27 @@ show the retained failed execution instead of “Not generated”; the next cale
 deadline is not a promise that the held window can run. This observation grants
 no cancellation, retirement or retry. A correlated quota continuation that
 succeeds clears the current failure projection while retaining its failed predecessor.
+
+When a terminal Codex failure with only the original user input is verified, the
+report attempt records that observation under its generation lock. The record
+binds the original Chat and Codex Turns, the report window and subscription
+revision, and the original native result digest. A later independent period
+queries live Codex history first after the existing journal, generation and
+delivery checks pass: readable counter-evidence durably invalidates that Turn's
+retained proof under the generation lock and holds the original window across
+subsequent history outages unless fresh same-Turn evidence explains the
+contradiction, and an un-contradicted retained proof is used only when Codex
+history is unavailable. Empty or unstable readbacks stay `unavailable` rather
+than writing a permanent contradiction, so a subsequent complete user-only
+observation for that same Turn can recover. Contradictions also persist a
+binding-scoped record in the parent `periodic_reports/` cadence scope before
+cleaning up the attempt file, so stale user-only evidence stays blocked across
+restarts even if removing or replacing the attempt file fails; if persisting
+the durable contradiction itself fails, the error surfaces to the cadence
+recovery boundary while holding the original window. Quota continuation
+for the original period still requires a live observation. Missing or
+mismatched evidence still leaves a window held when the original failure cannot
+be verified.
 
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |

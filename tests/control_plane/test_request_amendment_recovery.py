@@ -46,6 +46,12 @@ def _inbox(f, capsys, action, *args, actor="agent-a"):
     return code, json.loads(capsys.readouterr().out)
 
 
+def _unfinished_requests(f, capsys, actor):
+    code, inbox = _inbox(f, capsys, "read", actor=actor)
+    assert code == 0, inbox
+    return {row["request_id"]: row for row in inbox["unfinished_delegations"]["items"]}
+
+
 def _proposal(f, tmp_path, capsys):
     delivered = _request(f)
     rid = delivered["request_id"]
@@ -289,7 +295,11 @@ def test_request_cancellation_competes_for_one_real_goal_terminal_record(source_
             return actual(registry, root, ref, receiver, operation, parameters, **kwargs)
         if winner == "commit":
             response = actual(registry, root, ref, receiver, operation, parameters, **kwargs)
-        assert _cancel(f, rid)["view"]["control_state"] == "cancellation_pending"
+        cancelled = _cancel(f, rid)["view"]
+        assert cancelled["control_state"] == "cancellation_pending"
+        assert cancelled["active_reservation"] is not None
+        for actor in ("agent-a", "agent-b"):
+            assert _unfinished_requests(f, capsys, actor)[rid]["step"] == "reconcile_reservation"
         observations.append(_recover(f, rid))
         if winner == "abort":
             response = actual(registry, root, ref, receiver, operation, parameters, **kwargs)
@@ -303,6 +313,8 @@ def test_request_cancellation_competes_for_one_real_goal_terminal_record(source_
     assert observations[0]["effect"] == result["effect"]
     assert result["request_linked"] is True
     assert result["request_control"]["control_state"] == "cancelled"
+    for actor in ("agent-a", "agent-b"):
+        assert rid not in _unfinished_requests(f, capsys, actor)
     _, goal = goal_call(f, tmp_path, capsys, "inspect", agent=None)
     assert goal["intent"]["goal_revision"] == (2 if winner == "commit" else 1)
     assert len(goal["intent"]["created_todo_ids"]) == (1 if winner == "commit" else 0)
@@ -326,10 +338,15 @@ def test_lost_request_linkage_keeps_known_goal_effect_and_recovers_without_reapp
     assert code == 1 and result["request_linked"] is False
     assert result["effect"]["outcome"] == "committed" and result["effect"]["goal_changed"] is True
     assert result["request_control"]["control_state"] == "effect_pending"
+    assert result["request_control"]["recovery_operation"] == "read_receipt"
+    for actor in ("agent-a", "agent-b"):
+        assert _unfinished_requests(f, capsys, actor)[rid]["step"] == "reconcile_reservation"
     _, goal = goal_call(f, tmp_path, capsys, "inspect", agent=None)
     recovered = _recover(f, rid)
     assert recovered["ok"] and recovered["effect"] == result["effect"]
     assert goal_call(f, tmp_path, capsys, "inspect", agent=None)[1]["provider_revision"] == goal["provider_revision"]
+    assert _unfinished_requests(f, capsys, "agent-a")[rid]["step"] == "review_request_work"
+    assert _unfinished_requests(f, capsys, "agent-b")[rid]["step"] == "await_peer_result"
 
 
 def test_unknown_goal_outcome_survives_new_process_and_late_commit_after_abort(source_goal, tmp_path, capsys, monkeypatch):
@@ -547,29 +564,64 @@ def test_source_can_settle_cancellation_without_reusing_lost_receiver_authority(
 
 
 def test_source_correction_aborts_unknown_effect_and_next_revision_can_continue(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.capabilities.manager_context.roundtrip import report
     from loopx.control_plane.collaboration import request_amendment as io
+    from loopx.control_plane.collaboration.peers import consume_return, read_inbox
 
     f = source_goal
     rid, commit = _proposal(f, tmp_path, capsys)
+    root, registry, goal_id = f["runtime"], f["registry"], f["ref"]["goal_id"]
+    report(root, goal_id, "agent-a", rid, "conclusion", "Result from the original revision", registry=registry)
     actual = io._goal
 
     def unknown(*args, **kwargs):
         if args[4] == "commit" and kwargs.get("execute"):
             raise OSError("unknown original effect")
+        if args[4] == "abort_request" and kwargs.get("execute"):
+            view = _control(f, rid, "inspect")["view"]
+            assert view["revision"] == 2 and view["recovery_operation"] == "abort_request"
+            for actor in ("agent-a", "agent-b"):
+                row = _unfinished_requests(f, capsys, actor)[rid]
+                assert row["step"] == "reconcile_reservation"
+                assert row["request_revision"] == 2
+            code, packet = _inbox(f, capsys, "read", actor="agent-b")
+            assert code == 0, packet
+            attention = packet["unfinished_delegations"]["return_attention"]
+            assert attention["count"] == 1
+            old_return, = attention["items"]
+            assert old_return["request_id"] == rid
+            assert old_return["request_revision"] == 2
+            assert old_return["step"] == "consume_peer_result"
+            assert old_return["returns"] == [{"result_key": "conclusion", "request_revision": 1,
+                "status": "delivered", "consumed": False}]
+            returned, = read_inbox(root, registry, goal_id, "agent-b",
+                turn_instance_id="turn-prior-revision-result")["peer_returns"]["items"]
+            assert returned["request_id"] == rid and returned["request_revision"] == 1
+            assert returned["text"] == "Result from the original revision"
+            consume_return(root, goal_id, "agent-b", rid, registry=registry,
+                turn_instance_id="turn-prior-revision-result", disposition="accepted")
+            assert _control(f, rid, "inspect")["view"]["active_reservation"] == view["active_reservation"]
+            code, packet = _inbox(f, capsys, "read", actor="agent-b")
+            assert code == 0, packet
+            agenda = packet["unfinished_delegations"]
+            assert agenda["items"][0]["step"] == "reconcile_reservation"
+            assert agenda["return_attention"] == {"count": 0, "items": [], "omitted_count": 0}
         return actual(*args, **kwargs)
 
     with monkeypatch.context() as stopped:
         stopped.setattr(io, "_goal", unknown)
         assert goal_call(f, tmp_path, capsys, "commit", commit, operation_id="old-effect", execute=True)[0] == 1
-    current = _control(f, rid, "inspect")["view"]
-    corrected = control_request(registry_path=f["registry"], runtime_root=f["runtime"], goal_ref=f["ref"],
-        replan_configuration_reader=resolve_todo_replan_cadence_goal,
-        receiver_agent_id="agent-a", request_id=rid, actor_agent_id="agent-b", operation="revise", execute=True,
-        parameters={"operation_id": "correct-unknown", **_basis(current), "brief": {**BRIEF, "context": "Continue from corrected source"}, "reason": "Use the new input"})
+        current = _control(f, rid, "inspect")["view"]
+        corrected = control_request(registry_path=f["registry"], runtime_root=f["runtime"], goal_ref=f["ref"],
+            replan_configuration_reader=resolve_todo_replan_cadence_goal,
+            receiver_agent_id="agent-a", request_id=rid, actor_agent_id="agent-b", operation="revise", execute=True,
+            parameters={"operation_id": "correct-unknown", **_basis(current), "brief": {**BRIEF, "context": "Continue from corrected source"}, "reason": "Use the new input"})
     assert corrected["ok"] and corrected["view"]["control_state"] == "open", corrected
     assert corrected["view"]["cancellation"] is None
     assert corrected["effect_recovery"]["effect"]["outcome"] == "aborted"
     revised = corrected["view"]
+    assert _unfinished_requests(f, capsys, "agent-a")[rid]["step"] == "assess_request"
+    assert _unfinished_requests(f, capsys, "agent-b")[rid]["step"] == "await_peer_result"
     assert _inbox(f, capsys, "acknowledge", "--request-id", rid, "--decision", "adopt", "--reason", "Use revision two",
         "--request-revision", "2", "--request-digest", revised["revision_digest"])[0] == 0
     _, current_goal = goal_call(f, tmp_path, capsys, "inspect", agent=None)

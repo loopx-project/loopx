@@ -25,6 +25,39 @@ import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummary
   from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
+import {referenceVisionContinuation, requireVisionAuditReferences}
+  from "../../loopx/control_plane/quota/turn_envelope_references.ts";
+
+test("normal-work initial navigation stays scoped while other reads keep discovery", () => {
+  const source = payload();
+  source.normal_delivery_allowed = true;
+  const request = {operation: "context_select", select: [""], list_fields: true, include_initial_read_plan: true};
+  for (const change of [null, "action", "delivery", "channel", "missing_channel"]) {
+    const context = structuredClone(source);
+    if (change === "action") context.effective_action = "wait";
+    if (change === "delivery") context.normal_delivery_allowed = false;
+    const interaction = context.interaction_contract as JsonObject;
+    if (change === "channel") (interaction.agent_channel as JsonObject).delivery_allowed = false;
+    if (change === "missing_channel") delete interaction.agent_channel;
+    const before = structuredClone(context);
+    const scoped = evaluateTurnEnvelope({...request, context, normal_work_initial_read: true});
+    if (change === null) assert.ok(scoped.initial_read_plan);
+    else {
+      assert.equal(scoped.initial_read_plan, undefined);
+      assert.equal((scoped.selections as JsonObject[])[0].pointer, "");
+      assert.ok(Array.isArray(scoped.initial_read_pointers));
+    }
+    assert.ok(evaluateTurnEnvelope({...request, context}).initial_read_plan);
+    assert.deepEqual(evaluateTurnEnvelope({...request, context, normal_work_initial_read: false}),
+      evaluateTurnEnvelope({...request, context}));
+    assert.deepEqual(context, before);
+  }
+  assert.throws(() => evaluateTurnEnvelope({...request, context: source, normal_work_initial_read: "true"}),
+    /normal_work_initial_read must be a boolean/);
+  for (const scope of [{}, {normal_work_initial_read: false}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context: null,
+      select: ["/goal_id"], recover_selection_errors: "true", ...scope}), /recover-selection-errors must be boolean/);
+});
 
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
@@ -892,6 +925,31 @@ test("vision closeout obligations survive projection and signature mutation", ()
   }
   (projected.required_before_closeout as string[]).push("consumer edit");
   assert.deepEqual(source, before);
+});
+
+test("only an exact complete CLI Vision view shares its required audit", () => {
+  const clauses = ["Read and verify the registered original Vision source.".repeat(12)];
+  const view = {required: true, required_before_closeout: clauses, recommended_action: "Continue."};
+  const root = {schema_version: "vision_continuation_audit_v0", ...view, acceptance_gaps: ["open"]};
+  const source = (audit: JsonObject) => ({vision_continuation_audit: root, interaction_contract: {
+    agent_channel: {vision_continuation_audit: root}, cli_channel: {vision_continuation_audit: audit},
+  }});
+  const getCli = (result: JsonObject) =>
+    ((result.interaction_contract as JsonObject).cli_channel as JsonObject).vision_continuation_audit;
+  const exact = source(view);
+  const shared = referenceVisionContinuation(exact, undefined, true);
+  const reference = {projection_ref: "$.vision_continuation_audit", projection_view: "cli_channel", required: true};
+  assert.deepEqual(getCli(shared), reference);
+  assert.deepEqual(shared.vision_continuation_audit, root);
+  assert.deepEqual(referenceVisionContinuation(shared, undefined, true), shared);
+  assert.deepEqual(getCli(referenceVisionContinuation(exact)), view);
+  for (const changed of [{...view, required_before_closeout: ["Shorter."]},
+    {...view, new_channel_obligation: "Read the omitted evidence."}]) {
+    assert.deepEqual(getCli(referenceVisionContinuation(source(changed), undefined, true)), changed);
+  }
+  assert.throws(() => requireVisionAuditReferences(source({...reference, required: false})), /complete inline root owner/);
+  assert.throws(() => requireVisionAuditReferences({...shared, vision_continuation_audit: reference}),
+    /complete inline root owner/);
 });
 
 test("absent vision audit retains the existing envelope shape", () => {

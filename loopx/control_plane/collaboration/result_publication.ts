@@ -70,6 +70,15 @@ export function resultAttachmentRefs(params: JsonObject): JsonObject {
   return {refs};
 }
 
+/** Match the exact bytes normal publication writes to the original Chat. */
+export function returnTranscriptText(reply: JsonObject, exact: boolean): string {
+  const prefix = exact ? (reply.phase === "conclusion" ? "处理结论" : "处理进展")
+    : (reply.phase === "conclusion" ? "协作回复" : "协作进展");
+  const provenance = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}`;
+  const body = collaborationResultText(reply);
+  return usesReaderReturnFormat(reply) ? `${body}\n\n${provenance}` : `${provenance}\n\n${body}`;
+}
+
 /** Explicit result files are content-bound observations, never new grants. */
 export function resultAttachments(value: unknown): JsonObject[] {
   if (value === undefined || value === null) return [];

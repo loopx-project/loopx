@@ -40,7 +40,10 @@ def arguments(project, cli, entrypoint, document, operation):
 
 @pytest.mark.parametrize("entrypoint", ["refine", "refresh"])
 @pytest.mark.parametrize(("source_ref", "detail"), [
-    ("synthetic/private-ref", "source ref must be an opaque identifier"),
+    (
+        "synthetic/private-ref",
+        "source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)",
+    ),
     ("synthetic-private-ref ", "source ref must be bounded nonempty text"),
 ])
 def test_native_rejection_then_corrected_same_operation(acceptance_goal, entrypoint, source_ref, detail):

@@ -582,14 +582,14 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
     proof = ready["execution_preparation"]["lease_proof"]
     identity = ready["heartbeat_receipt"]["settlement_identity"]
     assert identity == first["heartbeat_receipt"]["settlement_identity"]
-    refresh = ["refresh-state", *scope,
-        "--task-lease-idempotency-key", proof["idempotency_key"],
-        "--task-lease-expected-version", str(proof["expected_version"]),
-        "--classification", "fixture_manual_result",
+    proof = ready["execution_preparation"]["lease_proof"]
+    refresh = ["refresh-state", *scope, "--classification", "fixture_manual_result",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
         "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:manual-result",
-        "--no-global-sync", "--suppress-external-sinks"]
+        "--no-global-sync", "--suppress-external-sinks",
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"])]
     if spend_committed:
         refresh += ["--settle-turn", "--settlement-receipt"]
     assert invoke(*refresh, cwd=delivery_worktree)["settlement_identity"] == identity
@@ -1650,3 +1650,68 @@ def test_todo_bound_autonomous_replan_admits_without_prepared_lease_only_on_repl
                 heartbeat_receipt={"status": "autonomous_replan_required", "details": {"delivery_allowed": False}},
             ),
         )
+
+
+def test_scoped_user_gate_fallback_execution_preparation_excludes_deferred_replan(monkeypatch):
+    from loopx.control_plane.quota import execution_preparation
+
+    replan_payload = {
+        "should_run": True,
+        "normal_delivery_allowed": False,
+        "effective_action": "successor_replan_required",
+        "selected_todo": {"todo_id": TODO, "status": "deferred", "resume_ready": True},
+        "scoped_user_gate_fallback": {
+            "selected_executable": {"todo_id": TODO, "fallback_kind": "deferred_successor_replan"}
+        },
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": True},
+    }
+
+    def unexpected_read(**_):
+        pytest.fail("deferred_successor_replan fallback must not consult execution-lease preparation")
+
+    monkeypatch.setattr(execution_preparation, "project_selected_todo_execution_preparation", unexpected_read)
+    apply_selected_todo_execution_preparation(
+        replan_payload,
+        runtime_root=None,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        obligation=replan_payload["execution_obligation"],
+    )
+    assert "execution_preparation" not in replan_payload
+    assert replan_payload["should_run"] is True
+    assert replan_payload["execution_obligation"]["delivery_allowed"] is True
+
+    monkeypatch.setattr(
+        execution_preparation,
+        "project_selected_todo_execution_preparation",
+        lambda **_: {
+            "schema_version": "execution_preparation_v0",
+            "todo_id": TODO,
+            "agent_id": AGENT,
+            "handoff_mode": "hard_lease",
+            "state": "claim_required",
+            "delivery_allowed": False,
+            "reason": "Acquire an atomic lease before advancing the open fallback.",
+            "claim": {"cli_args": ["todo", "claim", "--goal-id", GOAL, "--todo-id", TODO], "command_line": f"loopx todo claim --goal-id {GOAL} --todo-id {TODO} --thin"},
+        },
+    )
+    open_fallback_payload = {
+        "should_run": True,
+        "normal_delivery_allowed": False,
+        "effective_action": "scoped_user_gate_fallback",
+        "selected_todo": {"todo_id": TODO, "status": "open"},
+        "scoped_user_gate_fallback": {
+            "selected_executable": {"todo_id": TODO}
+        },
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": True},
+    }
+    apply_selected_todo_execution_preparation(
+        open_fallback_payload,
+        runtime_root=None,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        obligation=open_fallback_payload["execution_obligation"],
+    )
+    assert open_fallback_payload["execution_preparation"]["state"] == "claim_required"
+    assert open_fallback_payload["should_run"] is True
+    assert open_fallback_payload["execution_obligation"]["delivery_allowed"] is False
