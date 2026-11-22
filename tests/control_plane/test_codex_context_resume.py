@@ -866,3 +866,161 @@ def test_same_turn_large_earlier_record_keeps_ambiguity_and_corruption_rejected(
     assert "native_resume" not in context._state(tmp_path)["candidate"]
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     assert "candidate" not in context._state(tmp_path)
+
+
+def _write_large_decimal_rollout_record(history: Path, *, min_bytes: int, decimal_digits: int = 1100) -> int:
+    prefix = b'{"type":"event_msg","payload":{"unused_decimal":0.' + (b"1" * decimal_digits)
+    prefix += b',"nested":{"flag":true,"empty":null,"nums":[-0,123.45e+6,false]},"message":"'
+    suffix = b'","type":"background_event"}}'
+    pad_len = max(0, min_bytes - len(prefix) - len(suffix))
+    record = prefix + (b"x" * pad_len) + suffix
+    with history.open("ab") as stream:
+        stream.write(record + b"\n")
+    return len(record)
+
+
+@pytest.mark.parametrize("min_bytes", [71 * 1024, 17 * 1024 * 1024], ids=["71KiB", "17MiB"])
+@pytest.mark.parametrize("scope_mode", ["full", "selected"])
+def test_same_turn_earlier_record_with_long_decimal_preserves_native_resume(
+        tmp_path, monkeypatch, min_bytes, scope_mode):
+    from argparse import Namespace
+
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver import codex_context_history as history_io
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    turn_id = "long-decimal-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    raw_len = _write_large_decimal_rollout_record(history, min_bytes=min_bytes)
+    if min_bytes < history_io._MAX_RECORD_BYTES:
+        assert history_io._IO_CHUNK_BYTES < raw_len <= history_io._MAX_RECORD_BYTES
+    else:
+        assert raw_len > history_io._MAX_RECORD_BYTES
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    narrative = "Preserve replay across long decimals. " * 280
+    payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+        "goal_boundary": {"stop_condition": "Current boundary."},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+            }}]}}, "user_channel": {}, "cli_channel": {}}}
+    _, first = project(tmp_path, payload=payload)
+    if scope_mode == "full":
+        pages = read_pages(tmp_path, first, size=2048)
+        for i, page in enumerate(pages):
+            body = json.dumps(page)
+            parent, call = f"parent-{i}", f"reader-{i}"
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+            append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+                "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+            context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+                "tool_use_id": call, "tool_response": body})
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+                "output": [{"type": "input_text", "text": body}]})
+        state = context._state(tmp_path)
+        assert "native_resume" in state["candidate"]
+        assert history_io.native_resume_verified(state, {**event, "source": "resume"})
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert "candidate" in context._state(tmp_path)
+        _, wire = project(tmp_path, "second", payload={**payload, "heartbeat_receipt": {"turn_instance_id": "second"}})
+        assert wire["mode"] == "delta" and wire["continuity_basis"] == "captured_file"
+    else:
+        selected = read_context_capture(Namespace(capture_file=first["recovery"]["path"],
+            capture_sha256=first["recovery"]["sha256"], select=[address], offset=0,
+            page_bytes=64000, max_page_output_bytes=64000, format="json"))
+        assert selected["ok"] and selected["eof"]
+        body = json.dumps(selected)
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "parent-sel", "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": "reader-sel", "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": "reader-sel", "tool_response": body})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": "parent-sel",
+            "output": [{"type": "input_text", "text": body}]})
+        state = context._state(tmp_path)
+        assert "selected_resume" in state
+        retained = history_io.native_resume_sections(state, {**event, "source": "resume"})
+        assert address in retained
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert address in context._state(tmp_path).get("consumed_pointers", {})
+
+
+@pytest.mark.parametrize("bad_primitive", [b"01", b"1.", b"1e+", b"tru"])
+def test_large_earlier_record_rejects_malformed_json_primitives(tmp_path, monkeypatch, bad_primitive):
+    from loopx.control_plane.turn_driver import codex_context_history as history_io
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    turn_id = "malformed-primitive-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    offset = history.stat().st_size
+    with history.open("ab") as stream:
+        stream.write(b'{"type":"event_msg","payload":{"message":"' + (b"x" * (17 * 1024 * 1024))
+            + b'","unused":' + bad_primitive + b',"type":"background_event"}}\n')
+    stop = history.stat().st_size - 1
+    with history.open("rb") as stream, pytest.raises(ValueError):
+        history_io._scan_turn_prefix_record(stream, offset, stop)
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    for i, page in enumerate(pages):
+        body = json.dumps(page)
+        parent, call = f"parent-{i}", f"reader-{i}"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": call, "tool_response": body})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": body}]})
+    assert "native_resume" not in context._state(tmp_path)["candidate"]
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert "candidate" not in context._state(tmp_path)
+
+
+def test_json_slice_cursor_skip_primitive_rfc8259_and_chunk_boundaries():
+    import io
+
+    from loopx.control_plane.turn_driver import codex_context_history as history_io
+
+    chunk = history_io._IO_CHUNK_BYTES
+    long_dec = b"0." + (b"9" * (chunk + 200))
+    pad = b" " * (chunk - 2)
+    valid_records = [
+        b'{"type":"event_msg","payload":{"type":"background_event","n":0,"z":-0,"f":123.45e+6,"e":1E01}}',
+        b'{"type":"event_msg","payload":{"type":"background_event","d":' + long_dec + b"}}",
+        b'{"type":"event_msg","payload":{"type":"background_event","k":"' + (b"a" * (chunk - 56))
+        + b'","t":true,"f":false,"n":null}}',
+        b'{"type":"event_msg","payload":{"type":"background_event","k":' + pad + b"true}}",
+    ]
+    for raw in valid_records:
+        parsed = history_io._scan_turn_prefix_record(io.BytesIO(raw), 0, len(raw))
+        assert parsed["type"] == "event_msg"
+        assert parsed["payload"]["type"] == "background_event"
+
+    invalid_primitives = [
+        b"01", b"-01", b"00", b"1.", b"1.e2", b"1e", b"1e+", b"1E-",
+        b"tru", b"fals", b"nul", b"NaN", b"Infinity", b"-Infinity", b".5", b"+1", b"-", b"truefalse", b"1.2.3",
+    ]
+    for bad in invalid_primitives:
+        raw = b'{"type":"event_msg","payload":{"type":"background_event","bad":' + bad + b"}}"
+        with pytest.raises(ValueError):
+            history_io._scan_turn_prefix_record(io.BytesIO(raw), 0, len(raw))
+        cursor = history_io._JsonSliceCursor(io.BytesIO(bad), 0, len(bad))
+        with pytest.raises(ValueError):
+            cursor.skip_primitive()

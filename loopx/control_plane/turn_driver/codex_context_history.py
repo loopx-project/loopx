@@ -41,6 +41,8 @@ _SHELL_OUTPUT = re.compile(r"\AChunk ID: [^\r\n]+\nWall time: [0-9.]+ seconds\n"
     r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.DOTALL)
 _JSON_WS_STOP = re.compile(rb"[^ \t\r\n]")
 _JSON_STR_SPAN = re.compile(rb'(?:[^"\\\x00-\x1f]+|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})){1,64}')
+_JSON_DIGITS = re.compile(rb"[0-9]+")
+_JSON_PRIMITIVE_STOP = frozenset(b" \t\r\n,}]")
 _JSON_TOKEN_STOP = re.compile(rb"[ \t\r\n,\}\]]")
 _PREFIX_PAYLOAD_SPEC: dict[str, Any] = {
     "type": None,
@@ -181,6 +183,22 @@ class _JsonSliceCursor:
             self._pos = 0
         return len(self._buf) - self._pos >= n
 
+    def _peek_byte(self) -> int | None:
+        if self._pos >= len(self._buf) and not self._ensure(1):
+            return None
+        return self._buf[self._pos]
+
+    def _consume_digits(self) -> bool:
+        matched = False
+        while True:
+            if self._pos >= len(self._buf) and not self._ensure(1):
+                return matched
+            match = _JSON_DIGITS.match(self._buf, self._pos)
+            if match is None:
+                return matched
+            matched = True
+            self._pos = match.end()
+
     def skip_ws(self) -> int | None:
         while True:
             if self._pos >= len(self._buf) and not self._ensure(1):
@@ -252,6 +270,43 @@ class _JsonSliceCursor:
             raise ValueError("expected JSON value")
         return json.loads(bytes(raw), parse_constant=_reject_json_constant)
 
+    def skip_primitive(self) -> None:
+        """Validate and skip a JSON literal or number in O(1) memory."""
+        ch = self._peek_byte()
+        if ch is None:
+            raise ValueError("expected JSON value")
+        if ch in {0x74, 0x66, 0x6e}:
+            literal = b"true" if ch == 0x74 else b"false" if ch == 0x66 else b"null"
+            if not self._ensure(len(literal)) or self._buf[self._pos:self._pos + len(literal)] != literal:
+                raise ValueError("invalid JSON literal")
+            self._pos += len(literal)
+        else:
+            if ch == 0x2d:
+                self._pos += 1
+                ch = self._peek_byte()
+                if ch is None:
+                    raise ValueError("invalid JSON number")
+            if ch == 0x30:
+                self._pos += 1
+            elif 0x31 <= ch <= 0x39:
+                self._pos += 1
+                self._consume_digits()
+            else:
+                raise ValueError("invalid JSON number")
+            if self._peek_byte() == 0x2e:
+                self._pos += 1
+                if not self._consume_digits():
+                    raise ValueError("invalid JSON number")
+            if self._peek_byte() in {0x65, 0x45}:
+                self._pos += 1
+                if self._peek_byte() in {0x2b, 0x2d}:
+                    self._pos += 1
+                if not self._consume_digits():
+                    raise ValueError("invalid JSON number")
+        nxt = self._peek_byte()
+        if nxt is not None and nxt not in _JSON_PRIMITIVE_STOP:
+            raise ValueError("invalid JSON primitive")
+
     def skip_value(self) -> None:
         stack: list[bool] = []  # True = object, False = array
         state = 0  # 0=val, 1=val|arr_end, 2=arr_sep, 3=key|obj_end, 4=key, 5=colon, 6=obj_sep
@@ -322,7 +377,7 @@ class _JsonSliceCursor:
                     return
                 state = 6 if stack[-1] else 2
             else:
-                self.read_primitive()
+                self.skip_primitive()
                 if not stack:
                     return
                 state = 6 if stack[-1] else 2
@@ -398,12 +453,9 @@ def _native_reader(stream: BinaryIO, end: int, event: dict[str, Any]) -> tuple[i
     parent: tuple[int, str] | None = None
     for offset, stop in _reader_spans(stream, end):
         raw_len = stop - offset - 1
-        if parent is None:
-            if raw_len > _MAX_RECORD_BYTES:
+        if raw_len > _MAX_RECORD_BYTES:
+            if parent is None:
                 raise ValueError("unsupported native reader record")
-            stream.seek(offset)
-            record = json.loads(stream.read(stop - offset))
-        elif raw_len > _IO_CHUNK_BYTES:
             record = _scan_turn_prefix_record(stream, offset, stop - 1)
         else:
             stream.seek(offset)
@@ -426,9 +478,6 @@ def _native_reader(stream: BinaryIO, end: int, event: dict[str, Any]) -> tuple[i
         if call == reader and kind in {"function_call", "function_call_output"}:
             if raw_len > _MAX_RECORD_BYTES:
                 return None
-            if parent is not None and raw_len > _IO_CHUNK_BYTES:
-                stream.seek(offset)
-                record = json.loads(stream.read(stop - offset))
             return offset, _digest(record)
         if kind == "custom_tool_call_output":
             closed_parents.add(call)
