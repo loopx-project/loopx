@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import struct
 import subprocess
+import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -65,6 +68,10 @@ def test_rehearsal_simulation_e2e() -> None:
     assert data["transport"] == "https_tls"
     assert data["clock_mode"] == "controlled_service_clock"
     assert data["runtime_role_verified"] is False
+    assert data["server_version"] is None
+    assert data["server_version_num"] is None
+    assert data["server_major_version"] is None
+    assert data["pg16_qualified"] is False
     assert data["tenant_id"] == "tenant-canary"
     assert data["goal_id"] == "loopx-quality-review"
     assert data["actors"]["actor_a"] == "operator.local"
@@ -110,6 +117,167 @@ def test_rehearsal_ts_cli_direct() -> None:
     assert len(data["steps"]) == 8
 
 
+def test_rehearsal_rejects_empty_database_url_and_conflicting_flags() -> None:
+    """Explicit --database-url '' or conflicting flags must fail closed without simulation fallback."""
+    script_path = REPO_ROOT / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.sh"
+    ts_path = REPO_ROOT / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.ts"
+
+    shell_empty = subprocess.run(
+        [str(script_path), "--database-url", ""],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert shell_empty.returncode != 0
+    assert "simulation" not in shell_empty.stdout.lower()
+
+    ts_empty = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-sqlite",
+            "--experimental-strip-types",
+            str(ts_path),
+            "--database-url",
+            "",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert ts_empty.returncode != 0
+    assert "simulation" not in ts_empty.stdout.lower()
+
+    ts_conflict = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-sqlite",
+            "--experimental-strip-types",
+            str(ts_path),
+            "--simulate",
+            "--database-url",
+            "postgresql://postgres:secret@127.0.0.1:5432/postgres",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    assert ts_conflict.returncode != 0
+    assert "simulation" not in ts_conflict.stdout.lower()
+
+
+def _pg_frame(msg_type: bytes, body: bytes) -> bytes:
+    return msg_type + struct.pack("!I", 4 + len(body)) + body
+
+
+def test_rehearsal_refuses_pg15_before_writes_via_shell_entrypoint() -> None:
+    """Connecting --database-url to PostgreSQL 15.20 must fail before any write and never emit PG16 boundary."""
+    queries: list[str] = []
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    port = server.getsockname()[1]
+    stop_event = threading.Event()
+
+    def serve() -> None:
+        server.settimeout(0.2)
+        while not stop_event.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            with conn:
+                buf = b""
+                startup_done = False
+                while not stop_event.is_set():
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while buf:
+                        if not startup_done:
+                            if len(buf) < 8:
+                                break
+                            msg_len = struct.unpack("!I", buf[:4])[0]
+                            if len(buf) < msg_len:
+                                break
+                            code = struct.unpack("!I", buf[4:8])[0]
+                            buf = buf[msg_len:]
+                            if code == 80877103:
+                                conn.sendall(b"N")
+                                continue
+                            startup_done = True
+                            conn.sendall(
+                                _pg_frame(b"R", struct.pack("!I", 0))
+                                + _pg_frame(b"S", b"server_version\x0015.20\x00")
+                                + _pg_frame(b"K", struct.pack("!II", 1, 2))
+                                + _pg_frame(b"Z", b"I")
+                            )
+                            continue
+                        if len(buf) < 5:
+                            break
+                        msg_type = buf[:1]
+                        msg_len = struct.unpack("!I", buf[1:5])[0]
+                        if len(buf) < 1 + msg_len:
+                            break
+                        payload = buf[5 : 1 + msg_len]
+                        buf = buf[1 + msg_len :]
+                        if msg_type == b"X":
+                            return
+                        if msg_type == b"Q":
+                            sql = payload.rstrip(b"\x00").decode("utf-8").strip()
+                            queries.append(sql)
+                            if sql.lower() == "show server_version":
+                                col = b"server_version\x00"
+                                val = b"15.20"
+                            elif sql.lower() == "show server_version_num":
+                                col = b"server_version_num\x00"
+                                val = b"150020"
+                            else:
+                                err = b"SERROR\x00C42000\x00Munexpected write\x00\x00"
+                                conn.sendall(_pg_frame(b"E", err) + _pg_frame(b"Z", b"I"))
+                                continue
+                            row_desc = _pg_frame(
+                                b"T",
+                                struct.pack("!H", 1) + col + struct.pack("!IhIhih", 0, 0, 25, -1, -1, 0),
+                            )
+                            data_row = _pg_frame(b"D", struct.pack("!HI", 1, len(val)) + val)
+                            cmd_complete = _pg_frame(b"C", b"SHOW\x00")
+                            ready = _pg_frame(b"Z", b"I")
+                            conn.sendall(row_desc + data_row + cmd_complete + ready)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        script_path = REPO_ROOT / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.sh"
+        result = subprocess.run(
+            [str(script_path), "--database-url", f"postgresql://postgres:secret@127.0.0.1:{port}/postgres"],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert result.returncode == 1
+        data = json.loads(result.stdout)
+        assert data["ok"] is False
+        assert data["mode"] == "real_pg"
+        assert data["execution_boundary"] == "isolated_real_postgresql_tls"
+        assert data["server_version"] == "15.20"
+        assert data["server_version_num"] == 150020
+        assert data["server_major_version"] == 15
+        assert data["pg16_qualified"] is False
+        assert data["runtime_role_verified"] is False
+        assert data["steps"] == []
+        assert "15.20" in data.get("error", "")
+        assert queries == ["SHOW server_version", "SHOW server_version_num"]
+    finally:
+        stop_event.set()
+        server.close()
+        thread.join(timeout=2)
+
+
 def test_volcengine_deployment_artifacts() -> None:
     """Verify presence and validity of all Volcengine cn-beijing deployment assets."""
     doc_path = (
@@ -139,6 +307,17 @@ def test_volcengine_deployment_artifacts() -> None:
     assert "EnvironmentFile" in doc_content or "环境变量" in doc_content
     assert "LOOPX_AUTHORITY_CREDENTIAL" in doc_content
     assert "ARK_API_KEY" in doc_content
+    # Verify Stage 2B setup, restricted-role seed execution, and target readback instructions
+    assert "postgres setup --runtime-role loopx_app --execute" in doc_content
+    assert "local-to-pg-seed" in doc_content
+    assert "--store-identity" in doc_content
+    assert "--execute" in doc_content
+    assert "ALTER ROLE loopx_app" in doc_content
+    assert "GRANT CONNECT ON DATABASE" in doc_content
+    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT" in doc_content
+    assert "PostgreSqlAuthorityStore" in doc_content
+    assert "loadAuthority()" in doc_content
+    assert '"operation": "snapshot"' in doc_content
 
     volc_dir = REPO_ROOT / "examples" / "coordination" / "volcengine"
     assert volc_dir.is_dir()

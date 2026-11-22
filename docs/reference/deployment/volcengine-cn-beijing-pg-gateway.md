@@ -130,27 +130,96 @@
 ./examples/coordination/colima-pg16-e2e-rehearsal.sh --rehearsal
 ```
 
-### 步骤 2：创世种子脱敏与灌入
-部署者按目标环境设置参数变量后，使用 Stage 2B 工具导出脱敏创世种子，并通过只读权限隔离后的初始化连接灌入目标 PostgreSQL 实例：
-```bash
-# 由部署者提供参数与输出路径（自动剔除本地绝对路径、飞书私有 ID 与未过期租约）
-export LOOPX_RUNTIME_ROOT="/path/to/operator-runtime-root"
-export LOOPX_GOAL_ID="<goal-id>"
-export LOOPX_TENANT_ID="<tenant-id>"
-export LOOPX_SEED_OUTPUT="/tmp/genesis-seed.json"
+### 步骤 2：目标库初始化、受限账号装配与创世种子灌入
+进入全新的火山引擎 RDS PostgreSQL 16 实例后，必须严格拆分**管理员（一次性初始化与角色赋权）**与**受限运行账号（`loopx_app`，seed 写入与网关运行）**两类凭据与职责，并复用 Stage 2B CLI（`loopx postgres setup` 与 `local-to-pg-seed --execute`）完成灌入与游标回读：
 
-node --no-warnings --experimental-sqlite --experimental-strip-types \
-  -e '
-  import {exportLocalToPgGenesisSeed} from "./loopx/control_plane/coordination/postgresql_authority_seed.ts";
-  const result = await exportLocalToPgGenesisSeed({
-    runtimeRoot: process.env.LOOPX_RUNTIME_ROOT!,
-    goalId: process.env.LOOPX_GOAL_ID!,
-    tenantId: process.env.LOOPX_TENANT_ID!,
-    outputPath: process.env.LOOPX_SEED_OUTPUT!,
-  });
-  console.log("Genesis seed export result:", result.status, result.seed_digest);
-'
-```
+1. **管理员一次性初始化与角色装配（仅使用管理员连接）**：
+   - **管理员职责**：安装 `loopx_control_plane` schema、行级安全（RLS）策略与目标库唯一 `store_identity`；确保受限账号 `loopx_app` 具备登录与 `CONNECT` 权限且无管理员特权（`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`）。管理员连接仅用于一次性初始化、升级或轮换，严禁写入网关 `EnvironmentFile` 或用于日常 seed / 网关运行。
+   ```bash
+   # 管理员连接串仅在初始化阶段使用
+   export LOOPX_POSTGRES_URL="postgresql://<admin-user>:<admin-password>@<rds-private-host>:5432/<db-name>"
+
+   # 2.1a 先执行只读 dry-run 预览（不连接或修改数据库）
+   loopx --format json postgres setup --runtime-role loopx_app
+
+   # 2.1b 显式执行 schema、RLS、store_identity 安装与 loopx_app 最小表权装配
+   loopx --format json postgres setup --runtime-role loopx_app --execute
+   ```
+   记录输出 JSON 中的 `store_identity`（格式 `postgresql:<32 位小写十六进制>`）。`setup --execute` 会在同一事务中为 `loopx_app` 授予最小表级权限（`USAGE ON SCHEMA loopx_control_plane`、`authority_store_metadata` 只读 `SELECT`、`authority_heads` 的 `SELECT, INSERT, UPDATE`、`authority_checkpoints/commits/events/receipts` 的 `SELECT, INSERT`，禁止 `DELETE`、`TRUNCATE` 与 DDL）。若 RDS 尚未预先创建可登录的 `loopx_app` 角色（`setup` 默认以 `NOLOGIN` 建角），由管理员补齐登录口令与库级连接权限：
+   ```sql
+   ALTER ROLE loopx_app LOGIN PASSWORD '<restricted-password>' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+   GRANT CONNECT ON DATABASE <db-name> TO loopx_app;
+   ```
+
+2. **受限账号执行创世种子脱敏预览与灌入（使用 `loopx_app`）**：
+   - **受限账号职责**：`loopx_app` 仅向尚无权威状态的空目标 Goal 写入游标 `1` 的创世种子，不安装 schema、不修改角色权限、也不迁移既有历史日志。完成初始化后立即将 `LOOPX_POSTGRES_URL` 切换为受限账号连接串，并通过 `--store-identity` 绑定目标库身份：
+   ```bash
+   export LOOPX_REGISTRY="/path/to/registry.json"
+   export LOOPX_RUNTIME_ROOT="/path/to/operator-runtime-root"
+   export LOOPX_GOAL_ID="<goal-id>"
+   export LOOPX_TENANT_ID="<tenant-id>"
+   export LOOPX_SEED_OUTPUT="/path/to/private/genesis-seed.json"
+
+   # 2.2a 只读脱敏预览（自动剔除本地绝对路径、.local/ 引用、飞书 ID 与已过期租约；不连接目标 PostgreSQL）
+   loopx --registry "$LOOPX_REGISTRY" --runtime-root "$LOOPX_RUNTIME_ROOT" \
+     --format json postgres local-to-pg-seed \
+     --goal-id "$LOOPX_GOAL_ID" \
+     --tenant-id "$LOOPX_TENANT_ID" \
+     --output "$LOOPX_SEED_OUTPUT"
+
+   # 2.2b 切换为受限运行账号并绑定 store_identity 执行灌入（写入游标 1）
+   export LOOPX_STORE_IDENTITY="<store-identity-from-setup>"
+   export LOOPX_POSTGRES_URL="postgresql://loopx_app:<restricted-password>@<rds-private-host>:5432/<db-name>"
+
+   loopx --registry "$LOOPX_REGISTRY" --runtime-root "$LOOPX_RUNTIME_ROOT" \
+     --format json postgres local-to-pg-seed \
+     --goal-id "$LOOPX_GOAL_ID" \
+     --tenant-id "$LOOPX_TENANT_ID" \
+     --store-identity "$LOOPX_STORE_IDENTITY" \
+     --output "$LOOPX_SEED_OUTPUT" \
+     --execute
+   ```
+   确认返回 JSON 中 `status` 为 `"seeded"`、`cursor` 为 `"1"`、`provider_revision` 形如 `<store_identity>:1`（若使用完全相同的参数与 `--output` 文件重试，将幂等读回原回执；目标 Goal 若已存在不同权威状态则拒绝覆盖）。
+
+3. **目标 Goal 与游标回读校验**：
+   执行步骤 3 客户端认领前，先使用受限账号 `LOOPX_POSTGRES_URL` 直接从目标库回读 Goal 与游标，确认 `status === "loaded"`、`cursor === "1"` 且 `provider_revision` 匹配：
+   ```bash
+   node --no-warnings --experimental-sqlite --experimental-strip-types \
+     --input-type=module -e '
+     import {Pool} from "pg";
+     import {PostgreSqlAuthorityStore} from "./loopx/control_plane/coordination/postgresql_authority_store.ts";
+     const pool = new Pool({connectionString: process.env.LOOPX_POSTGRES_URL});
+     try {
+       const store = new PostgreSqlAuthorityStore({
+         connect: async () => {
+           const client = await pool.connect();
+           return {
+             query: (sql, args) => client.query(sql, args ? [...args] : undefined),
+             release: (err) => client.release(err),
+           };
+         },
+       }, {
+         tenant_id: process.env.LOOPX_TENANT_ID,
+         goal_id: process.env.LOOPX_GOAL_ID,
+         expected_store_identity: process.env.LOOPX_STORE_IDENTITY,
+       });
+       const loaded = await store.loadAuthority();
+       if (loaded.status !== "loaded") {
+         throw new Error(`Expected loaded target goal, got ${loaded.status}`);
+       }
+       console.log(JSON.stringify({
+         status: loaded.status,
+         goal_id: loaded.head.goal_id,
+         cursor: loaded.cursor,
+         provider_revision: loaded.provider_revision,
+         todo_count: Array.isArray(loaded.head.todos) ? loaded.head.todos.length : 0,
+       }));
+     } finally {
+       await pool.end();
+     }
+   '
+   ```
+   在网关节点启动 `examples/coordination/remote-authority-service.ts`（配置受限 `LOOPX_AUTHORITY_DATABASE_URL` 与绑定 `store_identity` 的 `/etc/loopx/remote-policy.json`）后，客户端可通过 `examples/coordination/remote-authority-client.ts` 发送 `"operation": "snapshot"` 请求复验目标 Goal 与待办列表端到端可读，确认源 Goal 为 `hard_lease` 模式与规范 `todo_<token>` 任务后再进入步骤 3。
 
 ### 步骤 3：多机客户端并发联调
 每个客户端仅持有所属 `principal` 的受限网关 Bearer 凭据与目标 `store_identity` / `tenant_id` / `goal_id` 参数，不接触数据库管理员凭据或彼此私钥：

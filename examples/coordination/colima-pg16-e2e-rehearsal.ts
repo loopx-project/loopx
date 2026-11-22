@@ -71,10 +71,17 @@ export interface RehearsalReport {
   schema_version: "colima_pg16_coordination_rehearsal_report_v0";
   ok: boolean;
   mode: "real_pg" | "simulation";
-  execution_boundary: "isolated_real_pg16_tls" | "in_memory_simulated_pg_tls";
+  execution_boundary:
+    | "isolated_real_pg16_tls"
+    | "isolated_real_postgresql_tls"
+    | "in_memory_simulated_pg_tls";
   transport: "https_tls";
   clock_mode: "controlled_service_clock";
   runtime_role_verified: boolean;
+  server_version: string | null;
+  server_version_num: number | null;
+  server_major_version: number | null;
+  pg16_qualified: boolean;
   tenant_id: string;
   goal_id: string;
   store_identity: string;
@@ -85,6 +92,61 @@ export interface RehearsalReport {
   };
   steps: RehearsalStepResult[];
   error?: string;
+}
+
+export interface PostgreSqlServerVersionInfo {
+  server_version: string | null;
+  server_version_num: number | null;
+  server_major_version: number | null;
+}
+
+/**
+ * Parses PostgreSQL `SHOW server_version` and `SHOW server_version_num` values
+ * into normalized version fields before any database mutation runs.
+ */
+export function parsePostgreSqlServerVersion(
+  serverVersionRaw: unknown,
+  serverVersionNumRaw?: unknown,
+): PostgreSqlServerVersionInfo {
+  const serverVersion =
+    typeof serverVersionRaw === "string" && serverVersionRaw.trim().length > 0
+      ? serverVersionRaw.trim()
+      : null;
+
+  if (serverVersionNumRaw !== undefined && serverVersionNumRaw !== null) {
+    const rawNum = String(serverVersionNumRaw).trim();
+    if (/^\d+$/.test(rawNum)) {
+      const parsedNum = Number(rawNum);
+      if (Number.isSafeInteger(parsedNum) && parsedNum > 0) {
+        return {
+          server_version: serverVersion,
+          server_version_num: parsedNum,
+          server_major_version: Math.floor(parsedNum / 10_000),
+        };
+      }
+    }
+  }
+
+  if (serverVersion !== null) {
+    const match = serverVersion.match(/^(\d+)(?:\.(\d+))?/);
+    if (match) {
+      const major = Number(match[1]);
+      const minor = match[2] ? Number(match[2]) : 0;
+      if (Number.isSafeInteger(major) && major > 0 && Number.isSafeInteger(minor) && minor >= 0) {
+        return {
+          server_version: serverVersion,
+          server_version_num: major * 10_000 + minor,
+          server_major_version: major,
+        };
+      }
+    }
+  }
+
+  return {
+    server_version: serverVersion,
+    server_version_num: null,
+    server_major_version: null,
+  };
 }
 
 export interface RehearsalOptions {
@@ -135,11 +197,16 @@ export class ColimaPgCoordinationRehearsal {
     const startTime = Date.now();
     const steps: RehearsalStepResult[] = [];
     const storeIdentity = `postgresql:${randomBytes(16).toString("hex").toLowerCase()}`;
-    const isRealPg = Boolean(this.options.databaseUrl && !this.options.simulate);
-    const mode: RehearsalReport["mode"] = isRealPg ? "real_pg" : "simulation";
-    const executionBoundary: RehearsalReport["execution_boundary"] = isRealPg
-      ? "isolated_real_pg16_tls"
+    const explicitEmptyUrl =
+      this.options.databaseUrl !== undefined && this.options.databaseUrl.trim().length === 0;
+    const isRealPg = Boolean(this.options.databaseUrl?.trim() && !this.options.simulate);
+    const mode: RehearsalReport["mode"] = isRealPg || explicitEmptyUrl ? "real_pg" : "simulation";
+    let executionBoundary: RehearsalReport["execution_boundary"] = mode === "real_pg"
+      ? "isolated_real_postgresql_tls"
       : "in_memory_simulated_pg_tls";
+    let serverVersion: string | null = null;
+    let serverVersionNum: number | null = null;
+    let serverMajorVersion: number | null = null;
 
     const disconnects = new Map<Pool, Set<Promise<void>>>();
     const trackedPool = (config: PoolConfig): Pool => {
@@ -171,6 +238,10 @@ export class ColimaPgCoordinationRehearsal {
     let listener: ReturnType<typeof createRemoteAuthorityServer> | null = null;
 
     try {
+      if (explicitEmptyUrl && !this.options.simulate) {
+        throw new Error("databaseUrl must be a non-empty PostgreSQL connection URL");
+      }
+
       const suffix = randomBytes(8).toString("hex");
       dbName = `rehearsal_${suffix}`;
       roleName = `loopx_app_${suffix}`;
@@ -187,6 +258,25 @@ export class ColimaPgCoordinationRehearsal {
           connectionTimeoutMillis: 5000,
           statement_timeout: 10000,
         });
+        // Inspect server version before any CREATE DATABASE / role / schema mutation.
+        const versionRes = await adminPool.query("SHOW server_version");
+        const versionNumRes = await adminPool.query("SHOW server_version_num");
+        const parsedVersion = parsePostgreSqlServerVersion(
+          asJsonObject(versionRes.rows[0])?.server_version,
+          asJsonObject(versionNumRes.rows[0])?.server_version_num,
+        );
+        serverVersion = parsedVersion.server_version;
+        serverVersionNum = parsedVersion.server_version_num;
+        serverMajorVersion = parsedVersion.server_major_version;
+        if (serverMajorVersion !== 16) {
+          throw new Error(
+            `PostgreSQL 16 is required for PG16 qualification rehearsal; connected server reports ${
+              serverVersion ?? "unknown"
+            } (server_version_num=${serverVersionNum ?? "unknown"}). Refusing before database setup.`,
+          );
+        }
+        executionBoundary = "isolated_real_pg16_tls";
+
         await adminPool.query(`CREATE DATABASE ${dbName}`);
         databaseCreated = true;
 
@@ -677,7 +767,7 @@ export class ColimaPgCoordinationRehearsal {
         },
       });
 
-      const allOk = steps.every(s => s.ok) && (!isRealPg || runtimeRoleVerified);
+      const allOk = steps.every(s => s.ok) && (!isRealPg || (runtimeRoleVerified && serverMajorVersion === 16));
       return {
         schema_version: "colima_pg16_coordination_rehearsal_report_v0",
         ok: allOk,
@@ -686,6 +776,10 @@ export class ColimaPgCoordinationRehearsal {
         transport: "https_tls",
         clock_mode: "controlled_service_clock",
         runtime_role_verified: runtimeRoleVerified,
+        server_version: serverVersion,
+        server_version_num: serverVersionNum,
+        server_major_version: serverMajorVersion,
+        pg16_qualified: isRealPg && allOk && serverMajorVersion === 16,
         tenant_id: this.tenantId,
         goal_id: this.goalId,
         store_identity: storeIdentity,
@@ -705,6 +799,10 @@ export class ColimaPgCoordinationRehearsal {
         transport: "https_tls",
         clock_mode: "controlled_service_clock",
         runtime_role_verified: runtimeRoleVerified,
+        server_version: serverVersion,
+        server_version_num: serverVersionNum,
+        server_major_version: serverMajorVersion,
+        pg16_qualified: false,
         tenant_id: this.tenantId,
         goal_id: this.goalId,
         store_identity: storeIdentity,
@@ -916,9 +1014,21 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     },
   });
 
+  if (values.simulate && values["database-url"] !== undefined) {
+    process.stderr.write("Error: --simulate and --database-url are mutually exclusive.\n");
+    process.exit(1);
+  }
+  if (values["database-url"] !== undefined && values["database-url"].trim().length === 0) {
+    process.stderr.write("Error: --database-url must be a non-empty PostgreSQL connection URL.\n");
+    process.exit(1);
+  }
+
+  const effectiveUrl = values.simulate
+    ? undefined
+    : (values["database-url"] ?? process.env.LOOPX_AUTHORITY_DATABASE_URL);
   const rehearsal = new ColimaPgCoordinationRehearsal({
-    databaseUrl: values["database-url"] || process.env.LOOPX_AUTHORITY_DATABASE_URL,
-    simulate: values.simulate || !(values["database-url"] || process.env.LOOPX_AUTHORITY_DATABASE_URL),
+    databaseUrl: effectiveUrl,
+    simulate: values.simulate || !effectiveUrl?.trim(),
     verbose: values.verbose,
     leaseTtlSeconds: Number(values["lease-ttl"] || "2"),
   });

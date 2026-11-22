@@ -70,11 +70,19 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --database-url)
+      if [ $# -lt 2 ] || [ -z "${2// }" ]; then
+        echo "Error: --database-url requires a non-empty PostgreSQL URL." >&2
+        exit 1
+      fi
       DATABASE_URL="$2"
       MODE="real_url"
       shift 2
       ;;
     --port)
+      if [ $# -lt 2 ] || [ -z "${2// }" ]; then
+        echo "Error: --port requires a non-empty port number." >&2
+        exit 1
+      fi
       PG_PORT="$2"
       PORT_EXPLICIT=true
       shift 2
@@ -134,11 +142,12 @@ if [ "${MODE}" = "container" ]; then
     exit 1
   fi
 
-  # Await PostgreSQL readiness
+  # Await TCP PostgreSQL readiness (not just Unix-socket initdb startup)
   echo "[colima-rehearsal] Waiting for PostgreSQL readiness on 127.0.0.1:${PG_PORT}..." >&2
   PG_READY=false
   for _ in {1..40}; do
-    if docker exec "${CONTAINER_NAME}" pg_isready -U postgres >/dev/null 2>&1; then
+    if docker exec -e PGPASSWORD=loopx_canary_secret "${CONTAINER_NAME}" \
+      psql -h 127.0.0.1 -p 5432 -U postgres -d loopx_canary -c "SELECT 1" >/dev/null 2>&1; then
       echo "[colima-rehearsal] PostgreSQL 16 is ready." >&2
       PG_READY=true
       break
