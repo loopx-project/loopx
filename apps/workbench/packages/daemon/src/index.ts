@@ -183,6 +183,10 @@ async function main(): Promise<void> {
   const autotitleManifest = extensions.builtin(AUTOTITLE_ID);
   const autotitle = autotitleManifest ? new AutoTitle(autotitleManifest, manager, store, extensions) : undefined;
   if (autotitle) extensions.register(autotitle);
+  // 看板 and 自动取名 come installed; an uninstall is kept, so each is installed once per machine.
+  const seeded = store.hubSetting<string[]>('extensions.defaults', []);
+  const nowSeeded = extensions.installDefaults(['board', AUTOTITLE_ID], seeded);
+  if (nowSeeded.length !== seeded.length) store.saveHubSetting('extensions.defaults', nowSeeded);
   extensions.start();
   const voice = new VoiceService({ adapters, extensions, manager });
   voice.start();

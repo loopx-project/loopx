@@ -1,14 +1,16 @@
 import type { DaemonExtension, Envelope, ExtensionManifest, NotificationHook } from '@calli/extension-api';
 import { turnAnswer } from './coordination.js';
+import type { ModelOption } from './adapters/types.js';
 import { HttpError } from './errors.js';
 import type { ExtensionHost } from './extension-host.js';
+import { listedPrice } from './pricing.js';
 import type { Store } from './store.js';
 import type { ThreadManager } from './threads.js';
 import { askedText } from './util.js';
 
 /**
  * The daemon side of the built-in 自动取名 extension: once a new thread's first turn ends, the agent
- * the person chose reads the start of the conversation and gives it a short title, following rules
+ * the person chose (or, by default, the cheapest model the hub can reach) reads the start of the conversation and gives it a short title, following rules
  * the person wrote. It only renames a title that is still the one taken from the first message (or,
  * on the optional second pass, one it gave itself); a title the person set is never touched. The
  * question runs in an archived thread of its own (ThreadManager.askOnce), so the named thread's
@@ -18,9 +20,9 @@ import { askedText } from './util.js';
 export const AUTOTITLE_ID = 'autotitle';
 
 export interface AutoTitleSettings {
-  /** The agent instance that names threads. Null: nothing is named until one is chosen. */
+  /** The agent instance that names threads. Null: chosen per thread, see AutoTitle.namer. */
   agent: string | null;
-  /** Its model; null for the agent's default. */
+  /** Its model; null for the agent's default. Unused while the agent is chosen automatically. */
   model: string | null;
   /** The person's own naming rules, sent as written. */
   rules: string;
@@ -54,6 +56,30 @@ const EXCERPT = 1500;
 const MAX_TITLE = 40;
 const MAX_RULES = 2000;
 const MAX_TRIES = 3;
+
+/** Bare Claude CLI aliases, which the price table only knows by their full family names. */
+const CLAUDE_ALIASES: Record<string, string> = { haiku: 'claude-haiku', sonnet: 'claude-sonnet', opus: 'claude-opus' };
+/** Effort carried in the id ("…-low"): among models of one price, the lowest effort answers soonest. */
+const EFFORT = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * The cheapest model in a list by its list price (input plus output per million tokens, CNY at a
+ * rough 7 to the dollar), or null when the price table knows none of them. Ties keep the lower
+ * effort, then the order the agent lists them in: Codex gives gpt-6-luna, Antigravity
+ * gemini-3.8-flash-low, Claude haiku.
+ */
+export function cheapestModel(models: ModelOption[]): { id: string; cost: number } | null {
+  let best: { id: string; cost: number; effort: number } | null = null;
+  for (const m of models) {
+    const price = listedPrice(CLAUDE_ALIASES[m.id] ?? m.id);
+    if (!price) continue;
+    const cost = (price.rates.input + price.rates.output) / (price.currency === 'CNY' ? 7 : 1);
+    const suffix = EFFORT.findIndex(e => m.id.endsWith(`-${e}`));
+    const effort = suffix < 0 ? EFFORT.length : suffix;
+    if (!best || cost < best.cost || (cost === best.cost && effort < best.effort)) best = { id: m.id, cost, effort };
+  }
+  return best && { id: best.id, cost: best.cost };
+}
 
 /** The first line of what the agent said, without labels, quotes and marks, at most MAX_TITLE characters. */
 export function cleanTitle(answer: string): string {
@@ -159,7 +185,7 @@ export class AutoTitle implements DaemonExtension {
     const origin = turn.origin;
     if (origin.initiator !== 'user' || origin.imported || origin.fromTerminal || origin.control) return;
     const settings = this.settings();
-    if (!settings.agent || !this.allowed()) return;
+    if (!this.allowed()) return;
     const index = this.userTurns(turn.threadId).findIndex(t => t.turnId === turn.turnId) + 1;
     let wanted = false;
     if (event.hook === 'turn.started') wanted = settings.trigger === 'sent' && index === 1;
@@ -191,7 +217,6 @@ export class AutoTitle implements DaemonExtension {
   /** Names a thread now: for the person's 「重新取名」, or to try the rules (`apply: false`). */
   async name(threadId: string, opts: { apply: boolean }): Promise<{ title: string }> {
     if (!this.allowed()) throw new HttpError(403, '自动取名扩展未安装、已停用或缺少权限');
-    if (!this.settings().agent) throw new HttpError(409, '先在自动取名的设置里选一个取名用的 agent');
     // What the title is when the person asks: if they rename it while the agent thinks, theirs stays.
     const before = (() => { try { return { title: this.manager.threadView(threadId).title }; } catch { return null; } })();
     return this.queue(threadId, false, opts.apply, before, true);
@@ -206,7 +231,6 @@ export class AutoTitle implements DaemonExtension {
    */
   organize(): { queued: number } {
     if (!this.allowed()) throw new HttpError(403, '自动取名扩展未安装、已停用或缺少权限');
-    if (!this.settings().agent) throw new HttpError(409, '先在自动取名的设置里选一个取名用的 agent');
     if (this.pass) throw new HttpError(409, '整理已在进行中');
     const threads = this.manager.listThreads().filter(view => {
       const by = this.manager.titleBy(view.id);
@@ -240,18 +264,22 @@ export class AutoTitle implements DaemonExtension {
     // Checked again here, not only when the turn ended: namings queue behind each other, and the
     // grant or the chosen agent may have been taken away while this one waited.
     const settings = this.settings();
-    if (!this.allowed() || !settings.agent) {
+    if (!this.allowed()) {
       if (automatic) return { title: '' };
-      if (!this.allowed()) throw new HttpError(403, '自动取名扩展未安装、已停用或缺少权限');
-      throw new HttpError(409, '先在自动取名的设置里选一个取名用的 agent');
+      throw new HttpError(403, '自动取名扩展未安装、已停用或缺少权限');
     }
     const first = this.userTurns(threadId)[0];
     if (!first) throw new HttpError(409, '这个对话还没有对话');
     // On send the answer is still streaming; a finished turn, the second pass and a manual ask see it.
     const firstAnswer = answer ? turnAnswer(this.store.listEvents(threadId, 0, -1), first.turnId).trim() || null : null;
+    const namer = await this.namer(threadId, settings);
+    if (!namer) {
+      if (automatic) return { title: '' };
+      throw new HttpError(409, '这个对话的 agent 没有已知价格的模型，自动模式不取名；可在自动取名设置里手动选一个 agent');
+    }
     try {
-      const reply = await this.manager.askOnce(settings.agent!, namingPrompt(settings.rules, first.text, firstAnswer), {
-        model: settings.model, title: `${this.manifest.name.zh} · ${threadId.slice(0, 8)}`, timeoutMs: 120_000,
+      const reply = await this.manager.askOnce(namer.agent, namingPrompt(settings.rules, first.text, firstAnswer), {
+        model: namer.model, title: `${this.manifest.name.zh} · ${threadId.slice(0, 8)}`, timeoutMs: 120_000,
       });
       const title = cleanTitle(reply);
       if (!title) throw new HttpError(502, '取名的 agent 没有给出标题');
@@ -268,6 +296,19 @@ export class AutoTitle implements DaemonExtension {
       this.store.saveHubSetting('autotitle.status', { ...this.status(), error: { threadId, message, at: new Date().toISOString() } });
       throw err;
     }
+  }
+
+  /**
+   * Who names this thread. The person's choice when they made one; otherwise the thread's own agent
+   * on its cheapest model, so naming costs least and draws on the account already in use. Null when
+   * the price table knows none of that agent's models: such a thread is not named automatically.
+   */
+  async namer(threadId: string, settings = this.settings()): Promise<{ agent: string; model: string | null } | null> {
+    if (settings.agent) return { agent: settings.agent, model: settings.model };
+    const own = (() => { try { return this.manager.threadView(threadId).agent; } catch { return null; } })();
+    if (!own || !this.manager.hasAgent(own)) return null;
+    const pick = cheapestModel(await this.manager.listModels(own).catch(() => [] as ModelOption[]));
+    return pick && { agent: own, model: pick.id };
   }
 
   /** The person's own turns in a thread, oldest first, with what each one asked. */
