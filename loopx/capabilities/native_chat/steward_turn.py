@@ -23,13 +23,10 @@ from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
 from .report_failure_proof import (
+    build_report_quota_request,
+    build_report_timeout_request,
     is_report_failure_contradicted,
-    probe_report_failure,
-    read_retained_report_failure,
-    report_failure_binding,
-    resolve_report_quota_observation,
-    retain_report_failure,
-    valid_report_failure_proof,
+    observe_report_failure,
     verify_report_window_failure,
 )
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
@@ -462,126 +459,37 @@ class StewardTurnHost:
         return self._report_continuation_basis(request, recovery_key="report_timeout_recovery",
             basis_key="report_timeout_basis")
 
-    def _report_failure_probe(
-        self, original: Mapping[str, Any], *, include_contradiction: bool = False,
-        contradiction_detail: bool = False, swallow_probe_errors: bool | None = None,
-    ) -> tuple[list[str], dict[str, Any] | None] | None:
-        return probe_report_failure(
-            self.controller, self.store, original,
-            include_contradiction=include_contradiction,
-            contradiction_detail=contradiction_detail,
-            swallow_probe_errors=swallow_probe_errors,
-        )
-
-    @staticmethod
-    def _valid_report_failure_proof(
-        original: Mapping[str, Any], threads: Sequence[str], proof: Mapping[str, Any] | None,
-    ) -> bool:
-        return valid_report_failure_proof(original, threads, proof)
-
     def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Read the original native failure without starting or resuming work."""
-        result = (original.get("response") or {}).get("native_loopx") or {}
-        request = original.get("loopx_request") or {}
-        upstream_turn_id = original.get("upstream_turn_id")
-        if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or result.get("result_kind") != "host_failure" or not upstream_turn_id):
-            return None
-        if isinstance(upstream_turn_id, str) and upstream_turn_id.startswith("agy_turn_"):
-            session = self.store.load_session(original["session_id"])
-            if not session or original.get("delta_count") != 0:
-                return None
-            try:
-                events = self.store.events_after(original["session_id"], original["turn_id"], None)
-            except (OSError, ValueError):
-                return None
-            if any(row.get("kind") in {"answer.final", "turn.native_result"} for row in events):
-                return None
-            started = [
-                (row.get("payload") or {}).get("threadId")
-                for row in events
-                if row.get("kind") == "turn.started" and isinstance(row.get("payload"), Mapping)
-                and row["payload"].get("upstream_turn_id") == upstream_turn_id
-            ]
-            if len(started) != 1 or not isinstance(started[0], str) or not started[0]:
-                return None
-            native_timeout = any(
-                row.get("kind") == "agent.phase" and isinstance(row.get("payload"), Mapping)
-                and row["payload"].get("method") == "native/timeout"
-                for row in events
-            )
-            from .antigravity_adapter import AntigravityAdapter
-            return AntigravityAdapter.failed_report_observation(
-                cascade_id=started[0],
-                turn_id=upstream_turn_id,
-                native_timeout=native_timeout,
-                model_id=session.get("agent_model_id"),
-                reasoning_effort=session.get("agent_reasoning_effort"),
-            )
-        probed = self._report_failure_probe(original)
-        if probed is None:
-            return None
-        threads, proof = probed
-        return proof if self._valid_report_failure_proof(original, threads, proof) else None
+        return observe_report_failure(self.controller, self.store, original)
 
     def report_window_failure_verified(
         self, original: Mapping[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
     ) -> bool:
         """Query live provider history first; fall back to retained proof only if unavailable."""
         return verify_report_window_failure(
-            self.controller, self.store, original, window,
-            probe_fn=self._report_failure_probe, generation_locked=generation_locked,
+            self.controller, self.store, original, window, generation_locked=generation_locked,
         )
-
-    @staticmethod
-    def _report_failure_binding(original: Mapping[str, Any], window: dict[str, Any]) -> dict[str, str] | None:
-        return report_failure_binding(original, window)
-
-    def retained_report_failure_observation(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
-        """Scope retained provider evidence to the same failure and cadence window."""
-        return read_retained_report_failure(self.controller.coordination_runtime_root, original, window)
 
     def report_failure_contradicted(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
         """Return True when a prior live observation contradicted this Turn's failure proof."""
         return is_report_failure_contradicted(self.controller.coordination_runtime_root, original, window)
 
-    def _retain_report_failure_observation(self, original: Mapping[str, Any], window: dict[str, Any],
-                                           proof: Mapping[str, Any], *, generation_locked: bool = False) -> None:
-        retain_report_failure(
-            self.controller.coordination_runtime_root, self.store, original, window, proof,
-            generation_locked=generation_locked,
-        )
-
     def report_quota_request(self, original: Mapping[str, Any], *,
                              report_window: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Observe quota recovery, never resume or rewrite the failed native Turn."""
-        request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
-            return None
-        direct_probe = getattr(self.report_failure_observation, "__func__", None) is _DEFAULT_REPORT_FAILURE_OBSERVATION
-        proof = resolve_report_quota_observation(
-            self.controller, self.store, original, report_window=report_window,
-            probe_fn=self._report_failure_probe if direct_probe else None,
-            fallback_observe_fn=None if direct_probe else self.report_failure_observation,
+        fallback = (
+            None
+            if getattr(self.report_failure_observation, "__func__", None) is _DEFAULT_REPORT_FAILURE_OBSERVATION
+            else self.report_failure_observation
         )
-        if (not proof or proof.get("only_original_user_item") is not True
-                or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
-            return None
-        return {**request, "turn_instance_id": request["turn_instance_id"] + ".quota-recovery",
-            "report_quota_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+        return build_report_quota_request(
+            self.controller, self.store, original, report_window=report_window, fallback_observe_fn=fallback,
+        )
 
     def report_timeout_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Observe idle Antigravity timeout for one bounded isolated-cascade retry."""
-        request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
-            return None
-        proof = self.report_failure_observation(original)
-        if (not proof or proof.get("adapter_kind") != "antigravity_ls"
-                or proof.get("cascade_idle") is not True or proof.get("no_final_response") is not True
-                or proof.get("native_timeout") is not True or proof.get("quota_available") is not True):
-            return None
-        return {**request, "turn_instance_id": request["turn_instance_id"] + ".timeout-recovery",
-            "report_timeout_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+        return build_report_timeout_request(original, observe_fn=self.report_failure_observation)
 
     def report_selection_recovery(self, original: dict[str, Any], *,
                                   probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:

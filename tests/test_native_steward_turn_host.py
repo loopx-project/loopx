@@ -1277,7 +1277,9 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeyp
     from datetime import datetime, timezone
     from types import SimpleNamespace
     import loopx.capabilities.native_chat.report_failure_proof as proof_module
+    from pathlib import Path
     from loopx.capabilities.native_chat.report_failure_proof import (
+        CONTRADICTED_REPORT_FAILURES,
         REPORT_FAILURE_PROOF,
         contradict_report_failure,
         handle_contradicted_report_observation,
@@ -1285,7 +1287,7 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeyp
         read_retained_report_failure,
         retain_report_failure,
     )
-    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window
+    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, cadence_journal_path
     from loopx.capabilities.periodic_report.private_generation import attempt_directory
     from loopx.file_lock import exclusive_file_lock
 
@@ -1374,7 +1376,8 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeyp
     assert read_retained_report_failure(tmp_path, original, window) is True
     assert is_report_failure_contradicted(tmp_path, original, window) is False
 
-    # Contradiction fails loudly on lock contention, invalid inputs, or changed original Turn.
+    # Contradiction fails loudly on parent ledger lock contention, invalid inputs, or changed original Turn.
+    ledger_path = cadence_journal_path(tmp_path, "goal-1").parent / CONTRADICTED_REPORT_FAILURES
     with pytest.raises(ValueError):
         contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "other-turn"})
     with pytest.raises(RuntimeError):
@@ -1382,14 +1385,35 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeyp
             tmp_path, SimpleNamespace(load_turn=lambda _s, _t: None), original, window,
             {"contradicted": True, "turn_id": "codex-turn-1"},
         )
-    with exclusive_file_lock(folder / "generation.lock", operation="busy"):
+    with exclusive_file_lock(ledger_path, operation="busy-ledger"):
         with pytest.raises(OSError):
             contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
-        assert read_retained_report_failure(tmp_path, original, window) is True
-        contradict_report_failure(
-            tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"},
-            generation_locked=True,
-        )
+        assert not proof_path.exists()
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+    assert read_retained_report_failure(tmp_path, original, window) is True
+
+    # If attempt-level unlink raises PermissionError or generation.lock is busy, durable parent
+    # contradiction still holds and blocks reading the stale user-only file.
+    real_unlink = Path.unlink
+    with monkeypatch.context() as deny_unlink:
+        def fail_proof_unlink(self, missing_ok=False):
+            if self == proof_path:
+                raise PermissionError("operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        deny_unlink.setattr(Path, "unlink", fail_proof_unlink)
+        with exclusive_file_lock(folder / "generation.lock", operation="busy"):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+            assert json.loads(proof_path.read_text(encoding="utf-8"))["only_original_user_item"] is True
+            assert read_retained_report_failure(tmp_path, original, window) is False
+            assert is_report_failure_contradicted(tmp_path, original, window) is True
+        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert json.loads(proof_path.read_text(encoding="utf-8"))["only_original_user_item"] is True
+        assert read_retained_report_failure(tmp_path, original, window) is False
+        assert is_report_failure_contradicted(tmp_path, original, window) is True
+
+    # Once attempt permissions recover, syncing replaces the attempt file too.
+    contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
     assert read_retained_report_failure(tmp_path, original, window) is False
     assert is_report_failure_contradicted(tmp_path, original, window) is True
     assert json.loads(proof_path.read_text(encoding="utf-8"))["provider_thread_id"] == "thread-1"
@@ -1397,11 +1421,29 @@ def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeyp
     assert read_retained_report_failure(tmp_path, original, window) is False
     assert is_report_failure_contradicted(tmp_path, original, window) is True
 
-    # Symlink proof paths are never read, unlinked, or overwritten.
-    proof_path.unlink()
-    proof_path.symlink_to("foreign-target")
+    # Symlink proof and ledger paths are never read, unlinked, or overwritten.
+    fresh_root = tmp_path / "symlink-check"
+    fresh_window = admit_cadence_window(
+        runtime_root=fresh_root,
+        goal_id="goal-1",
+        agent_id="agent-1",
+        subscription=subscription,
+        now=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+    )["window"]
+    fresh_folder = attempt_directory(fresh_root, fresh_window)
+    fresh_folder.mkdir(parents=True)
+    fresh_proof_path = fresh_folder / REPORT_FAILURE_PROOF
+    fresh_proof_path.symlink_to("foreign-target")
+    contradict_report_failure(fresh_root, store, original, fresh_window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    assert fresh_proof_path.is_symlink()
+    assert read_retained_report_failure(fresh_root, original, fresh_window) is False
+    assert is_report_failure_contradicted(fresh_root, original, fresh_window) is True
+
+    symlink_ledger = cadence_journal_path(fresh_root, "goal-1").parent / CONTRADICTED_REPORT_FAILURES
+    symlink_ledger.unlink()
+    symlink_ledger.symlink_to("foreign-ledger")
     with pytest.raises(OSError):
-        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
-    assert proof_path.is_symlink()
-    assert read_retained_report_failure(tmp_path, original, window) is False
-    assert is_report_failure_contradicted(tmp_path, original, window) is False
+        contradict_report_failure(fresh_root, store, original, fresh_window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    assert symlink_ledger.is_symlink()
+    assert read_retained_report_failure(fresh_root, original, fresh_window) is False
+    assert is_report_failure_contradicted(fresh_root, original, fresh_window) is True
