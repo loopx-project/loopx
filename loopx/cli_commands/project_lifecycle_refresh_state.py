@@ -454,7 +454,7 @@ def handle_refresh_state_command(
     if args.execution_loss_closeout:
         from ..control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
         from ..control_plane.goals.goal_ref_validation import exact_goal_ref
-        from ..control_plane.quota.execution_loss_closeout import commit_execution_loss_closeout
+        from ..control_plane.quota.execution_preparation import commit_execution_loss_closeout
         from .project_lifecycle_inputs import inline_progress_observation
 
         try:
