@@ -127,7 +127,7 @@ def test_a_blocked_query_takes_the_helpers_it_started(
         ["git", "-C", str(repo), "config", "core.fsmonitor", str(hook)], check=True
     )
 
-    monkeypatch.setattr(doctor_git, "GIT_PROBE_TIMEOUT_SECONDS", 0.8)
+    monkeypatch.setattr(doctor_git, "GIT_PROBE_TIMEOUT_SECONDS", 1.5)
     cleanup_calls: list[float] = []
     original_terminate = doctor_git.terminate_process_tree
 

@@ -35,7 +35,7 @@ versions may omit collaboration items from that history.
 `native-child record` 仍是主 Agent 上报入口，不能指定宿主来源。托管 Codex CLI
 与启用操作工具的 app-server Turn 会在自身连接上直接观察原生协作事件，
 把实际启动、宿主失败和观察到的结果写入同一事件流。结果完成之后仍须由主
-Agent 明确记录验收；
+Agent 明确记录验收；宿主完成不代表证据已被采纳。
 
 共享投影区分宿主观察、主 Agent 上报、混合来源和未知；仅全部决策均来自
 宿主时 `host_attested` 为真。Codex 的失败协作项没有容量错误码，适配器保留

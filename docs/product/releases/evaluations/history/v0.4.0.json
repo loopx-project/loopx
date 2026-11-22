@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 0,
+    "minor": 4,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "0.4.0",
+    "version_tag": "v0.4.0",
+    "git_commit": "a893d221db0b8e028997cefc303f7ec9fa7dbe0a",
+    "git_tree": "2868c6162e6ed3826d1bc976eb962c5f4e6abe1c",
+    "committed_at": "2026-08-02T00:43:38+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v0.4.0",
+      "last_tag": "v0.4.9",
+      "last_commit": "8bd1b6c426f3856a86f4a059b7cfd7215d159ef3",
+      "last_committed_at": "2026-08-19T09:32:29+08:00",
+      "tag_count": 10
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v0.4.0",
+      "v0.4.9"
+    ]
+  },
+  "a_scale": {
+    "score": 14.1,
+    "delta_from_prior": 2.2,
+    "domain_scores": {
+      "D1": 16.5,
+      "D2": 11.5,
+      "D3": 11.5,
+      "D4": 10.5,
+      "D5": 18.0,
+      "D6": 14.0,
+      "D7": 13.5,
+      "D8": 22.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 0,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Compact contract public smokes (#2726), monitor poll recorder seam (#3334), and release manpage alignment through v0.4.9 (#3337).",
+  "summary_zh": "将公共烟测对齐至精简契约（#2726），保留轮询录制接缝（#3334）并推进至 v0.4.9（#3337）。"
+}

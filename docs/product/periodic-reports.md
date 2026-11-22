@@ -10,7 +10,8 @@ Changing a previously prepared private steward to an executor without native
 scheduled-work support keeps its original configuration readable in connection
 settings. The monitor deadline, report schedule, retained window and delivery
 state remain visible with an explicit execution-unavailable notice. Configuration
-controls are disabled; Native admission still owns every execution and
+controls are disabled; inspecting retained state neither re-enables the old host
+nor retries a failed window. Native admission still owns every execution and
 configuration change. Restoring a supported executor restores the existing
 configuration view rather than creating a replacement identity or subscription.
 
@@ -258,7 +259,8 @@ edits and reload. The narrow view is a 390×844 viewport emulation.
 | ![Recurrence controls in a narrow viewport](../assets/personal-workspace/report-calendar-start-date/before-narrow.png) | ![First report date in a narrow viewport](../assets/personal-workspace/report-calendar-start-date/after-narrow.png) |
 
 Chat `/goal` transport supervision and a LoopX-managed Turn are distinct. Merely
-relaxing `validate_goal_chat`, changing a Session field, adding a prompt.
+relaxing `validate_goal_chat`, changing a Session field, adding a prompt, or
+starting a Codex native Goal does not establish the LoopX lifecycle below.
 
 ## One persistent steward actor
 
@@ -610,7 +612,8 @@ recorded Core continuation when resolving their private return route. A client
 suffix alone is insufficient: the transport and Core journals must agree on
 the current Session, Turn, source and recovery record. Quota, routing and
 unfinished-work continuations retain the same audience and existing saved-send
-verification; Missing records, changed identity or revoked grants still
+verification; this lookup neither retries model work nor resends an unknown
+provider effect. Missing records, changed identity or revoked grants still
 block delivery.
 
 Portfolio evidence collection finishes before the governed driver captures its
@@ -731,6 +734,27 @@ show the retained failed execution instead of “Not generated”; the next cale
 deadline is not a promise that the held window can run. This observation grants
 no cancellation, retirement or retry. A correlated quota continuation that
 succeeds clears the current failure projection while retaining its failed predecessor.
+
+When a terminal Codex failure with only the original user input is verified, the
+report attempt records that observation under its generation lock. The record
+binds the original Chat and Codex Turns, the report window and subscription
+revision, and the original native result digest. A later independent period
+queries live Codex history first after the existing journal, generation and
+delivery checks pass: readable counter-evidence durably invalidates that Turn's
+retained proof under the generation lock and holds the original window across
+subsequent history outages unless fresh same-Turn evidence explains the
+contradiction, and an un-contradicted retained proof is used only when Codex
+history is unavailable. Empty or unstable readbacks stay `unavailable` rather
+than writing a permanent contradiction, so a subsequent complete user-only
+observation for that same Turn can recover. Contradictions also persist a
+binding-scoped record in the parent `periodic_reports/` cadence scope before
+cleaning up the attempt file, so stale user-only evidence stays blocked across
+restarts even if removing or replacing the attempt file fails; if persisting
+the durable contradiction itself fails, the error surfaces to the cadence
+recovery boundary while holding the original window. Quota continuation
+for the original period still requires a live observation. Missing or
+mismatched evidence still leaves a window held when the original failure cannot
+be verified.
 
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |

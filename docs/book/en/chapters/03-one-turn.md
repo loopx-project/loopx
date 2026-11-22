@@ -60,7 +60,7 @@ Normal delivery has five useful stages: `Decide → Act → Validate → Write b
 
 **Decide** reads the current `interaction_contract` and selected work. An old prompt, card or recommendation does not override current selection.
 
-**Act** produces a coherent segment with explicit inputs and boundaries. an independently verifiable feature slice is more useful than fragments that cannot be accepted.
+**Act** produces a coherent segment with explicit inputs and boundaries. Bounded does not mean one line: an independently verifiable feature slice is more useful than fragments that cannot be accepted.
 
 **Validate** checks postconditions. Code needs behavioral validation, documentation needs command and explanation checks, external effects need appropriate readback, and blockers need inspectable missing conditions. An exit code matters only when the validator actually checked the intended postcondition.
 

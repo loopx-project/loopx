@@ -459,6 +459,8 @@ rl.on('line', (line) => {
 
   switch (msg.method) {
     case 'account/read':
+      if (process.env.FAKE_ACCOUNT_READ_UNSUPPORTED) return out({ id: msg.id, error: { code: -32601, message: 'Method not found' } });
+      if (process.env.FAKE_LOGIN_FILE && !existsSync(process.env.FAKE_LOGIN_FILE)) return out({ id: msg.id, result: { account: null, requiresOpenaiAuth: process.env.FAKE_CUSTOM_PROVIDER !== '1' } });
       return out({ id: msg.id, result: { account: { type: process.env.FAKE_CODEX_VOICE_API_KEY ? 'apiKey' : 'chatgpt' } } });
     case 'thread/realtime/listVoices':
       return out(process.env.FAKE_CODEX_NO_VOICE

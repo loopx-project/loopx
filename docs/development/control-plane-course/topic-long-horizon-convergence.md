@@ -1025,7 +1025,7 @@ if decision.rule in {MONITOR_NO_CHANGE_STREAK, MONITOR_FRONTIER_EXHAUSTED}:
 
 - `agent_id`：谁有义务处理；
 - `stall_threshold` 与 `trigger_count`：为什么现在触发；
-- `triggers`：可回读的证据
+- `triggers`：可回读的证据；
 - `todo_actions`：允许写回的最小动作；
 - `stop_condition`：遇到 private material、credential、destructive git、production
   action 或 owner-only decision 时停止；
@@ -1077,9 +1077,11 @@ derived = derive_goal_frontier_replan_obligation_from_summaries(
 return projection(replan_obligation=derived or obligation)
 ```
 
-这里防止“伪完成”：
+这里防止三种“伪完成”：
 
 1. **错 Agent ACK**：peer A 的 Replan 不能替 peer B 关闭 obligation；
+2. **旧 Frontier ACK**：相同文案再次出现，不代表仍是同一个 blocked successor；
+3. **过期 ACK**：ACK 早于最新 trigger evidence 时，不能证明新问题已处理。
 
 因此 `autonomous_replan_ack_matches_frontier` 除了比较 `frontier_identity`，还会比较 ACK
 时间和 trigger 时间。ACK 是当前 obligation 的结算凭证。

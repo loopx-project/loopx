@@ -45,3 +45,65 @@ def test_steward_and_chat_observe_only_the_existing_matching_native_owner(tmp_pa
     state["action"] = "handoff_interrupted"
     atomic(owner.path, state)
     assert owner.conversation_epoch(codex_home=home) is None
+
+
+def test_codex_primary_steward_route_switches_to_antigravity_fallback_when_exhausted(tmp_path):
+    now = 1767225600
+    home = tmp_path / "codex-home"
+    native = {
+        "active_slot": "slot-a",
+        "selection_revision": "revision-a",
+        "current_login_matches": True,
+        "recovery_required": False,
+        "action": "selection_changed",
+    }
+    owner = NativeAccounts(
+        tmp_path / "runtime",
+        transport=lambda _adapter, _op: native,
+        clock=lambda: now,
+    )
+    owner.root.mkdir(parents=True)
+    state = owner._load()
+    state.update(
+        policy={"enabled": True, "slots": ["slot-a", "slot-b"], "api_fallback": False},
+        adapter={"profile": {"home": str(home)}},
+        action="selection_changed",
+        accounts=[
+            {"slot": "slot-a", "availability": "exhausted", "observed_at": now - 600, "reset_at": now + 3600},
+            {"slot": "slot-b", "availability": "exhausted", "observed_at": now - 600, "reset_at": now + 3600},
+        ],
+    )
+    atomic(owner.path, state)
+    fallback = {
+        "observed_at": now,
+        "account_ref": "b" * 64,
+        "model_id": "gemini-4-carbon-high",
+        "execution_id": "endpoint-probe:ok",
+        "remaining_fraction": 0.99,
+        "reset_time": "2026-01-02T00:00:00Z",
+        "quota_exhausted": False,
+        "normal_completion": True,
+    }
+    assert owner.steward_route(
+        codex_home=home,
+        primary="codex",
+        pool=["codex", "antigravity"],
+        current="codex",
+        primary_capacity=None,
+        fallback_capacity=fallback,
+        model="gpt-6.2-sol",
+    )["endpoint"] == "antigravity"
+    state.update(action="ready", accounts=[
+        {"slot": "slot-a", "availability": "available", "observed_at": now},
+        state["accounts"][1],
+    ])
+    atomic(owner.path, state)
+    assert owner.steward_route(
+        codex_home=home,
+        primary="codex",
+        pool=["codex", "antigravity"],
+        current="antigravity",
+        primary_capacity=None,
+        fallback_capacity=fallback,
+        model="gpt-6.2-sol",
+    )["endpoint"] == "codex"

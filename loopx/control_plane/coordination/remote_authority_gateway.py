@@ -52,13 +52,14 @@ def check_remote_authority_gateway_status(
     if not credential:
         return {**projection, "status": "unavailable", "reason_code": "remote_authority_credential_required"}
     from ..effect_runtime import EffectRuntimeStartupError, _node_executable
+    from ..runtime.node_probe import node_typescript_flags
 
     try:
         # The user-owned registry supplies the origin and optional private CA.
         # Pass the credential and binding through the private pipe, not argv.
         bridge = Path(__file__).with_name("remote_authority_probe.ts")
         completed = subprocess.run(
-            [_node_executable(), "--no-warnings", "--experimental-strip-types", str(bridge)],
+            [_node_executable(), "--no-warnings", "--experimental-strip-types", *node_typescript_flags(), str(bridge)],
             input=json.dumps({
                 **{key: cfg[key] for key in _REQUIRED_BINDING},
                 "goal_id": goal_id, "credential": credential, "ca_file": cfg.get("ca_file"),
@@ -66,6 +67,7 @@ def check_remote_authority_gateway_status(
             env={key: os.environ[key] for key in ("PATH", "SystemRoot", "WINDIR", "TMPDIR", "TEMP")
                  if key in os.environ},
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=True,
             timeout=5,

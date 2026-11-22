@@ -254,14 +254,28 @@ def probe_definitions_ratcheted(guard: Guard) -> tuple[bool, str]:
 
 def probe_commit_time_selection(guard: Guard) -> tuple[bool, str]:
     """E07: the guard must be selected before merge, not discovered by the fleet."""
+    from loopx.canary.premerge import build_premerge_validation_gate
+    from loopx.canary.runner import MAINTAINABILITY_RATCHET_SCRIPT
+
     planner = (REPO_ROOT / "loopx" / "canary" / "planner.py").read_text(encoding="utf-8")
-    premerge = (REPO_ROOT / "loopx" / "canary" / "premerge.py").read_text(encoding="utf-8")
     command = "examples/semantic-vocabulary-drift-smoke.py"
     planned = command in planner
-    inherited = "INHERITED_BASELINE_COMMANDS" in premerge and "planner" in premerge
+    gate = build_premerge_validation_gate(
+        changed_files=["loopx/_probe_semantic_guard.py"],
+        execute=False,
+        repo_root=REPO_ROOT,
+    )
+    selected_commands = [
+        str(check.get("command") or "")
+        for check in (gate.get("catalog_run") or {}).get("selected_checks") or []
+        if isinstance(check, dict)
+    ]
+    selected_by_premerge = any(command in item for item in selected_commands)
+    not_advisory_baseline = command != MAINTAINABILITY_RATCHET_SCRIPT
     guarded_roots = [hint for hint in ("loopx/", "scripts/", "examples/") if f'"{hint}"' in planner]
-    return planned and inherited, (
-        f"named_in_planner={planned} premerge_consumes_planner={inherited} planner_trigger_hints={guarded_roots}"
+    return planned and selected_by_premerge and not_advisory_baseline, (
+        f"named_in_planner={planned} selected_by_premerge={selected_by_premerge} "
+        f"not_advisory_baseline={not_advisory_baseline} planner_trigger_hints={guarded_roots}"
     )
 
 

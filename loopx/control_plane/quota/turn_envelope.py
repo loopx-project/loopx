@@ -110,6 +110,10 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
+    if operation == "attach_complete_turn_context" and isinstance(params.get("context_additions"), Mapping):
+        addition_tokens = source_number_tokens(params["context_additions"])
+        if addition_tokens:
+            request["context_addition_tokens"] = addition_tokens
     if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
         transport = pack_turn_source(payload)
         if transport is not None:
@@ -302,17 +306,21 @@ def quota_capability_automation_source(payload: Mapping[str, Any]) -> dict[str, 
     return _turn_envelope_result("capability_automation_source", payload=dict(payload))
 
 
-def turn_envelope_replan_settlement_identity(
-    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+def _turn_settlement_identity(
+    operation: str, envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> dict[str, Any] | None:
-    result = _turn_envelope_result("replan_settlement_identity", envelope=dict(envelope),
-                                   turn_instance_id=turn_instance_id)
-    identity = result.get("identity")
+    identity = _turn_envelope_result(operation, envelope=dict(envelope), turn_instance_id=turn_instance_id).get("identity")
     if identity is None:
         return None
     if not isinstance(identity, Mapping):
         raise RuntimeError("TypeScript Turn settlement identity must be an object")
     return dict(identity)
+
+
+def turn_envelope_replan_settlement_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> dict[str, Any] | None:
+    return _turn_settlement_identity("replan_settlement_identity", envelope, turn_instance_id=turn_instance_id)
 
 
 def compose_turn_decision(
@@ -331,6 +339,22 @@ def compose_turn_decision(
     return _apply_context_projection_changes(source, result)
 
 
+def attach_complete_turn_context(
+    payload: Mapping[str, Any],
+    context_additions: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Seal validated turn-context fields onto an already-composed decision."""
+    source = dict(payload)
+    additions = dict(context_additions)
+    result = _turn_envelope_result(
+        "attach_complete_turn_context",
+        payload=source,
+        context_additions=additions,
+        source_edits=True,
+    )
+    return _apply_context_projection_changes({**source, **additions}, result)
+
+
 def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:
     """Recognize saved raw/v0 carriers that predate complete-source checking."""
     return (
@@ -347,11 +371,7 @@ def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
 def turn_envelope_scoped_settlement_identity(
     envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> dict[str, Any] | None:
-    identity = _turn_envelope_result("scoped_settlement_identity", envelope=dict(envelope),
-                                    turn_instance_id=turn_instance_id).get("identity")
-    if identity is not None and not isinstance(identity, Mapping):
-        raise RuntimeError("TypeScript Turn settlement identity must be an object")
-    return dict(identity) if identity is not None else None
+    return _turn_settlement_identity("scoped_settlement_identity", envelope, turn_instance_id=turn_instance_id)
 
 
 def build_turn_envelope(
@@ -363,19 +383,6 @@ def build_turn_envelope(
     captured_decision_path: str | None = None,
 ) -> dict[str, Any]:
     """Project one full quota decision through the canonical TS transaction."""
-
-    return _build_turn_projection(payload,
-        scheduler_execution_context=scheduler_execution_context,
-        captured_decision_path=captured_decision_path)
-
-
-def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
-    ) = None,
-    captured_decision_path: str | None = None,
-) -> dict[str, Any]:
-
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     scheduler_execution_args: object = ""
     if resolution.ok and resolution.context is not None:

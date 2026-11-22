@@ -314,7 +314,14 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         isinstance(instruction, str) and instruction
         for instruction in packet["planning_guidance"]
     )
-    assert packet["writeback_contract"] == {}
+    no_followup = packet["writeback_contract"]["no_followup_requirements"]
+    assert set(packet["writeback_contract"]) == {"no_followup_requirements"}
+    assert "--progress-result-class" in no_followup["cli_args"]
+    assert no_followup["vision_fields"] == {
+        "state": "no_followup",
+        "path_delta.outcome": "stop",
+    }
+    assert no_followup["preserve"] == ["vision_patch"]
     assert packet["allowed_terminal"] == [
         "exploration_exhausted",
         "blocked",

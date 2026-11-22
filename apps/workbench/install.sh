@@ -1,20 +1,4 @@
 #!/usr/bin/env bash
-# Installs LooChat on this machine, or updates it when it is there already:
-#
-#   curl -fsSL https://raw.githubusercontent.com/loopx-project/loopx/main/apps/workbench/install.sh | bash
-#   curl -fsSL .../install.sh | bash -s -- --dry-run      only print what it would do
-#
-# It clones the code to ~/.local/share/loochat, builds it, writes ~/.config/loochat/.env (a random
-# token; data under ~/.local/state/loochat; your home as the working directory), runs it as a
-# systemd user service and prints the address and token. Run again to update: the .env, the
-# token and the data stay. Agents (Claude Code, Codex, ...) are installed and signed in apart.
-#
-#   --dry-run      print the steps, change nothing
-#   --no-service   do not install the service; print how to start it by hand
-#   --uninstall    stop and remove the service and the code; the .env and the data stay
-#
-# LOOCHAT_REPO (git URL or path), LOOCHAT_REF (branch, tag or commit; default main) and
-# LOOCHAT_HOME (checkout directory) override the defaults. Core is installed separately.
 set -euo pipefail
 
 REPO_URL="${LOOCHAT_REPO:-https://github.com/loopx-project/loopx.git}"
@@ -25,13 +9,30 @@ ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/loochat/.env"
 DATA_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/loochat/data"
 NAME=loochat
 
+usage() {
+  cat <<'USAGE'
+Install or update LooChat from the LoopX repository.
+
+Usage: bash install.sh [--dry-run] [--no-service] [--uninstall]
+       ... | bash -s -- [options]
+
+  --dry-run     Print the steps without writing files or starting services.
+  --no-service  Build the application and print the foreground start command.
+  --uninstall   Remove the service and checkout, keeping configuration and data.
+  -h, --help    Show this help.
+
+LOOCHAT_REPO, LOOCHAT_REF (default: main), and LOOCHAT_HOME override
+the source, revision and checkout directory. Install LoopX Core separately.
+USAGE
+}
+
 DRY=0 SERVICE=1 UNINSTALL=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY=1 ;;
     --no-service) SERVICE=0 ;;
     --uninstall) UNINSTALL=1 ;;
-    -h | --help) sed -n '2,17p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) usage; exit 0 ;;
     *) echo "Unknown option: $arg (see --help)" >&2; exit 2 ;;
   esac
 done

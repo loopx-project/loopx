@@ -58,8 +58,10 @@ def _shapes_the_owner_recognizes() -> list[str]:
         "path:/srv/data/goal.json",
         "PATH:\\\\fileserver\\share",
         "/Users/alex/notes.md",
+        "/home/",
         "/home/alex/.codex/auth.json",
         "/var/folders/9x/private/notes",
+        "///var/",
         "/private/tmp/x/lease.log",
         "/tmp/build/out.log",
         "/etc/loopx/registry.json",
@@ -69,6 +71,7 @@ def _shapes_the_owner_recognizes() -> list[str]:
         "/workspace/private/notes.md",
         "/data/goal-evidence/dump",
         "C:\\Users\\alex\\notes.md",
+        "C:\\",
         "D:/notes/private.md",
         "\\\\fileserver\\share\\notes.md",
         # The boundary form: introduced by a colon or equals sign, which the
@@ -134,6 +137,7 @@ def test_neither_site_declares_a_local_path_regex_any_more() -> None:
 def test_owner_recognizes_the_absolute_roots_the_gaps_and_the_boundary_form() -> None:
     assert owner.PUBLIC_SAFE_LOCAL_PATH_PATTERNS == (
         owner.LOCAL_PATH_SURFACE_PATTERN,
+        owner.MULTI_SLASH_LOCAL_PATH_PATTERN,
         owner.HOME_RELATIVE_PATH_PATTERN,
         owner.PATH_PREFIX_LOCAL_PATTERN,
         owner.LOCAL_PATH_BOUNDARY_REFERENCE_PATTERN,
@@ -155,6 +159,26 @@ def test_owner_never_loosens_what_the_shared_corpus_already_established(
     # are pinned to.
     if LEGACY_SITE_COPY.search(value) is not None:
         assert owner.find_public_safe_local_path(value) is not None
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "https://docs.example.test./home/overview",
+        "https://[2001:db8::1]/home/overview",
+        "https://docs.example.com/?next=/home/overview",
+    ),
+)
+def test_owner_does_not_treat_an_http_url_path_as_a_local_reference(
+    value: str,
+) -> None:
+    assert owner.find_public_safe_local_path(value) is None
+    assert owner.mask_http_url_paths(value) != value
+
+
+def test_owner_still_finds_a_local_reference_beside_an_http_url() -> None:
+    value = "https://docs.example.test./home/overview and /Users/alice/notes.md"
+    assert owner.find_public_safe_local_path(value) is not None
 
 
 def test_owner_covers_the_whole_legacy_equivalence_class() -> None:
@@ -221,8 +245,10 @@ def test_the_widening_is_the_direction_three_shapes_not_the_corpus() -> None:
         "~\\notes.md",
         "path:/srv/data/goal.json",
         "PATH:\\\\fileserver\\share",
+        "/home/",
         "/home/alex/.codex/auth.json",
         "/var/folders/9x/private/notes",
+        "///var/",
         "/etc/loopx/registry.json",
         "/opt/secrets/token",
         "/mnt/nas/private.log",
@@ -230,6 +256,7 @@ def test_the_widening_is_the_direction_three_shapes_not_the_corpus() -> None:
         "/workspace/private/notes.md",
         "/data/goal-evidence/dump",
         "C:\\Users\\alex\\notes.md",
+        "C:\\",
         "D:/notes/private.md",
         "\\\\fileserver\\share\\notes.md",
     ]

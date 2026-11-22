@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_source_fixture
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota import live_decision, should_run_packet

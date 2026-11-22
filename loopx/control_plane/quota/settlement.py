@@ -12,6 +12,7 @@ from ...install_contract import render_host_cli_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
+from .error_codes import HeartbeatReceiptIdentityConflictError
 from .effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
     SETTLEMENT_PLAN_SCHEMA_VERSION,
@@ -174,6 +175,7 @@ class QuotaSettlementReadback:
     completion_event: dict[str, Any] | None
     monitor_phase: ReceiptBoundMonitorPhase | None
     replay_phase: ReceiptBoundReplayPhase | None
+    supersede_event: dict[str, Any] | None = None
     refresh_recovery: dict[str, Any] | None = None
     external_delivery: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
@@ -183,6 +185,8 @@ class QuotaSettlementReadback:
     replan_execution_pending: bool = False
     admission_recorded_at: str | None = None
     admission_event_id: str | None = None
+    prepared_lease: dict[str, Any] | None = None
+    prepared_lease_required: bool = False
 
 
 def render_owed_host_command(argv: list[str]) -> str:
@@ -394,6 +398,8 @@ def _read_heartbeat_settlement_payload(
                 large_local_snapshot=True,
             )
         except EffectRuntimeRejected as exc:
+            if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
+                raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
             raise ValueError(str(exc)) from None
 
     if source_admission is not None:
@@ -570,6 +576,7 @@ def read_heartbeat_settlement(
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
         spend_event=_optional_readback_record(payload.get("spend_event")),
         completion_event=_optional_readback_record(payload.get("completion_event")),
+        supersede_event=_optional_readback_record(payload.get("supersede_event")),
         monitor_phase=(
             ReceiptBoundMonitorPhase(str(monitor_phase))
             if monitor_phase is not None
@@ -582,4 +589,6 @@ def read_heartbeat_settlement(
         ),
         admission_recorded_at=_optional_readback_text(payload.get("admission_recorded_at")),
         admission_event_id=_optional_readback_text(payload.get("admission_event_id")),
+        prepared_lease=_optional_readback_record(payload.get("prepared_lease")),
+        prepared_lease_required=payload.get("prepared_lease_required") is True,
     )

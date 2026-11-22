@@ -97,7 +97,9 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
     assert build_turn_envelope(guard)["writeback"]["settlement_plan"] == plan
     rc, premature = run("checkpoint-context", *binding)
     assert rc != 0 and "original committed Turn writeback" in premature["error"]
-    rc, no_writeback = _run_generated_cli(plan["ordered_steps"][2]["command_template"], registry_path=registry)
+    assert plan["ordered_steps"][2]["owner"] == "runtime"
+    assert "command_template" not in plan["ordered_steps"][2]
+    rc, no_writeback = run("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
     assert rc != 0 and _spend_run_count(runtime) == 0, no_writeback
 
     if not in_flight:
@@ -124,12 +126,14 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
     rc, rejected = _run_generated_cli(refresh, registry_path=registry)
     assert rc != 0 and _spend_run_count(runtime) == 0, rejected
     path.write_text(json.dumps(vision))
-    rc, written = _run_generated_cli(refresh, registry_path=registry)
-    assert rc == 0 and written["vision_checkpoint"]["satisfied"], written
-    assert written["settlement_identity"] == plan["identity"]
     for replay in (False, True):
-        rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
-        assert rc == 0 and spent["appended"] is not replay, spent
+        rc, written = _run_generated_cli(refresh, registry_path=registry)
+        assert rc == 0 and written["settlement_progress"]["state"] == "settled", written
+        assert written["settlement_identity"] == plan["identity"]
+        assert written["settlement_result"]["ok"] is True
+        assert written.get("idempotent_replay", False) is replay
+        if not replay:
+            assert written["vision_checkpoint"]["satisfied"], written
         assert _spend_run_count(runtime) == 1
     rc, final_todo = _run_generated_cli(readback, registry_path=registry)
     assert rc == 0 and final_todo["todo"]["status"] == ("open" if in_flight else "done")
@@ -211,6 +215,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeypatch, provider):
     """A caller following the delivered example must retain a real work link."""
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     # Fund all three admitted Turns before execution; the shared fixture's
@@ -274,8 +279,11 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         args += ["--no-global-sync", "--suppress-external-sinks"]
         rc, written = run(*args)
         assert rc == 0, written
-        rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
-        assert rc == 0, spent
+        if written.get("settlement_progress", {}).get("state") == "settled":
+            assert written["settlement_result"]["ok"] is True
+        else:
+            rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
+            assert rc == 0, spent
 
     # Read the real immutable CLI history, not a hand-authored decision fixture.
     status = {"registry": str(registry), "runtime_root": str(runtime), "run_history": {"runs": []}}

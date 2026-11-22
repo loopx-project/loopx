@@ -250,6 +250,7 @@ def test_native_selection_opening_fits_before_candidate_scope(tmp_path, monkeypa
     assert opening["/goal_boundary/stop_condition"] == decision["goal_boundary"]["stop_condition"]
     assert opening["/heartbeat_receipt/turn_instance_id"] == turn
     assert "/heartbeat_receipt/settlement_identity" not in opening
+    assert opening["/action_portfolio/suggested_actions"] == decision["action_portfolio"]["suggested_actions"]
     if split:
         assert "/selected_todo" not in opening
         _, opening_ref = read_context_read_reference(page["reference_file"])
@@ -265,7 +266,7 @@ def test_native_selection_opening_fits_before_candidate_scope(tmp_path, monkeypa
         assert opening_ref["sha256"] == remaining_ref["sha256"] == reference["sha256"]
         remaining = selected_context_values(body.decode())
         assert remaining["/selected_todo"] == decision["selected_todo"]
-        assert remaining["/action_portfolio/suggested_actions"] == decision["action_portfolio"]["suggested_actions"]
+        assert "/action_portfolio/suggested_actions" not in remaining
     else:
         assert opening["/selected_todo"] == decision["selected_todo"]
     assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()
@@ -311,6 +312,158 @@ def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_l
     assert json.loads(detail["content"])["selections"][0]["value"] == pointers
     assert Path(view["recovery"]["path"]).read_bytes() == raw
     assert json.loads(raw) == decision
+
+
+@pytest.mark.parametrize("workspace_repair", [True, False], ids=["needs-worktree", "independent-worktree"])
+def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeypatch, decision, workspace_repair):
+    from test_codex_context_lifecycle import setup
+
+    setup(tmp_path, monkeypatch)
+    long_scopes = [f"src/area-{index:03d}/implementation/entrypoints/**" for index in range(355)]
+    short_scope = ["docs/reference/**"]
+    candidates = [
+        {"todo_id": "todo_current", "text": "Repair the source entrypoint.", "required_write_scopes": long_scopes},
+        {"todo_id": "todo_alternative", "text": "Verify the documentation.", "required_write_scopes": short_scope},
+    ]
+    turn = "workspace-selection-fixture"
+    mode = "agent_workspace_repair" if workspace_repair else "normal_run"
+    obligation = "agent_workspace_guard" if workspace_repair else "work_lane_contract"
+    decision.update(should_run=True, effective_action=mode,
+        normal_delivery_allowed=not workspace_repair, recovery_delivery_allowed=False,
+        workspace_repair_allowed=workspace_repair,
+        agent_identity={"agent_id": "agent"},
+        heartbeat_receipt={"turn_instance_id": turn, "settlement_binding_owed": True},
+        execution_obligation={"kind": mode if workspace_repair else obligation, "contract": obligation,
+                              "must_attempt_work": True, "delivery_allowed": False})
+    decision["selected_todo"].update(schema_version="quota_selected_todo_v0", required_write_scopes=long_scopes)
+    contract = decision["interaction_contract"]
+    contract["mode"] = mode
+    contract["agent_channel"].update(delivery_allowed=False, must_attempt=True,
+        work_context={"instruction": "Relocate before delivering.", "sources": []})
+    contract["cli_channel"] = {
+        "selection_required": True, "next_cli_actions": [],
+        "spend_allowed_now": False, "spend_after_validation": False,
+        "selection_policy_ref": "$.action_portfolio.selection_policy",
+        "selection_command": {"schema_version": "action_selection_cli_command_v1",
+            "route_prefix": "loopx --format json",
+            "command_args_template": f"quota should-run --todo-id '{{todo_id}}' --turn-instance-id {turn}",
+            "candidate_discovery_args": "todo list --goal-id fixture --status open"},
+    }
+    policy = {"mode": "explicit_turn_binding", "decision_owner": "agent", "requires_explicit_turn_binding": True}
+    decision["action_portfolio"] = {"selection_policy": policy, "suggested_actions": candidates}
+    capture = tmp_path / "decision.json"
+    original = json.dumps(decision).encode()
+    capture.write_bytes(original)
+    capture.chmod(0o600)
+    registry = tmp_path / "absent-registry.json"
+    runtime = tmp_path / "unused-runtime"
+    args = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json"]
+    run = subprocess.run([*args, "quota", "context-project", "--codex-app",
+        "--context-delivery", "on", "--goal-id", "fixture", "--agent-id", "agent", "--turn-instance-id", turn,
+        "--capture-file", str(capture), "--capture-sha256", hashlib.sha256(original).hexdigest(),
+        "--decision-output-root", str(tmp_path / "captures"), "--codex-context-dir", str(tmp_path)],
+        capture_output=True)
+    view = json.loads(run.stdout)
+    assert run.returncode == 0 and view["ok"], view
+    page, opening = read_selection(view["first_read_command"])
+    assert opening["/goal_boundary/stop_condition"] == decision["goal_boundary"]["stop_condition"]
+    assert opening["/execution_obligation"] == decision["execution_obligation"]
+    assert opening["/interaction_contract/agent_channel/delivery_allowed"] is False
+    selection = opening["/interaction_contract/cli_channel/selection_command"]
+    original_selection = contract["cli_channel"]["selection_command"]
+    assert selection["candidate_discovery_args"] == original_selection["candidate_discovery_args"]
+    command_words = shlex.split(selection["command_args_template"])
+    original_words = shlex.split(original_selection["command_args_template"])
+    assert command_words[:len(original_words)] == original_words
+    assert opening["/interaction_contract/cli_channel/spend_allowed_now"] is False
+    assert opening["/action_portfolio/selection_policy"] == policy
+    projected = opening["/action_portfolio/suggested_actions"]
+    assert projected == [{key: value for key, value in candidates[0].items() if key != "required_write_scopes"},
+                         candidates[1]]
+    assert "required_write_scopes" not in opening["/selected_todo"]
+    pointer = "/action_portfolio/suggested_actions/0/required_write_scopes"
+    recommended_scope = "/selected_todo/required_write_scopes"
+    assert pointer in opening["/context_details/instruction"]
+    assert recommended_scope in opening["/context_details/instruction"]
+    assert page["total_bytes"] < len(json.dumps(long_scopes).encode())
+    template = opening["/context_details/command_template"]
+    _, detail = read_selection(template.replace("<pointer>", pointer) + f" --select {recommended_scope}")
+    assert detail[pointer] == detail[recommended_scope] == long_scopes
+    assert capture.read_bytes() == original
+    assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_claim_preparation_keeps_requested_write_scopes_on_demand(tmp_path, monkeypatch, provider):
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_repository_write_todo, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _initialize_git_checkout, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    scopes = [f"src/area-{index:03d}/implementation/entrypoints/**" for index in range(355)]
+    state = _configure_repository_write_todo(project)
+    state.write_text(state.read_text().replace(
+        "required_capabilities=filesystem_write -->",
+        f"required_capabilities=filesystem_write required_write_scopes={','.join(scopes)} -->",
+    ))
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["write_scope"] = ["src/**"]
+    registry.write_text(json.dumps(config))
+    _initialize_git_checkout(project)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--quiet", "--allow-empty", "-m", "fixture"], cwd=project, check=True)
+    workspace = tmp_path / "work"
+    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(workspace)],
+                   cwd=project, check=True)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+
+    def cli(*args):
+        code, result = _run_cli(registry, runtime, *args, cwd=workspace)
+        assert code == 0 and result["ok"], result
+        return result
+
+    turn = "same-turn-claim"
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+    guard = ("quota", "should-run", "--codex-app", *binding, "--turn-instance-id", turn,
+             "--available-capability", "filesystem_write", "--available-capability", "shell")
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    native = ("--context-delivery", "on", "--delta-delivery", "off",
+              "--decision-output-root", str(captures), "--codex-context-root", str(captures))
+    raw = cli(*guard, "--context-delivery", "off")
+    channel = raw["interaction_contract"]["cli_channel"]
+    preparation = channel["execution_preparation"]
+    assert preparation["state"] == "claim_required" and preparation["delivery_allowed"] is False
+    assert preparation["claim"]["host_execution_allowed"]
+    assert raw["selected_todo"]["required_write_scopes"] == scopes
+
+    view = cli(*guard, *native)
+    page, opening = read_selection(view["first_read_command"])
+    state_pointer = "/interaction_contract/cli_channel/execution_preparation"
+    scope_pointer = "/selected_todo/required_write_scopes"
+    assert opening[state_pointer] == preparation
+    assert opening["/normal_delivery_allowed"] is False
+    assert opening["/interaction_contract/cli_channel/spend_after_validation"] is False
+    assert opening["/selected_todo"]["todo_id"] == TODO_ID
+    assert "required_write_scopes" not in opening["/selected_todo"], page["total_bytes"]
+    assert scope_pointer in opening["/context_details/instruction"]
+    _, detail = read_selection(opening["/context_details/command_template"].replace("<pointer>", scope_pointer))
+    assert detail[scope_pointer] == scopes
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+
+    claim = cli(*preparation["claim"]["cli_args"])
+    assert claim["execution_managed"] and claim["claim_operation_id"]
+    ready = cli(*guard, *native)
+    _, opening = read_selection(ready["first_read_command"])
+    assert opening["/normal_delivery_allowed"] is True and opening[state_pointer]["state"] == "ready"
+    assert opening["/selected_todo"]["required_write_scopes"] == scopes
+    assert opening["/heartbeat_receipt"]["settlement_identity"] == raw["heartbeat_receipt"]["settlement_identity"]
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("damage", [None, "foreign_plan", "changed_file"])
@@ -661,11 +814,13 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 @pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize(("scope_count", "page_budget", "checkpoint_count"), [
-    (165, 12000, 0), (290, 12000, 0), (165, 16000, 0), (290, 12000, 30),
+@pytest.mark.parametrize(("scope_count", "page_budget", "checkpoint_count", "requested_count"), [
+    (165, 12000, 0, 0), (290, 12000, 0, 0), (165, 16000, 0, 0), (290, 12000, 30, 0),
+    pytest.param(290, 12000, 0, 355, id="large-goal-and-todo-scopes"),
+    pytest.param(290, 12000, 30, 355, id="large-scopes-with-approvals"),
 ])
 def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
-    tmp_path, monkeypatch, provider, warm, scope_count, page_budget, checkpoint_count,
+    tmp_path, monkeypatch, provider, warm, scope_count, page_budget, checkpoint_count, requested_count,
 ):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
@@ -683,6 +838,14 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     state.write_text(state.read_text().replace("## Next Action", narrative + "\n\n## Next Action", 1))
     configuration = json.loads(registry.read_text())
     scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/public/**" for index in range(scope_count)]
+    requested_scopes = [
+        f"{scopes[index % scope_count][:-2]}section-{index:03d}/**" for index in range(requested_count)
+    ]
+    if requested_scopes:
+        state.write_text(state.read_text().replace(
+            "required_capabilities=shell%2Cfilesystem_read -->",
+            f"required_capabilities=shell%2Cfilesystem_read required_write_scopes={','.join(requested_scopes)} -->",
+        ))
     if scope_count == 165:
         assert len(json.dumps(scopes, separators=(",", ":")).encode()) < 8192
     coordination = configuration["goals"][0]["coordination"]
@@ -748,26 +911,38 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     if warm:
         prior = capture("wide-prior")
         _, prior_ref = read_context_read_reference(prior["recovery"]["reference_file"])
-        rows = json.loads(Path(prior_ref["path"]).read_bytes())["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        prior_decision = json.loads(Path(prior_ref["path"]).read_bytes())
+        rows = prior_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         index = next(i for i, source in enumerate(rows) if source["source"] == "goal_state")
         body_pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/text"
-        prior_pages, prior_facts = read(prior["recovery"]["command"] + " --select " + body_pointer)
+        prior_read = prior["recovery"]["command"] + " --select " + body_pointer
+        if requested_scopes:
+            prior_read += " --select /goal_boundary/write_scope"
+        prior_pages, prior_facts = read(prior_read)
         assert narrative in prior_facts[body_pointer]
+        if requested_scopes:
+            assert prior_facts["/goal_boundary/write_scope"] == scopes
         deliver(journal, event, prior_pages)
+        proof = prior_decision["interaction_contract"]["cli_channel"].get("execution_preparation", {}).get("lease_proof")
+        proof_args = (["--task-lease-idempotency-key", proof["idempotency_key"],
+                       "--task-lease-expected-version", str(proof["expected_version"])] if proof else [])
         cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks", *proof_args)
         cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
             "--slots", "1", "--source", "heartbeat", "--execute")
-        scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
-        configuration["goals"][0]["coordination"]["write_scope"] = scopes
-        registry.write_text(json.dumps(configuration))
+        if not requested_scopes:
+            scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
+            configuration["goals"][0]["coordination"]["write_scope"] = scopes
+            registry.write_text(json.dumps(configuration))
 
     view = capture("wide-ready")
     _, source_ref = read_context_read_reference(view["recovery"]["reference_file"])
     path = Path(source_ref["path"])
     raw = path.read_bytes()
     source = json.loads(raw)
+    if requested_scopes:
+        assert source["selected_todo"]["required_write_scopes"] == requested_scopes
     pages, opening = read(view["first_read_command"])
     if page_budget == 16000:
         # A paged body is not itself a reason to add a second reader. The
@@ -793,7 +968,12 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     assert opening["/interaction_contract/cli_channel/execution_preparation/state"] == "ready"
     assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
     assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
+    required_reads = "/interaction_contract/agent_channel/required_reads"
+    assert opening[required_reads] == source["interaction_contract"]["agent_channel"]["required_reads"]
     assert "/goal_boundary/write_scope" not in opening
+    if requested_scopes:
+        assert "/selected_todo/required_write_scopes" not in opening
+        assert opening["/selected_todo/text"] == source["selected_todo"]["text"]
     authority = "/goal_boundary/checkpointed_boundary_authority"
     if checkpoint_count:
         assert opening[authority + "/active_count"] == checkpoint_count // 2
@@ -804,7 +984,11 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         deliver(journal, event, pages)
 
     pages, remaining = read(view["remaining_read_command"])
-    assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
+    assert len(pages) > 1
+    if requested_scopes:
+        assert remaining["/selected_todo/required_write_scopes"] == requested_scopes
+    if not (warm and requested_scopes):
+        assert remaining["/goal_boundary/write_scope"] == scopes
     if checkpoint_count:
         entries = source["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
         assert len(entries) == checkpoint_count
@@ -818,9 +1002,14 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
             if not isinstance(value, (dict, list)) or not value}
     assert not opening.keys() & remaining.keys()
     if warm:
-        assert body_pointer in pages[0]["previously_delivered_fields"] and body_pointer not in remaining
-        assert "/goal_boundary/write_scope" not in pages[0]["previously_delivered_fields"]
-        assert leaves(opening | remaining) == {key: value for key, value in leaves(ordinary).items() if key != body_pointer}
+        expected_reuse = {body_pointer}
+        if requested_scopes:
+            expected_reuse.add("/goal_boundary/write_scope")
+        assert set(pages[0]["previously_delivered_fields"]) == expected_reuse
+        assert leaves(opening | remaining) == {
+            key: value for key, value in leaves(ordinary).items()
+            if not any(key == reused or key.startswith(reused + "/") for reused in expected_reuse)
+        }
         deliver(journal, event, pages)
         assert "/goal_boundary/write_scope" in codex_context._state(journal)["consumed_pointers"]
         codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
@@ -828,6 +1017,7 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         assert "previously_delivered_fields" not in recovery_pages[0]
         assert not opening.keys() & restored.keys()
         assert leaves(opening | restored) == leaves(ordinary)
+        assert restored["/goal_boundary/write_scope"] == scopes
     else:
         assert leaves(opening | remaining) == leaves(ordinary)
     assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
@@ -2058,15 +2248,25 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
     def binding(turn):
         return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn)
 
+    proofs = {}
+
     def capture(turn, registry_path=registry):
-        return cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
+        view = cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
                    *binding(turn), "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
                    registry_path=registry_path)
+        _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+        source = json.loads(Path(reference["path"]).read_bytes())
+        proofs[turn] = source["interaction_contract"]["cli_channel"]["execution_preparation"]["lease_proof"]
+        return view
 
     def settle(turn, registry_path=registry):
+        lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                    registry_path=registry_path)["lease"]
         cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--task-lease-idempotency-key", lease["idempotency_key"],
+            "--task-lease-expected-version", str(lease["version"]),
             "--no-global-sync", "--suppress-external-sinks", registry_path=registry_path)
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute",
                     registry_path=registry_path)
@@ -2222,15 +2422,24 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                 "--todo-id", todo_id, "--turn-instance-id", turn)
 
+    proofs = {}
+
     def capture(turn, todo_id=TODO_ID):
-        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+        view = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
                    "--delta-delivery", "auto", *binding(turn, todo_id),
                    "--decision-output-root", str(captures), "--codex-context-dir", str(journal))
+        _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+        source = json.loads(Path(reference["path"]).read_bytes())
+        proofs[turn] = source["interaction_contract"]["cli_channel"]["execution_preparation"]["lease_proof"]
+        return view
 
     def settle(turn):
+        lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["lease"]
         cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--task-lease-idempotency-key", lease["idempotency_key"],
+            "--task-lease-expected-version", str(lease["version"]),
             "--no-global-sync", "--suppress-external-sinks")
         spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
         assert spent["appended"]

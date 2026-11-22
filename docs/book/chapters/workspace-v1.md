@@ -166,7 +166,7 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 **代价三：需要理解四层"已启用"的区别。** 把它们压成一个开关会误判能力可用性，而分清它们需要额外的心智负担。
 
-先区分 source、runtime 与 projection；只有源状态和运行条件确认正常时，才把故障限定为显示恢复。shared-authority provider 的资格与提升由独立的 shadow 与 conformance 流程决定。
+**边界一：Workspace 不拥有事实。** 先区分 source、runtime 与 projection；只有源状态和运行条件确认正常时，才把故障限定为显示恢复。它也不构成 Stage 2C authority——shared-authority provider 的资格与提升由独立的 shadow 与 conformance 流程决定。
 
 **边界二：桌面更新的范围有限。** 更新只能来自固定官方 feed；macOS 使用 updater signature 与 ad-hoc code signing，不应描述为 notarized。
 
@@ -186,6 +186,8 @@ loopx periodic-report inspect-profile --preset weekly --format json
 
 ## 不变式
 
-1. 每次重要判断前重新读一次源。
-3. Owner 操作由对应 Goal lifecycle 接受，Todo 由其生命周期校验，自动 Turn 由当前 quota contract 准入；页面不重新授予任何一种权限。
+1. **界面是投影，不是事实源。** 每次重要判断前重新读一次源。
+2. **HTTP 成功不证明写入完成。** 只有 receipt 与 readback 能证明。
+3. **点击不构成授权。** Owner 操作由对应 Goal lifecycle 接受，Todo 由其生命周期校验，自动 Turn 由当前 quota contract 准入；页面不重新授予任何一种权限。
 4. **四种"已启用"需要分别证明。** 它们可以互为前提，但不能把一个开关的值当成所有条件均已满足。
+5. **消息到达不扩大权限。** Capture scope 与 ingress mode 都不授予新的写权限。

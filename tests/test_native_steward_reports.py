@@ -1034,6 +1034,113 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
     assert (capture.read_bytes(), bot.writes) == after
 
 
+def test_report_recovers_via_admission_resume_once_blocking_replan_clears_after_contract_failure(steward, tmp_path, monkeypatch):
+    from datetime import timezone
+    from loopx.capabilities.periodic_report import cadence_runtime
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.configure_goal import configure_goal
+    import loopx.capabilities.native_chat.steward_reports as report_host
+
+    store, runtime, bot, transport, binding, capture, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+    _, second_window = reports.current_window(owner)
+
+    prompts_seen: list[str] = []
+    # Return invalid host result contract (`replan_required` + `outcome_gap` without typed blocked fields).
+    bad_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {"vision_summary": "Keep reporting.", "acceptance_summary": "Validate full report."},
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["fixture:evidence"],
+        },
+    }
+    bad_outcome = {
+        "result_kind": "replan_required",
+        "classification": "outcome_gap_without_blocked_fields",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_gap",
+        "work_evidence": ["Observed gap"],
+        "validation_evidence": ["Validated check"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(bad_vision),
+        "summary": "Missing blocked fields trigger host_result_contract validation failure.",
+        "next_action": "Clear replan before resuming report.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json, pathlib\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + f"    pathlib.Path({str(tmp_path / 'prompts.jsonl')!r}).open('a').write(json.dumps(prompt) + '\\n')\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(bad_outcome)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    retry_turn = finish(runtime, pump_steward_monitors(runtime)[0])
+    prompts_seen = [json.loads(line) for line in (tmp_path / "prompts.jsonl").read_text().splitlines() if line.strip()]
+    assert any("Governance contract reminder:" in text for text in prompts_seen)
+    replan_events = [row["payload"] for row in store.events_after(sid, retry_turn["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result"]
+    assert len(replan_events) == 1
+    assert replan_events[0]["status"] == "failed" and replan_events[0]["validation_stage"] == "host_result_contract"
+
+    # While the autonomous replan obligation stays active, pumping must NOT spin or resume.
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+
+    # Once the blocking replan is cleared elsewhere, one .admission-resume carrier completes the original report cleanly.
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    calls = capture.read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    resumed = pump_steward_monitors(runtime)
+    assert len(resumed) == 1
+    done = finish(runtime, resumed[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"]
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == done["loopx_request"]["todo_id"])
+    assert task["status"] == "done"
+    tail = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in tail) == 1
+    assert transport.steward_reports.reconcile() == 0
+
+
 def embedded_report_python(tmp_path, monkeypatch):
     """A real child interpreter without the embedding host's LoopX bootstrap."""
     import subprocess
@@ -1600,23 +1707,18 @@ def test_report_http_preview_apply_is_original_source_bound_and_failure_is_revie
         thread.join(5)
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("local_session", [False, True])
-@pytest.mark.parametrize("native_status", ["failed", "inProgress"])
-def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
-        steward, tmp_path, monkeypatch, provider, local_session, native_status):
+def _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, native_status="failed"):
     from datetime import timezone
     from loopx.capabilities.native_chat import steward_reports as report_host
     from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path
-    from loopx.capabilities.periodic_report.private_generation import freeze_private_report
     from loopx.control_plane.turn_driver.journal_store import turn_journal_path
-    from loopx.file_lock import exclusive_file_lock
 
-    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=5)
+    clock = {"now": datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=5)}
 
     class CalendarClock(datetime):
         @classmethod
         def now(cls, tz=None):
+            point = clock["now"]
             return point.astimezone(tz) if tz else point.replace(tzinfo=None)
 
     monkeypatch.setattr(report_host, "datetime", CalendarClock)
@@ -1635,6 +1737,11 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     fake = Path(runtime.codex_bin)
     source = fake.read_text()
     fail_once = tmp_path / "fail-next-report"
+    history_unavailable = tmp_path / "report-history-unavailable"
+    history_rpc_error = tmp_path / "report-history-rpc-error"
+    items_unavailable = tmp_path / "report-items-unavailable"
+    contradicted_items = tmp_path / "report-contradicted-items"
+    other_turn_active = tmp_path / "report-other-turn-active"
     fail_once.touch()
     probe = f"""
     if method == "turn/start" and __import__("pathlib").Path({str(fail_once)!r}).exists():
@@ -1643,11 +1750,26 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
             print(json.dumps({{"method": "turn/completed", "params": {{"threadId": "durable-thread", "turn": {{"id": "report-failed-after-launch", "status": "failed", "error": {{"codexErrorInfo": "other", "message": "Synthetic terminal failure"}}}}}}}}), flush=True)
             continue
         sys.exit(0)
+    if method in {{"thread/turns/list", "thread/items/list"}} and __import__("pathlib").Path({str(history_rpc_error)!r}).exists():
+        print(json.dumps({{"id": request["id"], "error": {{"code": -32000, "message": "Synthetic provider history unavailable"}}}}), flush=True)
+        continue
+    if method == "thread/turns/list" and __import__("pathlib").Path({str(history_unavailable)!r}).exists():
+        print(json.dumps({{"id": request["id"], "result": {{"data": []}}}}), flush=True)
+        continue
     if method == "thread/turns/list":
-        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"id": "report-failed-after-launch", "status": {native_status!r}, "error": {{"codexErrorInfo": "other"}}}}]}}}}), flush=True)
+        rows = [{{"id": "report-failed-after-launch", "status": {native_status!r}, "error": {{"codexErrorInfo": "other"}}}}]
+        if __import__("pathlib").Path({str(other_turn_active)!r}).exists():
+            rows.insert(0, {{"id": "unrelated-active-turn", "status": "inProgress"}})
+        print(json.dumps({{"id": request["id"], "result": {{"data": rows}}}}), flush=True)
         continue
     if method == "thread/items/list":
-        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]}}}}), flush=True)
+        if __import__("pathlib").Path({str(items_unavailable)!r}).exists():
+            print(json.dumps({{"id": request["id"], "result": {{"data": []}}}}), flush=True)
+            continue
+        items = [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]
+        if __import__("pathlib").Path({str(contradicted_items)!r}).exists():
+            items.append({{"turnId": "report-failed-after-launch", "item": {{"id": "extra-agent", "type": "agentMessage"}}}})
+        print(json.dumps({{"id": request["id"], "result": {{"data": items}}}}), flush=True)
         continue
 """
     fake.write_text(source.replace('    method = request.get("method")', '    method = request.get("method")' + probe, 1))
@@ -1660,7 +1782,8 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     cadence = cadence_journal_path(reports.root, actor["goal_id"])
     previous = json.loads(cadence.read_text())
     native_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
-    old_artifacts = (store._turn_path(sid, original["turn_id"]), native_path,
+    old_artifacts = (store._turn_path(sid, original["turn_id"]),
+        store._event_path(sid, original["turn_id"]), native_path,
         old_folder / "source.json", old_folder / "editorial-request.json")
     original_bytes = [path.read_bytes() for path in old_artifacts]
     sent = list(bot.writes)
@@ -1668,15 +1791,63 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     fail_once.unlink()
     Path(store.load_session(sid)["codex_home"]).mkdir(parents=True, exist_ok=True)
     runtime.adapters.pop(sid).close_session()
+    return {
+        "clock": clock, "sid": sid, "owner": owner, "actor": actor, "reports": reports,
+        "original": original, "old": old, "old_folder": old_folder,
+        "cadence": cadence, "previous": previous, "native_path": native_path,
+        "old_artifacts": old_artifacts, "original_bytes": original_bytes,
+        "sent": sent, "calls_before": calls_before,
+        "history_unavailable": history_unavailable, "history_rpc_error": history_rpc_error,
+        "items_unavailable": items_unavailable,
+        "contradicted_items": contradicted_items, "other_turn_active": other_turn_active,
+    }
+
+
+def _restart_steward_runtime(store, runtime):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+
+    runtime.close()
+    restarted = ChatRuntimeController(
+        store=ChatSessionStore(store.root.parent),
+        codex_bin=runtime.codex_bin,
+        registry_path=runtime.registry_path,
+        project_contexts=runtime.project_contexts,
+    )
+    restarted.manager_scope_resolver = runtime.manager_scope_resolver
+    if hasattr(runtime, "steward_report_provider"):
+        restarted.steward_report_provider = runtime.steward_report_provider
+    return restarted
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("native_status", ["failed", "inProgress"])
+def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
+        steward, tmp_path, monkeypatch, provider, local_session, native_status):
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    from loopx.capabilities.periodic_report.private_generation import freeze_private_report
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, bot, transport, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, native_status)
+    clock, sid, owner, actor, reports = ctx["clock"], ctx["sid"], ctx["owner"], ctx["actor"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous, native_path = ctx["cadence"], ctx["previous"], ctx["native_path"]
+    old_artifacts, original_bytes = ctx["old_artifacts"], ctx["original_bytes"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    history_unavailable = ctx["history_unavailable"]
 
     def wake():
         runtime._steward_monitor_next_check.clear()
         return pump_steward_monitors(runtime)
 
     assert wake() == []
-    point += timedelta(days=1)
+    failure_proof = old_folder / "native-terminal-failure.json"
+    assert failure_proof.is_file() is (native_status == "failed")
+    clock["now"] += timedelta(days=1)
     assert wake() == []  # Keep the normal recovery opportunity at the next boundary.
-    point += timedelta(days=2)
+    clock["now"] += timedelta(days=2)
     uncertain = old_folder / "private-delivery.json"
     try:
         uncertain.symlink_to("unreadable-delivery-target")
@@ -1698,10 +1869,26 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
     assert starts() == original_starts
 
-    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
-    native_proof = StewardTurnHost(runtime).report_failure_observation(original)
+    host = StewardTurnHost(runtime)
+    native_proof = host.report_failure_observation(original)
     assert bool(native_proof) is (native_status == "failed"), native_proof
     assert reports._failed_without_generation(actor, old) is (native_status == "failed")
+    if native_status == "failed":
+        retained_bytes = failure_proof.read_bytes()
+        retained = json.loads(retained_bytes)
+        assert set(retained) == {"binding", "provider_thread_id", "only_original_user_item"}
+        assert retained["provider_thread_id"] == native_proof["thread_id"]
+        assert retained["binding"]["provider_turn_id"] == native_proof["turn_id"]
+        history_unavailable.touch()
+        assert host.report_failure_observation(original) is None
+        assert host.report_quota_request(original, report_window=old) is None
+        retained["binding"]["native_result_sha256"] = "0" * 64
+        failure_proof.write_text(json.dumps(retained), encoding="utf-8")
+        try:
+            assert wake() == [] and starts() == original_starts
+            assert json.loads(cadence.read_text()) == previous
+        finally:
+            failure_proof.write_bytes(retained_bytes)
     pending = wake()
     if native_status != "failed":
         assert pending == [] and starts() == original_starts
@@ -1714,7 +1901,7 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     done = finish(runtime, pending[0])
     assert done["response"]["native_loopx"]["status"] == "committed", done
     _, latest = reports.current_window(owner)
-    assert latest["due_at"] == point.replace(minute=0).isoformat().replace("+00:00", "Z")
+    assert latest["due_at"] == clock["now"].replace(minute=0).isoformat().replace("+00:00", "Z")
     assert latest["subscription_revision"] == old["subscription_revision"]
     assert done["loopx_request"]["actor"] == original["loopx_request"]["actor"]
     assert done["loopx_request"]["todo_id"] != original["loopx_request"]["todo_id"]
@@ -1722,6 +1909,7 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     assert "report_quota_recovery" not in done["loopx_request"]
     assert json.loads((cadence.parent / "superseded-cadence" / (old["window_id"] + ".json")).read_text()) == previous
     assert [path.read_bytes() for path in old_artifacts] == original_bytes
+    assert failure_proof.read_bytes() == retained_bytes
     assert reports.delivery_current(owner, old) is False
     with pytest.raises(ValueError, match="no longer the active window"):
         freeze_private_report(root=reports.root, window=old, response={}, require_current_window=True)
@@ -1746,6 +1934,380 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
         goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == latest["due_at"]
     assert wake() == [] and len(starts()) == len(original_starts) + 1
     assert transport.steward_reports.reconcile() == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+def test_contradicted_report_failure_proof_stays_held_after_restart_and_history_outage(
+        steward, tmp_path, monkeypatch, provider, local_session):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, bot, _, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock, actor, reports = ctx["clock"], ctx["actor"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    old_artifacts, original_bytes = ctx["old_artifacts"], ctx["original_bytes"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    history_unavailable, history_rpc_error = ctx["history_unavailable"], ctx["history_rpc_error"]
+    contradicted_items = ctx["contradicted_items"]
+
+    def wake(target_runtime=runtime):
+        cache = getattr(target_runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(target_runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+    original_todos = StewardMonitor(runtime).todos(actor)
+
+    # Phase 1: user-only failure proof is retained on the original window.
+    assert wake() == []
+    failure_proof = old_folder / "native-terminal-failure.json"
+    retained = json.loads(failure_proof.read_text(encoding="utf-8"))
+    assert set(retained) == {"binding", "provider_thread_id", "only_original_user_item"}
+    assert retained["only_original_user_item"] is True
+
+    # Phase 2: after >1 boundary, live Codex history for the same Turn reveals
+    # an agentMessage; the window holds and persists the contradiction under generation.lock.
+    clock["now"] += timedelta(days=3)
+    contradicted_items.touch()
+    assert wake() == []
+    assert starts() == original_starts
+    assert json.loads(cadence.read_text()) == previous
+    assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+    contradicted = json.loads(failure_proof.read_text(encoding="utf-8"))
+    assert contradicted["binding"] == retained["binding"]
+    assert contradicted["only_original_user_item"] is False
+    assert contradicted["contradicted"] is True
+
+    # Phase 3: after process restart and subsequent Codex history outage (empty
+    # list and RPC error), the invalidated record still rejects advancing.
+    contradicted_items.unlink()
+    history_unavailable.touch()
+    restarted = _restart_steward_runtime(store, runtime)
+    try:
+        restarted_reports = ManagedSessionReports(restarted) if local_session else StewardReports(restarted)
+        restarted_host = StewardTurnHost(restarted)
+        assert wake(restarted) == []
+        history_unavailable.unlink()
+        history_rpc_error.touch()
+        assert wake(restarted) == []
+        # Even if live history later stops returning the agentMessage without
+        # explaining the prior contradiction, the same Turn stays held.
+        history_rpc_error.unlink()
+        assert wake(restarted) == []
+        assert restarted_host.report_quota_request(original, report_window=old) is None
+        assert restarted_host.report_window_failure_verified(original, old) is False
+        assert restarted_reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+        assert json.loads(cadence.read_text()) == previous
+        assert starts() == original_starts
+        assert StewardMonitor(restarted).todos(actor) == original_todos
+        assert [path.read_bytes() for path in old_artifacts] == original_bytes
+        assert bot.writes == sent
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+def test_contradicted_quota_observation_and_active_thread_hold_safely(
+        steward, tmp_path, monkeypatch, provider, local_session):
+    from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+
+    store, runtime, _, _, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock = ctx["clock"]
+    old, old_folder = ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    calls_before = ctx["calls_before"]
+    history_unavailable = ctx["history_unavailable"]
+    contradicted_items, other_turn_active = ctx["contradicted_items"], ctx["other_turn_active"]
+
+    def wake(target_runtime=runtime):
+        cache = getattr(target_runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(target_runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+
+    # Save user-only failure proof on initial poll.
+    assert wake() == []
+    failure_proof = old_folder / "native-terminal-failure.json"
+    retained_bytes = failure_proof.read_bytes()
+
+    # Transient unrelated inProgress turn holds immediately without invalidating the retained proof.
+    clock["now"] += timedelta(days=3)
+    other_turn_active.touch()
+    assert wake() == []
+    assert failure_proof.read_bytes() == retained_bytes
+    assert json.loads(cadence.read_text()) == previous
+    other_turn_active.unlink()
+
+    # Contradiction observed during quota probe (same window, before crossing >1 boundary)
+    # persists and survives restart + history outage.
+    clock["now"] -= timedelta(days=3)
+    contradicted_items.touch()
+    assert wake() == []
+    contradicted = json.loads(failure_proof.read_text(encoding="utf-8"))
+    assert contradicted["contradicted"] is True and contradicted["only_original_user_item"] is False
+
+    contradicted_items.unlink()
+    history_unavailable.touch()
+    clock["now"] += timedelta(days=3)
+    restarted = _restart_steward_runtime(store, runtime)
+    try:
+        restarted_reports = ManagedSessionReports(restarted) if local_session else StewardReports(restarted)
+        assert wake(restarted) == []
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert restarted_reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+def test_contradiction_write_failure_invalidates_prior_proof_across_restart(
+        steward, tmp_path, monkeypatch, provider, local_session):
+    import os
+    from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, bot, _, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock, reports = ctx["clock"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    old_artifacts, original_bytes = ctx["old_artifacts"], ctx["original_bytes"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    history_unavailable, contradicted_items = ctx["history_unavailable"], ctx["contradicted_items"]
+
+    def wake(target_runtime=runtime):
+        cache = getattr(target_runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(target_runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+
+    # Phase 1: user-only failure proof is retained on the original window.
+    assert wake() == []
+    failure_proof = old_folder / "native-terminal-failure.json"
+    retained = json.loads(failure_proof.read_text(encoding="utf-8"))
+    assert retained["only_original_user_item"] is True
+
+    # Phase 2: live contradiction encounters a write failure; the old positive
+    # proof is removed before surfacing to the cadence recovery boundary.
+    clock["now"] += timedelta(days=3)
+    contradicted_items.touch()
+    real_replace = os.replace
+    with monkeypatch.context() as broken:
+        def failing_replace(src, dst):
+            if Path(dst).name == failure_proof.name:
+                raise OSError("injected proof replace failure")
+            return real_replace(src, dst)
+
+        broken.setattr(os, "replace", failing_replace)
+        assert wake() == []
+    assert not failure_proof.exists()
+    assert starts() == original_starts
+    assert json.loads(cadence.read_text()) == previous
+    assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+
+    # Phase 3: immediate restart with history offline still holds the original window.
+    contradicted_items.unlink()
+    history_unavailable.touch()
+    restarted = _restart_steward_runtime(store, runtime)
+    try:
+        restarted_reports = ManagedSessionReports(restarted) if local_session else StewardReports(restarted)
+        restarted_host = StewardTurnHost(restarted)
+        assert wake(restarted) == []
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert restarted_reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+        assert restarted_host.report_window_failure_verified(original, old) is False
+
+        # Phase 4: once write succeeds on the next live contradicted tick, durable
+        # contradiction is written, read back, and holds permanently.
+        history_unavailable.unlink()
+        contradicted_items.touch()
+        assert wake(restarted) == []
+        contradicted = json.loads(failure_proof.read_text(encoding="utf-8"))
+        assert contradicted["binding"] == retained["binding"]
+        assert contradicted["only_original_user_item"] is False
+        assert contradicted["contradicted"] is True
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert [path.read_bytes() for path in old_artifacts] == original_bytes
+        assert bot.writes == sent
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+def test_contradiction_unlink_permission_error_stays_held_after_restart_and_history_outage(
+        steward, tmp_path, monkeypatch, provider, local_session):
+    from loopx.capabilities.native_chat.report_failure_proof import CONTRADICTED_REPORT_FAILURES
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, bot, _, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock, actor, reports = ctx["clock"], ctx["actor"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    old_artifacts, original_bytes = ctx["old_artifacts"], ctx["original_bytes"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    history_unavailable, history_rpc_error = ctx["history_unavailable"], ctx["history_rpc_error"]
+    contradicted_items = ctx["contradicted_items"]
+
+    def wake(target_runtime=runtime):
+        cache = getattr(target_runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(target_runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+    original_todos = StewardMonitor(runtime).todos(actor)
+
+    # Phase 1: user-only failure proof is retained on the original window.
+    assert wake() == []
+    failure_proof = old_folder / "native-terminal-failure.json"
+    retained = json.loads(failure_proof.read_text(encoding="utf-8"))
+    assert retained["only_original_user_item"] is True
+
+    # Phase 2: live history returns an assistant item while unlinking the old
+    # attempt proof raises PermissionError. The durable parent contradiction is
+    # persisted outside attempt_directory and holds the original window.
+    clock["now"] += timedelta(days=3)
+    contradicted_items.touch()
+    real_unlink = Path.unlink
+    with monkeypatch.context() as deny_unlink:
+        def failing_unlink(self, missing_ok=False):
+            if self == failure_proof:
+                raise PermissionError("operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        deny_unlink.setattr(Path, "unlink", failing_unlink)
+        assert wake() == []
+
+    # Old user-only file is still on disk because unlink raised PermissionError.
+    assert json.loads(failure_proof.read_text(encoding="utf-8"))["only_original_user_item"] is True
+    assert (cadence.parent / CONTRADICTED_REPORT_FAILURES).is_file()
+    assert starts() == original_starts
+    assert json.loads(cadence.read_text()) == previous
+    assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+
+    # Phase 3: immediate restart + unreadable Codex history (proof is None) still
+    # checks the durable parent contradiction first and queues zero new turns.
+    contradicted_items.unlink()
+    history_unavailable.touch()
+    restarted = _restart_steward_runtime(store, runtime)
+    try:
+        restarted_reports = ManagedSessionReports(restarted) if local_session else StewardReports(restarted)
+        restarted_host = StewardTurnHost(restarted)
+        assert wake(restarted) == []
+        history_unavailable.unlink()
+        history_rpc_error.touch()
+        assert wake(restarted) == []
+        assert json.loads(failure_proof.read_text(encoding="utf-8"))["only_original_user_item"] is True
+        assert restarted_host.report_failure_contradicted(original, old) is True
+        assert restarted_host.report_window_failure_verified(original, old) is False
+        assert restarted_host.report_quota_request(original, report_window=old) is None
+        assert restarted_reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+        assert json.loads(cadence.read_text()) == previous
+        assert starts() == original_starts
+        assert StewardMonitor(restarted).todos(actor) == original_todos
+        assert [path.read_bytes() for path in old_artifacts] == original_bytes
+        assert bot.writes == sent
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("followup", ["user_only", "agent_message"])
+def test_empty_items_readback_recovers_on_same_turn_unless_explicitly_contradicted(
+        steward, tmp_path, monkeypatch, provider, local_session, followup):
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    store, runtime, bot, transport, _, capture, _ = steward
+    ctx = _setup_missed_report_failure(steward, tmp_path, monkeypatch, provider, local_session, "failed")
+    clock, sid, reports = ctx["clock"], ctx["sid"], ctx["reports"]
+    original, old, old_folder = ctx["original"], ctx["old"], ctx["old_folder"]
+    cadence, previous = ctx["cadence"], ctx["previous"]
+    sent, calls_before = ctx["sent"], ctx["calls_before"]
+    items_unavailable, contradicted_items = ctx["items_unavailable"], ctx["contradicted_items"]
+
+    def wake():
+        cache = getattr(runtime, "_steward_monitor_next_check", None)
+        if cache is not None:
+            cache.clear()
+        return pump_steward_monitors(runtime)
+
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+    failure_proof = old_folder / "native-terminal-failure.json"
+
+    # Tick 1: empty thread/items/list is unavailable, never a permanent contradiction.
+    clock["now"] += timedelta(days=3)
+    items_unavailable.touch()
+    assert wake() == []
+    assert not failure_proof.exists()
+    assert json.loads(cadence.read_text()) == previous
+    assert starts() == original_starts
+    assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
+    host = StewardTurnHost(runtime)
+    assert host.report_failure_contradicted(original, old) is False
+
+    # Tick 2: same Turn returns either full userMessage-only inventory or agentMessage.
+    items_unavailable.unlink()
+    if followup == "user_only":
+        pending = wake()
+        assert len(pending) == 1
+        done = finish(runtime, pending[0])
+        assert done["response"]["native_loopx"]["status"] == "committed", done
+        retained = json.loads(failure_proof.read_text(encoding="utf-8"))
+        assert retained["only_original_user_item"] is True
+        _, latest = reports.current_window(ctx["owner"])
+        assert latest["window_id"] != old["window_id"]
+        if local_session:
+            body = (attempt_directory(reports.root, latest) / "report.md").read_text()
+            assert any(msg["text"] == body and msg["turn_id"] == done["turn_id"] for msg in store.messages(sid))
+        else:
+            assert transport.steward_reports.reconcile() == 1
+            assert len(bot.writes) > len(sent)
+    else:
+        contradicted_items.touch()
+        assert wake() == []
+        contradicted = json.loads(failure_proof.read_text(encoding="utf-8"))
+        assert contradicted["contradicted"] is True and contradicted["only_original_user_item"] is False
+        assert starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        contradicted_items.unlink()
+        assert wake() == []
+        assert starts() == original_starts
+        assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
 
 
 def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path):
@@ -2005,3 +2567,102 @@ def test_original_report_resumes_remaining_native_spend_after_generation_done_wi
         assert body == (folder / "report.md").read_bytes()
         assert read_periodic_report_publication_cursor(runtime_root=reports.root,
             goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == window["next_due_at"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_stopped_no_typed_result_report_recovers_saved_editorial_candidate_without_model_replay(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.control_plane.turn_driver import host_candidate
+    from loopx.control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity, load_turn_journal, turn_journal_path
+
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+
+    # Simulate an older parser build failing on one trailing comma + stray outer
+    # closer, leaving the Turn journal stopped with `no_typed_host_result` while
+    # `answer.final` preserved the complete `editorial_response` text.
+    helper = tmp_path / "report_model.py"
+    raw_source = helper.read_text()
+    helper.write_text(
+        raw_source.replace(
+            '    return json.dumps({"result_kind":',
+            '    encoded = json.dumps({"result_kind":',
+        ).replace(
+            '"editorial_response": response}, ensure_ascii=False)',
+            '"editorial_response": response}, ensure_ascii=False)\n'
+            '    assert encoded.endswith("}]}}")\n'
+            '    return encoded[:-3].replace(\'"tone": "neutral"}\', \'"tone": "neutral",}\', 1) + "}]}}"',
+        )
+    )
+
+    real_parse = host_candidate.parse_model_json
+    with monkeypatch.context() as old_parser:
+        old_parser.setattr(host_candidate, "parse_model_json", lambda _text: None)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+
+    native = first["response"]["native_loopx"]
+    assert native["status"] == "stopped" and native["result_kind"] == "wait"
+    orig_journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"]))
+    assert orig_journal["host_result"]["classification"] == "no_typed_host_result"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    assert not (folder / "private-generation.json").exists()
+    assert not (folder / "editorial-response.json").exists()
+    todo = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == first["loopx_request"]["todo_id"])
+    assert todo["status"] == "open"
+    assert transport.steward_reports.reconcile() == 0
+
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    runtime._steward_monitor_next_check.clear()
+    assert real_parse('{"items": [{"ok": true,}]}}') == {"items": [{"ok": True}]}
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == calls
+    assert bot.writes == writes
+
+    assert validate_private_generation(folder)
+    assert (folder / "report.md").is_file()
+    todo_after = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == todo["todo_id"])
+    assert todo_after["status"] == "done"
+    assert todo_after["completion_turn_key"] == first["loopx_request"]["turn_instance_id"] + ".saved-candidate"
+    saved_key = find_loopx_turn_key_by_settlement_identity(
+        reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+        todo_id=todo["todo_id"], turn_instance_id=todo_after["completion_turn_key"],
+    )
+    assert saved_key and load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=saved_key))["status"] == "committed"
+
+    assert transport.steward_reports.reconcile() == 1
+    assert len(bot.writes) > len(writes)
+    cursor = read_periodic_report_publication_cursor(runtime_root=reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+    assert cursor and cursor["covered_until"] == window["due_at"]
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 0
+    assert capture.read_bytes() == calls
+
+
+def test_stopped_report_without_valid_saved_editorial_candidate_stays_closed(steward, tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.control_plane.turn_driver import host_candidate
+
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    install_model(steward, tmp_path, sid)
+    helper = tmp_path / "report_model.py"
+    helper.write_text('def fake_report_model(_params):\n    return "{\\"result_kind\\": \\"validated_completion\\", \\"truncated\\": "\n')
+
+    with monkeypatch.context() as old_parser:
+        old_parser.setattr(host_candidate, "parse_model_json", lambda _text: None)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+
+    assert first["response"]["native_loopx"]["status"] == "stopped"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 0
+    assert capture.read_bytes() == calls and bot.writes == writes
+    assert not (folder / "private-generation.json").exists()
+    todo = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == first["loopx_request"]["todo_id"])
+    assert todo["status"] == "open"

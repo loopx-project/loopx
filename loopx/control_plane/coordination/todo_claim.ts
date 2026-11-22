@@ -65,6 +65,7 @@ export interface CoordinationTodoClaimInput {
   readonly replan_obligation_id?: string;
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
   readonly manage_execution?: boolean;
+  readonly ttl_seconds?: number;
   /** Admission constraint on every attempt and replay, not a new business intent. */
   readonly required_handoff_mode?: ExecutionHandoffMode;
   readonly dry_run: boolean;
@@ -376,6 +377,8 @@ async function executeClaimAttempt(
         ? null : normalizeTodoAgent(rawInput.actor_agent_id, "actor_agent_id"),
       registered_agents: normalizeRegisteredTodoAgents(rawInput.registered_agents),
       lease_request: normalizeLeaseRequest(rawInput.lease_request),
+      ttl_seconds: rawInput.ttl_seconds === undefined || rawInput.ttl_seconds === null
+        ? undefined : normalizeTtl(rawInput.ttl_seconds),
     };
     if (input.manage_execution !== undefined) requireAuthorityBoolean(input.manage_execution, "manage_execution");
     if (input.required_handoff_mode !== undefined && !EXECUTION_HANDOFF_MODES.includes(input.required_handoff_mode)) {
@@ -383,6 +386,9 @@ async function executeClaimAttempt(
     }
     if (input.manage_execution && (input.lease_request != null || input.actor_agent_id !== input.claimed_by)) {
       throw new AuthorityStoreProtocolError("Managed execution requires the claiming actor and no explicit lease request");
+    }
+    if (input.ttl_seconds !== undefined && !input.manage_execution) {
+      throw new AuthorityStoreProtocolError("Managed execution TTL requires manage_execution and no explicit lease request");
     }
     requireAuthorityBoolean(input.dry_run, "dry_run");
     requireAuthorityDate(input.now, "now");
@@ -413,6 +419,7 @@ async function executeClaimAttempt(
     dry_run: input.dry_run,
     ...(leaseRequest === null ? {} : {lease_request: leaseRequest}),
     ...(input.manage_execution ? {manage_execution: true} : {}),
+    ...(input.ttl_seconds === undefined ? {} : {ttl_seconds: input.ttl_seconds}),
     ...(input.replan_obligation_id === undefined ? {} : {replan_obligation_id: input.replan_obligation_id}),
   };
   const requestSha = canonicalAuthoritySha256(requestIdentity);
@@ -477,8 +484,16 @@ async function executeClaimAttempt(
   };
   const recoverProof = async (result: CoordinationTodoClaimResult): Promise<CoordinationTodoClaimResult> => {
     if (input.manage_execution && result.reason_code === "coordination_operation_identity_mismatch") {
-      const original = await store.readReceipt(input.operation_id);
       const legacyIntent = {...requestIdentity};
+      if (input.expected_provider_revision !== undefined) {
+        // An earlier managed claim had no reviewed revision. Decode its exact
+        // historical intent without submitting a new claim without a revision.
+        delete legacyIntent.expected_provider_revision;
+        const historical = new CoordinationCommandReceipt({...receipt.contract,
+          identity: {...receipt.contract.identity, request_sha256: canonicalAuthoritySha256(legacyIntent)}});
+        return currentProof(await historical.read(store) ?? result);
+      }
+      const original = await store.readReceipt(input.operation_id);
       delete legacyIntent.manage_execution;
       if (original.status === "found" && original.receipts.length === 1 &&
           original.receipts[0]?.schema_version === COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA &&

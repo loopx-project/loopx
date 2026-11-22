@@ -16,6 +16,48 @@ When the observed execution used the finding's tested input revision, result
 attachments can bind it once and select the evidence to reuse. Readback and
 standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
 
+## Read execution evidence in the App
+
+Open a Goal's **Research / 研究** view, select its question in the history,
+then expand **Read saved findings / 阅读已保存的结论** and select the finding. Expand
+**Actual execution and resource observations / 实际执行与资源观测** to compare
+the planned and executed methods, read the change reason, elapsed time and
+limit, iterations, stop reason, and the input, candidate and result references.
+The history detail uses the same reader.
+
+![Research history and saved evidence entry](assets/execution-feedback-entry.png)
+
+Keep execution detail closed while browsing conclusions; open it when checking
+whether a result belongs to the intended execution. The example below records
+a change from `broad-search` to `targeted-check`. Its elapsed time is measured,
+while the iteration count is unknown. **Not measured / 未测量** stays unknown;
+a finding without an observation has no execution detail. A rejected response
+shows an error and hides stale result facts; use **Refresh evidence / 刷新证据**
+after the source or transport is repaired.
+
+![Execution detail with measured and unknown values](assets/execution-feedback-detail.png)
+
+On a narrow screen, references wrap within the reader. The same controls and
+unknown-value distinctions remain available.
+
+![Execution evidence on a narrow screen](assets/execution-feedback-narrow.png)
+
+These illustrations use synthetic findings with a packaged App and isolated
+SQLite backend. Reading evidence does not run a method or enable a capability.
+Recorded execution alone does not prove model adoption, method effectiveness,
+or an independently accepted outcome.
+
+### A saved finding has no execution detail
+
+First check whether that finding's source actually records an observation.
+Omission is valid and must not be replaced with guessed values. Older App
+builds can also omit recorded observations in saved findings while retaining
+them in research history. If the same source has execution detail in history
+but the saved finding looks like this earlier reader, update the App and
+refresh the evidence. Updating a reader does not execute the method again.
+
+![Earlier saved-finding reader omitting recorded execution detail](assets/execution-feedback-legacy-reader.png)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing
@@ -863,7 +905,7 @@ source retains a command for replay, but the inline context is not a separate
 `required_reads` obligation. It contains at most three recent nodes/findings
 and, in planning mode, three suggested Todo branches, plus structured commands
 for detail or evidence recording. The read folds existing history but bounds
-the returned context; The agent chooses
+the returned context; it does not claim to reduce history IO. The agent chooses
 evidence-backed work; planner suggestions do not require branching on every
 turn or recording empty ceremonial nodes. Use the detail command when the
 short view is insufficient.
@@ -887,7 +929,8 @@ repeated findings on the same question. An explicit `--todo-id` prioritizes that
 open, own-or-unclaimed task's canonical question links and measurement groups
 ahead of the independent planner's suggestions. Quota and managed-turn callers
 carry their explicit task selection into this read automatically. Other results
-remain available through the same bounded pages; Without a task scope, evidence-only mode retains
+remain available through the same bounded pages; an absent link does not imply
+that no evidence exists. Without a task scope, evidence-only mode retains
 recency ordering. These reads do not alter planner scores, graph state, claims
 or quota, and neither mode is enabled by supplying a task id.
 The dashboard's saved-evidence reader also pages through history; the CLI
@@ -939,7 +982,8 @@ uncertainty. These decision guidelines introduce no adoption/writeback gate,
 automatic successor or spawn permission. A context read does not prove that the
 model adopted the evidence or improved its result.
 
-`spawn_allowed=false` retains analysis-only planning.
+Mode selection does not grant spawn, claim, lease, execution, quota or external
+publication authority. `spawn_allowed=false` retains analysis-only planning.
 Feature-off adds no Explore hook or evidence reads. Turning off preserves all
 recorded evidence and existing display state.
 
@@ -1527,10 +1571,11 @@ Editing a profile or composition setting in the form or JSON preserves mode
 inheritance; only an explicit mode choice creates a mode override.
 
 Turn context, planning, quota/history, Todo settlement, native completion and
-material-refresh readers use the same mode owner. machine
+material-refresh readers use the same mode owner. Evidence does not grant external publication authority; machine
 activation retains local projection without enabling a sink. Profile, research
 scope, spawn permission, leases, quota and host continuation remain separately
-owned.
+owned. Enabled configuration alone does not prove evidence adoption or better
+outcomes.
 
 Native research completion retains the graph lock and, when inheriting, the
 device-configuration lock until its transaction finishes. Inherited planning

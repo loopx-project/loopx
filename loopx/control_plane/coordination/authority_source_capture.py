@@ -20,10 +20,15 @@ from .local_authority_shadow_projection import source_effect_runtime_result as e
 
 
 @contextmanager
-def authority_registry_source(registry_path: Path) -> Iterator[dict[str, str]]:
+def authority_registry_source(
+    registry_path: Path, *, routing_registry_witness: dict[str, str] | None = None,
+) -> Iterator[dict[str, object]]:
     path = registry_path.resolve()
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    yield {"path": str(path), "sha256": digest}
+    yield {
+        "path": str(path), "sha256": digest,
+        **({"routing_registry": routing_registry_witness} if routing_registry_witness is not None else {}),
+    }
     if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
         raise ValueError("Todo authority registration changed while reading; retry")
 

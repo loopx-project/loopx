@@ -53,14 +53,18 @@ Pass `--registry` (when running outside the primary repo root, such as a
 worktree) and `--goal-id GOAL` for managed merges and follow resolved
 `wait_for_ci`. Omitting `--registry` or `--goal-id` silently falls back to the
 unconfigured default (`wait_for_ci=true`) and reports false CI waits. When
-`wait_for_ci=false` (`ci_policy=not_consulted`), never query, poll, or wait for
-CI; complete required local validation (`canary premerge`, targeted tests,
-`check_rfc_bilingual.py` when RFCs change) and exact-head review/thread checks,
-and run eligible self-merges or maintainer-authorized merges immediately with
-`--match-head-commit HEAD_OID --admin` when branch protection holds only on
-author-owned `COMMENTED` approvals or unconsulted status checks. GitHub
-`BLOCKED` alone never grants merge authority; it only documents why admin bypass
-applies once readiness and authorization both hold.
+`wait_for_ci=false` (`ci_policy=not_consulted`), do not query, poll, or wait on
+remote CI during review/readiness or when an eligible or explicitly authorized
+merge/self-merge is executed: complete required local validation (`canary
+premerge`, targeted tests, `check_rfc_bilingual.py` when RFCs change) and
+exact-head review/thread checks, then leave the PR open for maintainer handoff
+by default, or run `--match-head-commit HEAD_OID --admin` only when owner or
+maintainer merge/self-merge authorization is separately held and branch
+protection blocks solely on author-owned `COMMENTED` approvals or unconsulted
+status checks. `wait_for_ci=false`, `ready=true`, and GitHub `BLOCKED` never
+grant merge authority or turn ordinary/low-risk PRs into automatic self-merges
+without owner/maintainer authorization; `BLOCKED` only documents why admin
+bypass applies once readiness and authorization both hold.
 
 ## Decision Workflow
 
@@ -100,8 +104,9 @@ authorization rule; without it, leave the merge to the maintainer. Bypass never
 replaces exact-head review, validation, thread/finding resolution or merge
 authority.
 
-Maintainers may self-merge single-purpose, low-risk public-doc, contributor
-metadata, test, example or narrow-cleanup PRs when all these conditions hold:
+With owner/maintainer authorization, maintainers may self-merge single-purpose,
+low-risk public-doc, contributor metadata, test, example or narrow-cleanup PRs
+when all these conditions hold:
 
 - none of the protected behavior surfaces above is changed;
 - the diff is easy to review and required checks/focused smokes passed;
@@ -109,7 +114,9 @@ metadata, test, example or narrow-cleanup PRs when all these conditions hold:
   `uv run --extra test loopx pr-review --check-merge-readiness NUMBER@HEAD_OID`
   returned `ready=true` for that unchanged head (always pass `--registry` and
   `--goal-id GOAL` for already Goal-managed work so `wait_for_ci=false` is
-  honored without waiting on remote CI; standalone delivery requires no Goal);
+  honored without waiting on remote CI; `ready=true` clears CI waiting only and
+  never turns ordinary/low-risk PRs into automatic self-merges without
+  owner/maintainer authorization; standalone delivery requires no Goal);
 - no private state, raw benchmark evidence, credentials, local paths or
   generated logs are included;
 - no runtime behavior, benchmark adapter, permission, destructive Git or public

@@ -442,7 +442,7 @@ class ChatConversationBindings:
 
         This read-only snapshot does not wait for a mutation fence. Core checks
         the observed grant, and a final canonical read rejects concurrent grant
-        changes. actual
+        changes. Discovery neither restores a thread nor creates work; actual
         submissions retain their fresh identity and effect-time grant fences.
         """
         if self.controller is None:

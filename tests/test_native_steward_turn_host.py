@@ -501,6 +501,36 @@ def test_local_managed_session_reuses_native_turn_and_declared_validation(
         service.submit(sid, agent_id=actor["agent_id"], operation_id="local-native-1", todo_id="todo_other")
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_preparer_declining_a_claim_keeps_the_native_refusal(steward, tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+
+    service, session, actor, _, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    store, runtime, *_ = steward
+    original_calls = capture.read_bytes()
+    preparation_states = []
+    monkeypatch.setattr(
+        codex_execution_preparation,
+        "compact_execution_preparation_request",
+        lambda decision: preparation_states.append(decision["execution_preparation"]["state"]),
+    )
+    sid = session["session_id"]
+    accepted, _ = service.submit(sid, agent_id=actor["agent_id"], operation_id="native-declines-claim")
+    finish(runtime, accepted)
+    assert preparation_states == ["claim_required"]
+    results = [
+        event["payload"] for event in store.events_after(sid, accepted["turn_id"], None)
+        if event["kind"] == "native_loopx.result"
+    ]
+    result, = results
+    assert result["ok"] is False
+    assert result["error"] == "LoopX Turn route is not host executable"
+    assert "claim_command" not in result
+    assert not any(result["effects"].values())
+    calls = [json.loads(row) for row in capture.read_bytes()[len(original_calls):].splitlines()]
+    assert not any(call["method"] == "turn/start" for call in calls)
+
+
 @pytest.mark.parametrize("fault", ["busy", "queued", "attached", "foreign_goal", "stopped_goal", "private", "native_goal", "unregistered", "host_closed"])
 def test_local_managed_session_denials_never_launch_or_accept(steward, tmp_path, monkeypatch, fault):
     service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch)
@@ -542,16 +572,16 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
         observation.write_text("not ready")
     if fault == "stopped_after_model":
         from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
-        original_start = CodexAppServerAdapter.start_turn
+        original_start = CodexAppServerAdapter.start_native_task_turn
 
-        def stopped(adapter, message, sink):
-            response = original_start(adapter, message, sink)
+        def stopped(adapter, message, sink, policy):
+            response = original_start(adapter, message, sink, policy)
             registry = json.loads(runtime.registry_path.read_text())
             registry["goals"][0]["activation"] = dict(STOPPED_ACTIVATION)
             runtime.registry_path.write_text(json.dumps(registry))
             return response
 
-        monkeypatch.setattr(CodexAppServerAdapter, "start_turn", stopped)
+        monkeypatch.setattr(CodexAppServerAdapter, "start_native_task_turn", stopped)
     calls = capture.read_bytes()
     accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"], operation_id="unqualified", todo_id=todo_id)
     completed = finish(runtime, accepted)
@@ -832,8 +862,8 @@ def test_native_submission_history_read_allows_input_and_rejects_changed_binding
         store.update_session(sid, status="ready", active_turn_id=None)
         observe_quota = host.report_quota_request
 
-        def checked_quota(turn):
-            result = observe_quota(turn)
+        def checked_quota(turn, *, report_window=None):
+            result = observe_quota(turn, report_window=report_window)
             quota_checked.set()
             return result
 
@@ -1120,3 +1150,330 @@ def test_managed_host_does_not_borrow_another_execution_lease(steward, tmp_path,
     retained = cli(runtime, "task-lease", "inspect", "--goal-id", actor["goal_id"], "--todo-id", todo_id)
     assert retained["active"] is True and retained["lease"] == original
     assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]
+
+
+def test_native_steward_advancement_and_report_run_on_qualified_antigravity_fallback(steward, tmp_path, monkeypatch):
+    import re
+    from test_chat_manager_model_adoption import configure
+    from test_native_steward_reports import configured, fake_report_model
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.capabilities.native_chat.steward_monitor import pump_steward_monitors
+    from loopx.chat_manager import steward_machine_defaults
+
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    store, runtime, _, transport, binding, capture, workspace = steward
+    configure(runtime.coordination_runtime_root, model="gpt-6.2-sol", effort="xhigh", endpoint="codex", policy="flexible")
+    defaults = steward_machine_defaults(runtime)
+    added = cli(
+        runtime,
+        "todo",
+        "add",
+        "--goal-id",
+        actor["goal_id"],
+        "--role",
+        "agent",
+        "--text",
+        "Advance native steward triage on Carbon fallback.",
+        "--claimed-by",
+        "steward",
+        "--action-kind",
+        "inspect",
+        "--continuation-policy",
+        "same_agent_non_delivery",
+        "--execute",
+    )
+    session = store.load_session(sid)
+    orig_thread = session["upstream_thread_id"]
+    turn_switch, _ = store.create_turn(sid, client_turn_id="fallback-switch", message="Failover to Antigravity")
+    store.update_turn(sid, turn_switch["turn_id"], status="queued")
+    store.update_session(sid, status="ready", active_turn_id=turn_switch["turn_id"], agent_model_id="gpt-6.2-sol")
+    session = store.load_session(sid)
+    allocation = {
+        "schema_version": "manager_executor_allocation_v0",
+        "selection_policy": "flexible",
+        "allocation_reason": "flexible_availability_fallback",
+        "executor_endpoint": "antigravity",
+        "executor_endpoint_source": "flexible_pool",
+        "executor_endpoint_default_reason": "",
+        "configured_endpoint": "codex",
+        "eligible_endpoints": ["codex", "antigravity"],
+        "configuration_revision": defaults["configuration_revision"],
+        "available": True,
+        "model": "gemini-4-carbon-high",
+        "model_source": "vendor_default",
+        "reasoning_effort": "high",
+        "configured_model": "gpt-6.2-sol",
+        "configured_reasoning_effort": "xhigh",
+    }
+    store.update_session(
+        sid,
+        status="ready",
+        active_turn_id=turn_switch["turn_id"],
+        expected_upstream_thread_id=orig_thread,
+        agent_id="antigravity",
+        executor_endpoint_id="antigravity",
+        adapter_kind="antigravity_ls",
+        upstream_mode="default",
+        upstream_thread_id="ag-cascade-1",
+        agent_model_id="gemini-4-carbon-high",
+        agent_reasoning_effort="high",
+        manager_executor_allocation=allocation,
+        upstream_context_history=[
+            *(session.get("upstream_context_history") or []),
+            {
+                "thread_id": orig_thread,
+                "manager_context_version": session.get("manager_context_version"),
+                "agent_id": "codex",
+                "agent_model_id": "gpt-6.2-sol",
+            },
+        ],
+    )
+    store.update_turn(sid, turn_switch["turn_id"], status="completed")
+    store.update_session(sid, active_turn_id=None)
+    if sid in runtime.adapters:
+        runtime.adapters.pop(sid).close_session()
+
+    guards = []
+
+    def fake_start(cls, *, work_dir, objective, resume_thread_id=None, history=None,
+                   runtime_profile="restricted", team_plan_context=None, executor_model=None,
+                   env=None, hard_timeout_sec=None):
+        return cls(
+            work_dir=work_dir,
+            objective=objective,
+            cascade_id=resume_thread_id or "ag-cascade-1",
+            ls_url="http://127.0.0.1:1",
+            csrf_token="tok",
+            model_id=(executor_model or {}).get("model") or "gemini-4-carbon-high",
+            model_placeholder="MODEL_PLACEHOLDER_M427",
+            reasoning_effort="high",
+            runtime_profile=runtime_profile,
+        )
+
+    def fake_turn(self, message, event_sink=None, **_kwargs):
+        with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
+            guards.append((type(self).__name__, self._steward_report_reader is not None))
+            match = re.search(r'"editorial_request_path":\s*"([^"\n]+)"', message)
+            if match:
+                body = fake_report_model({"input": [{"text": message}]})
+            else:
+                body = json.dumps({
+                    "result_kind": "validated_completion",
+                    "classification": "steward_triage",
+                    "summary": "Steward triage completed on Antigravity Carbon.",
+                    "next_action": "Continue monitoring.",
+                    "delivery_batch_scale": "single_surface",
+                    "delivery_outcome": "outcome_progress",
+                    "vision_unchanged_reason": "Current steward route holds.",
+                    "work_evidence": ["Observed Goal state on Antigravity fallback"],
+                    "validation_evidence": ["Scoped readback verified"],
+                    "steward_user_actions": [{
+                        "dedupe_key": "ag-fallback-digest",
+                        "priority": "P1",
+                        "text": "Review batched Carbon digest.",
+                    }],
+                }, ensure_ascii=False)
+            return {"message": body}
+
+    monkeypatch.setattr(AntigravityAdapter, "start", classmethod(fake_start))
+    monkeypatch.setattr(AntigravityAdapter, "start_turn", fake_turn)
+
+    before_codex = capture.read_bytes()
+    assert transport.managed_steward.health(binding["binding_id"])["execution_available"] is True
+
+    # 1. Native report window runs and publishes via AntigravityAdapter + _steward_report_reader.
+    report_turn = pump_steward_monitors(runtime)[0]
+    report_done = finish(runtime, report_turn)
+    assert report_done["status"] == "completed", report_done
+    assert report_done["response"]["native_loopx"].get("status") == "committed", report_done
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"] is True
+
+    # 2. Native steward advancement runs via AntigravityAdapter without CodexAppServerAdapter error.
+    adv_turn, _ = StewardTurnHost(runtime).submit(
+        binding["binding_id"],
+        turn_instance_id="advancement-on-carbon",
+        todo_id=added["todo_id"],
+    )
+    adv_done = finish(runtime, adv_turn)
+    assert adv_done["status"] == "completed", adv_done
+    assert adv_done["response"]["native_loopx"].get("status") == "committed", adv_done
+    assert adv_done["response"].get("steward_user_action_receipts")
+    assert guards == [("AntigravityAdapter", True), ("AntigravityAdapter", False)]
+    assert capture.read_bytes() == before_codex
+
+
+def test_report_failure_proof_lock_and_contradiction_lifecycle(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    import loopx.capabilities.native_chat.report_failure_proof as proof_module
+    from pathlib import Path
+    from loopx.capabilities.native_chat.report_failure_proof import (
+        CONTRADICTED_REPORT_FAILURES,
+        REPORT_FAILURE_PROOF,
+        contradict_report_failure,
+        handle_contradicted_report_observation,
+        is_report_failure_contradicted,
+        read_retained_report_failure,
+        retain_report_failure,
+    )
+    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, cadence_journal_path
+    from loopx.capabilities.periodic_report.private_generation import attempt_directory
+    from loopx.file_lock import exclusive_file_lock
+
+    subscription = {
+        "enabled": True,
+        "profile_preset": "portfolio-progress",
+        "effective_revision": "sha256:" + "1" * 64,
+        "schedule": {
+            "schema_version": "periodic_report_schedule_v0",
+            "schedule_id": "daily-report",
+            "timezone": "UTC",
+            "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+            "start_date": "2026-01-01",
+        },
+    }
+    window = admit_cadence_window(
+        runtime_root=tmp_path,
+        goal_id="goal-1",
+        agent_id="agent-1",
+        subscription=subscription,
+        now=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+    )["window"]
+    original = {
+        "origin": "native_loopx",
+        "loopx_execution": True,
+        "status": "completed",
+        "session_id": "sess-1",
+        "turn_id": "chat-turn-1",
+        "upstream_turn_id": "codex-turn-1",
+        "loopx_request": {
+            "actor": {"session_id": "sess-1", "goal_id": "goal-1", "agent_id": "agent-1"},
+            "work_kind": "report",
+            "report_window_id": window["window_id"],
+            "report_subscription_revision": window["subscription_revision"],
+            "turn_instance_id": "report." + window["window_id"],
+        },
+        "response": {
+            "native_loopx": {
+                "status": "failed",
+                "result_kind": "host_failure",
+                "host_failure": {"retryable": False, "kind": "unknown"},
+            }
+        },
+    }
+    store = SimpleNamespace(load_turn=lambda sid, tid: original if (sid, tid) == ("sess-1", "chat-turn-1") else None)
+    folder = attempt_directory(tmp_path, window)
+    folder.mkdir(parents=True)
+    proof_path = folder / REPORT_FAILURE_PROOF
+    valid_proof = {"thread_id": "thread-1", "turn_id": "codex-turn-1", "only_original_user_item": True}
+
+    # Held generation.lock blocks un-locked writes; generation_locked=True writes under caller's held lock.
+    with exclusive_file_lock(folder / "generation.lock", operation="busy"):
+        retain_report_failure(tmp_path, store, original, window, valid_proof)
+        assert not proof_path.exists()
+        retain_report_failure(tmp_path, store, original, window, valid_proof, generation_locked=True)
+        assert read_retained_report_failure(tmp_path, original, window) is True
+        assert is_report_failure_contradicted(tmp_path, original, window) is False
+
+    # Contradiction write failure neutralizes any prior retained positive proof before raising OSError.
+    with monkeypatch.context() as broken:
+        def fail_write(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        broken.setattr(proof_module, "atomic_write_json", fail_write)
+        with pytest.raises(OSError, match="disk full"):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert not proof_path.exists()
+        assert read_retained_report_failure(tmp_path, original, window) is False
+        assert is_report_failure_contradicted(tmp_path, original, window) is False
+
+    # Re-retain positive proof, verify missing readback raises OSError, then succeed cleanly.
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+    assert read_retained_report_failure(tmp_path, original, window) is True
+    with monkeypatch.context() as noop_write:
+        noop_write.setattr(proof_module, "atomic_write_json", lambda *_a, **_kw: None)
+        with pytest.raises(OSError, match="readback"):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert not proof_path.exists()
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+
+    # Non-explicit contradiction observations never persist contradiction.
+    handle_contradicted_report_observation(
+        tmp_path, store, original, window, ["thread-1"],
+        {"contradicted": True, "thread_id": "thread-1", "turn_id": "codex-turn-1"},
+    )
+    assert read_retained_report_failure(tmp_path, original, window) is True
+    assert is_report_failure_contradicted(tmp_path, original, window) is False
+
+    # Contradiction fails loudly on parent ledger lock contention, invalid inputs, or changed original Turn.
+    ledger_path = cadence_journal_path(tmp_path, "goal-1").parent / CONTRADICTED_REPORT_FAILURES
+    with pytest.raises(ValueError):
+        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "other-turn"})
+    with pytest.raises(RuntimeError):
+        contradict_report_failure(
+            tmp_path, SimpleNamespace(load_turn=lambda _s, _t: None), original, window,
+            {"contradicted": True, "turn_id": "codex-turn-1"},
+        )
+    with exclusive_file_lock(ledger_path, operation="busy-ledger"):
+        with pytest.raises(OSError):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert not proof_path.exists()
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+    assert read_retained_report_failure(tmp_path, original, window) is True
+
+    # If attempt-level unlink raises PermissionError or generation.lock is busy, durable parent
+    # contradiction still holds and blocks reading the stale user-only file.
+    real_unlink = Path.unlink
+    with monkeypatch.context() as deny_unlink:
+        def fail_proof_unlink(self, missing_ok=False):
+            if self == proof_path:
+                raise PermissionError("operation not permitted")
+            return real_unlink(self, missing_ok=missing_ok)
+
+        deny_unlink.setattr(Path, "unlink", fail_proof_unlink)
+        with exclusive_file_lock(folder / "generation.lock", operation="busy"):
+            contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+            assert json.loads(proof_path.read_text(encoding="utf-8"))["only_original_user_item"] is True
+            assert read_retained_report_failure(tmp_path, original, window) is False
+            assert is_report_failure_contradicted(tmp_path, original, window) is True
+        contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+        assert json.loads(proof_path.read_text(encoding="utf-8"))["only_original_user_item"] is True
+        assert read_retained_report_failure(tmp_path, original, window) is False
+        assert is_report_failure_contradicted(tmp_path, original, window) is True
+
+    # Once attempt permissions recover, syncing replaces the attempt file too.
+    contradict_report_failure(tmp_path, store, original, window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    assert read_retained_report_failure(tmp_path, original, window) is False
+    assert is_report_failure_contradicted(tmp_path, original, window) is True
+    assert json.loads(proof_path.read_text(encoding="utf-8"))["provider_thread_id"] == "thread-1"
+    retain_report_failure(tmp_path, store, original, window, valid_proof)
+    assert read_retained_report_failure(tmp_path, original, window) is False
+    assert is_report_failure_contradicted(tmp_path, original, window) is True
+
+    # Symlink proof and ledger paths are never read, unlinked, or overwritten.
+    fresh_root = tmp_path / "symlink-check"
+    fresh_window = admit_cadence_window(
+        runtime_root=fresh_root,
+        goal_id="goal-1",
+        agent_id="agent-1",
+        subscription=subscription,
+        now=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+    )["window"]
+    fresh_folder = attempt_directory(fresh_root, fresh_window)
+    fresh_folder.mkdir(parents=True)
+    fresh_proof_path = fresh_folder / REPORT_FAILURE_PROOF
+    fresh_proof_path.symlink_to("foreign-target")
+    contradict_report_failure(fresh_root, store, original, fresh_window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    assert fresh_proof_path.is_symlink()
+    assert read_retained_report_failure(fresh_root, original, fresh_window) is False
+    assert is_report_failure_contradicted(fresh_root, original, fresh_window) is True
+
+    symlink_ledger = cadence_journal_path(fresh_root, "goal-1").parent / CONTRADICTED_REPORT_FAILURES
+    symlink_ledger.unlink()
+    symlink_ledger.symlink_to("foreign-ledger")
+    with pytest.raises(OSError):
+        contradict_report_failure(fresh_root, store, original, fresh_window, {"contradicted": True, "turn_id": "codex-turn-1"})
+    assert symlink_ledger.is_symlink()
+    assert read_retained_report_failure(fresh_root, original, fresh_window) is False
+    assert is_report_failure_contradicted(fresh_root, original, fresh_window) is True

@@ -40,7 +40,10 @@ def arguments(project, cli, entrypoint, document, operation):
 
 @pytest.mark.parametrize("entrypoint", ["refine", "refresh"])
 @pytest.mark.parametrize(("source_ref", "detail"), [
-    ("synthetic/private-ref", "source ref must be an opaque identifier"),
+    (
+        "synthetic/private-ref",
+        "source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)",
+    ),
     ("synthetic-private-ref ", "source ref must be bounded nonempty text"),
 ])
 def test_native_rejection_then_corrected_same_operation(acceptance_goal, entrypoint, source_ref, detail):
@@ -134,7 +137,8 @@ def test_review_capacity_diagnosis_and_lossless_review_recovery(acceptance_goal,
     assert "outcome review capacity exceeded" in detail
     assert "declaration and review budgets are independent" in detail
     assert "all outcomes in the Goal, not the source count" in detail
-    assert "report the capacity blocker" in detail
+    assert "storage_format: records" in detail
+    assert "recover ambiguous operations unchanged" in detail
     assert declaration["source"]["summary"] not in json.dumps(rejected)
     assert "保留证据" not in json.dumps(rejected, ensure_ascii=False)
     assert cli("inspect")[1] == before

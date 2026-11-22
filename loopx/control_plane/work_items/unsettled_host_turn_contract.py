@@ -13,6 +13,7 @@ def recovery_cli_actions(
     lifecycle_actor_args: str,
     typed_quota_guard: str,
     turn_instance_id: str | None,
+    lease_proof: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """Render the bounded typed closeout repair outside the main dispatcher."""
 
@@ -64,6 +65,30 @@ def recovery_cli_actions(
              " --progress-evidence-id '<verified-evidence-ref>'"),
             "Read back the settled blocked closeout. Do not spend a slot or rebind this Turn; the next real host Turn selects independent work.",
         ]
+    if recovery.get("repair") == "execution_loss_closeout":
+        prior_turn = shlex.quote(str(recovery["prior_turn_instance_id"]))
+        scope = f"--goal-id {shlex.quote(goal_id)} --todo-id {shlex.quote(prior_todo_id)}"
+        goal_ref = payload.get("goal_ref")
+        instance = goal_ref.get("goal_instance_id") if isinstance(goal_ref, Mapping) else None
+        instance_arg = f" --goal-instance-id {shlex.quote(instance)}" if isinstance(instance, str) else ""
+        proof = recovery.get("execution_loss")
+        if not isinstance(proof, Mapping):
+            raise RuntimeError("execution-loss recovery is missing its fenced generation observation")
+        evidence = shlex.quote(f"lease-generation:{proof['original_prepared_epoch']}:{proof['current_lease_epoch']}")
+        closeout = (
+            f"{command_prefix} refresh-state --execution-loss-closeout {scope}{instance_arg}{lifecycle_actor_args}"
+            f" --turn-instance-id {prior_turn} --classification execution_loss_closeout"
+            " --delivery-batch-scale single_surface --delivery-outcome outcome_gap --delivery-boundary semantic_closeout"
+            " --progress-result-class blocked --progress-blocker-id original-execution-fenced"
+            f" --progress-evidence-id {evidence} --task-lease-idempotency-key '<current-key>'"
+            " --task-lease-expected-version '<current-version>' --no-global-sync --suppress-external-sinks"
+        )
+        return [
+            f"{command_prefix} task-lease inspect {scope}",
+            "Use the current control-writer proof for the original Agent. When unavailable, recover ownership through the authorized Todo lifecycle before closing.",
+            f"{closeout} --dry-run",
+            "After the preview establishes a no-spend closeout, execute the same command without --dry-run and verify the original settlement. Resume fresh work only through its own guard.",
+        ]
     if recovery.get("repair") == "resume_prior_turn":
         prior_turn_id = str(recovery["prior_turn_instance_id"])
         return [
@@ -95,6 +120,17 @@ def recovery_cli_actions(
         )
         cadence = str(recovery.get("binding_cadence") or "").strip()
         cadence_arg = f" --cadence {shlex.quote(cadence)}" if cadence else ""
+        lease_args = ""
+        if (
+            isinstance(lease_proof, Mapping)
+            and isinstance(lease_proof.get("idempotency_key"), str)
+            and lease_proof["idempotency_key"].strip()
+            and isinstance(lease_proof.get("expected_version"), int)
+        ):
+            lease_args = (
+                f" --task-lease-idempotency-key {shlex.quote(lease_proof['idempotency_key'].strip())}"
+                f" --task-lease-expected-version {lease_proof['expected_version']}"
+            )
         return [
             (
                 "If a verified observation was obtained under the original Turn, "
@@ -106,8 +142,8 @@ def recovery_cli_actions(
                 f"{command_prefix} quota monitor-poll --goal-id {goal_id}"
                 f"{lifecycle_actor_args} --todo-id {shlex.quote(prior_todo_id)}"
                 f"{target_arg} --result-hash '<public-safe-result-hash>'"
-                f"{cadence_arg} --turn-instance-id {shlex.quote(prior_turn_id)} "
-                "--execute"
+                f"{cadence_arg} --turn-instance-id {shlex.quote(prior_turn_id)}"
+                f"{lease_args} --execute"
             ),
             (
                 "If observation is unavailable, instead close only the original "
@@ -120,6 +156,7 @@ def recovery_cli_actions(
                 f"{command_prefix} refresh-state --goal-id {goal_id}{lifecycle_actor_args}"
                 f" --todo-id {shlex.quote(prior_todo_id)}"
                 f" --turn-instance-id {shlex.quote(prior_turn_id)}"
+                f"{lease_args}"
                 " --classification monitor_observation_unavailable"
                 " --delivery-batch-scale single_surface --delivery-outcome outcome_gap"
                 " --progress-result-class blocked --progress-blocker-id '<verified-blocker-id>'"

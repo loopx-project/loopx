@@ -696,3 +696,415 @@ def test_projection_ack_must_match_prior_candidate() -> None:
         assert "prior candidate" in str(exc)
     else:
         raise AssertionError("an unselected exact head was acknowledged as projected")
+
+
+def _github_model_review(
+    number: int, *, login: str, family: str, state: str = "COMMENTED",
+    sha: str = "1" * 40, source: str = "self_reported",
+) -> dict[str, object]:
+    providers = {"Gemini": "Google DeepMind", "gpt-6.2-sol": "OpenAI", "unknown": "unknown"}
+    model = f"Reviewer: {family} | {providers[family]} ({source})"
+    verdict = "REQUEST_CHANGES" if state == "CHANGES_REQUESTED" else "APPROVE"
+    explanation = (
+        "The reviewed change preserves its existing boundaries under the tested caller. "
+        "The attached observations map the expected behavior and remaining risk. "
+    ) * 3
+    body = (
+        f"{model}\n\n"
+        "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)\n\n"
+        f"Current reviewed head is {sha}.\n\n"
+        + "\n\n".join(f"## {section}\n{explanation}" for section in (
+            "动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价",
+        ))
+        + f"\n\nEnglish verdict: {verdict}"
+    )
+    return {
+        "id": number, "body": body, "state": state,
+        "author": {"login": login, "is_bot": False}, "authorAssociation": "MEMBER",
+        "commit": {"oid": sha}, "submittedAt": f"2026-10-01T00:00:{number:02}Z",
+        "url": f"https://github.com/example/project/pull/1#pullrequestreview-{number}",
+    }
+
+
+def _github_model_pr(reviews: list[dict[str, object]], **metadata: object) -> dict[str, object]:
+    return {
+        "number": 1, "title": "Keep a verified caller working",
+        "headRefOid": "1" * 40, "baseRefOid": "a" * 40,
+        "state": "OPEN", "author": {"login": "shared-review-account"},
+        "reviews_complete": True, "reviews": reviews, **metadata,
+    }
+
+
+def _model_queue_row(
+    pr: dict[str, object], *, family: str | None = "gpt",
+    readiness_observations: dict[str, dict] | None = None,
+) -> dict[str, object]:
+    from loopx.pr_review import build_pr_review_packet
+
+    packet = build_pr_review_packet(
+        pull_requests=[pr], repository="example/project", limit=10, source="fixture",
+        state_filter="all", reviewer_login="shared-review-account", wait_for_ci=False,
+        reviewer_model_family=family,
+        readiness_observations=readiness_observations,
+    )
+    return packet["pull_requests"][0]
+
+
+@pytest.mark.parametrize("author_only", [True, False])
+def test_model_queue_reviews_another_familys_current_head(author_only):
+    login = "shared-review-account" if author_only else "independent"
+    pr = _github_model_pr([_github_model_review(10, login=login, family="Gemini")])
+    before = _model_queue_row(pr, family=None)
+    after = _model_queue_row(pr)
+    assert before["review_action_kind"] == (
+        "qualify_pull_request_merge_readiness" if author_only else None
+    )
+    assert after["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert after["review_plan"] and after["evidence_commands"]
+    assert after["review_conclusion"] == before["review_conclusion"]
+    assert after.get("independent_review") == before.get("independent_review")
+    assert after["wait_for_ci"] is False
+    assert all("statusCheckRollup" not in command for command in after["evidence_commands"])
+
+
+@pytest.mark.parametrize("shared_login", [True, False])
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "Reviewer: model_agent | model=gpt-6.2-sol | provider=OpenAI "
+        "| reasoning_effort=max | source=runtime_reported",
+        "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · reasoning_effort=max",
+        "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · max",
+        "Reviewer: model_agent · gpt-6.2-sol · OpenAI · runtime_reported · xhigh",
+        "Reviewer: model_agent · `gpt-6.2-sol` · OpenAI · runtime_reported · max",
+        "Reviewer: model_agent | source=runtime_reported | provider=OpenAI "
+        "| model=gpt-6.2-sol | reasoning_effort=max",
+        "Reviewer: model_agent; reasoning_effort=max; provider=OpenAI; "
+        "model=`gpt-6.2-sol`; declaration_source=runtime_reported.",
+        "Reviewer: model_agent | gpt-6.2-sol | OpenAI | runtime_reported | max",
+    ],
+    ids=[
+        "keyed-pipe", "middle-dot", "bare-max", "bare-xhigh", "inline-code",
+        "reordered-pipe", "reordered-semicolon", "positional-pipe",
+    ],
+)
+def test_later_other_family_does_not_repeat_a_current_matching_review(shared_login, declaration):
+    from loopx.capabilities.pr_review_queue.result_check import _reviewer_errors
+
+    matching = "shared-review-account" if shared_login else "independent"
+    report = _github_model_review(10, login=matching, family="gpt-6.2-sol", source="runtime_reported")
+    _, separator, rest = report["body"].partition("\n")
+    report["body"] = f"{declaration}{separator}{rest}"
+    assert not _reviewer_errors({
+        "actor_kind": "model_agent",
+        "declaration_source": "runtime_reported",
+        "declared_model": "gpt-6.2-sol",
+        "declared_provider": "OpenAI",
+        "declared_reasoning_effort": "xhigh" if declaration.endswith("· xhigh") else "max",
+    }, report["body"], execution_present=True, runtime_reported=True)
+    pr = _github_model_pr([report, _github_model_review(11, login="second-peer", family="Gemini")])
+    before = _model_queue_row(pr, family=None)
+    after = _model_queue_row(pr)
+    assert before == after
+    if shared_login:
+        assert after["independent_review"]["reviewer"] == "second-peer"
+
+
+@pytest.mark.parametrize(
+    "first_family,second_family",
+    [("Gemini", "gpt-6.2-sol"), ("gpt-6.2-sol", "Gemini")],
+)
+@pytest.mark.parametrize("state", ["APPROVED", "COMMENTED"])
+def test_shared_independent_login_keeps_both_model_families(
+    first_family: str, second_family: str, state: str,
+) -> None:
+    login = "shared-peer"
+    prior_reviews = []
+    if state == "COMMENTED":
+        prior_reviews.append(
+            _github_model_review(9, login=login, family=first_family, state="APPROVED")
+        )
+    first = _github_model_review(10, login=login, family=first_family, state=state)
+    second = _github_model_review(11, login=login, family=second_family, state=state)
+    repeat = _github_model_review(12, login=login, family=first_family, state=state)
+    comment = _github_model_review(13, login=login, family=first_family)
+    comment["body"] = str(comment["body"]).splitlines()[0] + "\n\nOne follow-up question."
+    unattributed = _github_model_review(14, login=login, family="unknown")
+    unattributed["body"] = str(unattributed["body"]).split("\n\n", 1)[1]
+
+    missing = "gemini" if second_family == "Gemini" else "gpt"
+    one_family = _github_model_pr([*prior_reviews, first], reviewDecision="APPROVED")
+    assert _model_queue_row(one_family, family=missing)["review_action_kind"] == (
+        "rereview_pull_request_exact_head"
+    )
+    for later in ([], [repeat], [repeat, comment], [repeat, comment, unattributed]):
+        pr = _github_model_pr([*prior_reviews, first, second, *later], reviewDecision="APPROVED")
+        ordinary = _model_queue_row(pr, family=None)
+        assert ordinary["review_conclusion"]["state"] == "APPROVED"
+        for family in ("gpt", "gemini"):
+            assert _model_queue_row(pr, family=family) == ordinary
+
+
+@pytest.mark.parametrize("intervening", ["dismissal", "opposite_opinion", "different_head"])
+def test_shared_independent_login_retires_earlier_formal_evidence(intervening: str) -> None:
+    login = "shared-peer"
+    prior = _github_model_review(10, login=login, family="gpt-6.2-sol", state="APPROVED")
+    if intervening == "dismissal":
+        boundary = _github_model_review(11, login=login, family="Gemini", state="DISMISSED")
+    elif intervening == "opposite_opinion":
+        boundary = _github_model_review(11, login=login, family="Gemini", state="CHANGES_REQUESTED")
+    else:
+        boundary = _github_model_review(
+            11, login=login, family="Gemini", state="APPROVED", sha="2" * 40,
+        )
+    current = _github_model_review(12, login=login, family="Gemini", state="APPROVED")
+    pr = _github_model_pr([prior, boundary, current], reviewDecision="APPROVED")
+    row = _model_queue_row(pr)
+    ordinary = _model_queue_row(pr, family=None)
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert row["review_conclusion"] == ordinary["review_conclusion"]
+    assert row["independent_review"] == ordinary["independent_review"]
+
+
+@pytest.mark.parametrize(
+    "with_formal_opinion", [True, False],
+    ids=["keep-gpt-coverage", "keep-gemini-review-trigger"],
+)
+@pytest.mark.parametrize("complete_comment", [False, True], ids=["brief", "complete-unattributed"])
+def test_follow_up_preserves_qualified_commented_review(
+    with_formal_opinion: bool, complete_comment: bool,
+) -> None:
+    login = "shared-peer"
+    if with_formal_opinion:
+        reviews = [
+            _github_model_review(10, login=login, family="Gemini", state="APPROVED"),
+            _github_model_review(11, login=login, family="gpt-6.2-sol"),
+        ]
+        decision = "APPROVED"
+        action = "qualify_pull_request_merge_readiness"
+    else:
+        reviews = [_github_model_review(11, login=login, family="Gemini")]
+        decision = "REVIEW_REQUIRED"
+        action = "rereview_pull_request_exact_head"
+
+    before = _github_model_pr(reviews, reviewDecision=decision)
+    assert _model_queue_row(before)["review_action_kind"] == action
+    follow_up = _github_model_review(12, login=login, family="gpt-6.2-sol")
+    if complete_comment:
+        follow_up["body"] = str(follow_up["body"]).split("\n\n", 1)[1]
+    else:
+        follow_up["body"] = "Thanks for the update. I will check the next revision."
+    after = _github_model_pr([*reviews, follow_up], reviewDecision=decision)
+    row = _model_queue_row(after)
+    ordinary = _model_queue_row(after, family=None)
+    assert row["review_conclusion"] == ordinary["review_conclusion"]
+    assert row["independent_review"] == ordinary["independent_review"]
+    assert row["independent_review"]["review_id"] == 12
+    assert row["review_action_kind"] == action
+
+
+@pytest.mark.parametrize(
+    "intervening", ["dismissal", "changed-formal-opinion", "different-head"],
+)
+def test_commented_review_coverage_retires_at_account_boundary(intervening: str) -> None:
+    login = "shared-peer"
+    approval = _github_model_review(9, login=login, family="Gemini", state="APPROVED")
+    prior = _github_model_review(10, login=login, family="gpt-6.2-sol")
+    if intervening == "changed-formal-opinion":
+        replacement = _github_model_review(11, login=login, family="Gemini", state="CHANGES_REQUESTED")
+        reviews = [approval, prior, replacement]
+        decision = "CHANGES_REQUESTED"
+    else:
+        boundary = (
+            _github_model_review(11, login=login, family="Gemini", state="DISMISSED")
+            if intervening == "dismissal"
+            else _github_model_review(11, login=login, family="Gemini", sha="2" * 40)
+        )
+        replacement = _github_model_review(12, login=login, family="Gemini", state="APPROVED")
+        reviews = [approval, prior, boundary, replacement]
+        decision = "APPROVED"
+    follow_up = _github_model_review(13, login=login, family="Gemini")
+    follow_up["body"] = "I have added a reference to the discussion."
+    pr = _github_model_pr([*reviews, follow_up], reviewDecision=decision)
+    row = _model_queue_row(pr)
+    ordinary = _model_queue_row(pr, family=None)
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert row["review_conclusion"] == ordinary["review_conclusion"]
+    assert row["independent_review"] == ordinary["independent_review"]
+
+
+@pytest.mark.parametrize(
+    "invalid_evidence",
+    ["association", "bot", "body"],
+)
+def test_shared_login_history_needs_valid_evidence_for_each_formal_review(
+    invalid_evidence: str,
+) -> None:
+    login = "shared-peer"
+    prior = _github_model_review(10, login=login, family="gpt-6.2-sol", state="APPROVED")
+    if invalid_evidence == "association":
+        prior["authorAssociation"] = "NONE"
+    elif invalid_evidence == "bot":
+        prior["author"] = {"login": login, "is_bot": True}
+    else:
+        prior["body"] = str(prior["body"]).splitlines()[0] + "\n\nLooks good."
+    current = _github_model_review(11, login=login, family="Gemini", state="APPROVED")
+    pr = _github_model_pr([prior, current], reviewDecision="APPROVED")
+    assert _model_queue_row(pr)["review_action_kind"] == "rereview_pull_request_exact_head"
+
+
+@pytest.mark.parametrize("state", ["COMMENTED", "APPROVED"])
+def test_latest_review_with_unqualified_body_does_not_cover_its_model(state: str) -> None:
+    login = "shared-peer"
+    prior = _github_model_review(10, login=login, family="Gemini", state="APPROVED")
+    latest = _github_model_review(11, login=login, family="gpt-6.2-sol", state=state)
+    latest["body"] = str(latest["body"]).splitlines()[0] + "\n\nLooks good."
+    pr = _github_model_pr([prior, latest], reviewDecision="APPROVED")
+
+    ordinary = _model_queue_row(pr, family=None)
+    gpt = _model_queue_row(pr)
+    assert gpt["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert gpt["review_plan"] and gpt["evidence_commands"]
+    assert gpt["review_conclusion"] == ordinary["review_conclusion"]
+    assert gpt["independent_review"] == ordinary["independent_review"]
+    assert gpt["independent_review"]["review_id"] == 11
+    assert gpt["independent_review"]["state"] == state
+    assert _model_queue_row(pr, family="gemini") == ordinary
+
+
+@pytest.mark.parametrize("line,reason", [
+    (
+        "model_agent | model=gpt-6.2-sol | provider=OpenAI | source=runtime_reported "
+        "| declaration_source=self_reported | reasoning_effort=max",
+        "body_line_disagrees_with_declaration",
+    ),
+    ("model_agent · gpt-6.2-sol · OpenAI · self_reported · max", "runtime_basis_not_published"),
+    ("model_agent · gpt-6.2-sol · OpenAI · runtime_reported · xhigh", "runtime_basis_not_published"),
+    ("model_agent · gpt-6.2-sol · OpenAI (runtime_reported)", "runtime_basis_not_published"),
+])
+def test_runtime_publication_compares_provenance_and_effort_fields(line, reason):
+    from loopx.capabilities.pr_review_queue.result_check import _reviewer_errors
+
+    errors = _reviewer_errors({
+        "actor_kind": "model_agent",
+        "declaration_source": "runtime_reported",
+        "declared_model": "gpt-6.2-sol",
+        "declared_provider": "OpenAI",
+        "declared_reasoning_effort": "max",
+    }, f"Reviewer: {line}", execution_present=True, runtime_reported=True)
+    assert f"reviewer:{reason}" in errors
+
+
+@pytest.mark.parametrize("pretend_matching", ["old_head", "dismissed", "unknown", "retired", "authored"])
+def test_non_covering_review_leaves_full_cross_family_review_due(pretend_matching):
+    matching = _github_model_review(10, login="first-peer", family="gpt-6.2-sol")
+    if pretend_matching == "old_head":
+        matching["commit"] = {"oid": "2" * 40}
+    elif pretend_matching == "dismissed":
+        matching["state"] = "DISMISSED"
+    elif pretend_matching == "unknown":
+        matching = _github_model_review(10, login="first-peer", family="unknown")
+    elif pretend_matching == "authored":
+        matching["author"] = {"login": "shared-review-account", "is_bot": False}
+    reviews = [matching, _github_model_review(11, login="second-peer", family="Gemini")]
+    if pretend_matching == "retired":
+        reviews.append(_github_model_review(12, login="first-peer", family="gpt-6.2-sol", sha="2" * 40))
+    assert _model_queue_row(_github_model_pr(reviews))["review_action_kind"] == (
+        "rereview_pull_request_exact_head"
+    )
+
+
+def test_cross_family_coverage_preserves_dissent_and_lifecycle_boundaries():
+    prior = _github_model_review(10, login="peer", family="Gemini", state="CHANGES_REQUESTED")
+    pr = _github_model_pr([prior], reviewDecision="CHANGES_REQUESTED")
+    row = _model_queue_row(pr)
+    assert row["review_conclusion"] == _model_queue_row(pr, family=None)["review_conclusion"]
+    assert row["review_conclusion"]["verdict"] == "REQUEST_CHANGES"
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    for changes in ({"isDraft": True}, {"state": "MERGED"}, {"state": "CLOSED"}, {"reviews_complete": False}):
+        updated = pr | changes
+        assert _model_queue_row(updated) == _model_queue_row(updated, family=None)
+    unknown = _github_model_pr([_github_model_review(10, login="peer", family="unknown")])
+    assert _model_queue_row(unknown) == _model_queue_row(unknown, family=None)
+
+
+def test_model_queue_reads_complete_history_for_author_only_review_events():
+    from loopx.capabilities.pr_review_queue.github_source import _attach_review_provenance
+
+    review = _github_model_review(1, login="shared-review-account", family="Gemini")
+    pr = _github_model_pr([review])
+    pr.pop("reviews_complete")
+    details = {"reviews": [review]}
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        if arguments[0] == "api":
+            return [[{
+                "id": 1, "user": {"login": "shared-review-account", "type": "User"},
+                "author_association": "MEMBER", "state": "COMMENTED",
+                "commit_id": "1" * 40, "html_url": review["url"],
+                "submitted_at": review["submittedAt"], "body": review["body"],
+            }]]
+        return {"headRefOid": pr["headRefOid"], "baseRefOid": pr["baseRefOid"]}
+
+    options = {"repository": "example/project", "number": "1", "cwd": None, "run_gh_json": run}
+    assert _attach_review_provenance(pr, details, **options)
+    assert not calls and "reviews_complete" not in pr
+    assert _attach_review_provenance(pr, details, **options, model_review_coverage=True)
+    assert pr["reviews_complete"] is True
+    assert [arguments[0] for arguments in calls] == ["api", "pr"]
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ("Reviewer: Gemini | Google DeepMind (self_reported)", ("gemini", "self_reported")),
+        ("Reviewer: model_agent | self_reported | Gemini | Google DeepMind", ("gemini", "self_reported")),
+        ("Reviewer: model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)", ("gpt", "runtime_reported")),
+        (
+            "Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · effort_unavailable",
+            ("gpt", "runtime_reported"),
+        ),
+        ("Reviewer: model_agent · Gemini · Google · self_reported", ("gemini", "self_reported")),
+        ("Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · self_reported", None),
+        ("Reviewer: model_agent; model=GPT-5; provider=OpenAI; declaration_source=self_reported.", ("gpt", "self_reported")),
+        ("Reviewer: model_agent | model=Gemini | provider=Google DeepMind | source=self_reported", ("gemini", "self_reported")),
+        ("Reviewer: model_agent | Gemini | Google | self_reported", ("gemini", "self_reported")),
+        ("Reviewer: model_agent | model=Gemini | provider=Google | provider=OpenAI | source=self_reported", None),
+        ("Reviewer: model_agent | source=self_reported | model=Gemini | provider=Google | declaration_source=runtime_reported", None),
+        ("Reviewer: model_agent | Gemini | Google | self_reported | runtime_reported", None),
+        ("Reviewer: model_agent · Gemini · Google", None),
+        ("Reviewer: model_agent · Gemini · Google (self-reported family)", None),
+        ("Reviewer: Gemini | OpenAI (runtime_reported)", None),
+        ("Reviewer: not-gpt | OpenAI (runtime_reported)", None),
+        ("Reviewer: GPT-6 | OpenAI (unverified)", None),
+        ("<!-- Reviewer: GPT-6 | OpenAI (runtime_reported) -->", None),
+        ("Reviewer: GPT-5 | OpenAI (self_reported)\nReviewer: GPT-6 | OpenAI (runtime_reported)", None),
+    ],
+)
+def test_model_family_requires_an_unambiguous_published_provider_and_grade(body, expected):
+    from loopx.capabilities.pr_review_queue.model_coverage import published_review_model
+
+    assert published_review_model(body) == expected
+
+
+def test_model_review_is_due_even_when_approval_readiness_was_observed():
+    repository = "example/project"
+    threads = {"complete": True, "total_count": 0, "unresolved_count": 0}
+    review = _github_model_review(10, login="shared-review-account", family="Gemini")
+    _, separator, rest = review["body"].partition("\n")
+    review["body"] = f"Reviewer: model_agent | self_reported | Gemini | Google DeepMind{separator}{rest}"
+    pr = _github_model_pr([review], review_thread_summary=threads)
+    before = _model_queue_row(pr, family=None)
+    material = readiness_material_state(
+        repository=repository, item=before, review_threads=threads, wait_for_ci=False,
+    )
+    observations = {observation_key(repository, "1@" + "1" * 40): {
+        "schema_version": MERGE_READINESS_OBSERVATION_SCHEMA_VERSION,
+        "material_fingerprint": readiness_material_fingerprint(material),
+    }}
+    assert _model_queue_row(pr, family=None, readiness_observations=observations)["review_action_kind"] is None
+    item = _model_queue_row(pr, readiness_observations=observations)
+    assert item["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert item["review_conclusion"] == before["review_conclusion"]

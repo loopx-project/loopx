@@ -155,6 +155,17 @@ complete contract. They do **not** establish a current authority-loss bug: the
 recommendation is diagnostic, the unknown field is synthetic, and the complete
 source commitment still distinguishes both inputs. No model benefit is measured.
 
+The release-only host-prompt decision probe composes its realistic external-wait
+case through the existing complete-source TypeScript owner. Thin and brief modes
+receive one checked source instance per probe batch, including complete task and
+stop text; the scenario validator reads the source portfolio directly instead
+of constructing an old compact packet. The four small independent decision
+controls remain synthetic. The frozen raw/v0 model corpus and supported history
+readers are unchanged. This migrates qualification input, not the ordinary CLI
+writer or installed Host: provider execution remains explicitly release opt-in,
+and scripted probe passes do not qualify model behavior, settlement, accepted
+outcomes or complete cost.
+
 ### Differential context
 
 Reuse the existing context-delivery owner and immutable capture mechanism.

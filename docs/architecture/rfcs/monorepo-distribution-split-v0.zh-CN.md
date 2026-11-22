@@ -326,10 +326,18 @@ authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/
 再经所属 channel 交付/回读。各步骤使用既有合法迁移与重放规则；这段描述不新增竞争的 status enum
 或事务协调者。
 
+显式执行 `turn run-once --execute` 时，兼容的通用 CLI 宿主配合独立校验器，可为准入
+Todo 补齐缺失的租约。宿主复用普通领取操作，核对同一 Todo 已就绪后再派发。领取与
+派发共用同一 Turn 身份。恢复使用原尝试捕获的租约代次。
+
 Executor 崩溃、effect ACK 丢失、结果交付 ACK 丢失是不同恢复情形。
 Operation provider 必须说明某个 effect 能否核对、能否安全重试。
 外部状态未知时，后续依赖操作须等待回读或人工干预；“未观测到”不等于“未执行”。
 设备幂等、物理联锁与补偿归 provider 负责，不能虚构为内核保证。
+
+通用 CLI 的结果持久化后，原 Turn 可继续验收或结算，无需重新提供适配器命令及其请求版本。
+调用方仍使用已批准的工作区，验收未完成时提供独立检查命令。已结算的 Turn 回读已保存结果。
+恢复流程判定需要再次启动宿主时，调用方须提供适配器，准入才能继续。
 
 模型取消、进程终止、设备确认停止是不同事实。模型停止不能在缺少设备证据时生成
 “设备已停止”声明。需要持续监督的 provider，在 effect 尚未解决时不能卸载。
@@ -477,13 +485,7 @@ M0–M5 保留原发行里程碑；R0–R4 是同一计划中的运行时和旅�
 R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，不阻塞已合格的 CLI 或 managed 任务。
 真实调用者出现前不增加闲置 provider、字段或框架。每个 PR 记录应用/推迟的相邻重构。
 
-### Core 发现入口检查点 — 2026-11-19
-
-| 边界 | 交付增量／证据 | 仍未完成 |
-| --- | --- | --- |
-| V1/V3，能力发现 | Benchmark 包公开符号按需解析到所选既有 owner，保留全部 199 个符号及顺序；显式星号导入仍请求全部。执行实现不可用且无 Node 时，帮助／列表／详情仍可用，无进程启动、网络或状态写入。 | 未从 wheel 删除 benchmark 文件，也不验收 capability 分包缺席安装。 |
-| 元数据与活跃调用方 | 同冻结 `main@e235cde9c` workload 的目录和全部 25 项详情逐字节一致；53 项 CLI 帮助／列表／详情／未知 id 观察一致。发现入口的 benchmark 子模块从 28 降到 2，LoopX 模块从 326 降到 298。保留 benchmark 语义及公开符号的 canonical 对象身份。 | Import 数量不代表时延、完整成本、模型收益或完整 D2/D5 闭包。 |
-| 验收与继续方向 | 重建发行物通过 52 项安装 core 发现／执行／上下文／恢复用例；383 项所选消费方与 43 项架构／文档用例分别通过。没有新增状态 owner、provider id、启用开关或顶层模块。 | R1/M3 与 V1–V5/V10 继续开放；下一步仍是 capability 分包隔离与所选 Standard 交付。公开渠道 C1 资格仍归既有 release owner。 |
+- 检查点已移至执行台账：[Core 发现入口检查点（2026-11-19）](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.zh-CN.md)。
 
 <a id="subtraction-gate"></a>
 
@@ -530,17 +532,14 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
 
 #### 3. 具名退役清单与棘轮规则
 
-1. **退役 Turn 前置 pilot CLI 子命令与顶层模块。** 删除已被 `loopx turn`（`turn_driver/codex_cli.py`）、
-   `start-goal` 与 `codex_app` heartbeat 替代的 `15` 个 `codex-cli-*` pilot/证明子命令（其中
-   `14` 个在非 pilot 生产调用方中为零引用，另有 `codex-cli-session-probe` 仅作为提示出现在
-   `loopx/project_prompt.py`），以及 `4` 个顶层 `loopx/codex_cli_*.py`（`3,767` 行）和 `6` 个
-   `loopx/cli_commands/starter_*.py` 包装（`859` 行）；保留现役 `codex-cli-bootstrap-message` 与
-   `turn_driver/codex_cli.py`。
-2. **迁完剩余顶层 `chat_*` 与 `*_goal_mode` 并严格单向下调棘轮。** 完成 M1/M2：将剩余 `20` 个顶层
-   `loopx/chat_*.py`（`20,562` 行）迁入 `loopx/chat/`，将 `9` 个 `loopx/*_goal_mode/` 目录
-   （`59` 文件 / `17,655` 行；其中 `33` 个 `.py` / `7,062` 行）迁入 `loopx/hosts/`。任何删除或迁出
-   顶层模块的 PR 都必须在同一 PR 内同步调低 [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)
-   中的 `max_top_level_modules`（当前 `127`）；靠保留永久顶层 shim 维持计数不变不构成 M1/M2 完成。
+1. **退役 Turn 前置 pilot CLI。** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   已退役 15 个被替代的试验命令和四个顶层 `loopx/codex_cli_*.py` 模块，顶层预算从 127 降至 124。
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py` 仍有现役调用方。
+2. **迁移剩余顶层 `chat_*` 和 `*_goal_mode`。** M1 将动作规范化和 Goal 生命周期动作两个内部模块
+   放入 `loopx/chat/`，移除两个顶层名字，预算由 124 降至 122。M1 剩余 Chat 模块仍按 I3 迁移，
+   M2 继续把宿主模式包迁入 `loopx/hosts/`。每次净减少都在同一 PR 中等量调低
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)。
+   Core wheel 原已排除这两类 Chat 路径，这次减少的是源码顶层模块数量。
 3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
    实测 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
    并依 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
@@ -3704,3 +3703,17 @@ workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 
 - **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
   恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
   独立验收。
+
+### 2026-11-22 — Checkpoint 回放返回所选 runtime 的产物路径
+
+- **缺口：**从复制的 runtime 回放已提交 checkpoint 时，既有 typed owner
+  已验证迁移后的产物，但公开 `refresh-state` 响应仍返回原 runtime 的路径。
+- **改动：**Python 传输保留该已验证的回放结果，并在幂等响应中使用其 JSON
+  和 Markdown 路径。路径选择、产物验证和拒绝仍由既有 TypeScript checkpoint
+  owner 负责；不新增路径权限，不迁移历史记录。
+- **源码证据：**十项真实 CLI 用例覆盖 File、SQLite、dry-run、重复回放，
+  以及 JSON/Markdown 产物缺失或被符号链接替换。它们核对迁移后的字节、
+  原始与复制历史及 checkpoint 证明不变、结算 identity 保留、回放不追加记录
+  和零消费。修复前，固定 main 基线已复现公开响应路径陈旧。
+- **边界：**这是有界的 V2/V4/R1 恢复修复。原 Goal 完整回归、安装组合、
+  完整默认闭包与成本、真实模型采纳、R1/M3 验收和 C1 切换仍是独立门槛。

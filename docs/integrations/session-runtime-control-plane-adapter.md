@@ -122,7 +122,7 @@ launcher should separate ordinary open (read-only identity/configuration checks)
 from offline account switching, migration, or rollback (exclusive ownership).
 Do not make a normal open perform hidden migrations, kill managed workers, or
 move sessions into another home to pass an overly broad file-open check.
-Account changes still require quiescing all users of that home.
+Account changes still require quiescing all users of that home;
 this binding does not implement credential copying or account-refresh logic.
 
 Validation: `python -m pytest tests/test_chat_codex_home.py tests/test_chat_agent.py`
@@ -390,7 +390,8 @@ idle observation. If the Agent becomes busy before dispatch, the API returns
 `input_not_submitted: true` with the rejected operation id. The page retains the
 draft and restores the composer directly, including across reload, without an
 original-App check or automatic resend. This proof applies only before a receipt
-or native input exists; a generic conflict. After an interrupted response or reopening with a pending
+or native input exists; a generic conflict, missing receipt or transport failure
+does not establish it. After an interrupted response or reopening with a pending
 submission, the page automatically reads its existing receipt once. A recorded
 acknowledgement restores the composer without another user step; genuinely
 unconfirmed delivery remains pending and never silently retries a native effect.

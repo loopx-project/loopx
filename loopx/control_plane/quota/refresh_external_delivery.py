@@ -38,6 +38,18 @@ def finish_external_delivery_refresh(
     return payload
 
 
+def persist_external_delivery_pause(
+    readback: QuotaSettlementReadback,
+    runtime_root: Path, *,
+    goal_ref: Mapping[str, Any] | None = None,
+) -> None:
+    plan = readback.external_delivery
+    if isinstance(plan, dict) and (plan.get("transition") or {}).get("state") == "paused":
+        finish_external_delivery_refresh(
+            {"ok": True}, readback, runtime_root, dry_run=False, goal_ref=goal_ref,
+        )
+
+
 def refresh_recovery_payload(
     readback: QuotaSettlementReadback, *, registry_path: Path,
     runtime_root: Path, goal_id: str, dry_run: bool,
@@ -51,16 +63,10 @@ def refresh_recovery_payload(
     decision = recovery["decision"]
     delivery_error = plan.get("error_code") if decision != "reject" else None
     if decision not in {"replay", "repair_receipt", "reject"} and not delivery_error:
-        # Record a requested pause before a new writeback can commit. If later
-        # validation fails, retaining the pause is conservative and retryable.
-        if (plan.get("transition") or {}).get("state") == "paused":
-            finish_external_delivery_refresh(
-                {"ok": True},
-                readback,
-                runtime_root,
-                dry_run=dry_run,
-                goal_ref=goal_ref,
-            )
+        # First Todo writeback persists its pause under the same execution
+        # fence as the business effects. Other recovery retains its early pause.
+        if not dry_run and (decision != "append" or identity.todo_id is None):
+            persist_external_delivery_pause(readback, runtime_root, goal_ref=goal_ref)
         return None
     payload = {
         **(readback.writeback_run or {}), "ok": decision != "reject" and not delivery_error,

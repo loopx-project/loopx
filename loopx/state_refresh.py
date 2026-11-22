@@ -32,10 +32,13 @@ from .control_plane.agents.workspace_guard import (
 )
 from .control_plane.agents.delivery_workspace import qualify_delivery_workspace_isolation
 from .control_plane.quota.refresh_external_delivery import (
-    finish_external_delivery_refresh, refresh_recovery_payload,
+    finish_external_delivery_refresh,
+    persist_external_delivery_pause,
+    refresh_recovery_payload,
 )
 from .control_plane.quota.blocked_retry import require_blocked_retry_wait
 from .control_plane.quota.accounting_admission import quota_accounting_admission
+from .control_plane.quota.execution_preparation import guard_first_writeback_execution
 from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from .control_plane.quota.settlement import (
@@ -755,6 +758,9 @@ def refresh_state_run(
     external_delivery: dict[str, Any] | None = None,
     goal_ref: dict[str, str] | None = None,
     goal_acceptance_preview: dict[str, Any] | None = None,
+    task_lease_proof: dict[str, Any] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
@@ -935,13 +941,16 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
+            checkpoint_replay = None
             if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
-                inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
+                checkpoint_replay = inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
             )
             if recovery_payload is not None:
+                if checkpoint_replay is not None:
+                    recovery_payload.update({key: checkpoint_replay[key] for key in ("json_path", "markdown_path")})
                 return recover_refresh_todo_projection(
                     recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,
@@ -1593,6 +1602,30 @@ def refresh_state_run(
                     projection_status_surface=f"refresh-state dry-run: {classification}",
                 )
             if not dry_run:
+                if (
+                    settlement_identity is not None and settlement_identity.todo_id
+                    and not checkpoint_supplement
+                    # An administrative closeout can report inability to start.
+                    # A prepared Turn's blocker is still a first writeback.
+                    and (
+                        blocked_retry is None
+                        or task_lease_proof is not None
+                        or (settlement_readback is not None and settlement_readback.prepared_lease is not None)
+                    )
+                ):
+                    usage_booking_guard.enter_context(guard_first_writeback_execution(
+                        runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
+                        todo_id=settlement_identity.todo_id, agent_id=settlement_identity.agent_id,
+                        requested_proof=task_lease_proof,
+                        settlement=settlement_readback,
+                        locked_goal=current_goal if normalized_next_action else None,
+                        allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
+                    ))
+                if settlement_readback is not None:
+                    persist_external_delivery_pause(
+                        settlement_readback, runtime_root, goal_ref=goal_ref,
+                    )
                 runs_dir.mkdir(parents=True, exist_ok=True)
                 json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)
                 index_record["json_path"] = str(json_path)

@@ -126,8 +126,9 @@ class FeedTests(unittest.TestCase):
             "- name: Build signed Windows NSIS updater installer", 1
         )[1].split("- name: Collect native updater artifacts", 1)[0]
         self.assertIn("if: runner.os == 'macOS'", macos_step)
-        self.assertIn('\\"createUpdaterArtifacts\\":true', macos_step)
-        self.assertIn('\\"signingIdentity\\":\\"-\\"', macos_step)
+        self.assertIn("scripts/desktop_macos_signing.py build", macos_step)
+        self.assertIn("--create-updater-artifacts", macos_step)
+        self.assertIn("Verify macOS updater bundle", macos_step)
         self.assertIn("if: runner.os == 'Windows'", windows_step)
         self.assertIn('\\"createUpdaterArtifacts\\":true', windows_step)
         self.assertNotIn("signingIdentity", windows_step)
