@@ -164,8 +164,8 @@ cat ./guard-001/decision.json
 
 The parent directory must exist; LoopX creates the private capture directory.
 Check command success, `ok`, and Goal/Agent/Turn identity before consuming the
-saved decision. Read all required hooks, admission and settlement instructions;
-capture does not require `--turn-envelope` or change the displayed contract.
+saved decision. Current JSON guards deliver `loopx_turn_envelope_v1` by default.
+Read all required hooks, admission and settlement instructions in that decision.
 Selection or lease revalidation still needs a fresh guard and a new directory.
 After a late capture failure, inspect the existing Turn receipt before retrying.
 See the [capture contract](../reference/protocols/turn-envelope-v0.md).

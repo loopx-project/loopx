@@ -281,13 +281,13 @@ The main runtime publisher verifies its downloaded installation qualification
 against the source revision, channel, archive digest and byte count before any
 remote write. Every installation/recovery check must pass, and immutable metadata
 must match the candidate channel metadata. Missing, failed or mismatched evidence
-leaves the existing releases and channel untouched. This engineering qualification
-does not establish model outcomes, complete-cost benefit or C1 default adoption.
+leaves the existing releases and channel untouched. Record supported-profile
+adoption, matched model outcomes and complete cost separately under RFC §9.
 
 main 运行时发布器在任何远端写入前，将下载的安装资格与源码提交、渠道、归档摘要及
 字节数逐项核对。安装和恢复检查必须全部通过，不可变元数据必须与候选渠道元数据一致。
-证据缺失、失败或不匹配时，保留已有发布及渠道。此工程资格不证明模型结果、完整成本收益
-或 C1 默认采用资格。
+证据缺失、失败或不匹配时，保留已有发布及渠道。按 RFC §9 单独记录受支持 profile 的
+采用、匹配的模型成果和完整成本。
 
 New runtime descriptors carry the observed, supported `default_contract`.
 The builder probes the committed runtime before writing a channel descriptor
@@ -298,22 +298,58 @@ Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
 contract identity to its metadata. Historical v1 descriptors remain readable.
-The current supported distribution scope is the existing `quota_packet` writer;
-the complete-contract default cutover stays unqualified until the original RFC §9
-matched single-session outcome/full-cost and supported-profile adoption gate is
-met. Installation checks or a new boolean cannot extend that scope. Explicit
-complete-contract opt-in, context-delivery configuration and historical recovery
-retain their existing owners; this boundary does not switch an installed writer.
+The immutable `v2.4.0` release declares `quota_packet`. Current `main` artifacts
+declare `complete_turn` (`loopx_turn_envelope_v1`) as the engineering default.
+Every active writer in those artifacts follows that contract. Context-delivery
+configuration and historical recovery remain supported. Record actual adoption
+for each supported Host and verify the original matched single-session outcome
+and full-cost comparison before qualifying it under [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.md#9-validation-and-acceptance).
 
 新 runtime 描述符记录实际观测到且受支持的 `default_contract`。构建器在写入渠道描述符
 或替换已有制品之前探测已提交的 runtime。安装资格检查在隔离的原始 Goal 中关闭
 上下文传输后再次观察普通 quota writer。发布器要求安装后的观察与不可变描述符一致。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
-当前分发范围是已有 `quota_packet` writer；完整契约默认切换在满足原 RFC §9 同单会话
-匹配成果、完整成本及支持 profile 的采用门之前保持未资格化。安装检查或新增布尔值不能
-扩大该范围。显式完整契约 opt-in、上下文传输配置及历史恢复继续由原 owner 处理，此边界
-不切换已安装 writer。
+已发布的 `v2.4.0` 标签声明 `quota_packet`。当前 `main` 制品以 `complete_turn`
+（`loopx_turn_envelope_v1`）为工程默认，所有活跃 writer 使用这一契约。上下文传输配置
+和历史恢复继续受支持。按 [RFC §9](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#9-验证与验收)
+记录各受支持 Host 的实际采用，并完成原同单会话匹配成果和完整成本对照后，再确认采用资格。
+
+#### macOS preview upgrade across the C1 cutover
+
+The last quota-packet-only macOS updater rejects a C1 archive at the contract
+check. For that installed App, use the manual replacement path once:
+
+1. Download `LoopX.app.tar.gz` and `LoopX.app.tar.gz.sig` from the same official
+   `desktop-main-*` [release](https://github.com/loopx-project/loopx/releases)
+   for a C1-capable source revision. In a scratch directory, verify the archive
+   against the already trusted updater key. The key is the base64 value of
+   `plugins.updater.pubkey` in the installed version's trusted Tauri configuration.
+2. Decode the trusted key and the release signature and verify before unpacking.
+   With the trusted configuration saved as `trusted-tauri.conf.json`, run:
+
+   ```bash
+   set -euo pipefail
+   jq -er '.plugins.updater.pubkey' trusted-tauri.conf.json | base64 -D > updater.pub
+   base64 -D -i LoopX.app.tar.gz.sig -o updater.minisig
+   minisign -Vm LoopX.app.tar.gz -p updater.pub -x updater.minisig
+   tar -xzf LoopX.app.tar.gz
+   codesign --verify --deep --strict LoopX.app
+   ```
+
+3. Quit LoopX and save the existing App bundle and a compatible state backup
+   before replacing the App. Launch the verified replacement, then confirm the
+   App version, the same Goal and original receipt, and the installed runtime's
+   v1 default. If the checks fail, quit and restore the previous verified bundle
+   with the compatible backup as needed. The standalone CLI has its own update
+   and rollback path.
+
+仅支持 quota-packet 的上一版 macOS updater 会在契约校验处拒绝 C1 归档。首次跨越
+此边界时，按上面的手动流程操作。从同一官方 `desktop-main-*` 发行版下载归档和签名，
+用已信任的旧版 updater 公钥校验归档，再解包并校验 App 签名。退出 LoopX，备份旧
+App 与兼容状态后再替换。启动后读回版本、同一 Goal、原回执及已安装 runtime 的 v1
+默认值。检查失败时，退出并恢复已验证旧 App，需要时恢复兼容状态备份。独立 CLI
+沿自己的更新与回退路径处理。
 
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with

@@ -331,13 +331,8 @@ def test_warm_receiver_owns_only_selected_research_before_preparation(
     assert restored == ["workspace"]
 
 
-@pytest.mark.parametrize("explicit,trigger,expected", [
-    (False, None, None),
-    (False, "fresh_replan", None),
-    (True, None, "explicit"),
-    (True, "fresh_replan", "explicit"),
-])
-def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkeypatch, explicit, trigger, expected):
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+def test_sforge_checkpoint_keeps_current_worker_profile(tmp_path, monkeypatch, trigger):
     from types import SimpleNamespace
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -354,12 +349,12 @@ def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkey
     backend = SimpleNamespace(copy_to_container=lambda *args: None,
         exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile="heartbeat-resume", cwd="/task", turn_envelope=explicit,
+        profile="heartbeat-resume", cwd="/task",
         checkpoint_request=json.dumps(declaration).encode())
     worker.install_stop_hook(backend, None, tmp_path, None)
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
-    assert profile.get("turn_envelope_source") == expected
-    assert profile.get("turn_envelope") is (True if expected else None)
+    assert profile["checkpoint_capture_enabled"] is True
+    assert {"turn_envelope_source", "turn_envelope", "complete_turn"}.isdisjoint(profile)
 
 
 @pytest.mark.parametrize("enabled", [False, True])

@@ -148,8 +148,8 @@ cat ./guard-001/decision.json
 ```
 
 父目录必须已存在；LoopX 创建私有捕获目录。使用保存的决策前，检查命令是否成功、
-`ok` 和 Goal/Agent/Turn 身份。仍须读取所有必需的 hook、准入和结算指令；捕获不要求
-开启 `--turn-envelope`，也不改变展示的合同。选择 Todo 或重新校验 lease 时仍要运行
+`ok` 和 Goal/Agent/Turn 身份。当前 JSON guard 默认交付 `loopx_turn_envelope_v1`。
+读取其中所有必需的 hook、准入和结算指令。选择 Todo 或重新校验 lease 时仍要运行
 新 guard，并使用新目录。捕获在后段失败时，应先检查已有 Turn 回执，再判断重试。
 详见[捕获合同](../reference/protocols/turn-envelope-v0.md)。
 

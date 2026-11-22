@@ -1014,11 +1014,10 @@ comparison and cannot explain away a C1 regression.
 ### Default adoption and retirement qualification
 
 The [context-delivery guide](../../guides/context-delivery.md#qualify-default-adoption-and-retirement)
-turns this comparison into an operator plan. Documentation may ship first;
-future broader default adoption needs both a declared DeepSeek model and a declared
-strong model to support the claimed effectiveness and complete-cost scope.
-The reference's existing Codex-scoped default remains current behavior, not proof
-that these model comparisons have passed.
+turns this comparison into an operator plan. Current `main` artifacts default
+to C1 for all active writers and retire the older format selectors. Qualifying
+adoption for a supported profile requires both a declared DeepSeek model and a
+declared strong model to support the claimed effectiveness and complete-cost scope.
 Record exact model/provider/version/effort and fixed task, source, host, tools,
 feedback, evaluator, budget and stops. Include actual final input/output,
 cached/uncached tokens, requests, detail/recovery reads, wall/IO/setup costs and
@@ -1028,15 +1027,13 @@ variation, failures and negative cases. Historical-best optimization keeps that
 native ranking, with final-retention facts separate. A Codex-scoped adapter
 cannot qualify a DeepSeek host.
 
-Keep this sequence in C1/C2/C9: explanation → both-model comparison → supported
-profile's reversible adoption/release → scoped default → named old-path
-retirement. Mixed or regressed results retain opt-in or explicit limitations.
-Retirement requires actual caller replacement, historical decoding/readback,
-supported-version and rollback coverage; full snapshots, digest checks,
-authority/identity/stops and recovery remain. Do not preserve two permanent
-semantic owners or delete a still-supported reader based on new-path existence.
-This is a qualification plan, not new experiment authority, a claim of shipped
-benefit, or a gate on other independent authorized work.
+For supported-profile qualification in C1/C2/C9, record the explanation,
+both-model comparison, and the profile's reversible installation and adoption.
+Record mixed or regressed results as explicit limitations. Retiring a writer
+requires actual caller replacement, historical decoding and readback, and
+supported-version and rollback coverage. Preserve full snapshots, digest
+checks, authority, identity, stops, recovery and existing historical readers.
+Follow the existing experiment authorization for the comparisons.
 
 The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
 pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
@@ -1403,11 +1400,10 @@ Splitting delivery does not close C1 or waive §9's original quota-baseline test
 Public-distribution isolation now reuses the runtime artifact metadata owner:
 runtime qualification observes the installed ordinary writer, desktop packaging
 observes its archived writer, and publication requires their declared supported
-contract to match. The existing quota-packet default remains supported; the
-unqualified complete-contract default cannot pass on installation checks alone.
-This does not qualify §9 outcomes/costs, replace an installed writer, add another
-current producer or retire historical readers. Extending the supported profile
-still requires the original adoption evidence. See the [release boundary](../../product/release-readiness.md).
+contract to match. The immutable `v2.4.0` tag retains its quota-packet writer.
+Current `main` packages ship the single C1 writer. For each supported profile,
+record actual installation and adoption evidence, and evaluate outcomes and
+full cost under §9. See the [release boundary](../../product/release-readiness.md).
 
 Native launch rechecks use the original `SettlementIdentity` as their sole
 Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing

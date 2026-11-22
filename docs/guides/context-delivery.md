@@ -12,8 +12,9 @@ benchmark heartbeat callers when no machine preference is saved. Saved or explic
 off disables it; ordinary CLI, other hosts and unsupported platforms inherit full
 delivery.
 
-The complete C1 caller migration and long-horizon cost/outcome qualification remain
-open. Broad default adoption and old-path retirement need the evidence below.
+Current `main` artifacts use the C1 wire contract for both inline and staged
+delivery. The evidence below qualifies actual Host adoption, model outcomes,
+and complete cost.
 
 - To understand a work session, start with [the example](#one-task-four-situations).
 - To operate it, see [enable, verify and roll back](#enable-verify-and-roll-back).
@@ -266,13 +267,10 @@ remains first: original quota packet versus the fused contract in the same
 product path. Optional controller/executor separation is a later comparison.
 Do not explain away a single-session regression with a two-session result.
 
-Future broader default adoption requires **both a declared DeepSeek model and a strong
-model** to pass comparable effectiveness and complete-cost evaluation. Run each
-model's comparison within its own fixed conditions; do not pool them to hide a
-regression. This guide supplies a plan, not new experimental authority or a
-claim that either model family has passed.
-These criteria govern extending the current scoped default; that shipped default
-does not itself prove either model comparison has passed.
+Supported-profile adoption qualification requires **both a declared DeepSeek
+model and a strong model** to pass comparable effectiveness and complete-cost
+evaluation. Compare each model under its own fixed conditions and report
+regressions per model. Follow the existing experimental authority for these comparisons.
 
 ### A minimum discriminating study
 
