@@ -53,6 +53,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       assert.equal(threads[0].permissionMode, 'full_access');
       assert.equal(threads[0].agentSessionId, 'public-fixture-session');
       await page.waitForFunction(async ({ base, token, id }) => { const response = await fetch(base + '/api/threads/' + id, { headers: { Authorization: 'Bearer ' + token } }); return (await response.json()).status === 'idle'; }, { base: daemon.base, token: daemon.token, id: threads[0].id });
+      await page.locator('.composer .send-btn:not(.stop)').last().waitFor();
       await shot('chat');
       await page.goto(daemon.base + '/#/thread/' + threads[0].id, { waitUntil: 'domcontentloaded' });
       await page.getByText(/Native ACP answer: hello/).first().waitFor();
@@ -66,6 +67,7 @@ for (const mobile of [false, true]) for (const colorScheme of ['light', 'dark'])
       }, { base: daemon.base, token: daemon.token, id: threads[0].id });
       await page.locator('.error-box').last().waitFor();
       await page.locator('.error-box').last().scrollIntoViewIfNeeded();
+      await page.locator('.composer .send-btn:not(.stop)').last().waitFor();
       await shot('failure');
       await page.locator('.composer textarea').last().fill('recovered');
       await page.locator('.composer .send-btn:not(.stop)').last().click();
