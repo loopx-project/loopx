@@ -14,8 +14,8 @@ import type { VoiceTransport } from './voice-sessions.js';
 import { VoiceConversation } from './voice-conversation.js';
 import { turnOutcome } from './lifecycle.js';
 import { UserInputs } from './user-input.js';
-import type { SystemPrompt, WorkMode } from './adapters/types.js';
-import { diagnosticFailure } from './adapters/diagnostics.js';
+import type { LoginState, SystemPrompt, WorkMode } from './adapters/types.js';
+import { diagnosticFailure, modelLoginFailure } from './adapters/diagnostics.js';
 import { turnAnswer, type CoordinationManager, type CoordinationSetup } from './coordination.js';
 import { Injections, type InjectionGate } from './injections.js';
 import type { LoopxHooks } from './adapters/loopx/service.js';
@@ -272,9 +272,12 @@ export interface AgentInfo {
   /** The account this instance runs as, when it is a linked second login (an email). */
   account?: string | null;
   available: boolean;
+  unavailableReason?: string;
   streamBridgeEnabled?: boolean;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
+  /** In-progress login owned by the daemon, recoverable after page navigation. */
+  activeLogin?: { id: string } & LoginState;
   capabilities: AgentAdapter['capabilities'];
 }
 
@@ -394,7 +397,7 @@ export class ThreadManager {
     workdirs: string[] | Workdirs,
     private readonly attachments: AttachmentStore,
     /** What each instance is beyond its adapter: its adapter kind and linked account. */
-    private readonly agentMeta: () => Array<{ id: string; adapter?: string; account?: string | null; hidden?: boolean }> = () => [],
+    private readonly agentMeta: () => Array<{ id: string; adapter?: string; account?: string | null; hidden?: boolean; activeLogin?: { id: string } & LoginState }> = () => [],
   ) {
     this.dirs = Array.isArray(workdirs) ? new Workdirs(workdirs) : workdirs;
     this.references = new ContextReferences(store, this);
@@ -475,7 +478,9 @@ export class ThreadManager {
         ...(m?.account !== undefined ? { account: m.account } : {}),
         ...(m?.hidden !== undefined ? { hidden: m.hidden } : {}),
         available: await a.available(),
+        ...(a.unavailableReason ? { unavailableReason: a.unavailableReason } : {}),
         ...(a.startLogin ? { login: 'wizard' as const } : a.loginCommand ? { login: 'terminal' as const } : {}),
+        ...(m?.activeLogin ? { activeLogin: m.activeLogin } : {}),
         capabilities: a.capabilities,
         ...(a.capabilities.streamBridge ? { streamBridgeEnabled: a.streamBridgeEnabled ?? false } : {}),
       });
@@ -1083,16 +1088,45 @@ export class ThreadManager {
     return entry.value;
   }
 
+  private splitCombinedModel(models: ModelOption[], model: string | null | undefined): { option: ModelOption; effort: EffortLevel } | null {
+    if (!model || models.some((m) => m.id === model)) return null;
+    for (const option of models) {
+      for (const effort of option.efforts ?? []) {
+        if (model === `${option.id}-${effort}`) return { option, effort };
+      }
+    }
+    return null;
+  }
+
+  private migrateCombinedModels(agent: string, models: ModelOption[]): void {
+    if (!models.length) return;
+    for (const thread of [...this.store.listThreads(), ...this.store.listThreads({ archived: true })]) {
+      if (thread.agent !== agent || !thread.model) continue;
+      const split = this.splitCombinedModel(models, thread.model);
+      if (!split) continue;
+      this.store.updateThread(thread.id, { model: split.option.id, effort: (thread.effort as EffortLevel | null) ?? split.effort });
+      this.emitThreadEvent(thread.id, null, 'thread.updated', {});
+    }
+    const saved = readModelPreferences(this.store.hubSetting<unknown>(DRAFT_MODEL_PREFERENCES_KEY, {}))[agent];
+    const split = this.splitCombinedModel(models, saved?.model);
+    if (split) this.rememberModelPreference(agent, { model: split.option.id, effort: (saved?.effort as EffortLevel | null) ?? split.effort });
+  }
+
   private adapterModels(adapter: AgentAdapter, refresh = false): Promise<ModelOption[]> {
+    const agent = [...this.adapters].find(([, current]) => current === adapter)?.[0];
     adapter.onModelsChanged = models => {
       // Instance ids can differ from adapter ids; removed/replaced instances must not publish.
-      const agent = [...this.adapters].find(([, current]) => current === adapter)?.[0];
-      if (!agent) return;
+      const id = [...this.adapters].find(([, current]) => current === adapter)?.[0];
+      if (!id) return;
+      this.migrateCombinedModels(id, models);
       const event: StoredEvent = { threadId: '', seq: 0, turnId: null, type: 'agent.modelsChanged',
-        ts: new Date().toISOString(), data: { agent, models } };
+        ts: new Date().toISOString(), data: { agent: id, models } };
       for (const listener of this.listeners) listener(event);
     };
-    return adapter.models(refresh);
+    return adapter.models(refresh).then(models => {
+      if (agent && this.adapters.get(agent) === adapter) this.migrateCombinedModels(agent, models);
+      return models;
+    }).catch(error => { throw modelLoginFailure(error, adapter.label); });
   }
 
   async listModels(agent: string, refresh = false): Promise<ModelOption[]> {
@@ -1306,10 +1340,8 @@ export class ThreadManager {
 
   private view(thread: ThreadRecord): ThreadView {
     const adapter = this.adapters.get(thread.agent);
-    const resumeCommand =
-      adapter && thread.agentSessionId
-        ? `cd ${shellQuote(thread.cwd)} && ${adapter.resumeCommand(thread.agentSessionId)}`
-        : null;
+    const nativeResume = adapter && thread.agentSessionId ? adapter.resumeCommand(thread.agentSessionId) : '';
+    const resumeCommand = nativeResume ? `cd ${shellQuote(thread.cwd)} && ${nativeResume}` : null;
     let cwdReal = thread.cwd;
     let cwdGone = false;
     try {
@@ -1849,7 +1881,7 @@ export class ThreadManager {
       if (updates.model === null) {
         // Back to the agent's own default: only a restart can do that.
         patch.model = null;
-        await this.restartForChange(thread, 'model');
+        if (thread.model !== null) await this.restartForChange(thread, 'model');
       } else {
         const model = await this.validateModel(thread.agent, updates.model);
         patch.model = model;
@@ -1861,7 +1893,7 @@ export class ThreadManager {
     if (updates.effort !== undefined) {
       if (updates.effort === null) {
         patch.effort = null;
-        await this.restartForChange(thread, 'effort');
+        if (thread.effort !== null) await this.restartForChange(thread, 'effort');
       } else {
         const effort = await this.validateEffort(thread.agent, nextModel, updates.effort);
         patch.effort = effort;
@@ -2004,7 +2036,7 @@ export class ThreadManager {
    */
   private async modelOption(adapter: AgentAdapter, model: string | null): Promise<ModelOption | undefined> {
     const options = await this.adapterModels(adapter);
-    if (model !== null) return options.find((o) => o.id === model);
+    if (model !== null) return options.find((o) => o.id === model) ?? this.splitCombinedModel(options, model)?.option;
     return options.find((o) => o.id === 'default') ?? options.find((o) => o.isDefault);
   }
 
@@ -2289,9 +2321,12 @@ export class ThreadManager {
   }
 
   /** A fresh conversation in the source's exact directory, sharing its existing worktree. No agent is started. */
-  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method']): Promise<ThreadView> {
+  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method'], takeTeam = true): Promise<ThreadView> {
     const source = this.getThread(threadId);
     if (mode !== undefined && mode !== 'continue' && mode !== 'branch') throw new HttpError(400, 'invalid handover mode');
+    if (takeTeam && this.coordination?.metadata(threadId) && source.status === 'running') {
+      throw new HttpError(409, '请等待当前轮结束后带走协作成员');
+    }
     // Whoever takes over from here, the work leaves this thread; stop waiting for its quota.
     this.quotaResume.drop(threadId);
     const selected = mode ?? 'branch';
@@ -2319,6 +2354,8 @@ export class ThreadManager {
     }, source.worktree, { sourceId: source.id, title: source.title, agent: source.agent, mode: selected,
       sourceSeq: this.store.history.latest(source.id), ...(method ? { method } : {}) });
     this.personal.inherit(source.id, successor.id);
+    // Manual handover carries the collaboration; automatic handover waits for the successor claim.
+    if (takeTeam && this.coordination?.metadata(source.id)) this.coordination.replaceHandoverMember(source.id, successor.id, null);
     return successor;
   }
 
@@ -2915,7 +2952,7 @@ export class ThreadManager {
   async executeResumeHandover(id: string, target: HandoverTarget, sessionId: string, failedTurn: string | null, note?: string): Promise<ThreadView> {
     const source = this.getThread(id);
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume');
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume', false);
     this.store.updateThread(successor.id, { agentSessionId: sessionId });
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
@@ -2948,7 +2985,7 @@ export class ThreadManager {
     const source = this.getThread(id);
     // The work moves; waiting for this agent's quota to come back is moot.
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary');
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary', false);
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
     // Preserve the user's execution and permission choices when the successor supports them.

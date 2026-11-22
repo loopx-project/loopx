@@ -200,7 +200,8 @@ rl.on('line', (line) => {
     case 'initialize':
       return out({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
     case 'session/new':
-      if (process.env.FAKE_ACP_START_ERROR) return out({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: process.env.FAKE_ACP_START_ERROR } });
+      if (process.env.FAKE_LOGIN_FILE && !existsSync(process.env.FAKE_LOGIN_FILE)) return out({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'Authentication required' } });
+      if (process.env.FAKE_ACP_START_ERROR) return out({ jsonrpc: '2.0', id: msg.id, error: { code: Number(process.env.FAKE_ACP_ERROR_CODE ?? -32603), message: process.env.FAKE_ACP_START_ERROR, data: { reason: process.env.FAKE_ACP_ERROR_REASON } } });
       if (!dsh) {
         const initial = msg.params?._meta?.claudeCode?.options;
         if (typeof initial?.model === 'string' && process.env.FAKE_ACP_MODEL_SELECTION_LOG) appendFileSync(process.env.FAKE_ACP_MODEL_SELECTION_LOG, initial.model + '\n');
@@ -566,7 +567,7 @@ rl.on('line', (line) => {
       update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
       update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run ls', kind: 'execute', status: 'pending', rawInput: { command: 'ls' } });
       update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed', rawOutput: 'a.txt' });
-      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `echo:${text}` } });
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `echo:${process.env.FAKE_ACP_VISIBLE_ECHO === '1' ? text.split(/\n\n<loochat-/)[0] : text}` } });
       if (text.includes('model?')) {
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `model:${currentModel};mode:${currentMode};effort:${currentEffort}` } });
         return out({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } });

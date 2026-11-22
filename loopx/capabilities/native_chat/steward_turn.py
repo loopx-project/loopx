@@ -74,12 +74,20 @@ def report_turn(store: Any, actor: Mapping[str, Any], window: Mapping[str, Any])
     """Read the one bounded continuation, retaining the original failed Turn."""
     operation = "report." + window["window_id"]
     original = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation))
-    continued = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
-    if continued is not None:
+    quota = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
+    timeout_retry = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".timeout-recovery"))
+    if quota is not None and timeout_retry is not None:
+        raise ValueError("conflicting report continuations exist")
+    for suffix, key, label, continued in (
+        (".quota-recovery", "report_quota_recovery", "quota", quota),
+        (".timeout-recovery", "report_timeout_recovery", "timeout", timeout_retry),
+    ):
+        if continued is None:
+            continue
         request = continued.get("loopx_request") or {}
-        if (not original or (request.get("report_quota_recovery") or {}).get("original_turn_id") != original["turn_id"]
-                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + ".quota-recovery"):
-            raise ValueError("the report quota continuation changed its original identity")
+        if (not original or (request.get(key) or {}).get("original_turn_id") != original["turn_id"]
+                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + suffix):
+            raise ValueError(f"the report {label} continuation changed its original identity")
         return continued
     return original
 
@@ -318,6 +326,7 @@ class StewardTurnHost:
             **({"report_launch_recovery": launch_recovery} if launch_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **self.report_quota_basis(request),
+            **self.report_timeout_basis(request),
             **self.monitor_restart_basis(request),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
@@ -413,9 +422,10 @@ class StewardTurnHost:
             next_client_id = base + "." + carrier["turn_id"]
         return {"request": request, "client_id": next_client_id}
 
-    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def _report_continuation_basis(self, request: Mapping[str, Any], *,
+                                   recovery_key: str, basis_key: str) -> dict[str, Any]:
         """Transport original journal observations; the typed owner admits work."""
-        recovery = request.get("report_quota_recovery")
+        recovery = request.get(recovery_key)
         if recovery is None:
             return {}
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
@@ -427,24 +437,67 @@ class StewardTurnHost:
         reports, owner = report_service(self.controller, actor)
         _, window = reports.current_window(owner)
         folder = attempt_directory(reports.root, window) if window else None
-        return {"report_quota_basis": {"original": original,
+        return {basis_key: {"original": original,
             "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                 agent_id=actor["agent_id"], turn_key=result["resume_turn_key"]),
             "generation_present": folder is None or any((folder / name).exists() for name in
                 ("editorial-response.json", "private-generation.json", "private-delivery.json")),
             "observed_at": time.time()}}
 
+    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._report_continuation_basis(request, recovery_key="report_quota_recovery",
+            basis_key="report_quota_basis")
+
+    def report_timeout_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._report_continuation_basis(request, recovery_key="report_timeout_recovery",
+            basis_key="report_timeout_basis")
+
     def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Read the original native failure without starting or resuming work."""
         result = (original.get("response") or {}).get("native_loopx") or {}
         request = original.get("loopx_request") or {}
+        upstream_turn_id = original.get("upstream_turn_id")
         if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or result.get("result_kind") != "host_failure" or not original.get("upstream_turn_id")):
+                or result.get("result_kind") != "host_failure" or not upstream_turn_id):
             return None
+        from ...chat_agent import CodexChatAgentError
+        session = self.store.load_session(original["session_id"])
+        if not session:
+            return None
+        if isinstance(upstream_turn_id, str) and upstream_turn_id.startswith("agy_turn_"):
+            if original.get("delta_count") != 0:
+                return None
+            try:
+                events = self.store.events_after(original["session_id"], original["turn_id"], None)
+            except (OSError, ValueError):
+                return None
+            if any(row.get("kind") in {"answer.final", "turn.native_result"} for row in events):
+                return None
+            started = [
+                (row.get("payload") or {}).get("threadId")
+                for row in events
+                if row.get("kind") == "turn.started" and isinstance(row.get("payload"), Mapping)
+                and row["payload"].get("upstream_turn_id") == upstream_turn_id
+            ]
+            if len(started) != 1 or not isinstance(started[0], str) or not started[0]:
+                return None
+            thread_id = started[0]
+            native_timeout = any(
+                row.get("kind") == "agent.phase" and isinstance(row.get("payload"), Mapping)
+                and row["payload"].get("method") == "native/timeout"
+                for row in events
+            )
+            from .antigravity_adapter import AntigravityAdapter
+            return AntigravityAdapter.failed_report_observation(
+                cascade_id=thread_id,
+                turn_id=upstream_turn_id,
+                native_timeout=native_timeout,
+                model_id=session.get("agent_model_id"),
+                reasoning_effort=session.get("agent_reasoning_effort"),
+            )
         from .codex_adapter import CodexAppServerAdapter
         from .codex_context import checked_session_home
-        session = self.store.load_session(original["session_id"])
-        if not session or not session.get("codex_home") or not session.get("upstream_thread_id"):
+        if not session.get("codex_home") or not session.get("upstream_thread_id"):
             return None
         history = session.get("upstream_context_history") or []
         if not isinstance(history, list) or any(not isinstance(item, dict)
@@ -452,13 +505,22 @@ class StewardTurnHost:
                 for item in history):
             return None
         # Context replacement retains native provenance on this same Session.
-        # Read the original refusal there; never resume a historical thread.
-        threads = [session["upstream_thread_id"], *(item["thread_id"] for item in reversed(history))]
-        proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
-            codex_home=Path(session["codex_home"]),
-            model_auth_home=checked_session_home(self.controller.codex_home, session),
-            thread_ids=list(dict.fromkeys(threads)), turn_id=original["upstream_turn_id"])
-        if (not proof or proof.get("turn_id") != original["upstream_turn_id"]
+        # Read the original refusal there; exclude non-Codex cascades.
+        raw_threads = [
+            *([session["upstream_thread_id"]] if session.get("agent_id") != "antigravity" else []),
+            *(item["thread_id"] for item in reversed(history) if item.get("agent_id") != "antigravity"),
+        ]
+        threads = list(dict.fromkeys(raw_threads))
+        if not threads:
+            return None
+        try:
+            proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
+                codex_home=Path(session["codex_home"]),
+                model_auth_home=checked_session_home(self.controller.codex_home, session),
+                thread_ids=threads, turn_id=upstream_turn_id)
+        except (CodexChatAgentError, OSError, ValueError, RuntimeError):
+            return None
+        if (not proof or proof.get("turn_id") != upstream_turn_id
                 or proof.get("thread_id") not in threads or proof.get("only_original_user_item") is not True
                 or not proof.get("codex_error_info")):
             return None
@@ -467,7 +529,7 @@ class StewardTurnHost:
     def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Observe quota recovery, never resume or rewrite the failed native Turn."""
         request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None:
+        if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
             return None
         proof = self.report_failure_observation(original)
         if (not proof or proof.get("only_original_user_item") is not True
@@ -475,6 +537,19 @@ class StewardTurnHost:
             return None
         return {**request, "turn_instance_id": request["turn_instance_id"] + ".quota-recovery",
             "report_quota_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+
+    def report_timeout_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Observe idle Antigravity timeout for one bounded isolated-cascade retry."""
+        request = original.get("loopx_request") or {}
+        if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
+            return None
+        proof = self.report_failure_observation(original)
+        if (not proof or proof.get("adapter_kind") != "antigravity_ls"
+                or proof.get("cascade_idle") is not True or proof.get("no_final_response") is not True
+                or proof.get("native_timeout") is not True or proof.get("quota_available") is not True):
+            return None
+        return {**request, "turn_instance_id": request["turn_instance_id"] + ".timeout-recovery",
+            "report_timeout_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
 
     def report_selection_recovery(self, original: dict[str, Any], *,
                                   probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1148,7 +1223,11 @@ class StewardTurnHost:
         quota_observation = None
         if "quota_probe" in prepared:
             quota_observation = prepared["quota_probe"]
-            quota_observation["request"] = self.report_quota_request(quota_observation["original"])
+            original_turn = quota_observation["original"]
+            quota_observation["request"] = (
+                self.report_quota_request(original_turn)
+                or self.report_timeout_request(original_turn)
+            )
             prepared = inspect_submission(quota_observation)
         if "turn" in prepared:
             return prepared["turn"], False
@@ -1653,7 +1732,10 @@ class StewardTurnHost:
                         if (governance_work and event_sink is not None)
                         else event_sink
                     )
-                    response = adapter.start_turn(prompt, invocation_sink)
+                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                        response = adapter.start_turn(prompt, invocation_sink, isolated_cascade=True)
+                    else:
+                        response = adapter.start_turn(prompt, invocation_sink)
             finally:
                 guard_owner._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.

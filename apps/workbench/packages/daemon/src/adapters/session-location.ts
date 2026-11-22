@@ -1,6 +1,19 @@
 import { readdir } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** Server dependencies are not implicitly installed user agents (OAR bundles a Pi SDK). */
+export function isWorkbenchDependency(command: string): boolean {
+  try {
+    const file = realpathSync(command);
+    const app = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    return [join(app, 'node_modules'), join(app, 'packages/daemon/node_modules')].some(directory => {
+      try { return file.startsWith(realpathSync(directory) + sep); } catch { return false; }
+    });
+  } catch { return false; }
+}
 
 /** Resolve only a known directory setting; never include arbitrary instance environment in a handover. */
 export function configDirectory(env: Record<string, string>, key: string, fallback: string[], cwd: string): string {

@@ -13,8 +13,8 @@ from typing import Any, Callable
 from urllib import request
 import uuid
 
-from .chat import VisibleResponseStreamFilter, _turn_prompt, parse_agent_response
-from .chat_agent import CodexChatAgentError, _host_tool_gate
+from ..chat import VisibleResponseStreamFilter, _turn_prompt, parse_agent_response
+from ..chat_agent import CodexChatAgentError, _host_tool_gate
 
 
 EventSink = Callable[[str, dict[str, Any]], None]

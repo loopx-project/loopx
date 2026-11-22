@@ -48,7 +48,7 @@ from ..capabilities.native_chat.steward_managed_mode import (
     require_managed_agent_session,
 )
 from ..capabilities.steward_executor import allocation as alloc
-from ..chat_acp import ACPStdioAdapter
+from .acp import ACPStdioAdapter
 from ..chat_agent import CodexChatAgentError, agent_endpoint_error
 from ..chat_codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
 from ..chat_manager import (
@@ -60,7 +60,7 @@ from ..chat_manager import (
     open_manager_session,
     steward_machine_defaults,
 )
-from ..chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .providers import ClaudeCodeAdapter, direct_model_from_environment
 from ..chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     TERMINAL_TURN_STATES,

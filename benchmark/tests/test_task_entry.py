@@ -367,9 +367,12 @@ pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(s
 
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
+@pytest.mark.parametrize("phase_clock", [True, False], ids=["bounded", "natural"])
 def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
-    planning_env, context
+    planning_env, context, phase_clock
 ):
+    if not phase_clock:
+        planning_env.pop("LOOPX_PHASE_DEADLINE_EPOCH")
     planning_env["LOOPX_ITERATION_CONTEXT"] = context
     if context == "fresh":
         planning_env.pop("LOOPX_TASK_ENTRY")  # Omitted worker setting uses the same planner.
