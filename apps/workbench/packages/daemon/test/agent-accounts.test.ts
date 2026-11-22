@@ -308,7 +308,7 @@ test('signed-out model catalog offers typed login recovery and publishes models 
     await waitFor(() => events, list => list.some(event => event.data.agent === id && event.data.models.length > 0));
     const response = await api(`/api/agents/${id}/models`);
     assert.equal(response.status, 200);
-    assert.ok((await response.json() as any[]).some(model => model.id === 'fast-low'));
+    assert.ok((await response.json() as any[]).some(model => model.id === 'fast'));
     assert.equal(registry.get(id).account, 'agy-new@example.com');
   } finally { off(); }
 });
