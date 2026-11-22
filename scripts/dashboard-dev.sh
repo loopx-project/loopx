@@ -18,7 +18,15 @@ if [[ "${LOOPX_ENABLE_GOAL_SUBAGENT_CONFIGURATION:-0}" = "1" ]]; then
 fi
 
 node_is_supported() {
-  "$1" --no-warnings --experimental-strip-types --input-type=module -e '
+  local node_ts_flags=()
+  if [[ "$(uname -s 2>/dev/null || true)" == Linux* ]]; then
+    case "$(uname -m 2>/dev/null || true)" in
+      x86_64|amd64)
+        node_ts_flags=(--liftoff-only --no-wasm-tier-up --no-wasm-dynamic-tiering)
+        ;;
+    esac
+  fi
+  "$1" --no-warnings --experimental-strip-types ${node_ts_flags[@]+"${node_ts_flags[@]}"} --input-type=module -e '
 import { pathToFileURL } from "node:url";
 const { isSupportedNodeVersion } = await import(pathToFileURL(process.argv[1]).href);
 process.exit(isSupportedNodeVersion(process.versions.node) ? 0 : 1);

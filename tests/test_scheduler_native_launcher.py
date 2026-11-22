@@ -14,6 +14,7 @@ from examples.control_plane.quota_plan_fixtures import (
     write_cli_fixture,
     write_codex_heartbeat_fixture,
 )
+from loopx.control_plane.runtime.node_probe import node_typescript_flags
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from tests.control_plane.canonical_authority_fixture import (
     isolate_sqlite_runtime,
@@ -71,9 +72,12 @@ def test_unix_launcher_process_replaces_python_for_exact_native_followup(
 
     assert completed.returncode == 0, completed.stderr
     lines = completed.stdout.splitlines()
-    assert lines[:3] == [
+    expected_flags = list(node_typescript_flags())
+    script_index = 2 + len(expected_flags)
+    assert lines[: script_index + 1] == [
         "--no-warnings",
         "--experimental-strip-types",
+        *expected_flags,
         str(
             REPO_ROOT
             / "loopx"
@@ -81,6 +85,75 @@ def test_unix_launcher_process_replaces_python_for_exact_native_followup(
             / "scheduler"
             / "heartbeat_followup_cli.ts"
         ),
+    ]
+    assert lines[-len(args) :] == args
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the POSIX source launcher runs only on POSIX hosts",
+)
+@pytest.mark.parametrize(
+    ("uname_s", "uname_m", "expected_v8_flags"),
+    [
+        ("Linux", "x86_64", ["--liftoff-only", "--no-wasm-tier-up", "--no-wasm-dynamic-tiering"]),
+        ("Linux", "amd64", ["--liftoff-only", "--no-wasm-tier-up", "--no-wasm-dynamic-tiering"]),
+        ("Linux", "aarch64", []),
+        ("Darwin", "arm64", []),
+    ],
+)
+def test_unix_launcher_native_followup_passes_linux_x86_wasm_flags(
+    tmp_path: Path,
+    uname_s: str,
+    uname_m: str,
+    expected_v8_flags: list[str],
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "node").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    (fake_bin / "node").chmod(0o755)
+    (fake_bin / "uname").write_text(
+        f"#!/bin/sh\ncase \"$1\" in -s) echo {uname_s};; -m) echo {uname_m};; *) /usr/bin/uname \"$@\";; esac\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "uname").chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
+        "LOOPX_PYTHON": str(tmp_path / "python-must-not-run"),
+    }
+    args = [
+        "--format",
+        "json",
+        "--runtime-root",
+        str(tmp_path / "runtime"),
+        "quota",
+        "scheduler-ack-current",
+        "--goal-id",
+        "goal-native-launcher",
+        "--agent-id",
+        "agent-native-launcher",
+        "--scheduler-host-facts-chunk",
+        "facts",
+        "--turn-instance-id",
+        "turn-native-launcher",
+        "--execute",
+    ]
+    completed = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "loopx"), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    lines = completed.stdout.splitlines()
+    script_index = 2 + len(expected_v8_flags)
+    assert lines[: script_index + 1] == [
+        "--no-warnings",
+        "--experimental-strip-types",
+        *expected_v8_flags,
+        str(REPO_ROOT / "loopx" / "control_plane" / "scheduler" / "heartbeat_followup_cli.ts"),
     ]
     assert lines[-len(args) :] == args
 
