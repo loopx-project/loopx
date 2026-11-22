@@ -18,7 +18,10 @@ from ...control_plane.capability_hooks import (
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
-from .field_shapes import REPORT_IDENTITY_PATTERN
+from .field_shapes import (
+    REPORT_IDENTITY_PATTERN,
+    periodic_report_visible_text,
+)
 from ...registry import (
     atomic_write_json,
     find_registry_goal,
@@ -855,7 +858,7 @@ def _load_frozen_editorial_request(
 
 
 def _chinese_density(value: object) -> float:
-    text = str(value or "")
+    text = periodic_report_visible_text(value)
     chinese = len(_CHINESE_RE.findall(text))
     letters = sum(character.isalpha() for character in text)
     return chinese / max(letters, 1)

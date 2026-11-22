@@ -25,6 +25,7 @@ _SOURCE_NARRATIVE_REQUIREMENTS = (
     "Current source state is observed at collection time, not reconstructed as of the period end. Disclose the collection time when available and retain unreadable views as gaps.",
     "Use recorded completion/evidence times for the exact half-open window [window.start_at, window.due_at). Separate its outcomes, older history and changes at or after its end; a later completed Task is not proof of an in-window outcome. Unknown times stay unknown.",
     "Describe current work and relevant completed Tasks. Preserve concrete outcomes, quantified before/after comparisons, relevant counterevidence and the responsible owner's next action in the body. State shared limitations once; supporting evidence must not crowd out the substantive findings.",
+    "Format verified public GitHub PRs, Issues, Releases, and workflow runs (especially in mergeable or stalled PR checklists and owner action items) as inline clickable Markdown links such as [#1234](https://github.com/owner/repo/pull/1234) instead of bare #1234 tokens; never fabricate URLs from opaque digests or private records.",
 )
 
 
@@ -175,8 +176,11 @@ def report_prompt(request: dict[str, Any], folder: Path) -> str:
         "a concise Chinese-first title without the separately rendered period or timezone, "
         "2-4 Chinese highlights ({highlight_id: unique lower_snake token, label: <=80 chars, value: <=48 chars, "
         "detail: <=160 chars, tone: attention|neutral|positive}) and sections in the supplied exact order/titles. "
-        "Each section has nonempty items with title (<=240 chars), substantive summary (<=360 chars) "
-        "and a supplied fact's source_ref; causal items require 2-4 details, each {label: <=40 chars, text: <=360 chars}. "
+        "Each section has nonempty items with title (<=240 chars), substantive summary (<=360 visible chars) "
+        "and a supplied fact's source_ref; causal items require 2-4 details, each {label: <=40 chars, text: <=360 visible chars}. "
+        "Whenever citing verified public GitHub PRs, Issues, Releases, or workflow runs (especially in mergeable/stalled PR checklists), "
+        "format them as inline clickable Markdown links like [#1234](https://github.com/owner/repo/pull/1234) rather than bare #1234 numbers "
+        "(inline HTTP URL targets do not count against the 360-character visible limit or Chinese density; never fabricate URLs from opaque digests). "
         "Do not supply item_id, content_kind or value_rank. Include at least six substantive items in total, "
         "covering " + coverage + " and material gaps. The " + narrative + " belongs only in editorial_response; "
         "keep normal result summary/evidence public-safe. A validated report generation is distinct from " + delivery + ".\n"
@@ -348,6 +352,7 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
     # Each still requires full bundle, source and body equality below.
     for markdown_options, html_options in (
         ({}, {}),
+        ({"_legacy_inline_links": True}, {"_legacy_inline_links": True}),
         ({}, {"_legacy_highlight_wrap": True}),
         ({}, {"_legacy_masthead": True}),
         ({"_legacy_layout": True}, {"_legacy_layout": True}),

@@ -12,6 +12,10 @@ from ...capabilities.periodic_report.adapters import (
     PeriodicReportRendererAdapter,
     validate_periodic_report_editorial,
 )
+from ...capabilities.periodic_report.field_shapes import (
+    INLINE_MARKDOWN_LINK_RAW_MULTIPLIER,
+    iter_periodic_report_inline_segments,
+)
 from ..public_safety import redact_public_text
 from .periodic_report_markdown import (
     _source_references,
@@ -33,6 +37,55 @@ def _items(value: object) -> list[dict[str, Any]]:
 
 def _safe_text(value: object, *, maximum: int) -> str:
     return escape(str(redact_public_text(value, limit=maximum)))
+
+
+def _safe_inline_html(
+    value: object,
+    *,
+    maximum: int,
+    _legacy_inline_links: bool = False,
+) -> str:
+    if _legacy_inline_links:
+        return _safe_text(value, maximum=maximum)
+    redacted = str(
+        redact_public_text(
+            value,
+            limit=maximum * INLINE_MARKDOWN_LINK_RAW_MULTIPLIER,
+        )
+    )
+    if not redacted:
+        return ""
+    segments = iter_periodic_report_inline_segments(redacted)
+    visible_total = sum(len(label) for label, _url in segments)
+    truncated = visible_total > maximum
+    budget = max(0, maximum - 1) if truncated else maximum
+    rendered: list[str] = []
+    remaining = budget
+    plain_tail = ""
+    for label, url in segments:
+        if remaining <= 0:
+            break
+        if url is None:
+            piece = label[:remaining]
+            plain_tail += piece
+            remaining -= len(piece)
+        elif len(label) <= remaining:
+            if plain_tail:
+                rendered.append(escape(plain_tail))
+                plain_tail = ""
+            rendered.append(
+                f'<a href="{escape(url, quote=True)}" target="_blank" '
+                f'rel="noopener noreferrer">{escape(label)}</a>'
+            )
+            remaining -= len(label)
+        else:
+            plain_tail += label[:remaining]
+            remaining = 0
+    if truncated:
+        plain_tail = plain_tail.rstrip() + "..."
+    if plain_tail:
+        rendered.append(escape(plain_tail))
+    return "".join(rendered)
 
 
 def _safe_attr(value: object, *, maximum: int) -> str:
@@ -185,7 +238,7 @@ def _render_tags(item: Mapping[str, Any]) -> str:
     )
 
 
-def _render_details(value: object) -> str:
+def _render_details(value: object, *, _legacy_inline_links: bool = False) -> str:
     details = _items(value)
     if not details:
         return ""
@@ -194,7 +247,7 @@ def _render_details(value: object) -> str:
         rows.append(
             '<div class="item-detail">'
             f'<dt>{_safe_text(detail.get("label"), maximum=40)}</dt>'
-            f'<dd>{_safe_text(detail.get("text"), maximum=500)}</dd>'
+            f'<dd>{_safe_inline_html(detail.get("text"), maximum=500, _legacy_inline_links=_legacy_inline_links)}</dd>'
             "</div>"
         )
     return f'<dl class="item-details">{"".join(rows)}</dl>'
@@ -207,11 +260,20 @@ def _render_item(
     labels: Mapping[str, str],
     references: Mapping[str, int],
     _legacy_source_links: bool = False,
+    _legacy_inline_links: bool = False,
 ) -> str:
     title = _safe_text(item.get("title"), maximum=240)
-    summary = _safe_text(item.get("summary"), maximum=1000)
+    summary = _safe_inline_html(
+        item.get("summary"),
+        maximum=1000,
+        _legacy_inline_links=_legacy_inline_links,
+    )
     status = _safe_text(item.get("status"), maximum=80)
-    next_action = _safe_text(item.get("next_action"), maximum=500)
+    next_action = _safe_inline_html(
+        item.get("next_action"),
+        maximum=500,
+        _legacy_inline_links=_legacy_inline_links,
+    )
     source_ref = item.get("source_ref")
     source_url = _safe_http_url(source_ref, _legacy_source_links=_legacy_source_links)
     content_kind = _safe_attr(item.get("content_kind") or "unspecified", maximum=128)
@@ -265,7 +327,7 @@ def _render_item(
         f'<div class="row-kicker">{kicker}</div>'
         f"<h3>{title}</h3>"
         f'<p class="summary">{summary}</p>'
-        f"{_render_details(item.get('details'))}"
+        f"{_render_details(item.get('details'), _legacy_inline_links=_legacy_inline_links)}"
         f"{next_block}{footer}"
         "</div></article>"
     )
@@ -279,13 +341,15 @@ def _render_section(
     labels: Mapping[str, str],
     references: Mapping[str, int],
     _legacy_source_links: bool = False,
+    _legacy_inline_links: bool = False,
 ) -> tuple[str, int]:
     section_id = _safe_attr(section.get("section_id"), maximum=128)
     title = _safe_text(section.get("title"), maximum=160)
     items = _primary_items(section)
     rows = "".join(
         _render_item(item, index=item_start + offset, labels=labels, references=references,
-                     _legacy_source_links=_legacy_source_links)
+                     _legacy_source_links=_legacy_source_links,
+                     _legacy_inline_links=_legacy_inline_links)
         for offset, item in enumerate(items)
     )
     if not rows:
@@ -308,6 +372,7 @@ def _render_supporting_sections(
     labels: Mapping[str, str],
     references: Mapping[str, int],
     _legacy_source_links: bool = False,
+    _legacy_inline_links: bool = False,
 ) -> str:
     groups = []
     for section in sections:
@@ -323,7 +388,11 @@ def _render_supporting_sections(
                 maximum=128,
             )
             label = " · ".join(value for value in (kind, status) if value)
-            next_action = _safe_text(item.get("next_action"), maximum=500)
+            next_action = _safe_inline_html(
+                item.get("next_action"),
+                maximum=500,
+                _legacy_inline_links=_legacy_inline_links,
+            )
             source_url = _safe_http_url(item.get("source_ref"), _legacy_source_links=_legacy_source_links)
             source = (
                 f'<a href="{source_url}" target="_blank" '
@@ -342,7 +411,7 @@ def _render_supporting_sections(
                 '<article class="supporting-note">'
                 f'<p class="supporting-label">{label}</p>'
                 f"<h4>{_safe_text(item.get('title'), maximum=240)}</h4>"
-                f"<p>{_safe_text(item.get('summary'), maximum=1000)}</p>"
+                f"<p>{_safe_inline_html(item.get('summary'), maximum=1000, _legacy_inline_links=_legacy_inline_links)}</p>"
                 + (
                     f'<p><strong>{labels["next"]}{labels["label_separator"]}</strong> {next_action}</p>'
                     if next_action
@@ -666,13 +735,15 @@ _SCRIPT = """
 def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_links: bool = False,
                                 _legacy_layout: bool = False,
                                 _legacy_masthead: bool = False,
-                                _legacy_highlight_wrap: bool = False) -> dict[str, Any]:
+                                _legacy_highlight_wrap: bool = False,
+                                _legacy_inline_links: bool = False) -> dict[str, Any]:
     """Render one dense, self-contained report without changing its semantics."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
     validate_periodic_report_editorial(document)
     _legacy_layout = _legacy_layout or _legacy_source_links
+    _legacy_inline_links = _legacy_inline_links or _legacy_layout
     css = _CSS
     if _legacy_highlight_wrap or _legacy_masthead or _legacy_layout:
         css = css.replace("\n  overflow-wrap: anywhere;", "", 1)
@@ -698,8 +769,12 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
     item_count = sum(len(_primary_items(section)) for section in sections)
     supporting_item_count = sum(len(_supporting_items(section)) for section in sections)
     document_digest = _document_digest(document)
-    markdown_artifact = render_periodic_report_markdown(document, _legacy_source_links=_legacy_source_links,
-                                                       _legacy_layout=_legacy_layout)
+    markdown_artifact = render_periodic_report_markdown(
+        document,
+        _legacy_source_links=_legacy_source_links,
+        _legacy_layout=_legacy_layout,
+        _legacy_inline_links=_legacy_inline_links,
+    )
 
     filters = [
         '<a class="section-filter" href="#report-top" data-section-filter="all" '
@@ -722,6 +797,7 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
             labels=labels,
             references=references,
             _legacy_source_links=_legacy_source_links,
+            _legacy_inline_links=_legacy_inline_links,
         )
         rendered_sections.append(section_html)
 
@@ -740,7 +816,11 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
     if highlights:
         facts = []
         for highlight in highlights[:4]:
-            detail = _safe_text(highlight.get("detail"), maximum=160)
+            detail = _safe_inline_html(
+                highlight.get("detail"),
+                maximum=160,
+                _legacy_inline_links=_legacy_inline_links,
+            )
             tone = _safe_attr(highlight.get("tone") or "neutral", maximum=128)
             facts.append(
                 f'<div class="fact" data-tone="{tone}">'
@@ -759,8 +839,13 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
             f'<div class="fact"><strong>{len(sources)}</strong><span>{labels["sources"]}</span></div>'
             "</div>"
         )
-    supporting_sections = _render_supporting_sections(sections, labels=labels, references=references,
-        _legacy_source_links=_legacy_source_links)
+    supporting_sections = _render_supporting_sections(
+        sections,
+        labels=labels,
+        references=references,
+        _legacy_source_links=_legacy_source_links,
+        _legacy_inline_links=_legacy_inline_links,
+    )
     content = (
         "<!doctype html>\n"
         f'<html lang="{language}"><head><meta charset="utf-8">'
