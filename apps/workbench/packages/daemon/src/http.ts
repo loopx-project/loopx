@@ -1341,7 +1341,7 @@ export function createHttpServer(deps: HttpDeps): Server {
 
       if (method === 'POST' && sub === 'handover-thread') {
         const body = await readJson(req);
-        return sendJson(res, 201, await manager.createHandoverThread(threadId, body.agent, body.model, body.mode));
+        return sendJson(res, 201, await manager.createHandoverThread(threadId, body.agent, body.model, body.mode, undefined, body.takeTeam !== false));
       }
       // POST /api/threads/:id/autotitle: the person's 「重新取名」, through the 自动取名 extension.
       if (method === 'POST' && sub === 'autotitle') {
