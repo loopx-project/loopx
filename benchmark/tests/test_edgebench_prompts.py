@@ -66,6 +66,49 @@ def test_restricted_wrapper_preserves_task_and_describes_host_sampling(render, i
     assert "sforge-submit" not in wrapper
 
 
+def _sforge_runtime_stub(*, uses_loopx: bool, delivered: list[str]):
+    calls: dict[str, list[dict[str, object]]] = {"prepare": [], "loopx": [], "verify": []}
+
+    async def prepare(environment, text, **kwargs):
+        delivered.append(text)
+        calls["prepare"].append(kwargs)
+
+    async def configure(environment, command, **kwargs):
+        calls["loopx"].append({"command": list(command), "cwd": kwargs.get("cwd")})
+        return {"ok": True}
+
+    async def verify(environment, *, cwd, verify_explore=True, verify_yardstick=True):
+        calls["verify"].append({
+            "cwd": cwd,
+            "verify_explore": verify_explore,
+            "verify_yardstick": verify_yardstick,
+        })
+
+    runtime = SimpleNamespace(
+        goal_id="fixture-goal",
+        execution=SimpleNamespace(uses_loopx=uses_loopx),
+        _prepare_phase=prepare,
+        _write_task_document=prepare,
+        _loopx=configure,
+        _verify_phase_configuration=verify,
+        _worker_env=lambda **kwargs: {},
+    )
+    return runtime, calls
+
+
+def _assert_explore_phase_parity(calls: dict[str, list[dict[str, object]]], *, profile: str, workspace: Path, log_dir: Path) -> None:
+    if profile == "heartbeat-explore":
+        assert calls["prepare"] == [{"cwd": str(workspace), "verify": True, "verify_explore": False}]
+        assert len(calls["loopx"]) == 1
+        assert "--explore-harness-enabled" in calls["loopx"][0]["command"]
+        assert json.loads((log_dir / "explore-activation.json").read_text()) == {"ok": True}
+        assert calls["verify"] == [{"cwd": str(workspace), "verify_explore": True, "verify_yardstick": True}]
+    elif profile == "heartbeat-resume":
+        assert calls["prepare"] == [{"cwd": str(workspace), "verify": True, "verify_explore": True}]
+        assert calls["loopx"] == []
+        assert calls["verify"] == []
+
+
 @pytest.mark.parametrize("profile", [
     "official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore",
 ])
@@ -116,23 +159,15 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
             result = subprocess.run(["/bin/bash", "-c", command], capture_output=True, text=True)
             return SimpleNamespace(return_code=result.returncode, stdout=result.stdout)
 
-    async def prepare(environment, text, **kwargs):
-        received.append(text)
-
-    async def configure(*args, **kwargs):
-        return {"ok": True}
-
     worker.environment = Environment()
-    worker.runtime = SimpleNamespace(
-        goal_id="fixture-goal",
-        execution=SimpleNamespace(uses_loopx=profile.startswith("heartbeat-")),
-        _prepare_phase=prepare, _write_task_document=prepare, _loopx=configure,
-        _worker_env=lambda **kwargs: {},
+    worker.runtime, runtime_calls = _sforge_runtime_stub(
+        uses_loopx=profile.startswith("heartbeat-"), delivered=received,
     )
     monkeypatch.setattr("benchmark.runtime.sforge.worker_command", lambda *a, **kw: ["worker"])
     worker.format_run_cmd(str(remote), internet=False)
     assert remote.read_text() == prompt == (tmp_path / "agent_prompt.md").read_text()
     assert received == ([] if profile in {"official", "single"} else [prompt])
+    _assert_explore_phase_parity(runtime_calls, profile=profile, workspace=workspace, log_dir=tmp_path)
     if feedback == "native":
         assert agents.read_text().startswith("Task-owned instructions: preserve the interface.\n")
         assert agents.read_text().endswith(instructions)
@@ -201,20 +236,13 @@ def test_worker_delivers_exact_file_set_guidance_only_with_native_probe(
             result = subprocess.run(["/bin/bash", "-c", command], capture_output=True, text=True)
             return SimpleNamespace(return_code=result.returncode, stdout=result.stdout)
 
-    async def receive(environment, text, **kwargs):
-        delivered.append(text)
-
-    async def configure(*args, **kwargs):
-        return {"ok": True}
-
     worker.environment = Environment()
-    worker.runtime = SimpleNamespace(goal_id="fixture-goal", execution=SimpleNamespace(uses_loopx=True),
-        _prepare_phase=receive, _write_task_document=receive, _loopx=configure,
-        _worker_env=lambda **kwargs: {})
+    worker.runtime, runtime_calls = _sforge_runtime_stub(uses_loopx=True, delivered=delivered)
     monkeypatch.setattr("benchmark.runtime.sforge.worker_command", lambda *args, **kwargs: ["worker"])
     worker.format_run_cmd(str(remote), internet=False)
     assert delivered == [prompt]
     assert remote.read_text() == (tmp_path / "agent_prompt.md").read_text() == prompt
+    _assert_explore_phase_parity(runtime_calls, profile=profile, workspace=workspace, log_dir=tmp_path)
     if feedback == "native":
         assert agents.read_text().endswith(instructions)
         for text in [prompt, agents.read_text(), delivered[0]]:
