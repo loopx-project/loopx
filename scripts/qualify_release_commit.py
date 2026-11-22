@@ -99,8 +99,15 @@ def _load_pytest_norecursedirs(repo_root: Path) -> tuple[str, ...]:
     return tuple(patterns)
 
 
+def _normalize_rel_path(raw: str) -> str:
+    normalized = raw.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
+
+
 def _is_excluded_by_norecursedirs(rel_path: str, patterns: Sequence[str]) -> bool:
-    normalized = rel_path.replace("\\", "/").lstrip("./").strip("/")
+    normalized = _normalize_rel_path(rel_path).strip("/")
     if not normalized or not patterns:
         return False
     parts = Path(normalized).parent.parts
@@ -130,7 +137,7 @@ def select_preflight_tests(
     seen: set[str] = set()
 
     def add(rel_path: str) -> None:
-        normalized = rel_path.replace("\\", "/").lstrip("./")
+        normalized = _normalize_rel_path(rel_path)
         if normalized in seen or _is_excluded_by_norecursedirs(normalized, norecursedirs):
             return
         if (repo_root / normalized).is_file():
@@ -138,10 +145,12 @@ def select_preflight_tests(
             selected.append(normalized)
 
     for raw in changed_paths:
-        rel = raw.replace("\\", "/").lstrip("./")
-        if not rel or _is_excluded_by_norecursedirs(rel, norecursedirs):
+        rel = _normalize_rel_path(raw)
+        if not rel:
             continue
         if _is_direct_test_path(rel):
+            if _is_excluded_by_norecursedirs(rel, norecursedirs):
+                continue
             add(rel)
         if any(rel.startswith(prefix) for prefix in _PUBLIC_SAFETY_SURFACE_PREFIXES):
             for test_path in _PUBLIC_SAFETY_TESTS:
@@ -157,11 +166,26 @@ def select_preflight_tests(
             "scripts/qualify_release_commit.py",
             "scripts/qualify-doubao-model-behavior-live.py",
             "loopx/control_plane/testing/release_commit_qualification.py",
-        }:
+            "loopx/control_plane/testing/release_evaluation_gate.py",
+        } or rel.startswith("docs/product/releases/evaluations/"):
             add("tests/control_plane/test_release_commit_qualification.py")
+            add("tests/control_plane/test_release_evaluation_gate.py")
             add("tests/control_plane/test_actual_default_model_behavior_live.py")
         if rel == "pyproject.toml":
             add("tests/test_python_ci_workflow.py")
+        if rel.startswith("packages/dsh-loopx-plugin/") or rel in {
+            ".github/workflows/dsh-plugin.yml",
+            ".github/workflows/dsh-plugin-publish.yml",
+        }:
+            add("tests/test_dsh_plugin_publish_workflow.py")
+        if rel.startswith(("scripts/desktop_", ".github/workflows/desktop-")):
+            add("tests/desktop/test_desktop_signing_workflow.py")
+            add("tests/desktop/test_update_feed.py")
+        if rel in {
+            "scripts/release_multi_surface_preflight.py",
+            "docs/product/release-readiness.md",
+        }:
+            add("tests/control_plane/test_release_multi_surface_preflight.py")
         if rel.endswith(".py") and rel.startswith(("loopx/", "scripts/")):
             stem = Path(rel).stem
             if stem != "__init__" and len(stem) >= 4:

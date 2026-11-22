@@ -6,6 +6,7 @@ or the correctness of prose. The referenced tests remain the behavioral oracles.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -112,6 +113,15 @@ def require_heading(markdown: str, anchor: str) -> None:
         raise ValueError(f"missing heading anchor: {anchor}")
 
 
+def load_dev_book_smoke() -> object:
+    smoke_path = REPO / "examples" / "dev-book-publication-smoke.py"
+    spec = importlib.util.spec_from_file_location("dev_book_publication_smoke", smoke_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class ReaderCheckpointReferences(unittest.TestCase):
     def test_bilingual_checkpoint_commands_match(self) -> None:
         zh, en = (checkpoint_sections(page.read_text(encoding="utf-8")) for page in PAGES)
@@ -180,6 +190,10 @@ class ReaderCheckpointReferences(unittest.TestCase):
                             fence = None
                 with self.subTest(locale=locale, page=name):
                     self.assertIsNone(fence, "unclosed fenced example")
+
+    def test_chapter_invariants_and_named_sequences_hold(self) -> None:
+        smoke = load_dev_book_smoke()
+        smoke.assert_chapter_invariants_and_sequences()
 
 
 class ReaderCheckpointGuardTests(unittest.TestCase):
@@ -251,6 +265,26 @@ class ReaderCheckpointGuardTests(unittest.TestCase):
     def test_missing_heading_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing heading"):
             require_heading("## A {#present}\n", "missing")
+
+    def test_chapter_invariant_and_sequence_guards_reject_truncation(self) -> None:
+        smoke = load_dev_book_smoke()
+        cases = (
+            ("## Invariants\n\n1. Plain text without bold summary.\n", "missing bold summary"),
+            ("## Invariants\n\n1. **First.** Ok.\n3. **Third.** Skipped two.\n", "non-contiguous Invariants"),
+            ("**Boundary one: first.** Ok.\n\n**Boundary three: third.** Skipped two.\n", "non-contiguous Boundary"),
+            ("**Failure one: first.** Ok.\n\n**Failure two:** Body without title.\n", "Failure two missing bold title"),
+        )
+        for bad_markdown, expected_error in cases:
+            with self.subTest(expected=expected_error), tempfile.TemporaryDirectory() as tmp:
+                book_dir = Path(tmp)
+                (book_dir / "chapters").mkdir()
+                (book_dir / "en" / "chapters").mkdir(parents=True)
+                (book_dir / "chapters" / "sample.md").write_text("# Sample\n", encoding="utf-8")
+                (book_dir / "en" / "chapters" / "sample.md").write_text(bad_markdown, encoding="utf-8")
+                smoke.BOOK = book_dir
+                smoke.CHAPTERS = ("sample",)
+                with self.assertRaisesRegex(AssertionError, expected_error):
+                    smoke.assert_chapter_invariants_and_sequences()
 
 
 @unittest.skipUnless(shutil.which("git"), "Git is required for the isolated onboarding example")

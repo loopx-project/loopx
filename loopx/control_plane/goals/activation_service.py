@@ -1,33 +1,36 @@
 from __future__ import annotations
 
+import hashlib
+import os
+from collections.abc import Mapping
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from enum import Enum
-import hashlib
-import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ...configuration_transaction import configuration_payload_revision
+from ...file_lock import exclusive_cross_runtime_file_lock
+from ...global_registry import sync_project_registry_to_global
+from ...history import load_registry
+from ...paths import (
+    GLOBAL_REGISTRY_FILENAME,
+    global_registry_path,
+    goal_state_file_from_record,
+    resolve_runtime_root,
+    select_default_runtime_root,
+)
+from ...registry import registry_goals
+from ...registry_writability import probe_registry_write_path
+from ..actor_identity import OwnerControllerActorKind, normalize_owner_controller_actor
+from ..content_digest import BARE_SHA256_PATTERN
+from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import (
     activation_upgrade_registry_transaction,
     project_registry_transaction,
     read_activation_upgrade_registry,
 )
-from ..effect_runtime import effect_runtime_result
-from ...paths import (
-    GLOBAL_REGISTRY_FILENAME,
-    global_registry_path,
-    resolve_runtime_root,
-    select_default_runtime_root,
-)
-from ...configuration_transaction import configuration_payload_revision
-from ...file_lock import exclusive_cross_runtime_file_lock
-from ...global_registry import sync_project_registry_to_global
-from ...history import load_registry
-from ...registry import registry_goals
-from ...registry_writability import probe_registry_write_path
-from ..actor_identity import OwnerControllerActorKind, normalize_owner_controller_actor
 from ..runtime.time import now_local_iso
 from .activation import (
     GoalActivationState,
@@ -36,9 +39,7 @@ from .activation import (
     goal_owner_resume_id,
     normalize_goal_activation_state,
 )
-from ..content_digest import BARE_SHA256_PATTERN
 from .configure_goal_service import resolve_configure_goal_sync_target
-
 
 GOAL_ACTIVATION_TRANSITION_SCHEMA_VERSION = "loopx_goal_activation_transition_v1"
 GOAL_ACTIVATION_READBACK_SCHEMA_VERSION = "loopx_goal_activation_readback_v1"
@@ -232,6 +233,74 @@ def _source_and_target(
         source_status=GoalActivationSourceStatus.AVAILABLE,
     )
 
+
+def _project_committed_transition(
+    *,
+    source_registry: Path,
+    runtime_root_override: str | None,
+    goal_id: str,
+) -> dict[str, Any]:
+    """Project a transition the source registry already committed.
+
+    The source registry owns the lifecycle transition; the shared registry is
+    a repairable projection of it. A projection writer that raises is the same
+    fixable fault as a failure receipt, so report it here instead of letting it
+    escape and erase the committed transition receipt.
+    """
+
+    try:
+        return sync_project_registry_to_global(
+            registry_path=source_registry,
+            runtime_root_override=runtime_root_override,
+            goal_id=goal_id,
+            dry_run=False,
+            _global_registry_lock_held=True,
+        )
+    except Exception as exc:  # the committed source transition keeps its receipt
+        return {
+            "ok": False,
+            "dry_run": False,
+            "error_kind": "global_sync_failed",
+            "error": f"shared registry projection failed: {exc}",
+            "registry": str(source_registry),
+            "recommended_action": (
+                f"rerun loopx sync-global --goal-id {goal_id} "
+                "after repairing the shared registry route"
+            ),
+        }
+
+
+def _readback_committed_transition(
+    *,
+    source_registry: Path,
+    target_registry: Path,
+    goal_id: str,
+    expected_state: GoalActivationState,
+    expected_owner_resume_id: str | None,
+) -> dict[str, Any]:
+    """Read back a committed transition without discarding its receipt.
+
+    A read fault after the source commit is reported as an unverified readback
+    so the caller still sees ``written`` and the terminal hook still runs.
+    """
+
+    try:
+        return _readback(
+            source_registry=source_registry,
+            target_registry=target_registry,
+            goal_id=goal_id,
+            expected_state=expected_state,
+            expected_owner_resume_id=expected_owner_resume_id,
+        )
+    except Exception as exc:  # the committed source transition keeps its receipt
+        return {
+            "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
+            "status": "readback_failed",
+            "verified": False,
+            "goal_id": goal_id,
+            "expected_state": expected_state.value,
+            "error": f"activation readback failed: {exc}",
+        }
 
 def _readback(
     *,
@@ -472,6 +541,7 @@ def set_goal_activation_state(
                 )
                 return payload
             locked_goal = _goal(source_payload, normalized_goal_id)
+            closeout_goal = dict(locked_goal)
             locked_state = goal_activation_state(locked_goal)
             if locked_state is not before_state:
                 payload.update(
@@ -505,12 +575,10 @@ def set_goal_activation_state(
                 payload["written"] = True
 
             if registries_are_distinct:
-                sync_payload = sync_project_registry_to_global(
-                    registry_path=source_registry,
+                sync_payload = _project_committed_transition(
+                    source_registry=source_registry,
                     runtime_root_override=sync_runtime_root,
                     goal_id=normalized_goal_id,
-                    dry_run=False,
-                    _global_registry_lock_held=True,
                 )
                 payload["global_sync"] = sync_payload
 
@@ -521,7 +589,7 @@ def set_goal_activation_state(
                     "verified": False,
                 }
                 if sync_payload is not None and not sync_payload.get("ok")
-                else _readback(
+                else _readback_committed_transition(
                     source_registry=source_registry,
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
@@ -539,12 +607,111 @@ def set_goal_activation_state(
         and readback.get("verified")
     )
     if not payload["ok"]:
-        payload["error"] = "goal activation shared registry readback did not verify"
+        payload["error"] = str(
+            readback.get("error")
+            or (sync_payload or {}).get("error")
+            or "goal activation shared registry readback did not verify"
+        )
         payload["recommended_action"] = (
             (sync_payload or {}).get("recommended_action")
             or f"rerun loopx sync-global --goal-id {normalized_goal_id} after repairing the shared registry route"
         )
+    # The stop itself is committed in the source registry, which owns the
+    # transition. A failed shared projection is a separately reported, fixable
+    # fault, and a retry cannot re-enter this branch because the source is
+    # already stopped; the hook therefore runs once for the committed
+    # transition even when the projection has to be repaired afterwards.
+    if (
+        execute
+        and target_state is GoalActivationState.STOPPED
+        and changed
+        and payload.get("written")
+        and closeout_goal is not None
+    ):
+        payload["closeout"] = _stop_closeout_payload(
+            source_registry=source_registry,
+            registry_snapshot=source_payload,
+            runtime_root_override=runtime_root_override,
+            goal_id=normalized_goal_id,
+            closeout_goal=closeout_goal,
+        )
     return payload
+
+
+def _stop_closeout_payload(
+    *,
+    source_registry: Path,
+    registry_snapshot: Mapping[str, Any],
+    runtime_root_override: str | None,
+    goal_id: str,
+    closeout_goal: dict[str, Any],
+) -> dict[str, Any]:
+    """Run the terminal hook after a committed stop transition.
+
+    The stop is already committed when this runs, so the whole boundary is
+    best-effort: argument preparation reads the confirmed registry snapshot
+    taken inside the transaction, and any preparation failure is reported in
+    the hook result instead of raising past the committed receipt.
+    """
+
+    from ...lifecycle.goal_closeout import (
+        GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
+        goal_closeout_configuration,
+        run_goal_closeout,
+    )
+
+    try:
+        closeout_runtime_root = resolve_runtime_root(
+            dict(registry_snapshot),
+            runtime_root_override,
+            registry_path=source_registry,
+        )
+        # No configured command means no hook-only preparation: resolving a
+        # historical state path (say, an expired user alias) must not turn an
+        # otherwise clean stop into a preparation error. Retire and archive
+        # apply the same short-circuit.
+        configuration, configuration_error = goal_closeout_configuration(
+            closeout_runtime_root
+        )
+        if configuration_error is None and not (configuration or {}).get("command"):
+            return {
+                "schema_version": GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
+                "goal_id": goal_id,
+                "trigger": "goal-lifecycle-stop",
+                "terminal_reason": "stopped",
+                "status": "not_configured",
+                "ledger_recorded": False,
+            }
+        declared = goal_state_file_from_record(
+            closeout_goal,
+            registry_path=source_registry,
+        )
+        if declared is None:
+            declared = (
+                source_registry.parent
+                / "goals"
+                / goal_id
+                / "ACTIVE_GOAL_STATE.md"
+            )
+        state_file = declared
+        return run_goal_closeout(
+            runtime_root=closeout_runtime_root,
+            goal_id=goal_id,
+            repo=str(closeout_goal.get("repo")) if closeout_goal.get("repo") else None,
+            state_file=str(state_file),
+            terminal_reason="stopped",
+            trigger="goal-lifecycle-stop",
+        )
+    except Exception as exc:  # the committed stop must keep its own receipt
+        return {
+            "schema_version": "loopx_goal_closeout_invocation_v0",
+            "goal_id": goal_id,
+            "trigger": "goal-lifecycle-stop",
+            "terminal_reason": "stopped",
+            "status": "preparation_error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "ledger_recorded": False,
+        }
 
 
 def render_goal_activation_markdown(payload: dict[str, Any]) -> str:

@@ -1,4 +1,5 @@
 import type {WorkYardstickCapture, WorkYardstickProfile} from "../../../../../../loopx/control_plane/work_items/yardstick_decision.js";
+import {ContextHelp} from "./context-help";
 
 /** A source record, never an acceptance or permission indicator. */
 export function WorkYardstickReadback({capture, zh}: {capture: WorkYardstickCapture; zh: boolean}) {
@@ -29,7 +30,7 @@ export function ExecutionObservationReadback({observation, zh}: {
 }) {
   const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
   return <details className="explore-reader-details">
-    <summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
+    <summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
     <dl className="research-finding-sections">
       <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(observation.planned_method_id)} → {String(observation.executed_method_id)}</dd>
       {observation.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(observation.change_reason)}</dd></> : null}
@@ -40,6 +41,5 @@ export function ExecutionObservationReadback({observation, zh}: {
       <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(observation.candidate_sha256)}</code></dd>
       {observation.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(observation.result_ref)}</code></dd></> : null}
     </dl>
-    <p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p>
   </details>;
 }

@@ -750,7 +750,7 @@ owner、协议 schema、characterization fixture 和 migration boundary。
 **失败三：投影被当成事实源。** dashboard 上改一个 row 让显示正确，source 没变。症状是
 UI 与 CLI 长期不一致，而每次刷新都回到旧值。恢复方式是修 source 或 builder，再 readback。
 
-Goal `stopped`、quota paused 或 peer coordination blocked
+**失败四：停止的理由并不等于闭环。** Goal `stopped`、quota paused 或 peer coordination blocked
 都可能停止轮询，它们各自是合法停止。只有 `terminal_no_followup` 表达
 "因已验证 Goal closure 而停止"。把这几者混作一谈，会让一个被暂停的 Goal 看起来像已完成。
 
@@ -765,7 +765,7 @@ Goal `stopped`、quota paused 或 peer coordination blocked
    处理拒绝结果。
 5. **终局是合取。** 完整且闭合的 Todo source、没有未解决 frontier、结构化 `no_followup`
    intent，三者同时成立才算闭环。
-6. 改规则先确认 typed owner、协议 schema、characterization
+6. **教学地图不等于实现规格。** 改规则先确认 typed owner、协议 schema、characterization
    fixture 和 migration boundary。
 
 这六条回答的是同一个问题：**当机制被拆到九组机器、又只能通过持久事实互相说话时，凭什么

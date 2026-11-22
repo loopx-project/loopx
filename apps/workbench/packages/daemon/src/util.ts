@@ -34,7 +34,8 @@ export function textOf(content: unknown): string {
  * only notes is summed up by its first comment, else by the passage itself.
  */
 export function askedText(text: string): string {
-  text = text.replace(/(?:^|\n\n)<loochat-references>\n[^\n]*\n<\/loochat-references>(?=\n\n|$)/g, '');
+  // Strip hub instructions from titles and previews, while preserving inline code mentions.
+  text = text.replace(/(?:^|\n\n)<(loochat-[a-z-]+)>[\s\S]*?<\/\1>(?=\n|$)/g, '');
   const lines = text.split('\n');
   const quoted: string[] = [];
   const comments: string[] = [];

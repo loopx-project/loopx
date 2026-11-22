@@ -513,7 +513,11 @@ def quota_rollout_details(
         details["admission_resume_when"] = selected_todo.get("resume_when")
         details["admission_resume_ready"] = selected_todo.get("resume_ready")
     recovery = payload.get("unsettled_host_turn_recovery")
-    if isinstance(recovery, Mapping) and recovery.get("state") == "recovery_required":
+    if (
+        not getattr(args, "scheduler_observation", False)
+        and isinstance(recovery, Mapping)
+        and recovery.get("state") == "recovery_required"
+    ):
         checkpoint = recovery.get("admission_checkpoint")
         if isinstance(checkpoint, Mapping):
             details.update(checkpoint)

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -1383,4 +1383,78 @@ test("pending receipt preserves serialized work_lane_contract and external_evide
     (committed.record?.monitor_event as Record<string, unknown>).monitor_mode,
     "external_monitor_observed_without_material_transition",
   );
+});
+
+test("monitor-poll receipt replay follows a copied runtime and rejects unsafe paths", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request({
+    phase: "commit",
+    runtime_root: runtimeRoot,
+    execute: true,
+    effect_id: "quota-monitor-poll:copied-runtime",
+    turn_instance_id: "copied-turn",
+  });
+  const written = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(written.status, "written");
+  const copiedRoot = await tempRuntime(t);
+  const sourceRuns = join(runtimeRoot, "goals", goalId, "runs");
+  const copiedRuns = join(copiedRoot, "goals", goalId, "runs");
+  await cp(sourceRuns, copiedRuns, { recursive: true });
+  const originalJson = String(written.payload.json_path);
+  const originalBytes = await readFile(originalJson);
+  const originalIndex = await readFile(join(sourceRuns, "index.jsonl"), "utf8");
+  const copiedParams = { ...params, runtime_root: copiedRoot };
+  const preview = await evaluateQuotaMonitorPollCommit({ ...copiedParams, execute: false });
+  assert.equal(preview.status, "preview");
+  const replayed = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayed.payload.markdown_path, join(copiedRuns, basename(String(written.payload.markdown_path))));
+  assert.equal(replayed.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  assert.equal((await evaluateQuotaMonitorPollCommit(copiedParams)).status, "replayed");
+
+  const copiedIndex = await readFile(join(copiedRuns, "index.jsonl"));
+  await writeFile(join(copiedRuns, "index.jsonl"), copiedIndex.subarray(0, copiedIndex.length - 2));
+  const repaired = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.equal(await readFile(join(sourceRuns, "index.jsonl"), "utf8"), originalIndex);
+  const replayedAfterRepair = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
+
+  const token = createHash("sha256").update(String(params.effect_id)).digest("hex").slice(0, 24);
+  const receiptPath = join(copiedRuns, ".transactions", "quota-monitor-poll", `${token}.json`);
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as Record<string, unknown>;
+  const otherRuns = join(copiedRoot, "goals", "other-goal", "runs");
+  await mkdir(otherRuns, { recursive: true });
+  const otherJson = join(otherRuns, basename(originalJson));
+  await writeFile(otherJson, originalBytes);
+  await writeFile(receiptPath, JSON.stringify({ ...receipt, json_path: otherJson }));
+  await assert.rejects(
+    () => evaluateQuotaMonitorPollCommit(copiedParams),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      assert.match(error.message, /do not match the transaction scope/);
+      return true;
+    },
+  );
+  await writeFile(receiptPath, JSON.stringify(receipt));
+  const copiedJson = join(copiedRuns, basename(originalJson));
+  await unlink(copiedJson);
+  await symlink(originalJson, copiedJson);
+  await assert.rejects(
+    () => evaluateQuotaMonitorPollCommit(copiedParams),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  await assert.rejects(() => readFile(join(copiedRoot, "outside-monitor.json")), { code: "ENOENT" });
 });

@@ -17,7 +17,7 @@ from . import goal_direction_api as direction_api
 from . import decision_context_api as context_api
 from . import content_media_api as media_api
 from ..chat import machine_configuration_api as machine_api
-from .. import chat_operator_provider_api as operator_api
+from ..chat import operator_provider_api as operator_api
 from ..chat import automation_cadence_api as cadence_api
 
 

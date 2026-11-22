@@ -507,7 +507,7 @@ def reply_image_workspace(session: dict[str, Any], turn: dict[str, Any]) -> Path
 
 
 def _check_reply_image(data: bytes, mime: str) -> None:
-    from ...chat_attachments import CHAT_IMAGE_MAX_BYTES
+    from ...chat.attachments import CHAT_IMAGE_MAX_BYTES
 
     if not data or len(data) > CHAT_IMAGE_MAX_BYTES:
         raise ValueError("reply image is empty or exceeds its size bound")
@@ -539,7 +539,7 @@ def read_reply_image(workspace: Path, turn_id: str, name: str) -> tuple[str, byt
 
 def capture_reply_image_plan(workspace: Path, turn_id: str, targets: list[str]) -> list[str | dict[str, Any] | None]:
     """Pin exact local bytes without keeping host paths in Chat responses."""
-    from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES
+    from ...chat.attachments import CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES
 
     if all(target.startswith("https://") for target in targets):
         return []  # The original remote-image path remains authoritative.
@@ -585,7 +585,7 @@ class _DeferredBacklogRequest(dict[str, Any]):
 
 def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
     """Fingerprint already normalized Core images without exporting their bytes."""
-    from ...chat_attachments import normalize_chat_image_attachments
+    from ...chat.attachments import normalize_chat_image_attachments
 
     if not isinstance(value, list) or not value:
         return None

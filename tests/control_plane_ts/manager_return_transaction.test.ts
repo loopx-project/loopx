@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -7,6 +8,7 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { RETURN_DELIVERY_TRANSACTION, transactManagerReturnDelivery } from "../../loopx/control_plane/collaboration/return_delivery.ts";
 
 const id = "a".repeat(64);
+const conclusionMessageId = "handoff." + createHash("sha256").update(`["${id}", "conclusion"]`).digest("hex");
 const now = "2026-01-02T03:04:05.123456+00:00";
 const ref = { goal_id: "research", goal_instance_id: "ginst_" + "b".repeat(32) };
 const attempt = { schema_version: "manager_return_delivery_attempt_v0", provider: "lark",
@@ -58,6 +60,20 @@ for (const exact of [false, true]) {
       const bytes = await readFile(f.statePath);
       assert.equal((await f.run("prepare")).action, "skip");
       assert.deepEqual(await readFile(f.statePath), bytes);
+    } finally { await f.close(); }
+  });
+
+  test(`a local transcript cannot confirm an external terminal return (${exact})`, async () => {
+    const f = await fixture(exact, true);
+    try {
+      await f.put(f.statePath, {status: "delivered", delivered_at: now, ...(exact ? {goal_ref: ref} : {})});
+      const damaged = await readFile(f.statePath);
+      const plan = await f.run("prepare");
+      assert.equal(plan.action, "skip");
+      const attempted = await f.run("settle", {private_readback: {message_id: conclusionMessageId,
+        turn_id: "turn", role: "agent", origin: "manager_followup", created_at: now}});
+      assert.equal(attempted.processed, 0);
+      assert.deepEqual(await readFile(f.statePath), damaged);
     } finally { await f.close(); }
   });
 
@@ -268,7 +284,7 @@ test("scan skips terminal and corrupt records but locked admission rechecks ever
     transactManagerReturnDelivery({ ...f.command, phase: "scan", candidates });
   try {
     assert.deepEqual((await scan()).candidates, [{ request_id: id, result_key: "conclusion" }]);
-    await f.put(f.statePath, { status: "delivered" });
+    await f.put(f.statePath, { status: "delivered", message_id: conclusionMessageId });
     assert.deepEqual((await scan()).candidates, []);
     assert.equal((await f.run("prepare")).action, "skip");
     await writeFile(f.statePath, "{broken");
@@ -441,7 +457,8 @@ test("scan emits terminal_candidates strictly for immutable terminal states", as
     for (const status of ["delivered", "superseded", "explicit_unverified"]) {
       const f = await fixture(exact, true);
       try {
-        await f.put(f.statePath, { status, ...(exact ? { goal_ref: ref } : {}) });
+        await f.put(f.statePath, { status, ...(status === "delivered" ? { message_id: conclusionMessageId } : {}),
+          ...(exact ? { goal_ref: ref } : {}) });
         const result = await f.run("scan", { candidates: [{ request_id: id, result_key: "conclusion" }] });
         assert.deepEqual(result.candidates, []);
         assert.deepEqual(result.terminal_candidates, [{ request_id: id, result_key: "conclusion" }]);

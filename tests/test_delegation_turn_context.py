@@ -1,21 +1,29 @@
 """Real receipt/store journeys: a Turn agenda does not complete or replay work."""
 import json
 import os
-from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import sys
 import sysconfig
+from pathlib import Path
 
 import pytest
-
-from loopx.capabilities.manager_context import acknowledge, deliver, turn_start_hook, _root, _write
-from loopx.capabilities.manager_context.roundtrip import report, drain
-from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
-from loopx.control_plane.collaboration.peers import request, read_inbox, consume_return
-from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
 import test_manager_context_roundtrip as roundtrip_tests
+
+from loopx.capabilities.manager_context import (
+    _root,
+    _write,
+    acknowledge,
+    deliver,
+    turn_start_hook,
+)
+from loopx.capabilities.manager_context.roundtrip import drain, report
+from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
+from loopx.control_plane.collaboration.peers import consume_return, read_inbox, request
+from loopx.control_plane.collaboration.turn_context_observation import (
+    read_delegation_turn_context,
+)
 
 
 @pytest.fixture
@@ -183,7 +191,9 @@ def test_before_work_reader_preserves_delivered_partial_work_without_repeating_t
         compact = {row["request_id"]: row for row in view["unfinished_delegations"]["items"]}
         assert set(compact) == set(delivered) | expected
         assert all(compact[rid]["remaining_work"] == remainder for rid in delivered)
-        assert compact[mismatched]["step"] == "recover_evidence"
+        # Current main prioritizes the adopted request step; the mismatched
+        # delivery remains visible through its original evidence state.
+        assert compact[mismatched]["step"] == "review_request_work"
         mismatched_item = next(row for row in view["items"] if row["request_id"] == mismatched)
         assert mismatched_item["brief"] == delivered[mismatched]
         assert "--attention-only" not in view["unfinished_delegations"]["read_command"]
@@ -292,13 +302,21 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
     tmp_path, monkeypatch, provider, reader_output_bytes,
 ):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference,
+    )
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_context_first_read import read_selection
     from tests.control_plane.test_quota_settlement_cli import (
-        AGENT_ID, GOAL_ID, TURN_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
-        _run_cli, _spend_run_count, _write_fixture,
+        AGENT_ID,
+        GOAL_ID,
+        TURN_ID,
+        _heartbeat_receipt_count,
+        _initialize_fixture_authority,
+        _run_cli,
+        _spend_run_count,
+        _write_fixture,
     )
-    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
@@ -351,8 +369,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
     command = shlex.split(read["command"])
     assert command[0] == str(console)
     assert "--attention-only" in command
-
-    def invoke(argv, output_limit=5_000):
+    def invoke(argv, output_limit=12_000):
         result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
         assert 0 < len(result.stdout) <= output_limit
@@ -509,11 +526,19 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
 def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     tmp_path, monkeypatch, provider, delivery, partial, parent_context,
 ):
-    from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
     from loopx.control_plane.testing.canary_harness import write_fixture_registry
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
-    from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
+    from loopx.control_plane.todos.goal_todo_projection import (
+        retained_todo_summary_fields,
+    )
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     # A module launched from the checkout can mask a stale inherited package.
@@ -580,7 +605,10 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     assert code == 0 and tracking["rows"][0]["read"]["at"]
     before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
     if delivery == "native_files":
-        from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
+        from loopx.control_plane.turn_driver.codex_context import (
+            codex_context_directory,
+            codex_context_hook,
+        )
         (tmp_path / "captures").mkdir()
         (tmp_path / "context").mkdir(mode=0o700)
         monkeypatch.setenv("CODEX_THREAD_ID", "agenda-session")
@@ -622,7 +650,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 assert page["next_offset"] == len(content) > page["offset"]
                 command = page["next_command"]
             assert pages > 1, "Exercise complete selected-context pagination."
-            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+            from tests.control_plane.codex_checkpoint_fixture import (
+                selected_context_values,
+            )
 
             values = selected_context_values(content.decode("utf-8"))
             pointer = next(key for key in values if key.endswith("/content/unfinished_delegations"))

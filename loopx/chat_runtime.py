@@ -44,9 +44,9 @@ from .chat_codex_goal import (
     parse_native_goal_command,
     validate_goal_chat,
 )
-from .chat_dsh import DshChatAdapter as DshChatAdapter
+from .chat.dsh import DshChatAdapter as DshChatAdapter
 from .chat.endpoint_catalog import builtin_chat_endpoints
-from .chat_endpoints import AgentEndpointRegistry
+from .chat.endpoints import AgentEndpointRegistry
 from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
@@ -420,7 +420,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         session = self.store.load_session(session_id)
         if session is None:
             raise KeyError("chat session was not found")
-        from .chat_attachments import require_text_document_route
+        from .chat.attachments import require_text_document_route
         require_text_document_route(session, attachments)
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
@@ -508,11 +508,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
     def _require_steering_session(self, session_id: str) -> dict[str, Any]:
         session = self._load_open_session(session_id)
         require_managed_agent_session(self, session, Path(session.get("managed_workspace_path") or "."))
-        if session.get("steward_context") is not None:
-            raise ValueError("bound steward Chat requires its external source admission")
+        from .capabilities.native_chat.queued_admission import unbound_input_source_denial
+
+        denial = unbound_input_source_denial(session)
+        if denial:
+            raise ValueError(denial)
         if session.get("project_context") is not None:
-            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
-                raise ValueError("bound project steering requires its external source admission")
             self.project_contexts.session_context(session)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             session = require_current_attached_session(store=self.store, registry_path=self.registry_path, session_id=session_id)

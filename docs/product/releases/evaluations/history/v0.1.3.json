@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 0,
+    "minor": 1,
+    "patch": 3
+  },
+  "source": {
+    "package_version": "0.1.3",
+    "version_tag": "v0.1.3",
+    "git_commit": "10509b06b092deefbe6f2884fbaeaffa25dc1a9a",
+    "git_tree": "9d59fe470735ca4ddb626e53214b4fb1c07f8f5a",
+    "committed_at": "2026-07-02T14:42:50+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v0.1.3",
+      "last_tag": "v0.1.16",
+      "last_commit": "49f27961826ca29cc7b00273dbf4b6999846c8c7",
+      "last_committed_at": "2026-07-10T12:20:36+08:00",
+      "tag_count": 14
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v0.1.3",
+      "v0.1.16"
+    ]
+  },
+  "a_scale": {
+    "score": 8.4,
+    "delta_from_prior": null,
+    "domain_scores": {
+      "D1": 11.0,
+      "D2": 7.0,
+      "D3": 6.0,
+      "D4": 6.0,
+      "D5": 10.0,
+      "D6": 9.0,
+      "D7": 7.0,
+      "D8": 14.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 0,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Bootstrap SemVer contract (#1089), SkillsBench app-server context recovery, extending through v0.1.16 (#1777).",
+  "summary_zh": "建立 SemVer 版本契约（#1089）与 SkillsBench app-server 上下文恢复，并延续至 v0.1.16（#1777）。"
+}

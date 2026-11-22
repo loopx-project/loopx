@@ -156,6 +156,39 @@ try {
     const afterOriginal = await fixture('inspect');
     assert.equal(afterOriginal.posts, beforeOriginal.posts);
     assert.deepEqual(writes.slice(originalWrites), [], 'Reading, retrying and closing originals cannot submit an operation');
+
+    // Use the real inventory and original Turn reader with the typed overlap
+    // already exercised by collaboration_turn_context.test.ts.
+    const inventoryRoute = '**/api/chat/request-inventory?*';
+    await page.route(inventoryRoute, async route => {
+      const response = await route.fetch();
+      const data = await response.json();
+      const row = data.rows[0];
+      if (row) {
+        row.control_state = 'effect_pending';
+        row.agenda.step = 'reconcile_reservation';
+        row.returns.push({phase: 'conclusion', status: 'explicit_unverified', error: 'manager_return_payload_conflict'});
+      }
+      await route.fulfill({response, json: data});
+    });
+    await dialog.getByRole('button', {name: '清空', exact: true}).click(); await rows(12);
+    const conflicted = dialog.locator('.conversation-request-row').first();
+    await conflicted.locator(':scope > summary').scrollIntoViewIfNeeded();
+    await page.screenshot({path: resolve(output, 'return-verification-desktop.png')});
+    await conflicted.getByText('原操作待收尾', {exact: false}).waitFor();
+    await conflicted.getByText('回传待核对', {exact: true}).waitFor();
+    assert.equal(await dialog.getByText('回传待核对', {exact: true}).count(), 1);
+    await page.setViewportSize({width: 390, height: 844});
+    await conflicted.locator(':scope > summary').scrollIntoViewIfNeeded();
+    await page.screenshot({path: resolve(output, 'return-verification-narrow-summary.png')});
+    if (await conflicted.getAttribute('open') === null) await conflicted.locator(':scope > summary').click();
+    await conflicted.getByText('核对原对话', {exact: true}).click();
+    await conflicted.locator('.conversation-request-detail article').nth(1).waitFor();
+    assert.ok(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    await page.screenshot({path: resolve(output, 'return-verification-narrow.png')});
+    assert.deepEqual(writes.slice(originalWrites), [], 'Return verification reads the original conversation without changing it');
+    await page.unroute(inventoryRoute);
+    await page.setViewportSize({width: 1440, height: 1000});
     await search('no matching request'); await settled();
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();
     await dialog.getByRole('button', {name: '清空', exact: true}).click(); await settled();

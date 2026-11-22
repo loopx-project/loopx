@@ -756,6 +756,7 @@ async function evaluateCommit(
       expectedIndexDigest: request.expected_index_digest,
       ...(goalRef === null ? {} : { goalRef }),
       indexLockHeld,
+      digestAtRuntimeRoot: (runtimeRoot) => requestDigest({ ...request, runtime_root: runtimeRoot }),
       prepare: async (context) =>
         await prepareArtifacts(request, fingerprint, runsDir, context),
     });

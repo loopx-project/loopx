@@ -1,0 +1,63 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { AgyAdapter } from '../src/adapters/agy.js';
+import type { EmittedEvent } from '../src/events.js';
+import type { TurnHooks } from '../src/adapters/types.js';
+const fixture = fileURLToPath(new URL('./fixtures/fake-agy.mjs', import.meta.url));
+
+test('agy ACP: settings and compact stay in one process, queries do not enter the conversation, old IDs resume', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'agy-acp-'));
+  const log = join(cwd, 'rpc.jsonl');
+  const adapter = new AgyAdapter([process.execPath, fixture], { FAKE_AGY_RPC_LOG: log });
+  const events: EmittedEvent[] = [];
+  let approvals = 0;
+  const hooks: TurnHooks = { emit: e => events.push(e), requestApproval: async () => { approvals++; return { optionId: 'allow' }; } };
+  const s = await adapter.start({ cwd, resumeId: 'old-conversation', model: 'fast', effort: 'low' });
+  const prompt = (text: string) => s.prompt({ text, images: [] }, hooks);
+  try {
+    assert.equal(adapter.capabilities.compact, true);
+    await prompt('hello');
+    await s.setModel!('big-thinking');
+    await s.setEffort!('high');
+    await s.setPermissionMode!('ask');
+    await prompt('run a command');
+    assert.equal(approvals, 1);
+    await s.setPermissionMode!('full_access');
+    await prompt('run a command');
+    assert.equal(approvals, 1, 'full access grants the offered allow option without asking again');
+    await s.setWorkMode!('plan');
+    await prompt('plan-draft');
+    assert.ok(events.some(e => e.type === 'plan.completed'));
+    await s.setWorkMode!('execute');
+    await prompt('/usage');
+    events.length = 0;
+    await prompt('/compact');
+    const compact = events.filter(e => e.type !== 'turn.phase');
+    assert.deepEqual(compact.map(e => e.type), ['tool.start', 'usage.updated', 'tool.end']);
+    assert.equal(compact[2].data.status, 'completed');
+    assert.equal(compact[1].data.used, 250);
+    events.length = 0;
+    await prompt('usage-drop');
+    assert.ok(!events.some(e => e.type === 'context.compaction'), 'a decline is not an automatic compaction signal');
+    events.length = 0;
+    assert.equal((await prompt('/compact fail')).stopReason, 'error');
+    assert.equal(events.at(-1)?.data.status, 'failed');
+    events.length = 0;
+    const pending = prompt('/compact slow');
+    await s.waitForSubmission!();
+    await s.cancel();
+    assert.equal((await pending).stopReason, 'cancelled');
+    assert.equal(events.at(-1)?.data.status, 'failed');
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    assert.equal(new Set(calls.map(c => c.pid)).size, 1);
+    assert.ok(calls.some(c => c.method === 'session/resume' && c.params.sessionId === 'old-conversation'));
+    assert.ok(!calls.some(c => c.method === 'session/new'));
+    assert.ok(!calls.some(c => c.method === 'session/prompt' && c.params.prompt.some((p: any) => p.text === '/usage')));
+    assert.deepEqual(calls.filter(c => c.method === 'session/set_config_option').map(c => [c.params.configId, c.params.value]),
+      [['model', 'fast'], ['thought_level', 'low'], ['model', 'big-thinking'], ['thought_level', 'high']]);
+  } finally { await s.close(); rmSync(cwd, { recursive: true, force: true }); }
+});

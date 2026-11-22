@@ -15,7 +15,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -23,7 +23,11 @@ from pathlib import Path
 from threading import Lock
 from typing import IO, Any, Literal, TypeAlias
 
-from ..file_lock import process_is_alive
+from ..file_lock import (
+    _effect_file_identity_from_fd,
+    _remove_created_effect_file,
+    process_is_alive,
+)
 from .runtime.file_reads import iter_binary_file_reads
 from .runtime.private_permissions import protect_private_path, require_private_path
 from .runtime.node_probe import (
@@ -32,6 +36,7 @@ from .runtime.node_probe import (
     MINIMUM_NODE_VERSION_TEXT as MINIMUM_NODE_VERSION_TEXT,
     STARTUP_READY_TIMEOUT_SECONDS as STARTUP_READY_TIMEOUT_SECONDS,
     node_probe_remediation,
+    node_typescript_flags as _node_typescript_flags,
     probe_node as _probe_node,
 )
 from .content_digest import BARE_SHA256_PATTERN
@@ -1276,12 +1281,6 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
     while time.monotonic() < lock_deadline:
         try:
             descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
-                lock_file.write(f"{os.getpid()}\n")
-                lock_file.flush()
-                os.fsync(lock_file.fileno())
-            acquired = True
-            break
         except FileExistsError:
             existing = _read_info(info_path, fingerprint=fingerprint)
             if existing is not None:
@@ -1299,6 +1298,24 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
             except OSError:
                 pass
             time.sleep(STARTUP_POLL_SECONDS)
+        else:
+            identity = None
+            try:
+                try:
+                    identity = _effect_file_identity_from_fd(descriptor)
+                    # Keep the raw descriptor owned here across stream construction.
+                    with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as lock_file:
+                        lock_file.write(f"{os.getpid()}\n")
+                        lock_file.flush()
+                        os.fsync(lock_file.fileno())
+                finally:
+                    with suppress(OSError):
+                        os.close(descriptor)
+            except BaseException:
+                _remove_created_effect_file(lock, identity)
+                raise
+            acquired = True
+            break
     if not acquired:
         existing = _read_info(info_path, fingerprint=fingerprint)
         if existing is not None:
@@ -1324,6 +1341,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                         _node_executable(),
                         "--no-warnings",
                         "--experimental-strip-types",
+                        *_node_typescript_flags(),
                         "--import",
                         # ESM specifiers require file URLs on Windows; encode
                         # reserved path characters on every platform as well.
@@ -1440,6 +1458,7 @@ def _start_stdio_runtime(fingerprint: str) -> _StdioRuntime:
                 _node_executable(),
                 "--no-warnings",
                 "--experimental-strip-types",
+                *_node_typescript_flags(),
                 str(_control_plane_root() / "effect_runtime_stdio.ts"),
                 fingerprint,
             ],

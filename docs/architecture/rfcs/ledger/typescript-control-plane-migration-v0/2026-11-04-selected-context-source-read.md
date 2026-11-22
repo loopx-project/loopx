@@ -39,3 +39,12 @@ Integration base: `d29ec8bf2a105aac24629bcbf3dfb7c97aea51fe`. Source candidate: 
 Candidate `ff4e94459` integrates latest base `ce4cfc1ce`. Its four changed production files remain byte-identical to `c137daecc`. Upstream now returns capture navigation; the existing product reader verifies and opens the complete current projection. Actual File/SQLite entrypoint readbacks on this base preserve complete work context and event identity; logical Effect calls are 74→73 in these newer observations.
 
 Six historical direct-stdout assertions fail on both latest main and candidate because they still expect an inline `should_run` field. Both selected runs have 2 pass /6 fail, with the same identities and failure boundary. Those failures remain evidence. Earlier installed/cost measurements retain their stated revision; latest-main full cost and Host qualification remain held.
+
+### Complete Turn CLI Vision audit
+
+The Complete Turn writer replaces an exact duplicate CLI audit view with a typed
+reference to the root in the same capture. The existing capture reader restores
+the CLI audit through the interaction view before address selection and pinned
+first-read rendering. The TypeScript selector still validates addresses. File and
+SQLite tests exercise the generated first read, child selects and field discovery
+against the same saved capture. The original capture hash remains unchanged.

@@ -4,7 +4,7 @@ import type { SessionHooks } from './types.js';
 import { nativeQuestions } from './questions.js';
 import type { WorkMode } from './types.js';
 import { CodexUsage } from './usage.js';
-import { cliDiagnostic } from './diagnostics.js';
+import { agentLoginRequired, cliDiagnostic } from './diagnostics.js';
 import { trackCompaction } from './compaction.js';
 import { goalSnapshot, goalSummary, parseGoalCommand, type GoalControl, type GoalCommand, type GoalSnapshot } from './native-goal.js';
 import { sessionEnvironment } from './types.js';
@@ -1171,6 +1171,14 @@ export class CodexAppServerAdapter implements AgentAdapter {
 
   private async readModels(): Promise<ModelOption[]> {
     return this.withServer(async (peer) => {
+      // model/list can return a public catalog even when the account cannot run a turn.
+      // Custom providers explicitly opt out; older servers may not expose account/read.
+      try {
+        const auth = await peer.request('account/read', { refreshToken: false });
+        if (auth?.requiresOpenaiAuth === true && auth.account === null) throw agentLoginRequired(this.label);
+      } catch (error) {
+        if (!(error instanceof RpcError && error.code === -32601)) throw error;
+      }
       const models: any[] = [];
       let cursor: string | undefined;
       for (let page = 0; page < 20; page++) {

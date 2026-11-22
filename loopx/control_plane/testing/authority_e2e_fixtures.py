@@ -24,6 +24,7 @@ from ..coordination.authority_core import HandoffMode
 from ..coordination.coordination_state_contract_generated import (
     LOCAL_AUTHORITY_SHADOW_CONFIG_SCHEMA,
 )
+from ..runtime.node_probe import node_typescript_flags
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TS_READBACK_PROBE = Path("tests") / "control_plane_ts" / "authority_store_readback_probe.ts"
@@ -541,6 +542,7 @@ def ts_readback(
         node,
         "--no-warnings",
         "--experimental-strip-types",
+        *node_typescript_flags(),
         str(REPO_ROOT / TS_READBACK_PROBE),
         "--directory",
         str(directory or workspace.shadow_directory),

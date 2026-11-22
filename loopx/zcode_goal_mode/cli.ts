@@ -11,6 +11,7 @@ import {ZCODE_GOAL_ACTIONS, isGoalBasis, sameBinding, ZCodeGoalError, safeFailur
 import {NativeGoalController, readState, atomicState, type BindingState} from "./runtime.ts";
 import {ZCodeAppServer} from "./app-server.ts";
 import {acquireFileMutationLock, releaseFileMutationLock, durableWriteJson} from "../control_plane/effect_runtime_io.ts";
+import {nodeTypescriptFlags} from "../control_plane/runtime/node_version.ts";
 
 const MAX_INPUT = 64 * 1024;
 const MAX_RESPONSE = 1024 * 1024;
@@ -153,7 +154,7 @@ async function serve(request: NativeRequest): Promise<void> {
     const storage = request.state_path + ".host";
     await mkdir(storage, {recursive: true, mode: 0o700});
     const guardedCommand = [process.execPath, "--no-warnings", "--experimental-strip-types",
-      fileURLToPath(new URL("./guard.ts", import.meta.url)), "--", ...selected.cli_command];
+      ...nodeTypescriptFlags(), fileURLToPath(new URL("./guard.ts", import.meta.url)), "--", ...selected.cli_command];
     const host = new ZCodeAppServer(guardedCommand, selected.project, {
       ...process.env, ZCODE_STORAGE_DIR: storage, ZCODE_DATA_BASE_DIR: storage, ZCODE_SESSION_DB_PATH: join(storage, "sessions.db"),
     }, {guardian: true, onExit: () => {void shutdown();}});
@@ -272,7 +273,7 @@ async function dispatch(request: NativeRequest): Promise<ZCodeGoalReadback> {
   if (!state && !request.cli_command) throw new ZCodeGoalError("ZCode CLI was not found");
   await validate(request, ["pause", "stop"].includes(request.action));
   const child = spawn(process.execPath, ["--no-warnings", "--experimental-strip-types",
-    fileURLToPath(import.meta.url), "--serve"], {cwd: request.project, detached: true,
+    ...nodeTypescriptFlags(), fileURLToPath(import.meta.url), "--serve"], {cwd: request.project, detached: true,
       windowsHide: true, stdio: ["pipe", "ignore", "ignore"], env: process.env});
   child.on("error", () => {});
   child.stdin!.end(JSON.stringify(request));
