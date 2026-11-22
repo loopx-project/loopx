@@ -167,6 +167,23 @@ test('default built-ins are installed once per machine: an uninstall stays, an e
   }
 });
 
+test('a default that acts on its own is installed only on a fresh machine; an older one may have uninstalled it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-'));
+  try {
+    const hub = await serve(dir, [manifest('board'), manifest('namer')]);
+    const state = () => hub.extensions.list().map(e => [e.manifest.id, e.installed]);
+    const upgraded = hub.extensions.installDefaults(['board', 'namer'], [], { fresh: false, freshOnly: ['namer'] });
+    assert.deepEqual(upgraded, ['board', 'namer'], 'both are done: the upgrade never installs namer later');
+    assert.deepEqual(state(), [['board', true], ['namer', false]]);
+    hub.extensions.uninstall('board');
+    assert.deepEqual(hub.extensions.installDefaults(['board', 'namer'], [], { fresh: true, freshOnly: ['namer'] }), ['board', 'namer']);
+    assert.deepEqual(state(), [['board', true], ['namer', true]], 'a fresh machine gets both');
+    await hub.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the built-in catalog is read from the extension packages, and a broken manifest is left out', () => {
   const catalog = loadCatalog();
   assert.ok(catalog.some((m) => m.id === 'board' && m.permissions.includes('events.summary')), 'packages/ext-board/manifest.json');

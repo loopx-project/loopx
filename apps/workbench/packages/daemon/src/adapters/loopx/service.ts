@@ -6,7 +6,7 @@ import { HttpError } from '../../errors.js';
 import type { AgentAdapter, ApprovalRequest } from '../types.js';
 import { isWithinWorkdirs, type Workdirs } from '../../workdirs.js';
 import type { ThreadManager } from '../../threads.js';
-import { corePermission, fromCorePermission, goalAgentFor, goalThreadMode, LOOPX_PERMISSIONS, LoopxBindings, permissionAvailable, type GoalAdapter, type LoopxBinding, type LoopxPermission } from './binding.js';
+import { corePermission, fromCorePermission, goalAgentFor, goalThreadMode, LOOPX_PERMISSIONS, workspaceSandboxed, LoopxBindings, permissionAvailable, type GoalAdapter, type LoopxBinding, type LoopxPermission } from './binding.js';
 import { goalContextBlock } from './context.js';
 import { applyProposal, CoreError, coreJson, goalLocale, grantedWorkspaces, loadProposal, previewGoalCreate, registeredGoalRoot, workspaceRef, type GoalDraft } from './core.js';
 import { coreUrl } from './proxy.js';
@@ -199,7 +199,8 @@ export class LoopxService implements LoopxHooks {
         available: goalAgent !== null,
         ...(goalAgent === null ? { reason: '该 agent 还不能承载 LoopX Goal' } : {}),
         permissions: LOOPX_PERMISSIONS.map((id) => ({ id, ...(goalAgent ? permissionAvailable(adapter, id) : { ok: false, reason: '该 agent 还不能承载 LoopX Goal' }) }))
-          .map(({ id, ok, reason }) => ({ id, available: ok, ...(reason ? { reason } : {}), isDefault: id === 'workspace_auto' })),
+          .map(({ id, ok, reason }) => ({ id, available: ok, ...(reason ? { reason } : {}), isDefault: id === 'workspace_auto',
+            ...(id === 'workspace_auto' ? { sandboxed: workspaceSandboxed(adapter.id) } : {}) })),
       };
     });
   }

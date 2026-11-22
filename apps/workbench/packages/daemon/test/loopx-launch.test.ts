@@ -227,3 +227,11 @@ test('the granted directories carry where they are here, so a Goal can be pointe
   assert.equal(status, 200);
   assert.deepEqual(payload.workspaces, [{ ref: workspaceRef(granted), title: 'a', path: granted }]);
 });
+
+test('capabilities say whose writing a sandbox holds to the workspace, and writing is every agent’s default', async () => {
+  const { service } = harness();
+  const rows = service.capabilities();
+  const write = (agent: string) => rows.find((r) => r.agent === agent)!.permissions.find((p) => p.id === 'workspace_auto')!;
+  assert.deepEqual([write('codex').sandboxed, write('codex').isDefault], [true, true]);
+  assert.deepEqual([write('claude').sandboxed, write('claude').isDefault], [false, true], 'claude writes on instruction alone, and says so');
+});

@@ -127,6 +127,9 @@ export function permissionAvailable(adapter: GoalAdapter, permission: LoopxPermi
   return { ok: false, reason: '该 agent 不会先问再做，只读拦不住它，只能选工作区写入' };
 }
 
+/** Whether this agent's writing is held to the workspace by a sandbox (Codex), or only by what it is told. */
+export const workspaceSandboxed = (adapterId: string): boolean => adapterId === 'codex';
+
 /** The permission a Goal conversation's thread is created with; Codex's own sandbox policy takes over in the session. */
 export function goalThreadMode(adapter: GoalAdapter, permission: LoopxPermission): PermissionMode | undefined {
   const modes = adapter.capabilities.permissionModes;
