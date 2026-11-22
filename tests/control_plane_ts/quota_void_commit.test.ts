@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  cp,
   mkdtemp,
   mkdir,
   readFile,
@@ -11,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -833,4 +834,67 @@ test("legacy slot coercion truncates numeric strings and clamps both slot floors
       testCase.expectedAfter,
     );
   }
+});
+
+test("void receipt replay follows a copied runtime and rejects unsafe paths", async (t) => {
+  const fixture = await targetFixture(t);
+  const params = await request(fixture);
+  const written = await evaluateQuotaVoidCommit(params);
+  assert.equal(written.status, "written");
+  const copiedRoot = await tempRuntime(t);
+  const copiedRuns = join(copiedRoot, "goals", goalId, "runs");
+  await cp(fixture.runsDir, copiedRuns, { recursive: true });
+  const copiedFixture: TargetFixture = {
+    ...fixture,
+    runtimeRoot: copiedRoot,
+    runsDir: copiedRuns,
+    indexPath: join(copiedRuns, "index.jsonl"),
+  };
+  const originalJson = String(written.payload.json_path);
+  const originalBytes = await readFile(originalJson);
+  const originalIndex = await readFile(fixture.indexPath, "utf8");
+  const preview = await evaluateQuotaVoidCommit(await request(copiedFixture, { execute: false }));
+  assert.equal(preview.status, "preview");
+  const copiedParams = await request(copiedFixture);
+  const replayed = await evaluateQuotaVoidCommit(copiedParams);
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayed.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(copiedFixture.indexPath, "utf8"), originalIndex);
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  assert.equal((await evaluateQuotaVoidCommit(copiedParams)).status, "replayed");
+
+  const receipt = await transactionReceipt(copiedRuns, String(params.effect_id));
+  const otherRuns = join(copiedRoot, "goals", "other-goal", "runs");
+  await mkdir(otherRuns, { recursive: true });
+  const otherJson = join(otherRuns, basename(originalJson));
+  await writeFile(otherJson, originalBytes);
+  const escaped = {
+    ...receipt.value,
+    json_path: otherJson,
+    index_record: {
+      ...(receipt.value.index_record as Record<string, unknown>),
+      json_path: otherJson,
+    },
+    payload: {
+      ...(receipt.value.payload as Record<string, unknown>),
+      json_path: otherJson,
+    },
+  };
+  await writeFile(receipt.path, `${JSON.stringify(escaped)}\n`, "utf8");
+  await assert.rejects(
+    () => evaluateQuotaVoidCommit(copiedParams),
+    /JSON path is outside its run directory/,
+  );
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+
+  await writeFile(receipt.path, `${JSON.stringify(receipt.value)}\n`, "utf8");
+  const copiedJson = join(copiedRuns, basename(originalJson));
+  await unlink(copiedJson);
+  await symlink(originalJson, copiedJson);
+  await assert.rejects(
+    () => evaluateQuotaVoidCommit(copiedParams),
+    /JSON path is outside its run directory/,
+  );
+  assert.deepEqual(await readFile(originalJson), originalBytes);
 });
