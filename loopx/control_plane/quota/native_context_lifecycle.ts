@@ -103,6 +103,7 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   }
   if (name === "PreCompact" || name === "PostCompact") {
     invalidate();
+    delete state.compact_hook_wake;
     return state;
   }
   if (name === "Interrupt") {

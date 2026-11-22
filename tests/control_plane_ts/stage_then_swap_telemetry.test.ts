@@ -234,6 +234,44 @@ test('native lifecycle keeps epoch_prefetch across idempotent PostCompact and cl
   assert.deepEqual(afterPost.epoch_prefetch, {context_epoch: 'epoch-2', operator: 'EpochReset'});
 });
 
+test('native lifecycle clears compact_hook_wake on idempotent PreCompact/PostCompact while keeping SessionStart wake', () => {
+  const baseWake = {
+    context_epoch: 'epoch-2',
+    source_sha256: 'a'.repeat(64),
+    wake_digest: 'b'.repeat(64),
+    emitted_hook: 'SessionStart',
+  };
+  const afterDupStart = updateNativeContextLifecycle({
+    state: {
+      session_id: 's1',
+      cwd: '/tmp/ws',
+      context_epoch: 'epoch-2',
+      compact_hook_wake: baseWake,
+    },
+    event: {session_id: 's1', cwd: '/tmp/ws', hook_event_name: 'SessionStart', source: 'compact'},
+    new_epoch: 'epoch-3',
+    pages: [],
+  });
+  assert.equal(afterDupStart.context_epoch, 'epoch-2');
+  assert.deepEqual(afterDupStart.compact_hook_wake, baseWake);
+
+  for (const compactHook of ['PreCompact', 'PostCompact'] as const) {
+    const afterCompact = updateNativeContextLifecycle({
+      state: {
+        session_id: 's1',
+        cwd: '/tmp/ws',
+        context_epoch: 'epoch-2',
+        compact_hook_wake: baseWake,
+      },
+      event: {session_id: 's1', cwd: '/tmp/ws', hook_event_name: compactHook},
+      new_epoch: 'epoch-4',
+      pages: [],
+    });
+    assert.equal(afterCompact.context_epoch, 'epoch-2');
+    assert.equal('compact_hook_wake' in afterCompact, false);
+  }
+});
+
 test('Quiet-Turn emits zero-tax skip metadata on unchanged state and clears on state change', () => {
   const digest = 'd'.repeat(64);
   const unchanged = evaluateQuietTurn({

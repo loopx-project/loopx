@@ -520,3 +520,86 @@ def test_read_json_pointers_paginated_fails_closed_over_pointer_cap(tmp_path: Pa
     assert result["eof"] is False
     assert result["reason"] == "too_many_json_pointers"
     assert result["requested_count"] == direct_read.MAX_POINTERS_PER_HOOK + 1
+
+
+@pytest.mark.parametrize("path_mode", ["ts_lifecycle", "lock_free_fallback"])
+def test_multi_compaction_clears_compact_hook_wake_and_reinjects_c2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_mode: str,
+) -> None:
+    payload = {
+        "goal_id": "goal-c1-c2",
+        "selected_todo": {
+            "todo_id": "todo_multi_compact",
+            "title": "Keep injecting recovery context on C2+",
+        },
+    }
+    policy: dict[str, object] = (
+        {"enabled": True, "lock_free": True}
+        if path_mode == "lock_free_fallback"
+        else {"enabled": True, "lock_free": False}
+    )
+    journal_dir, start_event, _ = _seed_session_with_capture(
+        tmp_path,
+        monkeypatch,
+        session_id=f"multi-{path_mode}",
+        capture_payload=payload,
+        compact_direct_read_policy=policy,
+    )
+    if path_mode == "lock_free_fallback":
+        from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+
+        def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+            raise EffectRuntimeStartupError(
+                "startup lock timed out", diagnostic_code="startup_lock_timeout",
+            )
+
+        monkeypatch.setattr(
+            "loopx.control_plane.quota.turn_envelope.update_native_context_lifecycle",
+            _boom,
+        )
+
+    pre_event = {**start_event, "hook_event_name": "PreCompact"}
+    post_event = {**start_event, "hook_event_name": "PostCompact"}
+
+    # Compaction #1 (C1): PreCompact + PostCompact clear candidate and stay {}, SessionStart emits C1 wake.
+    assert context.codex_context_hook(str(journal_dir), pre_event) == {}
+    assert context.codex_context_hook(str(journal_dir), post_event) == {}
+    c1_reply = context.codex_context_hook(str(journal_dir), start_event)
+    c1_out = c1_reply["hookSpecificOutput"]
+    assert c1_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert c1_out["compactDirectRead"]["deduplicated"] is False
+    assert "todo_multi_compact" in c1_out["additionalContext"]
+    assert "candidate" not in context._state(journal_dir)
+
+    # Duplicate SessionStart(compact) inside C1 still deduplicates.
+    c1_dup = context.codex_context_hook(str(journal_dir), start_event)["hookSpecificOutput"]
+    assert "additionalContext" not in c1_dup
+    assert c1_dup["compactDirectRead"]["deduplicated"] is True
+
+    # Compaction #2 (C2): even with candidate still absent, PreCompact/PostCompact clears compact_hook_wake.
+    assert context.codex_context_hook(str(journal_dir), pre_event) == {}
+    assert "compact_hook_wake" not in context._state(journal_dir)
+    assert context.codex_context_hook(str(journal_dir), post_event) == {}
+
+    c2_reply = context.codex_context_hook(str(journal_dir), start_event)
+    c2_out = c2_reply["hookSpecificOutput"]
+    assert c2_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert c2_out["compactDirectRead"]["deduplicated"] is False
+    assert "todo_multi_compact" in c2_out["additionalContext"]
+
+    # Duplicate SessionStart(compact) inside C2 still deduplicates cleanly.
+    c2_dup = context.codex_context_hook(str(journal_dir), start_event)["hookSpecificOutput"]
+    assert "additionalContext" not in c2_dup
+    assert c2_dup["compactDirectRead"]["deduplicated"] is True
+    assert context._state(journal_dir)["compact_hook_metrics"]["direct_reads"] == 2
+    assert context._state(journal_dir)["compact_hook_metrics"]["deduplicated_wakes"] == 2
+
+    # Compaction #3 (C3): PostCompact alone (even without PreCompact) also clears compact_hook_wake.
+    assert context.codex_context_hook(str(journal_dir), post_event) == {}
+    assert "compact_hook_wake" not in context._state(journal_dir)
+    c3_out = context.codex_context_hook(str(journal_dir), start_event)["hookSpecificOutput"]
+    assert c3_out["compactDirectRead"]["deduplicated"] is False
+    assert "todo_multi_compact" in c3_out["additionalContext"]
+    assert context._state(journal_dir)["compact_hook_metrics"]["direct_reads"] == 3
