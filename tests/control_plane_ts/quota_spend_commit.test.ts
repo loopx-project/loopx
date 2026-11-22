@@ -1290,11 +1290,20 @@ test("spend receipt replay follows a copied runtime and keeps the original tree 
   assert.equal(await readFile(join(originalRuns, "index.jsonl"), "utf8"), originalIndex);
   const repairedReceipt = JSON.parse(await readFile(copiedReceiptPath, "utf8")) as Record<string, unknown>;
   assert.equal(repairedReceipt.status, "committed");
-  assert.equal(repairedReceipt.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(repairedReceipt.json_path, originalJson);
   assert.equal(repairedReceipt.request_digest, written.request_digest);
   assert.equal(
     (repairedReceipt.index_record as Record<string, unknown>).json_path,
-    join(copiedRuns, basename(originalJson)),
+    originalJson,
+  );
+  const replayedAfterRepair = await evaluateQuotaSpendCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayedAfterRepair.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.equal(
+    (JSON.parse(await readFile(copiedReceiptPath, "utf8")) as Record<string, unknown>).json_path,
+    originalJson,
   );
 });
 

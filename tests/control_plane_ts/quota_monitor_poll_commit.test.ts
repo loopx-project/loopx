@@ -1422,6 +1422,9 @@ test("monitor-poll receipt replay follows a copied runtime and rejects unsafe pa
   assert.equal(repaired.payload.json_path, join(copiedRuns, basename(originalJson)));
   assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
   assert.equal(await readFile(join(sourceRuns, "index.jsonl"), "utf8"), originalIndex);
+  const replayedAfterRepair = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
 
   const token = createHash("sha256").update(String(params.effect_id)).digest("hex").slice(0, 24);
   const receiptPath = join(copiedRuns, ".transactions", "quota-monitor-poll", `${token}.json`);

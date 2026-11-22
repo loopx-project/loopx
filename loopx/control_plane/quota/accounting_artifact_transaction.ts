@@ -587,6 +587,7 @@ async function relocatedRunArtifactPath(
 
 const relocatedRuntimeRoots = new WeakMap<object, string>();
 const storedIndexRecords = new WeakMap<object, JsonObject>();
+const receiptsBeforeRelocation = new WeakMap<object, object>();
 
 export function relocatedReceiptRuntimeRoot(receipt: object): string | null {
   return relocatedRuntimeRoots.get(receipt) ?? null;
@@ -594,6 +595,10 @@ export function relocatedReceiptRuntimeRoot(receipt: object): string | null {
 
 export function indexRecordBeforeRelocation(receipt: object, current: JsonObject): JsonObject {
   return storedIndexRecords.get(receipt) ?? current;
+}
+
+export function receiptBeforeRelocation<T extends object>(receipt: T): T {
+  return (receiptsBeforeRelocation.get(receipt) as T | undefined) ?? receipt;
 }
 
 export async function withRelocatedRunArtifactPaths(
@@ -669,6 +674,7 @@ export async function relocateTransactionReceipt<T extends RelocatableTransactio
   if (indexChanged && receipt.index_record !== undefined) {
     storedIndexRecords.set(located, receipt.index_record);
   }
+  receiptsBeforeRelocation.set(located, receipt);
   return located;
 }
 
@@ -1199,16 +1205,22 @@ export async function commitQuotaAccountingArtifactTransaction(
         existingReceipt,
         request.runsDir,
       );
-      const committedReceipt = {
+      // Repair may rewrite the receipt, but the stored paths remain the
+      // digest's source runtime. This read returns the selected runtime paths.
+      const persistedReceipt = {
+        ...receiptBeforeRelocation(existingReceipt),
+        status: "committed",
+      } satisfies QuotaAccountingArtifactReceipt;
+      const returnedReceipt = {
         ...existingReceipt,
         status: "committed",
       } satisfies QuotaAccountingArtifactReceipt;
       if (existingReceipt.status !== "committed" || repaired) {
-        await atomicWriteJson(receiptPath, committedReceipt);
+        await atomicWriteJson(receiptPath, persistedReceipt);
       }
       return {
         status: repaired ? "repaired" : "replayed",
-        receipt: committedReceipt,
+        receipt: returnedReceipt,
         indexDigest: await quotaAccountingIndexDigest(indexPath),
       };
     }

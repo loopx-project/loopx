@@ -864,6 +864,24 @@ test("void receipt replay follows a copied runtime and rejects unsafe paths", as
   assert.deepEqual(await readFile(originalJson), originalBytes);
   assert.equal((await evaluateQuotaVoidCommit(copiedParams)).status, "replayed");
 
+  const copiedIndexBytes = await readFile(copiedFixture.indexPath);
+  await writeFile(
+    copiedFixture.indexPath,
+    copiedIndexBytes.subarray(0, copiedIndexBytes.length - 2),
+  );
+  const repaired = await evaluateQuotaVoidCommit(copiedParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(await readFile(copiedFixture.indexPath, "utf8"), originalIndex);
+  assert.equal(await readFile(fixture.indexPath, "utf8"), originalIndex);
+  const repairedReceipt = await transactionReceipt(copiedRuns, String(params.effect_id));
+  assert.equal(repairedReceipt.value.json_path, originalJson);
+  assert.equal(repairedReceipt.value.request_digest, written.request_digest);
+  const replayedAfterRepair = await evaluateQuotaVoidCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(await readFile(copiedFixture.indexPath, "utf8"), originalIndex);
+
   const receipt = await transactionReceipt(copiedRuns, String(params.effect_id));
   const otherRuns = join(copiedRoot, "goals", "other-goal", "runs");
   await mkdir(otherRuns, { recursive: true });
