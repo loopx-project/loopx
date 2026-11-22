@@ -419,6 +419,7 @@ def _reduce_hook_lifecycle(
             session=session,
             cwd=str(event.get("cwd") or ""),
             new_epoch=uuid.uuid4().hex,
+            hook_name=name if isinstance(name, str) else None,
         )
     resume_verified = name == "SessionStart" and native_resume_verified_fn(state, event)
     try:
@@ -442,6 +443,7 @@ def _reduce_hook_lifecycle(
                 session=session,
                 cwd=str(event.get("cwd") or ""),
                 new_epoch=uuid.uuid4().hex,
+                hook_name=name if isinstance(name, str) else None,
             )
         raise
 

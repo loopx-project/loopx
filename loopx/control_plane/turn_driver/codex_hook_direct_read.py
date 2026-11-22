@@ -922,6 +922,7 @@ def apply_fail_closed_compact_invalidation(
     session: str,
     cwd: str,
     new_epoch: str,
+    hook_name: str | None = None,
 ) -> dict[str, Any]:
     """Fail-closed baseline invalidation keeping recovery lookup intact under startup contention."""
     same = state.get("session_id") == session and state.get("cwd") == cwd
@@ -940,6 +941,8 @@ def apply_fail_closed_compact_invalidation(
             updated.pop("compact_hook_wake", None)
             updated.pop("epoch_prefetch", None)
             updated.pop("quiet_turn", None)
+    if hook_name in ("PreCompact", "PostCompact"):
+        updated.pop("compact_hook_wake", None)
     for key in (
         "candidate",
         "pending",

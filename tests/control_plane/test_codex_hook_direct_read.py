@@ -745,6 +745,45 @@ def test_combined_compact_direct_read_and_epoch_prefetch_generated_hook_lifecycl
     assert replay_out["epochPrefetch"]["executed"] is False
     assert replay_out["epochPrefetch"]["superseded"] is False
 
+    # 3a. Compaction #2 (C2) in combined mode (including --quiet-turn): PreCompact/PostCompact
+    #     must never emit additionalContext/compactDirectRead and clear compact_hook_wake even with
+    #     candidate absent so C2 SessionStart(compact) re-injects BOTH!
+    r_c2_pre = subprocess.run(
+        hook_cmd,
+        input=json.dumps({"session_id": "s-combo", "cwd": str(repo), "hook_event_name": "PreCompact"}),
+        capture_output=True, text=True, env=env_clean, cwd=repo, check=True,
+    )
+    c2_pre_out = json.loads(r_c2_pre.stdout).get("hookSpecificOutput") or {}
+    assert "additionalContext" not in c2_pre_out
+    assert "compactDirectRead" not in c2_pre_out
+    r_c2_post = subprocess.run(
+        hook_cmd,
+        input=json.dumps({"session_id": "s-combo", "cwd": str(repo), "hook_event_name": "PostCompact"}),
+        capture_output=True, text=True, env=env_clean, cwd=repo, check=True,
+    )
+    c2_post_out = json.loads(r_c2_post.stdout).get("hookSpecificOutput") or {}
+    assert "additionalContext" not in c2_post_out
+    assert "compactDirectRead" not in c2_post_out
+    assert "compact_hook_wake" not in ctx._state(journal_dir)
+    r_c2_start = subprocess.run(
+        hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
+        env=env_clean, cwd=repo, check=True,
+    )
+    c2_out = json.loads(r_c2_start.stdout)["hookSpecificOutput"]
+    assert c2_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert c2_out["compactDirectRead"]["deduplicated"] is False
+    assert c2_out["compactDirectRead"]["composed_with_epoch_prefetch"] is True
+    assert c2_out["epochPrefetch"]["operator"] == "EpochReset"
+    assert c2_out["epochPrefetch"]["superseded"] is False
+    assert c2_out["epochPrefetch"]["composed_with_compact_direct_read"] is True
+    assert "todo_combo" in c2_out["additionalContext"]
+    assert "dirty.txt" in c2_out["additionalContext"]
+    r_c2_dup = subprocess.run(
+        hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
+        env=env_clean, cwd=repo, check=True,
+    )
+    assert json.loads(r_c2_dup.stdout)["hookSpecificOutput"]["compactDirectRead"]["deduplicated"] is True
+
     # 3b. Direct SessionStart(compact) without prior PostCompact includes BOTH pointer payload and EpochReset output.
     ctx._save(journal_dir, {
         "session_id": "s-combo",
@@ -1081,3 +1120,86 @@ def test_combined_hook_enforces_delivered_utf8_byte_budget_and_four_arm_comparis
     assert arm_combo["epochPrefetch"]["bytes_saved"] <= big_bytes - bytes_combo
     assert arm_combo["epochPrefetch"]["bytes_saved"] > 0
     assert bytes_off > 0
+
+
+@pytest.mark.parametrize("path_mode", ["ts_lifecycle", "lock_free_fallback"])
+def test_multi_compaction_clears_compact_hook_wake_and_reinjects_c2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_mode: str,
+) -> None:
+    payload = {
+        "goal_id": "goal-c1-c2",
+        "selected_todo": {
+            "todo_id": "todo_multi_compact",
+            "title": "Keep injecting recovery context on C2+",
+        },
+    }
+    policy: dict[str, object] = (
+        {"enabled": True, "lock_free": True}
+        if path_mode == "lock_free_fallback"
+        else {"enabled": True, "lock_free": False}
+    )
+    journal_dir, start_event, _ = _seed_session_with_capture(
+        tmp_path,
+        monkeypatch,
+        session_id=f"multi-{path_mode}",
+        capture_payload=payload,
+        compact_direct_read_policy=policy,
+    )
+    if path_mode == "lock_free_fallback":
+        from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+
+        def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+            raise EffectRuntimeStartupError(
+                "startup lock timed out", diagnostic_code="startup_lock_timeout",
+            )
+
+        monkeypatch.setattr(
+            "loopx.control_plane.quota.turn_envelope.update_native_context_lifecycle",
+            _boom,
+        )
+
+    pre_event = {**start_event, "hook_event_name": "PreCompact"}
+    post_event = {**start_event, "hook_event_name": "PostCompact"}
+
+    # Compaction #1 (C1): PreCompact + PostCompact clear candidate and stay {}, SessionStart emits C1 wake.
+    assert context.codex_context_hook(str(journal_dir), pre_event) == {}
+    assert context.codex_context_hook(str(journal_dir), post_event) == {}
+    c1_reply = context.codex_context_hook(str(journal_dir), start_event)
+    c1_out = c1_reply["hookSpecificOutput"]
+    assert c1_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert c1_out["compactDirectRead"]["deduplicated"] is False
+    assert "todo_multi_compact" in c1_out["additionalContext"]
+    assert "candidate" not in context._state(journal_dir)
+
+    # Duplicate SessionStart(compact) inside C1 still deduplicates.
+    c1_dup = context.codex_context_hook(str(journal_dir), start_event)["hookSpecificOutput"]
+    assert "additionalContext" not in c1_dup
+    assert c1_dup["compactDirectRead"]["deduplicated"] is True
+
+    # Compaction #2 (C2): even with candidate still absent, PreCompact/PostCompact clears compact_hook_wake.
+    assert context.codex_context_hook(str(journal_dir), pre_event) == {}
+    assert "compact_hook_wake" not in context._state(journal_dir)
+    assert context.codex_context_hook(str(journal_dir), post_event) == {}
+
+    c2_reply = context.codex_context_hook(str(journal_dir), start_event)
+    c2_out = c2_reply["hookSpecificOutput"]
+    assert c2_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert c2_out["compactDirectRead"]["deduplicated"] is False
+    assert "todo_multi_compact" in c2_out["additionalContext"]
+
+    # Duplicate SessionStart(compact) inside C2 still deduplicates cleanly.
+    c2_dup = context.codex_context_hook(str(journal_dir), start_event)["hookSpecificOutput"]
+    assert "additionalContext" not in c2_dup
+    assert c2_dup["compactDirectRead"]["deduplicated"] is True
+    assert context._state(journal_dir)["compact_hook_metrics"]["direct_reads"] == 2
+    assert context._state(journal_dir)["compact_hook_metrics"]["deduplicated_wakes"] == 2
+
+    # Compaction #3 (C3): PostCompact alone (even without PreCompact) also clears compact_hook_wake.
+    assert context.codex_context_hook(str(journal_dir), post_event) == {}
+    assert "compact_hook_wake" not in context._state(journal_dir)
+    c3_out = context.codex_context_hook(str(journal_dir), start_event)["hookSpecificOutput"]
+    assert c3_out["compactDirectRead"]["deduplicated"] is False
+    assert "todo_multi_compact" in c3_out["additionalContext"]
+    assert context._state(journal_dir)["compact_hook_metrics"]["direct_reads"] == 3
