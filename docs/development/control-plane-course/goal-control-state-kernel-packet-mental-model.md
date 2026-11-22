@@ -3,7 +3,7 @@
 > **结论：** Goal 给出稳定方向，structured control state 记录当前动态局面，Kernel
 > 校验并提交合法的状态迁移，Packet 把当前局面编译成 Agent 这一轮可以执行的行动协议。
 
-这四个名称不是四个并列模块，也不是四份状态。最简单的记法是：
+最简单的记法是：
 
 ```text
 Goal：要去哪
@@ -46,9 +46,7 @@ Packet：这一轮具体走哪一步
 | Kernel | 状态迁移与恢复引擎 | authority 校验、transition 接受、writeback、replay、closeout | 状态文件、领域推理器或 Provider |
 | Packet | 一次 Turn 的行动协议 | identity、selected work、允许/禁止动作、proof boundary、next command、writeback contract | 长期事实源或全部历史 |
 
-Kernel 不是状态本身，而是管理通用生命周期、校验写入并使状态可恢复的规则引擎。Packet
-也不是第二份状态，它只是从当前状态生成的一次性只读投影：Packet 丢失可以重建，canonical
-state 丢失则可能无法正确恢复。
+Kernel 是管理通用生命周期、校验写入并使状态可恢复的规则引擎。
 
 外部系统仍然拥有各自的权威事实。例如 repository 拥有当前代码，Git host 拥有 PR 与
 review 状态，CI 拥有检查结果。LoopX 保存的是：为什么观察这些对象、观察结果支持哪个判断、
@@ -89,7 +87,7 @@ flowchart TD
 
 ## Packet 由什么生成
 
-Packet 不是只从一条 Goal objective 生成，而是组合：
+Packet 是组合：
 
 ```text
 稳定 Goal
@@ -101,7 +99,7 @@ Packet 不是只从一条 Goal objective 生成，而是组合：
 + Kernel 与 Capability 规则
 ```
 
-然后压缩成本轮有限上下文可以安全消费的工单。下面是概念示例，不是具体协议的完整 schema：
+然后压缩成本轮有限上下文可以安全消费的工单。
 
 ```yaml
 packet:
@@ -124,7 +122,7 @@ packet:
 ```
 
 Packet 必须足够薄，避免把全部历史塞回模型；也不能薄到遗漏 identity、authority、required
-proof 和 writeback。它是过程协议，不是普通提示词摘要。
+proof 和 writeback。
 
 ## 一次 Auto PR Issue Fix Turn
 
@@ -196,7 +194,7 @@ Replan 通常也不会随意改写最终 objective。它先修订路线、vision
 
 ## Result 为什么不能直接成为状态
 
-Agent 说“CI 已通过，建议合并”只是 result 或 proposal，不是 canonical truth。完整路径应是：
+Agent 说“CI 已通过，建议合并”只是 result 或 proposal。完整路径应是：
 
 ```text
 Agent result

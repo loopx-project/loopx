@@ -4,8 +4,9 @@ import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
-import {outputDir, repoRoot} from "./fixture.mjs";
+import {outputDir, packaged, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
+import {fetchWorkspaceBackend} from "./scenario-context.mjs";
 
 async function readEmptyScope(page, results, message) {
   const search = results.getByRole('searchbox');
@@ -25,7 +26,8 @@ async function readEmptyScope(page, results, message) {
 
 export const researchRecordSearchScenario = {
   id: "research-record-search",
-  async run({browser, collectCoverage}) {
+  requiresBackendReadback: true,
+  async run({browser, collectCoverage, url}) {
     const temporary = await mkdtemp(resolve(tmpdir(), "loopx-record-search-"));
     let owner, page;
     try {
@@ -67,8 +69,18 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       page = await browser.newPage({viewport: {width: 1440, height: 900}});
       if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
       await page.addInitScript(() => {if (!localStorage.getItem("loopx-pw-locale")) localStorage.setItem("loopx-pw-locale", "en");});
-      const url = `${owner.base}/chat/?goalId=synthetic-record-search&view=research&statusUrl=%2Fstatus.json`;
-      await page.goto(url);
+      const entry = packaged ? new URL("/chat/", owner.base) : new URL(url);
+      entry.searchParams.set("goalId", "synthetic-record-search");
+      entry.searchParams.set("view", "research");
+      entry.searchParams.set("statusUrl", "/status.json");
+      if (!packaged) {
+        // Keep Vite modules and their source maps while using the same history owner.
+        await page.route(target => target.origin === entry.origin && (target.pathname === "/status.json"
+          || target.pathname.startsWith("/api/") || target.pathname.startsWith("/extension-")), async route => {
+          await route.fulfill({response: await fetchWorkspaceBackend(route, owner.base)});
+        });
+      }
+      await page.goto(entry.href);
       const history = page.locator(".research-history");
       await page.waitForFunction(() => document.querySelector('.research-history')?.getAttribute('aria-busy') === 'false');
       await page.screenshot({path: resolve(outputDir, "research-record-first-1440.png"), animations: "disabled"});
@@ -263,7 +275,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await results.locator("li").count(), 50, "A changed query resets display paging");
       // Fresh interrupted load searches only the explicitly partial snapshot.
       await page.route("**/api/chat/explore-results?*", route => new URL(route.request().url()).searchParams.has("cursor")
-        ? route.fulfill({status: 503, json: {error: "Synthetic page interruption"}}) : route.continue());
+        ? route.fulfill({status: 503, json: {error: "Synthetic page interruption"}}) : route.fallback());
       const periodBookmark = new URL(page.url());
       periodBookmark.searchParams.set("research_goal", "synthetic-record-search");
       periodBookmark.searchParams.set("research_phase", "2");
@@ -304,7 +316,9 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       const phases = history.locator(".research-phase");
       assert.equal(await phases.count(), 3);
       assert.equal(await phases.nth(2).getAttribute("aria-pressed"), "true", "Recovery applies the original period bookmark");
-      await page.goto(url.replace("synthetic-record-search", "synthetic-other-research"));
+      const otherGoal = new URL(entry);
+      otherGoal.searchParams.set("goalId", "synthetic-other-research");
+      await page.goto(otherGoal.href);
       const openOtherSearch = history.getByRole("button", {name: "Search research records", exact: true});
       await openOtherSearch.evaluate(button => {
         // Hold the frame from this one search activation until the reader moves focus.
@@ -354,13 +368,13 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert(other.records.every(record => record.goal_id === other.goal_id));
       await search.fill("amber-v1");
       await readEmptyScope(page, results, "No matching records. Try another term or clear the filters.");
-      await page.goto(url);
+      await page.goto(entry.href);
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       let firstRecord, pageMode = "replay";
       await page.route("**/api/chat/explore-results?*", async route => {
-        const response = await route.fetch();
+        const response = await fetchWorkspaceBackend(route, owner.base);
         const historyPage = await response.json();
         if (new URL(route.request().url()).searchParams.has("cursor")) {
           if (pageMode === "short") historyPage.items.pop();
@@ -391,7 +405,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       let release, observed;
       const hold = new Promise(resolve => {release = resolve;});
       const seen = new Promise(resolve => {observed = resolve;});
-      await page.route("**/api/chat/explore-results?*", async route => {observed(); await hold; await route.continue();});
+      await page.route("**/api/chat/explore-results?*", async route => {observed(); await hold; await route.fallback();});
       await history.getByRole("button", {name: "Refresh history", exact: true}).click();
       await seen;
       await page.waitForFunction(() => [...document.querySelectorAll(".research-record-filters button")].some(button => button.textContent.includes("Download matches") && button.disabled));
@@ -400,8 +414,6 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await page.waitForFunction(() => document.querySelector('.research-history')?.getAttribute('aria-busy') === 'false');
       await page.unroute("**/api/chat/explore-results?*");
       assert.equal(await downloadButton.isEnabled(), true);
-      const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
-      assert(readback.source_unchanged && readback.mutation_attempts === 0);
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
       await page.reload();
       await history.getByRole("button", {name: "搜索研究记录", exact: true}).click();
@@ -432,10 +444,24 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.match(reportText, /\*\*数值:\*\* 未知/);
       assert.match(reportText, /\*\*数值:\*\* 0/);
       assert.match(reportText, /质量下降 — original negative evidence/);
-      return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "packaged evidence search/export through native paged history; full and filtered downloads, original revisions, coverage/staleness, original revision comparison, download/read recovery, Goal isolation and narrow viewport"};
+      const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+      assert.ok(readback.ok && readback.history_reads >= 2, "Search uses the real paged history owner");
+      assert.ok(readback.source_unchanged && readback.mutation_attempts === 0, "Search leaves the source untouched");
+      const coverageEntries = collectCoverage ? await page.coverage.stopJSCoverage() : [];
+      if (collectCoverage) {
+        assert.ok(coverageEntries.some(entry => new URL(entry.url).pathname === "/src/features/personal-workspace/research-record-browser.tsx"
+          && entry.source && entry.functions.some(fn => fn.ranges.some(range => range.count > 0))),
+        "Research-record search must execute instrumented Dashboard source in the coverage lane");
+      }
+      return {coverageEntries, backendReadbackVerified: true, note: "evidence search/export through native paged history; full and filtered downloads, original revisions, coverage/staleness, original revision comparison, download/read recovery, Goal isolation and narrow viewport"};
     } catch (error) {
       if (page && !page.isClosed()) await page.screenshot({path: resolve(outputDir, "research-record-search-failed.png")});
       throw error;
-    } finally {await page?.close(); await owner?.close(); await rm(temporary, {recursive: true, force: true});}
+    } finally {
+      await page?.unrouteAll({behavior: "ignoreErrors"}).catch(() => {});
+      await page?.close();
+      await owner?.close();
+      await rm(temporary, {recursive: true, force: true});
+    }
   },
 };

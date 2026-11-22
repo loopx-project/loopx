@@ -796,12 +796,12 @@ def assert_scoped_gate_rejects_capability_ineligible_only_fallback() -> None:
     scheduler = payload["scheduler_hint"]
     assert scheduler["action"] == "backoff_waiting_for_user", scheduler
     assert scheduler["cadence_class"] == "human_gate", scheduler
-    assert scheduler["codex_app"]["example_progression_minutes"] == [
+    assert scheduler["app_automation"]["example_progression_minutes"] == [
         30,
         60,
     ], scheduler
-    assert scheduler["codex_app"]["max_interval_minutes"] == 60, scheduler
-    assert scheduler["codex_app"]["recommended_interval_minutes"] == 30, scheduler
+    assert scheduler["app_automation"]["max_interval_minutes"] == 60, scheduler
+    assert scheduler["app_automation"]["recommended_interval_minutes"] == 30, scheduler
 
 
 def assert_exact_todo_gate_survives_decision_scope_migration() -> None:
@@ -1029,11 +1029,11 @@ def assert_agent_without_advancement_candidate_and_only_monitor_work_stays_quiet
     scheduler = payload["scheduler_hint"]
     assert scheduler["schema_version"] == "scheduler_hint_v0", scheduler
     assert scheduler["action"] == "backoff_until_material_transition", scheduler
-    assert scheduler["codex_app"]["recommended_interval_minutes"] == 15, scheduler
-    assert scheduler["codex_app"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=15", scheduler
+    assert scheduler["app_automation"]["recommended_interval_minutes"] == 15, scheduler
+    assert scheduler["app_automation"]["recommended_rrule"] == "FREQ=MINUTELY;INTERVAL=15", scheduler
     # A far-future monitor keeps the host floor at 15m, but may back off more
     # coarsely until the scheduled window gets near.
-    progression = scheduler["codex_app"]["example_progression_minutes"]
+    progression = scheduler["app_automation"]["example_progression_minutes"]
     assert progression == [15, 30, 60], scheduler
     assert scheduler["unchanged_poll"]["limits"]["codex_cli_tui"] == 3, scheduler
     assert scheduler["unchanged_poll"]["final_quota_replan_check_enabled"] is True, scheduler
@@ -1048,7 +1048,7 @@ def assert_agent_without_advancement_candidate_and_only_monitor_work_stays_quiet
     assert reset["host_state_key"] == "scheduler_hint.reset_policy.reset_token", reset
     assert reset["app_automation_initial_interval_minutes"] == 15, reset
     assert reset["app_automation_initial_rrule"] == "FREQ=MINUTELY;INTERVAL=15", reset
-    assert scheduler["codex_app"]["max_interval_minutes"] == 60, scheduler
+    assert scheduler["app_automation"]["max_interval_minutes"] == 60, scheduler
     assert len(reset["identity_signature"]) == 12, reset
     assert "identity_snapshot" not in reset, reset
     assert "profile_snapshot" not in reset, reset

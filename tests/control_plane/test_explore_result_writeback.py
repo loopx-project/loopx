@@ -294,14 +294,16 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
 @pytest.mark.parametrize("terminal", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
 @pytest.mark.parametrize("source_mode", ["file", "vision", "both", "path_delta", "wide_path_delta", "linked_path_delta"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_retry(
-    tmp_path, terminal, interrupted, source_mode, monkeypatch, capsys,
+    tmp_path, terminal, interrupted, source_mode, provider, monkeypatch, capsys,
 ):
-    from canonical_authority_fixture import initialize_canonical_authority
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import (
         build_todo_runtime_shadow_projection,
     )
     from loopx.control_plane.work_items.task_lease import acquire_task_lease
+    from loopx.rollout_event_log import rollout_event_log_path
     from tests.control_plane.test_quota_settlement_cli import (
         _write_fixture,
         _run_cli,
@@ -311,6 +313,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         TURN_ID,
     )
 
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, path = _write_fixture(tmp_path)
     config = json.loads(path.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
@@ -339,7 +342,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
             handoff_mode="hard_lease" if terminal else "soft_claim",
         ),
         state_path=project / config["goals"][0]["state_file"],
-        provider="file",
+        provider=provider,
     )
     terminal_proof = {}
     if terminal:
@@ -371,8 +374,6 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         cwd=project,
     )
     assert rc == 0, claimed
-    if terminal:
-        from loopx.todos import complete_goal_todo
 
     binding = (
         "--goal-id",
@@ -395,14 +396,21 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
     )
     assert rc == 0, guard
     if terminal:
-        complete_goal_todo(
-            registry_path=path,
-            goal_id=GOAL_ID,
-            todo_id=TODO_ID,
-            agent_id=AGENT_ID,
-            evidence="Synthetic validation passed",
-            **terminal_proof,
+        rc, completed = _run_cli(
+            path,
+            runtime,
+            "todo",
+            "complete",
+            *binding,
+            "--evidence",
+            "Synthetic validation passed",
+            "--task-lease-idempotency-key",
+            terminal_proof["task_lease_idempotency_key"],
+            "--task-lease-expected-version",
+            str(terminal_proof["task_lease_expected_version"]),
+            cwd=project,
         )
+        assert rc == 0, completed
     source = tmp_path / "result.json"
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     template = plan["ordered_steps"][1]["optional_attachments"][0]["attachment_template"]
@@ -449,6 +457,12 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         attachment_args += ("--explore-result-json", str(source))
     if source_mode in {"vision", "both", "path_delta", "wide_path_delta", "linked_path_delta"}:
         attachment_args += ("--agent-vision-json", str(vision))
+    proof = guard.get("execution_preparation", {}).get("lease_proof")
+    lease_args = (
+        ("--task-lease-idempotency-key", proof["idempotency_key"],
+         "--task-lease-expected-version", str(proof["expected_version"]))
+        if proof else ()
+    )
     args = (
         "refresh-state",
         *binding,
@@ -458,6 +472,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         "implementation",
         "--delivery-outcome",
         "outcome_progress",
+        *lease_args,
         "--no-global-sync",
         "--suppress-external-sinks",
         *attachment_args,
@@ -482,6 +497,12 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
         assert first["explore_result_delivery"]["primary_committed"], first
         assert not first["explore_result_delivery"]["ok"], first
         assert "replay this exact refresh" in first["error"]
+        events = rollout_event_log_path(runtime, GOAL_ID)
+        assert not any(json.loads(line)["event_kind"] == "refresh_state"
+                       for line in events.read_text().splitlines())
+        rc, premature = _run_cli(path, runtime, "quota", "spend-slot", *binding,
+                                 "--source", "heartbeat", "--slots", "1", "--execute", cwd=project)
+        assert rc != 0 and not premature.get("appended"), premature
     else:
         rc, first = _run_cli(path, runtime, *args, cwd=project)
         assert rc == 0, first
@@ -489,7 +510,7 @@ def test_real_cli_normal_writeback_persists_attachment_and_rejects_conflicting_r
     index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     before = index.read_bytes()
     rc, replay = _run_cli(path, runtime, *args, cwd=project)
-    assert rc == 0 and replay["idempotent_replay"], replay
+    assert rc == 0 and replay["receipt_repaired" if interrupted else "idempotent_replay"], replay
     assert replay["explore_result_delivery"]["ok"], replay
     assert index.read_bytes() == before
     # Follow the owning hook's required read in a new process. Presence in the
@@ -875,10 +896,30 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     assert not log.exists()
     assert list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"] == todos
 
-    # Supported recovery: fresh admission and an active lease, then the same capture.
-    run(*guard_command)
-    current = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "recovery")["lease"]
-    captured = run(*refresh)
+    # Supported recovery after retiring the original generation: supersede onto a
+    # fresh Todo/Turn with an active lease, then commit and test replay after release.
+    reclaimed = run("todo", "claim", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                    "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID)
+    superseded = run("todo", "supersede", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                     "--agent-id", AGENT_ID, "--claim-operation-id", reclaimed["claim_operation_id"],
+                     "--reason", "Original lease was released before writeback",
+                     "--next-agent-todo", "[P1] Continue tail bound check",
+                     "--next-claimed-by", AGENT_ID)
+    recovery_todo_id = superseded["successor_todo_ids"][0]
+    recovery_lease_binding = ["--goal-id", GOAL_ID, "--todo-id", recovery_todo_id, "--owner", AGENT_ID]
+    current = run("task-lease", "acquire", *recovery_lease_binding, "--idempotency-key", "recovery")["lease"]
+    recovery_binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                        "--todo-id", recovery_todo_id, "--turn-instance-id", f"{TURN_ID}-recovery"]
+    recovery_guard = run("quota", "should-run", "--codex-app", *recovery_binding)
+    proof = recovery_guard["execution_preparation"]["lease_proof"]
+    recovery_refresh = [
+        "refresh-state", *recovery_binding, "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"]),
+        "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks",
+    ]
+    captured = run(*recovery_refresh)
     assert captured["appended"] and captured["explore_result_delivery"]["ok"]
     display_input = captured["explore_result_delivery"]["hook"]["intents"][0]["payload"]
     assert display_input == {"attachment_ref": "$.explore_result"}
@@ -886,15 +927,15 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     assert len(load_explore_result_events(log)) == 2
     committed_index, committed_log = index.read_bytes(), log.read_bytes()
     rows = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
-    target = next(row for row in rows if row["todo_id"] == TODO_ID)
+    target = next(row for row in rows if row["todo_id"] == recovery_todo_id)
     assert target["status"] == "open" and target["claimed_by"] == AGENT_ID
     assert target["explore_result_node_refs"] == [ATTACHMENT["node_id"]]
-    run("task-lease", "release", *lease_binding, "--idempotency-key", "recovery",
+    run("task-lease", "release", *recovery_lease_binding, "--idempotency-key", "recovery",
         "--expected-version", str(current["version"]))
     leases = read_canonical_todos_if_promoted(
         runtime_root=runtime, goal_id=GOAL_ID, include_leases=True)["leases"]
-    assert leases[0]["status"] == "released"
-    replay = run(*refresh)
+    assert all(lease["status"] == "released" for lease in leases), leases
+    replay = run(*recovery_refresh)
     assert replay["idempotent_replay"] and replay["explore_result_delivery"]["idempotent_replay"]
     assert replay["explore_result"] == captured["explore_result"]
     assert replay["explore_result_delivery"]["hook"]["intents"][0]["payload"] == display_input

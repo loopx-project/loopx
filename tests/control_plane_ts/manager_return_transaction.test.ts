@@ -136,6 +136,27 @@ test("concurrent exact admission is single flight and stale settlement cannot ov
   } finally { await f.close(); }
 });
 
+test("a legacy transaction cannot rewrite a saved exact attempt", async () => {
+  const f = await fixture(true, true);
+  try {
+    const plan = await f.run("prepare");
+    const saved = await f.run("attempt", { ...plan, attempt });
+    const before = await readFile(f.statePath);
+    const legacy = { exact: false, now: "2026-01-02T03:06:05.123456+00:00",
+      facts: { error: "return_source_unavailable" } };
+    const scanned = await f.run("scan", { ...legacy, candidates: [{ request_id: id, result_key: "conclusion" }] });
+    assert.deepEqual(scanned.candidates, []);
+    const skipped = await f.run("prepare", legacy);
+    assert.equal(skipped.action, "skip");
+    assert.equal(skipped.processed, 0);
+    await assert.rejects(f.run("attempt", { ...saved, ...legacy, attempt }), /exact delivery profile/);
+    assert.deepEqual(await readFile(f.statePath), before);
+    const recovery = await f.run("prepare", { now: legacy.now });
+    assert.equal(recovery.action, "verify");
+    assert.deepEqual(recovery.attempt, attempt);
+  } finally { await f.close(); }
+});
+
 test("an ambiguous expired external admission never dispatches another send", async () => {
   const f = await fixture(true, true);
   try {
@@ -414,3 +435,65 @@ for (const exact of [false, true]) {
     });
   }
 }
+
+test("scan emits terminal_candidates strictly for immutable terminal states", async () => {
+  for (const exact of [false, true]) {
+    for (const status of ["delivered", "superseded", "explicit_unverified"]) {
+      const f = await fixture(exact, true);
+      try {
+        await f.put(f.statePath, { status, ...(exact ? { goal_ref: ref } : {}) });
+        const result = await f.run("scan", { candidates: [{ request_id: id, result_key: "conclusion" }] });
+        assert.deepEqual(result.candidates, []);
+        assert.deepEqual(result.terminal_candidates, [{ request_id: id, result_key: "conclusion" }]);
+      } finally { await f.close(); }
+    }
+    for (const [label, body] of [
+      ["absent", null],
+      ["queued", { status: "queued" }],
+      ["retry_future", { status: "retry_pending", retry_at: "2026-01-02T04:04:05+00:00" }],
+      ["admitted_future", { status: "admitted", ...(exact ? { goal_ref: ref } : {}), admission: { expires_at: "2026-01-02T04:04:05+00:00" } }],
+      ["verification_required", { status: "verification_required", attempt }],
+    ] as const) {
+      const f = await fixture(exact, true);
+      try {
+        if (body !== null) await f.put(f.statePath, body);
+        const result = await f.run("scan", { candidates: [{ request_id: id, result_key: "conclusion" }] });
+        assert.deepEqual(result.terminal_candidates, [], `${exact}:${label} must stay uncached`);
+      } finally { await f.close(); }
+    }
+  }
+});
+
+test("scan gates chained follow-ups on predecessor readiness without caching blocked rows as terminal", async () => {
+  const followKey = "conclusion-00000001";
+  const followPath = (folder: string) => join(folder, "replies", id, `${followKey}.json`);
+  const followPayload = { request_id: id, goal_id: "research", agent_id: "worker",
+    source_id: "source:original", decision: "adopt", phase: "conclusion",
+    result_key: followKey, previous_result_key: "conclusion", update_id: "u1",
+    text: "Updated findings." };
+
+  for (const state of [null, { status: "retry_pending", retry_at: "2026-01-02T04:04:05+00:00" }]) {
+    const f = await fixture(false, true);
+    try {
+      await f.put(followPath(f.folder), followPayload);
+      if (state) await f.put(f.statePath, state);
+      const blocked = await f.run("scan", { candidates: [{ request_id: id, result_key: followKey }] });
+      assert.deepEqual(blocked.candidates, []);
+      assert.deepEqual(blocked.terminal_candidates, []);
+      await f.put(f.statePath, { status: "delivered" });
+      const ready = await f.run("scan", { candidates: [{ request_id: id, result_key: followKey }] });
+      assert.deepEqual(ready.candidates, [{ request_id: id, result_key: followKey }]);
+      assert.deepEqual(ready.terminal_candidates, []);
+    } finally { await f.close(); }
+  }
+
+  for (const invalidFollow of ["{broken", JSON.stringify({ ...followPayload, previous_result_key: "../escape" })]) {
+    const f = await fixture(false, true);
+    try {
+      await writeFile(followPath(f.folder), invalidFollow);
+      const result = await f.run("scan", { candidates: [{ request_id: id, result_key: followKey }] });
+      assert.deepEqual(result.candidates, [{ request_id: id, result_key: followKey }]);
+      assert.deepEqual(result.terminal_candidates, []);
+    } finally { await f.close(); }
+  }
+});

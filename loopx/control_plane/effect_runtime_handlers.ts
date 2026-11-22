@@ -26,6 +26,7 @@ import {
 } from "./effect_program.ts";
 
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+import type { SqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {
   optionalNonEmptyString as optionalString,
   requireBoolean,
@@ -38,7 +39,7 @@ import {
 
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
-type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
+export type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
 // Resolve only the selected module/handler, never cache its params or decision.
 // Node owns module caching; the existing runtime fingerprint owns invalidation.
@@ -57,6 +58,7 @@ export interface EffectRuntimeHandlerContext {
   fingerprint: string;
   /** Physical publication path observed by the managed server, not its caller. */
   readonly infoPath?: string;
+  readonly localRuntimeIdentity?: SqliteRuntimeIdentity;
   requestShutdown: () => void;
 }
 
@@ -254,7 +256,9 @@ export function createEffectRuntimeHandlers(
     [
       "runtime.ping",
       () => ({ ready: true, pid: process.pid, fingerprint: context.fingerprint,
-        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}) }),
+        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}),
+        ...(context.localRuntimeIdentity === undefined
+          ? {} : {runtime_identity: context.localRuntimeIdentity}) }),
     ],
     [
       "runtime.shutdown",
@@ -268,6 +272,8 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./turn_driver/turn_journal.ts"), ({interpretTurnJournal}) => (params) => interpretTurnJournal(turnJournalInspectionRequest(params))),
     ],
     ["host_failure.retry", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRetryRequest}) => hostFailureRetryRequest)],
+    ["host_failure.record", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRecordRequest}) => hostFailureRecordRequest)],
+    ["host_failure.observe", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureObservationRequest}) => hostFailureObservationRequest)],
     ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
@@ -362,6 +368,11 @@ export function createEffectRuntimeHandlers(
     ["goal.source_session.turn_effect.gate", lazyHandler(() => import("./goals/source_session_lifetime.ts"), ({decideSourceTurnEffectGate}) => decideSourceTurnEffectGate)],
     ["goal.first_party_host_runtime.decide", lazyHandler(() => import("./goals/first_party_host_runtime.ts"), ({decideFirstPartyHostRuntime}) => decideFirstPartyHostRuntime)],
     ["goal.chat_session.lifecycle.decide", lazyHandler(() => import("./goals/chat_session_lifecycle.ts"), ({decideChatSessionLifecycle}) => decideChatSessionLifecycle)],
+    ["goal.task.validation_plan", lazyHandler(() => import("./goals/task_validation_plan.ts"), ({canonicalTaskValidationPlan}) => canonicalTaskValidationPlan)],
+    ["goal.task.creation_selection", lazyHandler(() => import("./goals/task_validation_plan.ts"), ({originalCreationTaskSelection}) => originalCreationTaskSelection)],
+    ["goal.creation.execution.normalize", lazyHandler(() => import("./goals/creation_execution_review.ts"), ({normalizeGoalCreationExecution}) => normalizeGoalCreationExecution)],
+    ["goal.creation.execution_request.prepare", lazyHandler(() => import("./goals/creation_execution.ts"), ({prepareGoalCreationExecutionRequest}) => prepareGoalCreationExecutionRequest)],
+    ["goal.creation.execution_request", lazyHandler(() => import("./goals/creation_execution.ts"), ({projectGoalCreationExecutionRequest}) => projectGoalCreationExecutionRequest)],
     ["goal.acceptance.oracle.plan", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({planAcceptanceOracle}) => planAcceptanceOracle)],
     ["goal.acceptance.oracle.observe", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({observeAcceptanceOracles}) => observeAcceptanceOracles)],
     ["goal.acceptance.refine", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({refineLocalGoalAcceptanceOutcome}) => refineLocalGoalAcceptanceOutcome)],
@@ -378,6 +389,7 @@ export function createEffectRuntimeHandlers(
     ["quota.spend.commit", lazyHandler(() => import("./quota/spend_commit.ts"), ({evaluateQuotaSpendCommit}) => evaluateQuotaSpendCommit)],
     ["quota.void.commit", lazyHandler(() => import("./quota/void_commit.ts"), ({evaluateQuotaVoidCommit}) => evaluateQuotaVoidCommit)],
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
+    ["quota.heartbeat_receipt.select", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({projectHeartbeatReceiptSelection}) => projectHeartbeatReceiptSelection)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),
@@ -403,6 +415,20 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", lazyHandler(() => Promise.all([import("./coordination/runtime_shadow.ts"), import("./coordination/source_transfer.ts")]), ([{rollbackCoordinationRuntimeShadow}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow))],
     ["coordination.local_authority.promote", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({promoteLocalCoordinationAuthority}) => promoteLocalCoordinationAuthority)],
     ["coordination.authority_archive.manage", lazyHandler(() => import("./coordination/local_authority_archive.ts"), ({manageLocalAuthorityArchive}) => manageLocalAuthorityArchive)],
+    ["coordination.postgresql.setup", lazyHandler(() => import("./coordination/postgresql_authority_seed.ts"), ({setupPostgreSqlAuthoritySchemaAndRole}) => params => setupPostgreSqlAuthoritySchemaAndRole({
+      databaseUrl: requiredString(params.databaseUrl, "databaseUrl"),
+      storeIdentity: optionalString(params.storeIdentity, "storeIdentity") ?? undefined,
+      runtimeRole: optionalString(params.runtimeRole, "runtimeRole") ?? undefined,
+    }))],
+    ["coordination.postgresql.seed", lazyHandler(() => import("./coordination/postgresql_authority_seed.ts"), ({exportLocalToPgGenesisSeed}) => params => exportLocalToPgGenesisSeed({
+      runtimeRoot: requiredString(params.runtimeRoot, "runtimeRoot"),
+      goalId: requiredString(params.goalId, "goalId"),
+      tenantId: optionalString(params.tenantId, "tenantId") ?? undefined,
+      outputPath: optionalString(params.outputPath, "outputPath") ?? undefined,
+      databaseUrl: optionalString(params.databaseUrl, "databaseUrl") ?? undefined,
+      storeIdentity: optionalString(params.storeIdentity, "storeIdentity") ?? undefined,
+      execute: requireBoolean(params.execute, "execute"),
+    }))],
     ["configuration.backup", lazyHandler(() => import("./configuration_backup.ts"), ({configurationBackupOperation}) => configurationBackupOperation)],
     ["runtime.checkpoint_artifacts", lazyHandler(() => import("./runtime/checkpoint_artifacts.ts"), ({checkpointArtifacts}) => checkpointArtifacts)],
     ["state.recovery.archive.verify", lazyHandler(() => import("./state_recovery.ts"), ({verifyStateRecoveryArchive}) => verifyStateRecoveryArchive)],
@@ -611,16 +637,21 @@ export function createEffectRuntimeHandlers(
     ["collaboration.source.original_conversation_grants", lazyHandler(() => import("./collaboration/source_grants.ts"), ({inspectOriginalConversationGrants}) => inspectOriginalConversationGrants)],
     ["collaboration.project.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({projectConversationIdentity}) => projectConversationIdentity)],
     ["collaboration.steward.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({stewardConversationIdentity}) => stewardConversationIdentity)],
+    ["collaboration.steward.memory_policy", lazyHandler(() => import("./collaboration/steward_memory.ts"), ({planStewardMemoryTurn}) => planStewardMemoryTurn)],
+    ["collaboration.steward.memory_preferences", lazyHandler(() => import("./collaboration/steward_memory.ts"), ({normalizeStewardMemoryPreferences}) => (params) => ({preferences: normalizeStewardMemoryPreferences(params?.memory_preferences)}))],
     ["collaboration.steward.command", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({stewardCommand}) => stewardCommand)],
     ["collaboration.steward.authorize_creation", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({authorizeStewardCreation}) => authorizeStewardCreation)],
     ["collaboration.steward.managed_mode.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardManagedMode}) => planStewardManagedMode)],
     ["collaboration.steward.managed_mode.executor", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardNativeExecutor}) => observeStewardNativeExecutor)],
     ["collaboration.steward.managed_turn.admit", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({admitStewardManagedTurn}) => admitStewardManagedTurn)],
     ["collaboration.session.managed_turn.admit", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({admitManagedSessionTurn}) => admitManagedSessionTurn)],
+    ["collaboration.session.managed_turn.sandbox_policy", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({canonicalNativeTaskSandboxPolicy}) => canonicalNativeTaskSandboxPolicy)],
     ["collaboration.session.managed_identity", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({admitManagedSessionIdentity}) => admitManagedSessionIdentity)],
     ["collaboration.steward.monitor.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardMonitor}) => planStewardMonitor)],
     ["collaboration.steward.report.plan", lazyHandler(() => import("./collaboration/steward_reports.ts"), ({planStewardReport}) => planStewardReport)],
     ["collaboration.steward.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardPortfolio}) => observeStewardPortfolio)],
+    ["collaboration.steward.monitor.signal_observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardSignalMonitor}) => observeStewardSignalMonitor)],
+    ["collaboration.steward.monitor.signal_scope.normalize", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({normalizeStewardSignalMonitorScope}) => (params) => ({signal_scope: normalizeStewardSignalMonitorScope(params?.signal_scope)}))],
     ["collaboration.session.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeManagedWork}) => observeManagedWork)],
     ["collaboration.conversation.binding", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planConversationBinding}) => planConversationBinding)],
     ["collaboration.conversation.bound_context", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveBoundConversation}) => resolveBoundConversation)],
@@ -628,7 +659,6 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.request", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planBoundConversationRequest}) => planBoundConversationRequest)],
     ["collaboration.conversation.agent_target", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveConversationAgentTarget}) => resolveConversationAgentTarget)],
     ["collaboration.peer.context_access", lazyHandler(() => import("./collaboration/peer_context.ts"), ({requirePeerContextAccess}) => requirePeerContextAccess)],
-    ["collaboration.source.recipients", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceRecipients}) => resolveSourceRecipients)],
     ["collaboration.source.context_authority", lazyHandler(() => import("./collaboration/source_grants.ts"), ({resolveSourceContextAuthority}) => resolveSourceContextAuthority)],
     ["collaboration.source.ingress", lazyHandler(() => import("./collaboration/source_grants.ts"), ({validateSourceIngress}) => validateSourceIngress)],
     ["collaboration.source.execution_bindings", lazyHandler(() => import("./collaboration/source_grants.ts"), ({sourceExecutionBindings}) => sourceExecutionBindings)],
@@ -795,10 +825,8 @@ export function createEffectRuntimeHandlers(
       "settlement.plan_payload",
       (params) => settlementPlanPayload(settlementPlanInput(params.plan, "plan")),
     ],
-    ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"), ({turnScopedCliSettlementPlan}) => (params) =>
-      settlementPlanPayload(turnScopedCliSettlementPlan(params)))],
-    ["settlement.native_cli_projection", lazyHandler(() => import("./quota/settlement_plan.ts"),
-      ({nativeCliSettlementProjection}) => nativeCliSettlementProjection)],
+    ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"),
+      ({turnScopedCliSettlementPlanPayload}) => turnScopedCliSettlementPlanPayload)],
     [
       "settlement.result_payload",
       (params) => settlementResultPayload(
@@ -832,7 +860,15 @@ export function createEffectRuntimeHandlers(
     ["explore.measurements.normalize", lazyHandler(() => import("./capabilities/explore_measurements.ts"), ({normalizeExploreMeasurementsRequest}) => normalizeExploreMeasurementsRequest)],
     ["explore.result.evolution", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({planExploreQuestionEvolution}) => planExploreQuestionEvolution)],
     ["explore.result.intent", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({produceExploreResultIntent}) => produceExploreResultIntent)],
-    ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_turn_context.ts"), ({projectExploreTurnContext}) => projectExploreTurnContext)],
+    ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_context_delivery.ts"),
+      ({projectEmptyExploreTurnContext}) => async params => {
+        const empty = projectEmptyExploreTurnContext(params);
+        if (empty !== undefined) return empty;
+        const {projectExploreTurnContext} = await import("./capabilities/explore_turn_context.ts");
+        const yardstick = params.graph_enabled === true && params.yardstick_enabled === true
+          ? await import("./work_items/yardstick_decision.ts") : undefined;
+        return projectExploreTurnContext(params, yardstick);
+      })],
     ["explore.research.normalize", lazyHandler(() => import("./capabilities/explore_research.ts"), ({normalizeResearchObservation}) => normalizeResearchObservation)],
     ["explore.research.validate_attribution", lazyHandler(() => import("./capabilities/explore_research.ts"), ({validateResearchAttribution}) => validateResearchAttribution)],
     ["explore.research.validate_execution", lazyHandler(() => import("./capabilities/explore_research_execution.ts"), ({validateResearchExecution}) => validateResearchExecution)],

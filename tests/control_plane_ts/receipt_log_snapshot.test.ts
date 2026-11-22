@@ -95,6 +95,99 @@ test("schema, malformed line numbers and tolerant valid rows survive reuse", asy
   });
 });
 
+test("invalid UTF-8 rows are malformed, never receipts", async () => {
+  await fixture(async (path) => {
+    const valid = Buffer.from('{"run_id":"turn-1"}\n');
+    const bad = Buffer.concat([
+      Buffer.from('{"run_id":"turn-2","summary":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]);
+    await writeFile(path, Buffer.concat([valid, bad]));
+    const snapshot = (await read(path))!;
+    assert.deepEqual(snapshot.records.map((r) => r.run_id), ["turn-1"]);
+    assert.equal(snapshot.firstErrorLine, 2);
+    // Cached prefix reuse must not resurrect or forget the bad row.
+    const reused = (await read(path))!;
+    assert.equal(reused.firstErrorLine, 2);
+    assert.deepEqual(reused.records.map((r) => r.run_id), ["turn-1"]);
+    // An unterminated tail with invalid bytes is malformed, never a record.
+    await writeFile(path, Buffer.concat([
+      valid,
+      Buffer.from('{"run_id":"turn-3","summary":"'),
+      Buffer.from([0xff]),
+    ]));
+    const tail = (await read(path))!;
+    assert.deepEqual(tail.records.map((r) => r.run_id), ["turn-1"]);
+    assert.equal(tail.firstErrorLine, 2);
+    // Terminating the damaged tail keeps it malformed but never hides a later row.
+    await appendFile(path, Buffer.from('\n{"run_id":"turn-4"}\n'));
+    const completed = (await read(path))!;
+    assert.deepEqual(
+      completed.records.map((r) => r.run_id),
+      ["turn-1", "turn-4"],
+    );
+    assert.equal(completed.firstErrorLine, 2);
+  });
+});
+
+test("a damaged row still yields the named members its writer finished", async () => {
+  await fixture(async (path) => {
+    await writeFile(path, Buffer.concat([
+      Buffer.from('{"agent_id":"a","details":{"todo_id":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"},"event_id":"e","event_kind":"quota_should_run",' +
+        '"goal_id":"g","run_id":"turn-2","schema_version":"v0"}\n'),
+    ]));
+    const snapshot = (await read(path, "v0", ["event_kind", "run_id", "goal_id"]))!;
+    assert.deepEqual(snapshot.records, []);
+    assert.equal(snapshot.firstErrorLine, 1);
+    assert.deepEqual(
+      Object.fromEntries(snapshot.malformedLines[0].members),
+      { event_kind: "quota_should_run", goal_id: "g", run_id: "turn-2" },
+    );
+    assert.deepEqual(snapshot.malformedLines[0].unreadable, []);
+    // A damaged value is unreadable, never absent and never guessed.
+    await writeFile(path, Buffer.concat([
+      Buffer.from('{"run_id":"turn-'),
+      Buffer.from([0xff]),
+      Buffer.from('","schema_version":"v0"}\n'),
+    ]));
+    const damaged = (await read(path, "v0", ["run_id"]))!;
+    assert.deepEqual(damaged.malformedLines[0].members, []);
+    assert.deepEqual(damaged.malformedLines[0].unreadable, ["run_id"]);
+    // Members nobody asked for are not recovered at all.
+    assert.deepEqual((await read(path, "v0"))!.malformedLines, []);
+  });
+});
+
+test("uncommitted bytes the writer drops leave no trace in history", async () => {
+  await fixture(async (path) => {
+    // A torn write can hold a complete JSON object and still be missing its
+    // committing newline.  The append owner drops those bytes before writing
+    // its own row, so no reader ever sees the half-write.
+    await writeFile(path, '{"run_id":"turn-lost","schema_version":"v0"}');
+    await writeFile(path, '{"run_id":"kept","schema_version":"v0"}\n');
+    const snapshot = (await read(path, "v0", ["run_id"]))!;
+    assert.equal(snapshot.firstErrorLine, null);
+    assert.deepEqual(snapshot.records.map((record) => record.run_id), ["kept"]);
+    await appendFile(path, '{"run_id":"turn-2","schema_version":"v0"}\n');
+    const grown = (await read(path, "v0", ["run_id"]))!;
+    assert.deepEqual(grown.records.map((record) => record.run_id), ["kept", "turn-2"]);
+  });
+});
+
+test("a readable row stays a record beside a blank history line", async () => {
+  await fixture(async (path) => {
+    await writeFile(path, '{"run_id":"kept","schema_version":"v0"}\n\n');
+    const snapshot = (await read(path, "v0", ["run_id"]))!;
+    assert.deepEqual(snapshot.records.map((record) => record.run_id), ["kept"]);
+    await appendFile(path, '{"run_id":"later","schema_version":"v0"}\n');
+    const grown = (await read(path, "v0", ["run_id"]))!;
+    assert.deepEqual(grown.records.map((record) => record.run_id), ["kept", "later"]);
+  });
+});
+
 test("eviction and concurrent cold readers affect cost, never evidence", async () => {
   await fixture(async (path) => {
     const row = JSON.stringify({payload: "x".repeat(2048)}) + "\n";

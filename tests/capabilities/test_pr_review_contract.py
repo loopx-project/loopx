@@ -182,6 +182,7 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
     assert "absence of a topology" in isolation["rule"]
     assert "automatically loaded" in isolation["rule"]
     assert "availability from activation" in isolation["rule"]
+    assert "gate binds the intended scope and every required subject" in isolation["rule"]
     assert "runtime default of false" in isolation["rule"]
     authority = requirements["authority_semantics"]
     assert authority["verdict_values"] == [
@@ -293,6 +294,7 @@ def test_bilingual_presentation_keeps_canonical_evidence_and_validation_requirem
     assert "Problem / Evidence / " in template["output_hint"]
     assert "PASS / FAIL / UNVERIFIED" in template["output_hint"]
     assert "not a new language quota" in template["output_hint"]
+    assert "Do not translate every sentence twice, impose a language ratio" in template["output_hint"]
     # Style is carried by the existing writing hint, not a new evidence bypass.
     assert "check-result" in template["output_hint"]
     assert "read it back" in template["output_hint"]

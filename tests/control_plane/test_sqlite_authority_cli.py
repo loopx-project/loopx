@@ -216,7 +216,7 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(
                   "--update-operation-id", "trial-update", *proof]
         assert command(*update)["source_authority"] == "sqlite_v0"
         refresh_args = ["refresh-state", "--goal-id", goal, "--agent-id", agent,
-                        "--todo-id", todo, "--turn-instance-id", turn,
+                        "--todo-id", todo, "--turn-instance-id", turn, *proof,
                         "--classification", "validated_progress", "--delivery-batch-scale", "test_only",
                         "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks",
                         "--vision-state", "vision_on_track", "--vision-summary", "Continue reversible qualification.",
@@ -355,12 +355,19 @@ def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
     guard = ["quota", "should-run", "--context-delivery", "off", "--goal-id", goal, "--agent-id", agent,
              "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
              "--available-capability", "filesystem_read", ]
-    assert command(*guard)["normal_delivery_allowed"] is True
+    guarded = command(*guard)
+    assert guarded["normal_delivery_allowed"] is True
+    lease_proof = guarded["execution_preparation"]["lease_proof"]
+    lease_args = [
+        "--task-lease-idempotency-key", lease_proof["idempotency_key"],
+        "--task-lease-expected-version", str(lease_proof["expected_version"]),
+    ]
     update = ["todo", "update", "--goal-id", goal, "--todo-id", todo, "--agent-id", agent,
               "--note", "Keep the latest note 完整 🧭", "--update-operation-id", "ordinary-update", *proof]
     command(*update)
     refreshed = command("refresh-state", "--goal-id", goal, "--agent-id", agent,
-        "--todo-id", todo, "--turn-instance-id", turn, "--classification", "validated_progress",
+        "--todo-id", todo, "--turn-instance-id", turn, *lease_args,
+        "--classification", "validated_progress",
         "--delivery-batch-scale", "test_only", "--delivery-outcome", "outcome_progress",
         "--no-global-sync", "--suppress-external-sinks", "--vision-state", "vision_on_track",
         "--vision-summary", "Continue the ordinary lifecycle.",

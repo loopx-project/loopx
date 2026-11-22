@@ -5,57 +5,83 @@
     "lines": 2000
   },
   "module_metric_ceilings": {
-    "loopx/bootstrap_command_pack.py": {
-      "any_count": 32,
+    "loopx/authority.py": {
+      "any_count": 0,
       "dict_any_count": 0,
-      "lines": 2240
+      "lines": 686
+    },
+    "loopx/bootstrap_command_pack.py": {
+      "any_count": 26,
+      "dict_any_count": 0
     },
     "loopx/canary/planner.py": {
       "any_count": 22,
       "dict_any_count": 0
+    },
+    "loopx/capabilities/benchmark_toolkit/experiment_board.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1088
+    },
+    "loopx/capabilities/benchmark_toolkit/study_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1401
     },
     "loopx/capabilities/catalog.py": {
       "any_count": 8,
       "dict_any_count": 0
     },
     "loopx/capabilities/content_ops/surface.py": {
-      "any_count": 40,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1700
     },
     "loopx/capabilities/issue_fix/cli.py": {
       "any_count": 5,
       "dict_any_count": 0
     },
-    "loopx/capabilities/issue_fix/pr_lifecycle.py": {
-      "lines": 2056
+    "loopx/capabilities/reward_memory/utility_reducer.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1182
+    },
+    "loopx/capabilities/steward_executor/allocation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 225
+    },
+    "loopx/capabilities/steward_executor/machine_defaults.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 379
     },
     "loopx/chat_actions.py": {
-      "any_count": 52,
-      "dict_any_count": 0
-    },
-    "loopx/chat_agent.py": {
-      "lines": 2047
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1766
     },
     "loopx/chat_runtime.py": {
-      "any_count": 38,
-      "dict_any_count": 0,
-      "lines": 2503
+      "any_count": 29,
+      "dict_any_count": 0
     },
     "loopx/chat_server.py": {
-      "any_count": 25,
-      "dict_any_count": 0,
-      "lines": 2058
-    },
-    "loopx/chat_store.py": {
-      "lines": 2163
-    },
-    "loopx/codex_cli_probe.py": {
-      "any_count": 37,
+      "any_count": 16,
       "dict_any_count": 0
+    },
+    "loopx/control_plane/agents/agent_lane_recommendation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 662
     },
     "loopx/control_plane/agents/agent_scope.py": {
       "any_count": 107,
       "dict_any_count": 0
+    },
+    "loopx/control_plane/agents/management_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 826
     },
     "loopx/control_plane/goals/goal_frontier/__init__.py": {
       "any_count": 115,
@@ -65,29 +91,54 @@
       "any_count": 15,
       "dict_any_count": 0
     },
+    "loopx/control_plane/quota/heartbeat_recommendation.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 719
+    },
+    "loopx/control_plane/quota/monitor_poll.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1109
+    },
+    "loopx/control_plane/todos/quota_summary.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 686
+    },
+    "loopx/control_plane/todos/todo_summary.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 691
+    },
     "loopx/control_plane/work_items/interaction_contract.py": {
-      "any_count": 85,
+      "any_count": 0,
       "dict_any_count": 0
+    },
+    "loopx/domain_packs/issue_fix.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 627
     },
     "loopx/extensions/lark/goal_topic_runtime.py": {
       "any_count": 56,
       "dict_any_count": 0
     },
-    "loopx/extensions/lark/presentation/explore_results.py": {
-      "any_count": 78,
+    "loopx/extensions/lark/manager_returns.py": {
+      "any_count": 0,
       "dict_any_count": 0,
-      "lines": 2458
+      "lines": 500
+    },
+    "loopx/extensions/lark/presentation/explore_results.py": {
+      "any_count": 45,
+      "dict_any_count": 0
     },
     "loopx/extensions/lark/presentation/kanban.py": {
-      "any_count": 100,
-      "dict_any_count": 0,
-      "lines": 2760
-    },
-    "loopx/extensions/lark/private_conversations.py": {
-      "lines": 2191
+      "any_count": 62,
+      "dict_any_count": 0
     },
     "loopx/heartbeat_prompt.py": {
-      "any_count": 17,
+      "any_count": 0,
       "dict_any_count": 0,
       "lines": 1199
     },
@@ -100,17 +151,23 @@
       "dict_any_count": 0
     },
     "loopx/presentation/renderers/status_markdown.py": {
-      "any_count": 47,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1102
     },
     "loopx/quota.py": {
-      "any_count": 219,
+      "any_count": 0,
       "dict_any_count": 0,
-      "lines": 1999
+      "lines": 1427
     },
     "loopx/slash_command_install.py": {
       "any_count": 11,
       "dict_any_count": 0
+    },
+    "loopx/state_projection.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 795
     },
     "loopx/state_refresh.py": {
       "any_count": 30,
@@ -122,8 +179,13 @@
       "lines": 1999
     },
     "loopx/todos.py": {
-      "any_count": 48,
+      "any_count": 0,
       "dict_any_count": 0
+    },
+    "loopx/upgrade.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1062
     },
     "loopx/worker_bridge.py": {
       "any_count": 28,

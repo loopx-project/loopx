@@ -138,6 +138,18 @@ flowchart TD
 
 D/E 为拟新增能力，不在每轮同步视图构建时临时执行模型调用。当前工作权威、capture IO、共享 TypeScript 投影、exact codec、host delivery 分别沿原 owner 实施。
 
+#### 向下 Harness 协同设计：受回执门控的采样栈原语（`KeepRaw` / `FoldToReceipt` / `EpochReset`）
+
+为消除回合中动态改写工作集对前缀 KV-cache 的破坏，同时确保历史视图晋升具备可核验性，共享 TypeScript 投影 owner（`progressive_context.ts` + `context_delivery.ts` + `turn_envelope.ts`）通过**三类受回执门控的采样栈原语**将向下 harness 协同设计形式化（仍属 `Proposal` 成熟度且默认关闭）：
+
+| 原语 | 合法前置条件 | 前缀与 KV-cache 效应 | 工作集与权威边界 |
+| --- | --- | --- | --- |
+| `KeepRaw` | 默认的 epoch 内状态，适用于活跃义务、未验证探针、开放候选或不符合 §5.2 条件的范围 | **单调仅追加：** 仅在当前前缀尾部追加符合条件的新片段，在连续步骤间保持 **100% 前缀 KV-cache 稳定性** | 禁止在回合中删除、重排或重摘要已发出的前缀片段 |
+| `FoldToReceipt` | 候选满足 §5.2 准入条件，**且**持有确定性的结算、capture 或验证回执，绑定结果、失败原因、版本与精确来源引用 | 将已核验历史单元标记为已折叠，并把精简回执/摘要条目**排队等待**下一次 `EpochReset`，绝不在 epoch 中途改写已发出的在线前缀 | 工作集晋升严格**以回执为依据**；未经验证的模型散文、自报结果或未确认代理声明均不能触发折叠 |
+| `EpochReset` | 显式的静默、结算、会话恢复或压缩 checkpoint（`decision_capture` + `context_delivery` epoch 推进），且累计折叠收益超过冷启动 prefill 回本阈值 | **唯一**允许重定基规范前缀（`epoch + 1`）的迁移，将排队中的 `FoldToReceipt` 条目压缩为新的不可变基础前缀 | 保留原始 capture 与精确回读引用；显式重置温 KV-cache 前缀，而非在步幅中途静默失效 |
+
+在任意两次 `EpochReset` 边界之间，单调追加尾部之前的前缀保持字节级恒定（`100%` 前缀 KV-cache 命中保持）。向上策略层（[联合决策 RFC §5.9](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution) 中的 `{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}`）可提议这些迁移，确定性投影 owner 负责执行回执校验、资格检查与 epoch 不变量。
+
 ### 5.2 哪些材料允许进入候选集
 
 首版候选来自已存在的 typed attempt/result/evidence 事实与有界来源，不通过“done”“旧日志”等字符串推测完成度。
@@ -204,7 +216,7 @@ interface HistorySummaryProvider {
 - **原文删除/失效：** 发布时声明引用的有效范围/期限，正常清理不能提前破坏这项承诺；既有 owner 不能保证时，缩短承诺范围或不启用该历史视图。用户显式删除、权限撤销与异常损坏须立即反映到来源和摘要可见性，不能为了保留摘要而绕过。失去可读来源时不得继续标为完整可展开；可选摘要退出，必需材料依赖按原规则处理。
 - **引用定位限制：** 复用当前 path-bound reader 时，路径只是该 profile 下的定位方式；未验证迁移前，不宣称跨机器透明恢复或引用可自动重定位。
 - **去重边界：** 即使内容哈希相同，也不因此跨用户、Goal 或权限边界复用可见引用。
-- **缓存键：** 基于 scope/可见性边界、精确有序来源集合与 digest、策略和生成版本。稳定材料不每轮重写摘要，避免无意义 prefix 变化。
+- **缓存键：** 基于 scope/可见性边界、精确有序来源集合与 digest、epoch 边界身份、策略和生成版本。在一个 epoch 内保持单调 `KeepRaw` 追加稳定性，把工作集动态改写推迟到显式 `EpochReset` checkpoint 执行，从而在连续步骤间保持前缀 KV-cache 复用完整。
 - **历史真实性与当前适用性分开：** “R1 当时失败”可以持续为真；当前任务从 R2 变成 R3 后，要重新验证该历史的选择计划和适用性，不把旧失败当作当前状态，也不必仅因时间流逝重写历史原文。
 - **首版只做一层：** 以后增加摘要的摘要时，父摘要仍需能追溯叶子 coverage；不在首版实现通用 DAG/GC 框架。
 
@@ -220,7 +232,7 @@ interface HistorySummaryProvider {
 
 ### 5.7 与 exact delivery 的组合
 
-顺序固定为：完整来源 → 合法视图选择/摘要 → 校验后的工作视图 → exact full/delta → 宿主。
+顺序固定为：完整来源与验证回执 → 合法 `KeepRaw` / 回执门控 `FoldToReceipt` 视图选择 → epoch 冻结工作视图（或显式 `EpochReset` 重定基） → exact full/delta → 宿主。
 
 exact codec 可以精确重建一份含摘要的派生视图，但不能据此证明摘要等价于原始事实。不能因摘要文件存在就设置宿主 retained/complete，也不能借摘要失效重新 guard、创建新 attempt 或重复 settlement。[LX4]
 
@@ -303,7 +315,7 @@ exact codec 可以精确重建一份含摘要的派生视图，但不能据此�
 
 1. 独立验收成果、约束遗漏、错误版本引用、重复失败路径和人工介入。
 2. LoopX projection bytes/estimated tokens、实际 host input 与可观测覆盖；不可见部分标 unknown。
-3. 所有执行/摘要/重试调用的 provider usage，cached 与 uncached 输入、输出、回读引起的后续输入；避免同一 usage 重复计费。
+3. 所有执行/摘要/重试调用的 provider usage：显式区分 `cached_prefix_tokens`（沿稳定 `KeepRaw` 前缀命中的温 KV-cache）与 `uncached_input_tokens`（冷 prefill 启动、缓存 TTL 失效或 `EpochReset` 前缀重建）、输出 token 以及回读引起的后续输入；分别报告冷/温 KV-cache 工况，避免同一 usage 重复计数。
 4. 摘要构建、读取、重试和整体 wall time / tail latency。
 5. 来源磁盘量、保留期限和清理/恢复开销。
 

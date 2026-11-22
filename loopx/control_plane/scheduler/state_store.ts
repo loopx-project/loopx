@@ -13,6 +13,7 @@ import {
 import {
   assertNever,
   jsonObject,
+  pythonString,
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
   requireStringLiteral,
@@ -105,15 +106,6 @@ function pythonTruthy(value: unknown): boolean {
   if (typeof value === "string" || Array.isArray(value)) return value.length > 0;
   if (typeof value === "object") return Object.keys(value).length > 0;
   return true;
-}
-
-function pythonString(value: unknown): string {
-  if (value === null || value === undefined) return "None";
-  if (value === true) return "True";
-  if (value === false) return "False";
-  if (typeof value === "string") return value;
-  if (typeof value === "number") return String(value);
-  return String(value);
 }
 
 function stringOrEmpty(value: unknown): string {

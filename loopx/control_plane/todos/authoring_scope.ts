@@ -22,7 +22,7 @@ const TODO_STATUSES: ReadonlySet<string> = new Set(["open", "done", "blocked", "
 export const TODO_OWNERSHIP_INTENT_FIELDS = ["claimed_by", "clear_claim", "excluded_agents"] as const;
 
 /** Normalize explicit execution-owner intent before binding its replay identity.
- * This does not authorize the actor or manufacture a new execution lease. */
+ *  */
 export function normalizeTodoOwnershipIntent(raw: JsonObject): JsonObject {
   const intent: JsonObject = {};
   if (raw.claimed_by != null) {
@@ -244,7 +244,7 @@ export function userTodoScopeConflict(taskClass: string | null, scope: Scope,
 }
 
 function validateScope(role: string, taskClass: string | null, scope: Scope, agentCount: number): void {
-  const { bound_agent: bound, goal_bound: goal, blocks_agent: blocks, global_gate: global } = scope;
+  const { bound_agent: bound, goal_bound: goal } = scope;
   if (role !== "user") {
     if (bound || goal) fail("bound_agent and goal_bound are only valid for user todos");
     return;

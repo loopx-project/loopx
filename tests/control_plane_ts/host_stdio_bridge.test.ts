@@ -7,8 +7,9 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {setTimeout as delay} from "node:timers/promises";
 import test from "node:test";
+import {fileURLToPath} from "node:url";
 
-const bridge = new URL("../../loopx/control_plane/turn_driver/host_stdio_bridge.ts", import.meta.url).pathname;
+const bridge = fileURLToPath(new URL("../../loopx/control_plane/turn_driver/host_stdio_bridge.ts", import.meta.url));
 const launch = (script: string) => spawn(process.execPath,
   ["--no-warnings", "--experimental-strip-types", bridge, process.execPath, "-e", script],
   {stdio: ["pipe", "pipe", "pipe"]});

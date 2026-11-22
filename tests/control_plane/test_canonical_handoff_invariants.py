@@ -58,6 +58,7 @@ def _write_workspace(
     *,
     handoff_mode: str | None = None,
     lifecycle_authority: list[dict[str, Any]] | None = None,
+    registered_agents: list[str] | None = None,
 ) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
@@ -76,7 +77,11 @@ def _write_workspace(
     )
     coordination: dict[str, Any] = {
         "agent_model": "peer_v1",
-        "registered_agents": [AGENT_A, AGENT_B, ORCHESTRATOR],
+        "registered_agents": (
+            [AGENT_A, AGENT_B, ORCHESTRATOR]
+            if registered_agents is None
+            else list(registered_agents)
+        ),
     }
     if lifecycle_authority is not None:
         coordination["todo_lifecycle_authority"] = lifecycle_authority
@@ -775,6 +780,75 @@ def test_exact_user_gate_completion_preserves_execution_fence(
         assert _agent_todo(state, gate["todo_id"])["status"] == "done"
         assert not _agent_todo(state, target["todo_id"]).get("required_decision_scopes")
         assert result["decision_scope_resolution"]["state"] == "resolved"
+
+
+@pytest.mark.parametrize("mode", ["soft_claim", "hard_lease"])
+@pytest.mark.parametrize(
+    "agents",
+    [[AGENT_A], [AGENT_A, AGENT_B, ORCHESTRATOR]],
+    ids=["single-agent", "multi-agent"],
+)
+def test_owner_closes_exact_user_gate_without_an_agent_actor(
+    tmp_path, canonical_workspace, mode, agents
+):
+    """The owner who is not registered as an agent can close a single-agent gate.
+
+    A single-agent goal has no second agent to act for the owner, and the
+    terminal CLI has no human owner actor. Multi-agent hard-lease goals retain
+    their attributed-actor execution fence contract when no actor is named.
+    """
+    registry, state = canonical_workspace(
+        tmp_path, handoff_mode=mode, registered_agents=agents
+    )
+    target, gate = _add_exact_user_gate_pair(registry)
+    unlinked = add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="user",
+        text="Confirm one unlinked owner decision.",
+        task_class="user_gate",
+        blocks_agent=AGENT_A,
+    )
+    before, display = _snapshot(registry), state.read_bytes()
+    with pytest.raises(LocalCoordinationAuthorityRejection) as error:
+        _terminal(
+            registry,
+            unlinked["todo_id"],
+            role="user",
+            decision_outcome="approve",
+            agent_id=None,
+        )
+    assert error.value.code == "actor_required"
+    _unchanged(registry, state, before, display)
+
+    if mode == "hard_lease" and len(agents) > 1:
+        with pytest.raises(LocalCoordinationAuthorityRejection) as error:
+            _terminal(
+                registry,
+                gate["todo_id"],
+                role="user",
+                decision_outcome="approve",
+                agent_id=None,
+            )
+        assert error.value.code == "handoff_mode_requires_lease"
+        _unchanged(registry, state, before, display)
+        return
+
+    result = _terminal(
+        registry,
+        gate["todo_id"],
+        role="user",
+        decision_outcome="approve",
+        agent_id=None,
+    )
+    assert (
+        result["mutation_authority"]["authority_mode"]
+        == "exact_user_gate_decision_scope_override"
+    )
+    assert result["task_lease_fence"]["lease_fence"] == "not_required"
+    assert _agent_todo(state, gate["todo_id"])["status"] == "done"
+    assert not _agent_todo(state, target["todo_id"]).get("required_decision_scopes")
+    assert result["decision_scope_resolution"]["state"] == "resolved"
 
 
 def test_bound_user_action_completes_without_gate_or_execution_claim(

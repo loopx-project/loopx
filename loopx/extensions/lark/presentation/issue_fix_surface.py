@@ -270,7 +270,7 @@ def issue_fix_record_values(
     }
 
 
-def todo_record_values() -> dict[str, str]:
+def todo_record_values() -> dict[str, Any]:
     return {
         "Work Item Type": "Todo",
         "Repository": "",

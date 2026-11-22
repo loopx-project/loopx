@@ -21,7 +21,7 @@ export function parseTodoCompletionProof(text: string): {
   } catch { return null; }
 }
 
-/** Present the terminal owner's refusal; neither inspect nor acquire a lease. */
+/** Present the terminal owner's refusal; */
 export function todoCompletionProofRequired(error: unknown): boolean {
   return error instanceof ChatApiError && (error.payload.error_code === "handoff_mode_requires_lease"
     || error.payload.error_code === "lease_fence_required");

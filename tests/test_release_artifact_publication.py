@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,41 @@ assert SPEC and SPEC.loader
 owner = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = owner
 SPEC.loader.exec_module(owner)
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+@pytest.mark.parametrize("metadata", ["valid", "mismatch", "malformed"])
+def test_colocated_artifact_cli_never_initializes_the_candidate(tmp_path, isolated, metadata):
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / "loopx/control_plane/testing").mkdir(parents=True)
+    shutil.copyfile(
+        root / "loopx/control_plane/testing/release_metadata.py",
+        tmp_path / "loopx/control_plane/testing/release_metadata.py",
+    )
+    (tmp_path / "scripts").mkdir()
+    script = tmp_path / "scripts/release_artifacts.py"
+    shutil.copyfile(root / "scripts/release_artifacts.py", script)
+    sentinel = tmp_path / "loopx/initialized"
+    (tmp_path / "loopx/__init__.py").write_text(
+        '__version__: str = "1.2.3"\nfrom pathlib import Path\n'
+        'Path(__file__).with_name("initialized").write_text("executed")\n'
+        'raise RuntimeError("candidate package executed")\n', encoding="utf-8")
+    version = "9.9.9" if metadata == "mismatch" else "1.2.3"
+    project = f'[project]\nname = "loopx"\nversion = "{version}"\n'
+    if metadata == "malformed":
+        project = "[project\n"
+    (tmp_path / "pyproject.toml").write_text(project, encoding="utf-8")
+    result = subprocess.run([sys.executable, *(["-I", "-S"] if isolated else []),
+                             str(script), "expected-tag"], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=30)
+    assert not sentinel.exists(), (result.stdout, result.stderr)
+    assert result.returncode == (0 if metadata == "valid" else 2), result.stderr
+    if metadata == "valid":
+        assert result.stdout.strip() == "v1.2.3"
+    else:
+        assert result.stderr and "Traceback" not in result.stderr
+        if metadata == "mismatch":
+            assert "version mismatch" in result.stderr
 
 
 @pytest.fixture

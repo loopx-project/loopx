@@ -55,6 +55,11 @@ const GOAL_PATH_DELTA_OUTCOMES = [
   "stop",
   "wait",
 ] as const;
+const OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES = [
+  "continue",
+  "no_change",
+  "replan",
+] as const;
 const GOAL_PATH_DELTA_SCALAR_LIMITS = {
   prior_assumption: 320,
   observed_reality: 320,
@@ -194,10 +199,14 @@ const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s
 // outside the internal-state policy, and the per-face URL decision is the
 // caller-migration work still open in #5136.
 const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b[a-z][a-z0-9+.-]*://[^/\\s:@`'\\\"<>]+:[^/\\s@`'\\\"<>]+@[^\\s`'\\\"<>]*|\\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}|\\bsk-ant-[a-z0-9_-]{20,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\\s\\S]*?(?:-{3,}\\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
-const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/[^\\s`'\\\"<>]+|[A-Za-z]:[\\\\/][^\\s`'\\\"<>]+|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
+const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/{1,}(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/(?:[^\\s`'\\\"<>]+)?|[A-Za-z]:[\\\\/](?:[^\\s`'\\\"<>]+)?|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
+const HTTP_URL_SURFACE = /\bhttps?:\/\/[^\s`'"<>]+/giu;
+const maskHttpUrlPaths = (value: string): string =>
+  value.replace(HTTP_URL_SURFACE, match => " ".repeat(match.length));
 export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
+const HOME_DIRECTORY_TEXT_PATTERN = /\/Users\//;
 export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
-  /\/Users\//,
+  HOME_DIRECTORY_TEXT_PATTERN,
   /\/ext[_]data\//, // Preserve the matcher without matching its own policy source.
   /lark[o]ffice/i, // Equivalent matcher avoids matching its own policy source.
   /docs\.internal/i,
@@ -354,7 +363,15 @@ function publicSafeTextGuidance(label: string): string {
 
 function validatePublicSafeText(label: string, value: string): void {
   for (const pattern of INTERNAL_STATE_PRIVATE_TEXT_PATTERNS) {
-    if (pattern.test(value)) {
+    // The local-path arms read the URL-masked text: an ordinary http(s) link
+    // may legitimately carry a /Users/ or /home/ segment, which is URL syntax
+    // rather than a home-directory reference. Publication-tier callers keep
+    // reading the raw value.
+    const candidate =
+      pattern === LOCAL_PATH_SHAPE || pattern === HOME_DIRECTORY_TEXT_PATTERN
+        ? maskHttpUrlPaths(value)
+        : value;
+    if (pattern.test(candidate)) {
       throw new EffectRuntimeRequestError(
         `${label} contains a private-looking value; ${publicSafeTextGuidance(label)}`,
       );
@@ -883,6 +900,25 @@ function existingVisionContinuityBasis(
   };
 }
 
+function materialOutcomeCheckpointFailures(
+  vision: JsonObject,
+): string[] {
+  let closed = false;
+  try {
+    closed = lifecycle.closed_states.includes(normalizeGoalVisionState(vision.state));
+  } catch {
+    // Invalid lifecycle state is not evidence of a closed frontier.
+  }
+  if (closed) return [];
+
+  const path = optionalObject(vision.path_delta, "agent_vision.path_delta");
+  if (path === null) return [];
+  const outcome = compactText(path.outcome);
+  return (OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES as readonly string[]).includes(outcome)
+    ? []
+    : ["path_outcome_valid"];
+}
+
 function deliveryBoundary(value: unknown): DeliveryBoundary {
   if (value === null || value === undefined || value === "") {
     return "semantic_closeout";
@@ -1018,17 +1054,38 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
     trigger.kind !== "in_flight_continuation"
   );
   const required = requiredTriggers.length > 0 || unchanged !== null;
+  const materialCloseout = request.delivery_outcome !== "outcome_gap" && triggers.some((trigger) =>
+    trigger.kind === "material_delivery_outcome"
+  );
+  const patchedFailures = request.agent_vision !== null && materialCloseout
+    ? materialOutcomeCheckpointFailures(
+      request.agent_vision,
+    )
+    : [];
+  const unchangedBasis = unchanged !== null
+    ? existingVisionContinuityBasis(request.existing_agent_vision)
+    : null;
+  const unchangedFailures =
+    unchanged !== null && request.existing_agent_vision !== null && materialCloseout
+      ? materialOutcomeCheckpointFailures(
+        request.existing_agent_vision,
+      )
+      : [];
   let decision: VisionCheckpointDecision;
   let satisfied: boolean;
-  if (request.agent_vision !== null) {
+  let unqualifiedComponents: string[] = [];
+  if (request.agent_vision !== null && patchedFailures.length === 0) {
     decision = "patched";
     satisfied = true;
-  } else if (unchanged !== null && request.existing_agent_vision !== null) {
+  } else if (unchanged !== null && request.existing_agent_vision !== null && unchangedFailures.length === 0) {
     decision = "unchanged_with_reason";
     satisfied = true;
   } else if (unchanged !== null || required) {
     decision = "missing_required";
     satisfied = false;
+    unqualifiedComponents = patchedFailures.length > 0
+      ? patchedFailures
+      : unchangedFailures;
   } else {
     decision = "not_required";
     satisfied = true;
@@ -1046,14 +1103,14 @@ export function buildVisionCheckpoint(value: unknown): JsonObject {
   if (request.agent_vision !== null) {
     checkpoint.agent_vision_state = request.agent_vision.state;
   }
+  if (unqualifiedComponents.length > 0) {
+    checkpoint.unqualified_components = unqualifiedComponents;
+  }
   if (unchanged !== null && request.existing_agent_vision !== null) {
     checkpoint.unchanged_reason = unchanged;
     checkpoint.agent_vision_state = request.existing_agent_vision.state;
-    const continuityBasis = existingVisionContinuityBasis(
-      request.existing_agent_vision,
-    );
-    if (continuityBasis !== null) {
-      checkpoint.continuity_basis = continuityBasis;
+    if (unchangedBasis !== null) {
+      checkpoint.continuity_basis = unchangedBasis;
     }
   } else if (unchanged !== null) {
     checkpoint.missing_baseline = true;

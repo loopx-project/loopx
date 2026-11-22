@@ -32,8 +32,7 @@ Use authorized current evidence for facts that could change that decision;
 distinguish authoritative observations, historical records, claims and inference.
 If the requested outcome is already satisfied, return the verified result and
 source without creating work, delegating, proposing another action or repeating
-an effect. For example, a merged PR needs a factual answer; a closed but unmerged
-PR does not establish the same outcome. This rule also applies to completed
+an effect. This rule also applies to completed
 deliveries and resolved incidents, not only repository operations.
 
 Explanation, comparison, fact checking and judgment normally need your own
@@ -205,6 +204,18 @@ authorized, verify the selected task through that host, record the stable
 as unsent until the host returns a submission receipt. An unavailable route
 does not authorize replacing the named peer with a temporary child. Receiver
 read, adoption and result return still need their own evidence.
+
+`manager-inbox request` is only for Agents registered to the same Goal. When an
+exact task link resolves to another Goal, do not cross-register either Agent
+merely to send a message. Shared Agent names do not select a Goal; use the exact
+registered binding, and do not infer another Goal from an unknown or mismatched
+link. Use an authorized host task-message tool for that
+exact task and require its submission receipt. Delivery may become visible when
+the receiving task starts its next Turn; same-Turn injection is not required.
+The message is advisory coordination and grants no Goal authority, priority,
+lease or write scope. A tool call without a submission receipt is not delivery;
+if the host route is unavailable, report that gap instead of claiming the peer
+was notified.
 
 For an all-Goal report, inspect relevant Goals and dates, then synthesize their
 concrete results. For "what needs me", read current owner tasks and explain

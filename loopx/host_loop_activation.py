@@ -524,6 +524,7 @@ def _heartbeat_commands(
     agent_type: str,
     cli_bin: str,
     runtime_root: str | None = None,
+    registry: str | None = None,
     agent_id: str | None,
     available_capabilities: list[str] | None = None,
 ) -> dict[str, str]:
@@ -558,6 +559,7 @@ def _heartbeat_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -568,6 +570,7 @@ def _heartbeat_commands(
             goal_id,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry_path=registry,
             agent_id=agent_id,
             agent_scope=agent_scope,
             available_capabilities=available_capabilities,
@@ -1241,6 +1244,7 @@ def build_host_loop_activation_packet(
     goal_id: str,
     cli_bin: str = "loopx",
     runtime_root: str | None = None,
+    registry: str | None = None,
     identity_runtime_root: str | None = None,
     agent_id: str | None = None,
     registered_agents: list[str] | None = None,
@@ -1266,6 +1270,7 @@ def build_host_loop_activation_packet(
             agent_type=canonical,
             cli_bin=cli_bin,
             runtime_root=runtime_root,
+            registry=registry,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             available_capabilities=normalized_available_capabilities,
         )
@@ -1280,6 +1285,8 @@ def build_host_loop_activation_packet(
         cadence_args = [cli_bin, "--format", "json"]
         if runtime_root:
             cadence_args.extend(["--runtime-root", runtime_root])
+        if registry:
+            cadence_args.extend(["--registry", registry])
         cadence_args.extend(["automation-cadence", "--goal-id", goal_id])
         if selected_agent_id:
             cadence_args.extend(["--agent-id", str(selected_agent_id)])
@@ -1328,6 +1335,7 @@ def build_host_loop_activation_packet(
             goal_id=goal_id,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
             runtime_root=runtime_root,
+            registry=registry,
         )
     elif canonical == "kiro-cli":
         surface = kiro_cli_activation(commands, cli_bin)
@@ -1349,6 +1357,7 @@ def build_host_loop_activation_packet(
                 agent_type=canonical,
                 cli_bin=cli_bin,
                 runtime_root=runtime_root,
+                registry=registry,
                 agent_id=candidate,
                 available_capabilities=normalized_available_capabilities,
             )

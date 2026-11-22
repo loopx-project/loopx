@@ -1007,33 +1007,32 @@ def test_modern_envelope_does_not_bypass_host_signature_check(corruption: str) -
 
 
 @pytest.mark.parametrize("has_packet", [False, True])
-def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_packet: bool, monkeypatch) -> None:
+def test_quota_presentation_preserves_collection_failure(has_packet: bool, monkeypatch) -> None:
     from loopx.cli_commands.quota import _project_quota_cli_payload
     from argparse import Namespace
 
     failure: dict[str, Any] = {
         "ok": False, "decision": "skip", "should_run": False,
-        "error_code": "scheduler_execution_context_invalid",
+        "error_code": "quota_unexpected_collection_error",
+        "status": "quota_collection_failed",
     }
     if has_packet:
         failure["protocol_action_packet"] = {
             "schema_version": "protocol_action_packet_v0", "summary": "retired summary",
         }
     before = deepcopy(failure)
+    args = Namespace(quota_command="should-run", turn_envelope=True)
+
+    def unexpected_runtime(*_args, **_kwargs):
+        pytest.fail("A collection failure cannot reenter its unavailable runtime")
+
+    monkeypatch.setattr("loopx.control_plane.effect_runtime.effect_runtime_result", unexpected_runtime)
     if has_packet:
         from loopx.control_plane.effect_runtime import EffectRuntimeRejected
         with pytest.raises(EffectRuntimeRejected, match="unsupported format: protocol_action_packet"):
-            _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
-        assert failure == before
-        return
-
-    def unexpected_envelope(*_args, **_kwargs):
-        pytest.fail("A collection failure cannot reenter its unavailable runtime")
-
-    monkeypatch.setattr("loopx.cli_commands.quota_presentation.build_turn_envelope", unexpected_envelope)
-    rendered = _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
-    assert rendered.pop("turn_envelope_skipped") == "quota request failed; original diagnostic retained"
-    assert rendered == before
+            _project_quota_cli_payload(failure, args, frozenset(), None)
+    else:
+        assert _project_quota_cli_payload(failure, args, frozenset(), None) == before
     assert failure == before
 
 

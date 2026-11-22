@@ -6,17 +6,27 @@ import shlex
 import stat
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
+from ..quota.turn_envelope import quota_action_signature_document
 from .doubao_model_behavior_actor import (
+    ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
     ALLOWED_MODEL_BEHAVIOR_MODELS,
+    ARK_API_KEY_ENV,
+    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+    DEEPSEEK_FLASH_MODEL,
+    DOUBAO_2_1_PRO_MODEL,
     DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+    DOUBAO_MODEL_ENV,
     DoubaoActorTransport,
     DoubaoActorTransportError,
+    _deepseek_env_config,
+    _direct_ark_transport,
+    _direct_deepseek_transport,
 )
 
 EXEC_COMMAND_TOOL: dict[str, Any] = {
@@ -201,7 +211,7 @@ class ScriptedDoubaoExecTransport:
 
 
 class DoubaoExecToolClient:
-    """One bounded Ark function-tool transport shared by real behavior gates."""
+    """One bounded function-tool transport shared by real behavior gates."""
 
     def __init__(
         self,
@@ -210,21 +220,28 @@ class DoubaoExecToolClient:
         model: str,
         timeout_seconds: float,
         transport: DoubaoActorTransport,
+        endpoint: str = DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+        allowed_models: AbstractSet[str] = ALLOWED_MODEL_BEHAVIOR_MODELS,
+        provider_prefix: str = "ark",
     ) -> None:
+        provider_label = "DeepSeek" if provider_prefix == "deepseek" else "Doubao"
         if not api_key.strip():
-            raise RuntimeError("Doubao actor requires a runtime-injected API key")
-        if model not in ALLOWED_MODEL_BEHAVIOR_MODELS:
-            raise ValueError("Doubao actor model must be explicitly allowlisted")
+            raise RuntimeError(f"{provider_label} actor requires a runtime-injected API key")
+        if model not in allowed_models:
+            raise ValueError(f"{provider_label} actor model must be explicitly allowlisted")
         if timeout_seconds <= 0 or timeout_seconds > 300:
-            raise ValueError("Doubao actor timeout must be between 0 and 300 seconds")
+            raise ValueError(f"{provider_label} actor timeout must be between 0 and 300 seconds")
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._transport = transport
+        self._endpoint = endpoint
+        self._provider_prefix = provider_prefix
+        self._provider_label = provider_label
 
     @property
     def actor_ref(self) -> str:
-        return f"ark:{self._model}"
+        return f"{self._provider_prefix}:{self._model}"
 
     def next_tool_call(
         self,
@@ -261,7 +278,7 @@ class DoubaoExecToolClient:
         }
         try:
             response = self._transport(
-                endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+                endpoint=self._endpoint,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
@@ -279,7 +296,7 @@ class DoubaoExecToolClient:
             raise
         except Exception:  # noqa: BLE001 - custom transports may raise any error.
             raise DoubaoActorTransportError(
-                "Doubao tool behavior provider transport failed",
+                f"{self._provider_label} tool behavior provider transport failed",
                 error_code="provider_transport_failed",
             ) from None
 
@@ -299,7 +316,7 @@ class DoubaoExecToolClient:
         }
         try:
             response = self._transport(
-                endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+                endpoint=self._endpoint,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
@@ -315,7 +332,7 @@ class DoubaoExecToolClient:
             step = provider_exec_tool_step(response)
             if step.tool_call is not None:
                 raise DoubaoActorTransportError(
-                    "Doubao finalization returned an unavailable tool call",
+                    f"{self._provider_label} finalization returned an unavailable tool call",
                     error_code="provider_invalid_tool_call",
                 )
             return step.assistant_content
@@ -323,9 +340,58 @@ class DoubaoExecToolClient:
             raise
         except Exception:  # noqa: BLE001 - custom transports may raise any error.
             raise DoubaoActorTransportError(
-                "Doubao finalization provider transport failed",
+                f"{self._provider_label} finalization provider transport failed",
                 error_code="provider_transport_failed",
             ) from None
+
+
+class DeepSeekExecToolClient(DoubaoExecToolClient):
+    """One bounded DeepSeek function-tool transport shared by real behavior gates."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = DEEPSEEK_FLASH_MODEL,
+        timeout_seconds: float = 90.0,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        endpoint: str = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+    ) -> None:
+        if endpoint != DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT:
+            raise DoubaoActorTransportError(
+                "DeepSeek actor endpoint is not the canonical DeepSeek endpoint",
+                error_code="noncanonical_endpoint",
+            )
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+            allowed_models=ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
+            provider_prefix="deepseek",
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DeepSeekExecToolClient:
+        api_key, resolved_model, endpoint = _deepseek_env_config(
+            environ=environ,
+            model=model,
+        )
+        return cls(
+            api_key=api_key,
+            model=resolved_model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+        )
 
 
 def digest_text(value: str) -> str:
@@ -637,7 +703,10 @@ class QuotaToolContext:
             if path or digest:
                 raise ValueError("context reader cannot mix reference and capture arguments")
             reader = Path(reference_file).expanduser()
-            _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            try:
+                _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            except OSError as exc:
+                raise ValueError("context reader reference could not be read") from exc
             path, digest = reference["path"], reference["sha256"]
         source = Path(path).expanduser() if path else None
         source = (source if source.is_absolute() else project_root / source) if source else None
@@ -697,7 +766,7 @@ def execute_loopx_cli(
 
 
 class LoopxCliExecutionError(RuntimeError):
-    """An executed CLI returned nonzero; this does not imply state rollback."""
+    """An executed CLI returned nonzero;"""
 
     def __init__(self, returncode: int, detail: str, *, stdout: str = "") -> None:
         super().__init__(f"LoopX CLI command failed with exit={returncode}: {detail}")
@@ -705,6 +774,251 @@ class LoopxCliExecutionError(RuntimeError):
         # Transient tool feedback only. Durable receipts must never serialize
         # this raw output or infer rollback from the presence of valid JSON.
         self.stdout = stdout
+
+
+def qualification_turn_instance_id(qualification_id: str) -> str:
+    """Derive a deterministic Turn instance id for a hermetic qualification."""
+
+    digest = sha256(qualification_id.encode("utf-8")).hexdigest()[:16]
+    return f"qualification-{digest}"
+
+
+def hermetic_clock_output(
+    command: str,
+    *,
+    utc_output: str,
+    local_output: str,
+) -> str | None:
+    """Return fixed host clock output for bounded `date` invocations only."""
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if not tokens or Path(tokens[0]).name != "date" or len(tokens) > 4:
+        return None
+    if any(
+        token in {";", "&&", "||", "|"}
+        or (index > 0 and not token.startswith(("-", "+")))
+        for index, token in enumerate(tokens)
+    ):
+        return None
+    if "-u" in tokens or "--utc" in tokens:
+        return utc_output
+    return local_output
+
+
+def is_fixture_quota_guard(
+    command: str,
+    *,
+    goal_id: str,
+    agent_id: str,
+) -> bool:
+    """Return whether ``command`` invokes the fixture's `quota should-run` guard."""
+
+    tokens = loopx_command_tokens(command)
+    if not tokens:
+        return False
+    try:
+        quota_index = tokens.index("quota")
+    except ValueError:
+        return False
+    return bool(
+        tokens[quota_index : quota_index + 2] == ["quota", "should-run"]
+        and argument_value(tokens, "--goal-id") == goal_id
+        and argument_value(tokens, "--agent-id") == agent_id
+        and "--codex-app" in tokens
+        and argument_value(tokens, "--turn-instance-id")
+    )
+
+
+def extract_quota_action_contract_base(
+    packet: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Extract the shared action signature summary used by qualification contracts."""
+
+    signature = quota_action_signature_document(packet)
+    action = dict(signature.get("action") or {})
+    user = dict(signature.get("user") or {})
+    selected = dict(action.get("selected_todo") or {})
+    contract_base: dict[str, Any] = {
+        "decision": "execute",
+        "selected_todo_id": selected.get("todo_id"),
+        "user_action_required": bool(user.get("action_required")),
+        "must_attempt_work": bool(action.get("must_attempt")),
+        "delivery_allowed": bool(action.get("delivery_allowed")),
+        "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
+        "external_write_requested": False,
+    }
+    return contract_base, signature, action, selected
+
+
+def execute_bounded_read_steps(
+    plan: Sequence[Any],
+    *,
+    cwd: Path,
+    timeout_seconds: float = 10,
+    on_step: Callable[[Any, int, str], None] | None = None,
+) -> tuple[list[tuple[Any, int, str]], int]:
+    """Run parsed bounded-read steps under shell `;`/`&&`/`||` status rules."""
+
+    results: list[tuple[Any, int, str]] = []
+    status = 0
+    for step in plan:
+        should_run = bool(
+            step.operator == ";"
+            or (step.operator == "&&" and status == 0)
+            or (step.operator == "||" and status != 0)
+        )
+        if not should_run:
+            continue
+        completed = subprocess.run(
+            list(step.argv),
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+        )
+        status = completed.returncode
+        output = completed.stdout
+        if step.line_limit is not None:
+            output = "".join(output.splitlines(keepends=True)[: step.line_limit])
+        results.append((step, status, output))
+        if on_step is not None:
+            on_step(step, status, output)
+    return results, status
+
+
+def build_qualification_receipt(
+    *,
+    schema_version: str,
+    qualification_id: str,
+    actor_ref: str,
+    passed: bool,
+    failure_code: str | None,
+    steps: Sequence[Mapping[str, Any]],
+    contract: Mapping[str, Any] | None = None,
+    extra_fields: Mapping[str, Any] | None = None,
+    boundary: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble the standard redacted qualification receipt payload."""
+
+    merged_boundary: dict[str, Any] = {
+        "raw_prompt_persisted": False,
+        "raw_provider_response_persisted": False,
+        "raw_command_persisted": False,
+        "writes_limited_to_temporary_fixture": True,
+        "external_writes_executed": False,
+        "shell_commands_executed": False,
+        **(dict(boundary) if boundary is not None else {}),
+    }
+    receipt: dict[str, Any] = {
+        "schema_version": schema_version,
+        "qualification_id": qualification_id,
+        "actor_ref": actor_ref,
+        "qualification_passed": passed,
+        "failure_code": failure_code,
+        **dict(contract or {}),
+        "observed_tool_sequence": [step["kind"] for step in steps],
+        "tool_call_count": len(steps),
+        **dict(extra_fields or {}),
+        "tool_call_receipts": list(steps),
+        "boundary": merged_boundary,
+    }
+    return receipt
+
+
+def append_exec_tool_exchange(
+    messages: list[dict[str, Any]],
+    tool_call: ExecToolCall,
+    tool_output: str | None,
+    *,
+    include_assistant_content: bool = True,
+) -> None:
+    """Append the assistant exec tool request and tool response to ``messages``."""
+
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": (
+                    tool_call.assistant_content if include_assistant_content else None
+                ),
+                "tool_calls": [tool_call.provider_value],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.call_id,
+                "content": "" if tool_output is None else tool_output,
+            },
+        ]
+    )
+
+
+class DoubaoExecToolBehaviorActorBase:
+    """Shared lifecycle initialization for exec-tool Doubao/DeepSeek actors."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        model: str = DOUBAO_2_1_PRO_MODEL,
+        timeout_seconds: float = 90.0,
+        transport: DoubaoActorTransport = _direct_ark_transport,
+        client: DoubaoExecToolClient | None = None,
+    ) -> None:
+        self._client = (
+            client
+            if client is not None
+            else DoubaoExecToolClient(
+                api_key=api_key,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_ark_transport,
+        timeout_seconds: float = 90.0,
+    ) -> Self:
+        values = os.environ if environ is None else environ
+        api_key = values.get(ARK_API_KEY_ENV, "")
+        if not api_key.strip():
+            raise RuntimeError(
+                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
+            )
+        return cls(
+            api_key=api_key,
+            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+        )
+
+    @classmethod
+    def from_deepseek_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> Self:
+        return cls(
+            client=DeepSeekExecToolClient.from_environment(
+                environ=environ,
+                transport=transport,
+                timeout_seconds=timeout_seconds,
+                model=model,
+            )
+        )
 
 
 def snapshot_disposable_fixture(root: Path) -> dict[str, tuple[Any, ...]]:

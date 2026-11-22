@@ -15,6 +15,66 @@ struct LocalWorkspace {
     view: Option<String>,
     work_agent: Option<String>,
     todo: Option<String>,
+    research: Option<ResearchReading>,
+}
+
+/// Selection within the existing dashboard reader, scoped to this local Goal.
+#[derive(Debug, PartialEq)]
+struct ResearchReading {
+    mode: String,
+    pack_id: Option<String>,
+    chapter: Option<String>,
+}
+
+fn digest_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+impl ResearchReading {
+    fn selections(mode: &str, pack: &str, chapter: &str) -> Option<Self> {
+        if !matches!(mode, "case" | "history") {
+            return None;
+        }
+        let pack_id = digest_id(pack).then(|| pack.to_owned());
+        // The frontend resolves this bookmark against the saved study. Carry
+        // only its declared chapter/citation grammar, never an arbitrary URL.
+        let chapter = pack_id.as_deref().and_then(|pack| {
+            let body = chapter.strip_prefix("case-section-")?;
+            let prefix = format!("{pack}-");
+            let section = body.strip_prefix(&prefix).or_else(|| {
+                let (namespace, rest) = body.split_once('-')?;
+                digest_id(namespace).then_some(rest)?.strip_prefix(&prefix)
+            })?;
+            let (id, citation) = match section.split_once('~') {
+                Some((id, ordinal)) => (id, Some(ordinal)),
+                None => (section, None),
+            };
+            let valid_id = id.len() <= 80
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+                && (!id.is_empty() || citation.is_some());
+            let valid_citation = citation.is_none_or(|ordinal| {
+                ordinal.len() <= 2
+                    && !ordinal.starts_with('0')
+                    && ordinal.bytes().all(|c| c.is_ascii_digit())
+                    && !ordinal.is_empty()
+            });
+            (mode == "case" && valid_id && valid_citation).then(|| chapter.to_owned())
+        });
+        Some(Self {
+            mode: mode.to_owned(),
+            pack_id,
+            chapter,
+        })
+    }
+
+    fn value(&self) -> Value {
+        json!({"mode": self.mode, "pack_id": self.pack_id, "chapter": self.chapter})
+    }
 }
 
 // Match the existing Goal instance ID and frontend Agent/Todo search boundary.
@@ -44,6 +104,7 @@ impl LocalWorkspace {
             .then(|| view.to_owned()),
             work_agent: selection_id(agent),
             todo: selection_id(todo),
+            research: None,
         })
     }
 
@@ -71,7 +132,23 @@ impl LocalWorkspace {
             // authority. Reopening that unsupported context returns Manager.
             return Some(Self::default());
         }
-        Self::selections(get("goalId"), get("view"), get("workAgent"), get("todo"))
+        let mut selection =
+            Self::selections(get("goalId"), get("view"), get("workAgent"), get("todo"))?;
+        if selection.view.as_deref() == Some("research")
+            && get("research_goal") == selection.goal_id
+        {
+            let pack = if get("research_analysis_goal") == selection.goal_id {
+                get("research_pack")
+            } else {
+                ""
+            };
+            selection.research = ResearchReading::selections(
+                get("research_reading"),
+                pack,
+                current.fragment().unwrap_or(""),
+            );
+        }
+        Some(selection)
     }
 
     fn destination(&self, origin: &Url) -> Url {
@@ -90,7 +167,20 @@ impl LocalWorkspace {
                 query.append_pair(key, value);
             }
         }
+        if let Some(research) = &self.research {
+            query.append_pair("research_goal", &self.goal_id);
+            query.append_pair("research_reading", &research.mode);
+            if let Some(pack) = &research.pack_id {
+                query.append_pair("research_analysis_goal", &self.goal_id);
+                query.append_pair("research_pack", pack);
+            }
+        }
         drop(query);
+        destination.set_fragment(
+            self.research
+                .as_ref()
+                .and_then(|research| research.chapter.as_deref()),
+        );
         destination
     }
 
@@ -98,17 +188,30 @@ impl LocalWorkspace {
         if value["version"] != 1 {
             return None;
         }
-        Self::selections(
+        let mut selection = Self::selections(
             value["goal_id"].as_str()?,
             value["view"].as_str().unwrap_or(""),
             value["work_agent"].as_str().unwrap_or(""),
             value["todo"].as_str().unwrap_or(""),
-        )
+        )?;
+        if !selection.goal_id.is_empty() && selection.view.as_deref() == Some("research") {
+            let research = &value["research"];
+            selection.research = ResearchReading::selections(
+                research["mode"].as_str().unwrap_or(""),
+                research["pack_id"].as_str().unwrap_or(""),
+                research["chapter"].as_str().unwrap_or(""),
+            );
+        }
+        Some(selection)
     }
 
     fn value(&self) -> Value {
-        json!({"version": 1, "goal_id": self.goal_id, "view": self.view,
-            "work_agent": self.work_agent, "todo": self.todo})
+        let mut value = json!({"version": 1, "goal_id": self.goal_id, "view": self.view,
+            "work_agent": self.work_agent, "todo": self.todo});
+        if let Some(research) = &self.research {
+            value["research"] = research.value();
+        }
+        value
     }
 }
 
@@ -209,6 +312,124 @@ mod tests {
 
     fn origin(port: u16) -> Url {
         format!("http://127.0.0.1:{port}/chat/").parse().unwrap()
+    }
+
+    fn research_page(port: u16) -> Url {
+        let mut page = origin(port);
+        page.query_pairs_mut().extend_pairs([
+            ("goalId", "example"),
+            ("view", "research"),
+            ("research_goal", "example"),
+            ("research_reading", "case"),
+            ("research_analysis_goal", "example"),
+            ("research_pack", &"a".repeat(64)),
+        ]);
+        page
+    }
+
+    #[test]
+    fn research_reopen_keeps_registered_pack_and_chapter_or_citation_on_the_new_port() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("workspace-location.json");
+        for namespace in [String::new(), format!("{}-", "b".repeat(64))] {
+            for section in ["turning-point", "turning-point~2", "~1"] {
+                let mut page = research_page(49123);
+                let chapter = format!("case-section-{namespace}{}-{section}", "a".repeat(64));
+                page.set_fragment(Some(&chapter));
+                let saved = LocalWorkspace::capture(&page, &origin(49123)).unwrap();
+                write(&path, &saved).unwrap();
+                let reopened = read(&path).unwrap().destination(&origin(59234));
+                assert_eq!(reopened.port(), Some(59234));
+                let reopened_query = reopened
+                    .query_pairs()
+                    .into_owned()
+                    .collect::<BTreeMap<_, _>>();
+                for (key, value) in page.query_pairs().into_owned() {
+                    assert_eq!(reopened_query.get(&key), Some(&value));
+                }
+                assert_eq!(reopened.fragment(), Some(chapter.as_str()));
+                let bytes = fs::read_to_string(&path).unwrap();
+                assert!(!bytes.contains("49123") && !bytes.contains("http"));
+                assert_eq!(read(&path), Some(saved));
+            }
+        }
+    }
+
+    #[test]
+    fn research_selections_stay_with_their_goal_view_and_pack() {
+        let mut page = research_page(49123);
+        page.set_fragment(Some(&format!(
+            "case-section-{}-turning-point",
+            "a".repeat(64)
+        )));
+        for (key, value) in [
+            ("goalId", "other"),
+            ("view", "tasks"),
+            ("research_goal", "other"),
+        ] {
+            let mut changed = page.clone();
+            let pairs = changed
+                .query_pairs()
+                .into_owned()
+                .map(|(k, v)| {
+                    let v = if k == key { value.to_owned() } else { v };
+                    (k, v)
+                })
+                .collect::<Vec<_>>();
+            changed.query_pairs_mut().clear().extend_pairs(pairs);
+            assert!(LocalWorkspace::capture(&changed, &origin(49123))
+                .unwrap()
+                .research
+                .is_none());
+        }
+        for pack in ["wrong", &"c".repeat(64)] {
+            let mut changed = page.clone();
+            changed.query_pairs_mut().clear().extend_pairs([
+                ("goalId", "example"),
+                ("view", "research"),
+                ("research_goal", "example"),
+                ("research_reading", "case"),
+                ("research_analysis_goal", "other"),
+                ("research_pack", pack),
+            ]);
+            let saved = LocalWorkspace::capture(&changed, &origin(49123)).unwrap();
+            let research = saved.research.unwrap();
+            assert!(research.pack_id.is_none() && research.chapter.is_none());
+        }
+        let history =
+            ResearchReading::selections("history", &"a".repeat(64), page.fragment().unwrap())
+                .unwrap();
+        assert_eq!(history.mode, "history");
+        assert!(history.chapter.is_none());
+        assert!(ResearchReading::selections("retired", "", "").is_none());
+    }
+
+    #[test]
+    fn invalid_bookmarks_and_unrelated_preference_fields_are_not_restored() {
+        let pack = "a".repeat(64);
+        for chapter in [
+            "https://example.org/secret".to_owned(),
+            format!("case-section-{}-chapter", "c".repeat(64)),
+            format!("case-section-{pack}-../secret"),
+            format!("case-section-{pack}-chapter~0"),
+            format!("case-section-{pack}-chapter~01"),
+            format!("case-section-{pack}-chapter~100"),
+            format!("case-section-{pack}-{}", "x".repeat(81)),
+        ] {
+            assert!(ResearchReading::selections("case", &pack, &chapter)
+                .unwrap()
+                .chapter
+                .is_none());
+        }
+        let legacy = json!({"version": 1, "goal_id": "example", "view": "research"});
+        let saved = LocalWorkspace::from_value(&legacy).unwrap();
+        assert!(saved.research.is_none());
+        let mut modified = legacy;
+        modified["research"] = json!({"mode": "case", "pack_id": pack, "chapter": "secret", "url": "https://example.org"});
+        let restored = LocalWorkspace::from_value(&modified).unwrap();
+        assert!(restored.research.as_ref().unwrap().chapter.is_none());
+        assert!(!restored.value().to_string().contains("secret"));
+        assert!(!restored.value().to_string().contains("example.org"));
     }
 
     #[test]

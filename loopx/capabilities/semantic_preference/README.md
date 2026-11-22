@@ -270,7 +270,7 @@ an earlier empty or current view. Read explicitly before a durable correction;
 reuse the subject key, current revision, stable operation identity and exact user
 source, then preview, execute and read back. Missing hook context is unknown, not
 an instruction to discover preferences. An explicit empty read clears cached
-advice; neither context nor its absence grants authority.
+advice.
 
 ### Memory service providers and the next integration boundary
 
@@ -397,8 +397,7 @@ host's authority packet, including producer/contract failures that produced no
 read command. It invalidates the affected hook's cached context and holds only
 actions dependent on missing context; independent work keeps its existing
 permissions. Healthy/disabled hooks do not add this field. This failure-policy
-projection also applies to other turn-start hooks; it does not grant capability
-permissions, make a whole Goal unavailable, or retry failed providers in a loop.
+projection also applies to other turn-start hooks.
 Do not
 act on a cached preference; independent work can continue. This is a host
 obligation, **not** a claim that a generic memory engine intercepts every tool

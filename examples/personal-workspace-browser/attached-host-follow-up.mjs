@@ -100,10 +100,10 @@ export const attachedHostFollowUpScenario = {
       if (posts.length !== 1 || posts[0].sessionId !== sessionIdFor(attachedGoal.id) || posts[0].message !== followUp) {
         throw new Error(`The attached_host follow-up did not reach its Session queue: ${JSON.stringify(posts)}`);
       }
-      const queuedFollowUp = page.locator(".personal-conversation-queue li").filter({ hasText: followUp });
+      const queuedFollowUp = page.locator(".personal-conversation-queue > ol > li").filter({ hasText: followUp });
       await queuedFollowUp.waitFor({ timeout: 10_000 });
       await queuedFollowUp.locator("summary").click();
-      const expandedMessage = queuedFollowUp.locator(".personal-queue-message > p");
+      const expandedMessage = queuedFollowUp.locator(".personal-queue-message > .personal-md > p");
       await expandedMessage.waitFor();
       const assertExpandedBodyTypography = async (viewport) => {
         const typography = await expandedMessage.evaluate(element => {

@@ -36,22 +36,6 @@ def build_host_recovery_record(kind: str) -> dict[str, str]:
     }
 
 
-def reconcile_failed_turn_retry_request(
-    request: Mapping[str, Any],
-    journal: Mapping[str, Any],
-    *,
-    session_binding_resolver: SessionBindingResolver | None,
-) -> dict[str, Any]:
-    resolved, _check, error = assess_failed_turn_retry_request(
-        request,
-        journal,
-        session_binding_resolver=session_binding_resolver,
-    )
-    if error is not None:
-        raise error
-    return resolved
-
-
 def assess_failed_turn_retry_request(
     request: Mapping[str, Any],
     journal: Mapping[str, Any],

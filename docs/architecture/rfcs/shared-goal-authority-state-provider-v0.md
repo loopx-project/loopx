@@ -4,7 +4,8 @@
 - Supersedes / closes: none
 - Initially proposed by: NoKV Lab
 - Widened by: LoopX maintainers
-- Date: 2026-08-05; revised 2026-09-13
+- Date: 2026-08-05, revised 2026-09-13 and 2026-11-16
+- Cross-person access design: [original proposal and review](https://github.com/loopx-project/loopx/pull/8747)
 - Scope: one provider-neutral LoopX authority contract with built-in file,
   optional NoKV, and optional PostgreSQL provider profiles, complementing
   [`host-integration-surface-v0`](../../reference/protocols/host-integration-surface-v0.md)
@@ -1567,6 +1568,143 @@ Provider shadowing and read-only canaries may collect evidence, but neither
 changes the source of truth. Promotion is explicit and must follow the existing
 fail-closed migration discipline.
 
+### Cross-person shared access
+
+People can connect their own LoopX Agents to an explicitly shared Goal. A team
+connection is opt-in. Each person can continue executing on their computer
+with local model credentials, private tools and private projects. The selected
+shared authority owns shared work and receipts. A local registration points to
+that authority. Passive discovery and reading start no Agent, model or upload.
+Cloud workers need their own execution grants and budget.
+
+The gateway uses the existing service-admission seam and delegates work,
+acceptance, lease and evidence decisions to their typed owners. App, CLI and
+MCP use the same projected decisions and immutable request/receipt identities.
+Start with the configured local stdio MCP bridge over HTTPS. A native remote
+MCP profile needs qualified host identity and authentication. Any independently
+installed transport belongs in the optional extension lifecycle. The gateway
+provides no remote shell or provider commit API.
+
+#### Identity and credentials
+
+Service admission authenticates a principal to a tenant and a scoped Agent and
+host binding. The Goal identity owner resolves the exact Goal lifetime
+(`goal_id` and `goal_instance_id`). The store independently proves its
+incarnation and revision. The Todo or request, current lease and execution epoch
+identify the allowed execution. A caller-supplied name, alias, device label or
+provider incarnation cannot substitute for one of these identities.
+
+Service credentials are independent of the backend. PostgreSQL credentials
+and any qualified storage credentials remain on the service. Start with
+individually revocable high-entropy client keys bound to principal and scope.
+Separate device keys allow selective revocation. Keep only verifier digests in
+policy and avoid putting keys in model arguments, artifacts or receipts.
+Qualify custody, request binding, freshness, rotation and replay before adding
+asymmetric or federated credentials. Local-only OS and stdio access retains its
+existing boundary. A network credential authorizes neither a filesystem mount
+nor a local model or tool.
+
+#### Resource authorization
+
+For every action the service and the owning resource evaluate the intersection
+of **principal grants, credential scope, the resource access control list
+(ACL), and applicable delegation and source permissions**. Deny when a required
+proof is absent, unreadable, expired, revoked or mismatched. Bind the decision
+to the authenticated actor, tenant, exact Goal lifetime, resource, action and
+authorized audience. For versioned evidence, bind the immutable version as
+well. A child resource inherits only explicitly granted access and may narrow
+it. Membership, a coordinator role, or acceptance of a result cannot broaden
+the source audience or substitute for independent verification.
+
+| Resource | Actions to authorize independently |
+| --- | --- |
+| Goal lifetime | Discover or read, propose or amend intent, administer membership |
+| Todo or request | Discover or read, claim, record progress, complete |
+| Artifact and evidence version | Discover metadata, resolve exact bytes, submit, independently accept, return or share |
+
+List, search, projection and readback use the same boundary. Exclude denied
+items and their metadata, including counts, links and cached projections derived
+from those items. Opening a historical receipt first checks current access to
+the exact operation and its resource scope. A historical receipt does not
+authorize new work or restore an old lease. Downloads reauthorize the exact
+version at the owning resolver. Qualify any time-limited locator against the
+same audience, version and revocation policy. Bytes already downloaded remain
+with their recipient.
+
+New calls use current policy. An already admitted operation may finish under
+its recorded authorization snapshot and committed receipt. Audit and qualify
+stop/drain for this interval. A write still needs the owning lease, execution
+fence, budget and acceptance preconditions. ACL checks add no independent
+mutation or receipt ledger.
+
+#### Mixed-version access
+
+Missing mutation fences disable mutations even when the exact read identity
+can be established. A missing, ambiguous or stale read identity denies the
+affected discovery, list, metadata, download and recovery operations. Service
+bindings may supply missing request identity only when the service independently
+verifies the exact current Goal lifetime, resource scope and audience. Then
+ordinary ACL checks apply. Alias fallback and an unscoped read-only view would
+still expose data from an unintended lifetime.
+
+Use two distinct lifetimes of the same Goal alias in access qualification.
+
+| Client and service evidence | Expected outcome |
+| --- | --- |
+| Exact authorized lifetime and read scope, mutation fence absent | Permitted reads proceed. Mutations fail without changing state. |
+| Alias only, service cannot prove lifetime or audience | Discovery, listing, metadata, download and recovery fail closed. |
+| Client omits lifetime, server independently binds current lifetime and audience | Evaluate the bound resource and action through the ordinary ACL. Deny outside that scope. |
+| Explicit stale lifetime or different resource/version | Deny the mismatched action, even with a valid key and a current store connection. |
+
+The [v0 remote task service](../../reference/remote-authority-task-service-v0.md)
+is a source-checkout candidate. Its strict request and policy accept
+tenant/Goal/actor/operation grants and provider incarnation. They cannot
+express the resource or Goal lifetime ACL above. A scoped key for that service
+alone cannot qualify shared reading or evidence delivery. Add the missing
+checks through the existing service and resource owners before exposing the
+cross-person profile. Keep existing local-only access, provider selection and
+the Goal identity activation and old-writer gates under their owners.
+
+#### Portable evidence and work return
+
+A separate private Goal may carry out an authorized subproblem and submit an
+allowed result. Keep both GoalRefs, request and lineage, acceptance criteria
+and the existing same-Goal Explore edge restriction. Intake goes through the
+result or artifact owner. Intent amendments use the
+[shared alignment contract](shared-goal-alignment-and-governed-amendment-v0.md)
+and its existing authorization and adoption gates.
+
+Bind a result to an immutable artifact version and digest, exact inputs,
+authenticated producer and execution provenance. Preserve source permissions and
+intersect them with the result audience when sharing. An authorized resolver
+on the second computer must open the exact bytes. A private source can remain
+private with an explicitly allowed derivative and a visible verification gap.
+Show denial, offline origin, deleted bytes and conflicting versions as separate
+outcomes. A locator or checksum can identify bytes without establishing
+authorization, independence or correctness. Record common sources and preserve
+conflicting results and uncertainty.
+
+Keep authorized work acceptance, execution, submission, independent checking,
+receiver use and the original result return as separate facts. Preserve one
+result per return identity and show partial or rejected outcomes. A sourced
+challenge can change the next action. Retain the later work and outcome so
+adoption is observable. Local model credits stay with their owners until
+distributed admission and budget are qualified.
+
+The [Live Team Workspace](live-team-workspace-v0.md) owns the human reading
+journey and uses audience-scoped projections from these owners. It shows the
+conclusion, uncertainty, challenge or revision, source/version, independent
+check, actual adoption and pending decision. Workspace navigation and evidence
+readback are passive. Research judgments and metrics stay with the domain
+capability.
+
+Start in a new isolated scope. Moving an existing Goal uses the reviewed
+source backup, old-writer drain, identity activation and fenced cutover above.
+To disable participation, revoke admission, drain authorized work and keep
+committed receipts and allowed artifacts. Restore binds the verified
+incarnation and reconciles ambiguous actions before reopening. A local cache
+cannot become a writer during an outage.
+
 ## 9. What Happens Offline and What Must Stay Local
 
 When a shared-mode authority is unavailable:
@@ -1706,6 +1844,39 @@ The sequence is:
    make the shared LoopX service the sole writer. Local `.loopx` state becomes
    cache, offline projection, and diagnostic material. Never keep a long-lived
    dual-write or dual-master mode.
+
+#### Cross-person delivery under R6
+
+M1 qualifies the read-only profile. The same service, resource and work owners
+qualify these [R6 slices](loopx-overall-roadmap-v0.md#r6-localcloud-convergence).
+Existing D1–D3, Goal identity, governed intent amendment, budget and G3 exit
+criteria apply to the affected profile.
+
+| Slice | Acceptance | Reversal |
+| --- | --- | --- |
+| M1 shared reading | Two people on two physical computers read an authorized question, Todo and exact evidence version through App, CLI and MCP. Apply all mixed-version cases in [shared access](#mixed-version-access), valid key with denied resources, wrong tenant/actor/Goal, absent/unreadable policy, source/audience denial and per-client rotation/revocation. Passive reads leave state unchanged. Older unsupported clients fail without a local writer fallback. | Remove access and the connection. Retain shared records. |
+| M2 collaborative research | Observe scoped request and uptake, local work, exact portable result on the other computer, independent check, receiver's changed action and original return. Cover lost response, reconnect, restart/restore, lease expiry/takeover and duplicate effects/debits. Exercise the packaged Live Team L1/L2 journey on desktop and narrow screens with long history, disputed evidence and unavailable or private sources. Disabled local behavior and shared owner facts across App/CLI/MCP and an authorized Lark summary hold. | Stop new admission, drain in-flight work, retain results and receipts. |
+| M3 local/cloud qualification | Add the separately permitted cloud worker and sustain cross-host recovery with explicit shared budget/admission and the full provider/operations gates. Report which cohorts and environments qualified. | Reduce remote admission with explicit stop/drain and retain accepted history. |
+
+Before qualification, the service owner binds page, artifact, subscription and
+latency/load limits to the exercised workload. Use authoritative cursors and
+retain source time, dependencies and explicit coverage gaps when events arrive
+late. Keep audit and content retention and deletion with the relevant owners.
+Live presence does not establish active execution. One-host independent processes
+can characterize the candidate service. Qualifying the product requires the
+packaged cross-computer path and failure recovery.
+
+Keep three owner decisions visible during delivery. Service/identity owners
+qualify client credentials and their rotation before M1. Evidence/material and
+source owners choose licensed resolvers or consented immutable replicas and
+retention before M1. Workspace/research owners qualify the L1/L2 reading
+composition on a real disputed finding before M2.
+
+Measure the accepted single-Agent and team outcomes on matched work under the
+[long-horizon measurement contract](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model).
+Include duplicate effort, total model/service/storage cost and human attention.
+Retain negative comparisons. The bounded workflow and any measured strategic
+benefit have separate evidence.
 
 ### 11.2 Current implementation and evidence ledger (non-normative)
 

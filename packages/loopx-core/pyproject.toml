@@ -22,7 +22,7 @@ version = {attr = "loopx.__version__"}
 include = ["loopx*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.ts", "*.json", "*.mjs", "*.js", "README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]
+"*" = ["*.ts", "*.json", "*.mjs", "*.js", "*.toml", "README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]
 
 [tool.setuptools.exclude-package-data]
 "loopx.semantics" = ["project_registry_io_manifest_v1.json"]

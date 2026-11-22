@@ -75,7 +75,7 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, sh
     if (busy || !fresh || !canManage || !revision || !text.trim()) return;
     const identity = crypto.randomUUID();
     const request = pending ?? {action: "refine", expected_provider_revision: revision, operation_id: `outcome-ui:${identity}`,
-      refinement: {outcome_id: outcome.id,
+      refinement: {outcome_id: outcome.id, storage_format: "records",
         requirements: [{id: `requirement-${identity}`, description: text.trim()}],
         source: {ref: `owner:${identity}`, summary: text.trim()}}};
     setPending(request); setBusy(true); setNotice("");

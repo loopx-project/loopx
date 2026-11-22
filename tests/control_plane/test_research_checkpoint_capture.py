@@ -243,7 +243,15 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
         "MODEL_NAME": "fixture", "REASONING_EFFORT": "high", "OPENAI_BASE_URL": "http://localhost:8123/v1",
         "OPENAI_API_KEY": "fixture-key", "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_REGISTRY": str(registry), "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID}
-    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", lambda *a, **kw: "original work contract")
+    from benchmark.runtime import worker
+    real_heartbeat_body = worker.heartbeat_body
+
+    def checked_heartbeat_body(*args, **kwargs):
+        # Keep the real admission owner; only the synthetic model text is fixed.
+        real_heartbeat_body(*args, **kwargs)
+        return "original work contract"
+
+    monkeypatch.setattr(worker, "heartbeat_body", checked_heartbeat_body)
     off = run_once(env)
     assert off["ok"] and "checkpoint" not in off
     (project / "host-input.txt").unlink()
@@ -299,6 +307,9 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
         tmp_path, monkeypatch, opportunity, corrupt, collisions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args)
@@ -431,6 +442,9 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args, cwd=project)
@@ -583,6 +597,9 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     source_turn_id = "wake-100-prior"
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", source_turn_id)
 
@@ -733,7 +750,10 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
             'observed_reality':'Isolated source work was verified.', 'retained':['Participant capture'],
             'evidence_refs':['evidence:controller-fixture']}}))
     run('refresh-state', '--goal-id', cli.GOAL_ID, *binding, '--classification','controller_fixture_verified',
-        '--delivery-batch-scale','multi_surface','--delivery-outcome','outcome_progress','--agent-vision-json',str(vision))
+        '--delivery-batch-scale','multi_surface','--delivery-outcome','outcome_progress',
+        '--task-lease-idempotency-key', lease['lease']['idempotency_key'],
+        '--task-lease-expected-version', str(lease['lease']['version']),
+        '--agent-vision-json',str(vision))
     run('quota','spend-slot','--goal-id',cli.GOAL_ID,*binding,'--source','heartbeat','--execute')
     before = run('todo','list','--goal-id',cli.GOAL_ID,'--todo-id',cli.TODO_ID)
     from loopx.capabilities.explore.result_log import (
@@ -896,6 +916,9 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
         pytest.skip("Real POSIX permission denial requires an unprivileged test user")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 4
+    registry.write_text(json.dumps(config))
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"

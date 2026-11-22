@@ -81,17 +81,22 @@ agents:
       replan_after_turns: 6
 ```
 
-For an explicitly selected **heartbeat-only** context experiment, add
-`turn_envelope: true` to `kwargs` (default `false`). Each wake creates a private
-capture root and asks the product renderer for a short TurnEnvelope dispatcher.
-Full decisions remain available through `detail_ref.full_decision` from the same
-guard invocation. Selection/reentry still evaluate current authority; generated
-selection commands retain the capture root. When enabled, the setting appears in install,
-execution and wake receipts as `turn_envelope: true`. When disabled, the field
-and worker environment override are absent, preserving the pre-opt-in shape. Invalid native-Goal/plain/Turn-driver combinations
-fail before execution. Set it back to `false` for the next run to roll back;
-do not change a running trial's treatment. Captures contain private Goal context.
-Transport tests do not establish lower token cost or better model decisions.
+Historical Short trials request `turn_envelope: true` in heartbeat `kwargs`.
+Before planning or execution starts a model, the worker previews the selected
+product's quota response through the same CLI. Its wake receipt records the
+expected and observed versions and eligibility in `quota_input_contract`. C1
+sources return v1 and the Short request fails before Host preparation. A
+`fresh_replan` checkpoint preloads a distinct view and also prevents a Short
+launch. The preview has no Turn identity and creates no admission or capture.
+Ordinary and explicit Complete wakes proceed without this Short preview.
+
+Use the recorded product and runner revisions to reproduce a historical
+treatment. On a qualified v0 source, an execution wake records
+`turn_envelope_source=explicit` once it renders the Short bootstrap. Its
+same-invocation full decision remains available through `detail_ref.full_decision`.
+The planning prompt has its own input. Include the preview in startup
+and wake cost when measuring a new attempt with this runner. Keep captures
+private and preserve the settings and receipts of existing attempts.
 
 New native heartbeat trials default to context delivery `on`. Add
 `context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
@@ -171,10 +176,23 @@ release remains the original typed transport failure, without publishing an
 optimized result or rerunning the guard. An interrupted guard continues with
 the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification binds the context-directory/root option and the worker's
-original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
-a complete-mode binding cannot verify a pending command that uses
-`--complete-turn`. Historical ordinary and envelope guards remain readable.
+original `--complete-turn` and `--turn-envelope` choices. Current generated
+heartbeat guards use the default complete v1 contract without emitting either
+alias. A checkpoint without a complete-mode binding cannot verify a pending
+command that uses `--complete-turn`. Historical ordinary and envelope guards
+remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
+
+Restoring a pending replan for a fresh native conversation and checking whether
+a restored session may capture again use the same checkpoint artifact reader.
+It verifies the sealed decision member and original replan binding. Present
+complete-source versions are verified; an unversioned decision is readable
+only as historical evidence in this sealed path. A refusal holds that recovery
+before a session reset or a new capture. A successful read does not replace
+current native admission, current semantic settlement, or full archive checking.
+Empty historical replan annotations keep the ordinary restore path. A declared
+held-decision member still requires its original intent and sealed bytes, even
+when an annotation is empty.
 
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`
@@ -373,13 +391,22 @@ For a task-entry comparison, pin the same source and vary only `task_entry`;
 keep task inputs, scoring, model, budget and evaluation windows fixed. Include
 planning time in the common run budget.
 
-New `loopx-planned` invocations deliver the product planning packet without the
-previous benchmark research-strategy prefix. Only explicitly selected execution
-observation tool context is added. This applies to both Harbor and SForge callers;
-task content, the Core first-delivery contract, identity/readback validation and
-host deadline enforcement remain unchanged. Pin the runner revision when comparing
-planning policies. This adapter change does not qualify model adoption, earlier
-evaluation or outcome improvement.
+New `loopx-planned` invocations deliver the product planning packet, optional
+initial batch authoring and explicitly selected execution observation tool
+context. This applies to both Harbor and SForge callers. Pin the runner revision
+when comparing planning policies. The batch changes how the planner submits its
+decisions. Model adoption, time to a scored candidate and outcome improvements
+require separate run evidence.
+
+For an empty planning frontier, the model can save the same requirement
+declaration and ordered advancement Todos in one JSON proposal and invoke
+`python -m benchmark.runtime.planning_batch PROPOSAL.json` during the planning
+wake. Use the checkpoint's exact input digest and acceptance provider revision.
+The command declares requirements, writes Todos and binds their actual IDs
+through public LoopX operations. Each write has its own receipt. If the command
+is interrupted, reuse the unchanged proposal so the original effects can be
+replayed and missing links completed. Use the ordinary planning steps for
+existing work, changes to requirements and blockers.
 
 The model writes or reuses actual task Todos through the public CLI. The worker
 reads the product packet again and checks the input digest, identity, Todo ids

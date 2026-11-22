@@ -185,10 +185,12 @@
 .research-density span.is-gap { border-top: 0; }
 .research-gap-key { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--pw-red); border-radius: 2px; }
 .research-bar-key { display: inline-block; width: 10px; height: 10px; margin-inline-end: 4px; background: var(--pw-blue-soft); border-top: 2px solid var(--pw-blue); border-radius: 2px 2px 0 0; }
+.research-row-label .research-decision-key { gap: 2px 8px; }
+.research-decision-key > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .research-decision-ticks { position: relative; height: 12px; margin-top: 4px; }
-.research-decision-ticks span { position: absolute; top: 0; width: 3px; height: 10px; margin-left: -1px; border-radius: 1px; background: var(--pw-blue); }
-.research-decision-ticks span.is-replan, .research-tick-key.is-replan { background: var(--pw-orbit); }
-.research-tick-key { display: inline-block; width: 3px; height: 10px; border-radius: 1px; background: var(--pw-blue); }
+.research-decision-ticks span, .research-tick-key { display: inline-block; width: 3px; height: 10px; border-radius: 1px; background: var(--pw-blue); }
+.research-decision-ticks span { position: absolute; top: 50%; transform: translate(-50%, -50%); }
+.research-decision-ticks .is-replan, .research-tick-key.is-replan { width: 7px; height: 7px; rotate: 45deg; background: var(--pw-text); }
 .research-phase-divider { position: absolute; top: -4px; height: 76px; border-left: 1px dashed var(--pw-faint); pointer-events: none; }
 .research-axis { position: relative; height: 22px; margin-top: 2px; border-top: 1px solid var(--pw-line); }
 .research-axis time { position: absolute; top: 5px; transform: translateX(-50%); color: var(--pw-muted); font-size: var(--text-caption); white-space: nowrap; }
@@ -240,7 +242,7 @@
 .research-trail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--pw-muted); font-size: var(--text-caption); }
 .research-trail-question > .research-link { margin: 8px 0 0 36px; min-height: 44px; }
 .research-outcome { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; background: var(--pw-blue-soft); color: var(--pw-blue-ink); }
-.research-outcome.is-replan { background: var(--pw-tone); color: var(--pw-orbit); }
+.research-outcome.is-replan { background: var(--pw-hover); color: var(--pw-text); }
 .research-outcome.is-stop, .research-outcome.is-ask_human { background: var(--pw-amber-bg); color: var(--pw-text); }
 .research-link { padding: 0; border: 0; background: none; color: var(--pw-blue-ink); font: inherit; text-decoration: underline; cursor: pointer; }
 .research-trail > .research-link { margin-top: 8px; font-size: var(--text-caption); }

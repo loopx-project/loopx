@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA
 
 
 class ManagedCadenceStart(NamedTuple):
@@ -19,6 +20,19 @@ class ManagedCadenceStart(NamedTuple):
 
     admit: Callable[[Mapping[str, Any]], dict[str, Any]]
     confirm: Callable[[], None]
+
+
+def uses_effect_bound_start_identity(
+    host: str,
+    adapter_request_schema: str | None,
+    validation_command_json: str | None = None,
+) -> bool:
+    """These Host routes can reserve the same start before a Turn plan exists."""
+    return host == "codex-cli" or (
+        host == "generic-cli"
+        and adapter_request_schema == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+        and bool(validation_command_json)
+    )
 
 
 def managed_cadence_start(
@@ -59,7 +73,7 @@ def managed_cadence_start(
                 and start_request_id != legacy_request_id
                 and admission.get("admitted") is not True
                 and admission.get("reason") == "minimum_interval_wait"):
-            # Historical Codex journals reserved by transaction key. Retry only
+            # Historical journals reserved by transaction key. Retry only
             # this exact identity, after a no-write wait, so their unstarted
             # reservations remain recoverable; never bypass a started request.
             admission = reserve(legacy_request_id)

@@ -95,8 +95,7 @@ source-namespace-isolated store; it creates no Goal mirror or source mutations.
 The adapter uses one local Python process with one HTTP listener/thread per
 prepared source. Cache misses invoke the source's native status CLI or bounded
 log read; no lower CPU, process or IO cost is implied. Local host/container
-readback and SSH command composition are separate validation boundaries; a
-composed command test does not prove a live remote host/container journey.
+readback and SSH command composition are separate validation boundaries.
 
 ### Native App source Goals
 
@@ -145,13 +144,20 @@ through the original Goal's native history, including versions outside the
 status window. Its default overview spans all retained records by recorded time;
 it never silently selects the latest version. Sources proven to have no Explore
 records show this overview directly. Other sources keep their Explore history
-and load strategy history only on request. Unknown times stay visible, and time
-adjacency establishes neither inactivity, inheritance nor causal benefit.
+and load strategy history only on request. Unknown times stay visible.
 It preserves original language, negative results and unresolved
 questions. The focused reader supports exact-version links, reload, Back/Forward
 and unavailable-version recovery; missing versions never select the latest one
 silently. Plans and recorded adoption claims remain distinct from demonstrated
 subsequent action or benefit. Opening or switching records starts no analysis.
+The loaded-record reader also carries its open state, filters, display page and
+expanded entries through the existing research URL. Reading controls update the
+current history entry so Back/Forward can navigate between Goals and sources.
+Changing or clearing filters starts the new result list collapsed on its first
+page. Reload and Back/Forward restore saved selections within the same Goal and
+source. Missing group identities remain visibly unavailable. The native App
+keeps its own window-reopen preferences.
+
 The App and prepared workspace share `GET /api/chat/goal-source-strategies`;
 prepared readers also expose `/api/goal-source/strategies` and the existing
 source-read CLI's `strategies` operation. These reads retain physical namespace
@@ -211,9 +217,7 @@ to make the display work. Label the link as historical, preserve the source byte
 and retain the old namespace's artifacts. Admit the replacement through the same
 source-link owner; its new physical namespace must invalidate old cursors and
 analysis selection. Re-register an existing evidence pack only after verifying
-its original run/window, hashes and literal excerpts. Neither recovery nor
-registration starts analysis or turns an old native measurement into a current
-or countable study result.
+its original run/window, hashes and literal excerpts.
 
 ## Finding original steward delegations
 
@@ -240,8 +244,7 @@ only when **Linked work and records** is expanded, through the same authorized
 reader and current request revision. It is a separate current observation, not
 part of the request ordering/paging digest. Original conversations remain readable
 through their existing complete-history reader. The 2,000-entry discovery bound
-and explicit incomplete coverage remain; this change does not claim an unbounded
-history index or an atomic snapshot.
+and explicit incomplete coverage remain.
 
 Inventory and original-history HTTP reads both pin the shared runtime code
 revision once per request. Without that boundary, every collaboration rule on a
@@ -253,7 +256,7 @@ are reread. It caches no authorization or completion decision.
 在管家页头打开**委派**，输入请求内容、Goal、Agent 或请求 ID 后点**搜索**。
 查询不区分大小写，匹配原始问题及当前交办的目的/背景，先筛选再分页。
 **全部记录**包括已回传和已取消的请求；展开可回看交办、关联工作及原对话。
-**清空**恢复列表。页头数量仍表示全部待跟进请求，并非搜索命中数；读取不完整
+**清空**恢复列表。页头数量仍表示全部待跟进请求；读取不完整
 时保留提示，**重试**沿用当前查询。搜索沿用既有来源授权和扫描上限，不确认、
 取消或执行任何请求。
 
@@ -288,8 +291,7 @@ instead of following the latest message to the end.
 The read projection requires the original Session, Turn and both existing
 transport/Core correlation receipts. Canonical messages, model input and history
 cursors remain unchanged. Missing, changed or unsupported frozen context keeps
-the full original message visible. Browsing neither replays work nor contacts the
-provider to fill missing context.
+the full original message visible.
 
 外部原会话和委派的**原对话**优先显示用户原文，**引用与话题上下文**默认折叠。
 展开后可读准确引用和按原顺序保存的话题节选，长内容不会跳到末尾。节选标记保留，
@@ -605,8 +607,7 @@ although that runtime continues to use its browser-local preference.
 The packaged `navigation-sorting` browser scenario uses synthetic workspace
 records with the real HTTP preference owner. It checks pointer/keyboard moves,
 refresh, service restart on another port, delayed hydration, rapid moves,
-failure/retry and browser-cache migration. It does not certify native WebView
-crash recovery or an already-installed App's adoption of a proposed PR.
+failure/retry and browser-cache migration.
 
 ## PR qualification and releases
 
@@ -620,6 +621,11 @@ artifact that failed browser qualification. Both frontend-only and
 mixed/backend PRs pass through this producer. On pull requests the checkout SHA is GitHub's tested merge commit, which
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.
+
+The `dashboard-browser` source lane waits for its Vite child to confirm that
+it bound the requested port. An HTTP response from a listener already on that
+port cannot qualify the checkout or supply its source coverage. For a local
+port conflict, select a free port with `LOOPX_PERSONAL_WORKSPACE_PORT` and rerun.
 
 Release Artifacts checks out the exact release tag and runs:
 

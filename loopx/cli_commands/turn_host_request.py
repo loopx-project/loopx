@@ -1,6 +1,6 @@
 """Parse the existing CLI Host request before any Turn execution.
 
-This is CLI argument transport and host-adapter binding, not a decision owner.
+This is CLI argument transport and host-adapter binding.
 The Turn driver retains admission, effects and settlement.
 """
 from __future__ import annotations
@@ -31,25 +31,26 @@ def prepare_turn_host_arguments(
         native_host_runner is not None or native_session_binding_resolver is not None
     ):
         raise ValueError("a native Chat connection cannot replace a selected CLI host")
+    raw_argv = None
     if args.host == "generic-cli":
-        if not args.host_command_json:
+        if args.host_command_json:
+            raw_argv = json.loads(args.host_command_json)
+            if not isinstance(raw_argv, list) or not all(
+                isinstance(item, str) for item in raw_argv
+            ):
+                raise ValueError(
+                    "--host-adapter-command-json must be a JSON string array"
+                )
+        elif args.host_command_json is not None or not getattr(args, "resume_turn_key", None):
             raise ValueError(
                 "generic-cli requires --host-adapter-command-json "
                 "(alias --host-command-json)"
-            )
-        raw_argv = json.loads(args.host_command_json)
-        if not isinstance(raw_argv, list) or not all(
-            isinstance(item, str) for item in raw_argv
-        ):
-            raise ValueError(
-                "--host-adapter-command-json must be a JSON string array"
             )
     else:
         if args.host_command_json:
             raise ValueError(f"{args.host} does not accept --host-command-json")
         if getattr(args, "host_adapter_request_schema", None):
             raise ValueError("--host-adapter-request-schema is only for generic-cli")
-        raw_argv = None
     if native_task_validator is not None and args.host != "codex-app-server":
         raise ValueError("a native task validator cannot replace a selected CLI validator")
     task_validator = native_task_validator

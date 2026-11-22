@@ -23,7 +23,7 @@ from ...thread_agent_binding import summarize_agent_binding_routes
 
 
 def _public_safe_host_surface(value: object) -> str | None:
-    """Publish only public-safe host surface labels; compact tokens are not proof."""
+    """Publish only public-safe host surface labels."""
     if not isinstance(value, str):
         return None
     surface = value.strip()

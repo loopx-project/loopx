@@ -31,6 +31,9 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
 from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
+PUBLIC_DEFAULT_CONTRACT = json.loads(
+    Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
+)
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST = 256 * 1024
 MAX_ARCHIVE = 256 * 1024 * 1024
@@ -59,7 +62,15 @@ def standalone_source() -> str:
         if source.count(old) != 1:
             raise ValueError("Bootstrap grammar binding no longer matches its source import")
         source = source.replace(old, "\n" + binding + "\n", 1)
-    return source
+    # The public installer is one file, so embed the policy that the Python
+    # publishers and the native updater read from the distribution contract.
+    binding_start = source.index("\nPUBLIC_DEFAULT_CONTRACT = ")
+    binding_end = source.index("\nSHA = ", binding_start)
+    return (
+        source[:binding_start]
+        + f"\nPUBLIC_DEFAULT_CONTRACT = {PUBLIC_DEFAULT_CONTRACT!r}"
+        + source[binding_end:]
+    )
 
 
 def safe_url(url: str) -> str:
@@ -96,6 +107,22 @@ def read_json(url: str) -> dict[str, Any]:
     return result
 
 
+def validate_default_contract(value: object) -> dict[str, Any]:
+    """Keep public artifacts within the currently supported single-session default.
+
+    This is a distribution compatibility boundary, not a model-benefit verdict.
+    A new complete-contract default needs its original matched outcome/full-cost
+    qualification before this supported scope can be extended. Engineering
+    installation checks cannot authorize that extension.
+    """
+    if not isinstance(value, dict) or value != PUBLIC_DEFAULT_CONTRACT:
+        raise ValueError(
+            "Runtime default contract is unqualified for public adoption; "
+            "the C1 single-session outcome/full-cost and supported-profile qualification is required"
+        )
+    return dict(value)
+
+
 def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> dict[str, Any]:
     if value.get("schema_version") != RUNTIME_ARTIFACT_SCHEMA_VERSION:
         raise ValueError("Unsupported runtime artifact metadata")
@@ -114,6 +141,10 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         raise ValueError("Runtime artifact has no bounded download sources")
     for url in urls:
         safe_url(url)
+    # Historical v1 snapshots remain readable. Newly produced artifacts and
+    # the publisher require the observed contract; absence is not qualification.
+    if "default_contract" in value:
+        validate_default_contract(value["default_contract"])
     return dict(value)
 
 
@@ -385,6 +416,7 @@ def run_installer(command: list[str], *, env: dict[str, str], timeout: float,
 
 def install_artifact(manifest: dict[str, Any], *, env: dict[str, str], timeout_seconds: int,
                      progress=lambda _event: None):
+    manifest = validate_manifest(manifest)
     started = time.monotonic()
     archive = download_artifact(manifest, progress=progress, timeout=timeout_seconds)
     progress({"stage": "verify"})
@@ -393,6 +425,8 @@ def install_artifact(manifest: dict[str, Any], *, env: dict[str, str], timeout_s
         identity = json.loads((root / "runtime-artifact.json").read_text(encoding="utf-8"))
         if identity.get("source_revision") != manifest["source_revision"] or identity.get("package_version") != manifest["package_version"]:
             raise ValueError("Runtime identity disagrees with its release metadata")
+        if "default_contract" in manifest and identity.get("default_contract") != manifest["default_contract"]:
+            raise ValueError("Runtime default contract disagrees with its release metadata")
         selected = dict(env)
         selected.update({"LOOPX_RESOLVED_SOURCE_GIT_COMMIT": manifest["source_revision"],
             "LOOPX_ARCHIVE_SHA256": manifest["sha256"], "LOOPX_ARCHIVE_URL": manifest["urls"][0],

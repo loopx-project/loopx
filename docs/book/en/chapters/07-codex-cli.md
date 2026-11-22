@@ -4,7 +4,7 @@ A visible TUI can also sustain progress. LoopX generates a stable task body for 
 
 ## Why an active Goal differs from a background wake
 
-Suppose a fix is unfinished and you terminate its Codex process. No further work occurs before you restart it. The execution environment has exited; this does not mean a live native Goal needs a user message for every turn.
+Suppose a fix is unfinished and you terminate its Codex process. No further work occurs before you restart it. The execution environment has exited.
 
 | Host state | Behavior on this path | What the user needs to establish |
 | --- | --- | --- |
@@ -116,7 +116,7 @@ another Host or another lane, the work's ownership was silently rewritten. With 
 unregistered id is rejected, and a registered id that differs from the thread binding is treated as a
 deliberate override, so pass one only when you mean to switch lanes.
 
-Agent identity labels the LoopX lane. It does not prove that the work runs in Codex CLI. Use
+Agent identity labels the LoopX lane. Use
 `host_surface`, runtime profile, or run metadata to identify the Host.
 
 A proper handoff is:
@@ -132,7 +132,7 @@ A proper handoff is:
 
 **Continuation depends on an executable Host state.** An active native Goal can progress autonomously; process exit and blocked state have separate boundaries. Automatic wakes across those boundaries require the corresponding scheduling integration and readback.
 
-**Visibility does not replace validation.** A TUI shows activity; success still needs validation, writeback, and settlement. Whether someone watches the screen does not change those conditions.
+A TUI shows activity; success still needs validation, writeback, and settlement. Whether someone watches the screen does not change those conditions.
 
 **Handoff requires current authority checks.** App and CLI can read the same Goal. Check claim, lease, worktree, and applicable writer-fence mode when changing executors to avoid concurrent submission of the same effectful work.
 
@@ -144,7 +144,7 @@ A proper handoff is:
 | Check again on cadence after a long wait | App heartbeat or a qualified scheduler integration | Actual automation, cadence, and ACK/readback |
 | Continue after process exit | Resume the existing Goal or use a path supporting that boundary | An old prompt is not a new execution environment |
 
-Select the wake mechanism you need. Visible execution does not mean manually triggering every turn. Both paths must read the current LoopX decision.
+Select the wake mechanism you need. Both paths must read the current LoopX decision.
 
 ## Recovery paths
 

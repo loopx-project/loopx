@@ -61,7 +61,7 @@ def assert_cli_scheduler_ack_public_round_trip() -> None:
             runtime_root=runtime_root,
             project=project,
         )
-        before_app = before["scheduler_hint"]["codex_app"]
+        before_app = before["scheduler_hint"]["app_automation"]
         target_rrule = before_app["recommended_rrule"]
         ack_hint = before_app["ack_hint"]
         assert before_app["stateful_backoff"]["apply_needed"] is True, before
@@ -89,7 +89,7 @@ def assert_cli_scheduler_ack_public_round_trip() -> None:
             runtime_root=runtime_root,
             project=project,
         )
-        settled_app = settled["scheduler_hint"]["codex_app"]
+        settled_app = settled["scheduler_hint"]["app_automation"]
         assert settled_app["stateful_backoff"]["state_status"] == "same_identity"
         assert settled_app["stateful_backoff"]["current_rrule"] == target_rrule
         assert settled_app["stateful_backoff"]["apply_needed"] is False

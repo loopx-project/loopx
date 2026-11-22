@@ -342,10 +342,13 @@ def app(environment):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def request(path, body):
+    def request(path, body=None):
         connection = http.client.HTTPConnection(*server.server_address, timeout=30)
         try:
-            connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+            if body is None:
+                connection.request("GET", path)
+            else:
+                connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
@@ -589,7 +592,7 @@ def test_original_creation_waits_for_its_host_before_first_turn(environment, app
         elif refusal == "foreign_session":
             # The public store forbids rebinding a Goal Session. Model an
             # independently corrupted file in this disposable fixture only.
-            with pytest.raises(ValueError, match="only the owner manager"):
+            with pytest.raises(ValueError, match="a registered Agent Session cannot change its original Goal"):
                 chat.update_session(session_id, goal_id="another-goal")
             chat._session_path(session_id).write_text(json.dumps({**session, "goal_id": "another-goal"}))
         controller = controller_for(runtime / "missing-codex" if refusal == "missing_host" else fake)
@@ -625,7 +628,8 @@ def test_original_creation_waits_for_its_host_before_first_turn(environment, app
                     controller.open_session(goal_id="pre-first-turn", agent_id="codex",
                         goal_instance_id=session.get("goal_instance_id"), work_dir=project,
                         objective=preview["proposal"]["normalized_parameters"]["objective"],
-                        mode="resume_latest", channel_id="goal.pre-first-turn")
+                        mode="resume_latest", channel_id=session["channel_id"],
+                        managed_agent_id=session["managed_agent_id"])
                 assert chat.turn_for_client(session_id, client_turn_id) == pending
                 assert len(chat.list_sessions(goal_id="pre-first-turn")) == 1
             elif refusal == "terminal_before_start":

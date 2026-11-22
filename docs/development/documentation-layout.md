@@ -140,8 +140,7 @@ binary evidence. The old `examples/personal-workspace-browser/evidence/` and
 Before removing a pack, inspect references across documentation, navigation,
 source code, tests and distribution/build scripts, including references to its
 README or manifest. Preserve transitive consumers and distinguish fixture reads
-from screenshot output paths. No static references is a review signal, not proof
-of disuse. Repair current links in the same change, preserve the bytes of retained
+from screenshot output paths. No static references is a review signal. Repair current links in the same change, preserve the bytes of retained
 assets, and run the relevant link/asset checks. Retire tests only under the
 [smoke retention rules](good-smokes.md), not because their files are large.
 

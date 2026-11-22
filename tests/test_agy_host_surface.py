@@ -9,12 +9,16 @@ the facade dead-ends at argparse and the surface is decorative.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import shlex
 
 import pytest
 from host_surface_cli_probes import (
+    connected_project,
     onboarding_setup_command_installs,
+    run_cli,
     selection_gate_offers_surface,
     start_goal_accepts_surface,
 )
@@ -50,6 +54,61 @@ from loopx.agy_goal_mode import (
 )
 
 HOST_SURFACE = "agy"
+
+
+@pytest.mark.parametrize(
+    "entry", [
+        ("bootstrap-command-pack", "--host-surface", "antigravity-app"),
+        ("agent-onboard", "--agent-type", "antigravity-app"),
+    ],
+)
+def test_antigravity_generated_commands_read_the_project_registry_from_another_directory(
+    tmp_path: Path, entry: tuple[str, ...],
+) -> None:
+    project = connected_project(tmp_path / "project with spaces")
+    registry = project / ".loopx" / "registry.json"
+    runtime = tmp_path / "isolated-runtime"
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\nUse the registered project state.\n", encoding="utf-8")
+    data = json.loads(registry.read_text())
+    data["common_runtime_root"] = str(runtime)
+    data["goals"][0].update(
+        state_file=state.name,
+        coordination={"registered_agents": ["probe-agent"], "agent_model": "peer_v1"},
+    )
+    registry.write_text(json.dumps(data), encoding="utf-8")
+    foreign = tmp_path / "other"
+    foreign.mkdir()
+    # The host may be in another project which happens to use the same Goal id.
+    other = connected_project(foreign)
+    foreign_registry = other / ".loopx" / "registry.json"
+    foreign_registry.write_text(json.dumps({
+        "goals": [{**data["goals"][0], "repo": str(other)}],
+    }), encoding="utf-8")
+    env = {**os.environ, "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_USAGE_PING": "0"}
+    env.pop("LOOPX_REGISTRY", None)
+    result = run_cli(
+        *entry, "--project", str(project), "--goal-id", "surface-goal",
+        "--agent-id", "probe-agent", cwd=other, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    activation = json.loads(result.stdout)["host_loop_activation"]
+    assert activation["activation_allowed"]
+    mutation = activation["host_mutation"]
+    sidecar = mutation["sidecar_template"]
+    prompt = sidecar["sidecar_json"]["args"][-1]
+    bootstrap, = [line for line in prompt.splitlines() if " heartbeat-prompt " in line]
+    for command in (bootstrap, activation["activation_input_command"]):
+        argv = shlex.split(command)
+        result = run_cli(*argv[1:], cwd=other, env=env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["ok"]
+        guard = next(line for line in payload["task_body"].splitlines() if " quota should-run " in line)
+        guard_argv = shlex.split(guard)
+        assert Path(guard_argv[guard_argv.index("--registry") + 1]) == registry
+    hook = shlex.split(mutation["hooks_template"]["loopx"]["Stop"][0]["command"])
+    assert hook[hook.index("--registry") + 1] == str(registry)
 
 
 def test_start_goal_accepts_the_agy_host_surface(tmp_path: Path) -> None:
@@ -630,3 +689,242 @@ def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
         )
         is None
     )
+
+
+def test_antigravity_ambient_conversation_id_facade_and_bound_hooks_sync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Antigravity fixed sessions resolve ANTIGRAVITY_CONVERSATION_ID, bind hooks.json
+    atomically, and receive in-place schedule(DurationSeconds>=180) + .worktrees/ guidance."""
+    project = connected_project(tmp_path / "proj", goal_id="resident-goal")
+    registry_path = project / ".loopx" / "registry.json"
+    runtime_root = tmp_path / "runtime"
+    state_path = project / ".loopx" / "goals" / "resident-goal" / "ACTIVE_GOAL_STATE.md"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("# Goal\n\n## Agent Todo\n", encoding="utf-8")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["common_runtime_root"] = str(runtime_root)
+    registry["goals"][0].update(
+        state_file=".loopx/goals/resident-goal/ACTIVE_GOAL_STATE.md",
+        coordination={"registered_agents": ["antigravity"], "agent_model": "peer_v1"},
+    )
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    from loopx.global_registry import sync_project_registry_to_global
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_source_fixture,
+    )
+
+    initialize_canonical_source_fixture(
+        runtime_root,
+        "resident-goal",
+        state_path=state_path,
+    )
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id="resident-goal",
+        dry_run=False,
+    )
+
+    custom_agy_home = tmp_path / "agy-cfg"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGY_HOME", str(custom_agy_home))
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
+
+    # Preview and execute bind-agent-thread --with-agy-hooks
+    conv_id = "conv-fixed-1234"
+    preview = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "bind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", conv_id,
+        "--host-surface", "agy",
+        "--agent-id", "antigravity",
+        "--with-agy-hooks",
+        "--agy-home", str(custom_agy_home),
+        cwd=project,
+    )
+    assert preview.returncode == 0, preview.stderr
+    preview_payload = json.loads(preview.stdout)
+    assert preview_payload["antigravity_hooks"]["status"] == "would_write"
+    assert not (custom_agy_home / "hooks.json").exists()
+
+    bound_res = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "bind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", conv_id,
+        "--host-surface", "agy",
+        "--agent-id", "antigravity",
+        "--with-agy-hooks",
+        "--agy-home", str(custom_agy_home),
+        "--execute",
+        cwd=project,
+    )
+    assert bound_res.returncode == 0, bound_res.stderr
+    bound_payload = json.loads(bound_res.stdout)
+    assert bound_payload["ok"] is True
+    assert bound_payload["antigravity_hooks"]["status"] == "written"
+    hooks_data = json.loads((custom_agy_home / "hooks.json").read_text(encoding="utf-8"))
+    assert hooks_data["loopx"]["enabled"] is True
+    stop_cmd = hooks_data["loopx"]["Stop"][0]["command"]
+    assert f"--conversation-id {conv_id}" in stop_cmd
+    assert "--goal-id resident-goal" in stop_cmd
+    assert "--agent-id antigravity" in stop_cmd
+
+    # Non-Antigravity host surfaces reject --with-agy-hooks cleanly
+    bad_surface = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "bind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", "codex-t",
+        "--host-surface", "codex-app",
+        "--agent-id", "antigravity",
+        "--with-agy-hooks",
+        cwd=project,
+    )
+    assert bad_surface.returncode == 1
+    assert "--with-agy-hooks requires" in json.loads(bad_surface.stdout)["error"]
+
+    # Ambient ANTIGRAVITY_CONVERSATION_ID resolves the agy binding when invoking antigravity-app
+    env = {**os.environ, "ANTIGRAVITY_CONVERSATION_ID": conv_id, "LOOPX_RUNTIME_ROOT": str(runtime_root)}
+    for surface in ("agy", "antigravity-app"):
+        start_res = run_cli(
+            "--registry", str(registry_path),
+            "--runtime-root", str(runtime_root),
+            "start-goal", "--guided",
+            "--project", str(project),
+            "--goal-id", "resident-goal",
+            "--host-surface", surface,
+            "--goal-text", "继续原地巡检",
+            cwd=project,
+            env=env,
+        )
+        assert start_res.returncode == 0, start_res.stderr
+        start_payload = json.loads(start_res.stdout)
+        assert start_payload["thread_id"] == conv_id
+        assert start_payload["agent_id"] == "antigravity"
+        assert start_payload["thread_agent_binding"]["status"] == "bound"
+
+    # slash-commands --install --surface antigravity-app --with-agy-hooks supports bound flags & /loopx guidance
+    sc_dir = tmp_path / "sc-agy"
+    sc_res = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "slash-commands", "--install",
+        "--surface", "antigravity-app",
+        "--agy-home", str(sc_dir),
+        "--with-agy-hooks",
+        "--goal-id", "resident-goal",
+        "--agent-id", "antigravity",
+        "--conversation-id", conv_id,
+        cwd=project,
+    )
+    assert sc_res.returncode == 0, sc_res.stderr
+    sc_hooks = json.loads((sc_dir / "hooks.json").read_text(encoding="utf-8"))
+    assert sc_hooks["loopx"]["enabled"] is True
+    assert f"--conversation-id {conv_id}" in sc_hooks["loopx"]["Stop"][0]["command"]
+    loopx_skill = (sc_dir / "skills" / "loopx" / "SKILL.md").read_text(encoding="utf-8")
+    for phrase in (
+        "antigravity-app",
+        "Conversation ID",
+        "ANTIGRAVITY_CONVERSATION_ID",
+        "--with-agy-hooks",
+        ".worktrees/",
+        "DurationSeconds",
+        "3 -> 6 -> 10",
+    ):
+        assert phrase in loopx_skill, phrase
+
+    activation = build_host_loop_activation_packet(
+        agent_type=ANTIGRAVITY_APP_AGENT_TYPE,
+        goal_id="resident-goal",
+        agent_id="antigravity",
+        registered_agents=["antigravity"],
+    )
+    patrol_contract = activation["host_mutation"]["fixed_session_patrol_contract"]
+    assert patrol_contract["min_duration_seconds"] == 180
+    assert patrol_contract["backoff_progression_minutes"] == [3, 6, 10]
+    assert patrol_contract["detached_sidecar_required"] is False
+
+    # CLI unbind-agent-thread reads back with exact_surface=True even when a sibling surface shares (thread_id, agent_id)
+    bind_app = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "bind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", conv_id,
+        "--host-surface", "antigravity-app",
+        "--agent-id", "antigravity",
+        "--execute",
+        cwd=project,
+    )
+    assert bind_app.returncode == 0, bind_app.stderr
+    assert json.loads(bind_app.stdout)["ok"] is True
+
+    unbind_app = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "unbind-agent-thread",
+        "--goal-id", "resident-goal",
+        "--thread-id", conv_id,
+        "--host-surface", "antigravity-app",
+        "--agent-id", "antigravity",
+        "--execute",
+        cwd=project,
+    )
+    assert unbind_app.returncode == 0, unbind_app.stderr
+    unbind_payload = json.loads(unbind_app.stdout)
+    assert unbind_payload["ok"] is True
+    assert unbind_payload["registration_readback"] == {"verified": True}
+
+    # Sibling agy binding remains intact after unbinding antigravity-app
+    resolve_agy = run_cli(
+        "--registry", str(registry_path),
+        "--runtime-root", str(runtime_root),
+        "resolve-agent-thread",
+        "--thread-id", conv_id,
+        "--host-surface", "agy",
+        cwd=project,
+    )
+    assert resolve_agy.returncode == 0, resolve_agy.stderr
+    assert json.loads(resolve_agy.stdout)["status"] == "bound"
+
+    # slash-commands --with-agy-hooks run from an empty directory without --registry omits nonexistent CWD .loopx/registry.json
+    empty_cwd = tmp_path / "empty-cwd"
+    empty_cwd.mkdir()
+    sc_no_reg_dir = tmp_path / "sc-agy-no-reg"
+    env_no_reg = {k: v for k, v in os.environ.items() if k != "LOOPX_REGISTRY"}
+    sc_no_reg = run_cli(
+        "--runtime-root", str(runtime_root),
+        "slash-commands", "--install",
+        "--surface", "antigravity-app",
+        "--agy-home", str(sc_no_reg_dir),
+        "--with-agy-hooks",
+        "--goal-id", "resident-goal",
+        "--agent-id", "antigravity",
+        "--conversation-id", conv_id,
+        cwd=empty_cwd,
+        env=env_no_reg,
+    )
+    assert sc_no_reg.returncode == 0, sc_no_reg.stderr
+    no_reg_hooks = json.loads((sc_no_reg_dir / "hooks.json").read_text(encoding="utf-8"))
+    no_reg_stop = no_reg_hooks["loopx"]["Stop"][0]["command"]
+    assert f"--conversation-id {conv_id}" in no_reg_stop
+    assert "--registry" not in no_reg_stop
+    assert str(empty_cwd) not in no_reg_stop
+
+    # Antigravity installed skill facades match doctor readback when scoped to antigravity-app
+    from loopx.slash_command_install import inspect_skill_facades
+
+    agy_facades = inspect_skill_facades(
+        sc_no_reg_dir / "skills",
+        host_surface="antigravity-app",
+    )
+    assert agy_facades["loopx"]["readback_status"] == "ready"
+    monkeypatch.setenv("AGY_HOME", str(sc_no_reg_dir))
+    assert collect_doctor(agent_type="antigravity-app")["antigravity"]["command_facades_ready"] is True

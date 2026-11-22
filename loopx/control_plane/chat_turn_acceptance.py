@@ -192,11 +192,13 @@ def plan_native_mention_ingress(**facts: object) -> dict[str, Any]:
 def plan_queued_chat_steering(
     session: dict[str, Any], turn: dict[str, Any], active: dict[str, Any] | None,
     receipt: dict[str, Any] | None, *, ingress_id: str, operation_id: str, target: str, phase: str,
+    web_origin_only: bool = False,
 ) -> dict[str, Any]:
     return effect_runtime_result("chat.queue.steer", {
         "phase": phase,
         "request": {"client_ingress_id": ingress_id, "operation_id": operation_id, "target_turn_id": target},
-        "session": {"status": session.get("status"), "active_turn_id": session.get("active_turn_id")},
+        "session": {"status": session.get("status"), "active_turn_id": session.get("active_turn_id"),
+                    "web_origin_only": web_origin_only},
         "active_status": (active or {}).get("status"),
         "turn": {"turn_id": turn["turn_id"], "status": turn["status"],
                  "origin": turn.get("origin"), "loopx_execution": turn.get("loopx_execution", False),

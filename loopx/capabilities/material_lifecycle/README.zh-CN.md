@@ -71,7 +71,7 @@ flowchart LR
 - 默认每个 ranked entry 最多包含 3 条 primary material。
 - Overflow 必须变成新的、可独立排序的条目，不能藏入 supporting index。
 - 可见 Top-N 之外保留显式 ranked backlog。
-- 可见 Top-N 不是隐式保护前缀；只有明确声明的 pinned entry 或稳定前缀限制重排。
+只有明确声明的 pinned entry 或稳定前缀限制重排。
 - Recall 只是线索；影响排序的证据必须经过 exact read。
 - Proposal 与 apply receipt 必须分离。
 - Apply 与 rollback 都需要显式 owner gate 和 revision 校验。
@@ -88,7 +88,7 @@ flowchart LR
 - Decision Context 证明优先级变化后，只重排一个小窗口。
 - 保留完整 ranked backlog，同时输出一份简洁、可读的视图。
 - 把素材从 candidate 提升到 active，或携带稳定来源引用进行归档。
-- 针对一个明确 evidence gap 做有预算的探索，而不是无限收集。
+- 针对一个明确 evidence gap 做有预算的探索。
 - 修复过期派生计数，并在不破坏下一次可读投影的情况下归档已排序素材。
 
 普通的一次性阅读、摘要或网页调研不需要启用这项能力，除非项目已经显式激活了
@@ -235,7 +235,7 @@ storage adapter、source profile 和 provider credential 仍由项目拥有。
 
 普通项目对话可为已显式启用的素材来源使用 `MaterialProjectScope`，无需创建 Goal。inventory、candidate intake/rollback、rerank packet、readable projection 和 intake-ranking settlement 支持以 `project_scope` 替代 `goal_id`；两者必须且只能选一个。项目 packet 不含 Goal 标识，也不带入 manager 上下文。
 
-scope 的 `project_ref`、`source_profile_ref`、`workspace_grant_ref` 是既有 Core 授权与来源 profile 的选择器，不授予权限。project candidate provider 必须实现 `MaterialProjectScopeVerifier`，核对当前已验证本地 owner host（如 `Codex`、`Antigravity`、`Claude Code`、`OpenCode`、`Kiro CLI` 等）的活跃原生 turn（或同一 Core 工作区写入授权下的原生 Bot turn）、受众、精确 store/profile、工作区写入边界、owner gate 的有效期与撤销状态——不得虚构空壳 Goal，也不得借用其他 host 的 turn 身份。SDK 在访问 provider 前及发布 authority 前调用该 verifier，授权事实仍由既有 Core owner 提供；adapter 还须在自身 staging/publication 事务内执行授权检查，不能把预检查的 Boolean 当作事务 fence。
+scope 的 `project_ref`、`source_profile_ref`、`workspace_grant_ref` 是既有 Core 授权与来源 profile 的选择器。project candidate provider 必须实现 `MaterialProjectScopeVerifier`，核对当前已验证本地 owner host（如 `Codex`、`Antigravity`、`Claude Code`、`OpenCode`、`Kiro CLI` 等）的活跃原生 turn（或同一 Core 工作区写入授权下的原生 Bot turn）、受众、精确 store/profile、工作区写入边界、owner gate 的有效期与撤销状态——不得虚构空壳 Goal，也不得借用其他 host 的 turn 身份。SDK 在访问 provider 前及发布 authority 前调用该 verifier，授权事实仍由既有 Core owner 提供；adapter 还须在自身 staging/publication 事务内执行授权检查，不能把预检查的 Boolean 当作事务 fence。
 
 默认关闭不变；本路径不注册 Goal、不创建 source authority，不扩大 Goal-only migration/rebuild/Explore。新来源初始化、私有存储与 transport 接入仍由 source owner 提供，不能仅凭这些字段或安装 skill 开始写入。
 

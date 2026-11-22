@@ -727,3 +727,279 @@ def test_real_manager_switches_core_and_preserves_original_workspace(tmp_path, m
     finally:
         for kind in ports:
             original_run(["launchctl", "bootout", f"{domain}/{alias}.{kind}"], capture_output=True)
+
+
+
+def test_verify_services_allows_production_startup_past_legacy_cutoff_and_enforces_90s_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    identity = {
+        "schema_version": "loopx_runtime_identity_v1",
+        "package_version": "2.4.0",
+        "release_id": "20261120T000000Z",
+        "source_revision": "deadbeef",
+    }
+    services = {
+        tmp_path / "com.loopx.status.plist": 18766,
+        tmp_path / "com.loopx.chat.plist": 18767,
+    }
+    clock = [0.0]
+
+    class _FakeResponse(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+            return False
+
+    class _FakeOpener:
+        def open(self, url: str, timeout: float = 0.5):
+            if clock[0] < 60.0:
+                raise ConnectionRefusedError("starting up")
+            if url.endswith("/?readiness=1"):
+                payload = {
+                    "ok": True,
+                    "source": "serve-status",
+                    "readiness": {"state": "ready"},
+                    "runtime_identity": identity,
+                }
+            else:
+                payload = {
+                    "ok": True,
+                    "schema_version": "loopx_chat_readiness_v1",
+                    "state": "ready",
+                    "runtime_identity": identity,
+                }
+            return _FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(managed_runtime.urllib.request, "build_opener", lambda *_: _FakeOpener())
+    monkeypatch.setattr(managed_runtime.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        managed_runtime.time,
+        "sleep",
+        lambda _seconds: clock.__setitem__(0, clock[0] + 1.0),
+    )
+
+    managed_runtime._verify_services(services, identity)
+    assert clock[0] == 60.0
+
+    clock[0] = 0.0
+
+    class _NeverReadyOpener:
+        def open(self, url: str, timeout: float = 0.5):
+            raise ConnectionRefusedError("still unavailable")
+
+    monkeypatch.setattr(managed_runtime.urllib.request, "build_opener", lambda *_: _NeverReadyOpener())
+    with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+        managed_runtime._verify_services(services, identity)
+    assert clock[0] == 90.0
+
+
+def _install_observer_handoff_harness(monkeypatch, loaded, calls, pid_map, *, on_bootout=None, on_bootstrap=None):
+    lock_holder: list[int | None] = [pid_map.get("com.loopx.codex-native-accounts")]
+    original_run = subprocess.run
+
+    def launchctl(args, **kwargs):
+        if args[0] != "launchctl":
+            return original_run(args, **kwargs)
+        verb = args[1]
+        label = Path(args[-1]).stem if verb == "bootstrap" else args[-1].split("/")[-1]
+        if verb == "print":
+            if label not in loaded:
+                return subprocess.CompletedProcess(args, 113, "", "")
+            text = (
+                "arguments = {\n"
+                + "\n".join(loaded[label]["ProgramArguments"])
+                + f"\n}}\npid = {pid_map[label]}\n"
+            )
+            return subprocess.CompletedProcess(args, 0, text, "")
+        calls.append((verb, label))
+        if verb == "bootout":
+            loaded.pop(label, None)
+            if on_bootout is not None:
+                on_bootout(label, lock_holder)
+        elif verb == "bootstrap":
+            loaded[label] = plistlib.loads(Path(args[-1]).read_bytes())
+            if on_bootstrap is not None:
+                on_bootstrap(label, lock_holder)
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(activation.subprocess, "run", launchctl)
+    monkeypatch.setattr(managed_runtime, "_observer_lock_pid", lambda _: lock_holder[0])
+    return lock_holder
+
+
+def test_hosted_chat_contender_lock_hands_off_cleanly_to_standalone_observer(managed_with_observer, monkeypatch):
+    _, target, loaded, calls, _, _, _, path = managed_with_observer
+    pid_map = {
+        "com.loopx.status": 903,
+        "com.loopx.chat": 902,
+        path.stem: 900,
+    }
+
+    def on_bootout(label, lock_holder):
+        if label == "com.loopx.chat" and lock_holder[0] == 902:
+            lock_holder[0] = None
+
+    def on_bootstrap(label, lock_holder):
+        if label == path.stem and lock_holder[0] is None:
+            lock_holder[0] = 900
+
+    lock_holder = _install_observer_handoff_harness(
+        monkeypatch, loaded, calls, pid_map, on_bootout=on_bootout, on_bootstrap=on_bootstrap,
+    )
+    lock_holder[0] = 902
+    result = align_managed_runtime(str(target))
+    assert result["status"] == "aligned"
+    assert result["readiness_verified"] is True
+    assert lock_holder[0] == 900
+    assert calls.index(("bootout", "com.loopx.chat")) < calls.index(("bootstrap", path.stem))
+    assert calls.index(("bootstrap", path.stem)) < calls.index(("bootstrap", "com.loopx.chat"))
+
+
+def test_hosted_chat_contender_still_rejects_foreign_observer_lock_owner(managed_with_observer, monkeypatch):
+    agents, target, loaded, calls, _, _, held, path = managed_with_observer
+    pid_map = {
+        "com.loopx.status": 903,
+        "com.loopx.chat": 902,
+        path.stem: 900,
+    }
+    lock_holder = _install_observer_handoff_harness(monkeypatch, loaded, calls, pid_map)
+    lock_holder[0] = 901
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    with pytest.raises(ValueError, match="native_observer_owner_unverified"):
+        align_managed_runtime(str(target))
+    assert set(loaded) == {"com.loopx.status", "com.loopx.chat", path.stem}
+    assert not calls and not held
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_chat_only_update_waits_for_standalone_observer_reclaim_before_chat_restart(
+    managed_with_observer, monkeypatch,
+):
+    agents, target, loaded, calls, _, _, _, path = managed_with_observer
+    pid_map = {
+        "com.loopx.status": 903,
+        "com.loopx.chat": 902,
+        path.stem: 900,
+    }
+    pre_retargeted = managed_runtime._retarget_observer(
+        plistlib.loads(path.read_bytes()), sys.executable, target,
+    )
+    path.write_bytes(plistlib.dumps(pre_retargeted))
+    loaded[path.stem] = pre_retargeted
+    native = sys.modules["loopx_codex_provider_routing.native"]
+    heartbeat_time = [time.time() - 120.0]
+
+    def heartbeat_read(*_, **__):
+        return {
+            "build": "candidate",
+            "relay_build": "candidate-relay",
+            "checked_at": heartbeat_time[0],
+            "deadline_at": time.time() + 60.0,
+            "phase": "waiting",
+        }
+
+    monkeypatch.setattr(native, "private_read", heartbeat_read)
+    events: list[tuple[str, int | None]] = []
+    real_verify = managed_runtime._verify_observer
+
+    def on_bootout(label, lock_holder):
+        events.append((f"bootout:{label}", lock_holder[0]))
+        if label == "com.loopx.chat" and lock_holder[0] == 902:
+            lock_holder[0] = None
+
+    def on_bootstrap(label, lock_holder):
+        events.append((f"bootstrap:{label}", lock_holder[0]))
+
+    lock_holder = _install_observer_handoff_harness(
+        monkeypatch, loaded, calls, pid_map, on_bootout=on_bootout, on_bootstrap=on_bootstrap,
+    )
+    lock_holder[0] = 902
+
+    def verify_reclaim(obs_path, owner, after, expected):
+        # Standalone observer stays running across chat-only updates and reclaims after chat exits.
+        if lock_holder[0] is None:
+            lock_holder[0] = 900
+            heartbeat_time[0] = max(time.time(), after)
+        events.append(("verify_observer", lock_holder[0]))
+        return real_verify(obs_path, owner, after, expected)
+
+    monkeypatch.setattr(managed_runtime, "_verify_observer", verify_reclaim)
+    result = align_managed_runtime(str(target))
+    assert result["status"] == "aligned"
+    assert lock_holder[0] == 900
+    assert all(label != path.stem for _, label in calls)
+    assert events.index(("bootout:com.loopx.chat", 902)) < events.index(("verify_observer", 900))
+    assert events.index(("verify_observer", 900)) < events.index(("bootstrap:com.loopx.chat", 900))
+
+
+def test_handoff_recovery_accepts_managed_chat_contender_lock_and_rejects_foreign(
+    managed_with_observer, monkeypatch,
+):
+    import base64
+
+    agents, target, loaded, calls, _, _, _, path = managed_with_observer
+    pid_map = {
+        "com.loopx.status": 903,
+        "com.loopx.chat": 902,
+        path.stem: 900,
+    }
+    originals = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    candidates = {}
+    for p, raw in originals.items():
+        payload = plistlib.loads(raw)
+        upd = (
+            managed_runtime._retarget_observer(payload, sys.executable, target)
+            if p == path
+            else managed_runtime._retarget(payload, str(target), sys.executable)
+        )
+        candidates[p] = plistlib.dumps(upd)
+    journal = agents / ".loopx-runtime-activation.json"
+    journal_payload = {
+        "schema_version": "loopx_managed_runtime_handoff_v1",
+        "services": {
+            p.stem: {
+                "original": base64.b64encode(originals[p]).decode(),
+                "candidate": base64.b64encode(candidates[p]).decode(),
+            }
+            for p in originals
+        },
+    }
+    lock_holder = _install_observer_handoff_harness(
+        monkeypatch,
+        loaded,
+        calls,
+        pid_map,
+        on_bootout=lambda label, lh: lh.__setitem__(0, None) if label == "com.loopx.chat" else None,
+        on_bootstrap=lambda label, lh: lh.__setitem__(0, 900) if label == path.stem else None,
+    )
+
+    # 1. Both observer and chat loaded while managed chat holds observer.lock.
+    managed_runtime.write_json_atomic(journal, journal_payload, mode=0o600)
+    lock_holder[0] = 902
+    managed_runtime._recover_alignment(journal)
+    assert not journal.exists()
+    assert lock_holder[0] == 900
+    assert {p: p.read_bytes() for p in originals} == originals
+
+    # 2. Observer already unloaded (pid None) while managed chat still holds observer.lock.
+    loaded.pop(path.stem, None)
+    calls.clear()
+    managed_runtime.write_json_atomic(journal, journal_payload, mode=0o600)
+    lock_holder[0] = 902
+    managed_runtime._recover_alignment(journal)
+    assert not journal.exists()
+    assert lock_holder[0] == 900
+    assert ("bootstrap", path.stem) in calls
+
+    # 3. Foreign PID holding observer.lock is still rejected without touching loaded services.
+    managed_runtime.write_json_atomic(journal, journal_payload, mode=0o600)
+    calls.clear()
+    lock_holder[0] = 901
+    with pytest.raises(ValueError, match="native_observer_owner_unverified"):
+        managed_runtime._recover_alignment(journal)
+    assert journal.exists() and not calls

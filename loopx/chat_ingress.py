@@ -146,7 +146,7 @@ class ChatIngressStore:
     @cached_property
     def _terminal_turn_discovery(self) -> FileChatDiscovery:
         # Queue discovery and client lookup share this hint. Concurrent first use
-        # may build two empty observers; neither holds execution authority.
+        # may build two empty observers.
         return FileChatDiscovery()
 
     def _turn_discovery_rows(
@@ -247,6 +247,11 @@ class ChatIngressStore:
                 and str(payload.get("turn_id") or "") != active_turn_id
             ):
                 rows.append(payload)
+        # The ordinary read has no selectable Turn when storage has no queued
+        # candidates. Explicit capacity and strict reads still use the owner.
+        if not rows and not strict and not include_reserved and capacity_at is None:
+            return []
+
         from .control_plane.chat_turn_acceptance import queued_chat_turn_ids
         selected = set(queued_chat_turn_ids(rows, active_turn_id, include_reserved=include_reserved, capacity_at=capacity_at))
         return sorted(
@@ -447,7 +452,7 @@ class ChatIngressStore:
         from .chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
-        from .chat_attachments import normalize_chat_attachments, validate_chat_turn_envelope
+        from .chat.attachments import normalize_chat_attachments, validate_chat_turn_envelope
         normalized_attachments = normalize_chat_attachments(attachments) or None
         if normalized_attachments:
             validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})

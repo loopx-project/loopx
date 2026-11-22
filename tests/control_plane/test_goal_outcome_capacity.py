@@ -7,7 +7,7 @@ from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from test_goal_acceptance_prepared_action import conversation_check as conversation_check
 
 
-def seed_crowded(project, actor):
+def seed_crowded(project, actor, *, saturated=False):
     """Synthetic disposable authority only; exercise production readers/writers."""
     state = {"schema_version": "loopx_goal_outcomes_v0", "goal_id": "goal-acceptance",
         "goal_ref": None, "revision": 1, "outcomes": [
@@ -15,6 +15,8 @@ def seed_crowded(project, actor):
              "revision": 1, "todo_ids": [],
              "requirements": [{"id": f"r{r}", "description": f"Preserve requirement {r}"} for r in range(5)],
              "sources": [{"ref": f"origin-{i}", "summary": "Owner requested this result"}]} for i in range(20)]}
+    if saturated:
+        state["outcomes"][0]["requirements"] = [{"id": f"r{i}", "description": f"Preserve requirement {i}"} for i in range(32)]
     def size():
         return len(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode())
     i = 0
@@ -89,6 +91,57 @@ def test_crowded_native_review_uses_same_owner_and_preserves_stop(conversation_c
     assert handler(TOOL["name"], request)["status"] == "replayed"
     current = cli("inspect")[1]
     assert_reviewed(current, origins)
+    mode = controller.store.load_session(sid)["loopx_mode"]
+    controller.store.update_session(sid, loopx_mode={**mode, "paused": True})
+    assert handler(TOOL["name"], request)["error"] == "conversation_execution_inactive"
+    assert cli("inspect")[1] == current
+
+
+def test_saturated_cli_evolution_keeps_real_work_and_recovery(acceptance_goal):
+    project, document, cli, run = acceptance_goal
+    origins = seed_crowded(project, "agent-a", saturated=True)
+    before = cli("inspect")[1]
+    correction = {"outcome_id": "result-0", "storage_format": "records",
+        "requirements": [{"id": "correction", "description": "Verify the revised real entrypoint, original continuation and independent result."}],
+        "todo_ids": ["todo_export"], "source": {"ref": "owner:correction", "summary": "Authorized updated acceptance"}}
+    document.write_text(json.dumps(correction))
+    args = ("refine", "--agent-id", "agent-a", "--document", str(document), "--operation-id", "evolve-capacity",
+        "--expected-provider-revision", before["provider_revision"], "--execute")
+    code, result = cli(*args)
+    assert code == 0, result
+    rows = result["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(rows[0]["requirements"]) == 33
+    assert rows[0]["todo_ids"] == ["todo_export"]
+    assert all(row["sources"][:len(origins[row["id"]])] == origins[row["id"]] for row in rows)
+    assert cli(*args)[1]["status"] == "replayed"
+    assert cli("inspect")[1]["goal_acceptance_contract"] == result["goal_acceptance_contract"]
+    document.write_text(json.dumps({"outcome_id": "result-0", "review_patch": [
+        {"id": "correction", "conclusion": "unmet", "note": "The delivered entrypoint still needs independent validation.", "evidence_refs": ["artifact:negative-check"]}]}))
+    current = cli("inspect")[1]
+    code, result = cli("refine", "--agent-id", "agent-a", "--document", str(document), "--operation-id", "review-added",
+        "--expected-provider-revision", current["provider_revision"], "--execute")
+    assert code == 0, result
+    retained = result["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"][-1]
+    assert retained["id"] == "correction" and retained["agent_review"]["basis_current"]
+    assert not retained["planning_satisfied"] and retained["status"] == "unverified"
+
+
+def test_saturated_native_evolution_is_used_by_existing_conversation(conversation_check):
+    project, cli, controller, sid, _, _, adapter = conversation_check
+    from loopx.chat_loopx_mode import TOOL
+    seed_crowded(project, "coordinator", saturated=True)
+    handler = adapter.session.read_tool_handler
+    before = handler(TOOL["name"], {"action": "outcomes"})
+    request = {"action": "refine_outcome", "operation_id": "evolve-native",
+        "expected_provider_revision": before["provider_revision"], "document": {"outcome_id": "result-0", "storage_format": "records",
+            "requirements": [{"id": "correction", "description": "Preserve the revised independent acceptance condition."}],
+            "source_summary": "Authorized correction"}}
+    result = handler(TOOL["name"], request)
+    assert result["ok"], result
+    assert len(result["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"]) == 33
+    assert handler(TOOL["name"], request)["status"] == "replayed"
+    current = cli("inspect")[1]
+    assert current["goal_acceptance_contract"] == result["goal_acceptance_contract"]
     mode = controller.store.load_session(sid)["loopx_mode"]
     controller.store.update_session(sid, loopx_mode={**mode, "paused": True})
     assert handler(TOOL["name"], request)["error"] == "conversation_execution_inactive"

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
-from importlib.metadata import Distribution, PackageNotFoundError
+from importlib.metadata import Distribution, PackageNotFoundError, PackagePath
 import json
 import os
 from pathlib import Path
@@ -21,12 +21,31 @@ def installed_loopx_distribution(lookup: Callable[[str], Distribution]) -> Distr
 
     Callers still verify that its RECORD owns their actual imported file.
     Missing metadata, redirected records and content checks keep their original
-    failure behavior; the core name is not an ownership assertion.
+    failure behavior.
     """
     try:
         return lookup("loopx")
     except PackageNotFoundError:
         return lookup("loopx-core")
+
+
+def distribution_record_path(item: PackagePath) -> Path:
+    # PackagePath uses POSIX components and can lose a Windows drive root on
+    # Python 3.11. Interpret absolute RECORD entries under native path rules.
+    path = Path(str(item))
+    return path if path.is_absolute() else Path(item.locate())
+
+
+def verified_distribution_console(recorded: Path) -> Path | None:
+    """Keep the recorded launcher identity when resolving its directory."""
+    try:
+        expected = recorded.parent.resolve(strict=True) / recorded.name
+        resolved = recorded.resolve(strict=True)
+        if resolved == expected and resolved.is_file():
+            return resolved
+    except (OSError, RuntimeError):
+        pass
+    return None
 
 
 @dataclass(frozen=True)

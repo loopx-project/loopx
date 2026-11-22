@@ -8,11 +8,11 @@ They do not grant domain providers core control-plane authority.
 - [Agent collaboration: dependent artifacts, review and result return](cross-runtime/README.md)
 - [Office operations](office-operations/README.md)
 - [Steward: an owner sentence becomes a confirmed team](steward/README.md)
+- [Try LoopX with your AI assistant](community/README.md) ([简体中文](community/README.zh-CN.md)) · [Community FAQ](community/faq.md)
 
 ## Product golden queries
 
 - [Steward: less coordination, accepted results](steward/golden-queries.md)
 - [Community assistant: useful answers and checked contributions](community/golden-queries.md)
 
-These evaluation specifications define intended outcomes and release evidence;
-listing a query does not claim that the corresponding live journey has passed.
+These evaluation specifications define intended outcomes and release evidence.

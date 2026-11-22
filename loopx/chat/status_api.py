@@ -43,6 +43,8 @@ from ..control_plane.runtime.time import now_utc_iso
 from ..feedback import validate_goal_id
 from ..history import load_registry
 from ..control_plane.projects.registry_codec import load_project_registry
+from ..registry import registry_goals, resolve_state_file
+from ..state_projection import build_active_state_structured_projection
 from ..status import collect_status
 from ..status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
@@ -53,10 +55,11 @@ from ..status_server import (
 from ..control_plane.todos.list_readback import list_goal_todos
 
 
-def goal_read_runtime_root(server: Any) -> str | None:
+def goal_read_runtime_root(server: Any, *, registry: dict[str, Any] | None = None) -> str | None:
     """Keep registry source routing; Chat storage is only an unbound fallback."""
-    registry = _discovery_registry(server.registry_path)
-    if registry.get("common_runtime_root"):
+    if registry is None:
+        registry = _discovery_registry(server.registry_path)
+    if registry.get("common_runtime_root") or registry.get("registry_role") == "global-local":
         # Passing the coordinator's resolved root as an explicit override
         # suppresses the collector's per-Goal source_registry routing. A
         # global directory may contain Goals owned by different runtimes.
@@ -75,7 +78,7 @@ def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
             goal_id=goal_id,
             runtime_root_arg=str(runtime_root) if runtime_root else None,
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, LocalCoordinationAuthorityUnavailable):
         # An unreadable Todo source leaves the rest of the review usable.
         return None
     todos = [row for row in listed.get("todos") or [] if isinstance(row, dict)]
@@ -376,3 +379,162 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
             )
             return
         self._send_json(projection)
+
+
+def _compact_status_text(value: Any, *, limit: int = 600) -> str:
+    return " ".join(str(value or "").split())[:limit].strip()
+
+
+def _compact_todo(item: dict[str, Any], *, protected_paths: list[Path]) -> dict[str, Any]:
+    return {
+        "todo_id": _compact_status_text(item.get("todo_id"), limit=100) or None,
+        "role": _compact_status_text(item.get("role"), limit=40) or None,
+        "status": _compact_status_text(item.get("status"), limit=40) or ("done" if item.get("done") else "open"),
+        "priority": _compact_status_text(item.get("priority"), limit=60) or None,
+        "text": _compact_status_text(
+            redact_local_paths(str(item.get("text") or item.get("title") or ""), protected_paths=protected_paths)
+        ),
+        "action_kind": _compact_status_text(item.get("action_kind"), limit=100) or None,
+        "task_class": _compact_status_text(item.get("task_class"), limit=100) or None,
+        "claimed_by": _compact_status_text(item.get("claimed_by"), limit=100) or None,
+        "evidence": _compact_status_text(
+            redact_local_paths(str(item.get("evidence") or item.get("note") or ""), protected_paths=protected_paths)
+        )
+        or None,
+    }
+
+
+def _goal_todos(queue_item: dict[str, Any], *, protected_paths: list[Path]) -> list[dict[str, Any]]:
+    asset = queue_item.get("project_asset") if isinstance(queue_item.get("project_asset"), dict) else {}
+    todos: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for role in ("user", "agent"):
+        group = queue_item.get(f"{role}_todos")
+        if not isinstance(group, dict):
+            group = asset.get(f"{role}_todos")
+        items = group.get("items") if isinstance(group, dict) else []
+        for raw in items if isinstance(items, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            item.setdefault("role", role)
+            compact = _compact_todo(item, protected_paths=protected_paths)
+            key = str(compact.get("todo_id") or compact.get("text") or "")
+            if key and key not in seen:
+                seen.add(key)
+                todos.append(compact)
+    return todos[:40]
+
+
+def build_chat_status_projection(
+    *,
+    registry: dict[str, Any],
+    status_payload: dict[str, Any],
+    selected_goal_id: str | None,
+) -> dict[str, Any]:
+    """Project queue-backed Goal status for the Chat status response."""
+    from ..chat_server import _goal_public_context
+
+    queue = status_payload.get("attention_queue")
+    queue_items = queue.get("items") if isinstance(queue, dict) else []
+    queue_by_goal = {
+        str(item.get("goal_id") or ""): item
+        for item in (queue_items if isinstance(queue_items, list) else []) if isinstance(item, dict)
+    }
+    goals: list[dict[str, Any]] = []
+    for raw_goal in registry_goals(registry):
+        goal_id = str(raw_goal.get("id") or "")
+        context = _goal_public_context(registry, raw_goal)
+        protected_paths = [context["project"], context["runtime_root"]]
+        item = queue_by_goal.get(goal_id, {})
+        asset = item.get("project_asset") if isinstance(item.get("project_asset"), dict) else {}
+        todos = _goal_todos(item, protected_paths=protected_paths)
+        open_todos = [todo for todo in todos if todo.get("status") not in {"done", "completed", "closed"}]
+        top_todo = next((todo for todo in open_todos if todo.get("role") == "agent"), None) or (open_todos[0] if open_todos else None)
+        evidence = [str(todo.get("evidence")) for todo in todos if todo.get("evidence")][:4]
+        latest_validation = asset.get("latest_validation")
+        if isinstance(latest_validation, dict) and latest_validation.get("summary"):
+            evidence.insert(0, _compact_status_text(latest_validation.get("summary")))
+        quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+        raw_gate = asset.get("gate") or item.get("status")
+        raw_next_action = asset.get("next_action") or item.get("recommended_action")
+        goals.append({
+            "goal_id": goal_id,
+            "title": context["title"],
+            "objective": redact_local_paths(context["objective"], protected_paths=protected_paths),
+            "status": _compact_status_text(item.get("status"), limit=100),
+            "waiting_on": _compact_status_text(item.get("waiting_on"), limit=80) or None,
+            "severity": _compact_status_text(item.get("severity"), limit=60),
+            "gate": _compact_status_text(redact_local_paths(str(raw_gate or "clear"), protected_paths=protected_paths), limit=240),
+            "next_action": _compact_status_text(
+                redact_local_paths(str(raw_next_action or "Review the next bounded proposal."), protected_paths=protected_paths)
+            ),
+            "top_todo": top_todo,
+            "todos": todos,
+            "evidence": [_compact_status_text(redact_local_paths(value, protected_paths=protected_paths)) for value in evidence if value],
+            "quota": {
+                "state": _compact_status_text(quota.get("state"), limit=80) or None,
+                "spent_slots": quota.get("spent_slots"),
+                "allowed_slots": quota.get("allowed_slots"),
+                "reason": _compact_status_text(quota.get("reason"), limit=240) or None,
+            },
+        })
+    effective_selected = selected_goal_id or (goals[0]["goal_id"] if len(goals) == 1 else None)
+    return {
+        "ok": bool(status_payload.get("ok", True)),
+        "schema_version": "loopx_chat_status_v0",
+        "selected_goal_id": effective_selected,
+        "goal_count": len(goals),
+        "goals": goals,
+    }
+
+
+def build_bounded_chat_status_projection(
+    *,
+    registry: dict[str, Any],
+    selected_goal_id: str | None,
+) -> dict[str, Any]:
+    """Build Chat's first-screen projection from bounded local state only."""
+    items: list[dict[str, Any]] = []
+    for raw_goal in registry_goals(registry):
+        goal_id = str(raw_goal.get("id") or "")
+        project = Path(str(raw_goal.get("repo") or ".")).expanduser().resolve()
+        state_path = resolve_state_file(project, raw_goal.get("state_file"))
+        state_text = ""
+        if state_path is not None and state_path.is_file():
+            try:
+                state_text = state_path.read_text(encoding="utf-8")
+            except OSError:
+                state_text = ""
+        structured = build_active_state_structured_projection(state_text, goal_id=goal_id)
+        frontmatter = structured.get("frontmatter") if isinstance(structured.get("frontmatter"), dict) else {}
+        todos = structured.get("todos") if isinstance(structured.get("todos"), dict) else {}
+        user_todos = todos.get("user") if isinstance(todos.get("user"), dict) else {"items": [], "open_count": 0}
+        agent_todos = todos.get("agent") if isinstance(todos.get("agent"), dict) else {"items": [], "open_count": 0}
+        user_open = int(user_todos.get("open_count") or 0)
+        agent_open = int(agent_todos.get("open_count") or 0)
+        next_action = structured.get("next_action") if isinstance(structured.get("next_action"), dict) else {}
+        next_action_text = _compact_status_text(next_action.get("first"))
+        waiting_on = _compact_status_text(frontmatter.get("waiting_on"), limit=80) or (
+            "user_or_controller" if user_open else ("codex" if agent_open else "")
+        )
+        gate = _compact_status_text(frontmatter.get("gate"), limit=120) or (
+            "user_review_required" if user_open else "clear"
+        )
+        next_proposal = next_action_text or "Review the next bounded proposal."
+        items.append({
+            "goal_id": goal_id,
+            "status": _compact_status_text(frontmatter.get("status"), limit=100)
+            or _compact_status_text(raw_goal.get("status"), limit=100),
+            "waiting_on": waiting_on or None,
+            "severity": "action" if user_open or agent_open else "info",
+            "recommended_action": next_proposal,
+            "user_todos": user_todos,
+            "agent_todos": agent_todos,
+            "project_asset": {"gate": gate, "next_action": next_proposal, "user_todos": user_todos, "agent_todos": agent_todos},
+        })
+    return build_chat_status_projection(
+        registry=registry,
+        status_payload={"ok": True, "attention_queue": {"items": items}},
+        selected_goal_id=selected_goal_id,
+    )

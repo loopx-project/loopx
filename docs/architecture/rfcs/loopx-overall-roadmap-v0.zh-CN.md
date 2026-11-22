@@ -7,6 +7,7 @@
   `08e290fb5`。管家故障复现基线单独保留在第 8 节。历史工作集 RFC 的清单新增
   使用 2026-11-09 的 `701795db2`；面向终局目标的切片选择、零仪式感渐进式入口、
   结构性护城河及所选当前优先级／RFC 边界依据 2026-11-11 的 `bf8a66eb9c` 核对更新，
+  并依据 `e235cde9c8` 细化 Bitter-Lesson 减法纪律与六大结构性护城河，
   不代表对所有历史子系统重新审计。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
@@ -80,22 +81,46 @@ LoopX 内部保持严格、唯一 owner 的类型化内核（`AuthorityStore`、
 - **控制面税计入完整成本：** 控制 token、工具调用、额外 RPC 往返与人工打断都消耗任务总预算。
   在事实未发生实质变化时强加每 Turn 必填表单、额外 RPC 往返或冗长治理提示词，会降低净长程效率，
   应当拒绝。
+- **Bitter-Lesson 减法纪律：** 随着前沿基座模型持续增强，拒绝脆弱的手写提示词微操、投机性兼容垫片，
+  以及会被更强模型原生吸收或诱发上下文重力的回合中动态提示词改写（见[减法门禁](controller-executor-unified-contract-v0.zh-CN.md#subtraction-gate)）。
+  工程与研究只投入单次前向推理之外的可验证确定性不变量，一旦单一类型化 owner 替代旧路径，
+  立即退役被取代的封装与无引用适配器。
 
-### 三大复利结构性护城河
+<a id="three-compounding-structural-moats"></a>
 
-随着前沿基座模型快速升级，LoopX 避免投入会被更强基模原生吸收的脆弱手写提示词微操
-（预设工具调用顺序、每 Turn 机械清单、冗长战术提醒），把工程与研究重心集中在单次模型前向推理之外的
-三项复利结构能力：
+### 六大复利结构性护城河
 
-1. **端云异构连续性与权限围栏（`S2/S4/S9`、`R5/R6`）：** 在唯一 owner 事务租约、旧执行器
-   围栏与可撤销授权下，把本地个人上下文、交互登录态和 owner 确认门禁安全桥接到无人值守或云端
-   执行 worker。
-2. **确定性静默 Checkpoint 与同状态反事实接续底座（`S4/S10/S11`、`R5`、`T01/T03`）：**
-   在已消耗预算 $t_0$ 处精确恢复任务、会话、权限、已验收 incumbent 与评测冷却状态，使候选策略与
-   harness 机制通过匹配的同状态接续（$\tau_B(s; a, a_0, \pi)$）评估，而非混淆了起点状态的观察动作日志。
-3. **闭环轨迹归因记忆与预算内计算选择飞轮（`S6/S7/S11`、`T01–T04`）：** 将已验证终局成果、
-   邻域范围化的 yardstick 保真度与同 checkpoint 反事实证据转化为可复用的过程召回，以及经校准的
-   `Target/Yardstick/Stride` 预算内接续选择（`当前模型试验 -> 校准预期 -> 学习预算分配`）。
+随着前沿基座模型快速升级，LoopX 贯彻上述 Bitter-Lesson 减法纪律——避免投入会被更强基模原生吸收的
+脆弱手写提示词微操（预设工具调用顺序、每 Turn 机械清单、冗长战术提醒；见
+[研究计划 Bitter-Lesson 边界](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#22-bitter-lesson-边界原始产物重置与受治理控制面)），
+把工程与研究重心集中在单次模型前向推理之外的**六项复利结构能力**：
+
+1. **非标量 Yardstick 校准（`S3/S6/S11`、`T01–T04`）：**
+   围绕 `Target/Yardstick/Stride` 联合决策（`grow / switch / verify`）开展多证据、决策局部邻域
+   保真度校准，而非依赖未校准的标量代理指标；并将已验证轨迹成果沉淀为闭环过程召回与经校准的预算分配
+   （`当前模型试验 -> 校准预期 -> 学习预算分配`；见[联合决策](target-yardstick-stride-decisions-v0.zh-CN.md)）。
+2. **树外确定性 Merge、Visual 与 Boundary 门禁（`S5/S8/S11/S12`）：**
+   在求解器写边界之外执行宿主与进程隔离的确定性验证——包含 `benchmark_integrity_audit_v0` 的
+   verifier/挂载隔离与反 Reward-Hacking 根因认证、公私边界扫描、精确 head 的 `loopx pr-review` 与
+   merge-readiness 契约，以及高信息密度首屏视觉与行为证据；Agent 无法在文本中改写、伪造或自证通过。
+3. **唯一 owner `AuthorityStore` + CAS + 默认拒绝 ACL（`S2/S3/S9`、`R4/R5/R6`）：**
+   将 Goal/Todo/effect 真相锚定在事务化事件、投影与回执提交中，跨 File/SQLite/NoKV/PostgreSQL
+   provider 强制条件版本 `CAS`、独占 `claim/lease` 与代际围栏、显式 `ambiguous_commit` 处理、
+   仅一次幂等结算，以及默认拒绝的受众、凭据与能力 ACL 隔离边界。
+4. **管家异步 inbox 闭环（`S1/S3/S4/S5`、`R1–R3`）：**
+   通过作用域受限的 `collaboration_brief_v0` 委派载荷、有界 `remaining_work` 投影与类型化
+   `resume_when` 恢复谓词完成跨 Agent 协作与原路回报，使管家与 controller 会话在已验证唤醒触发器
+   到达前保持休眠（**零空轮询循环**）。
+5. **前缀 KV-Cache 保序上下文交付（`S2/S6/S7`、`T02`）：**
+   保持单调仅追加的规范前缀稳定性与精确 full/delta 传输（`progressive_context.ts` /
+   `context_delivery.ts` 配合回执门控的 `KeepRaw` / `FoldToReceipt` / `EpochReset` 状态迁移；
+   见[历史工作集策略](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)），
+   避免回合中破坏前缀缓存的动态改写，并分别计量 cached 与 uncached 前缀 token 成本。
+6. **持久状态与临时沙盒分离（`S2/S4/S10/S11`、`R5/R6`）：**
+   将持久 `AuthorityStore`、capture 与静默 checkpoint 状态——可在已消耗预算 $t_0$ 处精确恢复，
+   支持端云异构连续性与同状态反事实接续（$\tau_B(s; a, a_0, \pi)$），而非混淆起点的观察动作日志——与
+   一次性 worker 沙盒及 worktree（`--worker turn-resume`、隔离容器、归一化补丁交付）严格分离，
+   确保沙盒重置或故障不会破坏控制权威或暴露宿主凭据。
 
 ### 总纲与现有文档的关系
 
@@ -467,6 +492,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | 已接受；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |
 | [Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | S3 | 已接受；Stage 1/2 与有界本地 root/template commit，通用采纳未闭合 | P1：R4 一个 work-graph amendment class；CAS/lease impact、冲突及丢响应回执 |
+| [Goal 契约演化与有界工作上下文 v0](goal-contract-evolution-v0.zh-CN.md) | S3/S5/S6/S7 | 提案；main 的目标修订与只增成果仍分离 | R4/R5 M1：已满 Goal 接收纠正、精确保留、有界完整读取及打包恢复；M2 统一变更／peer 采用；S11、R6/R7 验行为、共享权威及完整成本 |
 | [Goal Direction Baseline (v0)](goal-direction-baseline-v0.zh-CN.md) | S3/S6 | 已接受；只读设计 | P1：合成 fixture 验同 Agent/current revision 的材料阅读；不写 Vision、不自动建 Todo |
 | [Goal Artifact Lifecycle Projection (milestone / guard / next-transition) v0](goal-artifact-lifecycle-projection-v0.zh-CN.md) | S3/S5 | 已接受；只读设计 | P1：从现有 typed facts 显示 milestone/guard/next transition；不加流程引擎 |
 | [Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.zh-CN.md) | S1/S3 | 已接受；共享请求评估/Core 链接上下文与沙盒关联工作已验证，M1–M4 未完整验收 | P0→P1：R1/R2 真实团队及 R3 验证接收方采用、实际工作与原路回传；接续矩阵及 A1–A20 |
@@ -845,6 +871,7 @@ Lark 传输 owner，本切片不再重复修改它。
 - **当前工作与完整义务：** 遵循 [alignment RFC §3.7](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#37-当前工作与-goal-要求)。跨重规划、压缩、重启和 Agent 交接保留 criterion 身份与覆盖关系；只有授权且留痕的 amendment 可改变承诺。经 R5 复用既有 Goal acceptance 与 Todo owner。全局收口前验证证据内容、范围和时效，局部 `no_followup` 不足以结清目标。共享 Goal/当前任务读取前置之外的部分仍未完成；模型实际采用的资格归 S11。
 - **成果连续性切片：** [默认细化与自查](goal-outcome-refinement-v0.zh-CN.md) 保留原始意图和累计要求，复用内联工作上下文，把有变化的证据合并进正常写回。未覆盖要求进入现有 replan，局部自查不改变根目标停止／预算权威。Rebase 后的基础组合验收／ACK 兼容、已配置检查、累计成果与未覆盖成果重规划；外部 worker 尝试去重及 Explore 方法选择仍由各自 owner 负责。只增式 File／SQLite 与打包 UI 验证，同 S11 模型采用及匹配 EdgeBench 收益分开记录；这里不发起实验。
 - **执行目标过期：** [owner 修订与逐 Agent 采用](goal-outcome-refinement-v0.zh-CN.md#current-operating-objective) 复用 Goal update 和验收传输，由 Agent 准备、owner 应用。Canonical 上下文优先于旧文件展示；各 Agent 在新执行前独立对齐，在途恢复保留。原始承诺及受保护修改权限不变。脚本 CLI／原生工具和真实存储验证不代表模型识别能力、已安装宿主或线上协作已验收。
+- **统一契约演化：** [Goal 契约演化](goal-contract-evolution-v0.zh-CN.md)在既有 R4 权威下统一当前目标与要求变更，保留精确历史、受治理替换／撤回、受影响 peer 采用，并衔接 R5 索引存储。M1 须让已满 Goal 通过 CLI／原生工具和打包 App 恢复路径保留新纠正；M2 验证关联变更及 peer 返回；S11 测自然触发识别和后续成果。它是提案，不提高上限、不增权威，也不因工具存在就声称模型会用。
 - **Owner：** alignment RFC Stage 3–5；TS Goal/work-graph owner。
 - **先收口：** `intent_basis` 仅是现有 source-facts digest；保留兼容 reader，真正引入 intent revision 时单独版本化并盘点 producer/reader。不得改名后假装历史回执拥有新语义。
 - **交付次序：** 明确 root intent/permissions/acceptance/stop 的 authority；先做保持 intent 的一个 work-graph commit class。普通 Todo 编辑仍走现有 owner，不能给每次 add 强加 amendment 流程。跨共享承诺修改才消费有范围 policy、必要的 verifier、精确 CAS 与 lease-impact disposition。
@@ -948,8 +975,11 @@ owner、旧 writer/effect-drain 资格、M4 恢复、M5 产品验收继续在 #5
 promotion 独立验收。本检查点不激活 identity，也不要求所有 R1–R4 改动等待完整
 lifecycle。
 
+<a id="r6-localcloud-convergence"></a>
+
 ### R6：本地与云端汇合
 
+- **跨人产品路径** 参见[共享权威的 R6 跨人验收](shared-goal-authority-state-provider-v0.zh-CN.md#cross-person-delivery-under-r6)。M1 验证资源级默认拒绝及共享阅读，M2 验证可回传的跨设备工作及团队工作区 L1/L2。M3 保留下方完整 G3/R6 退出条件。
 - **Owner：** shared-authority provider/service、session host adapter、collaboration；基础是已有 PostgreSQL admission/identity-rotation seam，不重写 store。
 - **交付：** 真正的认证传输、tenant/Goal/actor 权限、host identity 和 capability admission；跨主机 request/receipt/wake 只通过各 owner。处理断网、租约过期、旧 worker 回归、service restart/restore incarnation、ambiguous commit。
 - **退出：** 至少两个真实 host（含一个云端 worker）在隔离 tenant 上协作；错 tenant/actor、撤销与 split-brain 负例通过；共享预算与 admission 有明确 owner，不能声称本地 quota 就是分布式资源预留。

@@ -1,4 +1,5 @@
 import {planTodoCreationPriority} from "../todos/priority.ts";
+import {planMonitorSchedule} from "../todos/monitor_metadata.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
@@ -51,15 +52,23 @@ function failure(code: string, reason: string, detail: JsonObject = {}): Coordin
   };
 }
 
+/** Decode the creation owner's existing receipt without reading current state. */
+export function decodeCoordinationTodoCreateReceipt(original: JsonObject, todoId: string) {
+  const todo = canonicalAuthorityObject(original.todo, "created Todo receipt");
+  if (original.schema_version !== COORDINATION_TODO_CREATE_RECEIPT_SCHEMA ||
+      original.todo_id !== todoId || todo.todo_id !== todoId) {
+    throw new AuthorityStoreProtocolError("created Todo receipt identity mismatch");
+  }
+  return {fields: {todo_id: original.todo_id, todo, original_receipt: original}, changed: true};
+}
+
 function createReceipt(input: CoordinationTodoCreateInput, requestSha: string) {
   return new CoordinationCommandReceipt({result_schema: COORDINATION_TODO_CREATE_RESULT_SCHEMA,
     identity: {schema_version: COORDINATION_TODO_CREATE_RECEIPT_SCHEMA,
       operation_id: input.operation_id, goal_id: input.goal_id, todo_id: String(input.todo.todo_id),
       request_sha256: requestSha}, failure,
     decode(original) {
-      const todo = canonicalAuthorityObject(original.todo, "created Todo receipt");
-      if (todo.todo_id !== input.todo.todo_id) throw new AuthorityStoreProtocolError("created Todo receipt identity mismatch");
-      return {fields: {todo_id: original.todo_id, todo, original_receipt: original}, changed: true};
+      return decodeCoordinationTodoCreateReceipt(original, String(input.todo.todo_id));
     }});
 }
 
@@ -284,7 +293,14 @@ export async function executeCoordinationTodoCreate(
   const plan = planCoordinationTodoCreate(input, projection.todos, readModel.schema_version);
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason);
   if (plan.status !== "planned") return {...plan, provider_revision: head.provider_revision, cursor: head.cursor};
-  const created = canonicalAuthorityObject(plan.todo, "created Todo");
+  // An implicit due time belongs to a new record. Duplicate matching compares
+  // the submitted configuration and respects any explicitly requested due time.
+  const planned = canonicalAuthorityObject(plan.todo, "created Todo");
+  const needsInitialDue = planned.role === "agent" && planned.task_class === "continuous_monitor" &&
+    planned.next_due_at == null && planned.cadence != null;
+  const initialDue = needsInitialDue
+    ? planMonitorSchedule(input.now.toISOString(), planned.cadence).next_due_at : null;
+  const created = initialDue === null ? planned : {...planned, next_due_at: initialDue};
   if (input.dry_run) {
     return {
       schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA,

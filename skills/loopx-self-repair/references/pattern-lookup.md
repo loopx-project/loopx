@@ -1,6 +1,6 @@
 # Find a repair pattern
 
-The catalog is a reference database, not a prerequisite reading list. Search
+The catalog is a reference database. Search
 using the exact error code or two distinctive symptom terms, then expand the
 relevant result. Run from this skill directory, or use the script's absolute
 path from any working directory:

@@ -16,6 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery
 from ...file_lock import try_exclusive_file_lock
 from ...chat_store import _read_json
 from .conversation_identity import identity_ref, lark_private_source
@@ -45,6 +46,36 @@ def _private_source_input(message: Mapping[str, Any]) -> tuple[Any, ...]:
     content = private_source_text(message) if kind == "text" else message.get("content")
     ancestry = tuple(message.get(field) or None for field in ("parent_id", "root_id", "thread_id"))
     return kind, content, message.get("create_time"), ancestry
+
+
+def recovery_source_matches(record: Mapping[str, Any], source: Mapping[str, Any],
+                            native: Mapping[str, Any]) -> bool:
+    """Match a fresh provider observation against the originally admitted input."""
+    if source.get("deleted") is True:
+        return False
+    # Keep the source text without verified ancestry added for Core. A missing
+    # provider rendering is unknown and cannot stand in for the frozen body.
+    expected = record.get("reply_context_source_text", native.get("message"))
+    message_type = record["event"].get("message_type")
+    if source.get("msg_type", source.get("message_type")) != message_type:
+        return False
+    if message_type == "post":
+        # Posts froze their rendering at intake. Text-only input must also equal
+        # the admitted text. For image input Core separately verifies the saved
+        # attachment bytes against the original Turn.
+        frozen = record.get("source_content")
+        images = record.get("attachments")
+        frozen_images = (isinstance(images, list) and bool(images)
+            and images == native.get("attachments") and record.get("message") == native.get("message"))
+        if (record.get("attachment_notice") or not isinstance(frozen, str)
+                or (not frozen_images and (images != [] or native.get("attachments")
+                                          or frozen.strip() != expected))):
+            return False
+        expected = frozen
+    elif message_type != "text":
+        return False
+    observed = source.get("content")
+    return isinstance(observed, str) and observed == expected
 
 
 def steward_source_preflight(
@@ -202,7 +233,7 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
                 source = lark_private_source(provider_ref=saved["provider_ref"], event=record["event"])
                 # Recovery moves the correlation journal forward, retaining its
                 # original failed Turn. Read those exact recorded identities;
-                # suffix spelling is not evidence of an admitted continuation.
+
                 recoveries = [native.get("context_recovery") or {}, *native.get("context_recovery_history", [])]
                 if any(not isinstance(row, dict) for row in recoveries):
                     raise ValueError("unreadable recovery identities")
@@ -231,10 +262,18 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
     return result
 
 
+def _project_capture(_path: Path, row: Any) -> dict[str, Any]:
+    """Validate required private-capture fields before caching an unchanged row."""
+    if not isinstance(row, dict) or not isinstance(row.get("event"), dict) or not isinstance(row.get("binding_id"), str):
+        raise ValueError("private capture read is incomplete")
+    return row
+
+
 class PrivateIngressObserver:
     def __init__(self, transport: Any) -> None:
         self.transport = transport
         self.root = transport.root.parent / "lark-private-ingress"
+        self._capture_discovery = FileChatDiscovery()
 
     def _path(self, binding_id: str) -> Path:
         return self.root / f"{identity_ref(binding_id)}.json"
@@ -425,14 +464,14 @@ class PrivateIngressObserver:
                     **{key: canonical.get(key) for key in ("root_id", "parent_id", "thread_id")}}
                 yield binding["transport_ref"], history
             except (OSError, ValueError, KeyError, TypeError):
-                continue  # Preserve every gap; neither absence nor failure is an answer.
+                continue  # Preserve every gap;
 
     def _records(self) -> list[dict[str, Any]]:
-        records = [json.loads(path.read_text(encoding="utf-8")) for path in self.transport.root.glob("*.json")]
-        if any(not isinstance(row, dict) or not isinstance(row.get("event"), dict)
-               or not isinstance(row.get("binding_id"), str) for row in records):
-            raise ValueError("private capture read is incomplete")
-        return records
+        paths = sorted(self.transport.root.glob("*.json"))
+        return [row for _path, row in self._capture_discovery.rows(
+            self.transport.root, paths,
+            read=lambda path: json.loads(path.read_text(encoding="utf-8")),
+            project=_project_capture)]
 
     def _page(self, profile: str, chat: str, end: float, *, start: float | None = None,
               token: str | None = None) -> tuple[list[Mapping[str, Any]], bool, str | None]:
@@ -480,7 +519,7 @@ class PrivateIngressObserver:
         now = time.time()
         end = now - 5  # Leave live stream/admission a short race window.
         # Keep the live edge responsive. A separate bounded read below covers
-        # earlier history; neither cursor grants historical execution authority.
+        # earlier history.
         cursor = state.get("last_complete_at")
         start = (float(cursor) - 60) if cursor is not None else (now - 86400)
         window_end = min(end, start + 86400)

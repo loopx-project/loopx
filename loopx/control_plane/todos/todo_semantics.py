@@ -8,7 +8,6 @@ import re
 
 from ..scheduler.monitor_todo import (
     monitor_todo_expires_at,
-    monitor_todo_has_schedule,
     monitor_todo_is_actionable_open,
     monitor_todo_is_due,
     monitor_todo_is_expired,
@@ -229,10 +228,6 @@ def todo_item_is_deferred(item: dict[str, Any]) -> bool:
 
 def todo_item_next_due_at(item: dict[str, Any]) -> datetime | None:
     return monitor_todo_next_due_at(item)
-
-
-def todo_item_has_monitor_schedule(item: dict[str, Any]) -> bool:
-    return monitor_todo_has_schedule(item)
 
 
 def todo_item_expires_at(item: dict[str, Any]) -> datetime | None:

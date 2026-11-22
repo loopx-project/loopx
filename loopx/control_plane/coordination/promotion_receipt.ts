@@ -58,7 +58,7 @@ export interface PromotionCommitReadback {
   interrupted: boolean;
 }
 
-/** A thrown transport response does not establish that the commit failed.
+/**
  * Read the durable identity once; never issue a second business commit here. */
 export async function commitPromotionAndReadBack(
   store: AuthorityStore,

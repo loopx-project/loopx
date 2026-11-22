@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   LoopXCliError,
@@ -98,14 +102,14 @@ describe('runJsonCommand', () => {
           probes += 1
           controller.abort()
           if (outcome === 'rejected-probe') throw new Error('probe closed during cancellation')
-          return { exitCode: outcome === 'valid-version' ? 0 : 1, stdout: 'loopx 1.2.4\n', stderr: '' }
+          return { exitCode: outcome === 'valid-version' ? 0 : 1, stdout: 'loopx 2.4.0\n', stderr: '' }
         },
       })).rejects.toMatchObject({ kind: 'aborted', retryable: false })
       expect(probes).toBe(1)
     },
   )
 
-  it.each(['0.5.4', '1.2.3', '1.2.4rc1', '1.2.4.dev1', 'smoke', '1.2.4unknown'])(
+  it.each(['0.5.4', '1.2.3', '1.2.4', '2.4.0rc1', '2.4.0.dev1', '2.3.0', 'smoke', '2.4.0unknown'])(
     'rejects unavailable or pre-fix CLI version %s', async version => {
       await expect(resolveLoopXCommand({
         env: { LOOPX_BIN: 'configured-loopx' },
@@ -114,7 +118,7 @@ describe('runJsonCommand', () => {
     },
   )
 
-  it.each(['1.2.4', '1.2.4+local', '1.2.4.post1', '1.2.5rc1', '2.0.0.dev1'])(
+  it.each(['2.4.0', '2.4.0+local', '2.4.0.post1', '2.4.1rc1', '3.0.0.dev1'])(
     'accepts CLI release %s at or after the fixed floor', async version => {
       const command = await resolveLoopXCommand({
         env: { LOOPX_BIN: 'configured-loopx' },
@@ -128,7 +132,7 @@ describe('runJsonCommand', () => {
     const command = await resolveLoopXCommand({
       env: { PYTHON_BIN: 'fixture-python', LOOPX_BIN: '' },
       runner: async file => ({
-        exitCode: 0, stdout: `loopx ${file === 'loopx' ? '1.2.3' : '1.2.4'}\n`, stderr: '',
+        exitCode: 0, stdout: `loopx ${file === 'loopx' ? '2.3.0' : '2.4.0'}\n`, stderr: '',
       }),
     })
     expect(command.file).toBe('fixture-python')
@@ -141,7 +145,7 @@ describe('runJsonCommand', () => {
       env: { LOOPX_BIN: '' },
       runner: async (file, args) => {
         attempted.push(`${file} ${args.join(' ')}`)
-        if (file === 'python') return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        if (file === 'python') return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
         throw new LoopXCliError('missing', 'missing', false)
       },
     })
@@ -159,7 +163,7 @@ describe('runJsonCommand', () => {
       runner: async (file, args) => {
         expect(file).toBe(configured)
         expect(args).toEqual(['--version'])
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       },
     })
 
@@ -174,7 +178,7 @@ describe('runJsonCommand', () => {
         if (file === 'loopx') return { exitCode: 127, stdout: '', stderr: '' }
         expect(file).toBe(python)
         expect(args).toEqual(['-m', 'loopx.cli', '--version'])
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       },
     })
 
@@ -189,7 +193,7 @@ describe('runJsonCommand', () => {
       runner: async (file, args) => {
         expect(file).toBe(python)
         expect(args).toEqual([launcher, '--version'])
-        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+        return { exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }
       },
     })
 
@@ -312,4 +316,90 @@ describe('reap-aware mutation execution', () => {
       signal: undefined,
     }])
   })
+})
+
+describe.skipIf(process.platform === 'win32')('owned CLI process group', () => {
+  it.each(['timeout', 'abort', 'mutation', 'escaped pipe'] as const)(
+    'retires a descendant holding an inherited pipe on %s before returning or retrying',
+    async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'loopx-cli-child-'))
+      const childPidFile = join(dir, 'child-pid')
+      const signal = new AbortController()
+      const cli = { ...command, file: process.execPath }
+      const child = [
+        "process.on('SIGTERM', () => {})",
+        'setTimeout(() => {}, 5000)',
+      ].join(';')
+      const fixture = [
+        'const {spawn} = require("node:child_process")',
+        'const {writeFileSync} = require("node:fs")',
+        'const [code, path, mode] = process.argv.slice(1)',
+        'const child = spawn(process.execPath, ["-e", code], {stdio: "inherit", detached: mode === "escaped pipe"})',
+        'writeFileSync(path, String(child.pid))',
+        // The grandchild keeps the pipe open after the CLI leader is gone.
+        'process.exit(0)',
+      ].join(';')
+      const live = (pid: number): boolean => {
+        try {
+          const state = execFileSync('ps', ['-p', String(pid), '-o', 'stat='], {
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+          }).trim()
+          return !state.startsWith('Z')
+        } catch (error) {
+          if ((error as { status?: number }).status === 1) return false
+          throw error
+        }
+      }
+      let attempts = 0
+      let descendantAliveAfterFirst: boolean | undefined
+      const pid = () => Number(readFileSync(childPidFile, 'utf8'))
+      const runner: FileRunner = (_file, _args, options) => {
+        attempts += 1
+        if (attempts === 1) {
+          return runFile(process.execPath, ['-e', fixture, child, childPidFile, mode], options)
+        }
+        descendantAliveAfterFirst = live(pid())
+        return runFile(process.execPath, ['-e', 'console.log(JSON.stringify({ok:true}))'], options)
+      }
+      const options = { runner, timeoutMs: 750 }
+      const operation = mode === 'mutation'
+        ? runJsonMutationCommand(cli, [], options)
+        : runJsonCommand(cli, [], {
+            ...options, signal: signal.signal, attempts: 2, retryDelaysMs: [0],
+          })
+      // Attach the failure observer before scheduling abort or a bounded test
+      // deadline so neither test path leaves an unhandled rejection.
+      const observed = operation.catch((error: unknown) => error)
+      try {
+        if (mode === 'abort') {
+          await expect.poll(pid, { timeout: 600 }).toBeGreaterThan(1)
+          signal.abort()
+        }
+        const pending = Symbol('pending after cleanup')
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const outcome = await Promise.race([
+          observed,
+          new Promise(resolve => { timer = setTimeout(() => resolve(pending), 3200) }),
+        ]).finally(() => { clearTimeout(timer) })
+        expect(outcome).not.toBe(pending)
+        expect(live(pid())).toBe(mode === 'escaped pipe')
+        if (mode === 'timeout') {
+          expect(outcome).toEqual({ ok: true })
+          expect(attempts).toBe(2)
+          expect(descendantAliveAfterFirst).toBe(false)
+        } else {
+          expect(outcome).toMatchObject({
+            kind: mode === 'mutation' ? 'timeout' : mode === 'escaped pipe' ? 'transport' : 'aborted',
+            retryable: false,
+          })
+          expect(attempts).toBe(1)
+        }
+      } finally {
+        try { const childPid = pid(); if (live(childPid)) process.kill(childPid, 'SIGKILL') } catch {}
+        await observed
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    10_000,
+  )
 })

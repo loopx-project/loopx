@@ -256,14 +256,15 @@ DECLARED_OPEN_SITES: dict[str, str] = {
     # verdict: direction 2 asks for an explicit, tested short-assignment policy and
     # does not say which way, so this face stays where it is until that is decided.
     "loopx/extensions/presentation.py": "short-assignment verdict undecided",
-    # The public-boundary contract is the publication tier: it refuses a label with
-    # no value at all -- a trailing scheme word, an assignment operator with an
-    # empty right side -- which is exactly what the owner's publication helper
-    # `find_private_text_match` already answers. Moving it is one call with the
-    # publication categories, but it decides the tier for every surface that passes
-    # the contract, so it needs the corpus parity evidence behind it rather than two
-    # capability faces' tables.
-    "loopx/contract.py": "publication tier, needs its own corpus parity slice",
+    # The public-boundary contract answers a different question: is a credential
+    # being written into code or logs? Its `CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN`,
+    # `CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN` and
+    # `CREDENTIAL_VARIABLE_REFERENCE_PATTERN` classes are not publication-tier
+    # text shapes, so moving it onto `find_private_text_match` would drop those
+    # three detections. The corpus parity prerequisite once claimed here already
+    # exists; the reason for keeping the site is its distinct decision, not a
+    # missing slice.
+    "loopx/contract.py": "code-time credential question, not the publication tier",
 }
 
 

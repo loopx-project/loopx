@@ -7,14 +7,13 @@ from typing import Any
 from .core import _reject_raw_keys
 from ...control_plane.digest_envelope import sha256_envelope
 from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
+from .field_shapes import DOCUMENT_SCHEMA, ITEM_VISIBILITIES
 
 AUDIENCE_POLICY_SCHEMA = "periodic_report_audience_policy_v0"
 AUDIENCE_RECIPIENT_SCHEMA = "periodic_report_audience_recipient_v0"
 AUDIENCE_ROUTING_RULE_SCHEMA = "periodic_report_audience_routing_rule_v0"
 ANNOUNCEMENT_PLAN_SCHEMA = "periodic_report_announcement_plan_v0"
 
-_DOCUMENT_SCHEMA = "periodic_report_document_v0"
-_VISIBILITIES = {"primary", "supporting"}
 _RULE_SELECTORS = {
     "source_ids",
     "section_ids",
@@ -111,7 +110,7 @@ def normalize_periodic_report_audience_policy(
         "audience_policy.eligible_visibilities",
         maximum=2,
     )
-    if not visibilities or any(value not in _VISIBILITIES for value in visibilities):
+    if not visibilities or any(value not in ITEM_VISIBILITIES for value in visibilities):
         raise ValueError(
             "audience_policy.eligible_visibilities must contain primary or supporting"
         )
@@ -180,8 +179,8 @@ def normalize_periodic_report_audience_policy(
 
 
 def _normalized_document_items(document: Mapping[str, Any]) -> list[dict[str, Any]]:
-    if document.get("schema_version") != _DOCUMENT_SCHEMA:
-        raise ValueError(f"document must use {_DOCUMENT_SCHEMA}")
+    if document.get("schema_version") != DOCUMENT_SCHEMA:
+        raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
     items: list[dict[str, Any]] = []
     for section_index, raw_section in enumerate(
         _sequence(document.get("sections", []), "document.sections")
@@ -197,7 +196,7 @@ def _normalized_document_items(document: Mapping[str, Any]) -> list[dict[str, An
             visibility = _token(
                 item.get("visibility", "primary"), f"{item_label}.visibility"
             )
-            if visibility not in _VISIBILITIES:
+            if visibility not in ITEM_VISIBILITIES:
                 raise ValueError(f"{item_label}.visibility is invalid")
             items.append(
                 {

@@ -5,6 +5,7 @@ Matplotlib is an optional authoring dependency, never a website runtime dependen
 """
 from pathlib import Path
 import json
+import re
 
 import matplotlib as mpl
 mpl.use("Agg")
@@ -28,6 +29,23 @@ def save(fig, relative):
     fig.savefig(path, format="svg", facecolor="white", metadata={"Date": None})
     path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
     plt.close(fig)
+
+
+def listed_times_near_18_hours(row):
+    times = []
+    for side in ("on", "off"):
+        match = re.fullmatch(r"(\d+)h([0-5]\d)m", row[f"context_{side}_duration"])
+        if match is None:
+            return False
+        times.append(int(match[1]) * 60 + int(match[2]))
+    return all(abs(minutes - 18 * 60) <= 15 for minutes in times) and abs(times[0] - times[1]) <= 15
+
+
+def reported_side_ahead(row):
+    on, off = row["context_on_native"], row["context_off_native"]
+    if on == off:
+        return None
+    return "on" if (on > off) == (row["direction"] == "higher") else "off"
 
 
 for language in ("en", "zh"):
@@ -323,3 +341,133 @@ for language in ("en", "zh"):
         "v2: 372 records, 249 reported transitions; 7 outcomes unreconciled from published counts. Latest: 25 reviews, 17 scored transitions.\nRow counts: improved / flat / reported regression / unreconciled. Published aggregates do not establish causal benefit.")
     fig.text(.03,.025,footer,fontsize=10,color="#475569",linespacing=1.6)
     save(fig, f"images/edgebench-feedback-and-memory/stride-yardstick-closed-loop-{language}.svg")
+
+    # 4. Reported EdgeBench score pairs and their observation limits.
+    comparison = DATA["stride_context_on_off_comparison"]
+    rows = comparison["tasks"]
+    norm_rows = sorted(
+        (row for row in rows if row["context_on_norm"] is not None),
+        key=lambda row: row["context_on_norm"] - row["context_off_norm"],
+        reverse=True,
+    )
+    native_rows = {row["task"]: row for row in rows}
+
+    fig = plt.figure(figsize=(14.6, 7.8))
+    gs = fig.add_gridspec(
+        1, 2, width_ratios=[1.25, 1.05],
+        left=.17, right=.97, bottom=.175, top=.805, wspace=.14,
+    )
+    left = fig.add_subplot(gs[0, 0])
+    right = fig.add_subplot(gs[0, 1])
+    positions = list(range(len(norm_rows)))
+    on_bars = left.barh(
+        [y - .18 for y in positions], [row["context_on_norm"] for row in norm_rows],
+        height=.32, color=TEAL, label="Context ON",
+    )
+    off_bars = left.barh(
+        [y + .18 for y in positions], [row["context_off_norm"] for row in norm_rows],
+        height=.32, color="#94a3b8", label="Context OFF",
+    )
+    tags = {
+        "matched_18h": "接近 18h" if zh else "near 18h",
+        "historical_stride": "历史时长待核" if zh else "historical, time unverified",
+        "incomplete_off": "OFF 时长较短" if zh else "shorter OFF",
+        "both_incomplete": "均未满 18h" if zh else "both under 18h",
+    }
+    suffix = "zh" if zh else "en"
+    left.set_yticks(
+        positions,
+        [f"{row['task']} · {tags[row['cohort_group']]}" for row in norm_rows],
+        fontsize=9.5,
+    )
+    left.invert_yaxis()
+    left.set_xlim(0, 137)
+    ticks = [0, 25, 50, 75, 100]
+    left.set_xticks(ticks)
+    for tick_value, text in zip(ticks, left.get_xticklabels()):
+        text.set_gid(f"context-axis-{tick_value}")
+    left.set_xlabel("EdgeBench 百分制分数（越高越好）" if zh else "EdgeBench normalized score (/100, higher is better)", fontsize=9.5)
+    left.set_title(
+        "A. 九组百分制分数（ON / OFF）" if zh else "A. Nine normalized pairs (ON / OFF)",
+        loc="left", pad=14, fontsize=11, fontweight="bold",
+    )
+    left.set_axisbelow(True)
+    left.grid(axis="x", color="#e2e8f0", linewidth=.7)
+    left.tick_params(axis="both", length=0)
+
+    for index, (row, on_bar, off_bar) in enumerate(zip(norm_rows, on_bars, off_bars)):
+        task = row["task"]
+        on_bar.set_gid(f"context-bar-{task}-on")
+        off_bar.set_gid(f"context-bar-{task}-off")
+        on, off = row["context_on_norm"], row["context_off_norm"]
+        delta = on - off
+        color = TEAL if delta > 0 else ("#b45309" if delta < 0 else SLATE)
+        left.text(max(on, off) + 2.2, index, f"{on:.2f} / {off:.2f} ({delta:+.2f})",
+                  va="center", fontsize=8.8, fontweight="bold", color=color).set_gid(f"context-score-{task}")
+
+    right.axis("off")
+    right.set_title(
+        "B. 原生分（ON / OFF）" if zh else "B. Native scores (ON / OFF)",
+        loc="left", pad=14, fontsize=11, fontweight="bold",
+    )
+    borden = native_rows["Borden"]
+    winners = {row["task"]: reported_side_ahead(row) for row in rows}
+    near = [row for row in rows if listed_times_near_18_hours(row)]
+    on_count = list(winners.values()).count("on")
+    off_count = list(winners.values()).count("off")
+    near_on = sum(winners[row["task"]] == "on" for row in near)
+    near_off = sum(winners[row["task"]] == "off" for row in near)
+    examples = [native_rows[task] for task in ("ANN", "FFmpeg", "VLIW", "Grid")]
+    counterexamples = [row for row in rows if winners[row["task"]] == "off"]
+
+    def native_line(row):
+        return f"{row['task']} ({row[f'metric_label_{suffix}']}): {row['context_on_native']:,} / {row['context_off_native']:,}"
+
+    borden_label = "Borden 无百分制分数" if zh else "Borden has no /100 score"
+    near_line = (f"接近 18h 的 {len(near)} 组：ON {near_on} / OFF {near_off}" if zh
+                 else f"{len(near)} near-18h pairs: ON {near_on} / OFF {near_off}")
+    total_line = (f"{len(rows)} 组记录：ON {on_count} / OFF {off_count}" if zh
+                  else f"{len(rows)} reported pairs: ON {on_count} / OFF {off_count}")
+    cards = [
+        ("context-native-borden", "\n".join([
+            borden_label, native_line(borden),
+            f"ON {borden['context_on_duration']} / OFF {borden['context_off_duration']}",
+        ]), "#f0fdfa", "#99f6e4"),
+        ("context-native-examples", "\n".join([
+            "部分原生分（ANN 的 OFF 分数待核）" if zh else "Examples (ANN OFF unverified)",
+            *(native_line(row) for row in examples),
+        ]), "#f8fafc", "#cbd5e1"),
+        ("context-native-off", "\n".join([
+            total_line, near_line, "OFF 占先的题目" if zh else "Tasks where OFF leads",
+            *(native_line(row) for row in counterexamples),
+        ]), "#fffbeb", "#fcd34d"),
+    ]
+    for top, (group_id, text, face, edge) in zip([.98, .72, .36], cards):
+        right.text(
+            .01, top, text, transform=right.transAxes, va="top", fontsize=9.1,
+            linespacing=1.45, bbox={"boxstyle": "round,pad=.60", "facecolor": face, "edgecolor": edge},
+        ).set_gid(group_id)
+
+    fig.suptitle(
+        "EdgeBench 十题记录中的 Context ON 与 OFF 分数" if zh else
+        "EdgeBench scores reported for Context ON and OFF",
+        fontsize=14.6, fontweight="bold", y=.955,
+    )
+    other_count = len(rows) - len(near)
+    fig.text(
+        .5, .88,
+        f"{len(near)} 组列出的时长接近 18 小时，其余 {other_count} 组涉及历史运行或未跑满的记录。"
+        if zh else
+        f"{len(near)} pairs list runtimes near 18 hours. The other {other_count} include historical or incomplete runs.",
+        ha="center", fontsize=10, color="#475569",
+    )
+    fig.legend(*left.get_legend_handles_labels(), loc="lower center", ncol=2, frameon=False,
+               bbox_to_anchor=(.45, .081), fontsize=9.6)
+    fig.text(
+        .03, .028,
+        f"快照 {comparison['snapshot_cst']}。现有逐臂记录不足以单独衡量 Context Delivery 的影响。"
+        if zh else
+        f"Snapshot {comparison['snapshot_cst']}. The public records cannot isolate the effect of Context Delivery.",
+        fontsize=8.9, color="#475569",
+    )
+    save(fig, f"images/context-delivery/stride-context-on-vs-off-{language}.svg")

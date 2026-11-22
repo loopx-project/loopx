@@ -14,7 +14,9 @@ import shlex
 
 
 _TURN_ASSIGNMENT = re.compile(
-    r"LOOPX_TURN=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z)"
+    r"LOOPX_TURN=("
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z"
+    r"|wake-[0-9]+-[a-f0-9]{12})"
 )
 _TURN_PLACEHOLDER = "${LOOPX_TURN:?}"
 _TURN_ARGUMENT = re.compile(r'(?<!\S)--turn-instance-id[ \t]+"' + re.escape(_TURN_PLACEHOLDER) + r'"(?=[ \t]|$)')
@@ -25,8 +27,8 @@ def _argv(command: str, depth: int = 0) -> list[str] | None:
         return None
     bound_turn = None
     if "\n" in command:
-        # The managed heartbeat assigns one literal UTC Turn ID before the
-        # quota guard. Resolve only its quoted argument, without running shell.
+        # Codex App and the benchmark worker assign one literal Turn ID before
+        # the quota guard. Resolve only its quoted argument, without running shell.
         assignment, _, command = command.partition("\n")
         command = command.removesuffix("\n")
         match = _TURN_ASSIGNMENT.fullmatch(assignment)
@@ -48,7 +50,9 @@ def _argv(command: str, depth: int = 0) -> list[str] | None:
     if not words or any(word and set(word) <= set(";&|()<>") for word in words):
         return None
     if bound_turn is not None:
-        if words.count("--turn-instance-id") != 1:
+        # Both CLI spellings name the same option; an equals-form override
+        # must not hide behind the single quoted placeholder binding.
+        if sum(word.partition("=")[0] == "--turn-instance-id" for word in words) != 1:
             return None
         index = words.index("--turn-instance-id") + 1
         if words[index:index + 1] != [_TURN_PLACEHOLDER]:

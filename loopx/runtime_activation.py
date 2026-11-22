@@ -109,7 +109,7 @@ def _managed_service_state(plist: Path, *, label: str | None = None,
     if (not isinstance(configured, list) or not all(isinstance(arg, str) for arg in configured)
             or len(arguments) != 1
             or [line.strip() for line in arguments[0].splitlines()] != configured):
-        return False, None  # An edited plist is not proof of the running process's route.
+        return False, None
     pids = re.findall(r"^\s*pid = ([0-9]+)\s*$", result.stdout, re.MULTILINE)
     return True, int(pids[0]) if len(pids) == 1 else None
 

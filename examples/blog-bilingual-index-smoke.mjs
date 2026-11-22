@@ -76,10 +76,161 @@ function listingDates(html, language, articleSlugs) {
   return dates;
 }
 
+const SNAPSHOT_TASKS = ["Borden", "Grid", "Rust", "Portfolio", "ANN", "FFmpeg", "VLIW", "Ad", "Codec", "OpenTTD"];
+const SNAPSHOT_SCOPES = {
+  matched_18h: ["Near 18h", "接近 18 小时"],
+  historical_stride: ["Historical", "历史记录"],
+  incomplete_off: ["Shorter or early-stop OFF", "OFF 时长较短或早停"],
+  both_incomplete: ["Both below 18h", "两臂均未满 18 小时"],
+};
+const reportedNumber = value => value.toLocaleString("en-US", { maximumFractionDigits: 4 });
+const signed = value => (value < 0 ? "−" : value > 0 ? "+" : "") + reportedNumber(Math.abs(value));
+const delta = (on, off) => Number((on - off).toFixed(4));
+const durationParts = value => value.match(/^(\d+)h([0-5]\d)m$/)?.slice(1).map(Number);
+const plainText = svgOrHtml => svgOrHtml.replace(/<[^>]*>/g, "").replaceAll("&amp;", "&").replaceAll("&lt;", "<").trim();
+
+function scoreSnapshotRows(snapshot) {
+  for (const source of [snapshot.source_url, snapshot.prior_public_ann_url]) {
+    if (!/^https:\/\/github\.com\/loopx-project\/loopx\/blob\/[a-f0-9]{40}\//.test(source)) {
+      throw new Error("Score snapshot must link immutable public sources");
+    }
+  }
+  deepStrictEqual(snapshot.tasks.map(row => row.task), SNAPSHOT_TASKS, "Score snapshot task order and coverage");
+  const pairs = snapshot.tasks.map(row => {
+    const { task, direction } = row;
+    const arms = ["on", "off"].map(side => ({
+      native: row["context_" + side + "_native"],
+      norm: row["context_" + side + "_norm"],
+      duration: row["context_" + side + "_duration"],
+      valid: row["context_" + side + "_valid"],
+    }));
+    const [on, off] = arms;
+    if (!["higher", "lower"].includes(direction) || !Object.hasOwn(SNAPSHOT_SCOPES, row.cohort_group) ||
+        !arms.every(arm => Number.isFinite(arm.native) &&
+          (task === "Borden" ? arm.norm === null : Number.isFinite(arm.norm) && arm.norm >= 0 && arm.norm <= 100) &&
+          typeof arm.duration === "string" &&
+          (durationParts(arm.duration) || ["unverified", "stopped early"].includes(arm.duration)) &&
+          Number.isInteger(arm.valid) && arm.valid >= 0)) {
+      throw new Error("Invalid score snapshot row: " + task);
+    }
+    const sign = direction === "lower" ? -1 : 1;
+    const nativeWinner = Math.sign((on.native - off.native) * sign);
+    const normWinner = on.norm === null ? 0 : Math.sign(on.norm - off.norm);
+    const onLeads = nativeWinner > 0;
+    const winner = onLeads ? (on.norm !== null && normWinner === 0 ? "context-on-edge" : "context-on") : "context-off";
+    if (nativeWinner === 0 || (normWinner !== 0 && normWinner !== nativeWinner) || row.winner_explore !== winner) {
+      throw new Error("Score snapshot direction or winner conflicts with the reported values: " + task);
+    }
+    const reportedMinutes = arms.map(arm => {
+      const time = durationParts(arm.duration);
+      return time ? time[0] * 60 + time[1] : Infinity;
+    });
+    const near = reportedMinutes.every(time => Math.abs(time - 1080) <= 15) &&
+      Math.abs(reportedMinutes[0] - reportedMinutes[1]) <= 15;
+    deepStrictEqual(near, row.cohort_group === "matched_18h", "Near-18h classification: " + task);
+    return { row, on, off, onLeads, near };
+  });
+  const near = pairs.filter(pair => pair.near);
+  const ahead = pairs.filter(pair => pair.onLeads);
+  const offTasks = pairs.filter(pair => !pair.onLeads).map(pair => pair.row.task);
+  deepStrictEqual(offTasks, ["Portfolio", "Codec", "OpenTTD"], "Keep the three reported OFF counterexamples");
+  deepStrictEqual(snapshot.summary, {
+    total_tasks: pairs.length,
+    context_on_ahead_or_edge: ahead.length,
+    context_off_ahead: offTasks.length,
+    duration_matched_18h_pairs: near.length,
+    duration_matched_context_on_wins: near.filter(pair => pair.onLeads).length,
+    duration_matched_context_off_wins: near.filter(pair => !pair.onLeads).length,
+  }, "Score snapshot tally must follow native direction and the listed runtimes");
+  return pairs;
+}
+
+function assertScoreTable(section, pairs, lang) {
+  const zh = lang === "zh";
+  const table = section.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1] ?? "";
+  const rows = [...table.matchAll(/<tr>([\s\S]*?)<\/tr>/g)];
+  deepStrictEqual(rows.length, pairs.length, "Score table must keep all ten task rows: " + lang);
+  const armText = ({ native, norm, duration, valid }) => {
+    const time = zh ? ({ unverified: "待核实", "stopped early": "早停" }[duration] ?? duration) : duration;
+    const cells = (norm?.toFixed(2) ?? "—") + " · " + time + " · " + valid;
+    return reportedNumber(native) + (zh ? "（" + cells + " 次）" : " (" + cells + " valid)");
+  };
+  for (const [index, { row, on, off, onLeads }] of pairs.entries()) {
+    const raw = [...rows[index][1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(match => match[1]);
+    const metric = row["metric_label_" + lang] + (row.direction === "higher" ? " ↑" : " ↓");
+    const title = row.task + (zh ? "（" + metric + "）" : " (" + metric + ")");
+    const scope = SNAPSHOT_SCOPES[row.cohort_group][Number(zh)] + (onLeads ? "" : (zh ? " · OFF 占先" : " · OFF leads"));
+    const changes = signed(delta(on.native, off.native)) + " / " +
+      (on.norm === null ? "—" : signed(delta(on.norm, off.norm)));
+    deepStrictEqual(raw.map(plainText), [title, scope, armText(on), armText(off), changes],
+      "Score table row differs from the published aggregate: " + lang + "/" + row.task);
+    deepStrictEqual([raw[2].startsWith("<strong>"), raw[3].startsWith("<strong>")],
+      [onLeads, !onLeads], "Score table emphasizes the correct side: " + lang + "/" + row.task);
+  }
+}
+
+function assertScoreFigure(svg, pairs, lang) {
+  // Matplotlib emits named groups for each actual label and bar, with child groups indented.
+  const group = id => {
+    const contents = svg.match(new RegExp('^( *)<g id="' + id + '">\\n([\\s\\S]*?)^\\1</g>$', "m"))?.[2];
+    if (!contents) throw new Error("Score chart is missing " + lang + "/" + id);
+    return contents;
+  };
+  const labels = value => [...value.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)].map(match => plainText(match[1]));
+  const tickX = n => Number(group("context-axis-" + n).match(/<text\b[^>]*\bx="([^"]+)"/)?.[1]);
+  const origin = tickX(0);
+  const unit = (tickX(100) - origin) / 100;
+  const normalized = pairs.filter(pair => pair.on.norm !== null)
+    .sort((a, b) => delta(b.on.norm, b.off.norm) - delta(a.on.norm, a.off.norm));
+  deepStrictEqual([...svg.matchAll(/<g id="context-score-([^"]+)">/g)].map(match => match[1]),
+    normalized.map(pair => pair.row.task), "Score chart must retain the normalized delta order: " + lang);
+  for (const { row, on, off } of normalized) {
+    const change = delta(on.norm, off.norm);
+    const label = on.norm.toFixed(2) + " / " + off.norm.toFixed(2) +
+      " (" + (change >= 0 ? "+" : "") + change.toFixed(2) + ")";
+    deepStrictEqual(labels(group("context-score-" + row.task)), [label],
+      "Score chart label differs from the published aggregate: " + lang + "/" + row.task);
+    for (const [side, arm] of [["on", on], ["off", off]]) {
+      const points = [...group("context-bar-" + row.task + "-" + side).matchAll(/[ML] ([\d.]+) /g)]
+        .map(match => Number(match[1]));
+      if (!points.length || !(Math.abs(Math.min(...points) - origin) < 0.02) ||
+          !(Math.abs(Math.max(...points) - (origin + arm.norm * unit)) < 0.02)) {
+        throw new Error("Score chart bar differs from the published aggregate: " + lang + "/" + row.task + "/" + side);
+      }
+    }
+  }
+
+  const nativeLine = ({ row, on, off }) =>
+    row.task + " (" + row["metric_label_" + lang] + "): " + reportedNumber(on.native) + " / " + reportedNumber(off.native);
+  const borden = pairs[0];
+  deepStrictEqual(labels(group("context-native-borden")).slice(1),
+    [nativeLine(borden), "ON " + borden.on.duration + " / OFF " + borden.off.duration],
+    "Score chart Borden native pair differs: " + lang);
+  const examples = ["ANN", "FFmpeg", "VLIW", "Grid"].map(task => pairs.find(pair => pair.row.task === task));
+  deepStrictEqual(labels(group("context-native-examples")).slice(1), examples.map(nativeLine),
+    "Score chart native example differs: " + lang);
+  const counters = pairs.filter(pair => !pair.onLeads);
+  const near = pairs.filter(pair => pair.near);
+  const nearOn = near.filter(pair => pair.onLeads).length;
+  const counts = (total, off) => "ON " + (total - off) + " / OFF " + off;
+  const total = counts(pairs.length, counters.length);
+  const nearTotal = counts(near.length, near.length - nearOn);
+  const expectedCard = lang === "zh"
+    ? [pairs.length + " 组记录：" + total, "接近 18h 的 " + near.length + " 组：" + nearTotal, "OFF 占先的题目"]
+    : [pairs.length + " reported pairs: " + total, near.length + " near-18h pairs: " + nearTotal, "Tasks where OFF leads"];
+  deepStrictEqual(labels(group("context-native-off")), [...expectedCard, ...counters.map(nativeLine)],
+    "Score chart observed tally or native counterexample differs: " + lang);
+}
+
 export async function validateBilingualBlog(blogDir) {
   const auditPath = resolve(blogDir, "data/long-horizon-audit.json");
+  if (!existsSync(auditPath) && existsSync(resolve(blogDir, "context-delivery/index.html"))) {
+    throw new Error("The context delivery article requires its public audit data");
+  }
   if (existsSync(auditPath)) {
     const audit = JSON.parse(await readFile(auditPath, "utf8"));
+    const snapshot = audit.stride_context_on_off_comparison;
+    const snapshotRows = scoreSnapshotRows(snapshot);
     const tasks = audit.context.tasks;
     const sum = key => tasks.reduce((total, task) => total + task[key], 0);
     deepStrictEqual([tasks.length, sum("wakes"), sum("baseline_wakes"), sum("delta_wakes")],
@@ -132,6 +283,29 @@ export async function validateBilingualBlog(blogDir) {
         "utf8",
       );
       assertIncludes(multitaskSvg, "100.0%", `Eight-task byte audit chart must anchor at 100% Full: ${langSuffix}`);
+      const snapshotSection = article.split('<h3 id="context-on-vs-off-scores">')[1]?.split('<h3 id="ablation-evidence">')[0] ?? "";
+      const snapshotSvg = await readFile(
+        resolve(blogDir, "images/context-delivery/stride-context-on-vs-off-" + langSuffix + ".svg"), "utf8",
+      );
+      assertIncludes(snapshotSection, "stride-context-on-vs-off-" + langSuffix + ".svg", "Both editions link the reported score figure");
+      for (const source of [snapshot.source_url, snapshot.prior_public_ann_url]) {
+        assertIncludes(snapshotSection, source, "Both editions distinguish the original snapshot from earlier ANN evidence");
+      }
+      assertScoreTable(snapshotSection, snapshotRows, langSuffix);
+      assertScoreFigure(snapshotSvg, snapshotRows, langSuffix);
+      const index = await readFile(resolve(blogDir, locale, "index.html"), "utf8");
+      const listing = index.match(/<h2><a href="context-delivery\/">[^<]+<\/a><\/h2><p>([^<]+)<\/p>/)?.[1] ?? "";
+      assertIncludes(listing, langSuffix === "zh" ? "记录分数" : "reported EdgeBench", "Blog catalog describes the recorded score pair scope");
+      for (const observedText of [snapshotSection, snapshotSvg, JSON.stringify(snapshot), listing]) {
+        if (/controlled|fixed Explore|holding Explore|同构|受控|固定 Explore|four.arm|四臂/i.test(observedText)) {
+          throw new Error("Reported score snapshot restored a controlled or mixed-arm claim: " + locale);
+        }
+      }
+      for (const publicText of [article, snapshotSvg, JSON.stringify(audit)]) {
+        if (/sforge/i.test(publicText)) {
+          throw new Error(`Internal benchmark name leaked into public context-delivery blog artifact (${locale})`);
+        }
+      }
       if (/7,479,469|33\.4%|69\.9 KB|57\.1ms/.test(article))
         throw new Error("Unreconciled totals or unsupported C1 attribution reappeared");
     }
@@ -420,6 +594,37 @@ async function assertClockLabelRejected(blogDir, { figure, declared, regressed }
   }
 }
 
+async function assertScoreMismatchRejected(blogDir) {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "loopx-blog-score-parity-"));
+  const fixtureBlog = join(temporaryRoot, "blog");
+  try {
+    await cp(blogDir, fixtureBlog, { recursive: true });
+    // Each mutation changes just one published representation (or its source provenance).
+    const data = "data/long-horizon-audit.json";
+    const en = "context-delivery/index.html";
+    const zh = "zh/context-delivery/index.html";
+    const svg = "images/context-delivery/stride-context-on-vs-off-en.svg";
+    for (const [path, before, after, expected] of [
+      [data, '"context_on_native": 80,', '"context_on_native": 5,', /snapshot direction or winner/],
+      [data, '"context_on_native": 80,', '"context_on_native": 81,', /table row differs.*Borden/],
+      [svg, "7,159 / 3,746", "7,159 / 3,747", /chart native example differs/],
+      [en, "<strong>33,090,430</strong> (62.99", "<strong>13,090,430</strong> (62.99", /table row differs.*OpenTTD/],
+      [zh, "（27.18 · 17h57m · 10 次）", "（27.18 · 17h57m · 1 次）", /table row differs.*Rust/],
+      [data, '"prior_public_ann_url": "https://github.com/', '"prior_public_ann_url": "https://example.invalid/', /immutable public sources/],
+      [data, '"direction": "lower",\n        "metric_label_en": "Total cost"', '"direction": "higher",\n        "metric_label_en": "Total cost"', /snapshot direction or winner/],
+    ]) {
+      const file = resolve(fixtureBlog, path);
+      const source = await readFile(file, "utf8");
+      assertIncludes(source, before, "Negative fixture must contain the original value: " + path);
+      await writeFile(file, source.replace(before, after));
+      await rejects(() => validateBilingualBlog(fixtureBlog), expected);
+      await writeFile(file, source);
+    }
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 const modulePath = fileURLToPath(import.meta.url);
 if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
   const articleUrl = "https://loopx-project.github.io/loopx/blog/example/";
@@ -506,5 +711,6 @@ if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
     },
     "中文主图恢复反馈口径也必须被配对标签检查拦下",
   );
+  await assertScoreMismatchRejected(blogDir);
   console.log(`blog-bilingual-index-smoke: ok (${articleSlugs.length} paired articles)`);
 }

@@ -12,7 +12,8 @@
 import type { JsonObject } from "../effect_program.ts";
 import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { jsonObject } from "../runtime_decode.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
+import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
 
@@ -103,6 +104,16 @@ export function heartbeatReceiptFactFromEvent(
   };
 }
 
+/** Read positive autonomous replan admission from an effective guard receipt. */
+export function admitsAutonomousReplan(event: JsonObject, fact: HeartbeatReceiptFact): boolean {
+  const guard = heartbeatReceiptDetails(event);
+  const obligationId = normalizeHeartbeatReplanObligationId(guard.semantic_replan_obligation_id);
+  return fact.settlement_effect_id !== null && obligationId !== null
+    && (fact.todo_id !== null || obligationId === fact.replan_obligation_id)
+    && guard.interaction_mode === "autonomous_replan" && guard.ok === true && guard.should_run === true
+    && guard.must_attempt_work === true && guard.delivery_allowed === false && guard.quiet_noop_allowed === false;
+}
+
 /**
  * Resolve the settlement binding a persisted receipt declares.
  *
@@ -186,6 +197,91 @@ export function selectEffectiveHeartbeatReceipt<Value>(
     : entries.at(-1)!.value;
 }
 
+/** Pure transport for Python receipt callers. File/GoalRef scoping stays with
+ * their locked reader; this projection grants no admission or settlement.
+ * Return an index so unknown event details and numeric IO stay in that reader. */
+export function projectHeartbeatReceiptSelection(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "heartbeat receipt selection");
+  if (typeof request.goal_id !== "string" || typeof request.agent_id !== "string" ||
+      !Array.isArray(request.events)) {
+    throw new EffectRuntimeRequestError("heartbeat receipt selection requires scoped event facts");
+  }
+  const goalId = request.goal_id, agentId = request.agent_id;
+  const entries = request.events.map((value, index) => ({
+    fact: heartbeatReceiptFactFromEvent(requireJsonObject(value, "heartbeat receipt event")),
+    value: index,
+  }));
+  const index = selectEffectiveHeartbeatReceipt(goalId, agentId, entries);
+  if (index === null) return {index: null, binding: null};
+  const fact = entries[index]!.fact;
+  const binding = heartbeatReceiptBinding(goalId, agentId, fact);
+  if (binding === null) return {index, binding: null};
+  // The original receipt may omit its derived effect. Preserve any declared
+  // effect verbatim, including a conflicting one, just as the shared rule does.
+  return {index, binding: {
+    binding_kind: binding.binding_kind,
+    binding_id: binding.binding_id,
+    effect_id: binding.settlement_effect_id ?? settlementIdentity({
+      goal_id: goalId, agent_id: agentId, turn_instance_id: fact.run_id ?? "",
+      todo_id: fact.todo_id,
+      replan_obligation_id: normalizeHeartbeatReplanObligationId(fact.replan_obligation_id),
+      request_subject: fact.request_subject,
+    }).effect_id,
+  }};
+}
+
+/**
+ * The first bound receipt for one Turn, used only as the admission clock.
+ *
+ * `selectEffectiveHeartbeatReceipt` still returns the latest bound receipt so
+ * review and work content stay current. A later same-Turn upgrade must not
+ * move the historical-ACK admission time or log position. Callers pass the
+ * GoalRef-filtered receipt list; this reduction does not widen that scope.
+ * Conflicting bindings fail closed, the same way the effective reduction does.
+ */
+export function selectAdmissionHeartbeatReceipt<Value>(
+  goalId: string,
+  agentId: string,
+  entries: readonly { fact: HeartbeatReceiptFact; value: Value }[],
+): Value | null {
+  const identities = new Map<string, Value>();
+  for (const entry of entries) {
+    const binding = heartbeatReceiptBinding(goalId, agentId, entry.fact);
+    if (!binding || identities.has(binding.identity_key)) continue;
+    identities.set(binding.identity_key, entry.value);
+  }
+  if (identities.size > 1) {
+    throw receiptIdentityConflict(
+      "heartbeat receipt has conflicting settlement identities for the same goal, agent, and turn",
+    );
+  }
+  return identities.size === 1 ? [...identities.values()][0]! : null;
+}
+
+interface HeartbeatPreparedLease extends JsonObject {
+  prepared_lease_key_sha256: string;
+  prepared_lease_version: number;
+  prepared_lease_epoch?: number;
+}
+
+export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLease | null {
+  const key = details.prepared_lease_key_sha256;
+  const version = details.prepared_lease_version;
+  const epoch = details.prepared_lease_epoch;
+  if (key === undefined && version === undefined && epoch === undefined) return null;
+  if (typeof key !== "string" || !BARE_SHA256_PATTERN.test(key) ||
+      typeof version !== "number" || !Number.isSafeInteger(version) || version < 1 ||
+      (epoch !== undefined && (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 1))) {
+    throw new EffectRuntimeRequestError("Turn readiness has a malformed lease proof", "malformed_settlement_state");
+  }
+  return {prepared_lease_key_sha256: key, prepared_lease_version: version,
+    ...(epoch === undefined ? {} : {prepared_lease_epoch: epoch})};
+}
+
+export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {
+  return heartbeatReceiptDetails(event).settlement_receipt_revision === "lease_readiness";
+}
+
 /** Reentry can qualify work on the original binding, never replace its authority.
  * The caller commits this append-only projection under the receipt-log lock. */
 export function heartbeatWorkRequalification(
@@ -215,12 +311,41 @@ export function heartbeatWorkRequalification(
   const currentReplan = normalizeHeartbeatReplanObligationId(currentDetails.semantic_replan_obligation_id);
   if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false, currentReplan)
       .report_permission !== "new_operation") return replay;
+  const preparedLease = identity.todo_id === null ? null : heartbeatPreparedLease(currentDetails);
+  const previous = identity.todo_id === null ? null : heartbeatPreparedLease(oldDetails);
+  if (previous !== null && (
+      preparedLease === null || preparedLease.prepared_lease_key_sha256 !== previous.prepared_lease_key_sha256 ||
+      (previous.prepared_lease_epoch === undefined
+        ? preparedLease.prepared_lease_version !== previous.prepared_lease_version
+        : preparedLease.prepared_lease_epoch !== previous.prepared_lease_epoch))) {
+    throw receiptIdentityConflict("work requalification must preserve this Turn's original task lease generation");
+  }
   if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false, originalReplan)
-      .report_permission === "new_operation") return replay;
+      .report_permission === "new_operation") {
+    if (preparedLease === null || originalReplan !== currentReplan) return replay;
+    const previousVersion = previous?.prepared_lease_version ?? 0;
+    // A delayed readiness evaluation can never replace a newer lease. Only
+    // the preparation proof changes; admission, billing and workspace stay bound.
+    if (preparedLease.prepared_lease_version <= previousVersion) return replay;
+    return {append: true, details: {
+      ...oldDetails, ...preparedLease, settlement_receipt_revision: "lease_readiness",
+    }};
+  }
   if (currentReplan !== null && currentReplan !== originalReplan) {
     throw receiptIdentityConflict("work requalification cannot replace the original semantic replan guard");
   }
-  const qualified = {...oldDetails};
+  const qualified = {...oldDetails, ...preparedLease};
+  // The guarded route becomes durable when this binding first admits work.
+  const spendSource = currentDetails.quota_spend_source;
+  if (spendSource != null) {
+    if (spendSource !== "heartbeat" && spendSource !== "visible-goal") {
+      throw receiptIdentityConflict("work requalification has an unsupported quota spend source");
+    }
+    if (oldDetails.quota_spend_source != null && oldDetails.quota_spend_source !== spendSource) {
+      throw receiptIdentityConflict("work requalification cannot replace the original quota spend source");
+    }
+    qualified.quota_spend_source = spendSource;
+  }
   // The first positive work admission owns these facts. A repair-only
   // receipt's earlier selection cannot describe the newly admitted work.
   for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed",

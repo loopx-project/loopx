@@ -3,23 +3,11 @@ import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 import {leaseIsActive, TASK_LEASE_SCHEMA_VERSION} from "../work_items/task_lease_acquire.ts";
-import {HANDOFF_MODES, type HandoffMode} from "./handoff_mode_policy.ts";
+import {type HandoffMode} from "./handoff_mode_policy.ts";
 
 export type PersistedHandoffMode =
   | {kind: "valid"; value: HandoffMode}
   | {kind: "invalid"; value: string};
-
-export function persistedHandoffMode(value: unknown): PersistedHandoffMode {
-  const text = value == null ? "" : String(value).trim();
-  if (!text) return {kind: "valid", value: "legacy"};
-  const mode = HANDOFF_MODES.find(mode => mode === text);
-  return mode ? {kind: "valid", value: mode} : {kind: "invalid", value: text};
-}
-
-export function previousModeFields(mode: PersistedHandoffMode): JsonObject {
-  return {previous_mode: mode.value, previous_mode_valid: mode.kind === "valid",
-    ...(mode.kind === "invalid" ? {previous_mode_error_code: "invalid_handoff_mode"} : {})};
-}
 
 export interface HandoffQuiescence {
   claimed_todos: JsonObject[];

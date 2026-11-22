@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX maintainers
 - **创建：** 2026-09-26
-- **最近规范性修订：** 2026-10-29
+- **最近规范性修订：** 2026-11-19
 - **实现基线：** 发行盘点 `2f3d13ae9`；运行时装配审计 `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **相关契约：** [TypeScript 控制面迁移 v0](typescript-control-plane-migration-v0.zh-CN.md)、[Extensions 参考](../../reference/extensions.md)、[Capability 目录](../../../loopx/capabilities/README.md)、[总体路线图 v0](loopx-overall-roadmap-v0.zh-CN.md)（S2、S8、S12）、[import 边界测试](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **跟踪 issue：** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -25,7 +25,7 @@
 
 1. **仓库保持单一 monorepo。** 一条 PR 流程、一套 CI、一个发布列车。拆成多个 Git 仓库是本 RFC 的非目标。
 2. **安装物拆成多个发行物。** 单一 `loopx` wheel 逐步替换为 `loopx-core`、`loopx-workspace` 以及 `packages/` 下的按 capability 打包；`loopx` 保留为依赖全部子包的 meta-package。
-3. **先做顶层目录重组，再做打包变更。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
+3. **按独立打包所需重组所选依赖闭包。** `loopx/chat_*` 迁入 `loopx/chat/`，`loopx/*_goal_mode/` 迁入 `loopx/hosts/`，已建立的公开 import 保留至少一个 minor 版本的兼容 re-export；内部调用方一起迁移并删除旧内部入口。
 4. **新增一条架构测试钉住顶层增长。** `loopx/*.py` 的文件数只能减少，与现有零例外 import 边界测试并列。
 5. **仅内核安装不得在 import 阶段要求 Node.js。** TS effect runtime 对有副作用的命令仍是必需的；缺失时必须以现有的类型化 `node_unavailable` 诊断呈现，而不是安装或 import 失败。
 6. **不变：** 内核权威、CLI 兼容基线、extension 生命周期规则、公开/私有边界、全部稳定协议。
@@ -38,6 +38,15 @@ Minimal 必须执行并恢复真实的受治理任务；standard 围绕同一内
 “小”分别从安装依赖、加载代码、激活服务、模型可见上下文衡量。
 发行表定义可安装内容，不代表每条命令都必须加载。安装 standard 不授予服务激活或权限。
 现有默认值与机器强制工作义务持续生效，直到合格且明确披露的迁移改变它们。
+
+当前优先结果是可独立安装、执行任务、恢复原结果并返回证据的 core。无关目录移动、
+workspace 打包或额外模型会话不阻塞这一 core 发行物切片；完整 M3 仍保留全部发行
+验收。普通调用者提供任务与关键约束，不必先学 Vision、Quota、Lease 或方法名称。
+Host 承担记账；必要的权限、预算、不确定性与恢复决策仍在相关时可见。
+
+**10% 复杂度／90% 当前功能覆盖率**仍是未验证假设。固定版本化用户旅程分母，比较
+必要概念、必经步骤、加载／启用代码、模型读取、完整成本和已验收成果。分别报告
+仅内核与组合后的覆盖率；不能从分母删除特化旅程，也不能以代码计数代替模型收益。
 
 ## 2. 问题与动机
 
@@ -181,6 +190,16 @@ Planner 可以建议工作或 stride，所属迁移规则决定准入与义务�
 预设不能把机器强制的 `must_attempt_work` 契约变成文字 guidance。
 内核是内聚领域的集合，不是一个大文件。相邻重构应让下一次修改更局部，并保持已刻画的行为。
 
+### 必要机制与可选任务方法
+
+Core 负责合法限定工作、持久证据、停止、预算及原 attempt 恢复。Bench、workbench、
+管家围绕相同 owner 组合特化工作流；它们缺席不能阻塞无关的已授权 core 工作。
+**Yardstick 是独立可选的决策方法，不是 provider 或强制内核阶段。** 方法选择如何
+推理或衡量；provider 提供执行、存储或具体外部操作。复用既有 capability owner 和
+`yardstick_enabled`，不增加方法 registry、provider id 或开关。关闭方法不免除普通
+结果验收。保留既有记录、已配置义务、权限与默认值；移除方法／依赖须独立证明组件
+缺席、一致性与恢复。
+
 ### 发行层之上的预设
 
 | 装配 | 必需内容 | 显式可选内容 |
@@ -193,6 +212,13 @@ Planner 可以建议工作或 stride，所属迁移规则决定准入与义务�
 Minimal 是可执行装配，不是在 standard 完成全部初始化后加开关。
 不带宿主的只读 kernel library 不构成可执行预设资格。
 精确内容与首个受支持宿主/authority 组合由 D2/D5 决定。
+
+首批 **Standard** 选型提案为：`agent-turn-recall` 取回相关既有指导，`issue-fix`
+交付已验证仓库变更，`pull-request-review` 执行交付审查。保留各自既有 owner 和默认
+关闭设置；安装不授予来源访问、不启动 watcher，也不授权发布或合并。仅加载所选
+任务实现；可选指导召回缺席时，Minimal 仍保有基本恢复。Yardstick、Stride、研究／
+benchmark 机制与管家路由继续独立可选。这选定 R2 的目标，现有单体和 core 候选 wheel
+尚未实现该隔离分包组合。
 
 装配、managed/attached 模式、宿主 provider、一个/两个模型 Session、存储 provider、benchmark arm
 保持独立。Minimal 不意味着 attached，standard 不要求双模型 Session，research 不等于不受治理。
@@ -289,6 +315,10 @@ Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟
 authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/租约决策。
 
+普通任务获准执行后，内置 Worker 视图省去已知为空的 Todo 摘要列表。所选任务、
+非空列表、计数、引用与来源截断信息继续可见。签名来源和原有读取入口保留完整摘要，
+供恢复与诊断使用。
+
 ### 受治理生命周期与外部副作用
 
 通过统一工作契约使用既有 Goal/Agent/work/Turn 身份、revision、lease、effect id 与 receipt。
@@ -296,10 +326,18 @@ authority receipt 持久化、弱化 fsync/事务保证，或缓存过期权限/
 再经所属 channel 交付/回读。各步骤使用既有合法迁移与重放规则；这段描述不新增竞争的 status enum
 或事务协调者。
 
+显式执行 `turn run-once --execute` 时，兼容的通用 CLI 宿主配合独立校验器，可为准入
+Todo 补齐缺失的租约。宿主复用普通领取操作，核对同一 Todo 已就绪后再派发。领取与
+派发共用同一 Turn 身份。恢复使用原尝试捕获的租约代次。
+
 Executor 崩溃、effect ACK 丢失、结果交付 ACK 丢失是不同恢复情形。
 Operation provider 必须说明某个 effect 能否核对、能否安全重试。
 外部状态未知时，后续依赖操作须等待回读或人工干预；“未观测到”不等于“未执行”。
 设备幂等、物理联锁与补偿归 provider 负责，不能虚构为内核保证。
+
+通用 CLI 的结果持久化后，原 Turn 可继续验收或结算，无需重新提供适配器命令及其请求版本。
+调用方仍使用已批准的工作区，验收未完成时提供独立检查命令。已结算的 Turn 回读已保存结果。
+恢复流程判定需要再次启动宿主时，调用方须提供适配器，准入才能继续。
 
 模型取消、进程终止、设备确认停止是不同事实。模型停止不能在缺少设备证据时生成
 “设备已停止”声明。需要持续监督的 provider，在 effect 尚未解决时不能卸载。
@@ -344,6 +382,10 @@ minimal 包含持久 shell、图像读取与 compaction。SDK minimal 还提供�
 借鉴显式边界，不引入 Cordis、上游权限默认值或新的 LoopX 模型 loop。固定来源见附录 C。
 
 ## 7. 安全、隐私与兼容
+
+普通 C1 组装和重放沿用 Explore 的共享指引及精确上下文引用。图和规划关闭时，
+空读取在加载图投影前返回既有的关闭状态。有范围的 Explore 读取在图可用且 Goal
+启用评估时加载 Yardstick。设置、证据身份和恢复继续由当前 Goal 与 Explore 负责。
 
 - **默认关闭 / 功能关闭一致性：** 缺失 `loopx-workspace` 或 capability 包时，行为等同现有 extension off state（I4）。没有命令会静默回退到另一实现。
 - **公开/私有边界：** 不变。`loopx check` 继续扫描每个包；移动文件不改变其扫描类别。
@@ -442,6 +484,72 @@ Live、性能和晋级证据分别记录。
 M0–M5 保留原发行里程碑；R0–R4 是同一计划中的运行时和旅程资格切片。
 R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，不阻塞已合格的 CLI 或 managed 任务。
 真实调用者出现前不增加闲置 provider、字段或框架。每个 PR 记录应用/推迟的相邻重构。
+
+- 检查点已移至执行台账：[Core 发现入口检查点（2026-11-19）](ledger/monorepo-distribution-split-v0/2026-11-19-core-discovery-checkpoint.zh-CN.md)。
+
+<a id="subtraction-gate"></a>
+
+### 减法门禁与反上下文重力规则
+
+`main@f15ebdd16b` 与 C1 PR `#8266`（跨 `289` 个文件 `+26,672 / -4,561`，净增 `+22,111` 行）的
+实测显示：除非每次交付都通过显式的减法门禁，否则模块拆分与执行统一并不能缩小仓库体量
+（与 [Controller RFC 减法门禁](controller-executor-unified-contract-v0.zh-CN.md#subtraction-gate) 配套）。
+
+#### 1. “统一”PR 为何反而推高净代码量（四类实测驱动因素）
+
+在 `#8266` 中，代码与文档的净增分布在每一层：
+
+- **只增不减的双语 RFC 与台账日志（`docs/` 净增 `+9,564` 行）：** `docs/` 下 `+9,715 / -151`，
+  包含 `14` 个 `docs/architecture/rfcs/ledger/` 文件的 `+7,749` 行与 RFC/附录的 `+1,218 / -35` 行
+  （仅 `2026-10-30-c1-source-convergence.{md,zh-CN.md}` 即占 `+5,874` 行），把流水账当成收敛证据。
+- **旧 × 新模式组合矩阵测试（`tests/` 净增 `+9,976` 行）：** 跨 `142` 个测试文件 `+12,074 / -2,098`，
+  围绕 `loopx_turn_envelope_v0`、`--context-delivery off` 与统一 schema 乘积式扩写端到端 fixture。
+- **运行时与 CLI 增补兼容适配层（`loopx/` 净增 `+2,236` 行）：** 跨 `92` 个文件 `+4,224 / -1,988`，
+  在 `loopx/cli_commands/quota.py`、`quota_presentation.py`、`quota_capture.py` 与
+  `quota_context_reader.py` 增补重构旧 `v0`/普通视图的 shim（如 `raw_quota_turn_view`、
+  `compose_turn_decision_with_raw_envelope`、`--context-delivery off` 分支），而非退役旧 producer。
+- **跨语言 Python ↔ TS 包装重复：** `loopx/cli_commands/`（`+1,639 / -645`）、
+  `loopx/control_plane/*.py`（`+1,167 / -685`）与 `loopx/control_plane/*.ts`（`+1,080 / -532`）
+  在 TypeScript owner 旁保留 Python 编排包装。
+
+开放中的统一 PR `#8484`（`+1,979 / -174`，`41` 文件）与 `#7568`（`+6,230 / -349`，`56` 文件）
+同样体现该叠层模式；而聚焦规范收敛的 `#8749`（`+538 / -2`，已合入）及 `#5072`、`#8787` 则
+直面目录拆分与 CI 负载问题。
+
+#### 2. 上下文重力 vs. 保留伤疤的减法
+
+在 `main@f15ebdd16b` 上，仓库受跟踪代码/脚本总计约 `1.79M` 行（`1,785,239` 行，其中 `loopx/`
+`1,864` 文件 / 约 `658k` 行、`tests/` `1,956` 文件 / 约 `727k` 行、`examples/` `688` 文件 /
+约 `204k` 行，以及 `apps/`、`packages/`、`scripts/`、`benchmark/`），外加 `docs/architecture/rfcs/ledger/`
+的 `152` 个文件（约 `11.5k` 行）和本文附录 A 约 `3,990` 行的历史流水记录。
+
+- **上下文重力：** 模型置身于 `1.79M` 行体量的代码树时，倾向于假定既有顶层文件、历史开关和
+  过渡投影不可移除，从而在其外层包上兼容门面而不是化简。
+- **保留伤疤的减法：** LoopX 的核心护城河不是行数或包装厚度，而是**四项不可替代的内核不变量**——
+  （1）排他租约与写入/代际围栏、（2）默认拒绝的权限与 ACL/受众隔离、（3）一次性幂等结算回执、
+  （4）同源反事实检查点与评估台账——再加上**失败反例测试集**。小内核拆分必须在完整保护这些
+  不变量与失败反例的前提下，主动删除过时 pilot、顶层包装与无引用脚本。
+
+#### 3. 具名退役清单与棘轮规则
+
+1. **退役 Turn 前置 pilot CLI。** [#8884](https://github.com/loopx-project/loopx/pull/8884)
+   已退役 15 个被替代的试验命令和四个顶层 `loopx/codex_cli_*.py` 模块，顶层预算从 127 降至 124。
+   `codex-cli-bootstrap-message` 与 `turn_driver/codex_cli.py` 仍有现役调用方。
+2. **迁移剩余顶层 `chat_*` 和 `*_goal_mode`。** M1 将动作规范化和 Goal 生命周期动作两个内部模块
+   放入 `loopx/chat/`，移除两个顶层名字，预算由 124 降至 122。M1 剩余 Chat 模块仍按 I3 迁移，
+   M2 继续把宿主模式包迁入 `loopx/hosts/`。每次净减少都在同一 PR 中等量调低
+   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)。
+   Core wheel 原已排除这两类 Chat 路径，这次减少的是源码顶层模块数量。
+3. **清理无引用 `examples/` 与源码文本绑定式 smoke。** 清理 `examples/` 中无引用脚本（`main@f15ebdd16b`
+   实测 `200` 个无引用 `.py` / `45,504` 行；按 `.py/.sh/.mjs/.js/.ts` 计为 `209` 个 / `47,325` 行），
+   并依 [good-smokes](../../development/good-smokes.md) 退役 `14` 个绑定内部 Python 符号而非已交付
+   CLI 不变量的 `examples/cli-*-command-modularization-smoke.py`。
+4. **约束 RFC 与台账体量。** 下方附录 A 仅作历史冻结保留；后续规范修订与 `ledger/` 条目须使用
+   紧凑的边界、不变量、退役与实证表，不再写入数千行按日流水账。
+5. **兼容视图与 I3 shim 强制设退出门禁。** 在 I3 约定的单个 minor 版本公开 import 窗口之外，
+   任何过渡性 `v0` 投影（`loopx_turn_envelope_v0`、`raw_quota_turn_view`）、`legacy_fallback`
+   路径或关闭模式开关（`--context-delivery off`）都必须具名活跃消费者与删除里程碑。在重复
+   producer 与组合开关删除前，拆包或机制收敛均未完成。
 
 ## 12. 未决决策
 
@@ -3160,3 +3268,438 @@ R1/M3、C1 切换和原目标回归仍未完成资格验证。
 通过字符串强制转换，却生成 inactive policy，静默跳过研究证据。既有配置 owner
 现在在 IO 之前拒绝这种错误形状；已声明的标量 mode、默认值和错误语义保持不变。
 真实 File/SQLite 负向用例保护这个边界，不改变合法激活规则。
+
+
+### 2026-11-14 — 策略观察者恢复原始签名来源
+
+- **基线：**`main@8d7d234c6f55`；C1 #8266 为 `c3cb8b2fe7bf`。
+- **缺口：**当前 C1 的三条 guided-start 和可见 Goal 选择用例，把必要
+  展示页当成原始签名决策而拒绝。原始捕获的物理摘要和完整合同校验均
+  通过。同页 Todo 引用及其读取说明改变了展示正文，但保留原来源绑定。
+- **交付：**既有测试策略观察者在比较决策事实前，沿展示页声明的不可变
+  捕获及摘要读取原来源，复用物理捕获 reader。没有该引用的 inline/off
+  输出保留现有行为。生产者、决策、哈希编码、准入、结算 owner 和默认值
+  均未改变。
+- **证据：**固定 C1 组合的既有真实 guided-start/可见 Goal CLI 用例通过。
+  稳定 File/SQLite 回归执行共享 typed 投影，验证原来源相等、完整绑定、
+  零扣额，并拒绝捕获字节被改动或缺失，以及完整校验通过但原绑定不同的替代捕获。私有匹配观察者比较区分旧 reader
+  与修复 reader。历史失败及未完成运行继续保持失败或未完成。
+- **剩余：**本切片修复消费者资格的前置缺口。完整 V1–V5/V10、R1/M3、
+  当前 D2/D5 闭包、真实 Host/模型上下文采用、渐进产品控制、可比完整成本、
+  C1 默认切换和原 Goal 回归仍开放。
+
+### 2026-11-14 — 禁用 Turn 召回延迟加载执行依赖
+
+- **基线：**`main@4604f938b612`；C1 #8266 为 `79d7ebc81fbc`。
+- **缺口：**独立 Core 的 File/SQLite Turn journal 记录召回关闭、无上下文和
+  零 provider 调用，但准入仍经召回 package 导入执行 hook 和读权限实现。
+- **交付：**既有召回和 checkpoint 函数在实际调用时导入这两个实现。实验解析、
+  ingest reconciliation、schema owner、导出函数标识、权限和 C1 composition
+  保留既有 owner。共享编排和默认行为均未改变。
+- **证据：**禁用 helper 用例和真实安装 CLI 用例在基线上失败、修复后通过。
+  capability 回归覆盖启用召回、权限拒绝、provider 故障、去重和 outcome lifecycle。
+  独立 Core 的安装、执行、中断恢复、重放与上下文套件在主干及固定 C1 组合上
+  通过，runtime 字节与声明的源码相同。观测到的首次 File/SQLite Turn 从
+  516 个 Python 模块降为 514 个，capability 模块从 102 个降为 100 个；
+  RPC 仍为 223/222，重放仍为 432/50 个模块及 12 次 RPC。四次 Node 启动
+  分别是两次版本探测，以及两个已加观测的 runtime/Host bridge 进程。
+  这只验证加载边界，带观测开销的耗时不构成延迟或完整成本资格。
+- **剩余：**内置 capability 打包与完整 D2/D5 闭包、真实模型/Host 上下文采用、
+  渐进控制、可比完整成本、完整 V1–V5/V10、R1/M3 和 C1 默认切换仍未完成
+  资格验证。进程 Host 与 native context 事件属于 synthetic fixture。
+
+### 2026-11-14 — 当前模型任务结果通过 Core 恢复
+
+- **来源：**`main@83809355f84a` 与 C1 #8266 的 `6a31d83497a6`，
+  各自使用独立安装的 Core 环境。实际执行的 entrypoint、Turn driver/executor、
+  完整来源 owner 和召回入口字节与声明的源码一致。
+- **实际成果：**当前交互模型读取两次实际 generic Host 请求，用工具从隔离的
+  synthetic 输入生成 JSON 与可阅读的 Markdown 库存报告。独立 oracle 从输入
+  以 Decimal 重算，检查重复行合并、零库存、超额预留、非 ASCII SKU、排序、
+  每组结果和总计。
+- **恢复：**模型结果进入 durable `typed_result` 阶段后，对拥有该 Turn 的 CLI
+  进程注入 SIGKILL。两个原 Turn 都在不再次调用 Host 的情况下恢复，完成独立
+  校验与 Todo 读回，重放后仍只扣一次。在 C1 上，损坏报告被拒绝，Todo 保持
+  开放且零扣额；恢复已校验的报告后，同一个 Turn 完成。
+- **Owner 边界：**私有 rendezvous adapter 只传输当前模型的请求和结果。
+  C1 与既有 Turn driver 继续拥有组合、身份、准入、校验、捕获、恢复和结算。
+  没有新增执行管线、schema、产品默认行为或 capability 激活。
+- **剩余：**本次增强任务结果恢复证据，不构成已安装的原生模型/App adapter、
+  自然语言启动、原生 compaction 后的模型保留、渐进产品控制、完整 D2/D5 闭包、
+  可比完整成本、V1–V5/V10、R1/M3 或 C1 默认切换的资格验证。模型在两次检查
+  间复用了报告生成器；这些不是独立推理试验，也不是成果或成本对照实验。
+
+### 2026-11-15 — 完整对话 Goal 草稿只需一次确认
+
+- **缺口：**完整草稿已跳过表单，但仍需先点预览，再在抽屉确认。用户只有完成
+  这两步中的第一步后，才看得到服务解析的执行器和工作区。
+- **增量：**Dashboard 为可见的完整草稿准备既有 typed action，展示服务确认的 Agent 和
+  工作区，提供一次明确的“创建并开始”确认。未完整草稿与只读视图不能准备创建；
+  修改入口以及 typed 可用性、陈旧和恢复 gate 保留。准备前先读取既有按语言生成
+  的操作身份；刷新、切换语言和重复点击复用原操作。
+  可见草稿保留一个确认和恢复入口；草稿未加载时，原 canonical proposal 仍可用。
+  尚未展开、不可见的历史不会发起准备。
+- **证据：**`goal-draft` 覆盖准备失败、确认前零 Goal 写入、修改与取消、重复
+  点击、刷新、语言和窄屏。`goal-draft-live` 在隔离状态使用真实 discovery 和
+  action store，覆盖解析后的范围、丢失响应读回、原操作重试及 Agent 不可用拒绝。
+  对话是合成输入，stub Agent 的首轮执行失败；该失败保留，不记作成功。
+- **边界：**本次是 V4/R1 入口增量，复用既有 Goal 草稿、typed review/apply、
+  创建和恢复 owner。没有新增共享 schema、授权、替代执行管线或 C1 组合 owner。
+  通过该入口交付完整任务成果、已安装原生 App/模型采用、compaction 保留、完整
+  D2/D5 闭包、可比总成本、V1–V5/V10、R1/M3 和 C1 默认切换仍未完成资格验证。
+
+### 2026-11-15 — 首个 Goal 的回复被原受治理 Task 采用
+
+- **来源：**`main@74ca883d5bd3`。同一来源与 C1 #8266 的 `2c099be41e68`
+  无冲突组合，隔离组合树通过 287 项原生会话、work-context、首读和 Turn 结算
+  测试；这些测试使用隔离状态和合成 provider/model fixtures。这不构成 C1 的
+  批准或默认切换资格。
+- **实际产品路径：**真实 Chat discovery/action/store 从合成的已审阅请求创建
+  一个 Goal 和初始 Task。当前 Host 模型通过临时 stdio relay 读取保留的请求和
+  输入，产出八组只读报告；实际打包的 Goal 对话页面显示该报告。独立 CSV/Decimal
+  检查核验每组及总计。真实 Chat 重启保留原 Session、回复及操作；重试原操作
+  不会再次派发 Chat Turn。
+- **受治理采用：**测试调用方通过既有 Task owner 声明独立 argv 校验器，当前
+  模型再沿既有 Core + SQLite + generic Host 路径采用原回复。Goal、Agent 和
+  初始 Task 保持一致。在 durable `typed_result` 后注入 SIGKILL，同一个 Turn
+  不再次调用 Core Host 即可恢复。损坏回复被校验拒绝，Task 保持开放且零扣额；
+  恢复已校验回复后，原 Task 完成且只扣一次，重放仍保留该单次扣额。
+- **剩余入口缺口：**首个 Chat 请求仍是只读规划对话，另有明确的 LoopX 模式
+  控件。本次观察到的模型输入为 24,372 个 UTF-8 字节；这是单次观察，不是成本
+  对照。测试中明确声明校验器及受治理采用的过程不是产品自动行为。缺失集成应
+  复用注册的 managed-session、Task 校验/准入及 C1 owner；不得推断写权限或
+  削弱独立校验来激活该路径。
+- **边界：**这些来源与传输检查增强首个结果读回、原 Task 恢复的证据，不构成
+  一个目标即可启动的原生入口、已安装原生 App/模型采用、模型 compaction 保留、
+  完整 D2/D5 闭包、可比完整成本、V1–V5/V10、R1/M3 或 C1 切换的资格验证。
+  没有改变运行时、schema、激活、权限或公共证据政策；单次 relay/校验器文件
+  保留为私有资格验证产物，没有新增已交付执行管线或 CI fixture。
+
+### 2026-11-15 — 首个 Goal 准入失败保留创建与已确认工作
+
+- **缺口：**首个 Goal 的准入读取或判断失败会被转换为允许派发；反过来，
+  派发响应丢失后重试，又可能用之后的准入失败或拒绝阻断已派发工作。
+- **增量：**既有创建 owner 先保留 Goal、初始 Task 和完成要求，再检查准入。
+  准入不可验证时返回安全、可重试的 action 失败，不打开 Session 或发送模型
+  工作。没有可执行 Host 的纯创建不读取工作准入。恢复先通过既有 Task-start
+  reader 读回原 Session/client 操作，核对原请求及首轮状态；已派发工作直接
+  读回，不重新准入。排队工作仍需准入；外来 Session 和启动前已终止的工作
+  继续拒绝。
+- **证据：**在 `main@58cc5817e35e` 上，真实 Chat HTTP/action/store 路径配合
+  合成 Codex 协议通过 36 项创建与完成测试，以及 11 项既有 Session/checkpoint
+  恢复测试。独立评审在第一版候选发现两个恢复缺陷；对应失败用例保留，最终
+  候选已解决两项。最终运行时与测试文件还在 C1 #8266 的 `b8ac1ec5443b`
+  隔离组合中通过 22 项选定的 File/SQLite 及纯创建测试，逐字节读回来源一致。
+  这些是限定范围的源码与合成 Host 检查，不是当前原生模型资格验证。
+- **边界：**本次复用既有 Session、Task 与 quota owner，修复 V2/V4/R1 的
+  准入和恢复；没有新增共享词汇、授权、校验器安装或替代 C1 管线。自动采用
+  原 Task、选定 D2/D5 闭包、原生 App/模型与 compaction 保留、渐进控制、
+  可比完整成本、完整 V1–V5/V10、R1/M3 和 C1 切换仍未通过资格验证。原要求
+  与此前负面证据保留；完成目标前仍需完整原目标回归。
+
+### 2026-11-15 — Native Task 消费既有 owner Goal 检查
+
+- **缺口：**managed Native Task 即使有 owner 配置的 Goal 验收，也会拒绝执行，
+  要求重复声明 Task argv 校验器。
+- **增量：**既有 canonical Task 验证计划由 Native 和 Delegation 共用。Native
+  从既有 owner 读取当前 Goal 范围和私有 Task 声明，累加执行 Goal 与必需 Task
+  检查；验证前后复核定义、工作、认领、生命周期和检查器资产。必需声明缺失、
+  适用但未绑定或过期的检查，以及来源变化，都不能降级为更弱的检查。Task argv
+  保留 typed-result stdin 和既有 Turn receipt；旧非 argv 声明继续拒绝。
+- **证据：**原 Native 消费路径已复现 Goal-only 拒绝；共享 TypeScript 在 54 组
+  兼容向量上与不可变基线一致。真实隔离 Chat/Core/canonical 测试覆盖 Goal-only
+  与组合执行、HTTP 读回与重放、独立检查失败、声明损坏、检查前后来源变更和
+  无关进展观察。
+- **边界：**本次消除 V2/V4/R1 中既有 Goal 检查的重复配置，不为新的自然语言
+  Goal 安装可信检查器，不授权模型或 browser 命令，也不完成首个 Task 自动采用。
+  完整 V1–V5/V10、原生模型与 context 保留、D2/D5 闭包、渐进控制、可比完整成本、
+  R1/M3 和 C1 切换仍未通过资格验证；原验收与完整目标回归门继续保留。
+
+### 2026-11-15 — 首个 Goal 保留原注册会话
+
+- **缺口：**默认 Codex Goal 创建打开了未分配的 Goal 会话。重入可能再开旧式
+  会话；打开响应丢失后可能选中后来创建的 Session，回执也未复核实际存储身份。
+- **增量：**既有 TypeScript presentation owner 为新的默认 Codex Session 选择
+  注册 Agent 身份。Chat owner 将打开操作绑定到原创建操作，只复用已发布的原
+  Session，并在派发和回执交付前核对实际 Goal、Agent、路由、生命周期及 workspace。
+  未知 reservation、无法确认或不明确的历史原会话会停止恢复。已有记录的旧式 Session、显式原生
+  token budget 和其他 endpoint 保留原路径。前端通过既有目录、Session 与历史
+  reader 进入原 Agent 会话；无效回执显示恢复入口，不另开会话。
+- **证据：**隔离的真实 Chat/Core/File/SQLite 测试覆盖有明确 owner 检查时采用原
+  Task、检查缺失或失败时拒绝、历史保留、并发打开已发布 Session、响应丢失、原
+  action 重放及身份变化。未改变的运行时兼容测试在不可变基线与候选均通过 106
+  项。presentation reducer 通过 27 项测试，56 组 base/head 向量保留所有非路由
+  字段。浏览器检查覆盖填充后的桌面／窄屏、reload、无效回执，以及一次重新连接
+  恢复原历史。
+- **可维护性：**Session 读回在既有 Chat Session 入口 owner 复用。Runtime
+  coordinator 因精确打开接口与早期身份门由 2,503 增至 2,524 行；reviewed ceiling 记录这一
+  有界增量，没有重复读回逻辑或新增执行管线。这不是延迟、默认闭包或完整成本资格。
+- **边界：**普通首消息及后续消息仍为普通只读 Chat。有明确检查的原 Task 使用
+  既有 Native owner；本次不自动提供可信检查器，也不自动采用每个回复。恢复证据
+  覆盖已发布 Session，不覆盖尚未记录的原生 thread-start 效果。真实原生尝试失败：
+  当前配置的模型不受所选账号支持。合成成功与 account-read readiness 不能覆盖
+  该负面结果。完整 V1–V5/V10、模型／context 保留、D2/D5 闭包、渐进控制、可比
+  完整成本、R1/M3 及 C1 切换仍未通过资格验证。原十项要求保留，完成前仍需完整
+  原目标回归。
+
+当前入口设计将原回复与消息输入保留在一起，重入沿记录的 Session，不选择另一条
+会话。下方桌面与窄屏参考图使用 packaged frontend、真实 SQLite/Chat owner 和
+合成回复，未验证的验收状态继续可见；它们说明展示边界，不构成模型或成果资格。
+
+![桌面的原 Goal 会话](assets/goal-entry-original-session-desktop.webp)
+
+![窄屏的原 Goal 会话](assets/goal-entry-original-session-narrow.webp)
+
+### 2026-11-15 — 准备既有检查并执行原已授权 Task
+
+- **缺口：**原注册会话能读取工作，但准备既有验收方案仍需进入旧协调模式；
+  前端也没有调用既有原生 Task endpoint 的入口。合成修复还暴露了另一处缺口：
+  原生工作继承会话的只读 prompt 和 sandbox，没有请求本次 Task 权限。
+- **增量：**新 managed Codex 会话仅提供既有 `prepare_check` action。Host
+  复核原 Session、活动 owner Turn、注册身份、生命周期和 workspace，并固定实际
+  已有检查器的源码。既有验收 owner 解析保留要求及原 Task；owner 采用检查与启动
+  Task 继续分开。既有主控件沿原 Session 启动该 Task，使用当前检查、lease 和额度；
+  响应丢失保留原 operation。空闲页面只读取一次，不新增持续空查。创建时显示用户
+  确认的目标，内部执行请求继续保留；恢复不改写历史已记录的展示消息。
+- **权限：**准备和采用检查都不授予写权限。既有原生 Session owner 仅将已经批准
+  的完整 workspace 边界映射到 host policy；缺少批准或只有更窄批准时保持只读。
+  此限定原生路径仍禁用网络和临时目录写入。后续普通 send 显式恢复只读，包括原生
+  发布结果未知之后以及直接调用者。Session 默认值和原生 thread 身份保留，旧 thread
+  不新增 dynamic tools。
+- **证据：**真实 HTTP/Chat/Core/File/SQLite 用例从仓库保留的六行为购物车检查器
+  准备方案，确认初始失败，再经独立的既有 owner workspace 批准执行原 Task。
+  修复产物通过未改变的独立检查。检查未确认、来源改变、错误产物和缺少写批准时，
+  Task 保持 open 且不扣额度。Packaged 桌面／窄屏旅程覆盖同一结果、原历史、重复
+  operation、普通追问和有界空闲读取。模型解释与编辑由脚本模拟，不构成真实模型
+  或 OS sandbox 资格验证。
+- **可维护性：**身份、验收、原生准入和结算仍由既有 owner 管理，并沿用 C1
+  composition。Prompt／input 适配放在原生 adapter，attached 附件拒绝归其 queue
+  owner。Runtime 和 Chat Agent 都保持在既有 reviewed ceiling 内。
+- **边界：**本次交付 V2/V4/R1 中“既有检查器、原已授权 Task”的路径，不从任意
+  自然语言推断验收，不提升新 Goal 的写权限，不支持 host 无法落实的窄写范围，也
+  不为不支持安全来源检查的 host 取得资格。原十项要求、真实 model/account 与
+  context 保留、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整 V1–V5/V10、
+  R1/M3 和 C1 切换仍未闭合。完成前仍需完整原目标回归，随后才进入外部 benchmark
+  工作。
+
+下方当前设计参考使用 packaged frontend、真实 SQLite/Chat owner、明确的先行
+workspace 批准和脚本模型工作。桌面视图在采用检查后显示原 Task 主控件；窄屏视图
+在同一会话显示经独立检查的结果。
+
+![桌面的原已检查 Task](assets/goal-entry-original-task-desktop.webp)
+
+![窄屏的原已检查 Task 结果](assets/goal-entry-original-task-narrow.webp)
+
+### 2026-11-15 — 确认创建后沿原 Task 继续执行
+
+- **缺口：**「创建 Goal 并开始首轮」只创建只读对话，未保留可执行的原 Task 请求；
+  权限选择也未通过既有 authority owner 发布选定的 workspace 批准。
+- **增量：**明确支持的 Codex 创建意图在既有 action checkpoint／receipt 中保留
+  原 Goal、lifetime、Agent、Task、Session 与原生线程来源。确认的 workspace 选择
+  通过既有 boundary-authority owner 只发布一次。既有 Session queue 仅在当前独立
+  检查和准入允许时消费该请求；确认检查、Task GET 或 UI 观察不能自行创建执行。
+- **权限与恢复：**当前 Goal 批准和实际 Task lease 必须覆盖整个原 workspace，
+  窄范围保持只读。同一受保护原生 frame 发送直接 workspace policy，并固定唯一
+  runtime workspace root；之后普通 Chat 重新断言只读。不重放原生发布未知的操作。
+  重启仅恢复同一已证明尚未执行的 queued operation；来源／线程变化或未结束的
+  acceptance 保持恢复拒绝。等待请求在收到信号后重读，不定时空查。
+  初始 quota hold 让原创建保持可重试，不发布缺少已请求开始的不可变成功回执。
+  队列重读期间原操作结束，也不会遗留已排队的普通追问。已保存请求的当前 Task
+  准入受阻时保留等待；准备和派发重读既有 typed admission，之后仍由原生 launch
+  guard 判断是否执行，预检不替代最终授权。
+  Task 视图区分等待和实际运行，并保留既有 Goal 导航返回的来源地址。
+- **证据：**packaged UI、真实 Chat/Core/SQLite 与脚本原生协议把原购物车 Task
+  执行到未改变的六行为 oracle 通过；保留只读失败和被拒绝的完成声明，再经既有
+  Continue 控件推进剩余工作。创建 replay／reload 不增加 Task 派发或批准。桌面／
+  窄屏的长对话及结果读回已验证。Codex 0.142.2 源码评审和独立 OS 控制支持 root
+  替换及 outside／symlink／home／tmp／network 拒绝；这些控制未在同一 Turn 中
+  执行模型工具。Named-profile deep-merge 反例保留为负证据，不作为交付机制。
+- **组合与边界：**复用 C1 的身份、验证、准入、context 和结算 owner；source 与
+  installed-Core 组合证据和 installed Chat／真实原生模型资格分别保留。历史创建
+  不加载新增执行 adapter。[当前使用指南](../../guides/personal-workspace-user-guide.md#在原对话执行已检查的任务--run-the-checked-original-task)
+  说明批准范围、等待和恢复旅程。本次推进 V2/V4/R1 集成，原十项要求仍未完成。
+  真实 model/context 连续性、D2/D5 闭包、渐进 Standard 旅程、可比完整成本、完整
+  V1–V5/V10、R1/M3 和 C1 切换保持 open。完成前仍需完整原目标回归，随后才准备
+  EdgeBench。
+
+### 2026-11-15 — 在显式材料操作中才加载库存 provider
+
+- **缺口：**读取静态内容配置描述时会导入 Material Lifecycle 库存包，在没有请求
+  材料操作前便加载 apply、intake、ranking 和 revision owner。
+- **增量：**既有 reference adapter 仅在调用 `inspect_reference_materials` 时加载
+  该 provider；配置描述、内容 search/capture/draft、TypeScript reference owner
+  和既有 Python 库存 owner 继续使用原契约。
+- **证据：**以 `main@35c5efbd4b90` 为基线，新进程返回完全相同的配置描述，
+  LoopX 导入图由 108 降至 88 个模块，不再加载 18 个材料模块和两个 project-skill
+  模块。`configure-goal --help` 的输出和 39 个模块保持一致。显式库存操作继续
+  使用原始材料字节、验证和私有产物边界。
+- **边界：**本次减少配置加载，不减少安装包大小或 execute/replay 的导入。
+  复用 C1 的既有组合和 owner；完整 D2/D5 闭包、真实模型采纳、可比完整成本、
+  R1/M3、C1 切换及完整原目标回归仍未完成。
+
+### 2026-11-15 — Turn 读取时按需加载新决策与报告生产函数
+
+- **缺口：**查看 journal 时会导入新 Turn 决策 owner；检查待处理报告时，也会在
+  未选择相应操作前导入进展 snapshot 和发布函数。
+- **增量：**保留既有决策和报告 owner，在实际调用点加载。审批重试仍读取原 Todo
+  来源；发布函数仅在执行时导入，并早于任何报告产物写入。报告准入、订阅检查、
+  恢复和公开导出继续使用原契约，不新增 dispatcher、状态词汇或决策 owner。
+- **证据：**以 `main@c5ff8fdc32b6` 为基线，新 source-checkout CLI 进程使用
+  既有 Core 工作负载、File 和 SQLite、`checkpoint=None`，执行的 LoopX 导入图由
+  515 降至 512，回放由
+  432 降至 429，journal 查看由 363 降至 211 个模块。执行 RPC 数保持 File 223、
+  SQLite 222；回放保持 12，查看保持一次。回放仍加载原 Turn 决策模块。这些结果
+  证明加载范围减少，未证明总延迟、完整成本改善或 standalone／拆包资格。
+- **组合与边界：**本切片与 C1 #8266 的 `638b7e3c23f0` 版本组合，复用其既有
+  complete-source、selected-work、准入、context 和结算 owner。安装包大小、模型
+  采纳、完整 D2/D5 闭包、可比完整成本、R1/M3 与 C1 切换保持未验证。保留历史失败
+  和原十项要求；完成前仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — Core 资格验证前检查真实安装来源
+
+- **缺口：**Core 测试 fixture 只信任解释器环境变量；指向普通 editable checkout
+  也能通过执行测试，即使实际没有安装 standalone Core。
+- **增量：**每个 opt-in Core 资格用例在 Task 准备前检查版本一致、拒绝普通发行包
+  共装和 editable Core，并将实际导入包与 Core 安装记录对应。既有 identity 检查
+  通过该 fixture 共享，namespace、help、manifest 和 doctor 验证保留；未启用 opt-in
+  仍明确报告 skip。
+- **证据：**旧普通源码环境通过用例并派发十次 CLI。普通包、共装、source shadow、
+  缺失 `loopx/__init__.py` 的 RECORD 条目和 PEP660 editable 五种反例现在都在 fixture setup 阶段失败，Task／
+  CLI 派发为零。真实 Core wheel 通过 identity 及 File／SQLite 执行、回放和查看。
+  原 host、validator 和执行 oracle 均未改变。
+- **边界：**本次保护资格证据来源，不改变生产准入，也不认证 wheel 字节或模型
+  执行。固定源码／产物检查、真实模型采纳、完整 D2/D5 成本、R1/M3 和原十项要求
+  仍需分别验证；保留历史失败，完成前仍需完整原目标回归。
+
+### 2026-11-15 — 复用 staged Host 的最终来源检查
+
+- **缺口：**capture staging 后构造临时请求，在 `host_dispatch_context` 前紧接着
+  重复 `host_context`。完整组装仍有实际作用：frozen capture 的嵌套 plan 仍有
+  可变别名。
+- **增量：**公开请求 builder 与 staged dispatch 共享原 inspection、turn-key、
+  route guards、来源组装、可选 context、subagent 和 native-child metadata。
+  仅 staged complete-v1 plan 生成含 `work_contract`、不含 `turn_envelope` 的
+  Host-v1 请求时省去嵌套 `host_context`；原 carrier 转换和最终 dispatch 检查仍在
+  准入与发布之前。其它形状保留原 finish，不跨准入、发布或后续效果保留 checked
+  result。
+- **证据：**File／SQLite 基线与候选对照覆盖 42 个 guard、别名、carrier、数字／
+  文本、interval-wait 和 bridge 失败场景。精确 startup、transport permission、
+  offloaded snapshot 大小诊断保留原 carrier，发布与 ledger 效果为零。刻意丢弃
+  goal reference 能使独立值 oracle 失败。staged operation trace 少一次
+  `host_context`，仍保留一次 `host_dispatch_context`。候选及 `main@37a79decfe99`
+  与 C1 #8266 `638b7e3c23f0` 的干净组合分别构建真实 Core wheel，各通过 15 个
+  identity、执行／checkpoint、回放、journal 查看、进程丢失／stale lease 和无效
+  产物检查。C1 来源两 arm 使用同一 direct-complete-source planner API；先前
+  不兼容 keyword 的 setup 失败保留。上述检查使用 Python 3.13.5、Node 26.0.0，
+  wheel、RECORD、source 与 runtime 来源分别绑定。
+- **边界：**本次省去一次重复 bridge projection，不改变 typed source owner、默认
+  激活、capture 发布、恢复或结算边界。它不证明总延迟、完整成本或真实模型改善，
+  也不完成 D2/D5 闭包、R1/M3 或 C1 默认切换。保留历史失败和原十项要求；完成前
+  仍需完整原目标回归，随后才准备 EdgeBench。
+
+### 2026-11-15 — PR 等待观察在权限复查后加载
+
+- **缺口：**执行性 Turn 的组合在解析观察权限前导入 PR reconciler 及其 metadata／
+  content provider，即使 hook 不可用也会加载。provider 导入失败还会逃出可选
+  观察原有的故障边界。
+- **变化：**既有 producer 在 invocation-time capability 检查成功后，于原 provider
+  `try` 内导入 reconciler。注册和调用仍分别检查权限，保留撤销行为；没有新增
+  wrapper、缓存决策、激活 flag 或 policy owner。Python 仍承担稳定的 GitHub
+  provider／transport adapter；typed selection、权限、authority 和观察 cadence
+  继续由既有 owner 持有。
+- **证据：**独立进程的 blocked-provider 反例覆盖未授权、权限撤销、权限源不可用，
+  以及导入失败时读取／效果为 unknown。八类配对 hook 场景冻结时钟，比较确定性
+  返回、权限检查与 provider 调用；源码 File／SQLite 检查保留 provider 成功、失败、响应丢失、cadence
+  和完整源诊断。独立安装的两份 Core wheel 执行获权的 File／SQLite 观察和 canonical
+  Todo 回读，并覆盖执行、回放、进程丢失与非法 artifact。原 consumer 套件在两侧
+  保留四个一致的 setup 失败；独立的当前 carrier 协议 fixture 不替代这些记录。
+- **边界：**不可用观察不加载其 provider 闭包，获权观察保留既有行为。本次是有界
+  默认闭包增量；首次获权调用现在把 deferred import 纳入既有 `duration_ms` 观察
+  窗口，不证明真实计时等价或性能收益。它不完成 D2／D5、真实模型／上下文采用、完整成本改善、原十项验收
+  或 C1 切换。保留历史源码、失败和 seal；完成前仍需完整原目标回归，随后才准备
+  EdgeBench。
+
+### 2026-11-15 — 仅为请求的 capability editor 求 provider options
+
+- **缺口：**即使解析未启用的 periodic-report 订阅，也会构造全部 editor definitions，
+  查询未选中的 `codex_chat` profiles 和 steward options；无关 provider 不可用时
+  会阻断本次 metadata。
+- **增量：**现有 editor 仅为 `codex_chat` 查询原 profile owner，仅为 `codex_chat`
+  或 `steward_executor` 查询原 steward vocabulary helper。所选字段、scopes、
+  nullable options、helper 顺序与异常、配置 precedence 和 detached outputs 保留
+  原契约；unknown editor 仍只读，且不查询 provider。
+- **证据：**全部 20 个已注册 editor、unknown／empty 输入有完整基线与候选对照，
+  包括 nullable resolution 和 detached outputs。新进程中的 provider 不可用反例
+  及所选原 owner 的正反例通过。此前 `main@2b156284c4f4` 与 C1 #8266 snapshot
+  `1a3740cf9e6e` 仅 overlay editor 的 Core 证据保留在原范围内。重新资格化分别
+  从 `main@fef679d18192` 加入本 editor，以及它与当前 C1 `1a3740cf9e6e` 的无
+  冲突合并来源构建独立真实 Core wheel；均通过 metadata 检查及 File／SQLite
+  执行、回放和回读。
+- **边界：**本次收窄 metadata discovery，不改变安装的 capability 内容或 activation。
+  全 Settings 旅程、真实模型采纳、总成本、自然进程 drain、完整 D2/D5 闭包、
+  R1/M3、完整 C1 验收及其默认切换仍未资格化。
+
+### 2026-11-15 — 打包所选 manager discovery 的既有 projection
+
+- **缺口：**普通 wheel 遗漏了既有的 `manager_context/discovery_projection.ts`
+  资源。已授权的多来源 Agent discovery 到达 `manager.discovery.project` 后，
+  lazy handler 导入缺失文件而失败；源码 checkout 和 Core 已包含原 typed projection。
+- **增量：**普通发行包的 package data 将该包既有 TypeScript 资源与 skill 一起打包。
+  原 projection、caller、授权和 lazy dispatch 继续由原 owner 持有，不增加并行
+  decision owner 或 activation setting。
+- **验证：**原 package data 下的真实 setuptools 构建回归失败，包含资源后通过。
+  installed ordinary，以及 C1 #8266
+  `1c578cfe85c23db40605843a0afc1d9d37caad39` 加入本补丁的实际组合，分别按自身
+  source、wheel 和 RECORD 资格化。所选 projection 检查覆盖有界且标明来源的结果、
+  来源不可用的回读和非法 bounds；未选中的 dispatch 保留 lazy loading。
+- **边界：**本次修复所选发行包资源，不完成完整 D2/D5 闭包、真实模型／上下文
+  采用、完整成本改善、完整 R1/M3 验收或 C1 默认切换。历史失败、预算和 checkpoints
+  保留各自原范围。
+
+### 2026-11-15 — 既有 opt-out 提前跳过自动 usage 观察
+
+- **缺口：**Python observation hints 识别的环境 opt-out 少于原 TypeScript usage
+  owner。`LOOPX_USAGE_PING=off`、`CI=1` 或 `DO_NOT_TRACK=yes` 仍可能调度观察，
+  包括 binding／native metadata 发现，之后 TypeScript 才拒绝发送。
+- **增量：**一个 negative-only host hint 保留原 owner 各变量的 trim／case 语义，
+  提前跳过自动 CLI、Host、quota、direct-cycle 和 detached observation。
+  `LOOPX_USAGE_PING=yes`、`CI=false` 仍通过该 hint，`DO_NOT_TRACK=false` 仍阻断。
+  正向 decision、notice、consent、generation、state 和发送继续由 TypeScript
+  持有；允许路径的 payload 和业务错误保留原契约。
+- **证据：**源码基线 `main@2e52541f909089181e7415e0d796f6d413c83dbf` 的真实 CLI
+  反例启动六个 detached Node 子进程，每个上述 opt-out 各两个，均返回 blocked；
+  相同候选回放启动零个，CLI 结果和 fixture state 保持不变。源码验证通过
+  107 个 Python、55 个 TypeScript 测试。固定 fixture／clocks 的八个允许环境
+  场景保留 48 个完整 observation request 与 Host 错误行为；该 payload 对照
+  在本地捕获 dispatch，并与真实 transport 测试并列，范围不同。
+- **安装范围：**候选及其与 C1 #8266 当前
+  `1a3740cf9e6ebad337f17967452693a9050edc81` 的实际组合，各自全新 non-editable
+  only-Core 安装通过相同三个真实 selected `version` CLI opt-out 场景，observer
+  子进程为零，业务 JSON 与 fixture state 保持不变。每个组合还通过 22 个 metadata
+  场景及三个使用真实 File／SQLite authority 的原 Core 正确性场景，并保留 31 份
+  raw CLI command 记录。冷 metadata 范围是每个组合一个 fresh process 内含 20 个未选 ID，不能算作
+  20 次冷进程。product payload 经 source、wheel、RECORD 与安装文件独立绑定。
+- **边界：**本次资格化已测试的源码与 installed-Core 自动 observer 隔离，包括
+  current-C1 实际组合；不证明完整 process／network 闭包、自然进程
+  drain、实测 overhead 或完整成本收益、真实模型采用、完整 D2/D5、R1/M3、
+  Goal 完成或 C1 默认切换。保留既有 checkpoints、失败、预算和验收要求。
+
+
+### 2026-11-16 — 独立发行包的生命周期命令到达原 owner
+
+- **缺口：**独立 Core 已包含原 Goal activation 实现，但 selected CLI loading
+  未选入 `goal-lifecycle`。支持的 stop／resume 请求在到达 owner 前，落入有意
+  省略的完整 CLI。
+- **增量：**仅选入既有命令、registrar 与 handler。Actor、source identity、
+  expected fingerprint、preview、partial-write 读回与错误继续由原 activation
+  service 和 typed state owner 持有。无关命令及顶层 help 保持 lazy loading；
+  App 与消息控制继续使用既有 owner。
+- **写入归属边界：**既有 native outer-controller guard 现在识别其受管 Goal 的
+  生命周期执行。Owner／controller 标签不能绕过该 guard；preview、其他 Goal
+  与普通执行继续可用。同一个 guard 保护 selected 及完整 CLI 入口。
+- **源码证据：**仅加载命令 owner 的 help、完整 parser 对照、源码 stop／resume、
+  anonymous 与 stale-fingerprint 拒绝回归，保护 V2/V3 入口可达性及普通 CLI
+  parity。计划 activation 的时间戳独立校验，不在不同调用之间比较相等。
+- **边界：**本次是源码接线修复。Installed Core 与组合资格、被中断原 Task 的
+  恢复、完整 context／closure、真实模型、成本、完整 R1/M3 及 C1 cutover 仍是
+  独立验收。

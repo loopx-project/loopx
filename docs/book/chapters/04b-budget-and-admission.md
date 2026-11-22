@@ -1,6 +1,6 @@
 # 消耗的上限与外部观察
 
-T1 完成后，M1 仍在等待 C1 的 CI，G1 仍在等待发布决定。预算还有余额，不代表应该反复调用模型；没有新消息，也不证明外部条件没有变化。本章把“是否行动”“何时再看”“谁去观察”与“何时改路”分开，再让它们共同支持一次可解释的等待。
+T1 完成后，M1 仍在等待 C1 的 CI，G1 仍在等待发布决定。预算还有余额，不代表应该反复调用模型。本章把“是否行动”“何时再看”“谁去观察”与“何时改路”分开，再让它们共同支持一次可解释的等待。
 
 ## 先区分五种责任 {#observation-owners}
 
@@ -16,7 +16,7 @@ T1 完成后，M1 仍在等待 C1 的 CI，G1 仍在等待发布决定。预算�
 
 ## 一个错误计数策略会怎样误导判断
 
-以下是**假设性的错误策略**，不是声称当前实现仍有此缺陷：把“最近连续没有变化”只记在一个全局目标上，每次换目标就清零。
+以下是**假设性的错误策略**：把“最近连续没有变化”只记在一个全局目标上，每次换目标就清零。
 
 | 时间 | 到期工作 | 正确的工作项事实 | 假设的错误全局判断 |
 | --- | --- | --- | --- |
@@ -25,7 +25,7 @@ T1 完成后，M1 仍在等待 C1 的 CI，G1 仍在等待发布决定。预算�
 | 11:00 | M1 | M1 第二次无变化 | 又换目标，重新计数 |
 | 11:30 | M1、M2 各自到期 | 分别更新自己的观察 | 结果取决于处理顺序，而非目标真正停滞多久 |
 
-错误不在阈值太高，而在于把不同目标的观察混成了一段历史。修正应保留每个 Monitor 自己的身份和计数，而不是不断降低阈值。相反，假如根本没有可用 Host 去执行 due observation，计数器再正确也只是一份静态记录：这是执行活性缺口，不是 no-change。
+错误不在阈值太高，而在于把不同目标的观察混成了一段历史。修正应保留每个 Monitor 自己的身份和计数。相反，假如根本没有可用 Host 去执行 due observation，计数器再正确也只是一份静态记录：这是执行活性缺口，不是 no-change。
 
 ## 等 CI 时，观察频率怎样选择 {#running-wait}
 
@@ -51,7 +51,7 @@ Monitor 保存调用者完成的观察。本身不访问 CI，`next_due_at` 也�
 
 正常交付仍受预算限制：当前窗口 `spent_slots >= allowed_slots` 时会进入相应 throttling。余额不足不能通过换 Todo 或把交付叫作观察绕过；余额充足也不能绕过 Gate、当前身份、能力、工作区和依赖。
 
-读取最终 contract，至少区分“允许交付”“需要恢复或修复”“观察”“等待”与“要求决定”。身份不明时拒绝交付资格，不等于整个诊断过程不消耗任何资源。`quota should-run --codex-app` 的相关准入路径可能创建 heartbeat receipt，不应当作无副作用的循环查询。现场读取见[附录](appendix-reference.md#read-before-change)。
+读取最终 contract，至少区分“允许交付”“需要恢复或修复”“观察”“等待”与“要求决定”。身份不明时拒绝交付资格。`quota should-run --codex-app` 的相关准入路径可能创建 heartbeat receipt，不应当作无副作用的循环查询。现场读取见[附录](appendix-reference.md#read-before-change)。
 
 内部记账回答已接受的工作如何归因；scheduler cadence change、Gate 通知、dry-run、未变化的 poll、重复写回不能冒充新的 delivery spend。不要用“无费轮次”描述 no-spend，否则会掩盖观察本身的资源成本。
 
@@ -61,11 +61,11 @@ T1 发现真实依赖时，等待需要有具体对象，例如 `monitor_changed
 
 工作图中存在独立 T2，并不意味着已绑定 T1 的当前 Turn 可以直接改绑。应先完成原 Turn 按其合同要求的等待写回和收口，再由后续准入选择新工作。**Turn 收口、Todo 等待与下轮选择是三件事。**
 
-[Turn 章的等待时序](03-one-turn.md#wait-closeout)用主线 `f49b4a00…` 的明确测试解释这条路径，并标注了它不属于旧发布版承诺。它验证不重复扣减、不强迫执行 Monitor poll、原 Todo 的等待和验证声明仍保留；不是一条适用于所有 Host 的全局调度顺序。
+[Turn 章的等待时序](03-one-turn.md#wait-closeout)用主线 `f49b4a00…` 的明确测试解释这条路径，并标注了它不属于旧发布版承诺。它验证不重复扣减、不强迫执行 Monitor poll、原 Todo 的等待和验证声明仍保留。
 
 ## Cadence backoff 与路线重规划
 
-Backoff 问的是“相同条件下，多久以后再观察”。它从已仲裁的 decision 和运行 profile 派生调度建议，并按对应 scheduler state 的 identity / `reset_token` 保持或重置退避。具体间隔、上限与 unchanged limit 应读取当前 profile，而不是把一组示例数值当作所有 Host 的共同协议。
+Backoff 问的是“相同条件下，多久以后再观察”。它从已仲裁的 decision 和运行 profile 派生调度建议，并按对应 scheduler state 的 identity / `reset_token` 保持或重置退避。具体间隔、上限与 unchanged limit 应读取当前 profile。
 
 如果没有事件通道，外部变化只能在下一次真实观察后被发现。reset 可以改变后续间隔，但不会追回已经等待的时间。Host apply 成功或已经匹配目标 cadence 后，才按绑定 ACK 路径确认；失败或超时要记录对应失败，不能伪造 ACK。详见[调度入口](appendix-reference.md#scheduler-entry)。
 
@@ -78,9 +78,9 @@ Replan 问的是“继续等待是否仍符合目标，是否有更好的下一�
 | 只有 peer 有工作 | 不以 peer 的进展抹掉当前 Agent 的停滞 |
 | Monitor 明确为 `watch_only` | 相关测试中即使计数很大，也不因此触发这项 replan |
 
-[策略测试](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_monitor_replan_agent_scope.py)中的阈值为 5。这是被测策略，不是所有等待必须改路的普遍定理。测试预置计数后检查 decision；它不证明真实交错 poll、并发计数写入或真实 Host 唤醒。更完整的预测练习见[Monitor 检查](12-control-plane-course.md#checkpoint-monitor)。
+[策略测试](https://github.com/loopx-project/loopx/blob/76b7583a9f67d6090b43a8c6e58c42cb67a1f3c6/tests/control_plane/test_monitor_replan_agent_scope.py)中的阈值为 5。这是被测策略。测试预置计数后检查 decision。更完整的预测练习见[Monitor 检查](12-control-plane-course.md#checkpoint-monitor)。
 
-因此，replan 不是“更强的 backoff”。一次可以改变观察频率，另一次需要重新判断路线并形成当前协议认可的结果；仅写“重新想过了”不能替代所需的变化或明确终止依据。
+一次可以改变观察频率，另一次需要重新判断路线并形成当前协议认可的结果；仅写“重新想过了”不能替代所需的变化或明确终止依据。
 
 ## 怎样定义一项可解释的观察
 

@@ -1,6 +1,6 @@
 # 持久状态与只读投影
 
-接手一项任务时，最先遇到的问题通常是：哪一份记录代表当前状态？Todo、dashboard、聊天和历史回执可能各自描述不同时间点。能读到旧信息，并不等于能够安全继续。
+接手一项任务时，最先遇到的问题通常是：哪一份记录代表当前状态？Todo、dashboard、聊天和历史回执可能各自描述不同时间点。
 
 ## 同一条 Todo，为什么会看到两个状态
 
@@ -30,9 +30,9 @@ LoopX 在相应 authority 路径上采用最后一种分工。历史 R1 可以�
 
 ### 精确复用 Goal，不靠文本猜测
 
-复用依赖 stable `goal_id` 与 registry 路由。多个 Goal 存在时，`start-goal --guided` 提供只读选择，再按精确 id 重跑；相似目标文本不构成静默合并的依据。
+复用依赖 stable `goal_id` 与 registry 路由。多个 Goal 存在时，`start-goal --guided` 提供只读选择，再按精确 id 重跑。
 
-复用 Goal 和接管 Agent 是不同操作。新会话可以读取原 Goal，但 fresh `agent_id`、已有 lane 的明确复用以及执行 lease 仍有各自的检查。旧聊天或 receipt 不授予新执行者写入权。
+复用 Goal 和接管 Agent 是不同操作。新会话可以读取原 Goal，但 fresh `agent_id`、已有 lane 的明确复用以及执行 lease 仍有各自的检查。
 
 ### Todo 存储取决于选定的事实源
 
@@ -44,7 +44,7 @@ LoopX 在相应 authority 路径上采用最后一种分工。历史 R1 可以�
 | 已选择 canonical provider 的路径 | 对应 authority 的 Todo snapshot | 兼容工作台或投影 | 以 provider revision 和生命周期读回为准 |
 | 旧 Todo `events.jsonl` 实验 | 已退役，不是当前恢复入口 | 不能据旧示例恢复为 authority | 非空旧源需按退役合同处理，不能忽略或清空来过检查 |
 
-旧 Todo event API、replay、backfill 和 completion 示例已退役，见[退役合同](/loopx/docs/reference/protocols/event-sourced-state-contract-v0/)。这不等于 run history、quota events 或 `rollout_event_log` 也被退役；它们仍有各自的记录职责。
+旧 Todo event API、replay、backfill 和 completion 示例已退役，见[退役合同](/loopx/docs/reference/protocols/event-sourced-state-contract-v0/)。它们仍有各自的记录职责。
 
 ## 五类状态表面
 
@@ -111,7 +111,7 @@ Goal state 保留当前生命周期事实。一次 run 说测试通过，需要�
 }
 ```
 
-这里列的是事实类别与受控写入入口，不是声明所有状态都存进同一种介质。每个字段仍需回到其 owner 和当前 authority 路径解释。
+这里列的是事实类别与受控写入入口。每个字段仍需回到其 owner 和当前 authority 路径解释。
 
 Task graph、Agent management 等投影也声明 `projection_is_writable: false`、`write_api: false`。这些字段描述消费者合同；真正的权限仍由 lifecycle writer 检查，不能仅靠 JSON 中一条声明证明所有入口安全。
 
@@ -121,11 +121,11 @@ Task graph、Agent management 等投影也声明 `projection_is_writable: false`
 
 [本地写正确性协议](/loopx/docs/reference/protocols/local-state-write-correctness-v0/)用 `prepare -> preview -> apply -> record -> project` 描述目标边界：检查预期 revision，保护相应 lease，提交可读回结果，再更新展示。
 
-协议仍按 writer 分阶段落实。使用时应核对该命令、authority 模式和 provider 的实际验证，而不是把 draft 中的 hard idempotency、CAS 和 lease enforcement 一次性套到全部 legacy 路径。
+协议仍按 writer 分阶段落实。使用时应核对该命令、authority 模式和 provider 的实际验证。
 
 ### 历史基线与当前交付边界
 
-`v0.5.4` 的 shared-authority 工作引入 provider-neutral TypeScript `AuthorityStore` contract 与候选 provider 验证。后来的本地切换、fencing、projection 和默认入口采用有各自的里程碑；历史版本的能力不应倒推成当前所有路径的上限，也不能把候选资格当成远端服务已交付。
+`v0.5.4` 的 shared-authority 工作引入 provider-neutral TypeScript `AuthorityStore` contract 与候选 provider 验证。后来的本地切换、fencing、projection 和默认入口采用有各自的里程碑。
 
 File/SQLite 的当前本地 authority 路径，应按选定 Goal 的 readback 判断。NoKV/PostgreSQL 等阶段性候选不自动获得 runtime authority；安装 Provider 本身也不改变现有 Goal 的事实源。
 

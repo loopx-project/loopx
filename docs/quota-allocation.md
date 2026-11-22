@@ -90,6 +90,28 @@ depending on the executor:
 
 ## Goal Review Cadence
 
+Fresh autonomous replan work shares the Goal's compute window. Once
+`spent_slots >= allowed_slots`, its extra allowance is **zero**: `quota should-run`
+returns the existing typed `throttled_skip` action rather than admitting a
+replan wakeup. A pending replan remains pending until rolling-window accounting
+restores allowance or the owner increases the existing compute budget. This
+also applies when a focus or external wait masks the exhausted window. Replan
+still precedes monitor quiet and lane waits while compute remains available.
+Recovery of a positively admitted replan keeps its original Goal, Agent, Turn
+and obligation when the window later fills. Verified writeback still uses the
+original settlement plan, including qualified no-debit closeouts. If the
+spend owner rejects the debit because the window is full, retry that same
+settlement when allowance returns. Owner Stop and zero compute pause
+automatic execution.
+
+新的自主重规划与 Goal 共用算力窗口。`spent_slots >= allowed_slots` 时，额外额度为
+**零**；`quota should-run` 使用现有的 typed `throttled_skip`，不再为待处理的重规划
+唤醒模型。等待滚动窗口恢复额度，或 owner 提高已有算力预算后重新判断；focus 或
+外部等待不会豁免这一限制。有剩余额度时，重规划仍优先于 monitor quiet 和 lane wait。
+已有准入收据的重规划在额度用尽后仍按原 Goal、Agent、Turn 和义务恢复；已验证的
+写回沿原结算计划收尾，仍支持符合条件的免扣额收尾。扣额责任方因窗口已满拒绝扣额时，
+等额度恢复后重试同一笔结算。Owner Stop 和零算力暂停自动执行。
+
 The product and benchmark runners default to review after **6 settled effective
 work Turns** in both standard and fine-grained modes. This changes the previous
 product threshold of five Turns and benchmark threshold of three Turns. Review
@@ -102,6 +124,12 @@ same Agent after its latest accepted replan acknowledgement. An accepted negativ
 work result can count; observation-only polls, duplicate retries, unspent
 writebacks and missing settlement receipts cannot. At the threshold, the next
 quota evaluation creates `periodic_review_due` through the existing replan path.
+For an explicitly selected Agent, receipt qualification uses that Agent's scope
+before interpreting semantic settlement fields, including during status collection
+for refresh and spend. A peer's invalid semantic receipt
+does not block this count; selecting the affected Agent or an unscoped history
+still reports the invalid receipt. This does not rewrite receipts or relax Goal
+instance ownership and shared log integrity checks.
 An evidence-linked review may retain the current approach; it does not require
 inventing a new plan, completing the open Todo, or declaring the Goal achieved.
 Review evidence from settled work for current source and acceptance applicability
@@ -225,6 +253,28 @@ writeback/spend chain. An exact typed blocked writeback with a bounded retry
 instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
+
+Repeated recovery admissions for the same bound prior Turn are limited when
+the missing receipts remain unchanged. The limit counts distinct committed
+guard admissions. Replaying a guard or receiving a host-completed event leaves
+that count as it was. Verified receipt progress or an explicit Owner resume
+renews the allowance. The Goal activation record retains the last Owner
+resume through later Controller Stop and Resume transitions. Resuming a
+Goal that is already active leaves the recorded allowance in place.
+
+Each new recovery grant checks its admission basis under the receipt append
+lock. A contender with a stale basis reevaluates the same Turn. When an unbound
+waiting Turn becomes eligible after resume, its first positive recovery
+receipt is appended under the same lock and subsequent replays reuse it.
+
+同一原始 Turn 的缺失回执没有减少时，恢复准入有次数上限，按已提交的不同 guard
+准入计数。相同 guard 重放和宿主完成事件均保持原计数。验证到回执进展或 Owner
+显式恢复 Goal 后重新计算。Goal 激活记录会保留最近一次 Owner 恢复，后续
+Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复会保留既有额度。
+
+新的恢复准入会在持有回执追加锁时复核准入依据。依据已变化的并发请求用同一 Turn
+重新判定。未绑定的等待 Turn 在恢复后取得资格时，在同一把锁内追加首次准入回执，
+后续重放复用该回执。
 
 An admitted advancement Todo can also become persistently `blocked` through
 its ordinary owner-authorized lifecycle. Its original Turn then offers the
@@ -1155,7 +1205,10 @@ an external-evidence observation, or a due `continuous_monitor` todo selected
 by `work_lane_contract.obligation=attempt_due_monitor`. For due monitor todos,
 pass `--todo-id` or `--target-key` plus a public `--result-hash`; unchanged
 polls update `last_checked_at`, `next_due_at`, and
-`consecutive_no_change` without appending `quota_slot_spent`:
+`consecutive_no_change` without appending `quota_slot_spent`.
+For an `attempt_due_monitor` lane, a target key identifies the selected Todo.
+To observe another due Monitor claimed by the same Agent, supply its exact
+`--todo-id`. Existing User gates and Turn bindings still apply.
 
 ```bash
 loopx quota monitor-poll --goal-id <GOAL_ID> \
@@ -1404,6 +1457,14 @@ goal under `blocked_health`, `operator_gate`, `focus_wait`, `eligible`,
 markdown output and highlights `next_automatic_turn` when a goal is eligible.
 If that value is `none`, the automation should skip delivery compute and follow
 the displayed gate, evidence, or health reason.
+
+`quota receipt --goal-id <goal-id> --agent-id <agent-id> --turn-instance-id <turn-id>`
+reads the committed guard for that exact Turn. `heartbeat_receipt` is null when
+the scoped receipt is missing. A guard that admitted an explicit work choice
+before it was made carries `selection_required` and `settlement_binding_owed`.
+After selection, the same lookup returns the committed settlement identity.
+Hosts use this read-only lookup to reconcile a finished attempt with its
+original guard, including when the current queue has changed.
 
 `quota should-run` is the per-goal guard for heartbeat jobs. It returns a small
 JSON or Markdown decision:
@@ -1740,6 +1801,11 @@ trigger uses a fresh Turn identity to evaluate the live frontier; it never
 re-executes or spends for the closed Turn. Native Goal runtimes continue to that
 fresh guard instead of blocking the Goal. Explicit Goal stop or quota pause
 still takes precedence. Actual fresh-Turn waits retain their existing backoff.
+New scheduler decisions expose App cadence, applicability, and follow-up
+commands only under `scheduler_hint.app_automation`. This includes shutdown,
+minimum-interval waits, and the explicit unavailable state for schedulers owned
+outside the App. A saved decision retains its original representation. Older
+Codex state still uses its recorded state key when it is the selected authority.
 For Codex App and local schedulers, `recommended_interval_minutes` is the next
 target interval. For Codex App heartbeats, `recommended_rrule` is emitted only
 when `app_automation.stateful_backoff.apply_needed=true`; if the desired RRULE is
@@ -1765,10 +1831,16 @@ CLI-produced ACK hints bind that argument vector to the exact registry and
 effective runtime root that produced `quota should-run`. Hosts must execute the
 complete vector; stripping its leading global options can route a
 project-launched ACK into project-local scheduler state instead of the shared
-control plane. `fallback_hint.cli_args` receives the same registry binding, and
-its `--turn-instance-id` value is always the reference the current host shell can
-expand: `"${LOOPX_TURN:?}"` on POSIX and `$LOOPX_TURN` on native Windows, so a
-PowerShell host does not replay an empty Turn. When the decision is
+control plane. `fallback_hint.cli_args` receives the same registry and runtime
+root bindings. The bridge reads `scheduler_hint.app_automation` from the
+complete decision. It accepts a legacy `codex_app` packet from an earlier CLI
+version. An executable-bound guard also passes its selected CLI to the
+bridge. When that installation ships an executable POSIX fallback launcher
+beside the CLI, the command also names that launcher. For older saved commands
+without a runtime root, the registry route supplies it. When the Turn is still
+expressed as a shell variable, the
+fallback's `--turn-instance-id` uses `"${LOOPX_TURN:?}"` on POSIX and
+`$LOOPX_TURN` on native Windows. When the decision is
 heartbeat-receipted, ACK, failure, and fallback hints also bind the originating
 concrete `turn_instance_id`, and `fallback_hint.route_binding.turn_instance_bound`
 records whether that binding is present. The follow-up rebuilds the same
@@ -2049,7 +2121,7 @@ Codex turn actually consumes quota. The smallest public-safe event is
 ```
 
 The public fixture is
-[`examples/quota-slot-spend-event.example.json`](https://github.com/huangruiteng/loopx/blob/main/examples/quota-slot-spend-event.example.json).
+[`examples/quota-slot-spend-event.example.json`](https://github.com/loopx-project/loopx/blob/main/examples/quota-slot-spend-event.example.json).
 
 Validation rule:
 

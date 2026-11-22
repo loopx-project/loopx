@@ -50,12 +50,14 @@ def test_missing_final_message_keeps_the_existing_metadata_contract(tmp_path, la
     assert adapter.start_turn("Preserve the existing typed metadata") == expected
 
 
-@pytest.mark.parametrize("fault", [None, "source-changed", "closed", "stop", "native-unavailable", "action", "lost-ack"])
+@pytest.mark.parametrize("fault", [None, "source-changed", "source-edited-at-send", "source-recalled-at-send",
+    "closed", "stop", "native-unavailable", "action", "lost-ack"])
 def test_original_queue_returns_missing_final_message_from_retained_native_result_without_replay(
     steward, language_server, monkeypatch, fault,
 ):
     from loopx.chat import parse_agent_response
     from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+    from test_lark_private_conversations import assert_recovered_reply_waits_for_original_source
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
@@ -96,30 +98,36 @@ def test_original_queue_returns_missing_final_message_from_retained_native_resul
     writes = len(provider.writes)
     restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
         runner=provider, cli_bin="lark-cli")
+    path = restarted.root / f"{ref}.json"
     if fault == "stop":
         monkeypatch.setattr(restarted.core, "_source_stop_observed", lambda *_, **__: True)
-    restarted.reconcile()
+    late_source_change = fault in {"source-edited-at-send", "source-recalled-at-send"}
+    if late_source_change:
+        assert_recovered_reply_waits_for_original_source(
+            restarted, provider, path, event["message_id"], fault, monkeypatch)
+    else:
+        restarted.reconcile()
     recovered = restarted.core.read_request(ref).get("native_result_recovery")
     if fault == "lost-ack":
         assert recovered and recovered["delivery_verified"] is False
-        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        journal = json.loads(path.read_text())
         assert journal["deliveries"]["terminal"]["started"]
         assert not journal["deliveries"]["terminal"].get("attempt")
         after = list(provider.writes)
         restarted.reconcile()
         assert provider.writes == after and len(provider.writes) == writes + 1
-        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        journal = json.loads(path.read_text())
         assert journal["deliveries"]["terminal"]["blocker"] == "provider_delivery_receipt_unknown"
     elif fault == "action":
         assert recovered is None
         assert all("待办尚未写入" in text for _, text in provider.writes[writes:])
         assert restarted.core.read_request(ref).get("native_result_recovery") is None
-    elif fault:
+    elif fault and not late_source_change:
         assert recovered is None and len(provider.writes) == writes
     else:
         assert recovered["delivery_verified"] is True
         assert restarted.core.read_request(ref)["delivery_verified"] is True
-        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        journal = json.loads(path.read_text())
         assert journal["status"] == "delivered" and journal["deliveries"]["terminal"]["verified"]
         terminal = journal["deliveries"]["terminal"]
         assert "Original verified result." in terminal["text"]
@@ -453,6 +461,17 @@ def test_timeout_presentation_does_not_trust_unknown_diagnostic_text(info):
         phase_events=[{"kind": "agent.phase", "payload": {"method": "native/timeout", "timeout": info}}])
     assert code == "processing_failed" and "超时" in text and "不会自动重放" in text
     assert "NATIVE_PRIVATE_SENTINEL" not in text and "期间原生助手记录了调用错误" not in text
+
+
+def test_worker_exit_reply_distinguishes_lost_execution_from_unknown_errors():
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    code, text = manager_failure_reply({"error_code": "execution_worker_exited", "error": "NATIVE_PRIVATE_SENTINEL"})
+    assert code == "execution_worker_exited"
+    assert "执行任务" in text and "原请求和会话已保留" in text and "不会自动重跑" in text
+    unknown, generic = manager_failure_reply({"error_code": "runtime_error", "error": "execution worker exited"})
+    assert unknown == "processing_failed" and "执行任务" not in generic
+    assert "NATIVE_PRIVATE_SENTINEL" not in text
 
 
 @pytest.mark.parametrize("source_code", ["response_timeout", "antigravity_step_error", "unknown"])
@@ -856,7 +875,7 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         assert done["status"] == ("failed" if fault in {"native-changed", "review-action", "checkpoint-empty"} else "completed"), done
         restarted.reconcile_request(path)
         delivered = json.loads(path.read_text())
-        terminal = delivered["deliveries"]["terminal.recovery.22.review.1"]
+        terminal = delivered["deliveries"][f"terminal.recovery.{recovery['presentation_key']}"]
         assert terminal["verified"]
         actual = provider.messages[terminal["attempt"]["message_ref"]]
         assert actual["chat_id"] == event["chat_id"] and actual["sender"]["id"] == provider.profile_apps["steward-app"]
@@ -1190,7 +1209,10 @@ def test_cleared_visible_answer_is_only_stable_historical_review_evidence(monkey
     assert not set(calls) - {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail", "authenticated-host", "file-read", "file-running", "cleared-answer"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "source-edited-at-send", "source-recalled-at-send",
+    "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash",
+    "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail",
+    "authenticated-host", "file-read", "file-running", "cleared-answer"])
 def test_original_worker_answers_interrupted_steward_question_once(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
@@ -1199,6 +1221,10 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     fixture = steward.__wrapped__(tmp_path)
     store, runtime, provider, transport, binding, capture, workspace = next(fixture)
     try:
@@ -1384,7 +1410,39 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             assert recovered["context_recovery"]["answer_review"] is True
             done = runtime.wait_for_turn(session_id=recovered["session_id"], turn_id=recovered["turn_id"], timeout_sec=15)
             assert done["status"] == ("failed" if fault == "review-action" else "completed"), done
-            transport.reconcile_request(path)
+            if fault in {"source-edited-at-send", "source-recalled-at-send"}:
+                # Change the original provider source after the first check,
+                # while the final reply preview is in flight.
+                original_message = provider.messages[event["message_id"]]
+                change = ({"content": "Edited after review"} if fault == "source-edited-at-send"
+                          else {"deleted": True})
+                changed = {**original_message, **change}
+                reply = transport._reply_runner
+                previewed = False
+
+                def preview_then_change(args):
+                    nonlocal previewed
+                    result = reply(args)
+                    if "--dry-run" in args and ("+messages-reply" in args or "+messages-send" in args):
+                        previewed = True
+                        provider.messages[event["message_id"]] = changed
+                    return result
+
+                writes = list(provider.writes)
+                with monkeypatch.context() as send:
+                    send.setattr(transport, "_reply_runner", preview_then_change)
+                    delivery_count = transport.reconcile_request(path)
+                assert previewed
+                assert delivery_count == 0 and provider.writes == writes
+                assert not transport.core.read_request(ref).get("delivery_verified")
+                assert transport.reconcile_request(path) == 0 and provider.writes == writes
+                # Once the same frozen source is available again, the original
+                # completed review can be delivered without another Turn.
+                provider.messages[event["message_id"]] = original_message
+                assert transport.reconcile_request(path) == 1
+                assert len(provider.writes) == len(writes) + 1
+            else:
+                transport.reconcile_request(path)
             current = transport.core.read_request(ref)
             assert current["delivery_verified"]
             for later in new_question:

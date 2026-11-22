@@ -454,7 +454,7 @@ def test_available_first_agent_retains_its_real_eligibility_refusal(tmp_path, re
     import threading
 
     from loopx.chat_actions import goal_workspace_ref
-    from loopx.chat_endpoints import AgentEndpointRegistry
+    from loopx.chat.endpoints import AgentEndpointRegistry
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.chat_store import ChatSessionStore
@@ -517,6 +517,179 @@ def test_available_first_agent_retains_its_real_eligibility_refusal(tmp_path, re
         assert recovered["proposal"]["normalized_parameters"]["agent_id"] == "remote-first"
         assert len(server.action_store.list()) == 1 and not registry.exists()
         assert sessions.list_sessions() == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_goal_create_without_a_session_returns_the_managed_agent_address(tmp_path, monkeypatch):
+    # A caller that owns its own conversation layer (Workbench) opens the first
+    # thread itself: open_session=false creates the Goal, binds the Agent and
+    # todos, but opens no Session and sends no first Turn. The receipt still
+    # carries the managed Agent address the caller needs to attach its thread.
+    import http.client
+    import runpy
+    import threading
+    from pathlib import Path
+
+    from loopx import paths
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    monkeypatch.setattr(paths, "select_default_runtime_root", lambda: tmp_path / "implicit-default")
+    selected = tmp_path / "selected-runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    registry = project / ".loopx" / "registry.json"
+    fixture = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/loopx-chat-actions-smoke.py"))
+    sessions = ChatSessionStore(selected)
+    controller = fixture["FakeRuntimeController"](sessions)
+    controller.project_contexts = ChatProjectContexts([project])
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, selected, str(selected)
+    server.action_store = ChatActionStore(selected / "chat/actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[project],
+        runtime_root_override=str(selected))
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def request(path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request("POST", path, json.dumps(body or {}), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def create(**extra):
+        return {"action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": "no-session",
+                "context": {"kind": "manager", "goal_id": None},
+                "normalized_parameters": {"goal_id": "goal-nosession", "title": "No session", "objective": "Start here",
+                                          "agent_id": "codex", "workspace_ref": goal_workspace_ref(project), **extra}}
+
+    try:
+        status, refused = request("/api/actions/preview", create(open_session="no"))
+        assert status == 400, refused
+        # Starting execution needs the Session the core would open; refused rather than dropped.
+        status, refused = request("/api/actions/preview", create(
+            open_session=False, start_execution=True, permission="workspace_write_on_confirmation",
+            completion_criteria="The check passes", initial_todos=["Make the check pass"]))
+        assert status == 400, refused
+        assert refused["error_code"] == "invalid_action_preview" and "open_session" in refused["error"], refused
+        status, previewed = request("/api/actions/preview", create(open_session=False))
+        assert status == 201, previewed
+        assert previewed["proposal"]["normalized_parameters"]["open_session"] is False
+        status, applied = request(f"/api/actions/{previewed['proposal']['proposal_id']}/apply", {})
+        assert status in {200, 202}, applied
+        assert applied["turn"] is None
+        resources = applied["proposal"]["receipt"]["resource_ids"]
+        assert resources["goal_id"] == "goal-nosession" and resources["agent_id"] == "codex"
+        assert "session_id" not in resources and "turn_id" not in resources
+        assert resources["managed_agent_id"] and resources["channel_id"] == f"agent.{resources['managed_agent_id']}"
+        assert "goal_instance_id" in resources
+        assert [goal["id"] for goal in json.loads(registry.read_text())["goals"]] == ["goal-nosession"]
+        assert sessions.list_sessions() == [] if hasattr(sessions, "list_sessions") else True
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_goal_create_preview_keeps_reselection_gate_when_workspace_vanishes_mid_preview(tmp_path, monkeypatch):
+    # If a configured workspace disappears after the initial candidate scan,
+    # preview must rebuild both refs and labels from one current snapshot so it
+    # still returns a recoverable 409 gate with the remaining workspace instead
+    # of failing with KeyError -> 400.
+    import http.client
+    import runpy
+    import threading
+    from pathlib import Path
+
+    from loopx import paths
+    from loopx.chat_actions import goal_workspace_ref
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.chat_store import ChatSessionStore
+
+    monkeypatch.setattr(paths, "select_default_runtime_root", lambda: tmp_path / "implicit-default")
+    selected = tmp_path / "selected-runtime"
+    first = (tmp_path / "alpha").resolve()
+    second = (tmp_path / "beta").resolve()
+    first.mkdir()
+    second.mkdir()
+    registry = tmp_path / "registry.json"
+    registry_before = json.dumps({"schema_version": 1, "goals": []})
+    registry.write_text(registry_before, encoding="utf-8")
+    fixture = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/loopx-chat-actions-smoke.py"))
+    sessions = ChatSessionStore(selected)
+    controller = fixture["FakeRuntimeController"](sessions)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, selected, str(selected)
+    server.action_store = ChatActionStore(selected / "chat/actions")
+    server.action_service = ChatActionService(
+        store=server.action_store, registry_path=registry,
+        chat_store=sessions, runtime_controller=controller,
+        workspace_roots=[first, second], runtime_root_override=str(selected),
+    )
+    server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post_preview():
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        try:
+            connection.request(
+                "POST", "/api/actions/preview",
+                json.dumps({
+                    "action_kind": "goal.create", "summary": "Create a Goal", "idempotency_key": "vanish-mid-preview",
+                    "context": {"kind": "manager", "goal_id": None},
+                    "normalized_parameters": {"goal_id": "goal-vanish", "title": "Vanish",
+                                              "objective": "Verify reselection", "workspace_ref": "current"},
+                }),
+                {"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        # Control: both directories remain present.
+        status, stable = post_preview()
+        assert status == 409, stable
+        assert stable["error_code"] == "action_preview_gate" and stable["write_attempted"] is False
+        assert stable["gate"]["kind"] == "workspace_selection_required"
+        assert [c["label"] for c in stable["gate"]["candidates"]] == ["alpha", "beta"]
+        assert "--scan-path" in stable["gate"]["next_action"]
+        assert server.action_store.list() == [] and registry.read_text(encoding="utf-8") == registry_before
+
+        # Remove `second` immediately after the initial candidate scan sees it.
+        real_is_dir = Path.is_dir
+        saw_second = False
+
+        def is_dir_vanishing(self: Path) -> bool:
+            nonlocal saw_second
+            result = real_is_dir(self)
+            if self == second and result and not saw_second:
+                saw_second = True
+                second.rmdir()
+            return result
+
+        monkeypatch.setattr(Path, "is_dir", is_dir_vanishing)
+        status, recovered = post_preview()
+        assert status == 409, recovered
+        assert recovered["error_code"] == "action_preview_gate" and recovered["write_attempted"] is False
+        assert recovered["gate"]["kind"] == "workspace_selection_required"
+        assert recovered["gate"]["candidates"] == [
+            {"workspace_ref": goal_workspace_ref(first), "label": "alpha"}
+        ]
+        assert "--scan-path" in recovered["gate"]["next_action"]
+        assert server.action_store.list() == [] and registry.read_text(encoding="utf-8") == registry_before
     finally:
         server.shutdown()
         thread.join(timeout=5)

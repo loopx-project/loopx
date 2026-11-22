@@ -23,6 +23,7 @@ import {
   EffectRuntimeRequestError,
 } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import { requireJsonObject } from "../../loopx/control_plane/runtime_decode.ts";
+import { settlementIdentityPayload } from "../../loopx/control_plane/effect_program.ts";
 import {
   parseQuotaAccountingOwner,
   withQuotaAccountingOwner,
@@ -32,6 +33,9 @@ import {
   quotaSpendIndexDigest,
   QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/quota/spend_commit.ts";
+import {
+  readQuotaSpendEventFromRun,
+} from "../../loopx/control_plane/quota/accounting_artifact_transaction.ts";
 
 const goalId = "quota-spend-transaction";
 const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1087,6 +1091,52 @@ test("effect identity and index CAS reject drift and racing writers", async (t) 
   assert.equal(fresh.status, "written");
 });
 
+test("concurrent settlement retries share one debit across quota observation changes", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const identity = settlementIdentityPayload({
+    goal_id: goalId, agent_id: "codex-main-control", todo_id: "todo_original",
+    turn_instance_id: "turn-original",
+  });
+  const stable = {
+    settlement_identity: identity,
+    turn_instance_id: identity.turn_instance_id,
+    todo_id: identity.todo_id,
+    delivery_completion_spend: true,
+    delivery_run_generated_at: "2026-08-25T11:59:00+08:00",
+    delivery_run_classification: "validated_progress",
+    delivery_run_agent_id: identity.agent_id,
+    delivery_workspace: {workspace_identity: "git:github.com/example/fixture"},
+    delivery_workspace_validated: true,
+  };
+  const spendRequest = (spentSlots: number, slots = 1) => request(runtimeRoot, {
+    effect_id: null,
+    preview: preview({...stable, slots, would_throttle: spentSlots > 0}),
+    before: decision(spentSlots),
+    after: decision(spentSlots + slots),
+  });
+  const outcomes = await Promise.all([
+    evaluateQuotaSpendCommit(spendRequest(0)),
+    evaluateQuotaSpendCommit(spendRequest(1)),
+  ]);
+  assert.deepEqual(outcomes.map((result) => result.status).sort(), ["replayed", "written"]);
+  const committed = outcomes.find((result) => result.written)!;
+  const indexPath = String(committed.payload.index_path);
+  const originalRows = await readFile(indexPath, "utf8");
+  assert.equal(originalRows.trim().split("\n").length, 1);
+  assert.deepEqual(outcomes[0]?.record, outcomes[1]?.record);
+
+  const changedSpend = await evaluateQuotaSpendCommit(spendRequest(1, 2));
+  assert.equal(changedSpend.reason_code, "effect_id_conflict");
+  const changedSource = await evaluateQuotaSpendCommit({...spendRequest(1), source: "visible-goal"});
+  assert.equal(changedSource.reason_code, "effect_id_conflict");
+  const replacedWriteback = await evaluateQuotaSpendCommit({
+    ...spendRequest(1),
+    preview: preview({...stable, delivery_run_generated_at: "2026-08-25T11:58:00+08:00"}),
+  });
+  assert.equal(replacedWriteback.reason_code, "effect_id_conflict");
+  assert.equal(await readFile(indexPath, "utf8"), originalRows);
+});
+
 test("concurrent exact-effect retries serialize to one spend", async (t) => {
   const runtimeRoot = await tempRuntime(t);
   const params = request(runtimeRoot);
@@ -1100,4 +1150,66 @@ test("concurrent exact-effect retries serialize to one spend", async (t) => {
   );
   const indexPath = String(results[0].payload.index_path);
   assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("readQuotaSpendEventFromRun resolves checkpoint-relocated run json_path and rejects arbitrary outside paths", async (t) => {
+  const originalRoot = await tempRuntime(t);
+  const relocatedRoot = await tempRuntime(t);
+  const originalRunsDir = join(originalRoot, "goals", goalId, "runs");
+  const relocatedRunsDir = join(relocatedRoot, "goals", goalId, "runs");
+  await mkdir(originalRunsDir, { recursive: true });
+  await mkdir(relocatedRunsDir, { recursive: true });
+
+  const fileName = "2026-08-25T12-00-00Z-quota-spend.json";
+  const originalJson = join(originalRunsDir, fileName);
+  const relocatedJson = join(relocatedRunsDir, fileName);
+  await writeFile(
+    originalJson,
+    JSON.stringify({
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      effect_ref: "stale-original",
+      quota_event: { schema_version: "quota_event_v0", effect_id: "stale-original" },
+    }),
+    "utf8",
+  );
+  await writeFile(
+    relocatedJson,
+    JSON.stringify({
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      effect_ref: "quota-spend-effect-1",
+      quota_event: { schema_version: "quota_event_v0", effect_id: "quota-spend-effect-1" },
+    }),
+    "utf8",
+  );
+
+  const event = await readQuotaSpendEventFromRun(
+    relocatedRunsDir,
+    { effect_ref: "quota-spend-effect-1", json_path: originalJson },
+    goalId,
+  );
+  assert.equal(event?.effect_id, "quota-spend-effect-1");
+
+  const otherGoalRuns = join(originalRoot, "goals", "other-goal", "runs");
+  await mkdir(otherGoalRuns, { recursive: true });
+  const otherGoalJson = join(otherGoalRuns, fileName);
+  const outsideJson = join(originalRoot, "outside.json");
+  await writeFile(
+    otherGoalJson,
+    JSON.stringify({ classification: "quota_slot_spent", goal_id: goalId, effect_ref: "quota-spend-effect-1" }),
+    "utf8",
+  );
+  await writeFile(
+    outsideJson,
+    JSON.stringify({ classification: "quota_slot_spent", goal_id: goalId, effect_ref: "quota-spend-effect-1" }),
+    "utf8",
+  );
+
+  for (const unsafePath of [otherGoalJson, outsideJson]) {
+    await assert.rejects(
+      () => readQuotaSpendEventFromRun(relocatedRunsDir, { effect_ref: "quota-spend-effect-1", json_path: unsafePath }, goalId),
+      /quota spend json_path must stay inside the goal runs directory/,
+    );
+  }
 });

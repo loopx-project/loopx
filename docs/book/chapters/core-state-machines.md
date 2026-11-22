@@ -5,13 +5,11 @@
 那些机制在文档里分开读时各自成立；真正需要回答的问题在这里：**它们怎样接回同一
 条循环？**
 
-先给结论：**LoopX 由多组状态机协作驱动；但最高一层不是
-“九台机器互相发消息”，而是一条 effectful Agent Loop。** Harness 解释 Agent 或 Host 提出的
+先给结论：**LoopX 由多组状态机协作驱动；最高一层是一条 effectful Agent Loop。** Harness 解释 Agent 或 Host 提出的
 effect request，再由 Todo、Gate、Quota、Settlement、Scheduler 等领域状态机判断这一小段流程的
-合法动作。它们通过持久事实、typed contract、guarded transition 和 receipt 衔接，而不是直接
-覆盖彼此的状态。
+合法动作。它们通过持久事实、typed contract、guarded transition 和 receipt 衔接。
 
-LoopX 不靠一个巨型状态机推进 Goal。它把持久工作、单轮决策、证据结算、调度和界面投影
+它把持久工作、单轮决策、证据结算、调度和界面投影
 交给有明确 owner 的协作状态机。本章先建立名词和抽象层级，再解释为什么这样设计，随后看
 协作总图，再逐组展开状态机，最后交代这套设计付出的代价。这样你可以先理解主线，再按需深入某一组规则。
 
@@ -53,27 +51,25 @@ LoopX 不靠一个巨型状态机推进 Goal。它把持久工作、单轮决策
   Handoff 等各自维护一张 interpretation table。
 
 所以“LoopX 是多状态机系统”在内层是对的；在外层，更准确的说法是：**一条 Agent Loop 由
-多组有边界的状态机共同解释和约束。** 状态机是 Harness 内部的决策表，不是九个平级微服务，
-也不是九个 Agent。
+多组有边界的状态机共同解释和约束。** 状态机是 Harness 内部的决策表。
 
 ## 先认识名词：把“事实、判断、动作、证明”分开
 
-下面这些词会反复出现。第一次阅读只需记住“它是什么”和“它不是什么”：
+下面这些词会反复出现。第一次阅读只需记住“它是什么”：
 
 先把一轮读成一句白话：**Goal 给出长期边界，frontier 给出当前工作，控制面派生本轮 decision，
 Agent / Host 执行 effect，observation 经验证后写回事实，receipt 与 projection 再把下一轮接起来。**
 
 - **目标与工作 — Goal、Todo、frontier、Vision / replan**：Goal 是长期 identity 与边界；Todo
-  是工作项；frontier 是当前可继续的工作边界；Vision / replan 保存路线和改道依据。它们不是一个
-  可整体覆盖的大 Goal 对象，“一条 Todo 完成”也不等于“Goal 完成”。
+  是工作项；frontier 是当前可继续的工作边界；Vision / replan 保存路线和改道依据。
 - **事实与视图 — source / authoritative fact、derived decision、projection**：source 是 owner
   可持久写入的事实；decision 是规则算出的本轮判断；projection 是给 Agent、Host 或人看的视图。
-  页面显示的字段不一定可写，projection 也不是第二套事实源。
+  页面显示的字段不一定可写。
 - **动作与证明 — effect request / proposal、observation、transition、evidence、receipt**：proposal
   请求动作；observation 报告外部事实；transition 接受合法变化；evidence 支撑判断；receipt 证明
-  有 identity 的提交已经发生。Agent 的请求不等于授权，工具返回也不自动等于完成。
+  有 identity 的提交已经发生。
 - **约束与运行 — Gate、lease、quota、Scheduler / heartbeat、Host / Runtime**：它们分别限定
-  决定范围、临时执行权、本轮计算资格、再次唤醒时间和 effect 执行；不是五种同义的全局锁。
+  决定范围、临时执行权、本轮计算资格、再次唤醒时间和 effect 执行。
 
 ### 先分清三种“状态”
 
@@ -92,7 +88,7 @@ Todo completion、evidence 和 receipt 的 owner。
 
 ## 为什么这样设计，而不是一个大状态机？
 
-拆分不是为了增加名词，而是因为这些状态天然有不同的变化原因：
+拆分是因为这些状态天然有不同的变化原因：
 
 1. **寿命不同**：Todo 和 evidence 要跨会话保存；quota decision 只对当前 Turn 有效；projection 随时可以重建。
 2. **权限不同**：Agent 可以提出 effect；Host 可以执行 effect；只有对应 transition owner 能接受事实变化。
@@ -103,7 +99,7 @@ Todo completion、evidence 和 receipt 的 owner。
 如果把它们压进一个 `Goal.status` 或允许 Agent 整体覆盖 `GoalState`，一次写入就可能误删其他
 Agent 的进展；一次网络超时也无法判断该重试、回读还是补偿；界面字段还会反向变成事实源。
 
-协作不等于互相发消息。九组状态机主要通过四种稳定接口连接：
+九组状态机主要通过四种稳定接口连接：
 
 1. **Source facts**：Todo、event、lease、Vision 和 receipt 供 reducer / interpreter 只读。
 2. **Typed decision / effect**：`interaction_contract`、selected action 和 scheduler hint 告诉 Agent
@@ -129,7 +125,7 @@ flowchart TD
   Facts -.-> Projection["projection<br/>Workspace / status"]
 ```
 
-这不是“状态机 A 调用状态机 B”的时序图。真正接力的是 source facts、typed decision、effect、
+真正接力的是 source facts、typed decision、effect、
 observation 和 receipt；每个状态机只负责自己的 decision table 与合法 transition。
 
 ## 从 L0 到 L4：用这些名词回答五个架构问题
@@ -155,13 +151,13 @@ observation 和 receipt；每个状态机只负责自己的 decision table 与�
 | **Projection** | 把 facts 编译成面向 Agent、Host 或人的视图 | quota/status、Workspace、review packet |
 | **Runtime** | 解释本轮 decision 并执行有界 effect | Codex App/CLI、heartbeat、extension provider |
 
-这些组件不是一条由 Runtime 随意覆盖的 JSON。Runtime 是 effect executor；authoritative state 与
+Runtime 是 effect executor；authoritative state 与
 transition owner 才决定事实是否真的改变。
 
 ### L2：authoritative state 长什么样？
 
 为了理解，可以先把理想的 Goal 控制面想象成下面的**概念聚合视图**。它描述希望一次读取能够
-回答的问题，不是 LoopX 1.0 已经提供的统一 schema：
+回答的问题：
 
 ```yaml
 GoalControlSnapshot:                 # 概念视图；字段是待回答的问题，不是已实现字段名
@@ -209,7 +205,7 @@ acceptance、permissions 和 terminal conditions 目前还没有统一的 typed 
 
 ### L3：Agent 怎样修改 authoritative state？
 
-Agent 提交的是 proposal 或 typed effect，不是“我认为新状态应该长这样”的全量覆盖：
+Agent 提交的是 proposal 或 typed effect：
 
 ```mermaid
 flowchart TD
@@ -223,7 +219,7 @@ flowchart TD
   Readback --> Next["派生下一条合法动作"]
 ```
 
-这里的“CAS”是并发控制原则，不是假装全仓只有一个整数 `version`：
+这里的“CAS”是并发控制原则：
 
 - Todo completion 会在取得 mutation lock 后比对 admission 相关的字段快照（`status`、`completion_continuation`、`successor_todo_ids`、`validation_command_argv` 等），快照不一致即拒绝，确保针对某份声明的 validation 不能授权另一份已持久化的 Todo；
 - shared authority store 以 opaque `expected_provider_revision`（file provider 中对应 generation）做真正的 compare-and-swap；`authority_revision` 和 `lease_epoch` 不能代替它；
@@ -231,14 +227,13 @@ flowchart TD
 - settlement 再以 `goal_id + agent_id + turn_instance_id` 绑定 writeback、spend 与 scheduler receipt。
 
 对应的源码锚点分别是
-[`completion_transaction.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py)、
-[`local_state_write_correctness.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py)、
-[`authority_store.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts)、
-[`coordination/authority_core.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/authority_core.py)
-和 [`settlement.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py)。
+[`completion_transaction.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/completion_transaction.py)、
+[`local_state_write_correctness.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/runtime/local_state_write_correctness.py)、
+[`authority_store.ts`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/authority_store.ts)、
+[`coordination/authority_core.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/authority_core.py)
+和 [`settlement.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/turn_driver/settlement.py)。
 
-所以正确流程是“读 basis -> 提案 -> 验证/guard -> guarded commit -> 事件或 receipt -> 回读”，而不是
-Agent 直接覆盖一份看似完整的状态。
+所以正确流程是“读 basis -> 提案 -> 验证/guard -> guarded commit -> 事件或 receipt -> 回读”。
 
 ### L4：Agent 判断错了怎么办？
 
@@ -255,14 +250,14 @@ Agent 直接覆盖一份看似完整的状态。
 
 这也是为什么 side effect 必须独立建模：模型可以改主意，外部世界却不能靠改一段上下文回滚。
 LoopX 通过 validation、版本/identity guard、reconcile、补偿事件和 replan，把错误变成下一条可验证
-transition，而不是让它成为一段失去来路的聊天结论。这里的幂等恢复保证有明确边界：它适用于带
+transition。这里的幂等恢复保证有明确边界：它适用于带
 持久 journal、`effect_ref` 和 provider readback resolver 的 settlement step；不能外推成“任意外部工具
 调用都会自动去重”。resolver 缺失、报错或返回未知状态时，settlement 会 fail closed。
 
 ## 九组状态机怎样组成一条 Loop
 
 现在把刚才那条时间线接回整条循环。维护者级地图把控制面拆成九组协作状态机；“九”是当前
-核心规则的教学地图，不是一个要求所有 extension 都注册九台 runtime service 的协议常量。
+核心规则的教学地图。
 本书按读者任务把它们组织为四层：
 
 | 层 | 主要机器 | 回答的问题 |
@@ -293,22 +288,20 @@ flowchart TD
 ```
 
 图中没有从 projection 直接连回 decision 的写入捷径。界面只能发起受治理动作；真正的 state
-transition 仍由 write API、validation 和 receipt 完成。箭头表示事实和 contract 的依赖关系，
-不是状态机之间的进程消息。
+transition 仍由 write API、validation 和 receipt 完成。箭头表示事实和 contract 的依赖关系。
 
 ## 1. 持久工作：Todo、Gate 与 Handoff
 
 ### Todo lifecycle：只有四个持久 status
 
-[`loopx/control_plane/todos/contract.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/contract.py)
+[`loopx/control_plane/todos/contract.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/contract.py)
 定义 Todo 的持久状态：
 
 ```text
 open | done | blocked | deferred
 ```
 
-`claimed_by`、`resume_when`、`superseded_by`、`unblocks_todo_id` 和 `no_followup` 是正交字段，
-不是更多 status。它们共同决定下一条合法路径。
+`claimed_by`、`resume_when`、`superseded_by`、`unblocks_todo_id` 和 `no_followup` 是正交字段。它们共同决定下一条合法路径。
 
 ```mermaid
 stateDiagram-v2
@@ -370,7 +363,7 @@ flowchart LR
 
 ### Handoff：clear 不等于路线完整
 
-[`handoff_gate.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py)
+[`handoff_gate.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/todos/handoff_gate.py)
 从 Todo relation 派生六种 handoff state：
 
 | 派生状态 | 含义 | 下一步 |
@@ -383,13 +376,13 @@ flowchart LR
 | `deferred` | resume condition 尚未满足 | 等待或观察条件 |
 
 这些值是 projection，不应被手工写入。修复 `cleared_without_successor` 的方式是新增合法 successor、
-重开工作或记录 `no_followup`，而不是把显示值改成 `cleared_with_successor`。
+重开工作或记录 `no_followup`。
 
 ## 2. 单轮执行：Quota、Interaction Contract 与 Settlement
 
 ### Quota runtime：先判定行为，再考虑 spend
 
-[`loopx/control_plane/quota/states.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/quota/states.py)
+[`loopx/control_plane/quota/states.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/quota/states.py)
 固定了 quota runtime state 的判定优先级：
 
 ```text
@@ -402,8 +395,7 @@ flowchart LR
 7. paused
 ```
 
-这是 reducer 在多个条件同时出现时使用的 precedence，不是 `blocked_health` 会依次流转到 `paused`
-的状态图。每轮都从当前 source facts 重新判定。
+这是 reducer 在多个条件同时出现时使用的 precedence。每轮都从当前 source facts 重新判定。
 
 | Runtime state | 本轮合法动作 | 常见恢复路径 |
 | --- | --- | --- |
@@ -415,7 +407,7 @@ flowchart LR
 | `throttled` | 不执行交付 | 等待 quota window 或 owner adjustment |
 | `paused` | 不执行自动 Turn | 显式 resume；`active/stopped` 由 Goal activation owner 管理 |
 
-Quota state 不是单独的授权。`interaction_contract` 还会给出 user、agent、CLI channel、workspace
+`interaction_contract` 还会给出 user、agent、CLI channel、workspace
 guard、capability gate、selected Todo、execution obligation 和 scheduler hint。Agent 必须执行的是
 `must_attempt_work` 是布尔 obligation：为 `true` 时，本轮必须尝试 bounded work 并写回；它本身不选择
 动作。需要选择 Todo 时先执行 `selection_command`，否则执行 capability packet 或
@@ -424,7 +416,7 @@ guard、capability gate、selected Todo、execution obligation 和 scheduler hin
 
 ### Settlement：成功必须按事务顺序落地
 
-[`turn_transaction_contract.json`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/turn_transaction_contract.json)
+[`turn_transaction_contract.json`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/turn_transaction_contract.json)
 定义完整 Turn 的阶段：
 
 ```text
@@ -525,7 +517,7 @@ effect；外部结果必须先成为 typed observation，才能进入 Monitor �
 - 到达 expiry 或 stop condition：完成 Monitor，并连接 successor 或 `no_followup`。
 
 对于已经显式提升到 shared authority 的 Goal，
-[`todo_monitor_poll.ts`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/coordination/todo_monitor_poll.ts)
+[`todo_monitor_poll.ts`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/coordination/todo_monitor_poll.ts)
 会在同一个 canonical revision、同一次 CAS 和同一 durable operation receipt 中提交**无 lease 的
 observation 与它请求的独立 successor**。事务先校验 actor 注册、claim/binding/exclusion、Monitor
 仍处于 active 状态，以及 material-change generation 确实前进；任何校验失败都不会写入任一半。
@@ -543,7 +535,7 @@ Goal 返回 `canonical_authority_required`，必须先备份并迁移，之后�
 
 ### Agent Vision / replan：路线改变必须成为 state delta
 
-Vision 是 per-Agent 的有界可执行路线，不是 scratchpad。正常延续可以提交
+Vision 是 per-Agent 的有界可执行路线。正常延续可以提交
 `vision_unchanged_reason`；假设、scope、acceptance 或 route 发生 material change 时，必须提交
 bounded Vision patch，并同步 Todo / acceptance delta。
 
@@ -567,8 +559,7 @@ stateDiagram-v2
 
 ### Goal activation 不等于 automation 已启用
 
-Goal activation 的 typed source 只有 `active` 与 `stopped`。`active` 表示控制面允许继续评估，
-不证明已经安装 Host heartbeat，也不证明当前有 eligible work。完整 onboarding 还要经过：
+Goal activation 的 typed source 只有 `active` 与 `stopped`。`active` 表示控制面允许继续评估。完整 onboarding 还要经过：
 
 ```text
 project registered
@@ -596,7 +587,7 @@ public/private boundary。
 
 ## LoopX 怎样体现“闭环”
 
-LoopX 的闭环不是“Agent 做了一件事”，也不是 `Todo=done`。更准确的定义是：**一次 effect 的结果
+更准确的定义是：**一次 effect 的结果
 经过验证后写回负责该事实的 authoritative source，并且控制面能据此派生出下一条合法动作，或证明
 应当停止。**
 如果结果只留在聊天、工作区文件、远端系统或 dashboard 文案里，没有 readback、durable writeback
@@ -633,7 +624,7 @@ flowchart TD
 1. **结果回来了没有？** 外部 effect 必须有 typed observation 或 readback；“命令退出 0”不能替代
    provider、PR、文件 revision 或部署状态的权威回读。
 2. **结果落盘了吗？** validation 通过后，evidence、Todo outcome、Vision checkpoint 和 Next Action
-   必须通过 owner write API 持久化；聊天总结不是 writeback。
+   必须通过 owner write API 持久化。
 3. **下一步有归宿吗？** 完成一个 Todo 后必须存在 runnable successor、明确 Gate、带
    `resume_when` / `next_due_at` 的等待、repair/replan obligation，或者有证据的 `no_followup`。
 4. **Host 知道继续还是停止吗？** scheduler apply 必须有 ACK 或 failure receipt；下一次唤醒重新读取
@@ -643,7 +634,7 @@ flowchart TD
 
 ### Terminal 是严格合取，不是“队列看起来空了”
 
-[`loopx/control_plane/goals/goal_frontier/terminal.py`](https://github.com/huangruiteng/loopx/blob/main/loopx/control_plane/goals/goal_frontier/terminal.py)
+[`loopx/control_plane/goals/goal_frontier/terminal.py`](https://github.com/loopx-project/loopx/blob/main/loopx/control_plane/goals/goal_frontier/terminal.py)
 中的 `goal_frontier_is_terminal_no_followup` 不接受一个手写的 terminal flag。它要求 Todo source
 完整且闭合，并且 advancement、monitor、successor、handoff、replan、acceptance、autonomy blocker
 等 frontier 均无未解决项；同时还需要结构化的 `no_followup` intent。
@@ -677,7 +668,7 @@ coverage-backed `no_followup` 都可以诚实收口；关键是结果可追溯�
 9. **投影：** Workspace 显示文档已完成、首页仍待决定。界面没有吞掉或扩大 Gate scope。
 
 如果第 5 步失败，流转停在 validation；如果第 6 步失败，不得进入 spend；如果第 8 步 Host 更新
-失败，记录 failure receipt 并有界重试，而不是宣称 cadence 已生效。
+失败，记录 failure receipt 并有界重试。
 
 ## 从症状定位 owner
 
@@ -759,8 +750,8 @@ owner、协议 schema、characterization fixture 和 migration boundary。
 **失败三：投影被当成事实源。** dashboard 上改一个 row 让显示正确，source 没变。症状是
 UI 与 CLI 长期不一致，而每次刷新都回到旧值。恢复方式是修 source 或 builder，再 readback。
 
-**失败四：停止的理由并不等于闭环。** Goal `stopped`、quota paused 或 peer coordination blocked
-都可能停止轮询，它们各自是合法停止，但不证明 Goal 闭环。只有 `terminal_no_followup` 表达
+Goal `stopped`、quota paused 或 peer coordination blocked
+都可能停止轮询，它们各自是合法停止。只有 `terminal_no_followup` 表达
 "因已验证 Goal closure 而停止"。把这几者混作一谈，会让一个被暂停的 Goal 看起来像已完成。
 
 ## 不变式
@@ -774,7 +765,7 @@ UI 与 CLI 长期不一致，而每次刷新都回到旧值。恢复方式是修
    处理拒绝结果。
 5. **终局是合取。** 完整且闭合的 Todo source、没有未解决 frontier、结构化 `no_followup`
    intent，三者同时成立才算闭环。
-6. **教学地图不等于实现规格。** 改规则先确认 typed owner、协议 schema、characterization
+6. 改规则先确认 typed owner、协议 schema、characterization
    fixture 和 migration boundary。
 
 这六条回答的是同一个问题：**当机制被拆到九组机器、又只能通过持久事实互相说话时，凭什么

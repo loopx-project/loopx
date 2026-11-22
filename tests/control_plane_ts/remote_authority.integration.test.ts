@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {createServer, request as httpsRequest} from "node:https";
 import type {AddressInfo} from "node:net";
-import {writeFile} from "node:fs/promises";
+import {mkdir, writeFile} from "node:fs/promises";
+import {join} from "node:path";
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
 import {Client} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
@@ -12,12 +15,88 @@ import {PostgreSqlAuthorityStore, rotatePostgreSqlAuthorityStoreIdentity, type P
 import {remoteAuthorityOperationId, type RemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {postgresRemoteFixture, claimRequest, credentials, serviceIdentity, servicePolicy} from "./remote_authority_fixture.ts";
+import {openLocalAuthorityStore} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
+import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {registerRemoteAuthorityModeConformance} from "./remote_authority_mode_conformance.ts";
 import {registerRemoteAuthorityLifecycleConformance} from "./remote_authority_lifecycle_conformance.ts";
+import {registerRemoteAuthorityReadAclConformance} from "./remote_authority_read_acl_conformance.ts";
 
 const connectionString = process.env.LOOPX_TEST_POSTGRES_URL;
 registerRemoteAuthorityModeConformance(connectionString);
 registerRemoteAuthorityLifecycleConformance(connectionString);
+registerRemoteAuthorityReadAclConformance(connectionString);
+test("quota CLI verifies the exact remote binding and never grants local execution", {skip: !connectionString}, async t => {
+  const fixture = await postgresRemoteFixture(t, connectionString!);
+  await fixture.seed(["todo_gateway_probe"], {todo_gateway_probe: "private-synthetic-note"});
+  const initialHead = await fixture.store.loadAuthority();
+  const running = await fixture.start();
+  const python = resolveTestPython();
+  const invoke = promisify(execFile);
+  const workspace = join(fixture.root, "workspace"), runtime = join(fixture.root, "runtime");
+  const registry = join(workspace, "registry.json"), state = join(workspace, "STATE.md");
+  await mkdir(workspace);
+  await writeFile(state, "---\nstatus: active\nupdated_at: 2026-01-01T00:00:00Z\n---\n# Synthetic Goal\n");
+  // The candidate observes a remote authority alongside its established
+  // private host state. It does not auto-initialize or migrate a Goal.
+  const local = await openLocalAuthorityStore(runtime, "goal-one");
+  const localHead = authorityProjectionFixture("goal-one", [], [], "native", {handoff_mode: "soft_claim"});
+  const localSeed = await local.commitAuthority({operation_id: "gateway-local-fixture",
+    expected_provider_revision: null, next_projection: localHead, events: [], receipts: []});
+  assert.equal(localSeed.status, "applied");
+  if (localSeed.status !== "applied") throw new Error("local fixture did not initialize");
+  const fence = await engageLegacyCoordinationWriterFence({schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+    runtime_root: runtime, goal_id: "goal-one", state_path: state, fence: {
+      schema_version: "loopx_legacy_coordination_writer_fence_v0", state: "engaged", goal_id: "goal-one",
+      fence_id: "gateway-local-fixture", source_version: "gateway-local-fixture",
+      source_projection_sha256: canonicalAuthoritySha256(localHead), expected_shadow_provider_revision: localSeed.provider_revision,
+    }});
+  assert.equal(fence.status, "applied");
+  const cfg = {enabled: true, endpoint: running.endpoint, actor_id: "actor-a",
+    tenant_id: "tenant-one", store_identity: serviceIdentity, probe_todo_id: "todo_gateway_probe", ca_file: fixture.certPath};
+  const env: NodeJS.ProcessEnv = {...process.env, LOOPX_CONTEXT_DELIVERY: "off", LOOPX_AUTHORITY_CREDENTIAL: credentials.a};
+  delete env.LOOPX_TEST_POSTGRES_URL;
+  const writeBinding = async (overrides: JsonObject = {}) => writeFile(registry, JSON.stringify({
+    schema_version: "0.1", common_runtime_root: runtime,
+    goals: [{id: "goal-one", status: "active", repo: workspace, state_file: "STATE.md",
+      coordination: {agent_model: "peer_v1", registered_agents: ["actor-a", "actor-b"]},
+      quota: {compute: 1}, remote_authority: {...cfg, ...overrides}}],
+  }));
+  const args = ["-m", "loopx.cli", "--registry", registry, "--runtime-root", runtime, "--format", "json"];
+  const scope = ["--goal-id", "goal-one", "--agent-id", "actor-a"];
+  async function check(expected: string, credential = credentials.a) {
+    const {stdout} = await invoke(python, [...args, "quota", "should-run", "--runtime-profile", "outer_controller", ...scope],
+      {env: {...env, LOOPX_AUTHORITY_CREDENTIAL: credential}, timeout: 25_000, maxBuffer: 1024 * 1024});
+    const decision = JSON.parse(stdout);
+    assert.equal(decision.remote_gateway?.status, expected, JSON.stringify({
+      reason: decision.reason, code: decision.reason_code, fields: Object.keys(decision),
+    }));
+    assert.equal(decision.effective_action, "blocked_wait");
+    assert.equal(decision.should_run, false);
+    assert.equal(decision.normal_delivery_allowed, false);
+    assert.equal(decision.interaction_contract.agent_channel.must_attempt, false);
+    assert.equal(decision.interaction_contract.agent_channel.delivery_allowed, false);
+    assert.equal(decision.interaction_contract.cli_channel.spend_allowed_now, false);
+    assert(!decision.selected_todo);
+    for (const value of [cfg.endpoint, cfg.tenant_id, cfg.store_identity, cfg.ca_file, credential, "private-synthetic-note"]) {
+      assert(!stdout.includes(value));
+    }
+  }
+  await writeBinding(); await check("verified");
+  await check("unavailable", credentials.b); // Valid credential, wrong actor authorization.
+  for (const binding of [{tenant_id: "wrong-tenant"}, {store_identity: `postgresql:${"f".repeat(32)}`},
+    {ca_file: null}, {probe_todo_id: "todo_missing"}, {actor_id: "actor-b"}]) {
+    await writeBinding(binding); await check("unavailable");
+  }
+  await writeBinding();
+  await fixture.writePolicy({...servicePolicy(), principals: []}); await check("unavailable");
+  await fixture.writePolicy(); await check("verified");
+  await running.stop(); await check("unavailable");
+  await fixture.start(running.port); await check("verified");
+  assert.deepEqual(await fixture.store.loadAuthority(), initialHead, "gateway observations never change the remote head");
+});
+
 test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !connectionString}, async t => {
   const fixture = await postgresRemoteFixture(t, connectionString!);
   let running = await fixture.start();
@@ -235,28 +314,43 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
   });
   await t.test("lost response and server restart recover the exact receipt without repeating the write", async () => {
     await fixture.seed(["todo_disconnect"]);
-    const original = claimRequest("a", "todo_disconnect");
-    // Relay the real TLS request, wait for the complete committed response, then
-    // deliberately discard it. No mocked database or fabricated receipt.
-    const proxy = createServer({key: fixture.key, cert: fixture.cert}, (incoming, outgoing) => {
-      const upstream = httpsRequest(new URL(incoming.url!, running.endpoint), {method: "POST", ca: fixture.cert,
-        headers: incoming.headers}, response => {response.resume(); response.on("end", () => outgoing.destroy());});
-      upstream.on("error", () => outgoing.destroy()); incoming.pipe(upstream);
-    });
-    await new Promise<void>(resolve => proxy.listen(0, "127.0.0.1", resolve));
-    let lost: JsonObject;
-    try {lost = await callRemoteAuthority(`https://127.0.0.1:${(proxy.address() as AddressInfo).port}`, credentials.a, original, {ca: fixture.cert});}
-    finally {await new Promise<void>(resolve => proxy.close(() => resolve()));}
-    assert.equal(lost.status, "ambiguous");
-    const receipt = await fixture.store.readReceipt(remoteAuthorityOperationId(original, "principal-a"));
-    assert.equal(receipt.status, "found"); if (receipt.status !== "found") return;
-    const before = await fixture.store.loadAuthority();
-    const port = running.port; await running.stop(); running = await fixture.start(port);
-    const recovered = await fixture.client(running.endpoint, "a", original, true);
-    assert.equal(recovered.code, 0); assert.equal(recovered.value.status, "found");
-    assert.equal(recovered.value.receipt_sha256, canonicalAuthoritySha256(receipt.receipts[0]));
-    assert.equal(result(await call(original)).status, "replayed");
-    assert.deepEqual(await fixture.store.loadAuthority(), before);
+    const commands: RemoteAuthorityRequest[] = [claimRequest("a", "todo_disconnect"),
+      {...base("todo_created_after_disconnect"), operation: "todo_add", request_id: "create-disconnect",
+        text: "Synthetic task whose creation response is lost"}];
+    for (const original of commands) {
+      // Relay the real TLS request, wait for the complete committed response,
+      // then discard it. Each command retains its owner's actual receipt shape.
+      const proxy = createServer({key: fixture.key, cert: fixture.cert}, (incoming, outgoing) => {
+        const upstream = httpsRequest(new URL(incoming.url!, running.endpoint), {method: "POST", ca: fixture.cert,
+          headers: incoming.headers}, response => {response.resume(); response.on("end", () => outgoing.destroy());});
+        upstream.on("error", () => outgoing.destroy()); incoming.pipe(upstream);
+      });
+      await new Promise<void>(resolve => proxy.listen(0, "127.0.0.1", resolve));
+      let lost: JsonObject;
+      try {lost = await callRemoteAuthority(`https://127.0.0.1:${(proxy.address() as AddressInfo).port}`, credentials.a, original, {ca: fixture.cert});}
+      finally {await new Promise<void>(resolve => proxy.close(() => resolve()));}
+      assert.equal(lost.status, "ambiguous", original.operation);
+      const operationId = remoteAuthorityOperationId(original, "principal-a");
+      const receipt = await fixture.store.readReceipt(operationId);
+      assert.equal(receipt.status, "found"); if (receipt.status !== "found") return;
+      const before = await fixture.store.loadAuthority();
+      const port = running.port; await running.stop(); running = await fixture.start(port);
+      const recovered = await fixture.client(running.endpoint, "a", original, true);
+      assert.equal(recovered.code, 0, `${original.operation}: ${JSON.stringify(recovered.value)}`);
+      assert.equal(recovered.value.status, "found");
+      assert.equal(recovered.value.historical_only, true);
+      assert.equal(recovered.value.receipt_sha256, canonicalAuthoritySha256(receipt.receipts[0]));
+      assert.equal((recovered.value.result as JsonObject).changed, true);
+      assert.equal(result(await call(original)).status, "replayed");
+      if (original.operation === "todo_add") {
+        assert.equal(((recovered.value.result as JsonObject).todo as JsonObject).todo_id, original.todo_id);
+        const changed = await fixture.client(running.endpoint, "a", {...original, text: "Different creation intent"}, true);
+        assert.equal(changed.code, 1); assert.equal(changed.value.reason_code, "remote_authority_operation_mismatch");
+        assert.equal((await fixture.client(running.endpoint, "b", original, true)).code, 1);
+      }
+      assert.deepEqual(await fixture.store.readReceipt(operationId), receipt, "recovery preserves the original receipt bytes");
+      assert.deepEqual(await fixture.store.loadAuthority(), before, "recovery and replay commit no additional effect");
+    }
   });
   await t.test("unknown receipt query is read-only and does not turn into a claim", async () => {
     const before = await fixture.store.loadAuthority();

@@ -13,8 +13,8 @@ on 2026-05-31. The public product surface adopted the LoopX name on
 LoopX recognizes all accepted commit authors, co-authors, reviewers, issue
 reporters, and documentation contributors. The living contributor record is:
 
-- the repository's [Git history](https://github.com/huangruiteng/loopx/commits/main/);
-- GitHub's [Contributors view](https://github.com/huangruiteng/loopx/graphs/contributors);
+- the repository's [Git history](https://github.com/loopx-project/loopx/commits/main/);
+- GitHub's [Contributors view](https://github.com/loopx-project/loopx/graphs/contributors);
 - merged pull requests and their review history.
 
 This file intentionally does not maintain a ranked or hand-copied contributor

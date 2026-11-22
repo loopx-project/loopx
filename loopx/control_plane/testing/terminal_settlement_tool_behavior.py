@@ -12,26 +12,24 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..coordination.goal_storage_initialization import initialize_goal_storage_target
+from ..effect_program import SETTLEMENT_RECEIPT_SCHEMA_VERSION
 from ...heartbeat_prompt import build_heartbeat_prompt
 from ...control_plane.todos.mutation_api import add_goal_todo, complete_goal_todo
-from ..quota.turn_envelope import quota_action_signature_document
-from .doubao_model_behavior_actor import (
-    ARK_API_KEY_ENV,
-    DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_MODEL_ENV,
-    DoubaoActorTransport,
-    _direct_ark_transport,
-)
 from .model_tool_behavior import (
-    QuotaToolContext,
-    DoubaoExecToolClient,
-    QUOTA_FIRST_TOOL_INSTRUCTION,
+    DoubaoExecToolBehaviorActorBase,
     LoopxCliExecutionError,
+    QuotaToolContext,
+    QUOTA_FIRST_TOOL_INSTRUCTION,
+    append_exec_tool_exchange,
     argument_value,
+    build_qualification_receipt,
     digest_text,
+    execute_bounded_read_steps,
     execute_loopx_cli,
+    extract_quota_action_contract_base,
     is_context_read_command,
     loopx_command_tokens,
+    qualification_turn_instance_id,
     snapshot_disposable_fixture,
 )
 from .selected_todo_tool_behavior import bounded_workspace_read_plan
@@ -640,10 +638,7 @@ def _matches_identity(tokens: list[str], state: _QualificationState) -> bool:
 
 
 def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
-    signature = quota_action_signature_document(packet)
-    action = dict(signature.get("action") or {})
-    user = dict(signature.get("user") or {})
-    selected = dict(action.get("selected_todo") or {})
+    contract, _, _, _ = extract_quota_action_contract_base(packet)
     settlement_plan = dict(
         dict(packet.get("interaction_contract") or {})
         .get("cli_channel", {})
@@ -654,15 +649,8 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         for item in settlement_plan.get("ordered_steps", [])
         if isinstance(item, Mapping)
     ]
-    contract = {
-        "decision": "execute",
-        "selected_todo_id": selected.get("todo_id"),
-        "user_action_required": bool(user.get("action_required")),
-        "must_attempt_work": bool(action.get("must_attempt")),
-        "delivery_allowed": bool(action.get("delivery_allowed")),
-        "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
-        "external_write_requested": False,
-    }
+    spend = next((item for item in settlement_plan.get("ordered_steps", [])
+                  if isinstance(item, Mapping) and item.get("kind") == "quota_spend"), {})
     if (
         contract["selected_todo_id"] != TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
         or contract["user_action_required"]
@@ -670,22 +658,38 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         or not contract["delivery_allowed"]
         or contract["quiet_noop_allowed"]
         or ordered_steps != _EXPECTED_RECEIPT_STEPS
+        or settlement_plan.get("schema_version") != "quota_settlement_plan_v2"
+        or spend.get("owner") != "runtime"
+        or "command_template" in spend
     ):
-        raise ValueError("real quota packet did not expose terminal settlement v1")
+        raise ValueError("real quota packet did not expose runtime-owned terminal settlement")
     return contract
 
 
-def _settlement_receipt_steps(payload: Mapping[str, Any]) -> list[str]:
+def _settlement_receipt_steps(
+    payload: Mapping[str, Any], state: _QualificationState,
+) -> list[str]:
     settlement = payload.get("settlement_result")
     if not isinstance(settlement, Mapping) or settlement.get("ok") is not True:
         raise _TerminalToolViolation("settlement result is missing or failed")
     receipts = settlement.get("receipts")
     if not isinstance(receipts, list):
         raise _TerminalToolViolation("settlement receipts are missing")
+    identity = payload.get("settlement_identity")
+    heartbeat = (state.quota_packet or {}).get("heartbeat_receipt")
+    original = heartbeat.get("settlement_identity") if isinstance(heartbeat, Mapping) else None
+    effect_id = identity.get("effect_id") if isinstance(identity, Mapping) else None
+    if settlement.get("failure") is not None or not isinstance(original, Mapping) or identity != original or not isinstance(effect_id, str) or not effect_id or any(
+        not isinstance(item, Mapping)
+        or item.get("schema_version") != SETTLEMENT_RECEIPT_SCHEMA_VERSION
+        or item.get("status") != "committed"
+        or item.get("effect_id") != effect_id
+        for item in receipts
+    ):
+        return []
     return [
         str(item.get("step_kind"))
         for item in receipts
-        if isinstance(item, Mapping) and item.get("status") == "committed"
     ]
 
 
@@ -765,39 +769,17 @@ def _execute_workspace_read(
     )
     if not plan:
         raise _TerminalToolViolation("command is not one bounded workspace read")
-    outputs: list[str] = []
-    status = 0
-    proof_read = False
-    for step in plan:
-        should_run = bool(
-            step.operator == ";"
-            or (step.operator == "&&" and status == 0)
-            or (step.operator == "||" and status != 0)
-        )
-        if not should_run:
-            continue
-        completed = subprocess.run(
-            list(step.argv),
-            cwd=state.fixture.project_root,
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=10,
-        )
-        status = completed.returncode
-        output = completed.stdout
-        if step.line_limit is not None:
-            output = "".join(output.splitlines(keepends=True)[: step.line_limit])
-        outputs.append(output)
-        proof_read = proof_read or bool(
-            status == 0
-            and step.target is not None
-            and step.target.resolve() == state.fixture.proof_target.resolve()
-        )
+    results, status = execute_bounded_read_steps(plan, cwd=state.fixture.project_root)
+    proof_read = any(
+        step_status == 0
+        and step.target is not None
+        and step.target.resolve() == state.fixture.proof_target.resolve()
+        for step, step_status, _ in results
+    )
     if status != 0:
         raise RuntimeError(f"workspace read failed with exit={status}")
     state.proof_read = state.proof_read or proof_read
-    return "".join(outputs)
+    return "".join(output for _, _, output in results)
 
 
 def _receipt(
@@ -808,32 +790,27 @@ def _receipt(
     passed: bool,
     failure_code: str | None,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
-        "qualification_id": qualification_id,
-        "actor_ref": actor_ref,
-        "qualification_passed": passed,
-        "failure_code": failure_code,
-        **dict(state.contract or {}),
-        "observed_tool_sequence": [step["kind"] for step in state.steps],
-        "tool_call_count": len(state.steps),
-        "tool_call_limit": TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
-        "settlement_receipt_steps": list(state.receipt_steps),
-        "terminal_order_observed": bool(
-            passed and state.receipt_steps == _EXPECTED_RECEIPT_STEPS
-        ),
-        "tool_call_receipts": list(state.steps),
-        "boundary": {
-            "raw_prompt_persisted": False,
-            "raw_provider_response_persisted": False,
-            "raw_command_persisted": False,
+    return build_qualification_receipt(
+        schema_version=TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
+        qualification_id=qualification_id,
+        actor_ref=actor_ref,
+        passed=passed,
+        failure_code=failure_code,
+        steps=state.steps,
+        contract=state.contract,
+        extra_fields={
+            "tool_call_limit": TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
+            "settlement_receipt_steps": list(state.receipt_steps),
+            "terminal_order_observed": bool(
+                passed and state.receipt_steps == _EXPECTED_RECEIPT_STEPS
+            ),
+        },
+        boundary={
             "filesystem_writes_executed": True,
-            "writes_limited_to_temporary_fixture": True,
-            "external_writes_executed": False,
             "shell_commands_executed": state.workspace_shell_executed,
             "read_only_host_commands_executed": True,
         },
-    }
+    )
 
 
 def _execute_reentry_cli(
@@ -866,39 +843,33 @@ def _reentry_receipt(
     failure_code: str | None,
 ) -> dict[str, Any]:
     expected_count = len(state.fixture.projected_actions_by_todo)
-    return {
-        "schema_version": (
+    return build_qualification_receipt(
+        schema_version=(
             TERMINAL_SETTLEMENT_REENTRY_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION
         ),
-        "qualification_id": qualification_id,
-        "actor_ref": actor_ref,
-        "scenario": "post_refresh_rejection_reentry",
-        "qualification_passed": passed,
-        "failure_code": failure_code,
-        "provider_call_count": state.provider_call_count,
-        "tool_call_count": len(state.steps),
-        "projected_todo_count": expected_count,
-        "settled_todo_count": len(state.settled_todo_ids),
-        "completion_identity_preserved": bool(
-            passed and len(state.settled_todo_ids) == expected_count
-        ),
-        "terminal_quota_observed": state.terminal_quota_observed,
-        "model_stopped_after_terminal_quota": bool(
-            passed and state.terminal_quota_observed
-        ),
-        "observed_tool_sequence": [step["kind"] for step in state.steps],
-        "tool_call_receipts": list(state.steps),
-        "boundary": {
-            "raw_prompt_persisted": False,
-            "raw_provider_response_persisted": False,
-            "raw_command_persisted": False,
+        qualification_id=qualification_id,
+        actor_ref=actor_ref,
+        passed=passed,
+        failure_code=failure_code,
+        steps=state.steps,
+        extra_fields={
+            "scenario": "post_refresh_rejection_reentry",
+            "provider_call_count": state.provider_call_count,
+            "projected_todo_count": expected_count,
+            "settled_todo_count": len(state.settled_todo_ids),
+            "completion_identity_preserved": bool(
+                passed and len(state.settled_todo_ids) == expected_count
+            ),
+            "terminal_quota_observed": state.terminal_quota_observed,
+            "model_stopped_after_terminal_quota": bool(
+                passed and state.terminal_quota_observed
+            ),
+        },
+        boundary={
             "filesystem_writes_executed": True,
-            "writes_limited_to_temporary_fixture": True,
-            "external_writes_executed": False,
-            "shell_commands_executed": False,
             "read_only_host_commands_executed": True,
         },
-    }
+    )
 
 
 def _execute_todo_completion(
@@ -918,7 +889,7 @@ def _execute_todo_completion(
         if not _matches_identity(tokens, state):
             raise _TerminalToolViolation("completion_identity_mismatch")
     payload = _execute_cli(command, state)
-    receipt_steps = _settlement_receipt_steps(payload)
+    receipt_steps = _settlement_receipt_steps(payload, state)
     expected_steps = _EXPECTED_RECEIPT_STEPS if terminal else _EXPECTED_RECEIPT_STEPS[:1]
     if receipt_steps != expected_steps:
         raise _TerminalToolViolation("terminal_closeout_receipt_mismatch" if terminal
@@ -964,30 +935,20 @@ def _execute_terminal_cli(
                     if payload.get("error_code") == "progress_observation_invalid_arguments"
                     else "fixture_unchanged_cli_rejection")
             return json.dumps(payload, ensure_ascii=False, sort_keys=True), kind
-        receipt_steps = _settlement_receipt_steps(payload)
-        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:2]:
+        receipt_steps = _settlement_receipt_steps(payload, state)
+        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:3]:
             raise _TerminalToolViolation("writeback_receipt_mismatch")
         state.writeback_committed = True
+        state.spend_committed = True
         state.receipt_steps = receipt_steps
         kind = "durable_writeback"
         output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     elif command_kind == "quota" and command_action == "spend-slot":
         if not state.writeback_committed:
             raise _TerminalToolViolation("quota_spend_before_writeback")
-        if not tokens or not _matches_identity(tokens, state):
-            raise _TerminalToolViolation("quota_spend_identity_mismatch")
-        if "--execute" not in tokens or argument_value(
-            tokens, "--source"
-        ) != "heartbeat":
-            raise _TerminalToolViolation("quota_spend_contract_mismatch")
-        payload = _execute_cli(command, state)
-        receipt_steps = _settlement_receipt_steps(payload)
-        if receipt_steps != _EXPECTED_RECEIPT_STEPS[:3]:
-            raise _TerminalToolViolation("quota_spend_receipt_mismatch")
-        state.spend_committed = True
-        state.receipt_steps = receipt_steps
-        kind = "quota_spend"
-        output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        # The current complete plan makes this a runtime-owned writeback
+        # effect. A model must not issue a second debit after that receipt.
+        raise _TerminalToolViolation("quota_spend_contract_mismatch")
     elif command_kind == "todo" and command_action == "complete":
         return _execute_todo_completion(command, tokens, state)
     else:
@@ -1036,44 +997,8 @@ def _execute_terminal_workspace(
     return output, kind, workspace_shell
 
 
-class DoubaoTerminalSettlementToolBehaviorActor:
+class DoubaoTerminalSettlementToolBehaviorActor(DoubaoExecToolBehaviorActorBase):
     """Prove the model follows the real post-spend terminal closeout plan."""
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str = DOUBAO_2_1_PRO_MODEL,
-        timeout_seconds: float = 90.0,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-    ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        environ: Mapping[str, str] | None = None,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-        timeout_seconds: float = 90.0,
-    ) -> DoubaoTerminalSettlementToolBehaviorActor:
-        values = os.environ if environ is None else environ
-        api_key = values.get(ARK_API_KEY_ENV, "")
-        if not api_key.strip():
-            raise RuntimeError(
-                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
-            )
-        return cls(
-            api_key=api_key,
-            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
 
     def qualify(
         self,
@@ -1082,7 +1007,6 @@ class DoubaoTerminalSettlementToolBehaviorActor:
         fixture_root: Path,
     ) -> dict[str, Any]:
         fixture = _build_fixture(fixture_root)
-        digest = sha256(qualification_id.encode("utf-8")).hexdigest()[:16]
         state = _QualificationState(
             fixture=fixture,
             messages=[
@@ -1094,6 +1018,8 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "identity and settlement plan. A later same-Turn "
                         "settlement_plan supplies remaining commands and authoring "
                         "schema; use committed receipts to choose the next step. "
+                        "The runtime commits quota_spend with durable_writeback; "
+                        "observe those receipts and do not issue another spend. "
                         "A receipt without command templates does not replace "
                         "that plan. "
                         f"{QUOTA_FIRST_TOOL_INSTRUCTION}"
@@ -1140,7 +1066,7 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                 },
                 {"role": "user", "content": fixture.task_body},
             ],
-            turn_instance_id=f"qualification-{digest}",
+            turn_instance_id=qualification_turn_instance_id(qualification_id),
         )
         actor_ref = self._client.actor_ref
 
@@ -1199,20 +1125,7 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                     return receipt(passed=False, failure_code=failure_code)
                 if kind == "terminal_closeout":
                     return receipt(passed=True, failure_code=None)
-                state.messages.extend(
-                    [
-                        {
-                            "role": "assistant",
-                            "content": step.assistant_content,
-                            "tool_calls": [tool_call.provider_value],
-                        },
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.call_id,
-                            "content": output,
-                        },
-                    ]
-                )
+                append_exec_tool_exchange(state.messages, tool_call, output)
 
             return receipt(passed=False, failure_code="tool_call_budget_exhausted")
 
@@ -1427,19 +1340,6 @@ class DoubaoTerminalSettlementToolBehaviorActor:
             state.steps.append(step_receipt)
             if failure_code is not None:
                 return receipt(passed=False, failure_code=failure_code)
-            state.messages.extend(
-                [
-                    {
-                        "role": "assistant",
-                        "content": step.assistant_content,
-                        "tool_calls": [tool_call.provider_value],
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.call_id,
-                        "content": output,
-                    },
-                ]
-            )
+            append_exec_tool_exchange(state.messages, tool_call, output)
 
         return receipt(passed=False, failure_code="tool_call_budget_exhausted")

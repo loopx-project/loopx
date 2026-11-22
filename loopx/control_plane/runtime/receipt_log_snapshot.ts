@@ -6,10 +6,42 @@ import { setImmediate } from "node:timers/promises";
 
 import type { JsonObject } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
+import { jsonLineMembers } from "./json_line_members.ts";
+
+/** What one line that failed to parse still carries of the named members. */
+export interface MalformedLineMembers {
+  readonly line: number;
+  readonly members: readonly (readonly [string, unknown])[];
+  /** Named members the line contained but could not read intact. */
+  readonly unreadable: readonly string[];
+  /** A key's name met an undecodable byte; the member set is incomplete. */
+  readonly lostKeyName: boolean;
+  /** A separator or container boundary was unknowable; later members are guessed. */
+  readonly ambiguous: boolean;
+}
 
 export interface ReceiptLogSnapshot {
   readonly records: readonly JsonObject[];
+  /** Physical 1-based line number of each record, in `records` order. */
+  readonly recordLines: readonly number[];
+  /**
+   * Intact members of lines that were not records, restricted to the members a
+   * caller named.  A damaged display field must not erase the identity members
+   * the row's writer finished elsewhere in the same row; a row whose own writer
+   * never terminated it supplies no members at all.  Callers still decide which
+   * identities they trust.
+   */
+  readonly malformedLines: readonly MalformedLineMembers[];
   readonly firstErrorLine: number | null;
+  /**
+   * Physical line of an unterminated final row that still decoded, or null.
+   *
+   * The row never received the newline its writer must append to commit it,
+   * and the next append drops those bytes.  Deduplication and freshness may
+   * read the record for diagnosis, but only a newline-terminated row is a
+   * committed receipt.
+   */
+  readonly unterminatedRecordLine: number | null;
 }
 
 interface Prefix extends ReceiptLogSnapshot {
@@ -47,6 +79,21 @@ function remember(key: string, prefix: Prefix): void {
 }
 
 /** `readonly` is erased; freeze nested values so a caller cannot poison reuse. */
+function freezeMalformed(line: MalformedLineMembers): MalformedLineMembers {
+  for (const [, value] of line.members) {
+    if (value !== null && typeof value === "object") freezeRecord(value as JsonObject);
+  }
+  return Object.freeze({
+    line: line.line,
+    members: Object.freeze(line.members.map(([key, value]) => (
+      Object.freeze([key, value] as const)
+    ))),
+    unreadable: Object.freeze([...line.unreadable]),
+    lostKeyName: line.lostKeyName,
+    ambiguous: line.ambiguous,
+  });
+}
+
 function freezeRecord(record: JsonObject): JsonObject {
   const pending: object[] = [record];
   while (pending.length > 0) {
@@ -57,6 +104,18 @@ function freezeRecord(record: JsonObject): JsonObject {
     Object.freeze(value);
   }
   return record;
+}
+
+// One strict decoder for the whole read: replacement characters must never
+// become a different, valid-looking receipt identity. `ignoreBOM` matches
+// Buffer#toString, so a leading BOM still fails JSON parsing as before.
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function strictUtf8(bytes: Uint8Array): string | null {
+  try {
+    return STRICT_UTF8.decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 function decodeLine(line: string, schemaVersion?: string): JsonObject {
@@ -70,10 +129,9 @@ function decodeLine(line: string, schemaVersion?: string): JsonObject {
 
 /**
  * Read fresh bytes on EVERY invocation. Only reuse a parsed newline-terminated
- * prefix after hashing those exact bytes; size/mtime/inode are not evidence of
- * unchanged history. Rewrites, rotation, truncation and same-size edits all
+ * prefix after hashing those exact bytes;
+ *  Rewrites, rotation, truncation and same-size edits all
  * remain observable, including edits to an old identity-conflicting receipt.
- *
  * Never cache an unterminated tail: an append can finish its UTF-8 character or
  * JSON token. The tail still participates in this read, including strict errors.
  * Cache loss/eviction/restart affects cost only, never the returned facts.
@@ -81,8 +139,9 @@ function decodeLine(line: string, schemaVersion?: string): JsonObject {
 export async function readReceiptLogSnapshot(
   path: string,
   schemaVersion?: string,
+  recoveryKeys: readonly string[] = [],
 ): Promise<ReceiptLogSnapshot | null> {
-  const key = JSON.stringify([resolve(path), schemaVersion ?? null]);
+  const key = JSON.stringify([resolve(path), schemaVersion ?? null, recoveryKeys]);
   let bytes: Buffer;
   try {
     bytes = await readFile(path);
@@ -100,20 +159,43 @@ export async function readReceiptLogSnapshot(
     prefix = reusable;
   } else {
     const records = reusable ? [...reusable.records] : [];
+    const recordLines = reusable ? [...reusable.recordLines] : [];
+    const malformedLines = reusable ? [...reusable.malformedLines] : [];
     let firstErrorLine = reusable?.firstErrorLine ?? null;
     let lines = reusable?.lines ?? 0;
     let offset = reusable?.bytes ?? 0;
     let batchStart = offset;
+    // The append owner drops uncommitted torn bytes before it writes its own
+    // row, so this prefix can only end on a finished row. Any rewrite (including
+    // that drop) still fails the digest check and lands here as a cold read.
     while (offset < completeBytes) {
       const end = bytes.indexOf(10, offset);
-      const line = bytes.subarray(offset, end).toString("utf8");
+      const raw = bytes.subarray(offset, end);
+      const line = strictUtf8(raw);
       lines += 1;
-      if (line.trim()) {
+      let record: JsonObject | null = null;
+      if (line === null) {
+        firstErrorLine ??= lines;
+        const recovered = jsonLineMembers(raw, recoveryKeys);
+        if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
+          recovered.ambiguous || recovered.lostKeyName) {
+          malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
+        }
+      } else if (line.trim()) {
         try {
-          records.push(decodeLine(line, schemaVersion));
+          record = decodeLine(line, schemaVersion);
         } catch {
           firstErrorLine ??= lines;
+          const recovered = jsonLineMembers(raw, recoveryKeys);
+          if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
+            recovered.ambiguous || recovered.lostKeyName) {
+            malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
+          }
         }
+      }
+      if (record !== null) {
+        records.push(record);
+        recordLines.push(lines);
       }
       offset = end + 1;
       // Cold/rebuilt histories must let the shared server service other sockets.
@@ -123,22 +205,40 @@ export async function readReceiptLogSnapshot(
       }
     }
     prefix = Object.freeze({
-      records: Object.freeze(records), firstErrorLine, lines,
+      records: Object.freeze(records),
+      recordLines: Object.freeze(recordLines),
+      malformedLines: Object.freeze(malformedLines),
+      firstErrorLine, lines, unterminatedRecordLine: null,
       bytes: completeBytes, digest: digest(bytes.subarray(0, completeBytes)),
     });
   }
   remember(key, prefix);
-  const tail = bytes.subarray(completeBytes).toString("utf8");
+  const tail = strictUtf8(bytes.subarray(completeBytes));
+  if (tail === null) {
+    return Object.freeze({
+      records: prefix.records,
+      recordLines: prefix.recordLines,
+      malformedLines: prefix.malformedLines,
+      firstErrorLine: prefix.firstErrorLine ?? prefix.lines + 1,
+      unterminatedRecordLine: null,
+    });
+  }
   if (!tail.trim()) return prefix;
   try {
     return Object.freeze({
       records: Object.freeze([...prefix.records, decodeLine(tail, schemaVersion)]),
+      recordLines: Object.freeze([...prefix.recordLines, prefix.lines + 1]),
+      malformedLines: prefix.malformedLines,
       firstErrorLine: prefix.firstErrorLine,
+      unterminatedRecordLine: prefix.lines + 1,
     });
   } catch {
     return Object.freeze({
       records: prefix.records,
+      recordLines: prefix.recordLines,
+      malformedLines: prefix.malformedLines,
       firstErrorLine: prefix.firstErrorLine ?? prefix.lines + 1,
+      unterminatedRecordLine: null,
     });
   }
 }

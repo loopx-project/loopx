@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import ast
 import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from .release_metadata import checkout_release_metadata
 from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..runtime.public_safety import public_safe_compact_text
 from .actual_default_model_behavior_portfolio import (
@@ -512,25 +512,9 @@ def _git(repo_root: Path, *args: str) -> str:
 
 def _checkout_package_version(repo_root: Path) -> str:
     try:
-        init_module = ast.parse(
-            (repo_root / "loopx" / "__init__.py").read_text(encoding="utf-8")
-        )
-    except (OSError, SyntaxError) as exc:
+        module_version = checkout_release_metadata(repo_root)["version"]
+    except (OSError, SyntaxError, ValueError) as exc:
         raise ValueError("release package version is unavailable from the checkout") from exc
-
-    module_version = None
-    for statement in init_module.body:
-        if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
-            continue
-        target = statement.targets[0]
-        if (
-            isinstance(target, ast.Name)
-            and target.id == "__version__"
-            and isinstance(statement.value, ast.Constant)
-            and isinstance(statement.value.value, str)
-        ):
-            module_version = statement.value.value
-            break
     if not isinstance(module_version, str) or not _VERSION_RE.fullmatch(module_version):
         raise ValueError("release package version is invalid in the checkout")
     return module_version

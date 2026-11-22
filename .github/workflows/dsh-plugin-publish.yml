@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'loopx-project/loopx' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag
+    if: github.repository == 'loopx-project/loopx' && ((github.ref_type == 'tag' && github.ref_name == inputs.release_tag) || (github.ref == 'refs/heads/main' && startsWith(inputs.release_tag, 'dsh-loopx-plugin-v')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: refs/tags/${{ inputs.release_tag }}
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
@@ -47,7 +47,7 @@ jobs:
           const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
           assert.equal(process.env.RELEASE_TAG, `dsh-loopx-plugin-v${manifest.version}`)
           mkdirSync('output', { recursive: true })
-          appendFileSync(process.env.GITHUB_ENV, `DSH_ARTIFACT=output/${manifest.name}-${manifest.version}.tgz\n`)
+          appendFileSync(process.env.GITHUB_ENV, `DSH_ARTIFACT=./output/${manifest.name}-${manifest.version}.tgz\n`)
           NODE
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft > output/release.json
           node -e 'const r=require("./output/release.json"); require("node:assert/strict").equal(r.isDraft, false)'
