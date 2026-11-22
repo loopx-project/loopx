@@ -336,7 +336,7 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
         1,
         "an activation that still matches the selected Node keeps its precedence"
     );
-    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &stale, agreed.as_os_str());
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &selected, agreed.as_os_str());
 
     // No longer the selected Node: the stale directory becomes a last resort.
     let stale_nvm_bin = stale.as_os_str();
@@ -361,7 +361,7 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
         demoted_position(&nvm_root.join("versions/node/v24.22.1/bin")) < demoted_position(&stale),
         "a newer installed version outranks a demoted NVM_BIN"
     );
-    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &stale, demoted.as_os_str());
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &selected, demoted.as_os_str());
 
     // A PATH that resolves no Node at all: `NVM_BIN` is not evidence the shell
     // still selects that version, so it is demoted — yet still discovered, so
@@ -463,14 +463,11 @@ fn residual_nvm_bin_does_not_outrank_the_standard_host_node() {
         "the demoted NVM_BIN appears once: {paths:?}"
     );
 
-    // Core qualifies the Node the search resolves first, so the qualified
-    // discovered version must win rather than the residual one.
-    let resolved = resolve_executable_path("node", Some(search.as_os_str()))
-        .expect("the search must resolve a Node");
-    assert_eq!(
-        resolved, qualified_node,
-        "the residual NVM_BIN must not win resolution over a qualified version"
-    );
+    // Core qualifies the Node the search resolves first: the residual directory
+    // must not win while the host provides a Node, and when it does not the
+    // discovered qualified version must win. The oracle checks the host so it
+    // holds on a machine with a real Homebrew Node too.
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &qualified_node, search.as_os_str());
 
     // An nvm-only host with nothing else still finds the residual directory, so
     // the demotion never makes nvm invisible.
@@ -491,11 +488,21 @@ fn residual_nvm_bin_does_not_outrank_the_standard_host_node() {
         env::split_paths(&isolated_search).any(|directory| directory == isolated),
         "a residual NVM_BIN is still discovered when nothing else provides Node"
     );
-    assert_eq!(
-        resolve_executable_path("node", Some(isolated_search.as_os_str())),
-        Some(isolated.join("node")),
-        "an nvm-only host resolves its only Node"
-    );
+    let isolated_node = isolated.join("node");
+    match env::split_paths(&isolated_search)
+        .find(|directory| !directory.starts_with(&isolated_nvm) && directory.join("node").is_file())
+    {
+        Some(directory) => assert_eq!(
+            resolve_executable_path("node", Some(isolated_search.as_os_str())),
+            Some(directory.join("node")),
+            "a residual NVM_BIN must yield to a Node the host provides"
+        ),
+        None => assert_eq!(
+            resolve_executable_path("node", Some(isolated_search.as_os_str())),
+            Some(isolated_node),
+            "an nvm-only host resolves its only Node"
+        ),
+    }
 }
 
 // An inferred nvm candidate may only be selected when no other candidate
@@ -533,11 +540,13 @@ fn assert_inferred_nvm_never_displaces_existing(
 
 // A demoted `NVM_BIN` may only be selected when nothing else can be: a Node
 // the host provides, or a newer nvm install, must win first. The oracle reads
-// the host instead of assuming which candidate that is.
+// the host instead of assuming which candidate that is, so it holds on a
+// machine with a real Homebrew Node as well as on a bare one. `fallback` is the
+// executable the search must resolve to when the host provides no Node.
 #[cfg(unix)]
 fn assert_demoted_nvm_bin_is_last_resort(
     nvm_root: &Path,
-    stale_bin: &Path,
+    fallback: &Path,
     search: &std::ffi::OsStr,
 ) {
     let resolved =
@@ -550,9 +559,8 @@ fn assert_demoted_nvm_bin_is_last_resort(
             directory.join("node"),
             "a demoted NVM_BIN must yield to the Node the host provides"
         ),
-        None => assert_ne!(
-            resolved,
-            stale_bin.join("node"),
+        None => assert_eq!(
+            resolved, fallback,
             "a demoted NVM_BIN may only be selected when nothing else can be"
         ),
     }
