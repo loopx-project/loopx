@@ -461,7 +461,7 @@ grep -rln "required_decision_scopes" loopx/control_plane/todos/ | head
 1. **一条规则的所有者是决定合法转换的模块。** 如果无法指出被保护的不变量，这次改动还没有定位到位。
 2. **PR 描述里必须有一条完整的因果链：source、invariant、decision、projection 或 effect、receipt、validation。** 只能列出函数名的切片无法被评审。
 3. **文档描述责任归属，代码描述当前行为。** 两者冲突时，按冲突类型选择权威，并让这次 PR 把另一方更新掉。
-4. 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
+4. **`loopx/capabilities/<name>/` 下有代码，不证明该 Capability 已经发布。** 注册与真实 caller contract 才是发布判据，用 `loopx capability list --format json` 核对。
 5. **placement 先于实现。** capability id、provider id 与 built-in/extension-delivered 的选择，必须在写第一行代码之前写下理由。
 6. **任务来自公开入口。** 公开的 Contributor Task、Issue 和 fixture 是可参与工作的唯一来源，live active state 与 maintainer-local 判断都不算。
 

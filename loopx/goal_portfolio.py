@@ -326,6 +326,31 @@ def _read_goal(
     return row
 
 
+def registry_semantic_revision(registry_path: Path, raw: bytes) -> str | None:
+    """Hash registry content excluding benign global-sync heartbeat timestamps."""
+    try:
+        registry = decode_registry_snapshot(registry_path, raw)
+        goals = registry.get("goals")
+        if not isinstance(goals, list):
+            return None
+        normalized = {k: v for k, v in registry.items() if k != "updated_at"}
+        normalized["goals"] = [
+            {k: v for k, v in entry.items() if k != "synced_at"}
+            if isinstance(entry, dict)
+            else entry
+            for entry in goals
+        ]
+        canonical = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (OSError, TypeError, ValueError):
+        return None
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
 @effect_runtime_request_scope()
 def build_goal_portfolio(
     *,
@@ -340,6 +365,7 @@ def build_goal_portfolio(
     include_goal_attention: bool = False,
     include_goal_instance_id: bool = False,
     read_status: bool = True,
+    ignore_sync_timestamp_churn: bool = False,
 ) -> dict[str, Any]:
     """Read only the requested registry scope; never derive inventory from chat."""
     if not 1 <= limit <= 128 or not 0 < max_age_hours <= 8760:
@@ -463,8 +489,20 @@ def build_goal_portfolio(
             rows[-1]["goal_lifecycle"] = lifecycle_readback_unavailable(
                 goal_id, "goal_not_read"
             )
+    semantic_revision = (
+        registry_semantic_revision(registry_path, registry_bytes)
+        if ignore_sync_timestamp_churn
+        else None
+    )
     try:
-        changed = registry_path.read_bytes() != registry_bytes
+        after_bytes = registry_path.read_bytes()
+        changed = after_bytes != registry_bytes
+        if changed and ignore_sync_timestamp_churn:
+            changed = (
+                semantic_revision is None
+                or registry_semantic_revision(registry_path, after_bytes)
+                != semantic_revision
+            )
     except OSError:
         changed = True
     if changed:
@@ -505,6 +543,11 @@ def build_goal_portfolio(
         "collected_at": now.isoformat(),
         "collection_completed_at": datetime.now(timezone.utc).isoformat(),
         "inventory_revision": "sha256:" + hashlib.sha256(registry_bytes).hexdigest(),
+        **(
+            {"inventory_semantic_revision": semantic_revision}
+            if semantic_revision is not None
+            else {}
+        ),
         "scope": {
             "kind": "caller_authorized_registry",
             "requested_goal_ids": sorted(requested),

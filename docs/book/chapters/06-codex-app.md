@@ -175,7 +175,7 @@ writeback 和 spend 历史。
 **边界一：heartbeat 不创造 frontier。** 一个没有 Todo 的 Goal 不会因为被频繁唤醒而出现下一步。
 App 能保证有人看，不能保证有东西可做；没有可运行候选时就该进入 wait 或 monitor，让 cadence 放慢。
 
-不要在 automation prompt 里复制 quota 状态机，也不要让
+**边界二：automation 不是第二控制面。** 不要在 automation prompt 里复制 quota 状态机，也不要让
 它自己解析 Todo 是否 runnable。稳定 prompt 只负责协议，判断属于每次读到的 packet。
 
 **边界三：切换 Host 要核对工作归属。** App 和 CLI 可以读同一 Goal；切换前应查清旧实例是否仍执行、claim/lease 由谁持有，以及当前 writer 的围栏模式。需要显式移交时走对应 lifecycle，不能仅凭新 Host 已启动就并发推进同一项工作。
@@ -231,13 +231,13 @@ Gate 而不重复同样的安静轮询；若 Host cadence 更新失败而留下�
 
 ## 不变式
 
-1. 判断真实性看 writeback 与 spend，不看触发次数。
+1. **heartbeat 触发不等于工作发生。** 判断真实性看 writeback 与 spend，不看触发次数。
 2. **每次唤醒都过一次 `quota should-run`。** 没有这层 Gate，automation 就变成绕过决策的旁路。
 3. **`should_run=false` 是合法结果，但它只关闭这一个 Turn。** 已结算回放保留当前 cadence，用新的
 Turn identity 重新评估；`false` 的次数或本 Turn 的 receipt 都不能当作放慢 cadence 的依据。需要
 放慢时，由当前 `scheduler_hint` 提出（`apply_needed=true`），再走第 4 条的四步。
 4. **cadence 变化的四步缺一不可**：proposal、host apply、host readback、ACK。
-5. 只有 Host readback 与目标一致才闭合，不一致时按
+5. **本地 ACK ledger 不证明 Host 状态。** 只有 Host readback 与目标一致才闭合，不一致时按
    `drift_detected` 修复。
 6. **切换 Host 需要明确接管。** 同一 Goal 可被多处读取，写入仍须满足当前 authority、claim/lease 与围栏要求。
 

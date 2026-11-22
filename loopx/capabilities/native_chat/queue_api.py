@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ...chat_store import CHAT_STORE_SCHEMA_VERSION
 from ...status_server import is_loopback_host
+from .queued_admission import unbound_input_source_denial
 
 
 class ChatQueueRequestMixin:
@@ -70,6 +71,7 @@ class ChatQueueRequestMixin:
                 self.server.runtime_controller.project_contexts.session_context(session)
             else:
                 self._session_context(session)
+            mutable_source = unbound_input_source_denial(session) is None
             rows: list[dict[str, Any]] = []
             for turn in store.queued_turns(session_id, strict=True, include_reserved=True):
                 # Reuse history's exact admission/source checks before truncating;
@@ -87,6 +89,7 @@ class ChatQueueRequestMixin:
                     "attachment_count": len(turn.get("attachments") or []),
                     "steering": turn.get("_queue_steering"),
                     "input_revision": turn.get("input_revision", 0),
+                    "input_mutation_allowed": mutable_source and turn.get("origin") == "web",
                     "mutation": turn.get("_queue_mutation"),
                 })
             self._send_json({"ok": True, "schema_version": CHAT_STORE_SCHEMA_VERSION,

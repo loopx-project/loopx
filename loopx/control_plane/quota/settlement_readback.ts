@@ -1596,9 +1596,14 @@ function readQuotaSettlementFromRequest(
   // A committed observation closes its exact Turn independently of whether
   // the monitor still appears in the current Todo frontier. Reuse the monitor
   // reducer so completion, retirement or archival cannot reopen that Turn.
+  // Once a durable writeback is verified and quota spend (or its receipt) is
+  // still owed, the Turn is settlement_pending regardless of optional boundary
+  // or checkpoint flags; completed spends without those proofs remain open.
+  const spendPendingAfterWriteback = writeback.failure === null && spend.failure !== null;
   const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
-    writeback_completes_binding: todoBoundReplan || noSpendKind !== null || progressWriteback || replanWriteback,
+    writeback_completes_binding: todoBoundReplan || noSpendKind !== null || progressWriteback ||
+      replanWriteback || spendPendingAfterWriteback,
     completion_receipt_present: completionEvent !== null,
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,
