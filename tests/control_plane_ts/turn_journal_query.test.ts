@@ -170,6 +170,27 @@ test("the evidence chain aligns recorded execution, validation and settlement fa
   });
 });
 
+test("a failed terminal closeout appears between quota spend and scheduler application", async t => {
+  const { root, path } = await fixture(t);
+  const value = {
+    ...journal(),
+    status: "failed",
+    completed_phases: phases.slice(0, 5),
+    receipt: { turn_key: key, failed_phase: "terminal_closeout" },
+  };
+  await writeFile(path, JSON.stringify(value));
+
+  const chain = (await evidenceChain(root)).evidence_chain!;
+  assert.deepEqual(chain.completed_phases, value.completed_phases);
+  assert.equal(chain.failed_phase, "terminal_closeout");
+  assert.deepEqual(chain.phases.slice(4), [
+    { phase: "quota_spend", completed: true, failed: false },
+    { phase: "terminal_closeout", completed: false, failed: true },
+    { phase: "scheduler_apply", completed: false, failed: false },
+    { phase: "scheduler_ack", completed: false, failed: false },
+  ]);
+});
+
 test("terminal stop makes later writeback and settlement facts not applicable", async t => {
   const { root, path } = await fixture(t);
   const value = journal();

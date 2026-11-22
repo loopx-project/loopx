@@ -14,6 +14,7 @@ import pytest
 from loopx.cli import main
 from loopx.control_plane.turn_driver import executor
 from loopx.control_plane.turn_driver.driver import captured_todo_text_sha256
+from loopx.control_plane.turn_driver.journal_store import turn_journal_evidence_chain
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.test_loopx_turn_driver import (
     _completion_host_and_validation_scripts,
@@ -393,6 +394,21 @@ calls.write_text(calls.read_text() + "x" if calls.exists() else "x")""",
     assert (project / "completion-artifact.txt").read_text() == "completed"
     journal = _turn_journal(runtime)
     assert "durable_writeback" not in journal.get("effect_attempts", {})
+    if no_followup:
+        plan = journal["plan"]
+        readback = turn_journal_evidence_chain(
+            runtime,
+            settlement_identity=plan["transaction"]["settlement_plan"]["identity"],
+            goal_ref=plan.get("goal_ref"),
+        )
+        assert readback["availability"] == "recorded"
+        chain = readback["evidence_chain"]
+        assert chain["turn_key"] == journal["turn_key"]
+        assert chain["failed_phase"] == "terminal_closeout"
+        assert chain["settlement_result"]["value"]["failure"]["step_kind"] == "terminal_closeout"
+        assert [phase for phase in chain["phases"] if phase["failed"]] == [
+            {"phase": "terminal_closeout", "completed": False, "failed": True},
+        ]
     # A cached old result remains refused without another Host call or spend.
     monkeypatch.setattr(executor, "_run_task_validator", real_validator)
     retry = [

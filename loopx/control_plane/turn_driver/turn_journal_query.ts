@@ -161,6 +161,11 @@ function projectEvidenceChain(
   const failedPhase = typeof receipt?.failed_phase === "string"
     ? receipt.failed_phase
     : null;
+  const evidencePhases = [...transactionPhases];
+  if (failedPhase === "terminal_closeout") {
+    // Terminal closeout can fail after spend but is outside the committed ladder.
+    evidencePhases.splice(evidencePhases.indexOf("scheduler_apply"), 0, failedPhase);
+  }
   return {
     settlement_identity: settlementIdentityPayload(identity),
     turn_key: turnKey,
@@ -168,7 +173,7 @@ function projectEvidenceChain(
     result_kind: typeof journal.result_kind === "string" ? journal.result_kind : null,
     completed_phases: [...completedPhases],
     failed_phase: failedPhase,
-    phases: transactionPhases.map(phase => ({
+    phases: evidencePhases.map(phase => ({
       phase,
       completed: completedPhases.includes(phase),
       failed: failedPhase === phase,
