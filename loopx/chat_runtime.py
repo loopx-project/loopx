@@ -252,7 +252,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         claude_bin: str = "claude",
         kiro_cli_bin: str = KIRO_CLI_BIN,
         startup_timeout_sec: float | None = None,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         endpoint_registry: AgentEndpointRegistry | None = None,
         registry_path: Path | None = None,

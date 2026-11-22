@@ -310,7 +310,7 @@ class ChatSessionLifecycleMixin:
         claude_bin: str
         kiro_cli_bin: str
         acp_startup_timeout_sec: float | None
-        idle_timeout_sec: float
+        idle_timeout_sec: float | None
         hard_timeout_sec: float | None
         endpoint_registry: Any
         adapters: dict[str, ChatRuntimeAdapter]
@@ -422,7 +422,8 @@ class ChatSessionLifecycleMixin:
                     gate=None, error_code="unsupported_configuration")
             return AntigravityAdapter.start(
                 work_dir=work_dir, **native_context, resume_thread_id=resume_thread_id,
-                history=history, executor_model=model_config, hard_timeout_sec=self.hard_timeout_sec)
+                history=history, executor_model=model_config,
+                idle_timeout_sec=self.idle_timeout_sec, hard_timeout_sec=self.hard_timeout_sec)
         if agent_id == "codex":
             return start_runtime_adapter(
                 self, work_dir=work_dir, goal_id=goal_id, native_context=native_context,

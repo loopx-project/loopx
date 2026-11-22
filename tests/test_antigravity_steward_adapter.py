@@ -1194,7 +1194,7 @@ def test_transient_idle_cannot_reset_the_no_progress_deadline(tmp_path, language
         {"at": 302, "steps": [user, command], "status": "CASCADE_RUN_STATUS_IDLE"},
     ])
     with pytest.raises(CodexChatAgentError) as error:
-        adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("finish the task")
+        adapter_for(tmp_path, runtime_profile="trusted_owner", idle_timeout_sec=300.0).start_turn("finish the task")
     assert error.value.error_code == "response_timeout"
     assert language_server["cancelled"].is_set()
     assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
@@ -1274,7 +1274,7 @@ def test_explicit_deadline_and_default_no_progress_timeout_still_stop(tmp_path, 
     _native_clock(monkeypatch, language_server, _native_frames(stagnant=stagnant))
     events = []
     with pytest.raises(CodexChatAgentError) as error:
-        options = {"hard_timeout_sec": hard_limit} if hard_limit is not None else {}
+        options = {"hard_timeout_sec": hard_limit} if hard_limit is not None else {"idle_timeout_sec": 300.0}
         adapter_for(tmp_path, **options).start_turn("long task", lambda kind, data: events.append((kind, data)))
     assert error.value.error_code == "response_timeout"
     assert language_server["cancelled"].is_set()
@@ -1282,10 +1282,11 @@ def test_explicit_deadline_and_default_no_progress_timeout_still_stop(tmp_path, 
     assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
 
 
+@pytest.mark.parametrize("field", ["hard_timeout_sec", "idle_timeout_sec"])
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True])
-def test_invalid_hard_timeout_creates_no_native_invocation(tmp_path, language_server, value):
+def test_invalid_hard_timeout_creates_no_native_invocation(tmp_path, language_server, field, value):
     with pytest.raises(ValueError, match="finite and positive"):
-        adapter_for(tmp_path, hard_timeout_sec=value)
+        adapter_for(tmp_path, **{field: value})
     assert language_server["calls"] == []
 
 
@@ -1567,7 +1568,7 @@ def test_repeated_native_error_messages_do_not_reset_no_progress_deadline(tmp_pa
         frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
     _native_clock(monkeypatch, language_server, frames)
     with pytest.raises(CodexChatAgentError) as raised:
-        adapter_for(tmp_path).start_turn("original task")
+        adapter_for(tmp_path, idle_timeout_sec=300.0).start_turn("original task")
     assert raised.value.error_code == "response_timeout"
     assert language_server["now"] == 305.0
     assert language_server["cancelled"].is_set()
@@ -1856,10 +1857,163 @@ def test_repeated_native_error_plus_thinking_only_planner_retry_times_out_and_ca
         frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
     _native_clock(monkeypatch, language_server, frames)
     with pytest.raises(CodexChatAgentError) as raised:
-        adapter_for(tmp_path).start_turn("original task")
+        adapter_for(tmp_path, idle_timeout_sec=300.0).start_turn("original task")
     assert raised.value.error_code == "response_timeout"
     assert language_server["now"] == 305.0
     assert language_server["cancelled"].is_set()
+
+
+def test_default_antigravity_adapter_has_no_idle_timeout_across_silent_gaps(
+    tmp_path, language_server, monkeypatch
+) -> None:
+    user = {
+        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+    }
+    silent = {
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_GENERATING",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+        "plannerResponse": {"thinking": "initial thought"},
+    }
+    final = {
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+        "plannerResponse": {
+            "response": "completed after long quiet tool wait",
+            "stopReason": "STOP_REASON_STOP_PATTERN",
+        },
+    }
+    _native_clock(
+        monkeypatch,
+        language_server,
+        [
+            {"at": 1.0, "steps": [user, silent], "status": "CASCADE_RUN_STATUS_RUNNING"},
+            {"at": 450.0, "steps": [user, silent], "status": "CASCADE_RUN_STATUS_RUNNING"},
+            {"at": 900.0, "steps": [user, final], "status": "CASCADE_RUN_STATUS_IDLE"},
+        ],
+    )
+    adapter = adapter_for(tmp_path)
+    assert adapter.idle_timeout_sec is None
+    result = adapter.start_turn("wait for quiet work")
+    assert result["message"] == "completed after long quiet tool wait"
+    assert language_server["now"] == 900.0
+    assert not language_server["cancelled"].is_set()
+
+
+def test_explicit_idle_timeout_allows_active_recovery_and_resets_error_fence_after_substantive_progress(
+    tmp_path, language_server, monkeypatch
+) -> None:
+    from loopx.capabilities.native_chat.antigravity_adapter import _turn_progress_snapshot
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {
+        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+    }
+    err1 = {
+        "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+        "errorMessage": {"error": {"shortError": "The stream was interrupted."}},
+    }
+    retry1_done = {
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+        "plannerResponse": {"thinking": "interrupted retry 1"},
+    }
+    err2 = {
+        "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 3}},
+        "errorMessage": {"error": {"shortError": "The stream was interrupted again."}},
+    }
+    # CORTEX_STEP_TYPE_GENERIC (tool result) resets the error fence, whereas SYSTEM_MESSAGE does not.
+    sys_msg = {"type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE"}
+    generic_tool = {"type": "CORTEX_STEP_TYPE_GENERIC", "status": "CORTEX_STEP_STATUS_DONE"}
+    post_think = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING",
+                  "plannerResponse": {"thinking": "resumed thinking"}}
+    assert len(_turn_progress_snapshot(list(enumerate([user, err1, retry1_done, err2, sys_msg, post_think])))) == 2
+    assert len(_turn_progress_snapshot(list(enumerate([user, err1, retry1_done, err2, generic_tool, post_think])))) == 4
+    tool_planner = {
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 4}},
+        "plannerResponse": {"thinking": "calling tool", "toolCalls": [{"id": "c1", "name": "run_command"}]},
+    }
+    tool_step = {
+        "type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 5}},
+        "runCommand": {"commandLine": "echo ok", "combinedOutput": "ok\n", "exitCode": 0},
+    }
+    frames = [
+        {"at": 10.0, "steps": [user, err1, retry1_done, err2], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 100.0, "steps": [user, err1, retry1_done, err2, tool_planner, tool_step], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 280.0, "steps": [user, err1, retry1_done, err2, tool_planner, tool_step, {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_GENERATING",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 6}},
+            "plannerResponse": {"thinking": "post-recovery synthesis part 1"},
+        }], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 460.0, "steps": [user, err1, retry1_done, err2, tool_planner, tool_step, {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_GENERATING",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 6}},
+            "plannerResponse": {"thinking": "post-recovery synthesis part 2"},
+        }], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 640.0, "steps": [user, err1, retry1_done, err2, tool_planner, tool_step, {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 6}},
+            "plannerResponse": {
+                "thinking": "post-recovery synthesis complete",
+                "response": "recovered after transient error",
+                "stopReason": "STOP_REASON_STOP_PATTERN",
+            },
+        }], "status": "CASCADE_RUN_STATUS_IDLE"},
+    ]
+    _native_clock(monkeypatch, language_server, frames)
+    recovered = adapter_for(
+        tmp_path, runtime_profile="trusted_owner", idle_timeout_sec=300.0
+    ).start_turn("recover after stream error")
+    assert recovered["message"] == "recovered after transient error"
+    assert language_server["now"] == 640.0
+    assert not language_server["cancelled"].is_set()
+
+    # Repeated ERROR -> GENERATING thinking -> DONE thinking without substantive output still bounds at 300s.
+    language_server["active"] = False
+    loop_steps = [user, err1, retry1_done, err2]
+    loop_frames = [
+        {"at": 10.0, "steps": loop_steps, "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 150.0, "steps": [*loop_steps, {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_GENERATING",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 4}},
+            "plannerResponse": {"thinking": "looping generating thought"},
+        }], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 260.0, "steps": [*loop_steps, {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 4}},
+            "plannerResponse": {"thinking": "looping settled thought"},
+        }], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 315.0, "steps": [*loop_steps, {
+            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+            "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 4}},
+            "plannerResponse": {"thinking": "looping settled thought"},
+        }], "status": "CASCADE_RUN_STATUS_RUNNING"},
+    ]
+    _native_clock(monkeypatch, language_server, loop_frames)
+    with pytest.raises(CodexChatAgentError) as loop_err:
+        adapter_for(tmp_path, idle_timeout_sec=300.0).start_turn("looping error task")
+    assert loop_err.value.error_code == "response_timeout"
+    assert language_server["now"] == 315.0
 
 
 def test_isolated_cascade_preserves_main_cascade_and_pending_history(tmp_path, monkeypatch) -> None:
