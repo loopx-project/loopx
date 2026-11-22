@@ -1088,3 +1088,219 @@ test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete o
   assert.equal(externalIgnoringDraftOrApprove.observation_incomplete, false);
   assert.deepEqual(externalIgnoringDraftOrApprove.scoped_repository_items, []);
 });
+
+test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {
+  const noAgeScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+    },
+  };
+  const mergeableScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      exclude_conflicting: true,
+      effective_verdicts: ["APPROVE"],
+      required_approver_declarations: ["gpt"],
+    },
+  };
+  const externalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+
+  const pre9207RcPr = {
+    number: 410,
+    title: "External PR with RC",
+    url: "https://github.com/acme/widgets/pull/410",
+    headRefOid: "head410",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    author: {login: "ext-user"},
+    updatedAt: "2026-11-21T08:30:00Z",
+    checks_summary: {total: 1, pass_count: 1, fail_count: 0, pending_count: 0},
+    bypassed_gates: [],
+    review_summary: {
+      effective_verdict: "REQUEST_CHANGES",
+      has_review_conflict: false,
+      stale_review_count: 0,
+      exact_head_reviews: [],
+    },
+  };
+  const upgradedCompleteRcPr = {
+    ...pre9207RcPr,
+    stalled_since: "2026-11-21T07:00:00Z",
+    author_replied_after_request_changes: true,
+    comments_coverage_incomplete: false,
+    stalled_threshold_met: false,
+    stalled_bucket: "awaiting_maintainer_reply",
+    review_summary: {
+      ...pre9207RcPr.review_summary,
+      latest_request_changes_review_id: "PRR_410",
+      stalled_since: "2026-11-21T07:00:00Z",
+      author_replied_after_request_changes: true,
+      comments_coverage_incomplete: false,
+    },
+  };
+  const simulatedBackfillFailureRcPr = {
+    ...upgradedCompleteRcPr,
+    author_replied_after_request_changes: false,
+    comments_coverage_incomplete: true,
+    stalled_bucket: "under_24h",
+    review_summary: {
+      ...upgradedCompleteRcPr.review_summary,
+      author_replied_after_request_changes: false,
+      comments_coverage_incomplete: true,
+    },
+  };
+
+  for (const scope of [null, noAgeScope]) {
+    const legacy = observeStewardSignalMonitor({
+      signal_scope: scope,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [pre9207RcPr]},
+      observed_at: "2026-11-21T09:00:00Z",
+    });
+    const upgraded = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: legacy.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [upgradedCompleteRcPr]},
+      observed_at: "2026-11-21T09:05:00Z",
+    });
+    assert.equal(upgraded.result_hash, legacy.result_hash);
+    assert.equal(upgraded.material_change, false);
+    assert.equal(upgraded.observation_incomplete, false);
+
+    // Simulated backfill failure -> recovery on monitors without an age filter yields no false wakeup.
+    const failedBackfill = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: legacy.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [simulatedBackfillFailureRcPr]},
+      observed_at: "2026-11-21T09:10:00Z",
+    });
+    assert.equal(failedBackfill.result_hash, legacy.result_hash);
+    assert.equal(failedBackfill.material_change, false);
+    assert.equal(failedBackfill.observation_incomplete, false);
+
+    const recoveredBackfill = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: failedBackfill.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [upgradedCompleteRcPr]},
+      observed_at: "2026-11-21T09:15:00Z",
+    });
+    assert.equal(recoveredBackfill.result_hash, legacy.result_hash);
+    assert.equal(recoveredBackfill.material_change, false);
+    assert.equal(recoveredBackfill.observation_incomplete, false);
+
+    // Real updatedAt change still triggers material_change=true when !usesStalledAgeFilter.
+    const bumpedUpdatedAt = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: legacy.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {
+        status: "ok",
+        repository: "acme/widgets",
+        items: [{...upgradedCompleteRcPr, updatedAt: "2026-11-21T09:20:00Z"}],
+      },
+      observed_at: "2026-11-21T09:25:00Z",
+    });
+    assert.equal(bumpedUpdatedAt.material_change, true);
+    assert.equal(bumpedUpdatedAt.observation_incomplete, false);
+    assert.notEqual(bumpedUpdatedAt.result_hash, legacy.result_hash);
+  }
+
+  // Mergeable non-age scope also retains 100% pre-#9207 hash parity.
+  const pre9207Approved = {
+    number: 411,
+    title: "Approved PR",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    author: {login: "alice"},
+    updatedAt: "2026-11-21T08:00:00Z",
+    review_summary: {
+      effective_verdict: "APPROVE",
+      has_review_conflict: false,
+      exact_head_reviews: [
+        {author_login: "bob", reviewer_declaration: "GPT-5.4", verdict: "APPROVE", valid_verdict_review: true, state: "APPROVED"},
+      ],
+    },
+  };
+  const upgradedApproved = {
+    ...pre9207Approved,
+    stalled_since: null,
+    author_replied_after_request_changes: false,
+    comments_coverage_incomplete: false,
+    review_summary: {
+      ...pre9207Approved.review_summary,
+      latest_request_changes_review_id: null,
+      stalled_since: null,
+      author_replied_after_request_changes: false,
+      comments_coverage_incomplete: false,
+    },
+  };
+  const legacyMergeable = observeStewardSignalMonitor({
+    signal_scope: mergeableScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [pre9207Approved]},
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  const upgradedMergeable = observeStewardSignalMonitor({
+    signal_scope: mergeableScope,
+    previous_hash: legacyMergeable.result_hash,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [upgradedApproved]},
+    observed_at: "2026-11-21T09:05:00Z",
+  });
+  assert.equal(upgradedMergeable.result_hash, legacyMergeable.result_hash);
+  assert.equal(upgradedMergeable.material_change, false);
+
+  // Even under an age filter, comments_coverage_incomplete metadata never enters result_hash.
+  const withoutPaginationField = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [pre9207RcPr]},
+    observed_at: "2026-11-22T10:00:00Z",
+  });
+  const withPaginationFieldFalse = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    previous_hash: withoutPaginationField.result_hash,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        {
+          ...pre9207RcPr,
+          comments_coverage_incomplete: false,
+          review_summary: {
+            ...pre9207RcPr.review_summary,
+            comments_coverage_incomplete: false,
+          },
+        },
+      ],
+    },
+    observed_at: "2026-11-22T10:05:00Z",
+  });
+  assert.equal(withPaginationFieldFalse.result_hash, withoutPaginationField.result_hash);
+  assert.equal(withPaginationFieldFalse.material_change, false);
+});

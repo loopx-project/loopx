@@ -904,9 +904,18 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
         },
     )
 
-    def _observe_with(fake_runner) -> dict[str, Any]:
+    def _observe_with(fake_runner, *, backfill_comments: bool = True) -> dict[str, Any]:
         with monkeypatch.context() as mp:
-            mp.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_runner)
+            if backfill_comments:
+                mp.setattr(
+                    "loopx.capabilities.native_chat.steward_monitor.subprocess.run",
+                    fake_runner,
+                )
+                return _observe_github_repository_prs("org/repo", backfill_comments=True)
+            mp.setattr(
+                "loopx.capabilities.native_chat.steward_monitor.subprocess.run",
+                fake_runner,
+            )
             return _observe_github_repository_prs("org/repo")
 
     calls_snap1: list[list[str]] = []
@@ -1106,3 +1115,336 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
     )
     assert obs_rpc_err["observation_incomplete"] is True
     assert obs_rpc_err["result_hash"] == obs1["result_hash"]
+
+    # Default backfill_comments=False invokes zero comment backfill RPCs even when hasPreviousPage=True.
+    default_calls: list[list[str]] = []
+    repo_default_no_backfill = _observe_with(
+        lambda cmd, **_kw: (
+            default_calls.append(list(cmd))
+            or subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
+        ),
+        backfill_comments=False,
+    )
+    assert len(default_calls) == 1
+    assert not any(arg.startswith("before=") for cmd in default_calls for arg in cmd)
+    assert repo_default_no_backfill["items"][0]["comments_coverage_incomplete"] is True
+
+
+def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
+    steward, tmp_path, monkeypatch,  # noqa: F811
+) -> None:
+    from test_native_steward_managed_mode import original, storage
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _store, runtime, _provider, transport, binding, _capture, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, "sqlite")
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        expected_plan_id=plan["plan_id"],
+        execute=True,
+    )["actor"]
+    context = {"authorization_scope_id": "scope_test", "goals": [{"id": actor["goal_id"], "status": "active"}]}
+    monitor = StewardMonitor(runtime)
+    monkeypatch.setattr(
+        monitor.bindings,
+        "steward_scope",
+        lambda _session: [actor["goal_id"]],
+    )
+    monkeypatch.setattr(
+        monitor.bindings,
+        "_core",
+        lambda op, params: (
+            {"result_hash": "sha256:portfolio-fixed"}
+            if op == "collaboration.steward.monitor.observation"
+            else ChatConversationBindings._core(op, params)
+        ),
+    )
+
+    head = "c" * 40
+    gpt_decl = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    rc_review = {
+        "id": "PRR_rc_501",
+        "author": {"__typename": "User", "login": "maintainer"},
+        "authorAssociation": "MEMBER",
+        "state": "CHANGES_REQUESTED",
+        "commit": {"oid": head},
+        "submittedAt": "2030-01-01T08:00:00Z",
+        "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=gpt_decl),
+    }
+    author_comment = {
+        "createdAt": "2030-01-01T09:00:00Z",
+        "authorAssociation": "NONE",
+        "author": {"__typename": "User", "login": "ext-contributor"},
+    }
+
+    def _visitors(count: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "createdAt": f"2030-01-01T10:{1 + idx:02d}:00Z",
+                "authorAssociation": "NONE",
+                "author": {"__typename": "User", "login": f"visitor-{idx}"},
+            }
+            for idx in range(count)
+        ]
+
+    def _pr_node(*, updated_at: str, comments_conn: dict[str, Any]) -> dict[str, Any]:
+        node = _graphql_node(
+            _sample_pr(
+                number=501,
+                head_oid=head,
+                author="ext-contributor",
+                review_decision="CHANGES_REQUESTED",
+                reviews=[rc_review],
+            )
+        )
+        node["updatedAt"] = updated_at
+        node["comments"] = comments_conn
+        return node
+
+    complete_node = _pr_node(
+        updated_at="2030-01-01T10:19:00Z",
+        comments_conn={
+            "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
+            "nodes": [author_comment, *_visitors(19)],
+        },
+    )
+    truncated_node = _pr_node(
+        updated_at="2030-01-01T10:19:00Z",
+        comments_conn={
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "c20"},
+            "nodes": _visitors(20),
+        },
+    )
+    updated_at_changed_node = _pr_node(
+        updated_at="2030-01-01T10:30:00Z",
+        comments_conn={
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "c20"},
+            "nodes": _visitors(20),
+        },
+    )
+
+    def _create_monitor(target_key: str, signal_scope: dict[str, Any] | None) -> dict[str, Any]:
+        actions = transport.core.actions
+        params_dict: dict[str, Any] = {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": f"Monitor {target_key}",
+            "target_key": target_key,
+            "task_repository": "org/repo",
+            "cadence": "every_2_hours",
+            "timezone": "Asia/Shanghai",
+            "stop_condition": "watch_only",
+        }
+        if signal_scope is not None:
+            params_dict["signal_scope"] = signal_scope
+        preview = actions.preview({
+            "action_kind": "monitor.create",
+            "summary": f"Create {target_key}",
+            "normalized_parameters": params_dict,
+            "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+            "idempotency_key": f"create-{target_key}",
+        })
+        assert preview["status"] == "preview_ready"
+        todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
+        return next(row for row in monitor.todos(actor) if row["todo_id"] == todo_id)
+
+    def _collect_with_gh(todo_row: dict[str, Any], gh_runner) -> tuple[dict[str, Any], list[str], list[list[str]]]:
+        seen_cmds: list[list[str]] = []
+        real_subprocess_run = subprocess.run
+
+        def wrapped(cmd, **kwargs):
+            if cmd and cmd[0] == "gh":
+                seen_cmds.append(list(cmd))
+                return gh_runner(cmd, **kwargs)
+            return real_subprocess_run(cmd, **kwargs)
+
+        with monkeypatch.context() as mp:
+            mp.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", wrapped)
+            obs, succ = monitor._collect_signal_monitor(actor, context, todo_row)
+        return obs, succ, seen_cmds
+
+    # 1. Pre-#9207 persisted hash parity + unscoped (signal_scope=None) monitor:
+    #    0 backfill calls, no false wakeup on truncated window, real updatedAt change wakes up.
+    unscoped_todo = _create_monitor("steward-unscoped-no-backfill", None)
+    pre9207_item = {
+        "number": 501,
+        "title": "PR #501",
+        "url": "https://github.com/org/repo/pull/501",
+        "headRefOid": head,
+        "headRefName": "codex/test-pr",
+        "baseRefName": "main",
+        "isDraft": False,
+        "author": {"login": "ext-contributor"},
+        "reviewDecision": "CHANGES_REQUESTED",
+        "mergeStateStatus": "BLOCKED",
+        "mergeable": "MERGEABLE",
+        "updatedAt": "2030-01-01T10:19:00Z",
+        "checks_summary": {"total": 1, "pass_count": 1, "fail_count": 0, "pending_count": 0},
+        "review_summary": {
+            "effective_verdict": "REQUEST_CHANGES",
+            "has_review_conflict": False,
+            "stale_review_count": 0,
+            "exact_head_reviews": [
+                {
+                    "id": "PRR_rc_501",
+                    "url": None,
+                    "author_login": "maintainer",
+                    "author_is_pr_author": False,
+                    "state": "CHANGES_REQUESTED",
+                    "verdict": "REQUEST_CHANGES",
+                    "formal_github_verdict": "REQUEST_CHANGES",
+                    "author_owned_fallback": False,
+                    "bilingual_valid": True,
+                    "valid_verdict_review": True,
+                    "reviewer_declaration": gpt_decl,
+                    "submitted_at": "2030-01-01T08:00:00Z",
+                }
+            ],
+        },
+        "bypassed_gates": ["BLOCKED_MERGE_STATE"],
+    }
+    pre9207_unscoped_obs = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "portfolio_observation": {"result_hash": "sha256:portfolio-fixed"},
+            "inbox_items": [],
+            "repository_snapshot": {"status": "ok", "repository": "org/repo", "items": [pre9207_item]},
+            "previous_hash": None,
+        },
+    )
+    unscoped_todo_with_pre9207 = {**unscoped_todo, "result_hash": pre9207_unscoped_obs["result_hash"]}
+
+    obs_unscoped_complete, succ_u1, cmds_u1 = _collect_with_gh(
+        unscoped_todo_with_pre9207,
+        lambda cmd, **_kw: subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([complete_node])), stderr=""),
+    )
+    assert len(cmds_u1) == 1
+    assert obs_unscoped_complete["result_hash"] == pre9207_unscoped_obs["result_hash"]
+    assert obs_unscoped_complete["material_change"] is False
+    assert obs_unscoped_complete["observation_incomplete"] is False
+    assert succ_u1 == []
+
+    # Truncated suffix (even if backfill RPC would fail!) executes 0 backfill RPCs and keeps hash unchanged.
+    def _fail_if_backfill(node_to_return):
+        def _runner(cmd, **_kw):
+            if any(arg.startswith("before=") for arg in cmd):
+                raise AssertionError("backfill RPC must not run without min_stalled_hours > 0")
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([node_to_return])), stderr="")
+        return _runner
+
+    obs_unscoped_truncated, succ_u2, cmds_u2 = _collect_with_gh(
+        unscoped_todo_with_pre9207,
+        _fail_if_backfill(truncated_node),
+    )
+    assert len(cmds_u2) == 1
+    assert obs_unscoped_truncated["result_hash"] == pre9207_unscoped_obs["result_hash"]
+    assert obs_unscoped_truncated["material_change"] is False
+    assert obs_unscoped_truncated["observation_incomplete"] is False
+    assert succ_u2 == []
+
+    # Real updatedAt change wakes up unscoped monitor with --next-agent-todo.
+    obs_unscoped_updated, succ_u3, _ = _collect_with_gh(
+        unscoped_todo_with_pre9207,
+        _fail_if_backfill(updated_at_changed_node),
+    )
+    assert obs_unscoped_updated["material_change"] is True
+    assert obs_unscoped_updated["observation_incomplete"] is False
+    assert "--next-agent-todo" in succ_u3
+
+    # 2. Scoped monitor WITHOUT min_stalled_hours: 0 backfill calls, pre-#9207 parity, no false wakeup,
+    #    and real updatedAt change wakes up.
+    no_age_scope = {
+        "schema_version": "steward_signal_monitor_scope_v0",
+        "include_portfolio": False,
+        "include_inbox": False,
+        "pr_filter": {
+            "exclude_drafts": True,
+            "effective_verdicts": ["REQUEST_CHANGES"],
+            "author_mode": "exclude",
+            "authors": ["maintainer"],
+        },
+    }
+    no_age_todo = _create_monitor("steward-no-age-no-backfill", no_age_scope)
+    pre9207_no_age_obs = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "signal_scope": no_age_scope,
+            "repository_snapshot": {"status": "ok", "repository": "org/repo", "items": [pre9207_item]},
+            "observed_at": "2030-01-01T11:00:00Z",
+            "previous_hash": None,
+        },
+    )
+    no_age_todo_with_pre = {**no_age_todo, "result_hash": pre9207_no_age_obs["result_hash"]}
+
+    obs_na1, succ_na1, cmds_na1 = _collect_with_gh(no_age_todo_with_pre, _fail_if_backfill(truncated_node))
+    assert len(cmds_na1) == 1
+    assert obs_na1["result_hash"] == pre9207_no_age_obs["result_hash"]
+    assert obs_na1["material_change"] is False
+    assert obs_na1["observation_incomplete"] is False
+    assert succ_na1 == []
+
+    obs_na_rec, succ_na_rec, cmds_na_rec = _collect_with_gh(no_age_todo_with_pre, _fail_if_backfill(complete_node))
+    assert len(cmds_na_rec) == 1
+    assert obs_na_rec["result_hash"] == pre9207_no_age_obs["result_hash"]
+    assert obs_na_rec["material_change"] is False
+    assert succ_na_rec == []
+
+    obs_na2, succ_na2, _ = _collect_with_gh(no_age_todo_with_pre, _fail_if_backfill(updated_at_changed_node))
+    assert obs_na2["material_change"] is True
+    assert obs_na2["observation_incomplete"] is False
+    assert "--next-agent-todo" in succ_na2
+
+    # 3. Scoped monitor WITH min_stalled_hours > 0 DOES invoke backfill RPC and preserves state on failure.
+    age_scope = {
+        **no_age_scope,
+        "pr_filter": {**no_age_scope["pr_filter"], "min_stalled_hours": 24},
+    }
+    age_todo = _create_monitor("steward-age-backfill", age_scope)
+
+    def _age_backfill_runner(cmd, **_kw):
+        if any(arg == "before=c20" for arg in cmd):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "comments": {
+                                        "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
+                                        "nodes": [author_comment],
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([truncated_node])), stderr="")
+
+    obs_age, succ_age, cmds_age = _collect_with_gh(age_todo, _age_backfill_runner)
+    assert len(cmds_age) == 2
+    assert any("before=c20" in cmd for cmd in cmds_age)
+    assert obs_age["material_change"] is True
+    assert obs_age["observation_incomplete"] is False
+    assert obs_age["scoped_repository_items"][0]["stalled_bucket"] == "awaiting_maintainer_reply"
+    assert "--next-agent-todo" in succ_age
+
+    # And backfill failure on age-filtered monitor fails closed (RuntimeError -> no hash overwrite).
+    age_todo_with_hash = {**age_todo, "result_hash": obs_age["result_hash"]}
+    with pytest.raises(RuntimeError, match="temporarily unavailable"):
+        _collect_with_gh(
+            age_todo_with_hash,
+            lambda cmd, **_kw: (
+                subprocess.CompletedProcess(cmd, 1, stdout="", stderr="502")
+                if any(arg.startswith("before=") for arg in cmd)
+                else subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([truncated_node])), stderr="")
+            ),
+        )

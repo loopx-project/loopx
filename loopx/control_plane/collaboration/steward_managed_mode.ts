@@ -1151,6 +1151,49 @@ function filterScopedRepositoryItems(
   return { items: matched, observationIncomplete: false };
 }
 
+const AGE_FILTER_ITEM_FIELDS = [
+  "stalled_since",
+  "author_replied_after_request_changes",
+  "comments_coverage_incomplete",
+  "stalled_threshold_met",
+  "stalled_bucket",
+] as const;
+
+const AGE_FILTER_REVIEW_SUMMARY_FIELDS = [
+  "latest_request_changes_review_id",
+  "stalled_since",
+  "author_replied_after_request_changes",
+  "comments_coverage_incomplete",
+] as const;
+
+function omitKeys(obj: JsonObject, keysToOmit: readonly string[]): JsonObject {
+  const omit = new Set(keysToOmit);
+  return Object.fromEntries(Object.entries(obj).filter(([key]) => !omit.has(key)));
+}
+
+function projectRepositoryItemForMaterialHash(rawItem: unknown, usesStalledAgeFilter: boolean): unknown {
+  const item = jsonObject(rawItem);
+  if (!item) return rawItem;
+  const reviewSummary = jsonObject(item.review_summary);
+  if (usesStalledAgeFilter) {
+    const hasStalledSinceClock = typeof item.stalled_since === "string"
+      || typeof reviewSummary?.stalled_since === "string";
+    const omittedItemFields = hasStalledSinceClock
+      ? ["comments_coverage_incomplete", "updatedAt"]
+      : ["comments_coverage_incomplete"];
+    const projectedItem = omitKeys(item, omittedItemFields);
+    if (reviewSummary !== null) {
+      projectedItem.review_summary = omitKeys(reviewSummary, ["comments_coverage_incomplete"]);
+    }
+    return projectedItem;
+  }
+  const projectedItem = omitKeys(item, AGE_FILTER_ITEM_FIELDS);
+  if (reviewSummary !== null) {
+    projectedItem.review_summary = omitKeys(reviewSummary, AGE_FILTER_REVIEW_SUMMARY_FIELDS);
+  }
+  return projectedItem;
+}
+
 /** Combine authorized local portfolio, inbox and optional repository signal
  * snapshots into one deterministic change gate for custom Steward monitors.
  * Unavailable external signal reads fail closed so transient provider errors
@@ -1189,23 +1232,17 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     return incompleteObservation;
   }
   const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
-  const hashedRepoItems = signalScope !== null && scopedRepoItems !== null && usesStalledAgeFilter
-    ? scopedRepoItems.map((item) => {
-      const reviewSummary = jsonObject(item.review_summary);
-      const hasStalledSinceClock = typeof item.stalled_since === "string"
-        || typeof reviewSummary?.stalled_since === "string";
-      if (!hasStalledSinceClock) return item;
-      const { updatedAt: _ignoredUpdatedAt, ...rest } = item;
-      return rest;
-    })
-    : (scopedRepoItems ?? rawRepoItems);
+  const baseRepoItems = scopedRepoItems ?? rawRepoItems;
+  const hashedRepoItems = baseRepoItems === null
+    ? null
+    : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));
   const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
   const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
   const facts = signalScope === null
     ? {
       portfolio_hash: portfolio?.result_hash ?? null,
       inbox_items: inboxItems,
-      repository_items: rawRepoItems,
+      repository_items: hashedRepoItems,
     }
     : {
       signal_scope: signalScope,

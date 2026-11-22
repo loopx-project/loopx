@@ -792,7 +792,10 @@ def _backfill_pr_comments_if_needed(
 
 
 def observe_github_repository_prs(
-    repo_slug: str, *, runner: Callable[..., Any] = subprocess.run
+    repo_slug: str,
+    *,
+    runner: Callable[..., Any] = subprocess.run,
+    backfill_comments: bool = False,
 ) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     normalized = normalize_github_repo_slug(repo_slug)
@@ -853,8 +856,8 @@ def observe_github_repository_prs(
         for number in sorted(raw_nodes_by_number):
             norm_node = _normalize_graphql_pr_node(raw_nodes_by_number[number])
             summary = summarize_github_pr_signal(norm_node)
-            items.append(
-                _backfill_pr_comments_if_needed(
+            if backfill_comments:
+                summary = _backfill_pr_comments_if_needed(
                     norm_node,
                     summary,
                     owner=owner,
@@ -862,7 +865,7 @@ def observe_github_repository_prs(
                     number=number,
                     runner=runner,
                 )
-            )
+            items.append(summary)
         return {"status": "ok", "repository": repo_slug, "items": items}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}
