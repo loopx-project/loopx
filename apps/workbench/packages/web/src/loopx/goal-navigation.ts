@@ -7,11 +7,21 @@ import { goalOf } from './launch';
 
 export const GOALS_BOARD_HASH = '#/board';
 
-/** Legacy list and detail addresses have one successor. Malformed ids fall back to the board. */
-export function legacyGoalRoute(hash: string): { goalId: string | null } | null {
+/** The disclosures of the in-place Goal reader. */
+export const GOAL_SECTIONS = ['overview', 'tasks', 'files', 'acceptance'] as const;
+export type GoalSection = (typeof GOAL_SECTIONS)[number];
+const goalSection = (value: string | null | undefined): GoalSection | null =>
+  (GOAL_SECTIONS as readonly string[]).includes(value ?? '') ? value as GoalSection : null;
+
+/** A Goal the overview should open, and the section a link named (the old page's tab, or `section=`). */
+export interface GoalRequest { goalId: string | null; section?: GoalSection | null }
+
+/** Legacy list and detail addresses have one successor; `#/goals/<id>/<tab>` keeps its tab as the section. */
+export function legacyGoalRoute(hash: string): GoalRequest | null {
   if (hash === '#/goals' || hash === '#/goals/') return { goalId: null };
   if (!hash.startsWith('#/goals/')) return null;
-  try { return { goalId: decodeURIComponent(hash.slice('#/goals/'.length).split(/[/?]/)[0]) || null }; }
+  const [id, tab] = hash.slice('#/goals/'.length).split('?')[0].split('/');
+  try { return { goalId: decodeURIComponent(id) || null, section: goalSection(tab) }; }
   catch { return { goalId: null }; }
 }
 
@@ -27,17 +37,19 @@ export function goalConversation(goalId: string, threads: Thread[]): Thread | nu
     && (goalOf(thread)?.goalId ?? thread.loopxInfo?.goalId) === goalId) ?? null;
 }
 
-/** Goal identity survives reloads on the steward's in-place reader. */
-export function goalOverviewHash(goalId: string | null): string {
-  return goalId ? `#/steward?goal=${encodeURIComponent(goalId)}` : '#/steward?goals';
+/** Goal identity, and the section a link opened, survive reloads on the steward's in-place reader. */
+export function goalOverviewHash(goalId: string | null, section?: GoalSection | null): string {
+  if (!goalId) return '#/steward?goals';
+  return `#/steward?goal=${encodeURIComponent(goalId)}${section ? `&section=${section}` : ''}`;
 }
 
-export function goalOverviewRequest(hash: string): { goalId: string | null } | null {
+export function goalOverviewRequest(hash: string): GoalRequest | null {
   const legacy = legacyGoalRoute(hash);
   if (legacy) return legacy;
   if (!hash.startsWith('#/steward?')) return null;
   const query = new URLSearchParams(hash.slice('#/steward?'.length));
-  return query.has('goal') ? { goalId: query.get('goal') || null } : query.has('goals') ? { goalId: null } : null;
+  if (query.has('goal')) return { goalId: query.get('goal') || null, section: goalSection(query.get('section')) };
+  return query.has('goals') ? { goalId: null } : null;
 }
 
 /** A Goal without a conversation belongs to the Core inventory, never an empty board. */

@@ -51,6 +51,22 @@ test('Goal details fetch each heavy reader only when opened, with list-only task
   } finally { await act(async () => renderer?.unmount()); globalThis.fetch = saved; }
 });
 
+test('a section a link named opens on arrival and reads only that section', async () => {
+  const saved = globalThis.fetch;
+  const paths: string[] = [];
+  let renderer: ReactTestRenderer | undefined;
+  globalThis.fetch = async input => {
+    paths.push(String(input));
+    return Response.json({ items: [], next_cursor: null, unavailable_count: 0, unavailable_todo_ids: [] });
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(GoalDetails, { goalId: 'g', goal, threads: [], onBrowseFiles() {}, section: 'files' })); await tick(); });
+    const toggles = renderer!.root.findAllByProps({ className: 'goal-detail-toggle' });
+    assert.deepEqual(toggles.map(button => button.props['aria-expanded']), [false, false, true, false], 'files is open without another click');
+    assert.ok(paths.length > 0 && paths.every(path => path.includes('goal-results')), 'only the files reader ran');
+  } finally { await act(async () => renderer?.unmount()); globalThis.fetch = saved; }
+});
+
 test('Open Goal expands in place and switching conversations resets the Goal disclosures', async () => {
   let renderer: ReactTestRenderer | undefined;
   const p = { token: undefined, thread, goal, onChanged() {}, onBrowseFiles() {} };

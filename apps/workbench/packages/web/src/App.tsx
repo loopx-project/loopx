@@ -81,7 +81,7 @@ import { QuotaNavigation, quotaPushed } from './quota-reading';
 import { noteSource, SelectionMenu } from './components/SelectionMenu';
 import { AgentPanel } from './components/AgentPanel';
 import { memberProgress, ThreadOverview, type OverviewSection } from './components/ThreadOverview';
-import { goalDestination, goalOverviewHash, goalOverviewRequest, goalsBoardTarget } from './loopx/goal-navigation';
+import { goalDestination, goalOverviewHash, goalOverviewRequest, goalsBoardTarget, type GoalSection } from './loopx/goal-navigation';
 import { extensionStorage } from './extensions/host';
 import { prepareOverview } from './overview-reading';
 import { ChangeDiffDialog } from './components/ChangeDiffDialog';
@@ -539,7 +539,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [token, authKindRead.error, onToken]);
   // A browser alert for each Goal that newly waits on the person. The first read is only the baseline.
   const alertSeen = useRef<Set<string> | null>(null);
-  const openGoalRef = useRef<(goalId: string | null) => void>(() => undefined);
+  const openGoalRef = useRef<(goalId: string | null, section?: GoalSection | null) => void>(() => undefined);
   useEffect(() => {
     if (!loopxStatus) return;
     const { now, fresh } = newlyWaiting(alertSeen.current, loopxStatus.attention);
@@ -570,7 +570,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [schedulePath, setSchedulePath] = useState(() => window.location.hash.startsWith('#/schedules/') ? window.location.hash.slice('#/schedules/'.length) : '');
   const [boardEntry, setBoardEntry] = useState(0);
   const [goalRequest, setGoalRequest] = useState(() => goalOverviewRequest(window.location.hash));
-  const [goalDetailFocus, setGoalDetailFocus] = useState<{ api: Api; threadId: string | null; goalId: string | null } | null>(null);
+  const [goalDetailFocus, setGoalDetailFocus] = useState<{ api: Api; threadId: string | null; goalId: string | null; section?: GoalSection | null } | null>(null);
   const [machinePath, setMachinePath] = useState(() => window.location.hash.startsWith('#/machines/') ? window.location.hash.slice('#/machines/'.length) : '');
   const [settingsPath, setSettingsPath] = useState(() => start === 'machines' ? 'machines' : window.location.hash.replace(/^#\/settings\/?/, ''));
   // `list`: the phone's thread list was open, so closing settings goes back to it.
@@ -1167,7 +1167,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The address follows what the main area shows. Replaced, not pushed: going between the pages and
   // threads is not a trail for the back button to walk.
-  const stewardWant = goalRequest ? goalOverviewHash(goalRequest.goalId) : goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalOverviewHash(goalDetailFocus.goalId) : STEWARD_HASH;
+  const stewardWant = goalRequest ? goalOverviewHash(goalRequest.goalId, goalRequest.section) : goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalOverviewHash(goalDetailFocus.goalId, goalDetailFocus.section) : STEWARD_HASH;
   const extWant = onExt ? (extOpen ? extensionHash(extOpen) : extTarget ?? '') : '';
   useEffect(() => {
     if (threadLink) return;
@@ -2358,13 +2358,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     setBoardEntry(value => value + 1);
     setThreadLink(null); setSelectedId(null); setView('ext'); setDrawer(false);
   });
-  const openGoal = (goalId: string | null) => {
+  const openGoal = (goalId: string | null, section: GoalSection | null = null) => {
     const target = goalDestination(goalId, threads);
     navigate(() => {
       setThreadLink(null);
       if (target.threadId) openThread(threads.find(thread => thread.id === target.threadId)!);
       else { setSelectedId(null); setView('steward'); setDrawer(false); }
-      setGoalDetailFocus({ api, threadId: target.threadId, goalId });
+      setGoalDetailFocus({ api, threadId: target.threadId, goalId, section });
       setOverviewOpen(true);
     });
   };
@@ -2374,7 +2374,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useEffect(() => {
     if (!goalRequest || !onSteward || !observedAt && !api.demo) return;
     setGoalRequest(null);
-    openGoalRef.current(goalRequest.goalId);
+    openGoalRef.current(goalRequest.goalId, goalRequest.section);
   }, [goalRequest, onSteward, observedAt, api.demo, threads]);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
@@ -3007,7 +3007,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       onViewAll={(section, returnToPreview = true) => setOverviewDetail({ api, threadId: selected.id, section, returnToPreview })}
       api={api} threadId={selected.id} updatedAt={selected.updatedAt} active={selected.status === 'running'}
       team={overviewTeam} agents={agents} plan={topPlan} roots={threadRoots}
-      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} goal={loopxStatus?.goals.find(goal => goal.goalId === selected.loopxInfo?.goalId)} attention={loopxStatus?.attention.find(item => item.goalId === selected.loopxInfo?.goalId)} onChanged={goalsChanged} onExpandedChange={onGoalDetailsChange} threads={threads} onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }} initiallyExpanded={goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id && goalDetailFocus.goalId === selected.loopxInfo.goalId} /> : undefined}
+      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} goal={loopxStatus?.goals.find(goal => goal.goalId === selected.loopxInfo?.goalId)} attention={loopxStatus?.attention.find(item => item.goalId === selected.loopxInfo?.goalId)} onChanged={goalsChanged} onExpandedChange={onGoalDetailsChange} threads={threads} onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }} initiallyExpanded={goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id && goalDetailFocus.goalId === selected.loopxInfo.goalId} section={goalDetailFocus?.section ?? null} /> : undefined}
       loadFile={loadFile} persistent={persistent}
       onOpenMember={(member) => { setAgentsStart(member ?? null); setAgentsOpen(true); setFiles(null); }}
       onOpenDiff={(file) => setDiffFile({ threadId: selected.id, file })}

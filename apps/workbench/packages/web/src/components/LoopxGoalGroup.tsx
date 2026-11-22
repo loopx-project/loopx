@@ -4,13 +4,16 @@ import type { LoopxAttention, LoopxGoal } from '../loopx/status';
 import type { Thread } from '../api';
 import { t } from '../i18n';
 import { GoalDetails } from './GoalDetails';
+import type { GoalSection } from '../loopx/goal-navigation';
 import { GoalLifecycle } from './GoalLifecycle';
 import { IconCrab } from './icons';
 
 /** The current Goal stays compact and can be managed without leaving the conversation. */
-export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, threads = [thread], onBrowseFiles = () => {}, initiallyExpanded = false, onExpandedChange }: {
+export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, threads = [thread], onBrowseFiles = () => {}, initiallyExpanded = false, onExpandedChange, section = null }: {
   token: string | undefined; thread: Thread; goal?: LoopxGoal; attention?: LoopxAttention;
   onChanged: () => void; threads?: Thread[]; onBrowseFiles?: (threadId: string) => void; initiallyExpanded?: boolean; onExpandedChange?: (threadId: string, expanded: boolean) => void;
+  /** The section a link named, open when the details open with it. */
+  section?: GoalSection | null;
 }) {
   const info = thread.loopxInfo;
   const bound = Boolean(goalOf(thread));
@@ -62,7 +65,7 @@ export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, thre
         {goal && (goal.activationState === 'active' || goal.activationState === 'stopped') && <GoalLifecycle token={token} goal={goal} onChanged={changed} />}
         <button type="button" className="overview-more loopx-group-open" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{t(expanded ? 'loopx.panel.closeGoal' : 'loopx.panel.openGoal')}</button>
       </div>
-      {expanded && <GoalDetails key={info.goalId} token={token} goalId={info.goalId} goal={goal} threads={threads} refreshKey={revision} onBrowseFiles={onBrowseFiles} onOpenConversation={() => setExpanded(false)} />}
+      {expanded && <GoalDetails key={info.goalId} token={token} goalId={info.goalId} goal={goal} threads={threads} refreshKey={revision} onBrowseFiles={onBrowseFiles} onOpenConversation={() => setExpanded(false)} section={initiallyExpanded ? section : null} />}
     </div>}
   </section>;
 }

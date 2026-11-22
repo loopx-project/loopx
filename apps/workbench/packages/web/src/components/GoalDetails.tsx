@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Thread } from '../api';
 import { failureLabel, loopxFailureOf, type LoopxGoal } from '../loopx/status';
 import { fetchGoalDetail, type LoopxGoalDetail } from '../loopx/goal-detail';
-import { goalConversation } from '../loopx/goal-navigation';
+import { goalConversation, type GoalSection } from '../loopx/goal-navigation';
 import { statusWord } from '../loopx/launch';
 import { t } from '../i18n';
 import { GoalTasks } from './GoalTasks';
@@ -11,8 +11,8 @@ import { GoalAcceptance } from './GoalAcceptance';
 import { IconChevron } from './icons';
 
 /** Heavy readers mount only after their section is opened, and stop reading when it closes. */
-function GoalDetailSection({ label, children }: { label: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+function GoalDetailSection({ label, children, initiallyOpen = false }: { label: string; children: ReactNode; initiallyOpen?: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
   return <section className="goal-detail-section">
     <button type="button" className="goal-detail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
       <IconChevron size={12} open={open} /><span>{label}</span>
@@ -47,15 +47,17 @@ function GoalOverviewRead({ token, goalId, goal }: { token?: string; goalId: str
 }
 
 /** Shared in-place Goal details; an unbound Core Goal is a read-only reader. */
-export function GoalDetails({ token, goalId, goal, threads, refreshKey = 0, onBrowseFiles, onOpenConversation }: {
+export function GoalDetails({ token, goalId, goal, threads, refreshKey = 0, onBrowseFiles, onOpenConversation, section = null }: {
   token?: string; goalId: string; goal?: LoopxGoal; threads: Thread[]; refreshKey?: number;
   onBrowseFiles: (threadId: string) => void; onOpenConversation?: () => void;
+  /** The section a link named, open from the start. */
+  section?: GoalSection | null;
 }) {
   const bound = goalConversation(goalId, threads);
   return <div className="goal-details" data-goal-detail={goalId}>
-    <GoalDetailSection label={t('loopx.tabOverview')}><GoalOverviewRead token={token} goalId={goalId} goal={goal} /></GoalDetailSection>
-    <GoalDetailSection label={t('loopx.tabTasks')}><GoalTasks token={token} goalId={goalId} refreshKey={refreshKey} /></GoalDetailSection>
-    <GoalDetailSection label={t('loopx.tabFiles')}><GoalFiles token={token} goalId={goalId} threads={threads} onBrowse={onBrowseFiles} onOpenConversations={bound ? onOpenConversation : undefined} /></GoalDetailSection>
-    <GoalDetailSection label={t('loopx.accept.title')}>{goal ? <GoalAcceptance token={token} goal={goal} readOnly={!bound} /> : <p className="goal-empty" role="status">{t('loopx.goal.stateUnavailable')}</p>}</GoalDetailSection>
+    <GoalDetailSection label={t('loopx.tabOverview')} initiallyOpen={section === 'overview'}><GoalOverviewRead token={token} goalId={goalId} goal={goal} /></GoalDetailSection>
+    <GoalDetailSection label={t('loopx.tabTasks')} initiallyOpen={section === 'tasks'}><GoalTasks token={token} goalId={goalId} refreshKey={refreshKey} /></GoalDetailSection>
+    <GoalDetailSection label={t('loopx.tabFiles')} initiallyOpen={section === 'files'}><GoalFiles token={token} goalId={goalId} threads={threads} onBrowse={onBrowseFiles} onOpenConversations={bound ? onOpenConversation : undefined} /></GoalDetailSection>
+    <GoalDetailSection label={t('loopx.accept.title')} initiallyOpen={section === 'acceptance'}>{goal ? <GoalAcceptance token={token} goal={goal} readOnly={!bound} /> : <p className="goal-empty" role="status">{t('loopx.goal.stateUnavailable')}</p>}</GoalDetailSection>
   </div>;
 }

@@ -8,7 +8,8 @@ import { parseFilters } from '@calli/ext-board/filters';
 test('legacy Goal list, details and all four old tabs resolve without decoding errors', () => {
   assert.deepEqual(legacyGoalRoute('#/goals'), { goalId: null });
   assert.deepEqual(legacyGoalRoute('#/goals/'), { goalId: null });
-  for (const tab of ['', '/overview', '/tasks', '/chat', '/files']) assert.deepEqual(legacyGoalRoute(`#/goals/goal%20one${tab}`), { goalId: 'goal one' });
+  const sections: Record<string, string | null> = { '': null, '/overview': 'overview', '/tasks': 'tasks', '/chat': null, '/files': 'files' };
+  for (const [tab, section] of Object.entries(sections)) assert.deepEqual(legacyGoalRoute(`#/goals/goal%20one${tab}`), { goalId: 'goal one', section }, `the old ${tab || 'overview'} tab`);
   assert.deepEqual(legacyGoalRoute('#/goals/%bad'), { goalId: null });
   assert.equal(legacyGoalRoute('#/board'), null);
 });
@@ -35,8 +36,14 @@ test('bookmarks select a bound conversation, an unbound Core Goal reader, or the
   assert.deepEqual(goalDestination(null, [bound]), { view: 'steward', threadId: null, goalId: null });
   const hash = goalOverviewHash('core goal/8');
   assert.equal(hash, '#/steward?goal=core%20goal%2F8');
-  assert.deepEqual(goalOverviewRequest(hash), { goalId: 'core goal/8' });
-  assert.deepEqual(goalOverviewRequest('#/goals/core%20goal%2F8/tasks'), { goalId: 'core goal/8' });
+  assert.deepEqual(goalOverviewRequest(hash), { goalId: 'core goal/8', section: null });
+  assert.deepEqual(goalOverviewRequest('#/goals/core%20goal%2F8/tasks'), { goalId: 'core goal/8', section: 'tasks' });
+  // An old files link keeps its section on the new address, and a reload reads it back.
+  const files = goalOverviewRequest('#/goals/core%20goal%2F8/files')!;
+  const moved = goalOverviewHash(files.goalId, files.section);
+  assert.equal(moved, '#/steward?goal=core%20goal%2F8&section=files');
+  assert.deepEqual(goalOverviewRequest(moved), { goalId: 'core goal/8', section: 'files' });
+  assert.deepEqual(goalOverviewRequest('#/steward?goal=g&section=nonsense'), { goalId: 'g', section: null });
   assert.deepEqual(goalOverviewRequest('#/goals'), { goalId: null });
   assert.equal(goalOverviewHash(null), '#/steward?goals');
   assert.deepEqual(goalOverviewRequest(goalOverviewHash(null)), { goalId: null });

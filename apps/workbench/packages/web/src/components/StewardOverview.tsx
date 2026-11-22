@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Thread } from '../api';
 import { t } from '../i18n';
 import { joinGoalConversation } from '../loopx/join';
-import { goalConversation, hasGoalConversations } from '../loopx/goal-navigation';
+import { goalConversation, hasGoalConversations, type GoalRequest, type GoalSection } from '../loopx/goal-navigation';
 import { needsYouGoalIds, type LoopxAttention, type LoopxGoal, type LoopxStatusFailure } from '../loopx/status';
 import { GoalDetails } from './GoalDetails';
 import { GoalLifecycle } from './GoalLifecycle';
@@ -23,7 +23,7 @@ export function StewardOverview({ token, goals, attention, failure, loading, onC
   pickDirectory?: () => Promise<string | null>;
   onOpenAll?: () => void;
   onBrowseFiles?: (threadId: string) => void;
-  focusedGoal?: { goalId: string | null };
+  focusedGoal?: GoalRequest;
 }) {
   const [expandedGoalId, setExpandedGoalId] = useState(focusedGoal?.goalId ?? null);
   useEffect(() => { setExpandedGoalId(focusedGoal?.goalId ?? null); }, [focusedGoal]);
@@ -36,7 +36,7 @@ export function StewardOverview({ token, goals, attention, failure, loading, onC
   const canOpenBoard = !failure && hasGoalConversations(goals, threads);
   const row = (goal: LoopxGoal, waiting = false) => <GoalRow key={goal.goalId} token={token} goal={goal} waiting={waiting}
     attention={attention.find(item => item.goalId === goal.goalId)} onChanged={onChanged} threads={threads}
-    onOpenThread={onOpenThread} defaultAgent={defaultAgent} pickDirectory={pickDirectory} onBrowseFiles={onBrowseFiles} focused={focusedGoal?.goalId === goal.goalId} focusSignal={focusedGoal} expanded={expandedGoalId === goal.goalId} onToggle={() => setExpandedGoalId(current => current === goal.goalId ? null : goal.goalId)} />;
+    onOpenThread={onOpenThread} defaultAgent={defaultAgent} pickDirectory={pickDirectory} onBrowseFiles={onBrowseFiles} focused={focusedGoal?.goalId === goal.goalId} focusSignal={focusedGoal} section={focusedGoal?.goalId === goal.goalId ? focusedGoal.section : null} expanded={expandedGoalId === goal.goalId} onToggle={() => setExpandedGoalId(current => current === goal.goalId ? null : goal.goalId)} />;
 
   return <div className="thread-overview steward-overview" data-ready="true" aria-busy={loading}>
     <div className="overview-content">
@@ -82,9 +82,9 @@ function GoalGroup({ label, count, icon, waiting = false, initiallyOpen = true, 
   </section>;
 }
 
-function GoalRow({ token, goal, attention, waiting, onChanged, threads, onOpenThread, defaultAgent, pickDirectory, onBrowseFiles, expanded, onToggle, focused, focusSignal }: {
+function GoalRow({ token, goal, attention, waiting, onChanged, threads, onOpenThread, defaultAgent, pickDirectory, onBrowseFiles, expanded, onToggle, focused, focusSignal, section }: {
   token: string | undefined; goal: LoopxGoal; attention?: LoopxAttention; waiting: boolean; onChanged: () => void;
-  threads: Thread[]; onOpenThread: (threadId: string) => void; defaultAgent: string; pickDirectory?: () => Promise<string | null>; onBrowseFiles?: (threadId: string) => void; expanded: boolean; onToggle: () => void; focused?: boolean; focusSignal?: { goalId: string | null };
+  threads: Thread[]; onOpenThread: (threadId: string) => void; defaultAgent: string; pickDirectory?: () => Promise<string | null>; onBrowseFiles?: (threadId: string) => void; expanded: boolean; onToggle: () => void; focused?: boolean; focusSignal?: GoalRequest; section?: GoalSection | null;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (focused && expanded) rowRef.current?.scrollIntoView({ block: 'nearest' }); }, [focused, expanded, focusSignal]);
@@ -119,7 +119,7 @@ function GoalRow({ token, goal, attention, waiting, onChanged, threads, onOpenTh
       <button type="button" className="overview-more" aria-expanded={expanded} onClick={onToggle}>{t(expanded ? 'loopx.panel.closeGoal' : 'loopx.panel.openGoal')}</button>
       {(goal.activationState === 'active' || goal.activationState === 'stopped') && <GoalLifecycle token={token} goal={goal} onChanged={onChanged} />}
     </div>
-    {expanded && <GoalDetails token={token} goalId={goal.goalId} goal={goal} threads={threads} onBrowseFiles={onBrowseFiles ?? (() => {})} onOpenConversation={bound ? () => onOpenThread(bound.id) : undefined} />}
+    {expanded && <GoalDetails token={token} goalId={goal.goalId} goal={goal} threads={threads} section={section} onBrowseFiles={onBrowseFiles ?? (() => {})} onOpenConversation={bound ? () => onOpenThread(bound.id) : undefined} />}
     {error && <p className="overview-empty overview-attention" role="alert">{error}</p>}
   </div>;
 }
