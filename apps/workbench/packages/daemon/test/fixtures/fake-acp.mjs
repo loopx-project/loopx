@@ -567,7 +567,7 @@ rl.on('line', (line) => {
       update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } });
       update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run ls', kind: 'execute', status: 'pending', rawInput: { command: 'ls' } });
       update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed', rawOutput: 'a.txt' });
-      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `echo:${text}` } });
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `echo:${process.env.FAKE_ACP_VISIBLE_ECHO === '1' ? text.split(/\n\n<loochat-/)[0] : text}` } });
       if (text.includes('model?')) {
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `model:${currentModel};mode:${currentMode};effort:${currentEffort}` } });
         return out({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } });

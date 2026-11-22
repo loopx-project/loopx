@@ -43,6 +43,8 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 
 各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
 
+协作成员的回报、模型权限和引用对话预览见 [协作对话与概况侧栏指南](docs/collaboration.md)。
+
 ### Agent 未登录时恢复
 
 读取模型时，所有 Agent 明确返回的原生认证失败都会在工作区显示「账号名 尚未登录」。恢复方式按该实例支持的能力提供：
@@ -96,6 +98,18 @@ Agy 的权限请求使用现有审批入口；已有「完全访问」默认值�
 ![桌面 Antigravity 登录](docs/images/antigravity-login-desktop.png)
 
 <img src="docs/images/antigravity-login-phone.png" alt="手机 Antigravity 登录：打开链接后粘贴授权码或回跳地址" width="390" />
+
+## 通过 OAR 接入更多 Agent
+
+支持 Cursor、CodeBuddy Code、Devin、Factory Droid、Grok Build、Kimi Code、OpenCode、Qoder 和 Qwen Code。它们复用现有的「配置 → Agents → 添加 agent」入口；已安装的宿主可以发现并连接，未安装的宿主显示安装指引。Cursor 使用随工作台提供的官方 SDK，并在独立子进程运行。
+
+这些宿主需要 **Node.js 24+**。使用 Node.js 24 启动 workbench 后，在原生客户端完成所需安装或凭据配置，再通过添加页面连接。模型列表来自当前宿主和账号；未登录时可从原位置进入授权，浏览器确认型登录不要求粘贴授权码，设备授权码会直接显示。只读取列表不会开始登录或调用模型。Node.js 22 下既有原生适配器保持可用，OAR 宿主会报告运行环境不满足。
+
+OAR 宿主仅提供「完全访问」模式：原生工具可以直接修改文件和运行命令，不会弹出逐次审批。既有 Agent 的权限模式保持原样。选定模型后可在同一对话连续发送、停止执行；工作台保存原生会话 ID，重启后继续该会话。恢复失败会显示错误，不会自动换成空会话。
+
+本次接入不提供这些宿主的原生历史导入、分叉、账号复制、原生会话删除、订阅额度或实时语音。工作台自己的聊天记录仍可查看。图片按 OAR 和宿主声明的能力开放；各宿主能力及版本条件见 [OAR 运行时矩阵](https://github.com/botiverse/oar/blob/main/docs/spec/runtime-matrix.md)。
+
+可在 Agent 行菜单中隐藏或移除已连接实例；移除不会删除原生客户端的会话和凭据。OAR 与 Cursor SDK 固定版本随 lockfile 更新，故障回退时同时恢复工作台源码和 lockfile，再安装依赖、构建。现有原生适配器不经过 OAR。
 
 ## 插件与参与
 

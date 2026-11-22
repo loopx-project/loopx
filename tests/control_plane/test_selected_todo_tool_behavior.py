@@ -886,3 +886,51 @@ def test_tool_loop_fails_when_model_only_describes_the_action(
     assert receipt["qualification_passed"] is False
     assert receipt["failure_code"] == "model_returned_without_tool_call"
     assert receipt["tool_call_count"] == 0
+
+
+def test_corrupted_selected_todo_read_stops_before_launching_next_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+    from loopx.control_plane.testing import model_tool_behavior
+
+    oracle_root = tmp_path / "oracle"
+    actor_root = tmp_path / "actor"
+    fixture = _build_fixture(oracle_root)
+    commands = [
+        fixture.quota_guard_command.replace('"${LOOPX_TURN:?}"', "turn-001"),
+        "cat fixture/selected-lane.json && echo sentinel",
+    ]
+    call_count = 0
+    observed_subprocesses: list[list[str]] = []
+    real_run = subprocess.run
+
+    def spying_run(argv: Any, *args: Any, **kwargs: Any) -> Any:
+        observed_subprocesses.append([str(part) for part in argv])
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(model_tool_behavior.subprocess, "run", spying_run)
+
+    def transport(**_: Any) -> Mapping[str, Any]:
+        nonlocal call_count
+        if call_count == 1:
+            (actor_root / "project/fixture/selected-lane.json").write_text(
+                json.dumps({"contract": "corrupted", "lane": "selected"}),
+                encoding="utf-8",
+            )
+        command = commands[call_count]
+        call_count += 1
+        return _tool_response(f"call-{call_count}", command)
+
+    receipt = DoubaoSelectedTodoToolBehaviorActor(
+        api_key="test-only-placeholder",
+        transport=transport,
+    ).qualify(
+        qualification_id="selected-todo-stop-before-sentinel",
+        fixture_root=actor_root,
+    )
+
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "selected_action_execution_failed"
+    assert any(Path(cmd[0]).name == "cat" for cmd in observed_subprocesses)
+    assert not any(Path(cmd[0]).name == "echo" for cmd in observed_subprocesses)

@@ -396,7 +396,7 @@ function ModelLoad({ percent }: { percent: number }) {
 export interface DiscoveredAgent {
   id: string;
   adapter: string;
-  command: string;
+  command?: string;
 }
 
 /** An account of a multi-account agent already signed in on this host, as the picker offers it. */

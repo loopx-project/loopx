@@ -272,6 +272,7 @@ export interface AgentInfo {
   /** The account this instance runs as, when it is a linked second login (an email). */
   account?: string | null;
   available: boolean;
+  unavailableReason?: string;
   streamBridgeEnabled?: boolean;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
@@ -477,6 +478,7 @@ export class ThreadManager {
         ...(m?.account !== undefined ? { account: m.account } : {}),
         ...(m?.hidden !== undefined ? { hidden: m.hidden } : {}),
         available: await a.available(),
+        ...(a.unavailableReason ? { unavailableReason: a.unavailableReason } : {}),
         ...(a.startLogin ? { login: 'wizard' as const } : a.loginCommand ? { login: 'terminal' as const } : {}),
         ...(m?.activeLogin ? { activeLogin: m.activeLogin } : {}),
         capabilities: a.capabilities,
@@ -1338,10 +1340,8 @@ export class ThreadManager {
 
   private view(thread: ThreadRecord): ThreadView {
     const adapter = this.adapters.get(thread.agent);
-    const resumeCommand =
-      adapter && thread.agentSessionId
-        ? `cd ${shellQuote(thread.cwd)} && ${adapter.resumeCommand(thread.agentSessionId)}`
-        : null;
+    const nativeResume = adapter && thread.agentSessionId ? adapter.resumeCommand(thread.agentSessionId) : '';
+    const resumeCommand = nativeResume ? `cd ${shellQuote(thread.cwd)} && ${nativeResume}` : null;
     let cwdReal = thread.cwd;
     let cwdGone = false;
     try {
@@ -2321,9 +2321,12 @@ export class ThreadManager {
   }
 
   /** A fresh conversation in the source's exact directory, sharing its existing worktree. No agent is started. */
-  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method']): Promise<ThreadView> {
+  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method'], takeTeam = true): Promise<ThreadView> {
     const source = this.getThread(threadId);
     if (mode !== undefined && mode !== 'continue' && mode !== 'branch') throw new HttpError(400, 'invalid handover mode');
+    if (takeTeam && this.coordination?.metadata(threadId) && source.status === 'running') {
+      throw new HttpError(409, '请等待当前轮结束后带走协作成员');
+    }
     // Whoever takes over from here, the work leaves this thread; stop waiting for its quota.
     this.quotaResume.drop(threadId);
     const selected = mode ?? 'branch';
@@ -2351,6 +2354,8 @@ export class ThreadManager {
     }, source.worktree, { sourceId: source.id, title: source.title, agent: source.agent, mode: selected,
       sourceSeq: this.store.history.latest(source.id), ...(method ? { method } : {}) });
     this.personal.inherit(source.id, successor.id);
+    // Manual handover carries the collaboration; automatic handover waits for the successor claim.
+    if (takeTeam && this.coordination?.metadata(source.id)) this.coordination.replaceHandoverMember(source.id, successor.id, null);
     return successor;
   }
 
@@ -2947,7 +2952,7 @@ export class ThreadManager {
   async executeResumeHandover(id: string, target: HandoverTarget, sessionId: string, failedTurn: string | null, note?: string): Promise<ThreadView> {
     const source = this.getThread(id);
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume');
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume', false);
     this.store.updateThread(successor.id, { agentSessionId: sessionId });
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
@@ -2980,7 +2985,7 @@ export class ThreadManager {
     const source = this.getThread(id);
     // The work moves; waiting for this agent's quota to come back is moot.
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary');
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary', false);
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
     // Preserve the user's execution and permission choices when the successor supports them.

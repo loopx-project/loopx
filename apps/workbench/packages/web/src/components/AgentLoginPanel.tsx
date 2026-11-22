@@ -107,7 +107,7 @@ export function AgentLoginPanel({ api, agent, initial, onState, onReload, onColl
 
   return (
     <div className="agent-login-panel" role="region" aria-label={t('agentLogin.title', agent.label)}>
-      <p className="agent-login-hint">{t(codeOrUrl ? 'agentLogin.hintCodeOrUrl' : 'agentLogin.hint')}</p>
+      <p className="agent-login-hint">{t(login.input === 'none' ? 'agentLogin.browserHint' : codeOrUrl ? 'agentLogin.hintCodeOrUrl' : 'agentLogin.hint')}</p>
       {login.status === 'waiting' && login.url && (
         <>
           <div className="agent-login-link">
@@ -126,7 +126,8 @@ export function AgentLoginPanel({ api, agent, initial, onState, onReload, onColl
               {t(copied ? 'agentLogin.copied' : 'agentLogin.copy')}
             </button>
           </div>
-          <div className="dialog-field agent-login-code">
+          {login.userCode && <p>{t('agentLogin.deviceCode')}: <code>{login.userCode}</code></p>}
+          {login.input !== 'none' && <div className="dialog-field agent-login-code">
             <label htmlFor={`agent-login-code-${agent.id}`}>{t(codeOrUrl ? 'agentLogin.codeOrUrl' : 'agentLogin.code')}</label>
             <div className="agent-login-code-row">
               <input
@@ -145,7 +146,7 @@ export function AgentLoginPanel({ api, agent, initial, onState, onReload, onColl
                 {t('agentLogin.submit')}
               </button>
             </div>
-          </div>
+          </div>}
         </>
       )}
       {login.status !== 'waiting' && (

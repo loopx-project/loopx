@@ -3,6 +3,12 @@ import type { Messages } from './zh';
 const plural = (n: number, one: string, other: string) => `${n} ${n === 1 ? one : other}`;
 
 export const en: Messages = {
+  'overview.followups': 'Read messages after the handover',
+  'handover.group.viewing': 'Viewing',
+  'handover.group.current': 'Current',
+  'handover.group.count': (count: number) => `${count} ${count === 1 ? 'segment' : 'segments'}`,
+  'overview.chain': 'Handover',
+  'overview.pictureLarge': 'View larger',
   "pwa.title": "Install LoopX",
   "pwa.hint": "Open in its own window, ready to launch from your computer.",
   "pwa.install": "Install",
@@ -1120,6 +1126,7 @@ export const en: Messages = {
   'agentAccount.instance': 'Existing instance',
   'agentAccount.connect': 'Connect CLI',
   'agentAccount.localHint': 'Uses the local CLI’s sign-in. Existing instances only update their connection settings; no separate account is created.',
+  'onboard.installGuide': 'Installation guide',
   'onboard.connected': 'Connected',
 
   'agents.login': 'Sign in',
@@ -1179,6 +1186,9 @@ export const en: Messages = {
   "agentLogin.cancel": "Cancel sign-in",
   "agentLogin.waitingBadge": "Waiting for code",
   "agentLogin.keepHint": "Collapsing or leaving this page keeps sign-in active for 10 minutes.",
+  'agentLogin.browserWaitingBadge': 'Waiting for authorization',
+  'agentLogin.browserHint': 'Finish signing in in your browser. This panel updates automatically.',
+  'agentLogin.deviceCode': 'Verification code',
   'agentLogin.empty': (name: string) => `${name} has no available models; check sign-in or model configuration`,
   'agentLogin.noModels': 'No models are available yet. Check the native client and retry.',
   'agentLogin.nativeHint': 'Sign in or configure credentials in the native client, then retry.',
@@ -1471,6 +1481,7 @@ export const en: Messages = {
   'handover.mode.continue': 'Automatic handover',
   'handover.mode.detached': 'Continuation undone',
   'handover.mode.branch': 'Manual handover',
+  'handover.takeTeam': (n: number) => n === 1 ? 'Bring the collaborating agent along' : `Bring the ${n} collaborating agents along`,
   'handover.title': 'Hand over',
   'handover.message': 'Starts a new conversation in the same directory and worktree with the handover in the composer, ready to edit before sending. You can also just copy it.',
   'handover.successor': 'Successor agent',
@@ -2684,6 +2695,7 @@ export const en: Messages = {
   "extensions.assistant.cancelled": "Assistant request cancelled",
   "threadPeek.needsAction": "Action needed · Open full page",
   "app.machineNotFound": "Machine not found",
+  "threadPeek.back": "Back to conversation",
   "threadPeek.open": "Open full page",
   "extensions.perm.assistant.ask": "Ask your personal assistant",
   "extensions.perm.assistant.ask.hint": "When you click, send the selected thread summaries to your personal assistant as your message.",
