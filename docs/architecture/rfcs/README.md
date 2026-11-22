@@ -409,6 +409,17 @@ Paired diffs do not certify translation accuracy.
     Cross-session restoration, execution takeover and automatic return are specified
     separately, reusing #4094 with optional Obelisk gap recall under its own scope.
     Full runtime-profile qualification and generic handoff migration remain open.
+- [Steward Unified Entry — Extending the Steward Across Every Session and LoopX Goal v0](steward-unified-entry-v0.md)
+  ([中文版](steward-unified-entry-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal.
+  - **Current boundary:** Extends the shipped App/Workbench and Lark Steward
+    (`context_handoff`, `continuous_monitor`, `completion_validation`) across non-Goal
+    Workbench threads and self-opened local sessions: a revision-cached open-work
+    ledger, `session_handoff` delegation, Steward Topic Lanes and `steward.background`
+    isolation to eliminate head-of-line blocking, deterministic session watch with
+    bounded recovery and 15s merged decision notices, and zero-ceremony promotion
+    into long-horizon LoopX Goals (`Vision/Replan` escalation, heartbeat, `quota/stride`).
+    S1–S4 and A1–A10 define delivery and acceptance.
 - [Manager Runtime Profile v0](manager-runtime-profile-v0.md)
   ([中文版](manager-runtime-profile-v0.zh-CN.md))
   - **Delivery on `main`:** Partial; the explicit persistent `restricted` /
