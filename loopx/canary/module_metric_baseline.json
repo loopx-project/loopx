@@ -57,8 +57,9 @@
       "lines": 379
     },
     "loopx/chat_actions.py": {
-      "any_count": 52,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1766
     },
     "loopx/chat_runtime.py": {
       "any_count": 29,
