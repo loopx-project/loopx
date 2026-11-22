@@ -1,5 +1,6 @@
 // Host-neutral contract for the proposed verifier Hook adapter. The C1,
 // working-set and capability-portfolio owners still admit every effect.
+import type { QuotaGoalBoundaryReference } from "../quota/turn_envelope.ts";
 import type { WorkYardstickProfile } from "../work_items/yardstick_decision.ts";
 
 export type HarnessVerifierCapabilities = Readonly<{
@@ -40,6 +41,7 @@ export type GoalVerifierProfile = Readonly<{
 export type VerifierSolverView = Readonly<{
   objective: string;
   acceptance_refs: readonly string[];
+  goal_boundary_ref: QuotaGoalBoundaryReference;
   verifier: GoalVerifierProfile;
   incumbent_ref?: string;
   falsification_refs: readonly string[];
@@ -58,7 +60,7 @@ export type VerifierHookEvent = Readonly<{
   epoch_ref: string;
   turn_ref?: string;
 }> & (
-  | { boundary: "start" }
+  | { boundary: "start"; view: VerifierSolverView }
   | { boundary: "milestone_probe"; observation_ref: string }
   | { boundary: "compaction_or_subscope"; source_ref: string }
   | { boundary: "stop"; transition: Extract<VerifierTransition, { kind: "completion_claim" }> }
@@ -96,13 +98,22 @@ export type VerifiedCloseRecommendation =
   | { action: "KeepRaw"; counterexample_ref?: string }
   | { action: "FoldToReceipt"; receipt_ref: string; source_ref: string; summary_ref: string };
 
-// The caller binds the reader to the independent verifier's authenticated,
-// immutable receipt store. A hook report or model transcript is never that store.
+export type VerifiedCloseReader = Readonly<{
+  readReceipt: (ref: string) => VerifierScopeReceipt | undefined;
+  canReadEvidence: (ref: string) => boolean;
+}>;
+
+function hasReference(ref: string): boolean {
+  return typeof ref === "string" && ref.trim().length > 0;
+}
+
+// The adapter binds both reads to their authoritative stores and current scope.
+// It reports absent, inaccessible or mismatched evidence as unreadable.
 export function recommendVerifiedClose(
   request: VerifiedCloseRequest,
-  readVerifierReceipt: (ref: string) => VerifierScopeReceipt | undefined,
+  reader: VerifiedCloseReader,
 ): VerifiedCloseRecommendation {
-  const receipt = readVerifierReceipt(request.receipt_ref);
+  const receipt = hasReference(request.receipt_ref) ? reader.readReceipt(request.receipt_ref) : undefined;
   const expected = request.identity;
   const observed = receipt?.identity;
   if (!receipt || !observed
@@ -114,9 +125,15 @@ export function recommendVerifiedClose(
     return { action: "KeepRaw" };
   }
   if (receipt.verdict === "failed") {
-    return { action: "KeepRaw", counterexample_ref: receipt.counterexample_ref };
+    if (hasReference(receipt.counterexample_ref) && reader.canReadEvidence(receipt.counterexample_ref) === true) {
+      return { action: "KeepRaw", counterexample_ref: receipt.counterexample_ref };
+    }
+    return { action: "KeepRaw" };
   }
-  if (receipt.verdict !== "passed" || request.open_obligations !== false || request.overlap !== "low") {
+  if (receipt.verdict !== "passed" || request.open_obligations !== false || request.overlap !== "low"
+    || ![receipt.oracle_evidence_ref, receipt.source_ref, receipt.summary_ref].every(
+      ref => hasReference(ref) && reader.canReadEvidence(ref) === true
+    )) {
     return { action: "KeepRaw" };
   }
   return {
