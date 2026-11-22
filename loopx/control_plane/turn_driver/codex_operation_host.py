@@ -74,6 +74,11 @@ def run_codex_operation_host(
     if not all(lineage.values()):
         raise ValueError("managed operation tools require a Todo-bound Turn")
     mcp_server = normalize_codex_stdio_mcp_server(mcp_server)
+    from .codex_worker_identity import load_worker_identity
+
+    worker = load_worker_identity(runtime_root, registry_path)
+    if worker is not None and (sandbox != "read-only" or mcp_server is not None):
+        raise ValueError("isolated managed Codex requires read-only operation tools without a Core-provided MCP server")
     request_source = operation_request_source(operation_request_file, operation_request_sha256)
     resolved_bin = shutil.which(codex_bin)
     if not resolved_bin:
@@ -86,18 +91,22 @@ def run_codex_operation_host(
         "reasoning_effort": reasoning_effort,
         "sandbox": sandbox,
         "workspace": str(project.resolve()),
-        "codex_home": str(
+        "codex_home": str(worker.codex_home) if worker is not None else str(
             Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser().resolve()
         ),
         "codex_binary_digest": binary_digest,
         "mcp_server": mcp_server,
     }
+    if worker is not None:
+        profile["worker_identity"] = {"uid": worker.uid, "gid": worker.gid}
     if request_source is not None:
         profile["operation_request"] = request_source.profile(source_route)
     admission = goal_admission or FirstPartyHostGoalAdmission.for_plan(
         registry_path=registry_path,
         goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"), agent_id=lineage["agent_id"],
     )
+    if worker is not None and (admission.legacy_source_admission is not None or admission.registry_path != registry_path):
+        raise ValueError("isolated managed Codex requires the owning project registry")
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -150,6 +159,7 @@ def run_codex_operation_host(
             resume_thread_id=binding["session_id"] if binding else None,
             dynamic_tools=[operations.OPERATION_TOOL],
             host_config=host_config,
+            **({"worker_identity": worker} if worker is not None else {}),
             launch_guard=lambda: admission.launch_lifetime(operation="codex_operation_process_launch"),
             response_timeout_sec=30 if timeout_seconds is None else min(timeout_seconds, 30),
             hard_timeout_sec=timeout_seconds,

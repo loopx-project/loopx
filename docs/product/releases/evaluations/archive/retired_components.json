@@ -1,0 +1,51 @@
+{
+  "schema_version": "loopx_commander_archive_retired_v0",
+  "policy": "Archive holds only physically retired code components, superseded harnesses, and frozen rubric snapshots — never old version scoreboards (which belong continuously in history/).",
+  "retired_components": [
+    {
+      "id": "ARC-1X-MD-DUAL-WRITE",
+      "retired_in": "1.x -> 2.0",
+      "evidence_refs": [
+        "#6396"
+      ],
+      "component": "Legacy Markdown authority mutation dual-write callers",
+      "replacement": "Single-owner AuthorityStore (File/SQLite + CAS + hard lease) in loopx/control_plane/"
+    },
+    {
+      "id": "ARC-2X-TMUX-DEMOS",
+      "retired_in": "2.3.x",
+      "evidence_refs": [
+        "#8190"
+      ],
+      "component": "Legacy tmux agent and auto-research demo runners",
+      "replacement": "Neutral CLI/ACP host adapters and Steward async manager_context inbox"
+    },
+    {
+      "id": "ARC-2X-LEGACY-PAUSE-METADATA",
+      "retired_in": "2.3.x -> 2.4.0",
+      "evidence_refs": [
+        "#8431"
+      ],
+      "component": "Legacy Goal pause metadata wrapper",
+      "replacement": "Canonical authority-archive activation / sleep transitions with backed-up upgrades"
+    },
+    {
+      "id": "ARC-2X-EXPERIMENTAL-COMPACTION-MEM",
+      "retired_in": "2.4.0",
+      "evidence_refs": [
+        "#8928"
+      ],
+      "component": "Experimental compaction working memory prototype",
+      "replacement": "Bitter-Lesson subtraction clearing path for FoldToReceipt / EpochReset (battleline 2.5)"
+    },
+    {
+      "id": "ARC-PLAN-B-SERVER-PG",
+      "retired_in": "PR #9223 (Open)",
+      "evidence_refs": [
+        "#9223"
+      ],
+      "component": "In-repo server-side PostgreSQL RLS storage & RemoteAuthority HTTP server",
+      "replacement": "Extracted to private loopx-cloud; OSS keeps File/SQLite + openPostgresqlStore SPI + outbound RemoteAuthority client"
+    }
+  ]
+}

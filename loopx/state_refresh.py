@@ -942,13 +942,16 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
+            checkpoint_replay = None
             if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
-                inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
+                checkpoint_replay = inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
             )
             if recovery_payload is not None:
+                if checkpoint_replay is not None:
+                    recovery_payload.update({key: checkpoint_replay[key] for key in ("json_path", "markdown_path")})
                 return recover_refresh_todo_projection(
                     recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,

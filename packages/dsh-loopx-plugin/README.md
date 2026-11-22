@@ -261,12 +261,20 @@ For every DSH plugin release:
    or configured trusted publishing belongs to the release operator.
 
    For token-free CI publication, configure the package's npm Trusted Publisher
-   with organization `loopx-project`, repository `loopx`, and workflow filename
-   `dsh-plugin-publish.yml`, permitting `npm publish`. Then dispatch **Publish
+   on `https://www.npmjs.com/package/dsh-loopx-plugin/access` with provider
+   `GitHub Actions`, organization `loopx-project`, repository `loopx`, workflow
+   filename `dsh-plugin-publish.yml`, blank `Environment name`, and **`Allow npm publish`**
+   checked (default stage-only mode rejects direct `npm publish`).
+   Because npm rejects Trusted Publisher creation before a package exists (`HTTP
+   404` catch-22), enable `auth-and-writes` 2FA on the npm account first, run a
+   one-time web-auth `npm publish <release-tgz> --access public --tag latest
+   --ignore-scripts` against the exact GitHub Release tarball, then immediately
+   `npm logout` before binding Trusted Publishing. Dispatch **Publish
    DSH Plugin to npm** on the existing published plugin tag or on `main`, using
    that same tag for the `release_tag` input. Dispatching from `main` still
-   checks out `refs/tags/<release_tag>` so the artifact commit and npm
-   provenance stay pinned to the immutable tag.
+   checks out `refs/tags/<release_tag>` (while refreshing
+   `scripts/verify-distribution.mjs` from `origin/main` when present) so the
+   artifact commit and npm provenance stay pinned to the immutable tag.
    The workflow requires a merged tag, consumes its GitHub asset without
    rebuilding, and verifies npm bytes and discovery. It neither creates a
    GitHub release nor replaces npm account ownership or the release guide gate.
