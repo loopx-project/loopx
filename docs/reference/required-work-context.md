@@ -461,7 +461,7 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 沿同一游标查阅未结外发委派。只含外发摘要的续页不送达或消费结果。
 `Peer` 回传只有在送达回执绑定请求 ID 和确切结果键时才折叠简报。缺少绑定的旧回执
 继续保留完整简报，直到有权限的读取实际交付该条结果。
-`unavailable_count` 大于零时须恢复对应收执。收件全文用不带
+`unavailable_count` 大于零时须恢复对应回执。收件全文用不带
 `--attention-only` 的 `--request-id` 精读。Goal 外发委派可在同一 Goal 下用
 摘要中的接收方 `agent_id` 和精确 `request_id` 查阅 `manager-inbox status`。
 原摘要仍可从同一捕获取回。

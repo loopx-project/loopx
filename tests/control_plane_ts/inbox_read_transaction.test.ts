@@ -431,3 +431,20 @@ test("the attention cursor reaches all open sent requests without redelivering a
   assert.doesNotMatch(JSON.stringify(summaries), /PRIVATE_LONG_SOURCE|Checked result/);
   assert.deepEqual(sourceBytes(replies), originalReceipt);
 });
+test("terminal attention page reports unreadable sent requests even without a continuation", async t => {
+  const f = fixture(t);
+  const operations = join(f.base, "peer-operations", targets.exact);
+  mkdirSync(operations, {recursive: true});
+  const request = f.row(101, {agent_id: "reviewer", source_kind: "peer", source_agent_id: "worker"});
+  writeFileSync(join(operations, request.request_id + ".json"), JSON.stringify(request));
+  const before = sourceBytes(operations);
+
+  const ordinary = (await f.call("pending")).result as JsonObject;
+  assert.equal(ordinary.unavailable_count, undefined);
+  const attention = (await f.call("pending", {attention_only: true})).result as JsonObject;
+  assert.deepEqual(attention.items, []);
+  assert.deepEqual(attention.open_request_summaries, []);
+  assert.equal(attention.next_cursor, null);
+  assert.equal(attention.unavailable_count, 1);
+  assert.deepEqual(sourceBytes(operations), before);
+});

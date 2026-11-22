@@ -30,7 +30,8 @@ const TURN_INSTANCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const INBOX_PAGE_SIZE = 20;
 const ATTENTION_GUIDANCE = " Reconcile open_request_summaries together with items on every page, including pages with no full briefs. " +
   "For an incoming summary, use the unfiltered read command with --request-id for the full current brief before working on or returning it. " +
-  "Use the existing scoped request status for sent requests; follow next_cursor to reach their summaries.";
+  "Use the existing scoped request status for sent requests and follow next_cursor to reach their summaries. " +
+  "An unavailable_count above zero requires receipt recovery.";
 type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean; recipient?: JsonObject}>;
 type ReturnDelivery = Readonly<{key: string; request: JsonObject; reply: JsonObject}>;
 type PeerReturnPage = Readonly<{scope: string; afterOperation: string; afterResult: string}>;
@@ -281,10 +282,13 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
   }
   const page = entries.slice(0, INBOX_PAGE_SIZE);
   const moreIncoming = entries.length > page.length;
-  const nextCursor = moreIncoming ? `1:${scope}:${page.at(-1)!.item.request_id}`
-    : outgoingScope === null ? null : (await outgoingSummaryPage(source, outgoingScope, "", 0)).next_cursor;
+  const outgoing = !moreIncoming && outgoingScope !== null
+    ? await outgoingSummaryPage(source, outgoingScope, "", 0) : null;
+  const nextCursor = moreIncoming ? `1:${scope}:${page.at(-1)!.item.request_id}` : outgoing?.next_cursor ?? null;
   return {ok: true, items: page.filter(entry => !entry.summary).map(entry => entry.item),
     ...(attentionOnly ? {open_request_summaries: page.filter(entry => entry.summary).map(entry => entry.item)} : {}),
+    ...(outgoing && nextCursor === null && outgoing.unavailable_count > 0
+      ? {unavailable_count: outgoing.unavailable_count} : {}),
     has_more: nextCursor !== null, next_cursor: nextCursor, _cursor_scope: operationCursorScope,
     instruction: TRIAGE + (attentionOnly ? ATTENTION_GUIDANCE : "") +
       " Follow next_cursor to read later pending requests. Restart without a cursor to discover new " +

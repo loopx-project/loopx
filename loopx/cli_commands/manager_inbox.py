@@ -111,12 +111,12 @@ def _render_read_markdown(result: dict) -> str:
 def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
     """Deliver the already-recorded scoped read without repeating its effects."""
     from ..control_plane.turn_driver.native_context_profile import (
-        NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES,
         NATIVE_CONTEXT_OUTPUT_ENV,
+        NATIVE_INBOX_MARKDOWN_OUTPUT_BYTES,
         native_context_page_budget,
     )
 
-    limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    limit = NATIVE_INBOX_MARKDOWN_OUTPUT_BYTES
     view = _share_item_guidance(result)
     body = _render_read_markdown(view)
     size = len((body + os.linesep).encode("utf-8"))
@@ -151,7 +151,8 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
                     "Follow next_command through eof in UTF-8 byte-offset order. Compare each reported digest with "
                     "this opening's SHA-256. Check each "
                     "page's content length against its offsets, and complete coverage through total_bytes. "
-                    "If output is missing or truncated, reread that range of the same capture with a smaller page. "
+                    "If output is missing or truncated, reread that range of the same capture with smaller "
+                    "--page-bytes and --max-page-output-bytes. "
                     + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE
                     + "Apply any shared_item_guidance to the items on this page. After the page is complete, "
                       "follow its next_cursor, operation_handoff_next_cursor, or native_child_results.next_cursor with the original Inbox command. "
