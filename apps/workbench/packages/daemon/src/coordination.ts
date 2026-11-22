@@ -40,6 +40,12 @@ type Delivery = {
   id: string; key: string; fingerprint: string; from: string; to: string;
   text: string; kind: 'message' | 'result'; state: 'queued' | 'running' | 'returned' | 'failed' | 'stopped' | 'interrupted';
   turnId: string | null; result: string; createdAt: string;
+  /** Result letters only: whether this letter needs the lead to act, so it wakes the lead's thread. */
+  wake?: boolean;
+  /** Set while a mailbox batch is trying to start a turn with this letter, so the note injection skips it. */
+  picked?: boolean;
+  /** Set once the letter has ridden along a lead turn as read-only context; it speaks no more. */
+  noticed?: boolean;
   /** An explicit handoff document, used instead of `text` as the body of the file a remote member reads. */
   handoff?: string;
   /** Where the handoff and result files live on the member's machine, once the hub has written the handoff. */
@@ -71,6 +77,16 @@ type DirectTalk = { id: string; to: string; turnId: string; text: string; result
 /** How many of the person's talks with members the lead is told of at once, and how much of each. */
 const DIRECT_NOTICES = 5;
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/** The state a member's own last `[进度]` line carries, or null when it wrote none. */
+export function progressOf(text: string): 'progress' | 'review' | 'need' | 'wait' | null {
+  const said = /^\[进度\][ \t]*(进行中|待验收|需要你|等外部)(?=[：:\s]|$)/.exec(text.trim().split('\n').at(-1) ?? '')?.[1];
+  return said === '进行中' ? 'progress' : said === '待验收' ? 'review' : said === '需要你' ? 'need' : said === '等外部' ? 'wait' : null;
+}
+/** A result letter wakes the lead unless the member clearly said it is still mid-flight. */
+const letterWakes = (text: string, failed: boolean) => failed || !['progress', 'wait'].includes(progressOf(text) ?? 'review');
+/** The one-line status a letter opens with. Mid-flight notices say so, so the lead does not accept half-done work. */
+const letterLabel = (text: string, failed: boolean) => failed ? '失败' : ['progress', 'wait'].includes(progressOf(text) ?? 'review') ? '进行中通报（无需回应）' : '本轮已返回，仍需验收';
 /** A thread or delivery id used as a file name; anything unexpected is hashed rather than trusted. */
 const safePart = (value: string) =>
   /^[A-Za-z0-9_-]{1,80}$/.test(value) ? value : createHash('sha256').update(value).digest('hex').slice(0, 32);
@@ -93,6 +109,8 @@ export class CoordinationManager {
   readonly handovers: HandoverReader;
   private teams = new Map<string, Team>();
   private credentials = new Map<string, string>();
+  /** Keys of seats the work moved away from, by key: where it went, so a stale caller is told instead of refused. */
+  private moved = new Map<string, string>();
   private chain: Promise<unknown> = Promise.resolve();
   private scheduled = false;
   private stopping = new Set<string>();
@@ -123,6 +141,10 @@ export class CoordinationManager {
     for (const row of store.coordinationRecords()) {
       // Reusable tasks stop on interruption; free collaboration retains its original recovery policy.
       const team = JSON.parse(row.data) as Team;
+      for (const d of team.deliveries) {
+        if (d.kind === 'result' && d.wake === undefined) d.wake = letterWakes(d.text, d.text.startsWith('状态：失败'));
+        d.picked = false; // A crashed start never owns a letter after recovery.
+      }
       if (team.team) {
         this.teams.set(team.rootId, team);
         for (const id of [team.rootId, ...team.members.map(m => m.id)]) {
@@ -157,7 +179,7 @@ export class CoordinationManager {
         if (!team.members.some(m => m.id === job.to && m.voiceTarget)
           && (job.to !== team.rootId || job.kind === 'message' && team.members.some(m => m.id === job.from && m.voiceTarget === team.rootId))
           && job.state !== 'stopped' && !team.deliveries.some(d => d.key === key)) {
-          this.enqueue(team, job.to, job.kind === 'message' ? job.from : team.rootId, `重启前的结果：${job.result}`, 'result', key);
+          this.enqueue(team, job.to, job.kind === 'message' ? job.from : team.rootId, `重启前的结果：${job.result}`, 'result', key, '', '', letterWakes(job.result, job.state === 'failed'));
         }
       }
       this.teams.set(team.rootId, team);
@@ -179,6 +201,12 @@ export class CoordinationManager {
         const direct = t && this.directNotice(t);
         if (t && direct && prompt.includes(direct)) {
           for (const talk of t.direct ?? []) talk.told = true;
+          this.save(t);
+        }
+        const mailbox = t && this.mailboxNotice(t);
+        if (t && mailbox && prompt.includes(mailbox)) {
+          // The letter rode this turn as context: delivered once, it speaks no more.
+          for (const d of this.mailboxNotices(t)) { d.noticed = true; d.state = 'returned'; }
           this.save(t);
         }
       }
@@ -300,27 +328,31 @@ export class CoordinationManager {
     return true;
   }
 
-  /** Called synchronously in the successor turn's store transaction, before its runtime starts. */
-  replaceHandoverMember(source: string, target: string, turnId: string): void {
+  /** Called synchronously in the successor turn's store transaction, before its runtime starts.
+   * A null `turnId` moves the seat before any turn of the successor, as a handover by hand does. */
+  replaceHandoverMember(source: string, target: string, turnId: string | null): void {
     const t = this.team(source);
     const member = t?.members.find(m => m.id === source);
     if (!t || !member && t.rootId !== source) return;
     const name = this.name(t, source);
     const before = this.store.getThread(source)!;
     const after = this.store.getThread(target)!;
-    t.retiredMembers = [...(t.retiredMembers ?? []), { id: source, name }];
+    // A thread the work comes back to may have been this seat's earlier holder: it is retired no more.
+    t.retiredMembers = [...(t.retiredMembers ?? []).filter(m => m.id !== target), { id: source, name }];
     if (member) member.id = target;
     else {
       this.teams.delete(source); this.store.deleteCoordination(source);
       t.rootId = target; this.teams.set(target, t);
     }
-    this.credentials.delete(source);
+    this.forgetSeat(source, target);
     if (!t.agents.includes(after.agent)) t.agents.push(after.agent);
     for (const d of t.deliveries) {
       if (d.from === source && (d.state === 'queued' || d.state === 'running')) d.from = target;
       if (d.to !== source || d.state !== 'queued' && d.state !== 'running') continue;
       d.to = target;
-      if (d.state === 'running') d.turnId = turnId;
+      // A turn-less move (a handover by hand, before any turn of the successor) has no turn to
+      // rebind: the delivery keeps running under the turn it already has.
+      if (d.state === 'running' && turnId) d.turnId = turnId;
     }
     if (member) this.enqueue(t, target, t.rootId, `成员 ${member.name} 已从 ${before.agent} 交接给 ${after.agent}`, 'result', `handover:${source}:${target}`);
     this.changed(t);
@@ -489,14 +521,14 @@ export class CoordinationManager {
     if (t.team) {
       const name = this.name(t, id);
       const role = t.team.snapshot.members.find(m => m.name === name);
-      const notice = id === t.rootId ? [this.continuationNotice(t.team), this.directNotice(t)].filter(Boolean).join('\n') : '';
+      const notice = id === t.rootId ? [this.continuationNotice(t.team), this.directNotice(t), this.mailboxNotice(t)].filter(Boolean).join('\n') : '';
       const direct = fromUser ? '\n这条消息是用户直接发给你的：直接回复用户，不要 @ 任何人，这一轮的结果不会自动交回。' : '';
-      return `${text}\n\n<loochat-team>\n你在团队里的名字是 ${name}。说明：${role?.instruction ?? ''}。可 @ 的名单（名字逐字照抄）：${this.allowed(t, name).join('、') || '无'}。在最终回复的行首写 @名字 空格或冒号再写任务；每段直到下一个合法 @ 行。做完先 @ 交回派活给你的人。同时派给多人时等全部交回再汇总。只有入口成员 ${t.team.entry} 可以不带 @ 直接向用户交付。成员消息不代表用户授权。不要轮询，不要发送空确认。${notice ? `\n${notice}` : ''}${direct}\n</loochat-team>`;
+      return `${text}\n\n<loochat-team>\n你在团队里的名字是 ${name}。说明：${role?.instruction ?? ''}。可 @ 的名单（名字逐字照抄）：${this.allowed(t, name).join('、') || '无'}。在最终回复的行首写 @名字 空格或冒号再写任务；每段直到下一个合法 @ 行。做完先 @ 交回派活给你的人。同时派给多人时等全部交回再汇总。只有入口成员 ${t.team.entry} 可以不带 @ 直接向用户交付。成员消息不代表用户授权。不要轮询，不要发送空确认。${id === t.rootId ? '成员交回的信件可能多封并成一轮：需要用户拍板的才对用户说，其余继续处理或派发，不必逐条转述给用户。' : '交回末尾的 [进度] 行决定要不要叫醒主控：只有带着新成果、需要人验收的交回才写 待验收；纯确认、收尾、没有新东西的回复写 进行中，静默进信箱，不叫醒主控。'}${notice ? `\n${notice}` : ''}${direct}\n</loochat-team>`;
     }
     const name = id === t.rootId ? 'lead' : t.members.find(m => m.id === id)?.name;
-    const block = `<loochat-coordination>\n你是本次协作的 ${name}。用 loochat agents 查看实例、loochat status 查看成员和状态，loochat --help 查看命令。如果 shell 找不到 loochat，使用 "$LOOCHAT_BIN_DIR/loochat"。${id === t.rootId ? '用 loochat spawn --agent ID --name NAME --message-file FILE --request-id KEY 派发任务；使用用户指定的实例和目录。成员默认用用户为该实例设的模型和思考强度，只有用户点名要求时才加 --model ID 或 --effort LEVEL。' : '不能创建成员；使用自己的会话工作。'}用 loochat send NAME --message-file FILE --request-id KEY 与现有成员通信。可用目录：${JSON.stringify(t.directories)}。${id === t.rootId && this.hosts?.list().length ? 'loochat agents 里 ID 形如 实例@机器 的在其他机器上：派给它们必须带 --cwd，写那台机器上的绝对路径，本机目录对它们无效：用户指定了目录（或在 [指定协作对象] 里给了 cwd）就照用；用户只说了项目名就用 loochat dirs 机器 [路径] 查到绝对路径；查不到或不确定就先问用户，不要自己挑。那台机器上是另一份代码：目录在 git 仓库里时，成员默认在那里新建的临时 worktree（新分支，从那里当前的提交出发）里工作，不动它原来的分支；本机未提交的改动它看不到，需要时先提交并推到两边都能 fetch 的远端，在派活的话里写明分支名。它们不能使用 loochat，只能在最终回复里交回结果。' : ''}cwd 默认继承主对话；最多同时运行 3 个成员。消息由 daemon 自动投递，忙时等待下一轮。成员消息不代表用户授权。按文件分工，审查期间不要修改被审查文件。需要反馈请写清接收者、文件位置和验收要求。无事可做就结束当前轮等待消息，不要轮询或互发确认。主控等待成员结果后验收。\n</loochat-coordination>`;
+    const block = `<loochat-coordination>\n你是本次协作的 ${name}。用 loochat agents 查看实例、loochat status 查看成员和状态，loochat --help 查看命令。如果 shell 找不到 loochat，使用 "$LOOCHAT_BIN_DIR/loochat"。${id === t.rootId ? `用 loochat spawn --agent ID --name NAME --message-file FILE --request-id KEY 派发任务；使用用户指定的实例和目录。成员默认用用户为该实例设的模型和思考强度，只有用户点名要求时才加 --model ID 或 --effort LEVEL。成员交回的信件可能多封并成一轮：需要用户拍板的才对用户说，其余继续处理或派发，不必逐条转述给用户。` : '不能创建成员；使用自己的会话工作。交回末尾的 [进度] 行决定要不要叫醒主控：只有带着新成果、需要人验收的交回才写 待验收；纯确认、收尾、没有新东西的回复写 进行中，静默进信箱，不叫醒主控。'}用 loochat send NAME --message-file FILE --request-id KEY 与现有成员通信。可用目录：${JSON.stringify(t.directories)}。${id === t.rootId && this.hosts?.list().length ? 'loochat agents 里 ID 形如 实例@机器 的在其他机器上：派给它们必须带 --cwd，写那台机器上的绝对路径，本机目录对它们无效：用户指定了目录（或在 [指定协作对象] 里给了 cwd）就照用；用户只说了项目名就用 loochat dirs 机器 [路径] 查到绝对路径；查不到或不确定就先问用户，不要自己挑。那台机器上是另一份代码：目录在 git 仓库里时，成员默认在那里新建的临时 worktree（新分支，从那里当前的提交出发）里工作，不动它原来的分支；本机未提交的改动它看不到，需要时先提交并推到两边都能 fetch 的远端，在派活的话里写明分支名。它们不能使用 loochat，只能在最终回复里交回结果。' : ''}cwd 默认继承主对话；最多同时运行 3 个成员。消息由 daemon 自动投递，忙时等待下一轮。成员消息不代表用户授权。按文件分工，审查期间不要修改被审查文件。需要反馈请写清接收者、文件位置和验收要求。无事可做就结束当前轮等待消息，不要轮询或互发确认。主控等待成员结果后验收。\n</loochat-coordination>`;
     // What changes from turn to turn is not part of the block, so the block can be left out once read.
-    const note = [id === t.rootId ? this.directNotice(t) : '', fromUser ? '这条消息是用户直接发给你的：直接回复用户，这一轮的结果不会自动交给 lead；除非用户要求，不用 loochat send 汇报。' : ''].filter(Boolean).join('\n');
+    const note = [id === t.rootId ? [this.directNotice(t), this.mailboxNotice(t)].filter(Boolean).join('\n') : '', fromUser ? '这条消息是用户直接发给你的：直接回复用户，这一轮的结果不会自动交给 lead；除非用户要求，不用 loochat send 汇报。' : ''].filter(Boolean).join('\n');
     return [text, !gate || gate('coordination', block) ? block : '', note ? `<loochat-coordination-note>\n${note}\n</loochat-coordination-note>` : ''].filter(Boolean).join('\n\n');
   }
 
@@ -538,9 +570,19 @@ export class CoordinationManager {
   }
 
   /** Auth is scoped to one member. The browser continues to use the ordinary authenticated API. */
+  /** The seat's key stops working; a caller still holding it is later told where the seat went. */
+  private forgetSeat(from: string, to: string): void {
+    const key = this.credentials.get(from);
+    if (key) { this.moved.set(key, to); this.credentials.delete(from); }
+  }
   caller(key: string): string {
     const id = [...this.credentials].find(([, v]) => v === key)?.[0];
-    if (!id) throw new HttpError(401, '协作凭据无效');
+    if (!id) {
+      const to = this.moved.get(key);
+      const title = to ? this.store.getThread(to)?.title : undefined;
+      if (to) throw new HttpError(409, `协作已随交接转到另一段对话${title ? `「${title}」` : ''}（${to.slice(0, 8)}），请在那一段里操作`);
+      throw new HttpError(401, '协作凭据无效；这段对话若已交接，协作随交接转走了，请在接手的那一段里操作');
+    }
     return id;
   }
   async command(caller: string, input: Record<string, unknown>): Promise<unknown> {
@@ -638,8 +680,8 @@ export class CoordinationManager {
     if (!member) throw new HttpError(404, '接收者不在本次协作中');
     return member.id;
   }
-  private enqueue(t: Team, from: string, to: string, text: string, kind: Delivery['kind'], key: string, fingerprint = '', handoff = ''): Delivery {
-    const d: Delivery = { id: randomUUID(), key, fingerprint, from, to, text, kind, state: 'queued', turnId: null, result: '', createdAt: new Date().toISOString(), ...(handoff ? { handoff } : {}) };
+  private enqueue(t: Team, from: string, to: string, text: string, kind: Delivery['kind'], key: string, fingerprint = '', handoff = '', wake = false): Delivery {
+    const d: Delivery = { id: randomUUID(), key, fingerprint, from, to, text, kind, state: 'queued', turnId: null, result: '', createdAt: new Date().toISOString(), ...(handoff ? { handoff } : {}), ...(kind === 'result' ? { wake } : {}) };
     t.deliveries.push(d);
     return d;
   }
@@ -662,7 +704,9 @@ export class CoordinationManager {
     if (this.manager.autoHandover.held(ev.threadId)) { this.handoverEndings.set(ev.threadId, ev); return; }
     const t = this.team(ev.threadId);
     if (!t || !ev.turnId || (this.closed || t.retiredMembers?.some(m => m.id === ev.threadId))) return;
-    const job = t.deliveries.find(d => d.to === ev.threadId && d.turnId === ev.turnId);
+    // One lead turn may answer several letters at once: the mailbox batch claims them together.
+    const jobs = t.deliveries.filter(d => d.to === ev.threadId && d.turnId === ev.turnId);
+    const job = jobs[0];
     const result = turnAnswer(this.store.listEvents(ev.threadId, 0, -1), ev.turnId);
     const outcome = end.outcome;
     const stopped = outcome === 'cancelled';
@@ -677,7 +721,7 @@ export class CoordinationManager {
       this.changed(t);
       return;
     }
-    if (job) {
+    for (const job of jobs) {
       job.state = state;
       job.result = t.team && state === 'failed' ? [end.message, result].filter(Boolean).join('\n') : result || String(ev.data.message ?? '');
     }
@@ -703,13 +747,17 @@ export class CoordinationManager {
       this.changed(t); this.schedule(); return;
     }
     if (t.members.some(m => m.id === ev.threadId && m.voiceTarget)) { this.changed(t); return; }
+    const messageJob = jobs.find(j => j.kind === 'message');
     if (!this.closed && !t.paused && !stopped && (ev.threadId !== t.rootId
-      || job?.kind === 'message' && t.members.some(m => m.id === job.from && m.voiceTarget === t.rootId))) {
+      || messageJob && t.members.some(m => m.id === messageJob.from && m.voiceTarget === t.rootId))) {
       // Replies to a peer go back to that peer. Result notifications never create reply loops.
-      const to = job?.kind === 'message' ? job.from : t.rootId;
+      const to = messageJob ? messageJob.from : t.rootId;
       const key = `result:${ev.threadId}:${ev.turnId}`;
-      if (!t.deliveries.some(d => d.key === key)) this.enqueue(t, ev.threadId, to,
-        `状态：${state === 'failed' ? '失败' : '本轮已返回，仍需验收'}\n${result || String(ev.data.message ?? '无文字输出')}`, 'result', key);
+      if (!t.deliveries.some(d => d.key === key)) {
+        const answer = result || String(ev.data.message ?? '无文字输出');
+        const failed = state === 'failed';
+        this.enqueue(t, ev.threadId, to, `状态：${letterLabel(answer, failed)}\n${answer}`, 'result', key, '', '', letterWakes(answer, failed));
+      }
     }
     this.changed(t);
   }
@@ -725,6 +773,7 @@ export class CoordinationManager {
     if (this.closed) return;
     for (const t of this.teams.values()) {
       if (t.paused || !this.store.getThread(t.rootId) || this.store.getThread(t.rootId)?.archivedAt) continue;
+      await this.deliverMailbox(t);
       for (const d of t.deliveries) {
         if (d.state !== 'queued' || t.paused) continue;
         const remote = t.members.find(m => m.id === d.to && m.host);
@@ -734,6 +783,8 @@ export class CoordinationManager {
         }
         const target = this.store.getThread(d.to);
         if (!target || target.archivedAt) continue;
+        // Letters to the entry thread go through the mailbox batch above, never one turn each.
+        if (d.to === t.rootId && d.kind === 'result') continue;
         const view = this.manager.threadView(d.to);
         if (this.manager.autoHandover.queuePaused(d.to) || view.status === 'running' || view.queued.length) continue;
         if (d.to !== t.rootId && this.runningMembers(t) >= 3) continue;
@@ -753,7 +804,7 @@ export class CoordinationManager {
           if (err instanceof HttpError && err.status === 409) continue;
           d.state = 'failed'; d.result = err instanceof Error ? err.message : String(err);
           if (t.team) this.attention(t, d.result);
-          else if (d.to !== t.rootId) this.enqueue(t, d.to, d.kind === 'message' ? d.from : t.rootId, `无法启动任务：${d.result}`, 'result', `start-error:${d.id}`);
+          else if (d.to !== t.rootId) this.enqueue(t, d.to, d.kind === 'message' ? d.from : t.rootId, `无法启动任务：${d.result}`, 'result', `start-error:${d.id}`, '', '', true);
           this.changed(t);
         }
       }
@@ -764,6 +815,48 @@ export class CoordinationManager {
     return t.members.filter(m => m.host
       ? t.deliveries.some(d => d.to === m.id && d.state === 'running')
       : this.store.getThread(m.id)?.status === 'running').length;
+  }
+
+  // Member letters to the entry thread are the agents' private mail, not the person's conversation.
+  // A mid-flight notice waits in the mailbox (it rides the lead's next turn as context); a letter
+  // that needs the lead to act wakes the thread once, with everything piled up folded into that one
+  // turn — never one turn per letter between the person's own exchanges.
+
+  private async deliverMailbox(t: Team): Promise<void> {
+    const view = this.manager.threadView(t.rootId);
+    if (this.manager.autoHandover.queuePaused(t.rootId) || view.status === 'running' || view.queued.length) return;
+    const letters = t.deliveries.filter(d => d.to === t.rootId && d.kind === 'result' && d.state === 'queued');
+    if (!letters.length || !letters.some(d => d.wake !== false && (d.wake === true || letterWakes(d.text, d.text.startsWith('状态：失败'))))) return;
+    const names = [...new Set(letters.map(d => this.name(t, d.from)))];
+    const body = letters.map(d => `[${t.team ? '团队消息' : '协作消息 ' + d.id}｜${this.name(t, d.from)} → ${this.name(t, t.rootId)}]\n${clip(d.text, 4000)}`).join('\n\n');
+    // Letters only, no wrapper prose: what follows the headers is the members' own words, exactly as
+    // one letter at a time used to read. How to answer many letters at once is the lead's standing
+    // instruction, not part of the mail.
+    const shown = letters.map(d => letters.length === 1 ? d.text
+      : `### ${this.name(t, d.from)}\n\n${d.text.replace(/^状态：[^\n]*\n/, '')}`).join('\n\n');
+    const turnId = randomUUID();
+    for (const d of letters) d.picked = true;
+    try {
+      await this.manager.startTurn(t.rootId, { text: body }, {
+        turnId,
+        source: { messageId: letters[0].id, from: names.join('、'), kind: 'result' },
+        displayText: `来自 ${names.join('、')} 的结果\n\n${letters.some(d => d.text.startsWith('状态：失败')) && letters.length > 1 ? '状态：失败\n' : ''}${shown}`,
+        claim: () => {
+          if (this.closed || t.paused || letters.some(d => d.state !== 'queued')) throw new HttpError(409, '协作已停止');
+          for (const d of letters) { d.turnId = turnId; d.state = 'running'; d.picked = false; }
+          this.save(t);
+        },
+      });
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 409) {
+        for (const d of letters) d.picked = false;
+        this.changed(t); return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      for (const d of letters) { d.picked = false; if (d.state === 'queued') { d.state = 'failed'; d.result = message; } }
+      if (t.team) this.attention(t, message);
+      this.changed(t);
+    }
   }
 
   // Members on other machines. The hub's daemon makes their thread there through the machine's
@@ -867,7 +960,7 @@ export class CoordinationManager {
       // A machine that is away keeps its messages until it is back; anything else fails the message.
       if (err instanceof HttpError && (err.status === 409 || err.details?.code === 'host_offline')) return;
       d.state = 'failed'; d.result = err instanceof Error ? err.message : String(err);
-      this.enqueue(t, d.to, d.kind === 'message' ? d.from : t.rootId, `无法启动任务：${d.result}`, 'result', `start-error:${d.id}`);
+      this.enqueue(t, d.to, d.kind === 'message' ? d.from : t.rootId, `无法启动任务：${d.result}`, 'result', `start-error:${d.id}`, '', '', true);
       this.changed(t);
     }
   }
@@ -940,8 +1033,9 @@ export class CoordinationManager {
         ? `\n\n结果文件：${d.resultFile.localPath}（${d.resultFile.size} 字节${d.resultFile.truncated ? '，已截断' : ''}）`
         : '';
       if (!t.deliveries.some(x => x.key === key)) {
+        const failed = d.state === 'failed';
         const delivered = this.enqueue(t, d.to, d.kind === 'message' ? d.from : t.rootId,
-          `状态：${d.state === 'failed' ? '失败' : '本轮已返回，仍需验收'}\n${d.result || '无文字输出'}${file}`, 'result', key);
+          `状态：${letterLabel(d.result || '', failed)}\n${d.result || '无文字输出'}${file}`, 'result', key, '', '', letterWakes(d.result || '', failed));
         // The page shows the file under the answer it belongs to, not under the task that asked for it.
         if (d.resultFile) delivered.resultFile = d.resultFile;
       }
@@ -1119,6 +1213,16 @@ export class CoordinationManager {
     const lines = talks.map(d => `- 用户对 ${this.name(t, d.to)} 说：${clip(d.text, 300)}\n  ${this.name(t, d.to)}${d.state === 'failed' ? '（失败）' : d.state === 'stopped' ? '（已停止）' : ''}：${clip(d.result.split(/<(?:loochat|limi)-(?:coordination(?:-note)?|team)>/)[0].trim(), 600) || '无文字输出'}`);
     return `用户在成员对话里直接和成员说过话（供了解现状，不用回复，也不要重复派发）：\n${lines.join('\n')}`;
   }
+  /** Mid-flight member letters waiting in the mailbox: status the lead reads with its next turn, not mail it must answer. */
+  private mailboxNotices(t: Team): Delivery[] {
+    return t.deliveries.filter(d => d.to === t.rootId && d.kind === 'result' && d.state === 'queued' && d.wake === false && !d.picked && !d.noticed).slice(0, DIRECT_NOTICES);
+  }
+  private mailboxNotice(t: Team): string {
+    const letters = this.mailboxNotices(t);
+    if (!letters.length) return '';
+    const lines = letters.map(d => `- ${this.name(t, d.from)}（进行中）：${clip(d.text.replace(/^状态：[^\n]*\n/, '').split(/<(?:loochat|limi)-(?:coordination(?:-note)?|team)>/)[0].trim(), 500) || '无文字输出'}`);
+    return `成员交回的进行中通报（供了解现状，不用回复，也不用转述给用户）：\n${lines.join('\n')}`;
+  }
   private continuationNotice(task: TeamTask): string {
     return task.continuationNotices?.length ? `以下委派没有交回，已关闭：${task.continuationNotices.join('；')}。需要的话重新 @。` : '';
   }
@@ -1173,15 +1277,17 @@ export class CoordinationManager {
     }
     const sender = from === task.entry ? t.rootId : t.members.find(m => m.name === from)!.id;
     const returning = task.delegations.find(d => !d.closed && d.from === to && d.to === from);
-    const delivery = this.enqueue(t, sender, target, text, returning || key.endsWith(':return') ? 'result' : 'message', key, returning?.deliveryId);
+    const kind: Delivery['kind'] = returning || key.endsWith(':return') ? 'result' : 'message';
+    const delivery = this.enqueue(t, sender, target, text, kind, key, returning?.deliveryId, '', kind === 'message' || letterWakes(text, false));
     if (returning) returning.closed = true;
     else if (!key.endsWith(':return')) task.delegations.push({ from, to, deliveryId: delivery.id, closed: false });
     task.deliveries++;
   }
   private complete(t: Team): void {
     const task = t.team!;
+    // A mid-flight letter waiting in the mailbox is a notice, not pending work; it never holds the task open.
     if (t.paused || task.status !== 'running' || !task.resultTurnId || task.delegations.some(d => !d.closed)
-      || t.deliveries.some(d => d.state === 'queued' || d.state === 'running')
+      || t.deliveries.some(d => (d.state === 'queued' || d.state === 'running') && !(d.to === t.rootId && d.kind === 'result' && d.wake === false))
       || [t.rootId, ...t.members.map(m => m.id)].some(id => { const view = this.manager.threadView(id); return view.status === 'running' || view.queued.length; })) return;
     task.status = 'awaiting_confirm';
   }

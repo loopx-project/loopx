@@ -5149,12 +5149,13 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
-    _initialize_fixture_authority(project, runtime, handoff_mode="hard_lease")
+    _initialize_fixture_authority(project, runtime, handoff_mode="hard_lease", provider=provider)
 
     preview_rc, preview = _run_cli(
         registry_path,
@@ -5215,10 +5216,9 @@ def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
     )
     assert ready_rc == 0, ready
     assert ready["execution_preparation"]["state"] == "ready"
+    lease_proof = ready["execution_preparation"]["lease_proof"]
 
-    refresh_rc, refresh = _run_cli(
-        registry_path,
-        runtime,
+    refresh_args = (
         "refresh-state",
         "--goal-id",
         GOAL_ID,
@@ -5246,6 +5246,21 @@ def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
         "evidence:visible-goal-hard-lease",
         "--no-global-sync",
         "--suppress-external-sinks",
+    )
+    before = rollout_event_log_path(runtime, GOAL_ID).read_bytes()
+    refused_rc, refused = _run_cli(registry_path, runtime, *refresh_args, cwd=project)
+    assert refused_rc == 1, refused
+    assert refused["error_code"] == "refresh_task_lease_unavailable"
+    assert refused["appended"] is False
+    assert refused["settlement_recovery"]["settlement_identity"] == identity
+    assert rollout_event_log_path(runtime, GOAL_ID).read_bytes() == before
+
+    # Manual writeback carries the proof returned by this same guard; it must
+    # not borrow a lease merely because the current Todo has an active holder.
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, *refresh_args,
+        "--task-lease-idempotency-key", str(lease_proof["idempotency_key"]),
+        "--task-lease-expected-version", str(lease_proof["expected_version"]),
         cwd=project,
     )
     assert refresh_rc == 0, refresh

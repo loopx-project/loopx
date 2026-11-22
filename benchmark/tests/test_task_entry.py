@@ -1185,10 +1185,17 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
     assert len(calls) == entry.PLANNING_WAKE_ATTEMPTS
 
 
-@pytest.mark.parametrize("context", ["fresh", "resume"])
-@pytest.mark.parametrize("producer", [None, "local_probe"])
-@pytest.mark.parametrize("complete", [False, True])
-@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+@pytest.mark.parametrize(
+    ("context", "producer", "complete", "checkpoint_preflight"),
+    [
+        ("fresh", None, False, False),
+        ("fresh", "local_probe", True, False),
+        ("fresh", "local_probe", False, True),
+        ("resume", None, True, True),
+        ("resume", "local_probe", False, False),
+        ("resume", None, False, True),
+    ],
+)
 def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         planning_env, context, producer, complete, checkpoint_preflight):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""

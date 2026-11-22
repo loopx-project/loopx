@@ -38,7 +38,7 @@ from loopx.chat_manager import (  # noqa: E402
     manager_workspace,
     open_manager_session,
 )
-from loopx.chat_dsh import STEWARD_SEGMENT_ENV  # noqa: E402
+from loopx.chat.dsh import STEWARD_SEGMENT_ENV  # noqa: E402
 from loopx.chat_runtime import ChatRuntimeController  # noqa: E402
 from loopx.chat_store import ChatSessionStore  # noqa: E402
 

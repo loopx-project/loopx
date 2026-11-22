@@ -98,6 +98,8 @@ export async function startDaemon(env = {}, opts = {}) {
   if (env.LOOCHAT_E2E_DISCOVER_AGY2 === '1') shim(binDir, 'agy2', 'fake-agy.mjs');
 
   const port = await freePort();
+  let previewPort = await freePort();
+  while (previewPort === port) previewPort = await freePort();
   const daemonEnv = {
     ...process.env,
     HOME: homeDir,
@@ -113,6 +115,8 @@ export async function startDaemon(env = {}, opts = {}) {
     LOOCHAT_TOKEN: TOKEN,
     LOOCHAT_HOST: '127.0.0.1',
     LOOCHAT_PORT: String(port),
+    // Preview grants belong to this test hub, never an ambient resident preview server.
+    LOOCHAT_PREVIEW_PORT: String(previewPort),
     LOOCHAT_DATA_DIR: dataDir,
     LOOCHAT_WORKDIRS: workdir,
     // Serve this repo's own build, never a dist inherited from the ambient environment.

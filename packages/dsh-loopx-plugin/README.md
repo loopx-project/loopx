@@ -263,8 +263,10 @@ For every DSH plugin release:
    For token-free CI publication, configure the package's npm Trusted Publisher
    with organization `loopx-project`, repository `loopx`, and workflow filename
    `dsh-plugin-publish.yml`, permitting `npm publish`. Then dispatch **Publish
-   DSH Plugin to npm** on the existing published plugin tag, using that same tag
-   for the `release_tag` input. This keeps npm provenance on the artifact's commit.
+   DSH Plugin to npm** on the existing published plugin tag or on `main`, using
+   that same tag for the `release_tag` input. Dispatching from `main` still
+   checks out `refs/tags/<release_tag>` so the artifact commit and npm
+   provenance stay pinned to the immutable tag.
    The workflow requires a merged tag, consumes its GitHub asset without
    rebuilding, and verifies npm bytes and discovery. It neither creates a
    GitHub release nor replaces npm account ownership or the release guide gate.

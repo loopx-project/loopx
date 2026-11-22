@@ -68,6 +68,7 @@ def main():
     parser.add_argument("--cases", type=Path, default=Path(__file__).with_name("chat-intake.public.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, choices=range(1, 4), default=1)
+    parser.add_argument("--workers", type=int, choices=range(1, 13), default=6)
     args = parser.parse_args()
     if not args.live:
         parser.error("--live is required; this evaluation sends public fixtures to a paid API")
@@ -146,7 +147,7 @@ def main():
         print(json.dumps({k: row[k] for k in ("id", "passed", "errors")}), flush=True)
         return row
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
         rows = list(pool.map(run, cases * args.repeats))
     report = {"model": args.model, "provider": args.provider, "cases_sha256": hashlib.sha256(fixture).hexdigest(),
               "prompt_sha256": hashlib.sha256(_turn_prompt("").encode()).hexdigest(),

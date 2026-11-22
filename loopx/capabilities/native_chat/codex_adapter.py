@@ -1175,7 +1175,7 @@ class CodexAppServerAdapter:
 def start_attachment_turn(adapter: Any, session: dict[str, Any], turn: dict[str, Any], message: str,
                           event_sink: Callable[[str, dict[str, Any]], None], attachments: list[dict[str, Any]]) -> dict[str, Any]:
     """Keep attachment support and recovered source-route checks at the adapter."""
-    from ...chat_attachments import require_text_document_route
+    from ...chat.attachments import require_text_document_route
     from .antigravity_adapter import AntigravityAdapter
     require_text_document_route(session, attachments, origin=str(turn.get("origin") or "web"))
     if not isinstance(adapter, (CodexAppServerAdapter, AntigravityAdapter)):

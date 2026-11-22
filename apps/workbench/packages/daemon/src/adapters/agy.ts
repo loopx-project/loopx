@@ -1,3 +1,5 @@
+import { HttpError } from '../errors.js';
+import { AGY_AUTH_ENV, copyAgyAccount, startAgyLogin } from './agy-account.js';
 import type { WorkMode } from './types.js';
 import { cliDiagnostic } from './diagnostics.js';
 import { PlanReply } from './plan-reply.js';
@@ -10,7 +12,7 @@ import type { EmittedEvent } from '../events.js';
 import { imagePathNote } from '../attachments.js';
 import { commandExists } from '../util.js';
 import { ANTIGRAVITY_ICON } from './icons.js';
-import { configDirectory, findSessionFile } from './session-location.js';
+import { configDirectory, findSessionFile, quoteArg } from './session-location.js';
 import { agyLiveUsage } from './session-usage.js';
 import { agyImageTool } from './agy-image.js';
 import { agyBrowserTool, agySearchTool } from './agy-web.js';
@@ -501,6 +503,8 @@ export class AgyAdapter implements AgentAdapter {
     forkInto: false,
     quota: true,
   };
+  onModelsChanged?: (models: ModelOption[]) => void;
+  private modelGeneration = 0;
   private modelCache: { at: number; models: ModelOption[] } | null = null;
   private readonly commandCache = new Map<string, { at: number; value: Promise<{ cli: AgyCliCommand[]; list: SlashCommand[] }> }>();
 
@@ -514,6 +518,21 @@ export class AgyAdapter implements AgentAdapter {
 
   async available(): Promise<boolean> {
     return commandExists(this.command[0]);
+  }
+
+  createAccount(directory: string): Promise<Record<string, string>> {
+    return copyAgyAccount(configDirectory(this.env, 'LOOCHAT_AGY_HOME', ['.gemini', 'antigravity-cli'], process.cwd()),
+      this.env.HOME ?? process.env.HOME ?? homedir(), directory, this.env);
+  }
+
+  startLogin(onSuccess: (account?: string) => Promise<void>) {
+    return startAgyLogin(this.command, this.env, async account => {
+      this.modelCache = null;
+      this.modelGeneration++;
+      this.commandCache.clear();
+      await onSuccess(account);
+      void this.models(true).catch(() => {});
+    });
   }
 
   // Literal hard-quota message shipped in the CLI; do not classify HTTP 429 or disk quota errors.
@@ -534,14 +553,24 @@ export class AgyAdapter implements AgentAdapter {
   }
 
   async models(refresh = false): Promise<ModelOption[]> {
-    if (refresh) this.modelCache = null;
+    if (refresh) { this.modelCache = null; this.modelGeneration++; }
     if (this.modelCache && Date.now() - this.modelCache.at < MODELS_TTL_MS) return this.modelCache.models;
+    const generation = this.modelGeneration;
     const [bin, ...base] = this.command;
     const stdout = await new Promise<string>((resolve, reject) => {
-      execFile(bin, [...base, 'models'], { timeout: 30_000, env: { ...process.env, ...this.env } }, (err, out) => (err ? reject(err) : resolve(out)));
+      execFile(bin, [...base, 'models'], { timeout: 30_000, env: { ...process.env, ...this.env } }, (err, out, stderr) => {
+        if (!err) { resolve(out); return; }
+        // Native signed-out diagnostic only; network, quota and process errors retain their meaning.
+        if (/^\s*(?:Error:\s*)?Please sign in to view available models\.(?: Launch the CLI without arguments to sign in\.)?\s*$/m.test(stderr)) {
+          reject(new HttpError(409, 'Antigravity is not signed in', { code: 'agent_login_required' }));
+        } else reject(err);
+      });
     });
     const models = parseAgyModels(stdout);
-    if (models.length > 0) this.modelCache = { at: Date.now(), models };
+    if (generation === this.modelGeneration) {
+      if (models.length > 0) this.modelCache = { at: Date.now(), models };
+      if (refresh) this.onModelsChanged?.(models);
+    }
     return models;
   }
 
@@ -602,7 +631,9 @@ export class AgyAdapter implements AgentAdapter {
   }
 
   resumeCommand(agentSessionId: string): string {
-    return `agy --conversation ${agentSessionId}`;
+    const prefix = Object.entries(this.env).filter(([key, value]) => ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'].includes(key) || (AGY_AUTH_ENV.includes(key) && value === ''))
+      .map(([key, value]) => `${key}=${quoteArg(value)}`).join(' ');
+    return `${prefix ? `env ${prefix} ` : ''}${this.command.map(quoteArg).join(' ')} --conversation ${quoteArg(agentSessionId)}`;
   }
 
   async sessionLocation(agentSessionId: string | null, cwd: string) {
@@ -651,7 +682,7 @@ export class AgyAdapter implements AgentAdapter {
   /** agy saves what it generates (images, among other things) in a folder of its own per conversation. */
   artifactDirs(agentSessionId: string): string[] {
     if (!/^[0-9a-f-]{8,64}$/i.test(agentSessionId)) return [];
-    const home = this.env.LOOCHAT_AGY_HOME || process.env.LOOCHAT_AGY_HOME || join(homedir(), '.gemini', 'antigravity-cli');
+    const home = configDirectory(this.env, 'LOOCHAT_AGY_HOME', ['.gemini', 'antigravity-cli'], process.cwd());
     return [join(home, 'brain', agentSessionId)];
   }
 
