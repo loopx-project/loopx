@@ -289,7 +289,14 @@ def test_request_cancellation_competes_for_one_real_goal_terminal_record(source_
             return actual(registry, root, ref, receiver, operation, parameters, **kwargs)
         if winner == "commit":
             response = actual(registry, root, ref, receiver, operation, parameters, **kwargs)
-        assert _cancel(f, rid)["view"]["control_state"] == "cancellation_pending"
+        cancelled = _cancel(f, rid)["view"]
+        assert cancelled["control_state"] == "cancellation_pending"
+        assert cancelled["active_reservation"] is not None
+        for actor in ("agent-a", "agent-b"):
+            code, inbox = _inbox(f, capsys, "read", actor=actor)
+            assert code == 0, inbox
+            row, = (row for row in inbox["unfinished_delegations"]["items"] if row["request_id"] == rid)
+            assert row["step"] == "reconcile_reservation"
         observations.append(_recover(f, rid))
         if winner == "abort":
             response = actual(registry, root, ref, receiver, operation, parameters, **kwargs)
@@ -303,6 +310,10 @@ def test_request_cancellation_competes_for_one_real_goal_terminal_record(source_
     assert observations[0]["effect"] == result["effect"]
     assert result["request_linked"] is True
     assert result["request_control"]["control_state"] == "cancelled"
+    for actor in ("agent-a", "agent-b"):
+        code, inbox = _inbox(f, capsys, "read", actor=actor)
+        assert code == 0, inbox
+        assert all(row["request_id"] != rid for row in inbox["unfinished_delegations"]["items"])
     _, goal = goal_call(f, tmp_path, capsys, "inspect", agent=None)
     assert goal["intent"]["goal_revision"] == (2 if winner == "commit" else 1)
     assert len(goal["intent"]["created_todo_ids"]) == (1 if winner == "commit" else 0)
