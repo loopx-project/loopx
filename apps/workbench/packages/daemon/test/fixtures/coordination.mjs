@@ -37,8 +37,12 @@ export function coordinationFixture(text) {
     if (body.endsWith('TEAM_BUDGET')) return '@dev Loop TEAM_LOOP';
   }
   if (body.endsWith('LOOCHAT_REPORT')) return '文档审查完成。\n\n已检查接口约定、目录分工和异常处理。建议补充重启后的恢复步骤，测试覆盖其余预期行为。';
+  // Mailbox fixtures: what a member's closing words look like at each stage of its own [进度] protocol.
+  if (body.endsWith('LOOCHAT_PROGRESS_WORK')) return '第一阶段已提交，等 CI。\n\n[进度] 进行中：等 CI 结果';
+  if (body.endsWith('LOOCHAT_PROGRESS_DONE')) return '做完了，结论如下。\n\n[进度] 待验收：可以验收';
+  if (body.endsWith('LOOCHAT_PROGRESS_ASK')) return '卡住了，要人决定。\n\n[进度] 需要你：重试还是跳过';
   if (body === 'LOOCHAT_ENV' || body.endsWith('\nLOOCHAT_ENV')) return `loochat-ready:${Boolean(process.env.LOOCHAT_TEAM_SOCKET && process.env.LOOCHAT_TEAM_KEY)};cwd:${process.cwd()}`;
-  if (body === 'LOOCHAT_HANDOVER_ENV') {
+  if (body === 'LOOCHAT_HANDOVER_ENV' || body.startsWith('LOOCHAT_HANDOVER_ENV\n')) {
     const ready = Boolean(process.env.LOOCHAT_HANDOVER_SOCKET && process.env.LOOCHAT_HANDOVER_KEY);
     return `handover-ready:${ready};collaboration:${Boolean(process.env.LOOCHAT_TEAM_SOCKET && process.env.LOOCHAT_TEAM_KEY)};${ready ? execFileSync('loochat', ['handover'], { encoding: 'utf8' }).trim() : ''}`;
   }

@@ -181,7 +181,7 @@ class StewardReports:
                     or turn.get("session_id") != sid or request.get("actor") != actor
                     or request.get("work_kind") != "report" or request.get("report_window_id") != window["window_id"]
                     or request.get("report_subscription_revision") != window["subscription_revision"]
-                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery"}
+                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery", operation + ".timeout-recovery"}
                     or not request.get("todo_id") or result.get("status") != "failed"
                     or result.get("result_kind") != "host_failure" or failure.get("retryable") is not False
                     or receipt.get("ok") is not True or receipt.get("failed_phase") != "host_execute"

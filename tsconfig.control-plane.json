@@ -121,6 +121,7 @@
     "tests/control_plane_ts/checkpoint_read_context.test.ts",
     "tests/control_plane_ts/checkpoint_provider_head.test.ts",
     "tests/control_plane_ts/checkpoint_commit_probe.ts",
+    "tests/control_plane_ts/checkpoint_commit.test.ts",
     "tests/control_plane_ts/refresh_recovery.test.ts",
     "tests/control_plane_ts/vision_wait_coverage.test.ts",
     "tests/control_plane_ts/shared_goal_alignment.test.ts",

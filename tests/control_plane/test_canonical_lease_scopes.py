@@ -1,4 +1,6 @@
 """Scope comparison must preserve request identity and accepted declarations."""
+from contextlib import redirect_stdout
+import io
 import json
 import os
 import subprocess
@@ -8,6 +10,7 @@ from pathlib import Path
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
+from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
@@ -36,6 +39,18 @@ def scope_goal(tmp_path, monkeypatch, request):
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=request.param)
 
     def cli(*args, cwd=None, expected_exit=0):
+        if cwd is None and not any(name.startswith("LOOPX_LEASE_SCOPE_") for name in os.environ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = cli_main([
+                    "--registry", str(registry),
+                    "--runtime-root", str(runtime),
+                    "--format", "json",
+                    *args,
+                    "--goal-id", goal,
+                ])
+            assert code == expected_exit, output.getvalue()
+            return json.loads(output.getvalue())
         selected_repo = Path(os.environ.get("LOOPX_LEASE_SCOPE_CONSUMER", REPO)) if cwd is None else cwd
         child = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args, "--goal-id", goal],

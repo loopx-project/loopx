@@ -87,6 +87,8 @@ export function PermissionPicker({ modes, value, onChange, canAsk, openSignal, q
 }
 
 interface ModelProps {
+  catalogStatus?: 'loading' | 'ready' | 'error';
+  onRetryCatalog?: () => void;
   preferenceStatus?: 'loading' | 'ready' | 'error';
   onRetryPreference?: () => void;
   onDiagnose?: () => void;
@@ -216,6 +218,22 @@ export function ModelPicker(props: ModelProps) {
   const { models, model, efforts, effort, openSignal, quietFor } = props;
   const narrow = useIsNarrow();
   if (props.catalog === false) return null;
+  const levels = effortsForModel(models, model, efforts);
+  const shownEffort = effort && levels.includes(effort) ? effort : null;
+  if (props.catalogStatus && props.catalogStatus !== 'ready') {
+    const failed = props.catalogStatus === 'error';
+    const label = failed ? t('pickers.modelsLoadFailed') : t('common.loading');
+    return <Popover label={t('pickers.modelAndEffort')} align="end" panelClassName="model-control-panel"
+      triggerClassName={`tool-btn model-control-trigger${narrow && levels.length > 0 ? ' dial-only' : ''}`} triggerLabel={label} triggerTitle={label}
+      trigger={<>
+        {!(narrow && levels.length > 0) && <span className="model-trigger-name">{model ? modelName(models, model) : t('statusPanel.model')}</span>}
+        {levels.length > 0 && <span className="model-trigger-gauge"><IconEffortGauge size={narrow ? 20 : 17} level={shownEffort ? (levels.indexOf(shownEffort) + 1) / levels.length : null} /></span>}
+        {!narrow && <IconChevron size={13} open />}
+      </>}>
+      {() => <><div className="pop-title">{label}</div>{failed && <button type="button" className="pop-item compact" onClick={props.onRetryCatalog}>{t('common.retry')}</button>}</>}
+    </Popover>;
+  }
+
   if (props.preferenceStatus && props.preferenceStatus !== 'ready') {
     const failed = props.preferenceStatus === 'error';
     const label = failed ? t('pickers.preferenceFailed') : t('common.loading');
@@ -242,8 +260,6 @@ export function ModelPicker(props: ModelProps) {
       </Popover>
     );
   }
-  const levels = effortsForModel(models, model, efforts);
-  const shownEffort = effort && levels.includes(effort) ? effort : null;
   if (quietFor !== undefined) {
     const chosen = [model ? modelName(models, model) : '', shownEffort ? (EFFORT_LABELS[shownEffort] ?? shownEffort) : ''].filter(Boolean).join(' · ');
     // Named even when nothing was chosen: the default model's name, quieter than a choice.
@@ -370,7 +386,7 @@ function ModelLoad({ percent }: { percent: number }) {
 export interface DiscoveredAgent {
   id: string;
   adapter: string;
-  command: string;
+  command?: string;
 }
 
 /** An account of a multi-account agent already signed in on this host, as the picker offers it. */

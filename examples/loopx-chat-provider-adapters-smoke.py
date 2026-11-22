@@ -13,7 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.chat_providers import (  # noqa: E402
+from loopx.chat.providers import (  # noqa: E402
     ClaudeCodeAdapter,
     DirectModelAdapter,
     _execute_read_only_tool,

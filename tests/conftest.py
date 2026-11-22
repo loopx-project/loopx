@@ -202,6 +202,14 @@ def _isolated_worker_effect_runtime(tmp_path_factory, request):
         for variable in ("TMPDIR", "TEMP", "TMP"):
             patch.setenv(variable, str(temporary))
         patch.setattr(tempfile, "tempdir", str(temporary))
+        if (
+            os.environ.get("NODE_DISABLE_COMPILE_CACHE") != "1"
+            and not os.environ.get("NODE_V8_COVERAGE")
+        ):
+            compile_cache = temporary / "node-compile-cache"
+            compile_cache.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(compile_cache, 0o700)
+            patch.setenv("NODE_COMPILE_CACHE", str(compile_cache))
         yield
         from loopx.control_plane.effect_runtime import restart_effect_runtime
 

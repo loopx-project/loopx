@@ -13,7 +13,7 @@ import type { JsonObject } from "../effect_program.ts";
 import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
-import { jsonObject } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
 
@@ -195,6 +195,39 @@ export function selectEffectiveHeartbeatReceipt<Value>(
   return identities.size === 1
     ? [...identities.values()][0]!
     : entries.at(-1)!.value;
+}
+
+/** Pure transport for Python receipt callers. File/GoalRef scoping stays with
+ * their locked reader; this projection grants no admission or settlement.
+ * Return an index so unknown event details and numeric IO stay in that reader. */
+export function projectHeartbeatReceiptSelection(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "heartbeat receipt selection");
+  if (typeof request.goal_id !== "string" || typeof request.agent_id !== "string" ||
+      !Array.isArray(request.events)) {
+    throw new EffectRuntimeRequestError("heartbeat receipt selection requires scoped event facts");
+  }
+  const goalId = request.goal_id, agentId = request.agent_id;
+  const entries = request.events.map((value, index) => ({
+    fact: heartbeatReceiptFactFromEvent(requireJsonObject(value, "heartbeat receipt event")),
+    value: index,
+  }));
+  const index = selectEffectiveHeartbeatReceipt(goalId, agentId, entries);
+  if (index === null) return {index: null, binding: null};
+  const fact = entries[index]!.fact;
+  const binding = heartbeatReceiptBinding(goalId, agentId, fact);
+  if (binding === null) return {index, binding: null};
+  // The original receipt may omit its derived effect. Preserve any declared
+  // effect verbatim, including a conflicting one, just as the shared rule does.
+  return {index, binding: {
+    binding_kind: binding.binding_kind,
+    binding_id: binding.binding_id,
+    effect_id: binding.settlement_effect_id ?? settlementIdentity({
+      goal_id: goalId, agent_id: agentId, turn_instance_id: fact.run_id ?? "",
+      todo_id: fact.todo_id,
+      replan_obligation_id: normalizeHeartbeatReplanObligationId(fact.replan_obligation_id),
+      request_subject: fact.request_subject,
+    }).effect_id,
+  }};
 }
 
 /**
