@@ -6,7 +6,11 @@ import test, { type TestContext } from "node:test";
 
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import { commitTurnJournal } from "../../loopx/control_plane/turn_driver/turn_journal_effects.ts";
-import { findTurnJournalBySettlement, readTurnJournalCapabilities } from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
+import {
+  findTurnJournalBySettlement,
+  readTurnJournalCapabilities,
+  readTurnJournalEvidenceChain,
+} from "../../loopx/control_plane/turn_driver/turn_journal_query.ts";
 
 const phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"];
 const selector = { goal_id: "goal", agent_id: "actor", todo_id: "todo_task", turn_instance_id: "turn-7" };
@@ -50,15 +54,157 @@ const capabilities = (
     settlement_identity,
     ...(goal_ref === undefined ? {} : { goal_ref }),
   });
+const evidenceChain = (
+  runtime_root: string,
+  settlement_identity: unknown = identity,
+  goal_ref?: unknown,
+) =>
+  readTurnJournalEvidenceChain({
+    runtime_root,
+    settlement_identity,
+    ...(goal_ref === undefined ? {} : { goal_ref }),
+  });
 
 test("missing history is a read-only observation", async t => {
   const { root, directory } = await fixture(t);
   assert.deepEqual(await lookup(root), { turn_key: null });
   assert.deepEqual(await capabilities(root), { observed_capabilities: null });
+  assert.deepEqual(await evidenceChain(root), {
+    schema_version: "loopx_turn_journal_evidence_chain_v0",
+    availability: "missing",
+    evidence_chain: null,
+  });
   assert.deepEqual(await readdir(directory), []);
   await rm(directory, { recursive: true });
   assert.deepEqual(await lookup(root), { turn_key: null });
   await assert.rejects(readdir(directory), { code: "ENOENT" });
+});
+
+test("an admitted plan without completed execution phases remains unknown", async t => {
+  const { root, path } = await fixture(t);
+  const value = journal();
+  value.status = "in_progress";
+  value.completed_phases = [];
+  Object.assign(value.plan, { replan_context: { planned_work: ["inspect"] } });
+  Object.assign(value, {
+    host_result: { work_evidence: ["unconfirmed artifact"] },
+    task_validation: { status: "passed" },
+  });
+  await writeFile(path, JSON.stringify(value));
+
+  const readback = await evidenceChain(root);
+  assert.equal(readback.availability, "recorded");
+  const chain = readback.evidence_chain!;
+  assert.equal(chain.result_kind, null);
+  assert.ok(chain.phases.every(phase => !phase.completed && !phase.failed));
+  for (const fact of [
+    chain.host_result,
+    chain.task_validation,
+    chain.writeback,
+    chain.settlement_result,
+    chain.receipt,
+  ]) {
+    assert.deepEqual(fact, { availability: "unknown", value: null });
+  }
+  assert.ok(!("replan_context" in chain));
+});
+
+test("the evidence chain aligns recorded execution, validation and settlement facts", async t => {
+  const { root, path } = await fixture(t);
+  const value = journal(goalRefA);
+  const hostResult = {
+    schema_version: "loopx_turn_result_v0",
+    turn_key: key,
+    result_kind: "validated_progress",
+    completed_phases: phases.slice(0, 2),
+    path_delta_mode: "unchanged",
+    work_evidence: ["artifact: decoder output changed"],
+    validation_evidence: ["test: protocol and memory-safety checks passed"],
+    progress_observation: {
+      schema_version: "typed_progress_observation_v0",
+      result_class: "advanced",
+      work_item_id: "todo_task",
+      fingerprint: "decoder-progress",
+    },
+  };
+  const taskValidation = {
+    schema_version: "loopx_turn_task_validation_v0",
+    ok: true,
+    status: "passed",
+    validator_kind: "command",
+    summary: "independent checks passed",
+  };
+  const writeback = { completion: { todo_id: "todo_task", status: "in_progress" } };
+  const settlementResult = {
+    value: { result_kind: "validated_progress" },
+    receipts: [{ step_kind: "durable_writeback", status: "committed", effect_id: identity.effect_id }],
+    failure: null,
+  };
+  const receipt = { turn_key: key, completed_phases: [...phases], failed_phase: null };
+  Object.assign(value, {
+    result_kind: "validated_progress",
+    host_result: hostResult,
+    task_validation: taskValidation,
+    validation_stage: "task_postcondition",
+    writeback,
+    settlement_result: settlementResult,
+    receipt,
+  });
+  await writeFile(path, JSON.stringify(value));
+
+  const readback = await evidenceChain(root, identity, goalRefA);
+  assert.equal(readback.availability, "recorded");
+  assert.deepEqual(readback.evidence_chain, {
+    settlement_identity: identity,
+    turn_key: key,
+    status: "committed",
+    result_kind: "validated_progress",
+    completed_phases: phases,
+    failed_phase: null,
+    phases: phases.map(phase => ({ phase, completed: true, failed: false })),
+    host_result: { availability: "recorded", value: hostResult },
+    task_validation: { availability: "recorded", value: taskValidation },
+    writeback: { availability: "recorded", value: writeback },
+    settlement_result: { availability: "recorded", value: settlementResult },
+    receipt: { availability: "recorded", value: receipt },
+  });
+});
+
+test("terminal stop makes later writeback and settlement facts not applicable", async t => {
+  const { root, path } = await fixture(t);
+  const value = journal();
+  value.status = "stopped";
+  value.completed_phases = phases.slice(0, 3);
+  Object.assign(value, {
+    result_kind: "blocked",
+    host_result: { result_kind: "blocked", work_evidence: null, validation_evidence: null },
+    task_validation: { status: "not_required" },
+    receipt: { turn_key: key, completed_phases: phases.slice(0, 3), failed_phase: null },
+  });
+  await writeFile(path, JSON.stringify(value));
+
+  const chain = (await evidenceChain(root)).evidence_chain!;
+  assert.deepEqual(chain.writeback, { availability: "not_applicable", value: null });
+  assert.deepEqual(chain.settlement_result, { availability: "not_applicable", value: null });
+  assert.equal(chain.host_result.availability, "recorded");
+  assert.equal(chain.task_validation.availability, "recorded");
+  assert.equal(chain.receipt.availability, "recorded");
+});
+
+test("completed phases with absent facts preserve missingness", async t => {
+  const { root, path } = await fixture(t);
+  await writeFile(path, JSON.stringify(journal()));
+
+  const chain = (await evidenceChain(root)).evidence_chain!;
+  for (const fact of [
+    chain.host_result,
+    chain.task_validation,
+    chain.writeback,
+    chain.settlement_result,
+    chain.receipt,
+  ]) {
+    assert.deepEqual(fact, { availability: "missing", value: null });
+  }
 });
 
 test("real writer prefixes remain discoverable; only terminal history lends capabilities", async t => {
