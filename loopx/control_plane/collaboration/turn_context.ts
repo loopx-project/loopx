@@ -38,6 +38,7 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   // Peer returns require their requester acknowledgement. An original Chat
   // return has a delivery receipt.
   const unconsumed = request.source_kind === "peer" ? results.filter(result => result.consumed !== true) : [];
+  const returnConflict = incomplete.find(result => result.error === "manager_return_payload_conflict");
   let step: string;
   if (kind === "receipt_unavailable" || row.evidence_unavailable === true) step = "recover_evidence";
   else if (reservationPending) step = "reconcile_reservation";
@@ -45,6 +46,7 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   else if (kind !== "settled") step = direction === "outgoing" ? "await_peer_result"
     : receipt.recorded_decision == null ? "assess_request"
     : receipt.recorded_decision === "adopt" ? "review_request_work" : "return_answer";
+  else if (returnConflict) step = "recover_evidence";
   else if (incomplete.length) step = "await_return_delivery";
   else if (request.source_kind === "peer" && unconsumed.length) step = "await_peer_consumption";
   else return null;
@@ -52,7 +54,9 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
     || request.purpose || "").replace(/\s+/g, " ").trim();
   const todos = Array.isArray(row.todo_ids) ? row.todo_ids : [];
   const prioritizedReturns = canSurfacePeerReturns(direction, step) && unconsumed.length ? unconsumed : results;
-  const visibleReturns = prioritizedReturns.slice(-3);
+  const recentReturns = prioritizedReturns.slice(-3);
+  const visibleReturns = returnConflict && !recentReturns.includes(returnConflict)
+    ? [returnConflict, ...recentReturns.slice(-2)] : recentReturns;
   return {
     request_id: request.request_id, direction,
     ...(request.goal_ref ? {goal_ref: request.goal_ref} : {}),
@@ -67,7 +71,8 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
     ...(todos.length ? {todo_ids: todos.slice(0, 4), additional_todo_count: Math.max(0, todos.length - 4)} : {}),
     ...(results.length ? {pending_return_count: incomplete.length, unconsumed_return_count: unconsumed.length,
       returns: visibleReturns.map(result => ({result_key: result.result_key,
-        request_revision: result.request_revision, status: result.status, consumed: result.consumed})),
+        request_revision: result.request_revision, status: result.status, consumed: result.consumed,
+        ...(result === returnConflict ? {error: returnConflict.error} : {})})),
       additional_return_count: results.length - visibleReturns.length} : {}),
   };
 }

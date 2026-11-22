@@ -499,11 +499,13 @@ serves your terminal runtime) checks that host's installation. It cannot
 diagnose this Mac App's local bootstrap; only the App's own diagnostics do.
 
 The updater accepts only fixed official HTTPS channels, not browser-provided
-commands, paths or download URLs. Its signing private key is confined to the
-release secret; the App embeds the public key. PR validation has no signing
-secret. Updater signing does not provide Apple notarization. It also does not
-change Goal authority, grant capabilities, or stop running agents on behalf of
-the user. Services may briefly disconnect during reconciliation.
+commands, paths or download URLs. Its minisign private key
+(`TAURI_SIGNING_PRIVATE_KEY`) is confined to the release secret; the App embeds
+the public key. PR validation has no signing secret and keeps `--no-sign`
+preview builds. Updater minisign signing is distinct from Apple Developer ID
+signing and notarization; it also does not change Goal authority, grant
+capabilities, or stop running agents on behalf of the user. Services may
+briefly disconnect during reconciliation.
 
 The background feed check has a thirty-second deadline and is outside local
 workspace startup. A manual **Check for updates** allows 45 seconds for the same
@@ -513,10 +515,45 @@ A timeout remains an explicit retryable error, never a claim that the App is
 current. Archive downloads use the separate connection, idle-read and total
 deadlines described above. Installation and recovery boundaries are unchanged.
 
-Published macOS preview artifacts use ad-hoc code signing to verify bundle
-integrity without requiring an Apple Developer account. They are not signed
-with a Developer ID and are not notarized, so macOS may require the operator
-to approve the first launch in System Settings > Privacy & Security.
+On non-PR official macOS builds (`desktop-release-artifacts.yml` and
+`desktop-updater.yml`), signing and notarization depend on the five core Apple
+secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
+`APPLE_PASSWORD`, `APPLE_TEAM_ID`; plus optional `KEYCHAIN_PASSWORD`, which
+defaults to an ephemeral random password per build if unset, and optional
+`APPLE_SIGNING_IDENTITY`):
+
+- **Developer ID + Apple Notarization (all 5 core secrets set):** Tauri signs
+  `LoopX.app` with Developer ID Application and Hardened Runtime, notarizes and
+  staples `LoopX.app` before zipping `LoopX.app.zip` or packing the updater's
+  `.app.tar.gz`, and the release workflow notarizes and staples the `.dmg` with
+  `xcrun notarytool` / `xcrun stapler`. Both `.app` and `.dmg` are verified with
+  `codesign --verify --deep --strict`, `Authority=Developer ID Application:`,
+  `spctl --assess`, `xcrun stapler validate`, and `hdiutil verify`.
+- **Ad-hoc integrity signing (all 5 core secrets unset):** Non-PR builds keep
+  `"signingIdentity": "-"` (`Signature=adhoc` verified via
+  `codesign --verify --deep --strict` and `hdiutil verify`). Partial
+  configurations (1–4 of 5 core secrets) fail closed instead of downgrading.
+- **Updater signature compatibility across transitions:** `src-tauri` verifies
+  updater archives with the embedded minisign key and validates both staged
+  candidates and rollback backups with `codesign --verify --deep --strict`
+  (`installed_bundle_verifies` / `replace_bundle`), with no ad-hoc-only check.
+  Existing ad-hoc installations can upgrade in-app to Developer ID + notarized
+  releases (and between Developer ID releases) through the normal updater flow.
+
+When running an ad-hoc-signed or unsigned preview build on macOS Sequoia 15+,
+Gatekeeper's initial dialog offers **Move to Trash** by default instead of an
+inline **Open Anyway** button. Do not click **Move to Trash**; approve the first
+launch using either option below:
+
+1. Click **Done** to dismiss the Gatekeeper dialog, open **System Settings →
+   Privacy & Security**, scroll to the Security section, click **Open Anyway**
+   next to the `LoopX` prompt, and confirm launch.
+2. Or, after verifying the download against `DESKTOP-SHA256SUMS`, clear the
+   quarantine attribute in Terminal:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/LoopX.app
+   ```
 
 ## Runtime Model
 
@@ -824,8 +861,11 @@ comparison; they do not certify an installed update or an executing task's recov
 `src-tauri/target/release/bundle/`. The release workflow builds macOS `.dmg`
 and `.app.zip` artifacts on macOS, Windows `.msi` and `.exe` artifacts on
 Windows, and uploads them to the GitHub Release that triggered the workflow.
-It verifies the ad-hoc macOS app signature and disk-image integrity before
-upload. A separate `DESKTOP-SHA256SUMS` manifest covers all desktop artifacts
+When the Apple signing and notarization secrets are configured, it verifies
+Developer ID signing, Gatekeeper assessment (`spctl`), stapled notarization
+tickets (`xcrun stapler validate`), and disk-image integrity before upload;
+when all five core Apple secrets are unset, it verifies the ad-hoc macOS app
+signature and disk-image integrity instead. A separate `DESKTOP-SHA256SUMS` manifest covers all desktop artifacts
 attached by the workflow, and release builds use the Git tag as the desktop
 bundle version. A manual rerun for an existing tag is an explicit full desktop
 republish: it rebuilds both macOS and Windows assets, preserves the previous

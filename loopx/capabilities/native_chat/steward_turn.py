@@ -22,6 +22,13 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
+from .report_failure_proof import (
+    build_report_quota_request,
+    build_report_timeout_request,
+    is_report_failure_contradicted,
+    observe_report_failure,
+    verify_report_window_failure,
+)
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
@@ -454,102 +461,35 @@ class StewardTurnHost:
 
     def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Read the original native failure without starting or resuming work."""
-        result = (original.get("response") or {}).get("native_loopx") or {}
-        request = original.get("loopx_request") or {}
-        upstream_turn_id = original.get("upstream_turn_id")
-        if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or result.get("result_kind") != "host_failure" or not upstream_turn_id):
-            return None
-        from ...chat_agent import CodexChatAgentError
-        session = self.store.load_session(original["session_id"])
-        if not session:
-            return None
-        if isinstance(upstream_turn_id, str) and upstream_turn_id.startswith("agy_turn_"):
-            if original.get("delta_count") != 0:
-                return None
-            try:
-                events = self.store.events_after(original["session_id"], original["turn_id"], None)
-            except (OSError, ValueError):
-                return None
-            if any(row.get("kind") in {"answer.final", "turn.native_result"} for row in events):
-                return None
-            started = [
-                (row.get("payload") or {}).get("threadId")
-                for row in events
-                if row.get("kind") == "turn.started" and isinstance(row.get("payload"), Mapping)
-                and row["payload"].get("upstream_turn_id") == upstream_turn_id
-            ]
-            if len(started) != 1 or not isinstance(started[0], str) or not started[0]:
-                return None
-            thread_id = started[0]
-            native_timeout = any(
-                row.get("kind") == "agent.phase" and isinstance(row.get("payload"), Mapping)
-                and row["payload"].get("method") == "native/timeout"
-                for row in events
-            )
-            from .antigravity_adapter import AntigravityAdapter
-            return AntigravityAdapter.failed_report_observation(
-                cascade_id=thread_id,
-                turn_id=upstream_turn_id,
-                native_timeout=native_timeout,
-                model_id=session.get("agent_model_id"),
-                reasoning_effort=session.get("agent_reasoning_effort"),
-            )
-        from .codex_adapter import CodexAppServerAdapter
-        from .codex_context import checked_session_home
-        if not session.get("codex_home") or not session.get("upstream_thread_id"):
-            return None
-        history = session.get("upstream_context_history") or []
-        if not isinstance(history, list) or any(not isinstance(item, dict)
-                or not isinstance(item.get("thread_id"), str) or not item["thread_id"]
-                for item in history):
-            return None
-        # Context replacement retains native provenance on this same Session.
-        # Read the original refusal there; exclude non-Codex cascades.
-        raw_threads = [
-            *([session["upstream_thread_id"]] if session.get("agent_id") != "antigravity" else []),
-            *(item["thread_id"] for item in reversed(history) if item.get("agent_id") != "antigravity"),
-        ]
-        threads = list(dict.fromkeys(raw_threads))
-        if not threads:
-            return None
-        try:
-            proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
-                codex_home=Path(session["codex_home"]),
-                model_auth_home=checked_session_home(self.controller.codex_home, session),
-                thread_ids=threads, turn_id=upstream_turn_id)
-        except (CodexChatAgentError, OSError, ValueError, RuntimeError):
-            return None
-        if (not proof or proof.get("turn_id") != upstream_turn_id
-                or proof.get("thread_id") not in threads or proof.get("only_original_user_item") is not True
-                or not proof.get("codex_error_info")):
-            return None
-        return proof
+        return observe_report_failure(self.controller, self.store, original)
 
-    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+    def report_window_failure_verified(
+        self, original: Mapping[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
+        """Query live provider history first; fall back to retained proof only if unavailable."""
+        return verify_report_window_failure(
+            self.controller, self.store, original, window, generation_locked=generation_locked,
+        )
+
+    def report_failure_contradicted(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+        """Return True when a prior live observation contradicted this Turn's failure proof."""
+        return is_report_failure_contradicted(self.controller.coordination_runtime_root, original, window)
+
+    def report_quota_request(self, original: Mapping[str, Any], *,
+                             report_window: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Observe quota recovery, never resume or rewrite the failed native Turn."""
-        request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
-            return None
-        proof = self.report_failure_observation(original)
-        if (not proof or proof.get("only_original_user_item") is not True
-                or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
-            return None
-        return {**request, "turn_instance_id": request["turn_instance_id"] + ".quota-recovery",
-            "report_quota_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+        fallback = (
+            None
+            if getattr(self.report_failure_observation, "__func__", None) is _DEFAULT_REPORT_FAILURE_OBSERVATION
+            else self.report_failure_observation
+        )
+        return build_report_quota_request(
+            self.controller, self.store, original, report_window=report_window, fallback_observe_fn=fallback,
+        )
 
     def report_timeout_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Observe idle Antigravity timeout for one bounded isolated-cascade retry."""
-        request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None or request.get("report_timeout_recovery") is not None:
-            return None
-        proof = self.report_failure_observation(original)
-        if (not proof or proof.get("adapter_kind") != "antigravity_ls"
-                or proof.get("cascade_idle") is not True or proof.get("no_final_response") is not True
-                or proof.get("native_timeout") is not True or proof.get("quota_available") is not True):
-            return None
-        return {**request, "turn_instance_id": request["turn_instance_id"] + ".timeout-recovery",
-            "report_timeout_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+        return build_report_timeout_request(original, observe_fn=self.report_failure_observation)
 
     def report_selection_recovery(self, original: dict[str, Any], *,
                                   probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1225,7 +1165,7 @@ class StewardTurnHost:
             quota_observation = prepared["quota_probe"]
             original_turn = quota_observation["original"]
             quota_observation["request"] = (
-                self.report_quota_request(original_turn)
+                self.report_quota_request(original_turn, report_window=report_window)
                 or self.report_timeout_request(original_turn)
             )
             prepared = inspect_submission(quota_observation)
@@ -1667,7 +1607,7 @@ class StewardTurnHost:
                 followup_ctx = self._steward_followup_context(actor, session_id, request, authority)
                 prompt += (
                     "\nSteward advancement instructions: Evaluate the monitor prompt and signal snapshot against authorized recipients (`context_delegation.targets`), prior receipts (`prior_handoff_receipts`, avoid duplicate delivery for unchanged PR@headRefOid), and open user todos (`open_user_todos`). "
-                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
+                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, `stalled_since`, `author_replied_after_request_changes`, optional `stalled_bucket` (`awaiting_maintainer_reply` | `under_24h` | `24h_to_72h` | `72h_plus` | `7d_plus`), and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `latest_request_changes_review_id`, `stalled_since`, `author_replied_after_request_changes`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
                     "You may include optional top-level JSON fields alongside the normal kernel fields: "
                     "`context_handoff` (single object or array <=32 of {goal_id, agent_id, brief} with `schema_version='collaboration_brief_v0'` and `inputs=[]` when referencing URLs/PRs, restricted to `context_delegation.targets`), "
                     "`steward_owner_report` (optional non-empty Markdown string <=24000 chars or `{markdown}` delivered once directly to the bound Steward App and Feishu conversation; omit or set `null` when silent/no report should be sent), "
@@ -1977,3 +1917,6 @@ class StewardTurnHost:
             **({"context_handoff": committed_handoff} if committed_handoff else {}),
             **({"steward_owner_report_queued": True} if owner_report else {}),
             **({"steward_user_action_receipts": user_action_receipts} if user_action_receipts else {})}
+
+
+_DEFAULT_REPORT_FAILURE_OBSERVATION = StewardTurnHost.report_failure_observation

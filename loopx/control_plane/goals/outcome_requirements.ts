@@ -41,7 +41,10 @@ function text(value: unknown, label: string, max = 512): string {
 }
 function id(value: unknown, label: string): string {
   const result = text(value, label, 128);
-  requireValue(/^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(result), `${label} must be an opaque identifier`);
+  requireValue(
+    /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(result),
+    `${label} must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`,
+  );
   return result;
 }
 function keys(row: JsonObject, required: string[], optional: string[] = []): void {

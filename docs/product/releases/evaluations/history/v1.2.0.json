@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 1,
+    "minor": 2,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "1.2.0",
+    "version_tag": "v1.2.0",
+    "git_commit": "5a4617e6b96288eb2cbfbfe9ee97417c6c38f695",
+    "git_tree": "00eefb85c3407689a0d2d77a8e37ea586998c32b",
+    "committed_at": "2026-09-25T09:32:54+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v1.2.0",
+      "last_tag": "v1.2.4",
+      "last_commit": "fc42b84cedb21a56c15ca3b4af5eab0407829cf8",
+      "last_committed_at": "2026-10-03T20:23:50+08:00",
+      "tag_count": 5
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v1.2.0",
+      "v1.2.4"
+    ]
+  },
+  "a_scale": {
+    "score": 24.3,
+    "delta_from_prior": 2.2,
+    "domain_scores": {
+      "D1": 28.0,
+      "D2": 20.0,
+      "D3": 19.0,
+      "D4": 22.5,
+      "D5": 30.0,
+      "D6": 27.0,
+      "D7": 19.5,
+      "D8": 33.5
+    }
+  },
+  "b_scale": {
+    "generation_major": 1,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Bounded vision/portfolio closeout (#5025) and typed shared-session wake boundaries across Codex resume qualification through v1.2.4.",
+  "summary_zh": "落地有界目标收口预算（#5025）并类型化共享会话唤醒边界直至 v1.2.4。"
+}

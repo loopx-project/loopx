@@ -337,7 +337,7 @@ def _unsettled_host_turn_recovery(
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
 ) -> dict[str, Any] | None:
-    if not agent_id or not current_turn_instance_id:
+    if not agent_id:
         return None
     preflight = _prior_closeout_preflight(
         runtime_root=runtime_root,
@@ -438,8 +438,9 @@ def apply_unsettled_host_turn_recovery_if_required(
         current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
     )
-    if verdict["recovery"].get("state") == "attention_required":
-        payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
+    # Refresh scheduler_hint for both recovery_required and attention_required so
+    # an earlier wait or terminal stop hint never overrides recovery arbitration.
+    payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
     return True
 
 
@@ -536,7 +537,19 @@ def _apply_recovery_projection(
     if attention:
         from .settlement_precedence import clear_quota_action_projections
 
+        reads = payload.get("required_reads")
         clear_quota_action_projections(payload)
+        # The recovery hold suppresses the stale work selection. The
+        # authorized Inbox read is scoped to the Goal and Agent independently.
+        if isinstance(reads, list):
+            inbox_reads = [
+                read for read in reads
+                if isinstance(read, Mapping)
+                and read.get("source") == "turn_start_capability_hook"
+                and read.get("kind") == "operator_inbox"
+            ]
+            if inbox_reads:
+                payload["required_reads"] = inbox_reads
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)

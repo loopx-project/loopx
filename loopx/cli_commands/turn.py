@@ -111,6 +111,7 @@ def handle_turn_command(
         ):
             from ..control_plane.turn_driver.codex_execution_preparation import (
                 builtin_execution_preparation_claim,
+                unconsumed_preparation_refusal,
             )
 
             from .turn_host_request import prepare_turn_host_arguments
@@ -146,7 +147,7 @@ def handle_turn_command(
             preparation_error = "execution preparation did not make the same Todo ready"
 
             def execution_preparer(decision: Mapping[str, Any]) -> str | None:
-                return builtin_execution_preparation_claim(
+                prepared_todo = builtin_execution_preparation_claim(
                     decision,
                     agent_id=args.agent_id,
                     registry_path=registry_path.expanduser().resolve(),
@@ -157,6 +158,13 @@ def handle_turn_command(
                     admit_start=admit_preparation,
                     on_claim=record_claim,
                 )
+                if prepared_todo is None and preparation_admission is None:
+                    refusal = unconsumed_preparation_refusal(
+                        decision, goal_id=args.goal_id, agent_id=args.agent_id,
+                    )
+                    if refusal is not None:
+                        raise refusal
+                return prepared_todo
 
         resume_instance = getattr(args, "resume_turn_instance_id", None)
         if resume_instance is not None:

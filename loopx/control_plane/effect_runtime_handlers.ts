@@ -389,6 +389,7 @@ export function createEffectRuntimeHandlers(
     ["quota.spend.commit", lazyHandler(() => import("./quota/spend_commit.ts"), ({evaluateQuotaSpendCommit}) => evaluateQuotaSpendCommit)],
     ["quota.void.commit", lazyHandler(() => import("./quota/void_commit.ts"), ({evaluateQuotaVoidCommit}) => evaluateQuotaVoidCommit)],
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
+    ["quota.execution_loss_closeout.commit", lazyHandler(() => import("./quota/execution_loss_closeout.ts"), ({commitExecutionLossCloseout}) => commitExecutionLossCloseout)],
     ["quota.heartbeat_receipt.select", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({projectHeartbeatReceiptSelection}) => projectHeartbeatReceiptSelection)],
     [
       "quota.prior_host_turn_closeout.preflight",

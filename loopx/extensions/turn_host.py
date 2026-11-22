@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ..control_plane.effect_runtime import _node_executable
+from ..control_plane.runtime.node_probe import node_typescript_flags
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref
 from ..control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from ..control_plane.turn_driver.host_candidate import (
@@ -37,4 +38,11 @@ def supervised_stdio_command(command: Sequence[str]) -> list[str]:
     if not command or any(not isinstance(arg, str) or "\0" in arg for arg in command) or not command[0]:
         raise ValueError("a stdio command argv is required")
     bridge = Path(__file__).resolve().parents[1] / "control_plane" / "turn_driver" / "host_stdio_bridge.ts"
-    return [_node_executable(), "--no-warnings", "--experimental-strip-types", str(bridge), *command]
+    return [
+        _node_executable(),
+        "--no-warnings",
+        "--experimental-strip-types",
+        *node_typescript_flags(),
+        str(bridge),
+        *command,
+    ]

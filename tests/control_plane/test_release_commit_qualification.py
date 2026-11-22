@@ -545,6 +545,32 @@ def test_qualify_release_commit_parallelism_and_preflight_selection(tmp_path: Pa
         "tests/test_custom.py",
     ]
 
+    release_repo = tmp_path / "release-repo"
+    for rel in (
+        "tests/test_dsh_plugin_publish_workflow.py",
+        "tests/desktop/test_desktop_signing_workflow.py",
+        "tests/desktop/test_update_feed.py",
+        "tests/control_plane/test_release_multi_surface_preflight.py",
+    ):
+        target = release_repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    selected_release = runner["select_preflight_tests"](
+        [
+            ".github/workflows/dsh-plugin-publish.yml",
+            ".github/workflows/desktop-release-artifacts.yml",
+            "docs/product/release-readiness.md",
+        ],
+        repo_root=release_repo,
+    )
+    assert selected_release == [
+        "tests/test_dsh_plugin_publish_workflow.py",
+        "tests/desktop/test_desktop_signing_workflow.py",
+        "tests/desktop/test_update_feed.py",
+        "tests/control_plane/test_release_multi_surface_preflight.py",
+    ]
+
 
 def test_qualify_release_commit_resume_requires_exact_source_and_reduces_junit(tmp_path: Path) -> None:
     import importlib.util

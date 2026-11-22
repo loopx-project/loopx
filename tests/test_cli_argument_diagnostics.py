@@ -556,7 +556,7 @@ def test_monitor_change_scope_requires_material_transition() -> None:
                 "Continue the work.",
             ],
             "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
-            "--claim-operation-id, --task-lease-idempotency-key, "
+            "--claim-operation-id, --ttl-seconds, --task-lease-idempotency-key, "
             "--task-lease-expected-version, --project, --state-file, --dry-run, and --thin; unsupported: "
             "--decision-outcome, --next-agent-todo",
         ),
@@ -596,6 +596,35 @@ def test_managed_claim_reference_is_retained_for_the_execution_owner(command, op
     # Scope validation admits the supported caller without dropping its raw
     # reference. The native owner still rejects an invalid empty value.
     assert args.claim_operation_id == operation_id
+
+
+@pytest.mark.parametrize("command", ["add", "list", "update", "complete", "supersede"])
+def test_ttl_seconds_is_rejected_on_non_claim_todo_commands(command):
+    args = build_parser().parse_args([
+        "todo", command, "--goal-id", "example-goal", "--ttl-seconds", "7200",
+    ])
+    with pytest.raises(ValueError, match="--ttl-seconds is supported only by todo claim"):
+        validate_shared_todo_options(args)
+
+
+@pytest.mark.parametrize("bad_ttl", [0, 86401])
+def test_todo_claim_rejects_out_of_range_ttl_seconds(bad_ttl):
+    args = build_parser().parse_args([
+        "todo", "claim", "--goal-id", "example-goal", "--todo-id", "todo_example",
+        "--claimed-by", "codex-example", "--agent-id", "codex-example",
+        "--ttl-seconds", str(bad_ttl),
+    ])
+    with pytest.raises(ValueError, match="ttl seconds must be between 1 and 86400"):
+        validate_todo_claim_options(args)
+
+
+def test_todo_claim_ttl_seconds_requires_managed_or_explicit_lease():
+    args = build_parser().parse_args([
+        "todo", "claim", "--goal-id", "example-goal", "--todo-id", "todo_example",
+        "--claimed-by", "codex-example", "--ttl-seconds", "7200",
+    ])
+    with pytest.raises(ValueError, match="--ttl-seconds requires managed execution"):
+        validate_todo_claim_options(args)
 
 
 @pytest.mark.parametrize(
