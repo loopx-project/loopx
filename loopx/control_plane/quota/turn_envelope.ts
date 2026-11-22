@@ -997,7 +997,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);
-  source = referenceVisionContinuation(source, sourceIdentity);
+  source = referenceVisionContinuation(source, sourceIdentity, true);
   source = referenceQuotaSummaryLanes(source, sourceIdentity);
   return sealCompleteTurnDecision(source, request.scheduler_execution_args, sourceIdentity);
 }
