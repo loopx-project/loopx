@@ -2706,7 +2706,7 @@ keep "we stopped supporting this" from becoming "this was never configured".
    (`loopx/control_plane/coordination/local_authority_shadow.ts:57`) rather than
    disappearing into a transport error, because a rejection that looks like a
    transient failure invites a retry loop.
-3. One setting is retired; the
+3. **Clearing is neither enable nor bootstrap.** One setting is retired; the
    replacement capture path is configured on its own terms.
    `apply_coordination_shadow_changes` is documented as "Clear retired settings
    and configure the transaction-bound shadow independently"
