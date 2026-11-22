@@ -10,7 +10,7 @@
  * this rule, so it lives here rather than in either caller.
  */
 import type { JsonObject } from "../effect_program.ts";
-import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
+import {effectIdsMatch, executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
@@ -258,7 +258,7 @@ export function selectAdmissionHeartbeatReceipt<Value>(
   return identities.size === 1 ? [...identities.values()][0]! : null;
 }
 
-interface HeartbeatPreparedLease extends JsonObject {
+export interface HeartbeatPreparedLease extends JsonObject {
   prepared_lease_key_sha256: string;
   prepared_lease_version: number;
   prepared_lease_epoch?: number;
@@ -276,6 +276,26 @@ export function heartbeatPreparedLease(details: JsonObject): HeartbeatPreparedLe
   }
   return {prepared_lease_key_sha256: key, prepared_lease_version: version,
     ...(epoch === undefined ? {} : {prepared_lease_epoch: epoch})};
+}
+
+export function heartbeatPreparedWorkAdmission(
+  event: JsonObject,
+  identity: SettlementIdentity,
+): HeartbeatPreparedLease | null {
+  const fact = heartbeatReceiptFactFromEvent(event);
+  const binding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, fact);
+  const receiptDetails = heartbeatReceiptDetails(event);
+  if (event.schema_version !== "loopx_rollout_event_v0" || event.event_kind !== "quota_should_run"
+      || event.goal_id !== identity.goal_id || event.agent_id !== identity.agent_id
+      || fact.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id
+      || binding?.binding_kind !== "todo" || binding.binding_id !== identity.todo_id
+      || (fact.settlement_effect_id !== null && !effectIdsMatch(fact.settlement_effect_id, identity.effect_id))
+      || fact.closeout_required !== true
+      || (Object.hasOwn(receiptDetails, "prepared_lease_required") && receiptDetails.prepared_lease_required !== true)
+      || nativeChildReportAdmission(receiptDetails, event.status, identity.effect_id, "open", false,
+        normalizeHeartbeatReplanObligationId(receiptDetails.semantic_replan_obligation_id))
+        .report_permission !== "new_operation") return null;
+  return heartbeatPreparedLease(receiptDetails);
 }
 
 export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {

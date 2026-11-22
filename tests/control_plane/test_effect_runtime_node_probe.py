@@ -296,3 +296,71 @@ def test_deep_readiness_second_probe_timeout_recovers_real_request(tmp_path, mon
         assert recovered["runtime_identity"]["sqlite_authority_qualified"] is True
     finally:
         assert effect_runtime.restart_effect_runtime()["stopped"] is True
+
+
+@pytest.mark.parametrize(
+    ("system", "machine", "expected"),
+    [
+        ("linux", "x86_64", ("--liftoff-only", "--no-wasm-tier-up", "--no-wasm-dynamic-tiering")),
+        ("linux", "AMD64", ("--liftoff-only", "--no-wasm-tier-up", "--no-wasm-dynamic-tiering")),
+        ("linux", "aarch64", ()),
+        ("darwin", "arm64", ()),
+        ("win32", "AMD64", ()),
+    ],
+)
+def test_node_typescript_flags_scopes_wasm_baseline_workaround_to_linux_x86_64(
+    system: str,
+    machine: str,
+    expected: tuple[str, ...],
+) -> None:
+    assert node_probe.node_typescript_flags(system=system, machine=machine) == expected
+
+
+def test_stdio_and_server_runtime_launch_include_linux_x86_wasm_flags(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(node_probe.sys, "platform", "linux")
+    monkeypatch.setattr(node_probe.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(effect_runtime, "_node_executable", lambda: "node")
+    launched: list[list[str]] = []
+
+    class _FakePipe:
+        pid = 123
+
+        def close(self, **_kwargs) -> bool:
+            return True
+
+    def fake_stdio(argv, _env):
+        launched.append(list(argv))
+        return _FakePipe()
+
+    monkeypatch.setattr(effect_runtime, "EffectRuntimeStdio", fake_stdio)
+    monkeypatch.setattr(
+        effect_runtime,
+        "_request_with_info",
+        lambda *_args, **_kwargs: {
+            "result": {"ready": True, "pid": 123, "fingerprint": "f" * 64, "runtime_identity": None},
+        },
+    )
+    runtime = effect_runtime._start_stdio_runtime("f" * 64)
+    assert runtime.fingerprint == "f" * 64
+    assert launched and launched[0][:6] == [
+        "node",
+        "--no-warnings",
+        "--experimental-strip-types",
+        "--liftoff-only",
+        "--no-wasm-tier-up",
+        "--no-wasm-dynamic-tiering",
+    ]
+    assert Path(launched[0][6]).name == "effect_runtime_stdio.ts"
+
+    server_launches: list[list[str]] = []
+    observations = iter([None, {"ready": True}])
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_args, **_kwargs: next(observations))
+    monkeypatch.setattr(
+        effect_runtime.subprocess,
+        "Popen",
+        lambda args, **_kwargs: server_launches.append(list(args)) or SimpleNamespace(poll=lambda: None),
+    )
+    info = tmp_path / "runtime" / "runtime.json"
+    assert effect_runtime._start_runtime(fingerprint="f" * 64, info_path=info) == {"ready": True}
+    assert server_launches and server_launches[0][:6] == launched[0][:6]
+    assert "--import" in server_launches[0]

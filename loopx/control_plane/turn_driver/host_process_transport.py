@@ -15,6 +15,7 @@ from typing import Any
 
 from ...file_lock import lock_holder_host_label
 from ..effect_runtime import _node_executable
+from ..runtime.node_probe import node_typescript_flags
 from .host_bridge_transport import GuardedHostBridge
 
 # Keep Python's Windows executable/batch launcher compatibility. No timeout,
@@ -347,6 +348,7 @@ def run_host_process(
                 _node_executable(),
                 "--no-warnings",
                 "--experimental-strip-types",
+                *node_typescript_flags(),
                 str(bridge),
                 *launch_arguments,
             ],

@@ -51,9 +51,9 @@ for (const adapter of ['agy', 'claude']) for (const mobile of [false, true]) for
       await recovery.waitFor({ state: 'detached' });
       // No picker click or page refresh is allowed to trigger this recovery.
       await page.waitForFunction(({ id, model }) => Object.values(JSON.parse(localStorage.getItem('calli.host.v1') ?? '{}'))
-        .some(state => state.models?.[id]?.some(item => item.id === model)), { id, model: adapter === 'agy' ? 'fast-low' : 'big' });
+        .some(state => state.models?.[id]?.some(item => item.id === model)), { id, model: adapter === 'agy' ? 'fast' : 'big' });
       await page.locator('.model-control-trigger').first().click();
-      await page.getByText(adapter === 'agy' ? 'Fast (Low)' : 'Big 1.0', { exact: true }).first().waitFor();
+      await page.getByText(adapter === 'agy' ? 'Fast' : 'Big 1.0', { exact: true }).first().waitFor();
       await shot('models-restored');
       assert.ok(existsSync(credentials));
       const agents = await (await api(daemon, '/api/agents')).json();

@@ -795,5 +795,107 @@ def test_task_help_exposes_managed_reference_not_host_lease_flags():
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "todo", "claim", "--help"],
         cwd=REPO, capture_output=True, text=True, check=True)
     assert "--claim-operation-id" in result.stdout
+    assert "--ttl-seconds" in result.stdout
     assert "--task-lease-idempotency-key" not in result.stdout
     assert "--task-lease-expected-version" not in result.stdout
+
+
+@pytest.mark.parametrize("thin", [False, True])
+def test_claim_ttl_seconds_bounds_visibility_and_replay_parity(claim_cli, thin):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    before = snapshot()
+
+    for bad_ttl in (0, 86401):
+        rejected = run([
+            *prefix, *claim, "--claimed-by", "peer-a",
+            "--ttl-seconds", str(bad_ttl),
+            *(["--thin"] if thin else []),
+        ], expected_exit=1)
+        assert rejected["ok"] is False
+        assert "1 and 86400" in rejected["error"]
+    assert snapshot() == before
+
+    unmanaged = run([
+        *prefix, "todo", "claim", "--goal-id", GOAL, "--todo-id", TODO,
+        "--claimed-by", "peer-a", "--ttl-seconds", "7200",
+    ], expected_exit=1)
+    assert unmanaged["ok"] is False
+    assert "--ttl-seconds requires managed execution" in unmanaged["error"]
+    assert snapshot() == before
+
+    accepted = run([
+        *prefix, *claim, "--claimed-by", "peer-a",
+        "--claim-operation-id", f"claim-long-{thin}",
+        "--ttl-seconds", "7200",
+        *(["--thin"] if thin else []),
+    ])
+    assert accepted["ok"] is True and accepted["execution_managed"] is True
+    assert "lease" not in accepted
+    assert accepted["lease_ttl_seconds"] == 7200
+    assert isinstance(accepted["lease_expires_at"], str) and accepted["lease_expires_at"].endswith("Z")
+    assert "--ttl-seconds" in accepted["instruction"]
+    assert "task-lease renew" in accepted["instruction"]
+    assert "--next-action" in accepted["instruction"]
+
+    inspected = run([*prefix, "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO])
+    assert inspected["active"] is True
+    assert inspected["lease"]["acquire_ttl_seconds"] == 7200
+    assert inspected["lease"]["expires_at"] == accepted["lease_expires_at"]
+
+    replayed = run([
+        *prefix, *claim, "--claimed-by", "peer-a",
+        "--claim-operation-id", f"claim-long-{thin}",
+        "--ttl-seconds", "7200",
+        *(["--thin"] if thin else []),
+    ])
+    assert replayed["ok"] is True and replayed["status"] == "replayed"
+    assert replayed["lease_ttl_seconds"] == 7200
+    assert replayed["lease_expires_at"] == accepted["lease_expires_at"]
+
+    mismatched = run([
+        *prefix, *claim, "--claimed-by", "peer-a",
+        "--claim-operation-id", f"claim-long-{thin}",
+        "--ttl-seconds", "3600",
+    ], expected_exit=1)
+    assert mismatched["ok"] is False
+    assert mismatched["error_code"] == "coordination_operation_identity_mismatch"
+
+    md = subprocess.run(
+        [
+            sys.executable, "-m", "loopx.cli",
+            *prefix[:-2], "--format", "markdown",
+            *claim, "--claimed-by", "peer-a",
+            "--claim-operation-id", f"claim-long-{thin}",
+            "--ttl-seconds", "7200",
+        ],
+        cwd=REPO, capture_output=True, text=True, timeout=90, check=True,
+    )
+    assert f"lease_expires_at: `{accepted['lease_expires_at']}`" in md.stdout
+    assert "lease_ttl_seconds: `7200`" in md.stdout
+
+
+def test_claim_omitted_ttl_preserves_2700_default_and_explicit_lease_ttl(claim_cli):
+    _, run, _, prefix, claim, _, _, _ = claim_cli
+    default_claim = run([
+        *prefix, *claim, "--claimed-by", "peer-a", "--claim-operation-id", "claim-default-ttl",
+    ])
+    assert default_claim["ok"] is True and default_claim["execution_managed"] is True
+    assert default_claim["lease_ttl_seconds"] == 2700
+    assert isinstance(default_claim["lease_expires_at"], str) and default_claim["lease_expires_at"]
+    inspected = run([*prefix, "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO])
+    assert inspected["lease"]["acquire_ttl_seconds"] == 2700
+
+    # Release and verify explicit --task-lease-idempotency-key honors --ttl-seconds too.
+    released = run([
+        *prefix, "task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO,
+        "--owner", "peer-a", "--idempotency-key", inspected["lease"]["idempotency_key"],
+        "--expected-version", str(inspected["lease"]["version"]),
+    ])
+    assert released["ok"] is True
+    explicit = run([
+        *prefix, *claim, "--claimed-by", "peer-a", "--claim-operation-id", "claim-explicit-ttl",
+        "--task-lease-idempotency-key", "explicit-ttl-key", "--task-lease-expected-version", "1",
+        "--ttl-seconds", "5400",
+    ])
+    assert explicit["ok"] is True
+    assert explicit["lease"]["acquire_ttl_seconds"] == 5400
