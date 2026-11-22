@@ -3,6 +3,12 @@ import type { Messages } from './zh';
 const plural = (n: number, one: string, other: string) => `${n} ${n === 1 ? one : other}`;
 
 export const en: Messages = {
+  'overview.followups': 'Read messages after the handover',
+  'handover.group.viewing': 'Viewing',
+  'handover.group.current': 'Current',
+  'handover.group.count': (count: number) => `${count} ${count === 1 ? 'segment' : 'segments'}`,
+  'overview.chain': 'Handover',
+  'overview.pictureLarge': 'View larger',
   "pwa.title": "Install LoopX",
   "pwa.hint": "Open in its own window, ready to launch from your computer.",
   "pwa.install": "Install",

@@ -1,6 +1,12 @@
 import type { Messages } from './zh';
 
 export const ja: Messages = {
+  'overview.followups': '引き継ぎ後のメッセージを読む',
+  'handover.group.viewing': '表示中',
+  'handover.group.current': '現在',
+  'handover.group.count': (count: number) => `${count} 区間`,
+  'overview.chain': '引き継ぎ',
+  'overview.pictureLarge': '拡大して見る',
   "pwa.title": "LoopX をインストール",
   "pwa.hint": "独立したウィンドウで開き、パソコンからすぐに起動できます。",
   "pwa.install": "インストール",

@@ -46,6 +46,12 @@ conversation panel from `556dc46`; collaboration handover diagnostics from
 previews to its active conversation page, keeps its existing protocol names,
 and adds unread-overflow, restart and handover regression coverage.
 
+Overview side-column readers are adapted from Calli `09aebf4`, with the chain
+group from `abc2105`, linked-thread layout from `7db2955`, retired-lead labeling
+from `a2504cc`, and the historical read boundary from `4d5a108` adapted to the
+existing Workbench history reader. LoopX retains its Goal group, shell sizing,
+preview isolation and adaptive overview behavior.
+
 MIT License
 
 Copyright (c) 2026 Calli contributors

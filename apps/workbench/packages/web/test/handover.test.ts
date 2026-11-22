@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handoverHistoryKey, laterSegment, latestHandoverThread, nextSegment, takeoverMention } from '../src/handover';
+import { handoverHistoryKey, laterSegment, latestHandoverThread, nextSegment, takeoverMention, overviewHistoryBoundary } from '../src/handover';
 import type { Thread } from '../src/api';
 
 const segment = (id: string, parent?: string) => ({ id, createdAt: id, handover: parent ? { sourceId: parent, mode: 'continue' } : null }) as Thread;
@@ -64,4 +64,16 @@ test('a conversation handed over to by hand follows its source only while the so
   const next = by('next', {}, { mode: 'continue', automatic: true });
   assert.equal(laterSegment(a, next, [a, next, older])?.id, 'next');
   assert.equal(laterSegment(a, a, [a, by('other', {}, { sourceId: 'z' })]), undefined, 'handed over from another conversation');
+});
+
+
+test('overview reads an earlier segment only to its handover boundary without including detached successors', () => {
+  const source = segment('a');
+  const first = { ...segment('b', 'a'), handover: { ...segment('b', 'a').handover!, sourceSeq: 36 } };
+  const detached = { ...segment('z', 'a'), handover: { ...segment('z', 'a').handover!, sourceSeq: 200, detached: true } };
+  assert.equal(overviewHistoryBoundary(source.id, [source, first, detached]), 37);
+  assert.equal(overviewHistoryBoundary(first.id, [source, first]), undefined);
+  assert.equal(overviewHistoryBoundary(source.id, [source, segment('old', 'a')]), undefined, 'legacy links do not invent a boundary');
+  assert.equal(overviewHistoryBoundary(source.id, [source, { ...first, handover: { ...first.handover, sourceSeq: 0 } }]), 1);
+  assert.equal(overviewHistoryBoundary(source.id, [source, { ...first, handover: { ...first.handover, sourceSeq: -1 } }]), undefined);
 });

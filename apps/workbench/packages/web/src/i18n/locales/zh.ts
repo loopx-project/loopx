@@ -3,6 +3,12 @@
  * a key added here has to be added to them too. Messages with values are functions.
  */
 export const zh = {
+  'overview.followups': '查看交接后的后续消息',
+  'handover.group.viewing': '正在看',
+  'handover.group.current': '当前',
+  'handover.group.count': (count: number) => `${count} 段`,
+  'overview.chain': '接力',
+  'overview.pictureLarge': '放大查看',
   "pwa.title": "安装 LoopX",
   "pwa.hint": "用独立窗口打开，随时从电脑启动。",
   "pwa.install": "安装",
