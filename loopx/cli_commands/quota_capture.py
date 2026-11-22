@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.quota.turn_envelope import (
     COMPLETE_TURN_DECISION_VERSION, TURN_ENVELOPE_SCHEMA_VERSION,
@@ -22,11 +21,13 @@ from ..control_plane.turn_driver.decision_capture import (
     context_index_fields as _context_index_fields,
     write_initial_context_read_reference,
     validate_handoff_socket, context_capture_read_command,
-    write_context_read_reference, private_capture_uid, open_regular_capture,
+    write_context_read_reference,
+    private_capture_uid as private_capture_uid,
+    open_regular_capture as open_regular_capture,
 )
 from ..control_plane.turn_driver.native_context_profile import (
     NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES,
-    native_context_page_budget,
+    native_context_page_budget as native_context_page_budget,
 )
 from .quota_context_reader import (
     budgeted_ready_opening,
@@ -123,24 +124,22 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             # metadata is optional and never a read/authority receipt.
             pass
 
-    interaction = current_document.get("interaction_contract")
-    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
-    stateless_ready = (
+    stateless_navigation = (
         progressive_enabled and initial_read_plan is None and context_directory is None and not page_attached
-        and current_document.get("effective_action") == EffectiveAction.NORMAL_RUN.value
-        and current_document.get("normal_delivery_allowed") is True
-        and isinstance(channel, dict) and channel.get("delivery_allowed") is True
     )
-    if stateless_ready:
+    if stateless_navigation:
         try:
             navigation_plan = _turn_envelope_result("context_select", context=current_document,
-                select=[""], list_fields=True, include_initial_read_plan=True)
+                select=[""], list_fields=True, include_initial_read_plan=True, normal_work_initial_read=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass
         else:
             selection = navigation_plan.get("initial_read_plan")
-            initial_read_plan = {"initial": selection is not None,
-                                 "plan": navigation_plan if selection is None else selection}
+            if selection is not None:
+                initial_read_plan = {"initial": True, "plan": selection}
+            else:
+                field_index = _context_index_fields(current_document, navigation_plan["selections"][0]["children"])
+                initial_read_pointers = navigation_plan.get("initial_read_pointers")
 
     if progressive_enabled and initial_read_plan is not None:
         try:
@@ -152,7 +151,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             # Optional discovery cannot invalidate the immutable file reference.
             pass
-    elif progressive_enabled and not stateless_first_read and not stateless_ready:
+    elif progressive_enabled and not stateless_first_read and not stateless_navigation:
         try:
             plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -234,10 +233,60 @@ def quota_context_surface(payload: dict[str, Any]) -> str:
     return "turn_envelope" if version == TURN_ENVELOPE_SCHEMA_VERSION else "quota_packet"
 
 
+def _saved_decision_reference(
+    directory: Path | None, *, expected_sha256: str | None = None,
+) -> dict[str, str] | None:
+    """Verify the just-captured private decision file before staging replan views."""
+    if directory is None:
+        return None
+    candidate = directory / "decision.json"
+    if not candidate.is_file():
+        return None
+    import hashlib
+    import os
+    from ..control_plane.content_digest import BARE_SHA256_PATTERN
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from ..control_plane.turn_driver.decision_capture import (
+        open_regular_capture,
+        private_capture_supported,
+        private_capture_uid,
+    )
+
+    if not private_capture_supported():
+        return None
+    if expected_sha256 is not None and BARE_SHA256_PATTERN.fullmatch(expected_sha256) is None:
+        return None
+    try:
+        uid = private_capture_uid()
+        resolved = candidate.expanduser().absolute()
+        resolved = resolved.parent.resolve(strict=True) / resolved.name
+        if resolved.is_symlink():
+            return None
+        descriptor = open_regular_capture(resolved)
+        with os.fdopen(descriptor, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if (
+                metadata.st_uid != uid
+                or metadata.st_mode & 0o077
+                or metadata.st_size > MAX_REQUEST_BYTES
+            ):
+                return None
+            raw = stream.read(metadata.st_size + 1)
+    except (OSError, ValueError):
+        return None
+    if len(raw) > MAX_REQUEST_BYTES:
+        return None
+    digest = hashlib.sha256(raw).hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        return None
+    return {"path": str(resolved), "sha256": digest}
+
+
 def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
                                  capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
                                  progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
     """Prepare one already-decided native view; callers retain receipt failures."""
+    from .quota_request import quota_detail_sections_from_args
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
     )
@@ -246,11 +295,19 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
             root=getattr(args, "codex_context_root", None), create=True)
     except NativeContextSessionUnavailable:
         directory = None  # Current full input, no fabricated native journal.
+    decision_ref = (
+        _saved_decision_reference(capture_directory, expected_sha256=capture_id)
+        if progressive_enabled
+        and (directory is not None or not bool(getattr(args, "begin_turn", False)))
+        and "vision" not in quota_detail_sections_from_args(args)
+        else None
+    )
     prepared = prepare_codex_context(payload, directory=directory,
         capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
         surface=quota_context_surface(payload),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
-        progressive_enabled=progressive_enabled)
+        progressive_enabled=progressive_enabled,
+        captured_decision=decision_ref)
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
@@ -410,14 +467,15 @@ def capture_decision(directory: Path | None, payload: dict[str, object], *,
                      args: argparse.Namespace | None = None, native_context: bool = False,
                      record_capture: Callable[[dict[str, object], str], None] | None = None) -> str | None:
     if directory is None:
-        return
+        return None
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
         digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
         if record_capture is not None:
             record_capture(payload, digest)
-        if isinstance(payload.get("detail_ref"), dict) and "full_decision" in payload["detail_ref"]:
+        detail_ref = payload.get("detail_ref")
+        if isinstance(detail_ref, dict) and "full_decision" in detail_ref:
             from ..command_invocation import current_loopx_cli_argv
 
             write_context_read_reference(directory / "decision.json", digest,

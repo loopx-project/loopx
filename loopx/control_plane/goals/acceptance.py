@@ -171,6 +171,13 @@ def refine_goal_outcome(
     }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
+def require_active_goal_for_objective_update(goal: Mapping[str, Any] | None) -> None:
+    if goal is None:
+        raise ValueError("Goal acceptance requires a registered Goal")
+    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+        raise ValueError("Objective updates require an active Goal")
+
+
 def update_goal_objective(
     *, registry_path: Path, goal_id: str, document: dict[str, Any], operation: str,
     expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
@@ -180,8 +187,7 @@ def update_goal_objective(
     from ..work_items.replan_context_codec import goal_context_facts
 
     registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
-        raise ValueError("Objective updates require an active Goal")
+    require_active_goal_for_objective_update(goal)
     return _result("goal.acceptance.objective", {**route, "actor_agent_id": agent_id,
         "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
         "operation": operation, "document": document, "dry_run": not execute,

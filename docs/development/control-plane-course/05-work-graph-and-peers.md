@@ -151,7 +151,7 @@ quota 可以同时返回：
 - 没有永久的主执行者；
 - 没有永久的辅助执行者；
 - todo claim 和 continuation policy 决定当前工作归属；
-
+- task-scoped coordination 不授予 durable authority；
 - 旧 hierarchy 字段只允许存在于 exactly-once migration reader。
 
 对应实现是 `loopx/control_plane/agents/runtime_model.py`。它只暴露 `AgentRuntimeModel.PEER_V1`。
@@ -222,7 +222,7 @@ if (rejection === "claim_owner_mismatch") {
 
 这份 grant 有四个边界：
 
-1. 只授予列出的 lifecycle action
+1. 只授予列出的 lifecycle action，不授予 repo、quota 或 user decision 权限；
 2. actor 必须是当前 goal 的 registered agent；
 3. `excluded_agents`、`bound_agent` 和精确 user-gate scope 仍独立生效；
 4. reason 进入 mutation receipt，使越权操作可追溯。
@@ -861,6 +861,7 @@ if current_workspace:
 ### 读完这一段应能回答
 
 1. 为什么 `task_class` 不能由 `status` 推断？
+2. `select_peer_for_work` 为什么不是 claim？
 3. migration reader 与 live runtime model 的边界在哪里？
 4. capability gate 为什么返回 candidate set？
 5. worktree guard 与 spend causality 有什么关系？

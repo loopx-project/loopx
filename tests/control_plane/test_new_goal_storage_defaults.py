@@ -342,10 +342,13 @@ def app(environment):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def request(path, body):
+    def request(path, body=None):
         connection = http.client.HTTPConnection(*server.server_address, timeout=30)
         try:
-            connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+            if body is None:
+                connection.request("GET", path)
+            else:
+                connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:

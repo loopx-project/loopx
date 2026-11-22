@@ -10,19 +10,26 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import cache
 from pathlib import Path
-import hashlib
 import json
 import re
+import threading
+import time
 from datetime import datetime as datetime, timezone as timezone
 from typing import Any
+
+from ...chat.attachments import normalize_chat_image_attachments
 
 from ...chat_ingress import (
     STEWARD_BINDING_ADOPTION_PENDING as STEWARD_BINDING_ADOPTION_PENDING,
     ensure_external_admission_scope,
     resolve_external_admission_source,
 )
-from ...chat_store import _atomic_write_json as _atomic_write_json, _read_json as _read_json, RESUMABLE_SESSION_STATES
-from ...chat_attachments import normalize_chat_image_attachments
+from ...chat_store import (
+    ChatSessionStore,
+    _atomic_write_json as _atomic_write_json,
+    _read_json as _read_json,
+    RESUMABLE_SESSION_STATES,
+)
 from ...control_plane import effect_runtime
 from ...control_plane.quota.automation_cadence_readback import (
     automation_cadence_readback,
@@ -31,7 +38,23 @@ from ...control_plane.quota.automation_cadence_readback import (
 from ...file_lock import exclusive_file_lock as exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
-from .file_discovery import FileChatDiscovery, external_source_route_path, later_equivalent_source_input, recovery_journal_fields, source_control_fields
+from .file_discovery import (
+    FileChatDiscovery,
+    QuotaBacklogObservationCache,
+    _DeferredBacklogRequest,
+    _RecoveryDiscoveryReads,
+    _preparation_image_identity,
+    _project_source_request_digest,
+    _project_user_message_hint,
+    _same_store_method,
+    external_source_route_path,
+    file_change_fingerprint,
+    later_equivalent_source_input,
+    observe_quota_backlog_batch,
+    observed_turn_event_summary,
+    recovery_journal_fields,
+    source_control_fields,
+)
 from .steward_commands import ExternalStewardCommissionMixin
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
@@ -41,60 +64,6 @@ QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
 
 
-def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
-    """Fingerprint already normalized Core images without exporting their bytes."""
-    if not isinstance(value, list) or not value:
-        return None
-    try:
-        images = normalize_chat_image_attachments(value)
-        if images != value:
-            return None
-        encoded = json.dumps(images, sort_keys=True, separators=(",", ":")).encode()
-        return {"count": len(images), "sha256": hashlib.sha256(encoded).hexdigest()}
-    except (ValueError, TypeError, OverflowError):
-        return None
-
-
-class _RecoveryDiscoveryReads:
-    """Lazy facts for one queue-discovery pass, never recovery admission.
-
-    Historical requests share Session history. Retain queue/control/history
-    hints, never provider identity or a recovery decision. A new
-    pass builds new observations; normal admission never receives this object.
-    """
-
-    def __init__(self, core: ChatExternalConversations) -> None:
-        self.core = core
-        self.queues: dict[str, bool] = {}
-        self.histories: dict[str, list[dict[str, Any]]] = {}
-        self.message_indexes: dict[str, dict[str, list[dict[str, Any]]]] = {}
-        self.controls: list[dict[str, Any]] | None = None
-
-    def queued(self, session_id: str) -> bool:
-        if session_id not in self.queues:
-            self.queues[session_id] = bool(self.core.controller.store.queued_turns(session_id))
-        return self.queues[session_id]
-
-    def user_messages(self, session_id: str) -> list[dict[str, Any]]:
-        if session_id not in self.histories:
-            self.histories[session_id] = [message for message in self.core.controller.store.messages(session_id)
-                if message.get("role") == "user"]
-        return self.histories[session_id]
-
-    def source_controls(self) -> list[dict[str, Any]]:
-        if self.controls is None:
-            self.controls = self.core.source_controls()
-        return self.controls
-
-    def matching_user_messages(self, session_id: str, text: str) -> list[dict[str, Any]]:
-        if session_id not in self.message_indexes:
-            index: dict[str, list[dict[str, Any]]] = {}
-            for row in self.user_messages(session_id):
-                index.setdefault(row.get("text", ""), []).append(row)
-            self.message_indexes[session_id] = index
-        return self.message_indexes[session_id].get(text, [])
-
-
 class ChatExternalConversations(ExternalStewardCommissionMixin):
     def __init__(self, controller: Any) -> None:
         self.controller = controller
@@ -102,9 +71,20 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
+        self._source_request_discovery = FileChatDiscovery()
         self._backlog_request_discovery = FileChatDiscovery()
         self._recovery_discovery = FileChatDiscovery()
+        self._user_messages_lock = threading.Lock()
+        self._session_user_messages_cache: dict[str, tuple[tuple[int, ...], tuple[dict[str, Any], ...]]] = {}
+        self._quota_backlog_cache = QuotaBacklogObservationCache()
         self.actions: Any | None = None
+
+    def _event_summary_cache(self) -> QuotaBacklogObservationCache:
+        cache_store = getattr(self, "_quota_backlog_cache", None)
+        if cache_store is None:
+            cache_store = QuotaBacklogObservationCache()
+            self._quota_backlog_cache = cache_store
+        return cache_store
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
         """Read correlation only; the typed owner still checks continuation eligibility."""
@@ -130,6 +110,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                                discovery_only: bool = False,
                                preparation_scope_available: bool = False,
                                metadata_capacity: dict[str, Any] | None = None,
+                               failure_notice_receipt_unknown: bool = False,
                                discovery_reads: _RecoveryDiscoveryReads | None = None) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
 
@@ -162,7 +143,20 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             and reservation.get("failed_turn_id") == turn["turn_id"]
             and (retained_review is None or reservation.get("work_attempt") == 1
                  or reservation.get("legacy_result_review")) else None)
-        events, anchors = self._started_native_inputs(session["session_id"], turn["turn_id"])
+        image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
+        runtime_failure = turn.get("error_code") in {
+            "model_auth_unavailable", "resume_failed", "execution_worker_exited_before_dispatch"}
+        needs_full_events = (not discovery_only or retained_review is not None
+            or turn.get("error_code") == "manager_authorization_unavailable"
+            or image_failure or runtime_failure)
+        if needs_full_events:
+            events, anchors = self._started_native_inputs(session["session_id"], turn["turn_id"])
+            steering_observed = interrupt_observed = False
+        else:
+            single_anchor, steering_observed, interrupt_observed = observed_turn_event_summary(
+                store, session["session_id"], turn["turn_id"], self._event_summary_cache(),
+                real_events=_same_store_method(store, "events_after", ChatSessionStore))
+            events, anchors = [], ([single_anchor] if single_anchor is not None else [])
         session = self._original_native_session(session, anchors)
         unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         related_review = (result_review_evidence.collect_related_result_review(self, row, turn, discovery_reads=discovery_reads)
@@ -185,8 +179,6 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         later_equivalent = None
         read_source_controls = (discovery_reads.source_controls if discovery_reads is not None
                                 else cache(self.source_controls))
-        image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
-        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
@@ -239,12 +231,15 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 "queued_input_present": (discovery_reads.queued(session["session_id"])
                     if discovery_reads is not None else bool(store.queued_turns(session["session_id"]))),
                 "attachments_present": bool(row.get("attachments")),
-                "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
-                "stop_observed": self._source_stop_observed(row, turn, events,
-                    source_controls=read_source_controls),
+                "steering_observed": (any(event.get("kind") == "turn.steered" for event in events)
+                                      if needs_full_events else steering_observed),
+                "stop_observed": (self._source_stop_observed(row, turn, events, source_controls=read_source_controls)
+                    if needs_full_events else (interrupt_observed
+                        or self._source_stop_observed(row, turn, (), source_controls=read_source_controls))),
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
+                "failure_notice_receipt_unknown": bool(failure_notice_receipt_unknown),
                 "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
@@ -269,6 +264,73 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
     def _source_requests(self, row: dict[str, Any]) -> list[dict[str, Any]]:
         return [item for item in self.pending()
                 if item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]]
+
+    def _source_request_digests(self, row: dict[str, Any]) -> list[dict[str, Any]]:
+        discovery = getattr(self, "_source_request_discovery", None)
+        if discovery is None:
+            discovery = FileChatDiscovery()
+            self._source_request_discovery = discovery
+        binding_id, source = row["binding_id"], row["source"]
+        return [
+            item for _, item in discovery.rows(
+                self.root, self._request_paths(), read=_read_json, project=_project_source_request_digest,
+            )
+            if item.get("binding_id") == binding_id and item.get("source") == source
+        ]
+
+    def _cached_user_messages(self, session_id: str) -> tuple[dict[str, Any], ...]:
+        store = self.controller.store
+        is_real_store = (
+            isinstance(store, ChatSessionStore)
+            and getattr(store.messages, "__func__", None) is ChatSessionStore.messages
+        )
+        if not is_real_store:
+            return tuple(
+                _project_user_message_hint(message)
+                for message in store.messages(session_id)
+                if message.get("role") == "user"
+            )
+        try:
+            msg_path = store._session_dir(session_id) / "messages.jsonl"
+            before = file_change_fingerprint(msg_path)
+        except (OSError, ValueError):
+            before = None
+            msg_path = None
+        lock = getattr(self, "_user_messages_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._user_messages_lock = lock
+        cache_map = getattr(self, "_session_user_messages_cache", None)
+        if cache_map is None:
+            cache_map = {}
+            self._session_user_messages_cache = cache_map
+        if before is None:
+            with lock:
+                cache_map.pop(session_id, None)
+            if msg_path is None:
+                return ()
+            return tuple(
+                _project_user_message_hint(message)
+                for message in store.messages(session_id)
+                if message.get("role") == "user"
+            )
+        with lock:
+            saved = cache_map.get(session_id)
+            if saved is not None and saved[0] == before:
+                return saved[1]
+        rows = tuple(
+            _project_user_message_hint(message)
+            for message in store.messages(session_id)
+            if message.get("role") == "user"
+        )
+        try:
+            unchanged = msg_path is not None and file_change_fingerprint(msg_path) == before
+        except OSError:
+            unchanged = False
+        if unchanged:
+            with lock:
+                cache_map[session_id] = (before, rows)
+        return rows
 
     def _codex_quota_route_capacity(self, session: dict[str, Any]) -> dict[str, Any] | None:
         from ...chat_manager import manager_session_quota_route
@@ -295,7 +357,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             "upstream_thread_id": matches[0]["thread_id"]}
 
     def _source_stop_observed(self, row: dict[str, Any], turn: dict[str, Any],
-                              events: list[dict[str, Any]], *,
+                              events: Sequence[dict[str, Any]], *,
                               source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Read the same durable source controls for recovery and display."""
         return (any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
@@ -306,36 +368,31 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 for item in (source_controls or self.source_controls)())))
 
     def quota_backlog_observer(
-        self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None,
+        self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None, use_cache: bool = False,
+        observed_fps: Mapping[Path, tuple[int, ...]] | None = None,
     ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
         """Read Session state after each batch's Turns and share source controls across batches."""
-        read_controls = cache(source_controls or self.source_controls)
+        read_controls = cache(source_controls or (self.source_controls if observed_fps is None
+            else (lambda: self.source_controls(known_fingerprints=observed_fps))))
+
+        @cache
+        def stop_controls() -> tuple[tuple[Any, Any, datetime], ...]:
+            return tuple(
+                (item.get("binding_id"), item.get("source"), datetime.fromisoformat(item["created_at"]))
+                for item in read_controls()
+                if item.get("command") in {"stop", "new"}
+            )
 
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
             if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
                 raise ValueError("select at most 64 pending requests per observation")
-            params = [self._quota_pending_inputs(row) for row in rows]
-            load_session = self.controller.store.load_session
-            sessions = {}
-            for session_id in dict.fromkeys(row["session_id"] for row in rows):
-                # A transient read failure must not mask a closed Session.
-                session = load_session(session_id) or load_session(session_id)
-                sessions[session_id] = ({key: session[key] for key in ("session_id", "status") if key in session}
-                                        if session is not None else None)
-            for row, values in zip(rows, params, strict=True):
-                values["current_session"] = sessions[row["session_id"]]
-            flags = self._quota_pending_flags(params)
-            stopped = []
-            for index, (row, values, pending) in enumerate(zip(rows, params, flags, strict=True)):
-                if pending:
-                    events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
-                    if self._source_stop_observed(row, values["pending_observation"]["turn"], events,
-                                                 source_controls=read_controls):
-                        values["pending_observation"]["stop_observed"] = True
-                        stopped.append(index)
-            for index, pending in zip(stopped, self._quota_pending_flags([params[i] for i in stopped]), strict=True):
-                flags[index] = pending
-            return flags
+            cache_store = self._event_summary_cache() if use_cache else None
+            return observe_quota_backlog_batch(
+                root=self.root, store=self.controller.store, rows=rows,
+                build_inputs=self._quota_pending_inputs, eval_flags=self._quota_pending_flags,
+                stop_controls=stop_controls, evaluator_id=id(effect_runtime.effect_runtime_result),
+                cache_store=cache_store,
+            )
 
         return observe
 
@@ -376,6 +433,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         return flags
 
     def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
+        if getattr(row, "needs_full_read", False):
+            row = self.read_request(row["request_ref"])
         turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
@@ -391,13 +450,15 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         """Retain quota and declared unfinished work without admitting recovery."""
         return self.quota_backlog_observer(source_controls=source_controls)([row])[0]
 
-    def context_recovery_observer(self) -> Callable[[str], bool]:
+    def context_recovery_observer(self) -> Callable[..., bool]:
         """Reuse scan-local hints; reread each request, Turn and binding."""
         reads = _RecoveryDiscoveryReads(self)
-        return lambda ref: self.context_recovery_candidate(ref, discovery_reads=reads)
+        return lambda ref, *, failure_notice_receipt_unknown=False: self.context_recovery_candidate(
+            ref, discovery_reads=reads, failure_notice_receipt_unknown=failure_notice_receipt_unknown)
 
     def context_recovery_candidate(self, request_ref: str, *,
-                                   discovery_reads: _RecoveryDiscoveryReads | None = None) -> bool:
+                                   discovery_reads: _RecoveryDiscoveryReads | None = None,
+                                   failure_notice_receipt_unknown: bool = False) -> bool:
         """Discovery only; every authority and native fact is re-read at admission."""
         try:
             row = self.read_request(request_ref)
@@ -412,6 +473,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 return True
             if not row.get("delivery_verified"):
                 return self._context_recovery_plan(row, discovery_only=True,
+                    failure_notice_receipt_unknown=failure_notice_receipt_unknown,
                     discovery_reads=discovery_reads).get("recovery_candidate") is True
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
             if not turn or turn.get("status") not in {"failed", "completed"}:
@@ -424,12 +486,14 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                         and result_review_evidence.collect_related_result_review(self, row, turn, discovery_reads=discovery_reads) is None):
                     return False  # A lexical probe hint, never permission to adopt or send.
             return self._context_recovery_plan(row, discovery_only=True,
+                failure_notice_receipt_unknown=failure_notice_receipt_unknown,
                 discovery_reads=discovery_reads).get("recovery_candidate") is True
         except (KeyError, ValueError, RuntimeError, OSError):
             return False
 
     def recover_failed_request(self, request_ref: str, *,
-                               source_observation: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+                               source_observation: Callable[[dict[str, Any]], dict[str, Any] | None],
+                               failure_notice_receipt_unknown: bool = False) -> dict[str, Any]:
         """Reserve/admit one same-source continuation through the existing queue.
 
         The failed Turn and its original notice remain immutable. The new Turn
@@ -443,7 +507,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
             row = self.read_request(request_ref)
-            plan = self._context_recovery_plan(row)
+            plan = self._context_recovery_plan(row, failure_notice_receipt_unknown=failure_notice_receipt_unknown)
             if not plan.get("recovery_candidate"):
                 return row
             session = self.controller.store.load_session(row["session_id"])
@@ -462,7 +526,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                                else checked_session_home(self.controller.codex_home, session))
             context = self.controller.project_contexts.session_context(session)
 
-            requests = self._source_requests(row)
+            requests = self._source_request_digests(row)
             # The read-only native client can consume its entire RPC deadline.
             # Retain this request's fence, but let new source input/control in.
             # Its observation is only usable if the original local state still
@@ -521,6 +585,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                         model_auth_home=model_auth_home,
+                        runtime_root=self.controller.coordination_runtime_root,
+                        consumer="steward" if session.get("steward_context") else "worker",
                         read_only_review=bool(plan.get("read_only_review")) and not quota_answer,
                         thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                     if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
@@ -564,11 +630,11 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                         or self.controller.store.load_turn(row["session_id"], current_turn["turn_id"]) != current_turn
                         or (plan.get("completed_review_turn_id") or plan.get("original_result_turn_id"))
                         and self.controller.store.load_turn(row["session_id"], turn["turn_id"]) != turn
-                        or self._source_requests(row) != requests):
+                        or self._source_request_digests(row) != requests):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                     selected_binding=selected["binding"], preparation_scope_available=scope_available,
-                    metadata_capacity=capacity)
+                    metadata_capacity=capacity, failure_notice_receipt_unknown=failure_notice_receipt_unknown)
                 if plan.get("retain_metadata_result") and facts and not self.controller.store.native_result(row["session_id"], turn["turn_id"]):
                     try:
                         self.controller.store.retain_native_result(row["session_id"], turn["turn_id"],
@@ -579,7 +645,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                         return row  # Preserve the delivered answer and unspent review.
                     proof = self._original_native_result(row, session, turn, context, include_raw_response=True)
                     plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
-                        selected_binding=selected["binding"], metadata_capacity=capacity)
+                        selected_binding=selected["binding"], metadata_capacity=capacity,
+                        failure_notice_receipt_unknown=failure_notice_receipt_unknown)
                 if not plan.get("recovery_eligible"):
                     if plan.get("metadata_quota_wait") is not None and row.get("metadata_quota_wait") != plan["metadata_quota_wait"]:
                         row["metadata_quota_wait"] = plan["metadata_quota_wait"]
@@ -592,13 +659,13 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": turn["turn_id"],
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
-                        "failure_notice_delivery_verified": row["delivery_verified"]}
+                        "failure_notice_delivery_verified": row.get("delivery_verified") is True}
                     if plan.get("read_only_review"):
                         recovery.update(read_only_review=True, presentation_key=f"{MANAGER_CONTEXT_VERSION}.review.1")
                         if plan.get("unfinished_work") or plan.get("legacy_result_review"):
                             recovery.pop("failure_notice_delivery_verified", None)
                             recovery.update(original_turn=deepcopy(turn), binding_snapshot=selected["binding"],
-                                prior_result_delivery_verified=row["delivery_verified"])
+                                prior_result_delivery_verified=row.get("delivery_verified") is True)
                             if plan.get("unfinished_work"):
                                 recovery["unfinished_work"] = deepcopy(plan["unfinished_work"])
                             else:
@@ -620,7 +687,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     if plan.get("work_attempt"):
                         recovery.pop("failure_notice_delivery_verified", None)
                         recovery.update(work_attempt=1, unfinished_work=plan["unfinished_work"],
-                            prior_result_delivery_verified=row["delivery_verified"],
+                            prior_result_delivery_verified=row.get("delivery_verified") is True,
                             presentation_key=f"{MANAGER_CONTEXT_VERSION}.work.1", not_before=plan["not_before"])
                         if plan.get("completed_review_turn_id"):
                             recovery.update(completed_review_turn_id=plan["completed_review_turn_id"],
@@ -662,11 +729,34 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             if runtime_preparation:
                 # Preparation never starts a model request. Check the same
                 # optional transport owner before reserving a bounded retry.
-                from .codex_auth import native_api_transport
-                native_api_transport(self.controller.coordination_runtime_root,
-                    checked_session_home(self.controller.codex_home, session),
-                    consumer="worker" if session.get("project_context") is not None else "steward",
-                    model=session.get("requested_agent_model_id") or session.get("agent_model_id"))
+                if session.get("agent_id") == "antigravity":
+                    from .antigravity_adapter import _rpc_post, discover_antigravity_language_server
+
+                    discovered = discover_antigravity_language_server(deadline=time.monotonic() + 3.0)
+                    if discovered is None:
+                        return False
+                    cascade_id = str(session.get("upstream_thread_id") or "").strip()
+                    if cascade_id:
+                        from ...chat_agent import CodexChatAgentError
+
+                        try:
+                            trajectory = _rpc_post(
+                                str(discovered["url"]),
+                                str(discovered["csrf_token"]),
+                                "GetCascadeTrajectory",
+                                {"cascadeId": cascade_id},
+                                timeout=2.5,
+                            )
+                        except CodexChatAgentError:
+                            return False
+                        if not isinstance(trajectory, dict) or trajectory.get("status") != "CASCADE_RUN_STATUS_IDLE":
+                            return False
+                else:
+                    from .codex_auth import native_api_transport
+                    native_api_transport(self.controller.coordination_runtime_root,
+                        checked_session_home(self.controller.codex_home, session),
+                        consumer="worker" if session.get("project_context") is not None else "steward",
+                        model=session.get("requested_agent_model_id") or session.get("agent_model_id"))
             if session.get("project_context") is not None:
                 # Resolve the existing project grant again; a project assistant
                 # has no manager portfolio scope to borrow.
@@ -725,7 +815,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                                turn: dict[str, Any], source_observation: Callable) -> dict[str, Any]:
         """Adopt an original provider result, without reopening/dispatching a Turn."""
         store = self.controller.store
-        requests = self._source_requests(row)
+        requests = self._source_request_digests(row)
         context = self.controller.project_contexts.session_context(session)
         recovered = row.get("native_result_recovery")
         proof = self._original_native_result(row, session, turn, context) if recovered is None else recovered.get("native_observation")
@@ -741,7 +831,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             selected = self.bindings._resolve_observed(current, selected["binding"], selected["observation"], row["source"])
             if (store.load_session(session["session_id"]) != session
                     or store.load_turn(session["session_id"], turn["turn_id"]) != turn
-                    or self._source_requests(row) != requests):
+                    or self._source_request_digests(row) != requests):
                 return row
             plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
                                                selected_binding=selected["binding"])
@@ -973,7 +1063,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             error_message="The original source, grant or queue changed; metadata review is held.",
             require_empty_queue=True,
         )
-        refs = sorted(item["request_ref"] for item in self._source_requests(row))
+        refs = sorted(item["request_ref"] for item in self._source_request_digests(row))
         native_session = self._original_native_session(current, [continuation["native_observation"]])
         if (native_session.get("agent_id") != "antigravity"
                 or native_session.get("upstream_thread_id") != continuation["native_observation"]["thread_id"]
@@ -991,7 +1081,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         continuation = self._checked_metadata_review(session, turn, observe_native=True)
         if continuation is None:
             return None
-        from ...chat_agent import COLLABORATION_INPUTS_GUIDANCE
+        from ...chat import COLLABORATION_INPUTS_GUIDANCE
 
         return (
             "Core admitted ONE text-only FORMAT REVIEW of an already completed original result. "
@@ -1747,28 +1837,52 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         return [r for _, r in self._recovery_discovery.rows(
             self.root, self._request_paths(), read=_read_json, project=recovery_journal_fields)]
 
-    def source_controls(self) -> list[dict[str, Any]]:
+    def source_controls(self, *, known_fingerprints: Mapping[Path, tuple[int, ...]] | None = None) -> list[dict[str, Any]]:
         """Observe source controls and private text digests without reparsing unchanged bodies."""
-        return [r for _, r in self._source_control_discovery.rows(
-            self.root, self._request_paths(), read=_read_json, project=source_control_fields)]
+        return [r for _, r, _ in self._source_control_discovery.rows_with_fingerprints(
+            self.root, self._request_paths(), read=_read_json, project=source_control_fields,
+            known_fingerprints=known_fingerprints)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
 
-    def read_backlog_requests(self, request_refs: Iterable[str]) -> Iterator[dict[str, Any]]:
+    def read_backlog_requests(
+        self, request_refs: Iterable[str], *, defer_recovery: bool = False,
+        observed_fps: dict[Path, tuple[int, ...]] | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Observe settings correlation, without retaining ordinary request bodies."""
         fields = ("request_ref", "binding_id", "source", "session_id", "turn_id",
                   "status", "command", "created_at")
+        fresh: dict[Path, dict[str, Any]] = {}
+
+        def read_current(path: Path) -> dict[str, Any]:
+            payload = _read_json(path)
+            if not defer_recovery:
+                fresh[path] = payload
+            return payload
 
         def project(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
-            # Recovery evidence is consumed by the typed pending rule.
-            if any(row.get(k) is not None for k in ("context_recovery", "native_result_recovery")):
+            if not all(key in row for key in fields):
                 return None
-            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
+            return {
+                **{key: row[key] for key in fields},
+                "_has_recovery": any(row.get(k) is not None for k in ("context_recovery", "native_result_recovery")),
+            }
 
         paths = (self.root / f"{ref}.json" for ref in request_refs)
-        for _, row in self._backlog_request_discovery.rows(self.root, paths, read=_read_json, project=project):
-            yield row
+        for path, row, fp in self._backlog_request_discovery.rows_with_fingerprints(
+            self.root, paths, read=read_current, project=project,
+        ):
+            payload = fresh.pop(path, None)
+            is_recovery = bool(row.pop("_has_recovery", False))
+            if observed_fps is not None and fp is not None:
+                observed_fps[path] = fp
+            if is_recovery and not defer_recovery:
+                yield payload if payload is not None else _read_json(path)
+            elif defer_recovery:
+                yield _DeferredBacklogRequest(row, req_fp=fp, needs_full_read=is_recovery)
+            else:
+                yield row
 
     def record_delivery(self, request_ref: str, *, session_id: str | None, turn_id: str | None,
                         message_text: str | None = None) -> None:

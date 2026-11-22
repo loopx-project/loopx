@@ -2,7 +2,7 @@
 // Looks for things that must not be published: your user name, host name and home directory,
 // private IP addresses, long secrets, personal e-mail addresses, and words you list yourself.
 //
-//   npm run check:publish
+//   node scripts/check-publish.mjs
 //
 // Words of your own (company or project names, for example) go in a file outside the repository,
 // one per line: $LOOCHAT_PUBLISH_DENYLIST, or ~/.config/loochat/publish-denylist by default.

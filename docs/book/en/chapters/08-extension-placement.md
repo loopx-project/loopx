@@ -262,7 +262,8 @@ settle the outcome, then the owner, and only then the delivery shape.
 ### Where platform-level machinery belongs
 
 One further branch confuses people. If the addition is only the registration and lifecycle machinery
-shared by every Extension, it belongs in `loopx/extensions/`, not in any provider package. needs no manifest of its own. Putting that machinery inside one provider forces the next
+shared by every Extension, it belongs in `loopx/extensions/`, not in any provider package. It is not a
+capability and needs no manifest of its own. Putting that machinery inside one provider forces the next
 provider to depend on the first one's private structure.
 
 ## Record the minimum rationale

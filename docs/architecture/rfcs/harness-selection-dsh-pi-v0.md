@@ -531,7 +531,7 @@ explicitly does not promise cross-turn DSH session continuity.
 
 Option A shipped, so this section now records the transport rather than a plan.
 The steward channel holds the managed host through
-`loopx/chat_dsh.py`: each Chat turn starts **one bounded dsh segment** on the
+`loopx/chat/dsh.py`: each Chat turn starts **one bounded dsh segment** on the
 resolved execution profile, hands it the channel's bounded visible history plus
 the current message, and returns the final assistant message. The snapshot the
 segment sees is composed by LoopX and the segment's sandbox is pinned read-only

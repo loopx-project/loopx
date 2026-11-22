@@ -19,35 +19,15 @@ LooChat 是一个开源的 agent 工作台。用简单的界面管理 TRAE、zco
 
 LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 是自创品牌名，呼应随时叫上 AI 伙伴的感觉；图标采用一只举着大小双钳的蓝色小螃蟹，配浅蓝背景，保持简单、亲切的形象。
 
-## 界面预览
+## 使用方式
 
-| 桌面 · 亮色 | 桌面 · 深色 |
-|---|---|
-| ![桌面亮色](docs/screenshots/desktop-light.png) | ![桌面深色](docs/screenshots/desktop-dark.png) |
-
-| 手机 · 亮色 | 手机 · 深色 |
-|---|---|
-| ![手机亮色](docs/screenshots/phone-light.png) | ![手机深色](docs/screenshots/phone-dark.png) |
+消息菜单中的复制为引用、整条回复引用、作为上下文和侧边追问，见[引用使用说明](docs/references.md)。
 
 实时语音：开启后输入框换成一个会随声音起伏的球，你说的话以浅蓝气泡记进线程；后台任务和待批准事项一行可见；结束后逐句对话折成一行，下面留一份文字总结。
 
-![实时语音（亮色）：连接中、对话中、静音、结束后的总结](docs/screenshots/voice-light.png)
-
-![实时语音（深色）](docs/screenshots/voice-dark.png)
-
 用量与诊断：多 agent 的 token 用量、TPM 走势和费用估算。
 
-![用量与诊断](docs/screenshots/usage-light.png)
-
-写作模式：在加号菜单里一点就开。你口述观点，agent 用你的原话记成初稿、标出【待补】、追问具体场景，再按二稿、三稿、配图、润色一稿一稿往下走。正文是 `writing/` 下的 Markdown，按文章排版，画出 Mermaid 图、显示配图；读和写是同一张纸，可以直接改（键盘或语音输入法都行），agent 同时改过时不会覆盖你的版本。在正文里选中一句，一点「删」「待补」「为什么」「改成…」就成了给 agent 的注释。说「复盘」，agent 把你反复改的地方提炼成写作习惯，记进 `~/.loochat/notes/writing.md` 等你确认，之后每篇都照着写。设计见 [写作流程设计](docs/writing-design.md)。
-
-![写作模式（亮色）：加号菜单、选阶段、正文、选中一句加注释](docs/screenshots/writing-light.png)
-
-![写作模式（深色）](docs/screenshots/writing-dark.png)
-
-![写作模式（桌面）：对话上方是阶段条，右边是正文](docs/screenshots/writing-desktop-light.png)
-
-> 状态：可用，正在迭代。产品方向见 [愿景与设计思路](docs/VISION.md)，现有架构见 [PLAN](docs/PLAN.md)，进度见 [TODO](docs/TODO.md)，扩展方案见 [扩展设计](docs/extensions-design.md)。
+写作模式：在加号菜单里一点就开。你口述观点，agent 用你的原话记成初稿、标出【待补】、追问具体场景，再按二稿、三稿、配图、润色一稿一稿往下走。正文是 `writing/` 下的 Markdown，按文章排版，画出 Mermaid 图、显示配图；读和写是同一张纸，可以直接改（键盘或语音输入法都行），agent 同时改过时不会覆盖你的版本。在正文里选中一句，一点「删」「待补」「为什么」「改成…」就成了给 agent 的注释。说「复盘」，agent 把你反复改的地方提炼成写作习惯，记进 `~/.loochat/notes/writing.md` 等你确认，之后每篇都照着写。
 
 ## 已支持
 
@@ -55,13 +35,81 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 |---|---|---|---|---|
 | Claude Code | ACP（`@agentclientprotocol/claude-agent-acp`，随项目安装） | 有 | 有 | 有 |
 | pi | `pi --mode rpc` | 无（pi 本身没有） | 有。纯文本模型需要装 pi 扩展 `pi-aux-vision` | 有 |
-| Antigravity | `agy` 的无界面 stream-json 模式 | 无（不能询问，只有"自动改文件"和"完全访问"两档） | 有（按文件路径交给它） | 暂无 |
+| Antigravity | `agy acp`（ACP 1） | 有 | 有（原生 ACP 图片） | 暂无 |
 | Codex | `codex app-server` | 有 | 有 | 有 |
 | TRAE CLI | app-server 执行，ACP 模型与历史接口 | 有 | 有 | 有 |
 | zcode | `zcode app-server` 精简接入 | 有 | 按原生模型能力 | 暂无 |
 | DeepSeek Harness | `dsh --profile acp`（ACP） | 有（仅允许一次/拒绝） | 有（按当前模型路由） | 暂无 |
 
-各家 agent CLI 需要先在主机上装好并完成登录或鉴权。没装的 agent 在界面里显示为不可用；各家的能力和接入边界见 [架构说明](docs/PLAN.md)。
+各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
+
+协作成员的回报、模型权限和引用对话预览见 [协作对话与概况侧栏指南](docs/collaboration.md)。
+
+### Agent 未登录时恢复
+
+读取模型时，所有 Agent 明确返回的原生认证失败都会在工作区显示「账号名 尚未登录」。恢复方式按该实例支持的能力提供：
+
+| Agent | 恢复入口 |
+| --- | --- |
+| Claude Code、Antigravity | 「去登录」展开行内授权面板；验证后自动刷新模型 |
+| Codex、TRAE CLI、ZCode | 「去登录」打开该账号的原生终端登录；模型读取确认可用后自动恢复 |
+| pi、DeepSeek Harness | 显示原生客户端凭据配置指引和「重试」；pi 在原生客户端使用 `/login` |
+
+空目录单独提示「暂无可用模型，请检查登录或模型配置」；空列表本身不作为未登录证据。配置型 Agent 在原生客户端配置后点击「重试」，已有草稿保留。网络故障、额度耗尽、不受支持的订阅和 Workbench 自身的访问令牌错误保留各自含义。
+
+以下为构建页面与隔离测试账号的实际界面；原生授权结果由测试 CLI 提供，不代表真实账号授权已验收。
+
+![Claude Code 未登录时的恢复入口](docs/images/agent-login-claude.png)
+
+<img src="docs/images/agent-login-codex-phone.png" alt="手机上的 Codex 登录与重试入口，原草稿保留" width="390" />
+
+![pi 空模型目录的配置指引](docs/images/agent-login-empty-models.png)
+
+认证识别遵循原生协议：[ACP 的认证错误](https://agentclientprotocol.com/protocol/v1/authentication)、Codex 的 `account/read`（仅在 `requiresOpenaiAuth` 为真且账号为空时判断未登录），以及 CLI 明确的登录或缺失凭据诊断。Codex 自定义服务和旧版账号协议保留原有目录行为。
+
+### Antigravity 模型与思考强度
+
+需要支持 `agy acp` 的原生 CLI。同一模型的多种强度合并为一个模型选项，在输入框的模型控件中打开「思考强度」滑块即可调整。可选档位来自该账号的模型目录；只有一个固定强度的模型保留原 ID，不显示可调滑块。模型列表中可手动刷新，其他客户端刷新的结果也会同步到打开的列表。
+
+模型和强度通过 ACP 在当前会话内切换；调整后继续发送即可。旧的 `模型-high` 等选择在目录可识别时转换为模型与强度，当前会话、归档会话和该账号的已保存偏好保留原强度。明确设置的强度优先，目录读取失败不会重置选择。
+
+Agy 的权限请求使用现有审批入口；已有「完全访问」默认值保留。图片通过原生 ACP 图片块传入，上下文占用使用 ACP 用量事件；`/compact` 在当前会话内执行，并显示成功、失败或取消。旧的原生会话 ID 通过 `session/resume` 恢复。登录和 `/usage` 等账号查询继续走已有原生 CLI 入口。
+
+下图使用隔离测试目录与假 Agent，展示实际构建页面中的模型分组和强度选择：
+
+![按模型归并的目录](docs/images/antigravity-model-families.png)
+
+<img src="docs/images/antigravity-effort-phone.png" alt="手机中调整 Antigravity 思考强度，当前会话保留" width="390" />
+
+### Antigravity 登录
+
+若读取模型时尚未登录，当前页面会显示「Antigravity 尚未登录」和「去登录」。点击后在原位置展开授权面板；登录验证成功后自动加载模型列表，无需刷新页面。若此时模型读取暂时失败，可以重试读取，不必重复授权。网络或 CLI 故障仍单独显示为错误。
+
+![未登录时就地进入授权](docs/images/antigravity-login-required.png)
+
+<img src="docs/images/antigravity-models-restored.png" alt="授权后自动恢复的模型列表（测试账号）" width="390" />
+
+在 Agents 页点击 Antigravity 的「登录」，授权面板会在该账号行下方展开，不遮挡其他页面操作。打开 Google 授权链接，授权后把验证码或浏览器最后显示的完整回跳地址粘贴回来，点击「提交验证码」。出现登录成功后，账号邮箱会显示在列表中。收起面板、离开页面或刷新都不会取消登录，10 分钟内可从「继续登录」回到同一次授权；只有「取消登录」会主动结束它。链接过期或授权失败时点「重试」获取新链接。
+
+另加账号时，选择「添加 agent → Antigravity → 添加账号」。创建后直接展开登录面板。新账号使用独立目录，只复制可移植设置、指令和技能，不复制原账号的凭据、历史或项目信任。原生 CLI 负责 OAuth 和保存凭据。安装器留下的 `.old` 等备份不会作为可用账号展示，原文件保留。
+
+下面是同一登录入口在桌面与手机上的示意（使用测试账号）：
+
+![桌面 Antigravity 登录](docs/images/antigravity-login-desktop.png)
+
+<img src="docs/images/antigravity-login-phone.png" alt="手机 Antigravity 登录：打开链接后粘贴授权码或回跳地址" width="390" />
+
+## 通过 OAR 接入更多 Agent
+
+支持 Cursor、CodeBuddy Code、Devin、Factory Droid、Grok Build、Kimi Code、OpenCode、Qoder 和 Qwen Code。它们复用现有的「配置 → Agents → 添加 agent」入口；已安装的宿主可以发现并连接，未安装的宿主显示安装指引。Cursor 使用随工作台提供的官方 SDK，并在独立子进程运行。
+
+这些宿主需要 **Node.js 24+**。使用 Node.js 24 启动 workbench 后，在原生客户端完成所需安装或凭据配置，再通过添加页面连接。模型列表来自当前宿主和账号；未登录时可从原位置进入授权，浏览器确认型登录不要求粘贴授权码，设备授权码会直接显示。只读取列表不会开始登录或调用模型。Node.js 22 下既有原生适配器保持可用，OAR 宿主会报告运行环境不满足。
+
+OAR 宿主仅提供「完全访问」模式：原生工具可以直接修改文件和运行命令，不会弹出逐次审批。既有 Agent 的权限模式保持原样。选定模型后可在同一对话连续发送、停止执行；工作台保存原生会话 ID，重启后继续该会话。恢复失败会显示错误，不会自动换成空会话。
+
+本次接入不提供这些宿主的原生历史导入、分叉、账号复制、原生会话删除、订阅额度或实时语音。工作台自己的聊天记录仍可查看。图片按 OAR 和宿主声明的能力开放；各宿主能力及版本条件见 [OAR 运行时矩阵](https://github.com/botiverse/oar/blob/main/docs/spec/runtime-matrix.md)。
+
+可在 Agent 行菜单中隐藏或移除已连接实例；移除不会删除原生客户端的会话和凭据。OAR 与 Cursor SDK 固定版本随 lockfile 更新，故障回退时同时恢复工作台源码和 lockfile，再安装依赖、构建。现有原生适配器不经过 OAR。
 
 ## 插件与参与
 
@@ -69,10 +117,10 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 
 - **线程看板**：按进行中、等你、待验收、已完成排列线程；agent 每轮结束报告进度，完成由你勾选。
 - **Memory 记忆看板**：只读浏览 Codex 已有的记忆文档，不生成或同步记忆。
-- **实时语音**（试验中，真人听说仍在验收）：用这台机器上已登录的 Codex 原生语音，不需要另配 API Key；会消耗现有额度，具体计费归属尚未核实。在任意支持协作的线程里都能开，任务可以交给当前线程的 agent（Claude Code、pi 等）去做。浏览器开麦需要 HTTPS 或 localhost，见 [语音设计](docs/voice-design.md)。
+- **实时语音**（试验中，真人听说仍在验收）：用这台机器上已登录的 Codex 原生语音，不需要另配 API Key；会消耗现有额度，具体计费归属尚未核实。在任意支持协作的线程里都能开，任务可以交给当前线程的 agent（Claude Code、pi 等）去做。浏览器开麦需要 HTTPS 或 localhost。
 - **LoopX**：需先安装并配置 LoopX，关联目标和线程后，在会话与看板中查看目标、待办和待决定事项。当前不提供自动推进。
 
-skills 和 MCP 属于 agent 资源，通过各自的管理页操作，与 LooChat 插件分开。想接入工具、贡献一个工作视图，或者反馈使用中的问题，可以从 [参与和插件指南](docs/contributing-extensions.md) 开始。独立数据源可放在自己的仓库；当前还没有自动收录的插件市场。
+skills 和 MCP 属于 agent 资源，通过各自的管理页操作，与 LooChat 插件分开。想接入工具、贡献一个工作视图，或者反馈使用中的问题，可以在 LoopX 仓库提交 issue。独立数据源可放在自己的仓库；当前还没有自动收录的插件市场。
 
 ## 快速开始
 
@@ -99,8 +147,6 @@ curl -fsSL "https://raw.githubusercontent.com/loopx-project/loopx/$ref/apps/work
 
 **Core 单独安装。** 上述稀疏检出不包含 Python Core，安装器不会启动或升级 Core。普通 agent 会话可独立使用；Goal 功能需要运行中的 Core，以及对应注册表的 LoopX CLI。安装器会检查 Core 的 `/healthz`，不可达时打印地址和配置提示。在生成的 `.env` 中配置 `LOOCHAT_LOOPX_CORE_URL`（默认 `http://127.0.0.1:8792`）；源码 Core 还需设置 `LOOCHAT_LOOPX_CMD`、`LOOCHAT_LOOPX_CWD`，具体见 [安装与 Core 连接](docs/install-agent.md#连接-loopx-core)。
 
-以上 `main` 安装链接在本次变更合入 `main` 后生效；合入前请使用包含本安装器的提交 SHA。
-
 **让 agent 帮你装**：把这句话发给这台机器上的 Claude Code、Codex 等：
 
 ```text
@@ -111,12 +157,75 @@ curl -fsSL "https://raw.githubusercontent.com/loopx-project/loopx/$ref/apps/work
 
 各家 agent CLI 要自己装好并登录，LooChat 只调用这台机器上现有的。
 
+### 统一启动命令
+
+安装支持此命令的 LoopX CLI，并安装、构建同版本 Workbench 后：
+
+```bash
+loopx workbench start
+loopx workbench status
+loopx workbench stop
+```
+
+`start` 在后台启动 Workbench，输出访问地址和私密登录链接。重复执行复用已有实例；
+`status` 只读检查实际服务及 Core 连通性，不创建配置、不签发登录链接。
+`stop` 保留配置和会话数据，存在运行中的 Agent 时拒绝停止；明确要中断时使用
+`loopx workbench stop --force`。Core 仍独立管理，以上命令不会启动、替换或停止 Core。
+Core 不可达会明确提示，普通 Agent 会话仍可使用；连通性不代表 Goal 功能已验收。
+
+需要登录电脑后自动运行时，显式启用：
+
+```bash
+loopx workbench start --autostart
+loopx workbench status
+# 本次停止；下次登录仍自动启动
+loopx workbench stop
+# 停止并取消自启动，保留会话和配置
+loopx workbench stop --disable-autostart
+```
+
+macOS 使用当前用户的 LaunchAgent，登录后启动、异常退出后恢复；不承诺未登录时运行。
+Linux 使用 `systemd --user`，需要可用的用户服务管理器；不自动启用 linger 或申请 root 权限。
+`status` 从系统服务管理器读取自启动状态，无法核实会明确报错。普通 `start` 不主动开启自启动；
+已有注册时沿用该服务。为已运行的 CLI 实例启用自启动需要一次空闲重启，运行中的任务会阻止迁移。
+系统服务只读取已有配置，不签发登录链接；交互执行 `start` 就会输出带 token 的私密登录链接。
+默认地址只适用于同机浏览器；异机访问仍需已有的可达域名或代理。
+
+注册使用 Node 和当前 CLI 的绝对路径。应从稳定安装位置启用，保留 Node、CLI、应用及配置文件；
+移动安装位置或更换 Node 后，先用原安装执行 `stop --disable-autostart`，再从新安装启用。
+若服务文件被外部修改，CLI 会拒绝覆盖或删除，需先核对并恢复原注册；服务管理器不可用时不假报成功。
+服务文件只保存启动路径和必要环境，不复制登录 token；密钥仍由已有 `.env` 管理。
+
+默认数据目录与 `scripts/workbench.sh` 相同：
+`${XDG_STATE_HOME:-~/.local/state}/loochat-workbench`。
+可以用 `WORKBENCH_STATE_DIR` 或每次传入 `--state-dir` 指定已有目录。
+`start --port 8796`、`--workbench-dir /path/to/apps/workbench`、
+`--env-file /path/to/workbench.env` 可选择端口、已构建应用和已有配置；
+成功启动后保存这些选择，停止后再次启动沿用。应用依次从显式目录、
+`LOOPX_WORKBENCH_DIR`、已保存目录、`LOOCHAT_HOME`、CLI 源码目录和默认安装目录查找。
+依赖或构建缺失时给出准备命令，不自动下载安装。
+
+原有脚本或 systemd 正在管理的实例不会被接管或停止。迁移时先用原启动方式正常停止，
+再指定同一数据和配置，例如安装器的默认目录：
+
+```bash
+loopx workbench start --state-dir ~/.local/state/loochat --env-file ~/.config/loochat/.env
+loopx workbench status --state-dir ~/.local/state/loochat
+loopx workbench stop --state-dir ~/.local/state/loochat
+```
+
+systemd 实例继续使用原服务管理也完全可行，不要让两种启动方式同时管理同一数据。
+CLI 管理使用独立的私有 Unix socket，不开放浏览器或远程 relay 的停服接口；
+旧 PID 文件不授予停止权限。后台日志在状态目录的 `daemon.log`；
+启动失败先看日志，修正配置后重试。异常中断留下 `lifecycle.lock` 时，先确认没有进行中的
+启动，再移除该锁目录重试。命令支持 `--format json`，但 `start` 输出包含登录链接，勿公开。
+
 ### 从源码开发
 
 ```bash
 cd apps/workbench        # 从 LoopX 仓库根目录进入
 npm install
-npm run setup               # 生成仓库根目录的 .env 和随机 LOOCHAT_TOKEN，并打印出来
+npm run setup               # 生成 apps/workbench 下的 .env 和随机 LOOCHAT_TOKEN，并打印出来
 npm run build
 LOOCHAT_ENV_FILE=../../.env npm start -w @loopx/loochat    # 默认监听 127.0.0.1:8787
 ```
@@ -128,28 +237,7 @@ LOOCHAT_ENV_FILE=../../.env npm run dev:daemon   # 后端
 npm run dev:web                              # Vite，http://127.0.0.1:5173，/api 代理到后端
 ```
 
-daemon 在 `packages/daemon` 目录里运行，所以用 `LOOCHAT_ENV_FILE` 指向根目录的 `.env`。没有设置 `LOOCHAT_ENV_FILE` 时，读取的是当前目录下的 `.env`。
-
-## 产品官网与引导体验
-
-官网：[maxliux5.github.io/loochat](https://maxliux5.github.io/loochat/)。
-
-仓库包含独立的中文产品官网，展示「简单管理更多国内外 agent、按需安装插件、一起参与建设」的方向。官网展示自动交接、agent 协作、看板与记忆等可操作例子：体验账号接力、取消倒计时或原会话换模型，派发任务、查看成员与返回结果，勾选看板验收，以及搜索记忆、阅读原文；同时保留任务、审批和方案体验，介绍可安装的 LoopX 工作数据源，并提供插件贡献与需求反馈入口。技能和 MCP 通过各自的资源页管理；BotMux 提醒与通用任务控制仍在规划，具体状态见 [扩展设计](docs/extensions-design.md)。
-
-```bash
-npm run dev:site       # 开发官网，默认端口 5174
-npm run build:site     # 输出 packages/site/dist
-npm run preview:site   # 预览构建后的静态站点
-npm run test:site      # 构建并运行官网浏览器测试
-```
-
-`packages/site/dist` 可以单独部署到静态托管服务，支持网站根目录和子目录。首页是 `index.html`，独立体验入口是 `demo/index.html`；托管服务需要支持目录首页。开发与本地预览默认只监听本机。
-
-GitHub Pages 通过 `.github/workflows/pages.yml` 发布：推送到 `main` 后，自动安装依赖、检查并构建官网，再上传 `packages/site/dist`；也可在 Actions 中手动运行「Deploy website」。首次启用需在仓库 Settings → Pages 选择 GitHub Actions 作为发布来源。Pages 仅托管官网和本地模拟体验，运行 agent 的 hub 仍部署在自己的主机上。
-
-体验区进入可视范围或点击场景后才加载，手机保留内嵌交互并提供「全屏体验」。官网使用自己的轻量图标和静态资源目录，不复制 hub 的应用清单。安装区包含启动后打开工作台、输入 token 及远程访问说明。
-
-引导体验仅在浏览器内回放预置事件，不需要 daemon，不读取已保存的 hub token，不发送 `/api/` 请求，也不运行真实 agent。回复、命令结果和文件改动都是示例；切换任务可浏览不同流程，重新体验会清空本轮演示。普通 hub 的入口、登录和原有只读示例保持不变。官网独立构建，不由 `scripts/restart.sh` 部署。
+daemon 在 `packages/daemon` 目录里运行，所以用 `LOOCHAT_ENV_FILE` 指向 `apps/workbench/.env`。没有设置 `LOOCHAT_ENV_FILE` 时，读取的是当前目录下的 `.env`。
 
 ## 远程访问
 
@@ -176,7 +264,7 @@ GitHub Pages 通过 `.github/workflows/pages.yml` 发布：推送到 `main` 后�
 
 私有 socket 由本机用户文件权限保护。hub token 能操作登记的节点；节点令牌只能领取自己的 relay 任务。移除机器会撤销令牌，不删除节点线程和文件。
 
-`scripts/update-hosts.sh [机器ID] [--check]` 可经 relay 更新在线节点。节点需要 systemd 用户服务与仓库克隆（默认优先使用 `install.sh` 的 `~/.local/share/loochat`，否则回退 `~/code/loochat`；hosts.json 的 `repo` 可设为仓库根或 `apps/workbench` 子目录）。更新任务独立于节点服务运行，构建快照、等待空闲后切换、失败回滚；hub 在重连后读取结果。`--check` 会 fetch 并快进克隆，但不构建或切换服务。真实 systemd 更新与跨网络部署仍待验收，机制和限制见 [多机管理设计](docs/multi-host-design.md)。
+`scripts/update-hosts.sh [机器ID] [--check]` 可经 relay 更新在线节点。节点需要 systemd 用户服务与仓库克隆（默认优先使用 `install.sh` 的 `~/.local/share/loochat`，否则回退 `~/code/loochat`；hosts.json 的 `repo` 可设为仓库根或 `apps/workbench` 子目录）。更新任务独立于节点服务运行，构建快照、等待空闲后切换、失败回滚；hub 在重连后读取结果。`--check` 会 fetch 并报告候选版本，保留当前检出、构建和服务。真实 systemd 更新与跨网络部署仍待验收。
 
 ## 开机自启
 
@@ -206,7 +294,7 @@ scripts/migrate-name.sh             # 构建，等线程空闲后切换，服务
 ## 发布前检查
 
 ```bash
-npm run check:publish
+node scripts/check-publish.mjs
 ```
 
 扫描会被发布的文件，查找你的用户名、主机名、家目录路径、内网 IP、长密钥、邮箱地址。公司名、项目名这类私人词放在仓库外的 `~/.config/loochat/publish-denylist`（每行一个），也会一起检查。
@@ -216,14 +304,13 @@ npm run check:publish
 ```
 packages/daemon   网关：HTTP/SSE API、鉴权、SQLite 存储、各 agent 的适配器
 packages/web      界面：React + Vite，手机与桌面共用一套组件
-docs/             计划与界面说明
+docs/             安装与 Core 连接指南
 ```
 
 ## 开发
 
 ```bash
 scripts/init.sh   # 装依赖、构建，起一个用假 agent 的临时 hub 并跑一轮冒烟测试；加 --check 跑完即停
-scripts/demo.sh   # 起一个浏览器可打开的体验 hub：假 agent，绑定所有网卡，打印地址和 token；用 stop 子命令停止并清理
 npm test          # daemon 与 web 的全部单元测试和 API 测试
 npm run typecheck
 npm run test:e2e   # 统一构建一次，再运行浏览器 E2E（最多并行 2 个测试文件）
@@ -246,7 +333,7 @@ npm test -w @calli/e2e -- --test-concurrency=1 test/smoke.spec.mjs
 
 - HTTP 监听上的 API 需要 `Authorization: Bearer <LOOCHAT_TOKEN>`，`/api/health` 除外；仅本机用户能访问的私有 Unix socket 免 token，由本机用户文件权限保护。
 - daemon 等同于远程 shell。只把它暴露在可信网络（VPN）中。
-- 工作目录必须在 `LOOCHAT_WORKDIRS` 白名单内。
+- 工作目录必须在 `LOOCHAT_WORKDIRS` 白名单内，或是从页面添加的目录。侧栏列出本机所有目录里的 Agent 会话；导入白名单外的会话时，会把它所在的目录加入工作目录（home 或根目录本身除外）。不想列出的目录写进 `LOOCHAT_HIDDEN_SESSION_DIRS`。
 
 ## 许可证
 
@@ -254,6 +341,8 @@ npm test -w @calli/e2e -- --test-concurrency=1 test/smoke.spec.mjs
 
 ### 安装为桌面应用
 
-在 Chrome 中打开 LooChat 后，可通过浏览器菜单将它安装为应用。安装名称为 LooChat，图标使用蓝白配色的大小钳小螃蟹。
+在 macOS 或 Windows 的 Chrome 中打开 LoopX，浏览器允许安装时，侧栏底部会出现「安装 LoopX」。点击「安装」后，在 Chrome 弹窗中确认；网页不能跳过这次确认。安装后可从 Spotlight 或开始菜单打开独立窗口。
+
+选择「以后再说」或取消安装后，7 天内不再主动提示；「配置 → 安装 LoopX」仍可手动进入。没有快捷安装按钮时，该页面会显示浏览器菜单安装说明。请使用 HTTPS（本机 localhost 也可）；受管理的浏览器可能禁用安装。独立窗口仍需连接原来的 Workbench 服务，不提供离线 Agent 执行。
 
 如果此前安装的应用仍显示 Limi、AgentHub 或旧图标，先尝试关闭所有应用窗口后重新打开，并接受 Chrome 提供的名称或图标更新。如果仍未更新，可卸载旧应用后从当前网页重新安装；卸载时不要勾选清除网站数据，以保留本机登录和偏好。

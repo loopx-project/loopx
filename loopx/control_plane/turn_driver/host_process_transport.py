@@ -15,6 +15,7 @@ from typing import Any
 
 from ...file_lock import lock_holder_host_label
 from ..effect_runtime import _node_executable
+from ..runtime.node_probe import node_typescript_flags
 from .host_bridge_transport import GuardedHostBridge
 
 # Keep Python's Windows executable/batch launcher compatibility. No timeout,
@@ -347,6 +348,7 @@ def run_host_process(
                 _node_executable(),
                 "--no-warnings",
                 "--experimental-strip-types",
+                *node_typescript_flags(),
                 str(bridge),
                 *launch_arguments,
             ],
@@ -422,7 +424,10 @@ def run_host_process(
                     raise RuntimeError("Invalid managed Host process observation")
         finally:
             try:
-                if guarded is not None and (launch_deadline is not None or sys.exc_info()[0] is not None):
+                if guarded is not None and (
+                    launch_deadline is not None
+                    or (supervision == "direct" and sys.exc_info()[0] is not None)
+                ):
                     # A failed handoff still owns the Goal fence. The TS bridge must
                     # report no launch or finish its Host cleanup before it releases.
                     _cancel_guarded_host(

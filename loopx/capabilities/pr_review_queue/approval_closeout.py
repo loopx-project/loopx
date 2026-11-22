@@ -68,11 +68,14 @@ def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[s
     login = resolve_current_github_login()
     if not login:
         raise ValueError("approval closeout requires authenticated reviewer identity")
-    fields = "number,headRefOid,state,reviewDecision,author,files,changedFiles"
+    fields = "number,headRefOid,baseRefOid,state,reviewDecision,author,files,changedFiles"
     args = ["pr", "view", str(number), "--repo", repository, "--json", fields]
     pr = run_gh_json(args)
     if not isinstance(pr, dict):
         raise ValueError("pull-request readback is incomplete")
+    base_oid = pr.get("baseRefOid")
+    if not isinstance(base_oid, str) or not base_oid.strip():
+        raise ValueError("pull-request comparison base is unavailable")
     expected_files = pr.get("changedFiles")
     if not isinstance(expected_files, int) or expected_files < 0:
         raise ValueError("changed-file readback is incomplete")
@@ -101,6 +104,10 @@ def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[s
     after = run_gh_json(args)
     if not isinstance(after, dict) or after.get("number") != number or after.get("state") != pr.get("state"):
         raise ValueError("pull-request identity or lifecycle changed during readback")
+    if after.get("headRefOid") == pr.get("headRefOid") and (
+        after.get("baseRefOid") != base_oid or after.get("changedFiles") != expected_files
+    ):
+        raise ValueError("pull-request comparison changed during readback; retry closeout")
     return plan_approval_closeout({"repository": repository, "expected_exact_head": exact_head,
         "pull_request": pr, "readback_head": after.get("headRefOid"), "reviews": reviews,
         "reviews_complete": True, "review_conclusions": conclusions})

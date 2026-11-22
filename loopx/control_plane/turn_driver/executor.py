@@ -1526,12 +1526,14 @@ def _typed_settlement_stage(
 
 def _prepare_host_invocation(
     plan: Mapping[str, Any], *, host_argv: Sequence[str] | None,
-    host_runner: HostRunner | None,
+    host_runner: HostRunner | None, resume_existing_turn: bool,
 ) -> tuple[list[str] | None, dict[str, str | int]]:
     """Normalize the existing external or built-in transport before admission."""
     if host_runner is not None and host_argv is not None:
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
+        if host_argv is None and resume_existing_turn:
+            return None, {}
         argv = normalize_host_argv(host_argv or [])
         return argv, {"executable": Path(argv[0]).name, "argv_count": len(argv)}
     planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
@@ -1558,6 +1560,34 @@ def _host_attempt_requirements(
     return needs_host, retry_validation, None
 
 
+def _turn_transport_refusal(
+    *,
+    argv: Sequence[str] | None,
+    host_runner: HostRunner | None,
+    needs_host: bool,
+    request_schema: str,
+    adapter_schema: str | None,
+    journal: Mapping[str, object] | None,
+    recovery: Mapping[str, object] | None,
+    task_validator: TaskValidator | None,
+) -> str | None:
+    """Check the selected transport against the locked journal before effects."""
+    if argv is not None:
+        return host_request_schema_mismatch(request_schema, adapter_schema) if needs_host else None
+    if host_runner is not None:
+        return None
+    if needs_host or recovery is None or recovery["reinvoke_host"]:
+        return "This Turn needs a host invocation. Supply --host-adapter-command-json."
+    if recovery["resume_from"] == "validation" and task_validator is None:
+        stored_result = journal.get("host_result") if journal is not None else None
+        if (
+            not isinstance(stored_result, Mapping)
+            or str(stored_result.get("result_kind")) not in STOP_HOST_RESULT_KINDS
+        ):
+            return "The saved result still needs independent validation. Supply --validation-command-json."
+    return None
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
@@ -1572,6 +1602,7 @@ def run_loopx_turn_once(
     timeout_seconds: float | None,
     execute: bool,
     retry_failed: bool = False,
+    resume_existing_turn: bool = False,
     decision_capture_payload: Mapping[str, Any] | None = None,
     require_decision_capture: bool = False,
     task_validator: TaskValidator | None = None,
@@ -1591,7 +1622,10 @@ def run_loopx_turn_once(
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
-    argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
+    argv, host_projection = _prepare_host_invocation(
+        plan, host_argv=host_argv, host_runner=host_runner,
+        resume_existing_turn=resume_existing_turn,
+    )
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )
@@ -1728,8 +1762,10 @@ def run_loopx_turn_once(
 
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
-        if needs_host and argv is not None and (reason := host_request_schema_mismatch(
-            request["schema_version"], host_adapter_request_schema,
+        if (reason := _turn_transport_refusal(
+            argv=argv, host_runner=host_runner, needs_host=needs_host,
+            request_schema=request["schema_version"], adapter_schema=host_adapter_request_schema,
+            journal=journal, recovery=recovery_decision, task_validator=task_validator,
         )) is not None:
             return execution_payload(
                 plan, {"status": "unavailable", "host": host_projection, "reason": reason},

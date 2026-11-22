@@ -146,6 +146,22 @@ def _work_sequence(receipt: Mapping[str, object]) -> list[str]:
     ]
 
 
+def _assert_replan_tool_budget(receipt: Mapping[str, object], *, captured: bool) -> None:
+    sequence = receipt["observed_tool_sequence"]
+    assert isinstance(sequence, list)
+    ordinary_calls = len(_work_sequence(receipt))
+    native_reads = len(sequence) - ordinary_calls
+    native_read_limit = 3 if captured else 0
+
+    assert receipt["tool_call_count"] == len(sequence)
+    assert receipt["ordinary_tool_call_limit"] == 7
+    assert receipt["native_context_read_call_limit"] == native_read_limit
+    assert receipt["tool_call_limit"] == 7 + native_read_limit
+    assert ordinary_calls <= 7
+    assert native_reads <= native_read_limit
+    assert ("context_read" in sequence) is captured
+
+
 def _latest_quota_packet(request: Mapping[str, object]) -> dict[str, object]:
     messages = request.get("messages")
     if not isinstance(messages, list) or not messages:
@@ -681,20 +697,14 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
         "semantic_replan_writeback",
         "quota_spend_slot",
     ]
-    assert ("context_read" in receipt["observed_tool_sequence"]) is (context_mode == "on")
     assert receipt["context_delivery"] in {
         "host_projected",
         "progressive_replan_view",
     }
-    if receipt["context_delivery"] == "progressive_replan_view":
+    progressive = receipt["context_delivery"] == "progressive_replan_view"
+    if progressive:
         assert "replan_context_read" in receipt["observed_tool_sequence"]
-        assert receipt["tool_call_limit"] == 10
-        assert receipt["native_context_read_call_limit"] == 3
-    else:
-        assert receipt["tool_call_limit"] == 7
-        assert receipt["native_context_read_call_limit"] == 0
-    assert receipt["ordinary_tool_call_limit"] == 7
-    assert receipt["tool_call_count"] == receipt["tool_call_limit"]
+    _assert_replan_tool_budget(receipt, captured=context_mode == "on")
     assert receipt["semantic_action_accepted"] is True
     assert "new_surface" in receipt["selected_semantic_outcomes"]
     assert "new_surface" in receipt["required_semantic_outcomes"]
@@ -722,7 +732,11 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     assert "If the current replan_action_packet supplies a writeback command" in system_prompt
     assert "Otherwise use its inline writeback_contract" in system_prompt
     delivered_action = _latest_quota_packet(transport.requests[-1])["replan_action_packet"]
-    assert ("writeback" in delivered_action) is (context_mode == "on")
+    if progressive:
+        assert replan_view_command_tokens(delivered_action["writeback"])
+    else:
+        assert "writeback" not in delivered_action
+        assert delivered_action["writeback_contract"]["preferred_input"] == "evidence_linked_vision_path"
 
     quota_packet = QuotaToolContext.from_output(transport.requests[2]["messages"][-1]["content"]).packet
     assert quota_packet.get("required_reads") in (None, [])
@@ -737,7 +751,7 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     assert quota_packet["replan_action_packet"]["obligation_id"] == receipt[
         "replan_obligation_id"
     ]
-    if context_mode == "on":
+    if progressive:
         assert quota_packet["replan_action_packet"].get("writeback_contract", {}) == {}
     else:
         assert quota_packet["replan_action_packet"]["writeback_contract"]["preferred_input"] == "evidence_linked_vision_path"
@@ -1144,7 +1158,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["tool_call_count"] == receipt["tool_call_limit"]
+    _assert_replan_tool_budget(receipt, captured=context_mode == "on")
     assert _work_sequence(receipt) == [
         "quota_should_run",
         "workspace_read",
@@ -1607,3 +1621,14 @@ def test_prose_intent_without_typed_action_is_rejected(tmp_path: Path) -> None:
     assert receipt["qualification_passed"] is False
     assert receipt["failure_code"] == "model_returned_without_semantic_action"
     assert receipt["tool_call_count"] == 0
+
+
+@requires_draft_shell
+def test_real_tool_loop_preserves_writeback_rejection_recovery_under_deep_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deep_root = tmp_path / ("deep-" + "x" * 64)
+    deep_root.mkdir(parents=True)
+    test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
+        deep_root, monkeypatch, "off",
+    )

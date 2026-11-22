@@ -81,6 +81,56 @@ def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, mon
         assert store.messages(sid)[0]["attachments"] == attachments
 
 
+def test_live_queue_recovers_reserved_answer_then_runs_followup(tmp_path, monkeypatch, caplog):
+    import errno
+    import queue
+    from types import SimpleNamespace
+    from loopx.chat_agent import CodexChatAgentSession
+
+    store, sid, runtime = session_runtime(tmp_path)
+    original, _ = store.create_queued_turn(sid, client_turn_id="first", message="First request.")
+    followup, _ = store.create_queued_turn(sid, client_turn_id="second", message="Follow-up request.")
+    native = CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="public-thread", work_dir=tmp_path)
+    sent = []
+
+    def write(packet):
+        assert packet["method"] == "turn/start"
+        sent.append(packet["params"]["input"][0]["text"])
+        text = f"Answer {len(sent)}."
+        native.messages.put({"id": packet["id"], "result": {"turn": {"id": f"native-{len(sent)}"}}})
+        native.messages.put({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "final_answer", "text": text}}})
+        native.messages.put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+
+    publish = store.append_completed_response_events
+    failures = []
+
+    def fail_first_publication(session_id, turn_id, **kwargs):
+        if turn_id == original["turn_id"] and not failures:
+            failures.append(turn_id)
+            raise OSError(errno.EIO, "PRIVATE_ERROR_DETAIL")
+        return publish(session_id, turn_id, **kwargs)
+
+    monkeypatch.setattr(native, "_write", write)
+    monkeypatch.setattr(runtime, "_ensure_adapter", lambda *a, **kw: CodexAppServerAdapter(native))
+    monkeypatch.setattr(store, "append_completed_response_events", fail_first_publication)
+    runtime.resume_session_queue(session_id=sid, work_dir=tmp_path, objective="Answer requests")
+    try:
+        assert runtime.wait_for_turn(session_id=sid, turn_id=followup["turn_id"], timeout_sec=10)["status"] == "completed"
+        first = store.load_turn(sid, original["turn_id"])
+        assert first["status"] == "completed" and first["response"]["message"] == "Answer 1."
+        assert failures == [original["turn_id"]]
+        assert len(sent) == 2 and "First request." in sent[0] and "Follow-up request." in sent[1]
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["Answer 1.", "Answer 2."]
+        events = store.events_after(sid, original["turn_id"], None)
+        assert [e["kind"] for e in events if e["kind"] in {"turn.completed", "turn.failed"}] == ["turn.completed"]
+        assert f"turn={original['turn_id']} phase=publish_saved_answer errno={errno.EIO}" in caplog.text
+        assert "PRIVATE_ERROR_DETAIL" not in caplog.text
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("failure", ["before_message", "after_message", "before_event"])
 @pytest.mark.parametrize("display", ["Execution request", "Original visible request 原文"])
 def test_queue_replay_leaves_prepared_managed_input_with_its_owner(tmp_path, monkeypatch, failure, display):

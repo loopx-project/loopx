@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from typing import Any, Callable
 
+from ..control_plane.runtime.node_probe import node_typescript_flags
 from .inventory import SourceFile
 from .python_production import Production, enum_members, scan_python_production
 
@@ -292,7 +293,7 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
                  for count in (2, 3) for group in combinations(bindings, count)]
     probes.extend(conflicts)
     completed = subprocess.run(
-        ['node', '--no-warnings', '--experimental-strip-types',
+        ['node', '--no-warnings', '--experimental-strip-types', *node_typescript_flags(),
          str(root / 'scripts/settlement_binding_witness.mts')],
         input=json.dumps({'probes': probes}), capture_output=True, text=True,
         encoding='utf-8', check=False,
@@ -337,7 +338,7 @@ def probe_quota_run_decision_production(vocabulary: dict[str, Any]) -> list[Prod
     root = Path(__file__).resolve().parents[2]
     try:
         completed = subprocess.run(
-            ['node', '--no-warnings', '--experimental-strip-types',
+            ['node', '--no-warnings', '--experimental-strip-types', *node_typescript_flags(),
              str(root / 'scripts/quota_run_decision_witness.mts')],
             input=json.dumps({'values': vocabulary['values']}), capture_output=True,
             text=True, encoding='utf-8', check=False, timeout=30,

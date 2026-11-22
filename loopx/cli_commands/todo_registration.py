@@ -308,6 +308,15 @@ def register_todo_command(
     todo_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
     todo_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
     todo_parser.add_argument(
+        "--ttl-seconds",
+        type=int,
+        help=(
+            "For todo claim, optional lease TTL in seconds (1..86400; default "
+            "2700 = 45m). Pass a higher TTL on claim for long (>45m) execution "
+            "wakes, or renew via `task-lease renew` before expiry."
+        ),
+    )
+    todo_parser.add_argument(
         "--bound-agent",
         help=(
             "For user todo add/update, bind reminder delivery and post-response "

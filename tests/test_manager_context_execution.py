@@ -13,8 +13,7 @@ from loopx.capabilities.manager_context import (
     POLICY_SCHEMA, _root, _write, deliver, register_ingress,
 )
 from loopx.capabilities.manager_context import execution
-from loopx.chat import normalize_agent_response
-from loopx.chat_agent import _turn_prompt
+from loopx.chat import _turn_prompt, normalize_agent_response
 from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context.inspection import manager_index
 from test_local_delegation import brief, wait, service as delegation_service  # noqa: F401

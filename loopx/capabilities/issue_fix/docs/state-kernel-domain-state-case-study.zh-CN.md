@@ -309,8 +309,8 @@ idempotency key 和 exact row/result-id readback，失败则保留 retry/success
 6. **如何幂等？** 定义 stable key、observation fingerprint、unchanged 规则和 crash-safe upsert。
 7. **如何精确回读？** 外部写入必须有 provider receipt、remote readback 和失败 successor。
 8. **capability 与 provider 如何分层？** 产品结果进入 capability；可选 I/O 实现进入 extension；
-
-9. 加 projection contract、negative tests，并验证关闭 provider 后
+   领域状态不是因为“可扩展”就自动成为 extension。
+9. **如何证明不是第二事实源？** 加 projection contract、negative tests，并验证关闭 provider 后
    Kernel 与核心 capability 仍能工作。
 
 最小代码形态通常是：

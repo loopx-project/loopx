@@ -103,7 +103,13 @@ SURFACE_BUDGETS = {
         # paths; 24k leaves 726 chars without widening structural guards.
         # The same canonical fixture is 24,315 chars on both base/head; the
         # 25k ceiling retains 685 chars without dropping authority metadata.
-        "max_json_chars": 25_000,
+        # On v2.3.0 and 55bae0ac55 under identical short TMPDIR, dashboard_status_json
+        # measures the same 24,247 chars (339 nested / 26 top-level keys, zero
+        # payload growth), whereas isolated pytest / sharded-runner TMPDIR
+        # prefixes expand complete fixture-root paths to 25,151 / 25,311 chars.
+        # Calibrate max_json_chars to 26,000 (689 chars of runner headroom)
+        # while keeping the 350/27 structural limits and oversized rejection.
+        "max_json_chars": 26_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },
@@ -479,6 +485,17 @@ def main() -> int:
             assert error.args[0][1] > SURFACE_BUDGETS["quota_should_run_json"]["max_json_chars"], error
         else:
             raise AssertionError("quota character budget accepted an oversized payload")
+        oversized_status = {
+            **status_payload,
+            "operator_note": "x" * int(SURFACE_BUDGETS["dashboard_status_json"]["max_json_chars"]),
+        }
+        try:
+            assert_surface("dashboard_status_json", oversized_status)
+        except AssertionError as error:
+            assert error.args[0][0] == "dashboard_status_json", error
+            assert error.args[0][1] > SURFACE_BUDGETS["dashboard_status_json"]["max_json_chars"], error
+        else:
+            raise AssertionError("dashboard status character budget accepted an oversized payload")
         cadence = build_interface_budget_cadence(
             summaries,
             checked_at="2099-01-01T00:10:00+00:00",

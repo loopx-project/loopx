@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import signal
@@ -476,7 +477,7 @@ def run_native_goal(
                 receipt["native_goal"] = compact_native_goal_receipt(observed[-1])
 
 
-def native_command(env, execution, stage, wake, session_wake):
+def native_command(env, execution, stage, wake, session_wake, *, native_hook_args=()):
     if session_wake is None:
         # Preserve the baseline/Goal-planning entrypoint and its transport inputs.
         return [
@@ -484,6 +485,7 @@ def native_command(env, execution, stage, wake, session_wake):
             "--sandbox", execution.sandbox, "--cd", env["LOOPX_PROJECT"],
             *(["-c", "features.goals=false", "--output-schema", str(wake / "planning-schema.json"),
                "--output-last-message", str(wake / "planning-result.json")] if stage == "plan" else []),
+            *native_hook_args,
             "-",
         ]
     from loopx.control_plane.turn_driver.codex_cli import _codex_command
@@ -584,6 +586,9 @@ def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> bool:
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
+    stop_hook = env.get("LOOPX_OFFICIAL_STOP_HOOK", "0")
+    if stop_hook not in {"0", "1"}:
+        raise ValueError("LOOPX_OFFICIAL_STOP_HOOK must be 0 or 1")
     display = explicit_turn_display(env)
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
@@ -598,6 +603,7 @@ def run_once(env: dict[str, str]) -> dict:
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
         complete_turn=display.complete_turn,
+        official_stop_hook=stop_hook == "1",
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -645,6 +651,7 @@ def run_once(env: dict[str, str]) -> dict:
            if observation_producer is not None else {}),
         **turn_envelope_receipt(explicit=False, complete=execution.complete_turn),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
+        **({"official_stop_hook": True} if execution.official_stop_hook else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),
@@ -660,6 +667,11 @@ def run_once(env: dict[str, str]) -> dict:
             phase_deadline_epoch=env.get("LOOPX_PHASE_DEADLINE_EPOCH"))
     session_wake = None
     phase_work_deadline = None
+    official_worker_deadline = (
+        time.time() + execution.timeout_seconds
+        if execution.official_stop_hook and execution.timeout_seconds is not None
+        else None
+    )
     wake_context = ExitStack()
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
@@ -670,16 +682,16 @@ def run_once(env: dict[str, str]) -> dict:
         if handoff is not None:
             receipt["recovery_handoff_sha256"] = handoff["sha256"]
         if stage == "execute" and env.get("LOOPX_PHASE_DEADLINE_EPOCH"):
-            remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
-            # Heartbeat work uses the whole remaining phase. Cleanup is bounded
-            # by its existing host transport, not subtracted from each wake.
-            # Native Goal and managed-turn transports retain their own reserve.
-            reserve = phase_work_reserve(execution.mode)
+            phase_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"])
+            if execution.official_stop_hook and not math.isfinite(phase_deadline):
+                raise ValueError("official_stop_hook requires a finite phase deadline")
+            remaining = phase_deadline - time.time()
+            reserve = phase_work_reserve(execution.mode, official_stop_hook=execution.official_stop_hook)
             if remaining <= reserve:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
-            if execution.mode == "heartbeat":
-                phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"])
+            if execution.mode == "heartbeat" or execution.official_stop_hook:
+                phase_work_deadline = phase_deadline - reserve
             execution = replace(
                 execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
                                              else min(execution.timeout_seconds, remaining - reserve))
@@ -701,6 +713,24 @@ def run_once(env: dict[str, str]) -> dict:
                 Path(env["LOOPX_MODEL_CATALOG"]) if env.get("LOOPX_MODEL_CATALOG") else None
             ),
         )
+        native_hook_args = ()
+        if execution.official_stop_hook:
+            from benchmark.runtime.native_hooks import prepare_official_stop_hook
+
+            worker_remaining = (
+                None if official_worker_deadline is None else official_worker_deadline - time.time()
+            )
+            remaining, phase_limited = _phase_timeout(worker_remaining, phase_work_deadline)
+            try:
+                native_hook_args = prepare_official_stop_hook(
+                    env, home, deadline=None if remaining is None else time.monotonic() + remaining
+                )
+            except subprocess.TimeoutExpired:
+                receipt["host_invoked"] = False
+                if phase_limited:
+                    receipt["budget_exhausted"] = True
+                raise
+            receipt["official_stop_hook_verified"] = True
         if execution.mode == "heartbeat":
             # Checkpoint capture needs the LoopX control plane, which only
             # heartbeat workers stage; other modes must not import it.
@@ -767,6 +797,8 @@ def run_once(env: dict[str, str]) -> dict:
         if phase_work_deadline is not None and time.time() >= phase_work_deadline:
             receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
             return receipt
+        if official_worker_deadline is not None and time.time() >= official_worker_deadline:
+            raise subprocess.TimeoutExpired(env["CODEX_BIN"], execution.timeout_seconds)
         with stderr_path.open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr,
@@ -790,16 +822,24 @@ def run_once(env: dict[str, str]) -> dict:
                         recover_instance=pending["turn_instance_id"] != turn_id,
                     )
                     if execution.mode == "turn" and stage == "execute"
-                    else native_command(env, execution, stage, wake, session_wake)
+                    else native_command(
+                        env, execution, stage, wake, session_wake, native_hook_args=native_hook_args
+                    )
                 )
                 with stdout_path.open("w") as stdout:
                     allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
                     if stage == "plan":
                         # Planning and execution consume the same phase budget.
-                        timeout = max(0, float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time())
+                        phase_end = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
+                        timeout = (max(0, float(phase_end) - time.time())
+                                   if phase_end else execution.timeout_seconds)
                     else:
-                        timeout = (None if execution.timeout_seconds is None
-                                   else execution.timeout_seconds + allowance)
+                        timeout = execution.timeout_seconds
+                        if execution.official_stop_hook:
+                            timeout = (None if official_worker_deadline is None
+                                       else max(0, official_worker_deadline - time.time()))
+                        elif timeout is not None:
+                            timeout += allowance
                     if checkpoint_wake.listener is not None:
                         timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
                         receipt["return_code"] = checkpoint_wake.run(

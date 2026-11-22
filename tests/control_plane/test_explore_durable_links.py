@@ -51,12 +51,15 @@ def test_ninth_capture_keeps_history_and_survives_real_cli_replay(tmp_path, prov
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
                         *binding,  cwd=project)
     assert rc == 0, guard
+    proof = guard["execution_preparation"]["lease_proof"]
     vision = tmp_path / "vision.json"
     vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
         "vision_patch": {"acceptance_summary": "Require a uniform tail bound."},
         "explore_result": deepcopy(ATTACHMENT)}))
     command = ("refresh-state", *binding, "--classification", "validated_change",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"]),
         "--no-global-sync", "--suppress-external-sinks", "--agent-vision-json", str(vision))
     rc, captured = _run_cli(registry, runtime, *command, cwd=project)
     assert rc == 0 and captured["explore_result_delivery"]["ok"], captured

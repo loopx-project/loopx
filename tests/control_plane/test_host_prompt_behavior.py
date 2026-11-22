@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+from loopx.control_plane.testing.action_portfolio_scenarios import (
+    external_wait_fallback_scenario_source,
+)
 from loopx.control_plane.testing.host_prompt_behavior import cases, probe_messages, run_probe
 
 
@@ -78,6 +83,57 @@ def test_oracle_boundary_allows_version_preconditions_but_rejects_answer_leakage
         ScriptedClient().next_final_content(probe_messages("thin", cases()[0]))
 
 
+def test_fallback_probe_delivers_one_complete_source_to_both_prompt_modes(monkeypatch):
+    source = external_wait_fallback_scenario_source()
+    stop = "保留完整材料和原权限。" * 60 + "\nStop when the original authority is revoked."
+    task = source["selected_todo"]["text"] + "\n" + "不得遗漏验收要求。" * 60
+    source["goal_boundary"]["stop_condition"] = stop
+    source["selected_todo"]["text"] = task
+    monkeypatch.setattr(
+        "loopx.control_plane.testing.host_prompt_behavior.external_wait_fallback_scenario_source",
+        lambda: source,
+    )
+
+    class CompleteSourceClient(ScriptedClient):
+        def __init__(self):
+            super().__init__()
+            self.fallbacks = []
+
+        def next_final_content(self, messages):
+            packet = sent_packet(messages)
+            if packet.get("selected_todo", {}).get("todo_id") == "todo_external_wait_fallback":
+                assert_complete_turn_decision(packet)
+                assert packet["goal_boundary"]["stop_condition"] == stop
+                assert packet["selected_todo"]["text"] == task
+                self.fallbacks.append(packet)
+            return super().next_final_content(messages)
+
+    client = CompleteSourceClient()
+    report = run_probe(client, repeats=1)
+    assert report["qualification_passed"]
+    assert client.count == report["provider_call_count"] == 10
+    assert len(client.fallbacks) == 2
+    assert client.fallbacks[0] == client.fallbacks[1]
+    assert source["goal_boundary"]["stop_condition"] == stop
+    assert source["selected_todo"]["text"] == task
+
+
+@pytest.mark.parametrize("reserved", [
+    {"schema_version": "unknown_source_version"}, {"contract_binding": {}},
+])
+def test_unknown_source_binding_is_rejected_before_provider_call(monkeypatch, reserved):
+    source = external_wait_fallback_scenario_source()
+    source.update(reserved)
+    monkeypatch.setattr(
+        "loopx.control_plane.testing.host_prompt_behavior.external_wait_fallback_scenario_source",
+        lambda: source,
+    )
+    client = ScriptedClient()
+    with pytest.raises(EffectRuntimeRejected, match="reserved version/binding"):
+        run_probe(client, repeats=1)
+    assert client.count == 0
+
+
 @pytest.mark.parametrize("mutation", [
     {"action": "wait"}, {"notify": True}, {"finish_goal": True}, {"notify": 0},
 ])
@@ -120,3 +176,46 @@ def test_attempted_failure_is_not_reported_as_environment_skip(monkeypatch, caps
     result = capsys.readouterr().out
     assert "private provider" not in result
     assert json.loads(result)["status"] == "failed"
+
+
+def test_release_probe_supports_deepseek_provider_and_fails_closed(monkeypatch, capsys):
+    script = Path(__file__).resolve().parents[2] / "scripts/qualify-host-prompt-release.py"
+    main = runpy.run_path(str(script))["main"]
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    assert main(["--release-live", "--provider", "deepseek"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "skipped"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only-unused")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://evil.example/v1")
+    assert main(["--release-live", "--provider", "deepseek"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"status": "failed", "reason": "probe_execution_failed"}
+
+    seen = []
+
+    def fake_probe(client, *, repeats):
+        seen.append((client.actor_ref, repeats))
+        return {"qualification_passed": True, "actor_ref": client.actor_ref, "provider_call_count": 0}
+
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setitem(main.__globals__, "run_probe", fake_probe)
+    assert main(["--release-live", "--provider", "deepseek", "--model", "deepseek-v4-pro", "--repeats", "1"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["actor_ref"] == "deepseek:deepseek-v4-pro"
+    assert seen == [("deepseek:deepseek-v4-pro", 1)]
+
+
+def test_probe_handles_dual_global_roots_and_json_fences(monkeypatch, tmp_path):
+    (tmp_path / ".loopx").mkdir()
+    (tmp_path / ".loopx" / "registry.global.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".codex" / "loopx").mkdir(parents=True)
+    (tmp_path / ".codex" / "loopx" / "registry.global.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    class FencedClient(ScriptedClient):
+        def next_final_content(self, messages):
+            return f"```json\n{super().next_final_content(messages)}\n```"
+
+    report = run_probe(FencedClient(), repeats=1)
+    assert report["qualification_passed"] is True
+    assert report["provider_call_count"] == 10

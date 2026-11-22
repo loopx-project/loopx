@@ -317,6 +317,8 @@ export interface StreamBridgeCapability {
 }
 
 export interface AgentAdapter {
+  /** Why a discovered runtime cannot run in this host, distinct from a missing CLI. */
+  readonly unavailableReason?: string;
   /** Optional task capabilities exposed through LoopX's on-demand CLI. */
   readonly borrowedTools?: readonly import('./borrowed-tools.js').BorrowedTool[];
   readonly id: string;
@@ -509,6 +511,8 @@ export interface AgentAdapter {
 export interface LoginState {
   status: 'starting' | 'waiting' | 'submitting' | 'success' | 'error' | 'cancelled';
   url?: string;
+  input?: 'code-or-url' | 'none';
+  userCode?: string;
   error?: 'failed' | 'expired' | 'unavailable' | 'verification';
 }
 

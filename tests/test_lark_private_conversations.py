@@ -1590,7 +1590,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         _atomic_write_json(manifest, plan)
         if fault == "unlisted_cached_redirect":
             import base64
-            from loopx.chat_attachments import normalize_chat_image_attachments
+            from loopx.chat.attachments import normalize_chat_image_attachments
 
             legacy_attachments = normalize_chat_image_attachments([
                 {"id": f"reply-image-{index}", "name": f"original-{index}.png", "mime_type": "image/png",
@@ -4049,11 +4049,41 @@ def test_unreadable_private_delivery_does_not_hold_other_original_replies(ordina
         runtime.close()
 
 
-def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary):  # noqa: F811
+@pytest.mark.parametrize("source_link", ["original", "negative", "larksuite", "foreign", "non_integer", "unavailable"])
+def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary, source_link):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     sid = original["session_id"]
     canonical = [message for message in store.messages(sid) if message.get("turn_id") in turns]
     requests_before = ordinary[4].read_text()
+
+    def build_link(chat_id: str, ref: str) -> str | None:
+        if source_link == "unavailable":
+            return None
+        domain = "applink.larksuite.com" if source_link == "larksuite" else "applink.feishu.cn"
+        chat = "oc_a_different_private_chat" if source_link == "foreign" else chat_id
+        index = int(ref.removeprefix("om_out_"))
+        if source_link == "original":
+            position: int | str = index
+        elif source_link in {"negative", "larksuite", "foreign"}:
+            position = -1 - index
+        else:
+            position = "1.5"
+        return f"https://{domain}/client/chat/open?openChatId={chat}&position={position}"
+
+    def with_source_links(args, cwd=None, timeout=None):
+        response = provider(args, cwd, timeout)
+        if "+messages-mget" not in args:
+            return response
+        payload = json.loads(response["stdout"])
+        for row in payload.get("data", {}).get("items", []):
+            ref = row["message_id"]
+            if ref.startswith("om_out_"):
+                link = build_link(row["chat_id"], ref)
+                if link is not None:
+                    row["message_app_link"] = link
+        return {**response, "stdout": json.dumps(payload, ensure_ascii=False)}
+
+    transport.runner = with_source_links
     try:
         _drain_app_projection(transport, lambda: len(provider.writes) >= before + len(canonical))
         projected = provider.writes[before:]
@@ -4062,6 +4092,21 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         for (profile, text), message in zip(projected, canonical):
             assert profile == "notes-app" and message["text"] in text
             assert ("你（App）" if message["role"] == "user" else "LoopX（App）") in text
+        journal, = (transport.root / "web-projections").glob("*.json")
+        deliveries = json.loads(journal.read_text())["deliveries"]
+        canonical_inputs = {m["turn_id"]: m["message_id"] for m in canonical if m["role"] == "user"}
+        for message in canonical:
+            current = deliveries["web." + message["message_id"]]
+            if source_link in {"original", "negative", "larksuite"} and message["role"] == "agent":
+                parent = deliveries["web." + canonical_inputs[message["turn_id"]]]
+                expected = build_link("oc_notes_app", parent["attempt"]["message_ref"])
+                assert expected is not None and current["question_link"] == expected
+                provider_message = provider.messages[current["attempt"]["message_ref"]]
+                contents = json.loads(provider_message["body"]["content"])["zh_cn"]["content"]
+                assert f"[查看对应提问]({expected})" in contents[0][0]["text"]
+            else:
+                assert "查看对应提问" not in current["text"]
+                assert "question_link" not in current
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
             runner=provider, cli_bin="lark-cli")
         for _ in range(3):
@@ -4612,6 +4657,175 @@ def test_app_long_input_feedback_uses_its_last_verified_post(ordinary):  # noqa:
         runtime.close()
 
 
+@pytest.mark.parametrize("question_parts", ["available", "empty", "missing_parts", "missing_attempt"])
+def test_app_long_input_mirror_delivers_answer_when_question_parts_unavailable(ordinary, question_parts):  # noqa: F811
+    from loopx.extensions.lark.post_delivery import POST_PARTS_LOCATOR, _path
+
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    text = "Long App input with complete source.\n" * 900 + "END_APP_INPUT"
+    sid = original["session_id"]
+    try:
+        status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns",
+            {"message": text, "client_turn_id": f"long-app-mirror-{question_parts}"})
+        assert status == 202
+        assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+        _drain_app_projection(transport, lambda: any("END_APP_INPUT" in body for _, body in provider.writes[before:]))
+        refs = {ref for ref, message in provider.messages.items()
+                if "Long App input" in json.dumps(message.get("body", {})) or "END_APP_INPUT" in json.dumps(message.get("body", {}))}
+        last = next(ref for ref in refs if "END_APP_INPUT" in json.dumps(provider.messages[ref]))
+
+        question, answer = [message for message in store.messages(sid) if message["turn_id"] == turn["turn_id"]]
+        journal, = (transport.root / "web-projections").glob("*.json")
+        row = json.loads(journal.read_text())
+        question_key, answer_key = ("web." + message["message_id"] for message in (question, answer))
+        question_phase = row["deliveries"][question_key]
+        assert question_phase["verified"] and answer_key not in row["deliveries"]
+        link = "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1"
+        provider.messages[last]["message_app_link"] = link
+        match = POST_PARTS_LOCATOR.fullmatch(question_phase["attempt"]["message_ref"])
+        assert match is not None
+        state_path = _path(transport.runtime_root, transport._inbox(row), match[1])
+        if question_parts == "empty":
+            state = json.loads(state_path.read_text())
+            state["delivery_parts"] = []
+            state_path.write_text(json.dumps(state))
+        elif question_parts == "missing_parts":
+            state = json.loads(state_path.read_text())
+            state.pop("delivery_parts", None)
+            state_path.write_text(json.dumps(state))
+        elif question_parts == "missing_attempt":
+            state = json.loads(state_path.read_text())
+            state.pop("delivery_part_attempts", None)
+            state_path.write_text(json.dumps(state))
+        frozen_parts = state_path.read_bytes()
+        original_requests = ordinary[4].read_bytes()
+        writes = len(provider.writes)
+
+        _drain_app_projection(transport, lambda: json.loads(journal.read_text())["deliveries"].get(answer_key, {}).get("verified"))
+        phase = json.loads(journal.read_text())["deliveries"][answer_key]
+        expected = "**LoopX（App）**\n\n"
+        if question_parts == "available":
+            expected += f"[查看对应提问]({link})\n\n"
+        assert provider.writes[writes:] == [("notes-app", expected + answer["text"])]
+        assert phase.get("question_link") == (link if question_parts == "available" else None)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        for _ in range(3):
+            restarted.reconcile()
+        assert len(provider.writes) == writes + 1
+        assert state_path.read_bytes() == frozen_parts
+        assert ordinary[4].read_bytes() == original_requests
+    finally:
+        runtime.close()
+
+
+def test_app_mirror_negative_link_persists_before_send_recovers_and_downgrades(ordinary, monkeypatch):  # noqa: F811
+    import copy
+    from loopx.extensions.lark.manager_returns import prepare_app_mirror_text
+
+    store, runtime, provider, transport = connect(ordinary)
+    raw_answer = r"Result @contributor.\nDetails: <at unsupported>quoted</at>"
+    downgraded = "Result ＠contributor.\nDetails: ‹at unsupported>quoted‹/at>"
+    ordinary[-2].write_text(ordinary[-2].read_text().replace('"Runtime response."', json.dumps(raw_answer)))
+    event = provider.event("notes-app", "original-app-negative-link", "Original source conversation")
+    transport.admit("notes-app", event)
+    original = next(row for row in transport.core.pending() if row["message"] == event["content"])
+    assert runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)["status"] == "completed"
+    transport.reconcile()
+    sid = original["session_id"]
+    try:
+        with monkeypatch.context() as queued:
+            queued.setattr(runtime, "resume_session_queue", lambda **_: None)
+            status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns",
+                {"message": "Question needing signed position", "client_turn_id": "negative-link-pre-send"})
+        assert status == 202
+        _drain_app_projection(transport, lambda: any("Question needing signed position" in body for _, body in provider.writes))
+        question, = [m for m in store.messages(sid) if m["turn_id"] == turn["turn_id"]]
+        journal, = (transport.root / "web-projections").glob("*.json")
+        row = json.loads(journal.read_text())
+        question_key = "web." + question["message_id"]
+        question_ref = row["deliveries"][question_key]["attempt"]["message_ref"]
+        assert row["deliveries"][question_key]["verified"]
+
+        runtime.resume_session_queue(session_id=sid, work_dir=ordinary[-1], objective="")
+        assert runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=10)["status"] == "completed"
+        _, answer = [m for m in store.messages(sid) if m["turn_id"] == turn["turn_id"]]
+        answer_key = "web." + answer["message_id"]
+        messages = transport._web_projection_messages(row)
+
+        # Reject malformed/non-integer/wrong-domain/foreign-chat links without touching the journal.
+        invalid_links = [
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=1.5",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=abc",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=+1",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1)",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1&extra=1",
+            "https://applink.feishu.cn/client/chat/open?openChatId=oc_other_chat&position=-1",
+            "https://applink.feishu.cn/client/thread/open?openChatId=oc_notes_app&position=-1",
+            "https://evil.example/client/chat/open?openChatId=oc_notes_app&position=-1",
+            "http://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1",
+        ]
+        for bad_link in invalid_links:
+            provider.messages[question_ref]["message_app_link"] = bad_link
+            probe_row = copy.deepcopy(row)
+            assert prepare_app_mirror_text(transport, journal, probe_row, messages, answer) == f"**LoopX（App）**\n\n{raw_answer}"
+            assert answer_key not in probe_row["deliveries"]
+
+        link = "https://applink.feishu.cn/client/chat/open?openChatId=oc_notes_app&position=-1"
+        provider.messages[question_ref]["message_app_link"] = link
+        writes_before = len(provider.writes)
+
+        # Pre-send persistence: preview outage after prepare_app_mirror_text keeps question_link on disk.
+        def fail_preview(args, cwd=None, timeout=None):
+            if "+messages-send" in args and "--dry-run" in args:
+                return {"returncode": 1, "stdout": "", "stderr": "synthetic preview outage"}
+            return provider(args, cwd, timeout)
+
+        transport.runner = fail_preview
+        transport._web_projection_scan_at = 0
+        transport.reconcile()
+        persisted = json.loads(journal.read_text())["deliveries"][answer_key]
+        assert persisted == {
+            "question_link": link,
+            "verified": False,
+            "blocker": "lark_inbox_reply_provider_preview_mismatch",
+        }
+        assert len(provider.writes) == writes_before
+
+        # Link disappears from provider before first send; restarted worker uses persisted link
+        # and plain-text presentation downgrade on the real outbox.
+        del provider.messages[question_ref]["message_app_link"]
+        provider.verify_replies = False
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        _drain_app_projection(restarted, lambda: json.loads(journal.read_text())["deliveries"][answer_key].get("attempt") is not None)
+        expected_body = f"**LoopX（App）**\n\n[查看对应提问]({link})\n\n{downgraded}"
+        assert provider.writes[writes_before:] == [("notes-app", expected_body)]
+        attempted = json.loads(journal.read_text())["deliveries"][answer_key]
+        assert attempted["question_link"] == link
+        assert attempted["text"] == expected_body
+        assert not attempted.get("verified")
+        assert not any("+chat-members-list" in call for call in provider.calls)
+
+        # Post-restart recovery readback verifies the saved attempt without resending.
+        provider.verify_replies = True
+        writes_after = list(provider.writes)
+        requests_before = ordinary[4].read_bytes()
+        recovered = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        _drain_app_projection(recovered, lambda: json.loads(journal.read_text())["deliveries"][answer_key].get("verified"))
+        recovered.reconcile()
+        final_phase = json.loads(journal.read_text())["deliveries"][answer_key]
+        assert final_phase["verified"] and final_phase["question_link"] == link
+        assert final_phase["attempt"] == attempted["attempt"]
+        assert provider.writes == writes_after
+        assert ordinary[4].read_bytes() == requests_before
+    finally:
+        runtime.close()
+
+
 def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     transport.reaction_feedback = False
@@ -5152,6 +5366,46 @@ def test_completed_answer_delivery_does_not_prepare_another_execution(ordinary, 
             assert delivery_followup == queued_before
         packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         assert len([row for row in packets if row["method"] == "turn/start"]) == 1
+    finally:
+        runtime.close()
+
+
+def test_private_delivery_recovers_saved_answer_after_claim_release(ordinary, monkeypatch):  # noqa: F811
+    import errno
+    from loopx import chat_store
+
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "saved-answer-original", "Complete the original request.")
+    write = chat_store._atomic_write_json
+    lost = threading.Event()
+
+    def fail_final_status(path, value, **kwargs):
+        if path.parent.name == "turns" and value.get("status") == "completed" and not lost.is_set():
+            lost.set()
+            raise OSError(errno.EIO, "Synthetic final status write failure")
+        return write(path, value, **kwargs)
+
+    monkeypatch.setattr(chat_store, "_atomic_write_json", fail_final_status)
+    try:
+        transport.admit("notes-app", event)
+        native, = transport.core.pending()
+        sid, tid = native["session_id"], native["turn_id"]
+        assert lost.wait(10)
+        worker = runtime.session_queue_threads.get(sid)
+        if worker is not None:
+            worker.join(5)
+            assert not worker.is_alive()
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert store.load_turn(sid, tid)["status"] == "completing"
+        path = transport.root / f"{native['request_ref']}.json"
+        assert transport.reconcile_request(path) == 1
+        assert transport.reconcile_request(path) == 0
+        assert provider.writes == [("notes-app", "Runtime response.")]
+        assert store.load_turn(sid, tid)["status"] == "completed"
+        assert json.loads(path.read_text())["deliveries"]["terminal"]["verified"] is True
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["Runtime response."]
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(row["method"] == "turn/start" for row in packets) == 1
     finally:
         runtime.close()
 
@@ -6937,6 +7191,198 @@ def test_private_mention_does_not_target_turn_started_during_provider_read(ordin
         runtime.close()
 
 
+@pytest.mark.parametrize("queued", [False, True], ids=["composer", "queued-input"])
+def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_path, queued):
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = store.root.parent, runtime.registry_path
+    server.selected_goal_id, server.verbose = None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def request(method, path, body=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, path, None if body is None else json.dumps(body),
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        event = provider.event("steward-app", "original-private-input", "wait for steer")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid, tid = original["session_id"], original["turn_id"]
+        session_path = f"/api/chat/sessions/{sid}"
+        endpoint = f"{session_path}/turns/{tid}/steer"
+        correction = {"message": "Correct the current inspection.", "client_ingress_id": "app-correction"}
+        body = correction
+        wrong_endpoint = f"{session_path}/turns/old-turn/steer"
+        wrong_body = {**correction, "client_ingress_id": "wrong-turn"}
+        original_queued = None
+        if queued:
+            status, pending = request("POST", f"{session_path}/turns", {
+                "message": correction["message"], "client_turn_id": "queue-original", "delivery": "queue",
+            })
+            assert status == 202 and pending["status"] == "queued"
+            qid = pending["turn_id"]
+            original_queued = store.load_turn(sid, qid)
+            endpoint = wrong_endpoint = f"{session_path}/queue/{qid}/steer"
+            body = {"target_turn_id": tid, "client_ingress_id": "app-correction"}
+            wrong_body = {"target_turn_id": "old-turn", "client_ingress_id": "wrong-turn"}
+
+        status, refused = request("POST", wrong_endpoint, wrong_body)
+        assert status == 409 and refused["error_code"] == "live_steering_turn_mismatch"
+        provider.owner_ready = False
+        assert request("POST", endpoint, body)[0] == 400
+        if queued:
+            assert store.load_turn(sid, qid) == original_queued
+        else:
+            assert store.steering_receipt(sid, "app-correction") is None
+        provider.owner_ready = True
+
+        # Managed Steward admission takes the controller lock before its
+        # binding. Steering already fenced by the binding cannot wait on it.
+        with runtime.lock:
+            status, delivered = request("POST", endpoint, body)
+        assert status == 200 and delivered["turn_id"] == tid
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        status, duplicate = request("POST", endpoint, body)
+        assert status == 200 and duplicate["turn_id"] == tid
+        if queued:
+            assert duplicate == delivered and delivered["queued_turn_id"] == qid
+            assert store.load_turn(sid, qid)["status"] == "completed"
+            adoption, = [row for row in store.events_after(sid, qid, None)
+                         if row["kind"] == "turn.completed"]
+            assert adoption["payload"]["steered_into_turn_id"] == tid
+        else:
+            assert delivered["created"] is True and duplicate["created"] is False
+        status, history = request("GET", session_path)
+        assert status == 200
+        entry, = [row for row in history["messages"] if row["text"] == correction["message"]]
+        assert entry["turn_id"] == (qid if queued else tid) and entry["origin"] == "web"
+
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        assert request("POST", endpoint, {**body, "client_ingress_id": "revoked-input"})[0] == 400
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        steer, = [call["params"] for call in calls if call["method"] == "turn/steer"]
+        assert steer["expectedTurnId"] == completed["upstream_turn_id"]
+        assert steer["input"] == [{"type": "text", "text": correction["message"]}]
+        assert sum(call["method"] == "turn/start" for call in calls) == 1
+        assert not store.queued_turns(sid)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        fixture.close()
+
+
+def test_private_steward_app_recovers_queued_steering_after_restart(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.capabilities.native_chat.queued_admission import steer_queued_web_turn
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from test_native_steward_private import steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, _, capture, _ = next(fixture)
+    observer = None
+    try:
+        runtime.codex_home = tmp_path / "original-codex-home"
+        runtime.codex_home.mkdir()
+        inventory = tmp_path / "thread-items.json"
+        inventory.write_text("[]")
+        fake = Path(runtime.codex_bin)
+        source = fake.read_text()
+        original_inventory = '    elif method in {"thread/items/list", "thread/backgroundTerminals/list"}:'
+        assert original_inventory in source
+        fake.write_text(source.replace(original_inventory, f'''    elif method == "thread/items/list":
+        with open({str(inventory)!r}) as file:
+            result = {{"data": json.load(file)}}
+    elif method == "thread/backgroundTerminals/list":'''))
+
+        event = provider.event("steward-app", "cold-original", "wait for steer")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        original, = transport.core.pending()
+        _wait_private_upstream(store, original)
+        sid, tid = original["session_id"], original["turn_id"]
+        message = "Follow the correction on this Turn."
+        pending, _ = runtime.enqueue_turn(session_id=sid, client_turn_id="cold-queued", message=message,
+            work_dir=None, objective="", origin="web")
+        qid = pending["turn_id"]
+        attempt = dict(session_id=sid, queued_turn_id=qid, expected_turn_id=tid,
+                       client_ingress_id="cold-ack")
+        original_steer = CodexAppServerAdapter.steer_turn
+
+        def lose_response(adapter, *args):
+            original_steer(adapter, *args)
+            raise RuntimeError("response lost after accepting the correction")
+
+        monkeypatch.setattr(CodexAppServerAdapter, "steer_turn", lose_response)
+        with pytest.raises(RuntimeError, match="live_steering_delivery_unresolved"):
+            steer_queued_web_turn(runtime, **attempt)
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        held = store.load_turn(sid, qid)
+        assert held["_queue_steering"]["status"] == "pending"
+        runtime.adapters.pop(sid).close_session()
+        observer = ChatRuntimeController(
+            store=ChatSessionStore(store.root.parent, startup_maintenance=False),
+            codex_bin=runtime.codex_bin, project_contexts=runtime.project_contexts,
+            registry_path=runtime.registry_path,
+        )
+        observer.codex_home = runtime.codex_home
+        observer.manager_scope_resolver = runtime.manager_scope_resolver
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        sent, = [call["params"] for call in calls if call["method"] == "turn/steer"]
+        for wrong in ([], [{"turnId": completed["upstream_turn_id"], "item": {
+            "type": "userMessage", "clientId": sent["clientUserMessageId"],
+            "content": [{"type": "text", "text": "Different text"}],
+        }}]):
+            inventory.write_text(json.dumps(wrong))
+            with pytest.raises(RuntimeError, match="live_steering_delivery_unresolved"):
+                steer_queued_web_turn(observer, **attempt)
+            assert store.load_turn(sid, qid) == held
+            assert store.claim_next_queued_turn(sid) is None
+        inventory.write_text(json.dumps([{"turnId": completed["upstream_turn_id"], "item": {
+            "type": "userMessage", "clientId": sent["clientUserMessageId"], "content": sent["input"],
+        }}]))
+        observer.codex_home = tmp_path / "different-codex-home"
+        with pytest.raises(RuntimeError, match="live_steering_delivery_unresolved"):
+            steer_queued_web_turn(observer, **attempt)
+        assert store.load_turn(sid, qid) == held
+        observer.codex_home = runtime.codex_home
+        delivered = steer_queued_web_turn(observer, **attempt)
+        assert delivered["status"] == "delivered" and delivered["turn_id"] == tid
+        assert delivered["queued_turn_id"] == qid
+        assert steer_queued_web_turn(observer, **attempt) == delivered
+        assert not observer.adapters and not store.claim_next_queued_turn(sid)
+        assert store.load_turn(sid, qid)["status"] == "completed"
+        after = [json.loads(line) for line in capture.read_text().splitlines()]
+        observed = [call["params"] for call in after if call["method"] == "thread/items/list"]
+        assert len(observed) == 3 and all(call["threadId"] == sent["threadId"]
+            and call["turnId"] == sent["expectedTurnId"] for call in observed)
+        assert [call for call in after if call["method"] in {"thread/start", "thread/resume", "thread/fork",
+            "turn/start", "turn/steer"}] == [call for call in calls if call["method"] in {
+                "thread/start", "thread/resume", "thread/fork", "turn/start", "turn/steer"}]
+        assert sum(row["kind"] == "turn.steered" for row in store.events_after(sid, tid, None)) == 1
+    finally:
+        if observer is not None:
+            observer.close()
+        fixture.close()
+
+
 def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, monkeypatch):
     from test_native_steward_private import steward
 
@@ -8178,7 +8624,7 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
     assert "private-body-marker" not in repr(transport._delivery_discovery._completed)
     _atomic_write_json(new, {"status": "pending"})
     assert transport.pending_delivery_paths() == [new, pending]
-    clock[0] += 61
+    clock[0] += 120  # Ineligible recovery probes stagger across [60, 120)s.
     eligible["old"] = True
     assert transport.pending_delivery_paths() == [new, old, pending]
     clock[0] += 61
@@ -9096,3 +9542,102 @@ def test_due_discovery_progresses_when_only_free_slot_keeps_retrying_a_body(tmp_
         release.set()
         service.close()
         service._delivery_thread.join(5)
+
+
+@pytest.mark.parametrize("relay_ready_initially", [False, True])
+def test_project_workspace_write_recovers_loopback_relay_auth_once_ready(
+    ordinary, monkeypatch, tmp_path, relay_ready_initially,  # noqa: F811
+):
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.native_chat import codex_adapter as adapter_module
+    from loopx.capabilities.native_chat import external_conversations
+
+    ordinary[2].workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        capture, fake = ordinary[-3:-1]
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        assert binding["grant"] == "workspace_write"
+        source = fake.read_text().replace(
+            '"codexErrorInfo": "cyberPolicy"',
+            '"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}',
+        ).replace(
+            '"private-fixture-upstream-detail"',
+            '"unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses"',
+        ).replace(
+            '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n',
+            "",
+        )
+        fake.write_text(source)
+        event = provider.event("notes-app", "relay-401", "typed terminal failure")
+        transport.admit("notes-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == "upstream_transport_failure" and failed["delta_count"] == 0
+        transport.reconcile()
+        delivery_path = transport.root / f"{ref}.json"
+        old_notice = json.loads(delivery_path.read_text())["deliveries"]["terminal"]
+        runtime.adapters.pop(original["session_id"]).close_session()
+        Path(store.load_session(original["session_id"])["codex_home"]).mkdir(parents=True, exist_ok=True)
+        inventory = tmp_path / "relay-inventory.json"
+        inventory.write_text(json.dumps({
+            "turns": [{"id": failed["upstream_turn_id"], "status": "failed", "error": {
+                "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}},
+                "message": "unexpected status 401 Unauthorized: OpenAI API fallback request could not complete., url: http://127.0.0.1:57500/v1/responses",
+            }}],
+            "items": [{"turnId": failed["upstream_turn_id"], "item": {"type": "userMessage", "id": "user-1"}}],
+        }))
+        begin = source.index('    elif method == "thread/turns/list":')
+        end = source.index('    else:\n        result = {}', begin)
+        reader = f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
+        with open({str(inventory)!r}) as observed:
+            snapshot = json.load(observed)
+        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+    elif method == "thread/backgroundTerminals/list":
+        result = {{"data": []}}
+'''
+        fake.write_text((source[:begin] + reader + source[end:]).replace(
+            'if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+            "if False:",
+        ))
+        clock = [datetime.now(timezone.utc) + timedelta(seconds=61)]
+
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0]
+
+        ready_state = [relay_ready_initially]
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(
+            adapter_module,
+            "_loopback_relay_transport_ready",
+            lambda *_a, **_kw: (ready_state[0], int(clock[0].timestamp())),
+        )
+        from loopx.extensions.lark.private_progress import presentation_phase
+
+        worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        worker.reconcile()
+        row = worker.core.read_request(ref)
+        if not relay_ready_initially:
+            assert row["turn_id"] == original["turn_id"] and not row.get("context_recovery")
+            ready_state[0] = True
+            clock[0] += timedelta(minutes=1)
+            worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                runner=provider, cli_bin="lark-cli")
+            worker.reconcile()
+            row = worker.core.read_request(ref)
+        assert row["turn_id"] != original["turn_id"]
+        assert row["context_recovery"]["routing_attempt"] == 1
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        worker.reconcile()
+        delivered = json.loads(delivery_path.read_text())
+        assert delivered["deliveries"]["terminal"] == old_notice
+        assert delivered["deliveries"][presentation_phase(row, "terminal")]["verified"]
+        starts = [json.loads(line) for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
+        assert len(starts) == 2
+    finally:
+        runtime.close()

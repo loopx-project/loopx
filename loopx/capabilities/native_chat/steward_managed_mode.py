@@ -143,7 +143,7 @@ class StewardManagedMode:
                     "scheduling_enabled": False, "model_invoked": False}
 
     def health(self, binding_id: str) -> dict[str, Any]:
-        """Metadata projection only."""
+        """Metadata projection only; it neither verifies grants nor enables work."""
         try:
             binding = next(row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id)
             actor = binding.get("managed_actor")
@@ -167,7 +167,7 @@ class StewardManagedMode:
             return {"available": True, "prepared": True,
                     **(self.bindings._core("collaboration.steward.managed_mode.executor", {
                         "binding": binding, "session": session})
-                       if binding["executor_endpoint_id"] != "codex" else {}),
+                       if binding["executor_endpoint_id"] != "codex" or session.get("agent_id") != "codex" else {}),
                     "scheduling_enabled": bool(active and monitor and monitor.get("status") == "open"),
                     "goal_active": active, "report": StewardReports(self.controller).health(binding_id),
                     "monitor": ({"todo_id": monitor["todo_id"], "status": monitor["status"],
@@ -267,7 +267,8 @@ class ManagedSessionTurn:
 
     def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
               settlement_recovery: dict[str, Any] | None = None,
-              selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
+              selection_recovery: dict[str, Any] | None = None,
+              frozen_contract_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
         from .steward_turn import StewardTurnHost
         if self.controller.closed.is_set():
@@ -310,8 +311,10 @@ class ManagedSessionTurn:
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "monitor_todo": monitor, **report, **creation,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
+            **({"report_frozen_contract_recovery": frozen_contract_recovery} if frozen_contract_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
+            **StewardTurnHost(self.controller).report_timeout_basis(request),
             **StewardTurnHost(self.controller).monitor_restart_basis(request),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
@@ -449,10 +452,14 @@ class ManagedSessionTurn:
                     retained = report_turn(self.store, request["actor"], report_window)
                     if retained is not None and retained["turn_id"] != existing["turn_id"]:
                         return retained, False
-                    quota_request = host.report_quota_request(existing)
-                    if quota_request is not None:
-                        request = quota_request
-                        client_id += ".quota-recovery"
+                    recovery_request = host.report_quota_request(existing, report_window=report_window)
+                    suffix = ".quota-recovery"
+                    if recovery_request is None:
+                        recovery_request = host.report_timeout_request(existing)
+                        suffix = ".timeout-recovery"
+                    if recovery_request is not None:
+                        request = recovery_request
+                        client_id += suffix
                         existing = None
                 selection_recovery = host.report_selection_recovery(existing) if existing is not None and report_window is not None else None
                 recovery = (host.monitor_restart_carrier(existing, client_id)

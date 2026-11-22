@@ -9,29 +9,35 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import inspect
 import json
 import logging
+import math
 from pathlib import Path
 import re
 import subprocess
 import time
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from ...agent_registry import load_goal_from_registry
 from ...chat_store import _atomic_write_json
+from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.runtime.time import now_utc
 from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
+from ..issue_fix.repository_snapshot import _REPO_PATTERN
 from .github_pr_evidence import observe_github_repository_prs
 from .steward_commands import native_command
 from .steward_managed_mode import StewardManagedMode
 
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
+ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS = 60
+ADVANCEMENT_ADMISSION_RETRY_SUFFIX = ".admission-retry"
+ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX = ".precommit-retry"
 _LOG = logging.getLogger(__name__)
-_GITHUB_REPO_URL = re.compile(r"^git:github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$")
 
 
 class StewardObservationAdapter:
@@ -68,20 +74,223 @@ def advancement_turn_id(todo: dict[str, Any]) -> str:
         [todo["todo_id"], stamp], sort_keys=True).encode()).hexdigest()[:40]
 
 
+def _zero_write_advancement_response(
+    turn: Mapping[str, Any],
+    *,
+    now: float | None = None,
+) -> Mapping[str, Any] | None:
+    """Return native_loopx payload only when a completed Turn wrote zero Steward outputs and passed cooldown."""
+    from .steward_turn import _iso_timestamp_seconds
+
+    if turn.get("status") != "completed":
+        return None
+    resp = turn.get("response")
+    if not isinstance(resp, Mapping):
+        return None
+    if (resp.get("steward_owner_report_queued")
+            or resp.get("context_handoff")
+            or resp.get("steward_user_action_receipts")):
+        return None
+    nl = resp.get("native_loopx")
+    if not isinstance(nl, Mapping) or nl.get("ok") is not False:
+        return None
+    completed_ts = _iso_timestamp_seconds(turn.get("completed_at"))
+    if completed_ts is None:
+        return None
+    current_ts = time.time() if now is None else now
+    if current_ts - completed_ts < ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS:
+        return None
+    return nl
+
+
+def _is_precommit_retryable_advancement_turn(
+    turn: Mapping[str, Any],
+    *,
+    now: float | None = None,
+) -> bool:
+    """Allow one delayed retry only when zero kernel/Steward writes occurred."""
+    nl = _zero_write_advancement_response(turn, now=now)
+    if nl is None or nl.get("status") != "failed":
+        return False
+    if nl.get("result_kind") not in {"validation_failed", "host_failure"}:
+        return False
+    receipt = nl.get("receipt")
+    commit_eligibility = (receipt.get("commit_eligibility") if isinstance(receipt, Mapping) else None) or {}
+    effects = nl.get("effects") or {}
+    if not isinstance(commit_eligibility, Mapping) or not isinstance(effects, Mapping):
+        return False
+    if not (commit_eligibility.get("writeback") is False or effects.get("state_written") is False):
+        return False
+    return not (
+        effects.get("state_written") is True
+        or effects.get("quota_spent") is True
+        or effects.get("scheduler_acknowledged") is True
+    )
+
+
+def _is_zero_effect_selection_deferred_advancement_turn(
+    turn: Mapping[str, Any],
+    *,
+    now: float | None = None,
+) -> bool:
+    """Allow bounded retry only for zero-effect pre-host selection deferrals."""
+    nl = _zero_write_advancement_response(turn, now=now)
+    if nl is None or nl.get("error_code") != "turn_todo_selection_deferred":
+        return False
+    refusal = nl.get("selection_rejection")
+    if not isinstance(refusal, Mapping) or refusal.get("state") != "deferred":
+        return False
+    effects = nl.get("effects")
+    if not isinstance(effects, Mapping):
+        return False
+    return not any(
+        effects.get(key) is not False
+        for key in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")
+    )
+
+
+def resolve_advancement_turn_id(
+    store: Any,
+    actor: Mapping[str, Any],
+    todo: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> str | None:
+    """Resolve the active attempt id or bounded post-cooldown deferral/pre-commit retries."""
+    from .steward_turn import native_steward_client_id
+
+    base = advancement_turn_id(todo)
+    existing = store.turn_for_client(
+        actor["session_id"],
+        native_steward_client_id(actor, base),
+    )
+    if existing is None:
+        return base
+    primary_token = base
+    if _is_zero_effect_selection_deferred_advancement_turn(existing, now=now):
+        primary_token = base + ADVANCEMENT_ADMISSION_RETRY_SUFFIX
+        existing = store.turn_for_client(
+            actor["session_id"],
+            native_steward_client_id(actor, primary_token),
+        )
+        if existing is None:
+            return primary_token
+    if not _is_precommit_retryable_advancement_turn(existing, now=now):
+        return None
+    retry_token = primary_token + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    retry_existing = store.turn_for_client(
+        actor["session_id"],
+        native_steward_client_id(actor, retry_token),
+    )
+    if retry_existing is None:
+        return retry_token
+    if _is_zero_effect_selection_deferred_advancement_turn(retry_existing, now=now):
+        retry_admission_token = retry_token + ADVANCEMENT_ADMISSION_RETRY_SUFFIX
+        if store.turn_for_client(
+            actor["session_id"],
+            native_steward_client_id(actor, retry_admission_token),
+        ) is None:
+            return retry_admission_token
+    return None
+
+
 def _github_repo_slug(task_repository: Any) -> str | None:
     if not isinstance(task_repository, str):
         return None
-    match = _GITHUB_REPO_URL.fullmatch(task_repository.strip())
-    return match.group(1) if match else None
+    raw = task_repository.strip()
+    if not raw.startswith("git:github.com/"):
+        return None
+    slug = raw.removeprefix("git:github.com/")
+    return slug if _REPO_PATTERN.fullmatch(slug) else None
 
 
-def _observe_github_repository_prs(repo_slug: str) -> dict[str, Any]:
+def _observe_github_repository_prs(
+    repo_slug: str, *, backfill_comments: bool = False
+) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
-    return observe_github_repository_prs(repo_slug, runner=subprocess.run)
+    return observe_github_repository_prs(
+        repo_slug, runner=subprocess.run, backfill_comments=backfill_comments
+    )
+
+
+def _signal_scope_uses_stalled_age(signal_scope: Mapping[str, Any] | None) -> bool:
+    if not isinstance(signal_scope, Mapping):
+        return False
+    pr_filter = signal_scope.get("pr_filter")
+    if not isinstance(pr_filter, Mapping):
+        return False
+    min_stalled_hours = pr_filter.get("min_stalled_hours")
+    return (
+        isinstance(min_stalled_hours, (int, float))
+        and not isinstance(min_stalled_hours, bool)
+        and math.isfinite(float(min_stalled_hours))
+        and float(min_stalled_hours) > 0
+    )
+
+
+def _accepts_backfill_comments(fn: Callable[..., Any]) -> bool:
+    params = inspect.signature(fn).parameters
+    return "backfill_comments" in params or any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
+
+
+_MONITOR_TARGET_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
 
 def steward_monitor_snapshot_path(runtime_root: Path, goal_id: str, todo_id: str) -> Path:
     return Path(runtime_root).expanduser().resolve() / "steward-monitors" / goal_id / f"{todo_id}.latest.json"
+
+
+def steward_monitor_scope_path(runtime_root: Path, goal_id: str, target_key: str) -> Path:
+    safe_goal = str(goal_id or "").strip()
+    safe_key = str(target_key or "").strip()
+    if not safe_goal or "/" in safe_goal or "\\" in safe_goal or ".." in safe_goal:
+        raise ValueError("invalid monitor scope goal_id")
+    if not _MONITOR_TARGET_KEY_RE.fullmatch(safe_key):
+        raise ValueError("invalid monitor scope target_key")
+    return Path(runtime_root).expanduser().resolve() / "steward-monitors" / safe_goal / "scopes" / f"{safe_key}.json"
+
+
+def steward_monitor_delivery_dir(runtime_root: Path, goal_id: str) -> Path:
+    safe_goal = str(goal_id or "").strip()
+    if not safe_goal or "/" in safe_goal or "\\" in safe_goal or ".." in safe_goal:
+        raise ValueError("invalid monitor delivery goal_id")
+    return Path(runtime_root).expanduser().resolve() / "steward-monitors" / safe_goal / "deliveries"
+
+
+def normalize_steward_monitor_scope(signal_scope: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if signal_scope is None:
+        return None
+    normalized = effect_runtime_result(
+        "collaboration.steward.monitor.signal_scope.normalize",
+        {"signal_scope": dict(signal_scope)},
+    ).get("signal_scope")
+    return dict(normalized) if isinstance(normalized, Mapping) else None
+
+
+def write_steward_monitor_scope(
+    runtime_root: Path, goal_id: str, target_key: str, signal_scope: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = normalize_steward_monitor_scope(signal_scope)
+    if normalized is None:
+        raise ValueError("signal_scope cannot be empty")
+    path = steward_monitor_scope_path(runtime_root, goal_id, target_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, normalized)
+    return normalized
+
+
+def read_steward_monitor_scope(runtime_root: Path, goal_id: str, target_key: str) -> dict[str, Any] | None:
+    if not target_key or not _MONITOR_TARGET_KEY_RE.fullmatch(str(target_key)):
+        return None
+    path = steward_monitor_scope_path(runtime_root, goal_id, target_key)
+    if not path.is_file():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, Mapping):
+        raise ValueError("invalid persisted steward monitor scope")
+    return normalize_steward_monitor_scope(raw)
 
 
 class StewardMonitor:
@@ -296,27 +505,53 @@ class StewardMonitor:
                 "monitor": self.current(actor), "model_invoked": False}
 
     def _collect_signal_monitor(self, actor: dict[str, Any], context: dict[str, Any], todo: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-        portfolio = self.bindings._core("collaboration.steward.monitor.observation", {
-            "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
-            "actor_goal_id": actor["goal_id"], "previous_hash": None})
+        target_key = str(todo.get("target_key") or "")
+        signal_scope = read_steward_monitor_scope(
+            self.controller.coordination_runtime_root, actor["goal_id"], target_key,
+        )
+        include_portfolio = True if signal_scope is None else signal_scope.get("include_portfolio", True) is True
+        include_inbox = True if signal_scope is None else signal_scope.get("include_inbox", True) is True
+        portfolio = (
+            self.bindings._core("collaboration.steward.monitor.observation", {
+                "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
+                "actor_goal_id": actor["goal_id"], "previous_hash": None})
+            if include_portfolio else None
+        )
         from ...control_plane.collaboration.inbox import pending as inbox_pending
-        try:
-            inbox_raw = inbox_pending(self.controller.coordination_runtime_root,
-                goal_id=actor["goal_id"], agent_id=actor["agent_id"])
-            inbox_items = [{"request_id": row["request_id"], "source_id": row.get("source_id")}
-                           for row in inbox_raw if isinstance(row, dict) and row.get("request_id")]
-        except (OSError, ValueError):
+        if include_inbox:
+            try:
+                inbox_raw = inbox_pending(self.controller.coordination_runtime_root,
+                    goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+                inbox_items = [{"request_id": row["request_id"], "source_id": row.get("source_id")}
+                               for row in inbox_raw if isinstance(row, dict) and row.get("request_id")]
+            except (OSError, ValueError):
+                inbox_items = []
+        else:
             inbox_items = []
         repo_slug = _github_repo_slug(todo.get("task_repository"))
-        repo_snapshot = _observe_github_repository_prs(repo_slug) if repo_slug else None
-        observation = self.bindings._core("collaboration.steward.monitor.signal_observation", {
+        backfill_comments = _signal_scope_uses_stalled_age(signal_scope)
+        if not repo_slug:
+            repo_snapshot = None
+        elif backfill_comments and _accepts_backfill_comments(_observe_github_repository_prs):
+            repo_snapshot = _observe_github_repository_prs(repo_slug, backfill_comments=True)
+        else:
+            repo_snapshot = _observe_github_repository_prs(repo_slug)
+        observed_at = now_utc().isoformat()
+        signal_request: dict[str, Any] = {
             "portfolio_observation": portfolio,
             "inbox_items": inbox_items,
             "repository_snapshot": repo_snapshot,
             "previous_hash": todo.get("result_hash"),
-        })
+        }
+        if signal_scope is not None:
+            signal_request["signal_scope"] = signal_scope
+            signal_request["observed_at"] = observed_at
+        observation = self.bindings._core("collaboration.steward.monitor.signal_observation", signal_request)
         if observation.get("observation_incomplete") is True:
             raise RuntimeError("steward monitor external signal source temporarily unavailable")
+        persisted_repo_snapshot = repo_snapshot
+        if isinstance(repo_snapshot, Mapping) and "scoped_repository_items" in observation:
+            persisted_repo_snapshot = {**repo_snapshot, "items": list(observation["scoped_repository_items"])}
         snapshot_path = steward_monitor_snapshot_path(
             self.controller.coordination_runtime_root, actor["goal_id"], todo["todo_id"])
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -327,10 +562,11 @@ class StewardMonitor:
             "target_key": todo.get("target_key"),
             "monitor_text": todo.get("text"),
             "task_repository": todo.get("task_repository"),
+            **({"signal_scope": signal_scope} if signal_scope is not None else {}),
             "result_hash": observation["result_hash"],
             "material_change": observation["material_change"],
-            "observed_at": now_utc().isoformat(),
-            "repository_snapshot": repo_snapshot,
+            "observed_at": observed_at,
+            "repository_snapshot": persisted_repo_snapshot,
             "inbox_items": inbox_items,
         })
         followup_key = f"{FOLLOWUP_TARGET_PREFIX}{todo['todo_id']}"
@@ -470,10 +706,8 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                 if dispatched:
                     continue
             for adv in service.runnable_advancement_todos(actor):
-                from .steward_turn import native_steward_client_id
-                turn_id_token = advancement_turn_id(adv)
-                if controller.store.turn_for_client(actor["session_id"],
-                        native_steward_client_id(actor, turn_id_token)) is not None:
+                turn_id_token = resolve_advancement_turn_id(controller.store, actor, adv)
+                if turn_id_token is None:
                     continue
                 accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
                     turn_instance_id=turn_id_token, todo_id=adv["todo_id"], work_kind="native_turn")

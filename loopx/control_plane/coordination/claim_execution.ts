@@ -99,7 +99,7 @@ export function maintainClaimExecution(head: JsonObject, input: ExecutionInput, 
  * transfer grant). Expired execution is reclaimable without the old process;
  * acquisition still validates scope, eligibility and generation under one CAS. */
 export async function prepareClaimExecution(head: JsonObject,
-  input: ExecutionInput & {operation_id: string; claimed_by: string},
+  input: ExecutionInput & {operation_id: string; claimed_by: string; ttl_seconds?: number},
   observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]}> {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now);
@@ -119,7 +119,7 @@ export async function prepareClaimExecution(head: JsonObject,
   const command = {owner: input.claimed_by,
     idempotency_key: `claim-${canonicalAuthoritySha256({goal_id: input.goal_id, todo_id: input.todo_id,
       owner: input.claimed_by, operation_id: input.operation_id})}`,
-    expected_version: current ? leaseVersion(current) : 0, ttl_seconds: normalizeTtl(null),
+    expected_version: current ? leaseVersion(current) : 0, ttl_seconds: normalizeTtl(input.ttl_seconds),
     write_scopes: writeScopes, ...(workspace ? {write_workspace: workspace} : {})};
   const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: String(head.handoff_mode),
     registered_agents: [...input.registered_agents], ...facts,

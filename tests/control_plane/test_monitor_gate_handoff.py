@@ -16,9 +16,9 @@ from tests.control_plane.test_monitor_followthrough_contract import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_monitor_observation_never_projects_gate_completion(tmp_path, tmp_path_factory, monkeypatch, provider):
+def test_monitor_observation_never_projects_gate_completion(tmp_path, case_mktemp, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, state = _write_fixture(tmp_path_factory.mktemp("g") / "a b", provider=provider,
+    registry, runtime, state = _write_fixture(case_mktemp("g") / "a b", provider=provider,
         handoff_mode="hard_lease")
 
     def cli(*args):

@@ -117,6 +117,13 @@ settlement plan 在投影中保留，改变其 Turn 身份会改变 action signa
 recommendation 属于诊断，未知字段是合成输入，完整来源承诺仍能区分两份输入。
 没有测量模型收益。
 
+发布用宿主提示决策探针的真实 external-wait 场景，经既有完整来源 TypeScript owner
+组合。Thin 与 brief 在每批探针中接收同一份已检查来源，保留完整任务和停止正文；
+场景校验器直接读取来源 portfolio，不再构造旧压缩包。四个独立的小型决策对照仍为
+合成输入，冻结的 raw/v0 模型语料和受支持历史 reader 不变。这只迁移资格验证输入，
+不切换普通 CLI writer，也不证明已安装 Host 采用；provider 执行仍须显式 release
+opt-in，脚本探针通过不代表模型行为、结算、验收成果或完整成本已经取得资格。
+
 ### 差分上下文
 
 复用现有 context-delivery owner 与不可变 capture 机制。目标包含两个正交层，

@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 0,
+    "minor": 5,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "0.5.0",
+    "version_tag": "v0.5.0",
+    "git_commit": "db5d9e9f7afec3914c75c2d1d0207df42a8d4095",
+    "git_tree": "54a22f2d26c525aa0068214fec87c92c4b866403",
+    "committed_at": "2026-08-20T07:10:21+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v0.5.0",
+      "last_tag": "v0.5.4",
+      "last_commit": "fe80aecd7f7c8302e1e8f4296ad4061aa4679dca",
+      "last_committed_at": "2026-09-03T04:27:48+08:00",
+      "tag_count": 5
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v0.5.0",
+      "v0.5.4"
+    ]
+  },
+  "a_scale": {
+    "score": 16.8,
+    "delta_from_prior": 2.7,
+    "domain_scores": {
+      "D1": 21.0,
+      "D2": 13.5,
+      "D3": 13.0,
+      "D4": 13.0,
+      "D5": 21.0,
+      "D6": 17.0,
+      "D7": 15.0,
+      "D8": 25.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 0,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Dashboard browser readiness suite (#3378) and early PostgreSQL authority tenant RLS exploration through v0.5.4 (#3839/#3864).",
+  "summary_zh": "建立 Dashboard 浏览器就绪套件（#3378）并完成早期 PostgreSQL 租户 RLS 探索至 v0.5.4（#3839/#3864）。"
+}

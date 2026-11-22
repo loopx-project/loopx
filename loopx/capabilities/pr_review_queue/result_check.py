@@ -21,6 +21,7 @@ from .review_body import (
     author_owned_review_title_matches,
     check_review_body,
     normalized_review_prose,
+    parse_model_reviewer_line,
     review_section_text,
     reviewer_declaration_lines,
     visible_review_text,
@@ -251,7 +252,9 @@ def _published_as_token(reference: str, text: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def _reviewer_errors(value: object, body: str) -> list[str]:
+def _reviewer_errors(
+    value: object, body: str, *, execution_present: bool = False, runtime_reported: bool = False,
+) -> list[str]:
     key = "reviewer"
     contract = REVIEWER_DECLARATION
     if not isinstance(value, Mapping):
@@ -260,9 +263,9 @@ def _reviewer_errors(value: object, body: str) -> list[str]:
     if actor_kind not in contract["actor_kinds"]:
         return [f"{key}:invalid_actor_kind"]
     errors: list[str] = []
-    if value.get("declaration_source") not in contract["declaration_sources"]:
+    source = value.get("declaration_source")
+    if source not in contract["declaration_sources"]:
         errors.append(f"{key}:invalid_declaration_source")
-    declared: list[str] = [str(actor_kind)]
     if actor_kind == "model_agent":
         for field in contract["model_agent_fields"]:
             text = value.get(field)
@@ -270,16 +273,31 @@ def _reviewer_errors(value: object, body: str) -> list[str]:
                 errors.append(f"{key}:missing_field:{field}")
             elif _DECLARED_NAME_FORBIDDEN.search(text):
                 errors.append(f"{key}:not_a_product_family_name:{field}")
-            else:
-                declared.append(text.strip())
     lines = reviewer_declaration_lines(body)
     if len(lines) != 1:
-        errors.append(f"{key}:body_line_missing_or_ambiguous")
-    elif _PUBLISHED_LINE_FORBIDDEN.search(lines[0]):
-        errors.append(f"{key}:body_line_carries_runtime_detail")
-    elif any(not _published_as_token(token.casefold(), lines[0].casefold())
-             for token in declared):
+        return [*errors, f"{key}:body_line_missing_or_ambiguous"]
+    if _PUBLISHED_LINE_FORBIDDEN.search(lines[0]):
+        return [*errors, f"{key}:body_line_carries_runtime_detail"]
+    if actor_kind == "human_operator":
+        if not _published_as_token("human_operator", lines[0].casefold()):
+            errors.append(f"{key}:body_line_disagrees_with_declaration")
+        return errors
+
+    published = parse_model_reviewer_line(lines[0])
+    model, provider = value.get("declared_model"), value.get("declared_provider")
+    if (published is None or not published.has_model_actor
+        or isinstance(model, str) and published.model.casefold() != model.strip().casefold()
+        or isinstance(provider, str) and published.provider.casefold() != provider.strip().casefold()
+        or published.source is not None and published.source != source
+    ):
         errors.append(f"{key}:body_line_disagrees_with_declaration")
+    if execution_present or runtime_reported or source == "runtime_reported":
+        expected_effort = value.get("declared_reasoning_effort") or "effort_unavailable"
+        if (published is None or published.source != source or
+            runtime_reported and isinstance(expected_effort, str)
+            and published.reasoning_effort != expected_effort.casefold()
+        ):
+            errors.append(f"{key}:runtime_basis_not_published")
     return errors
 
 
@@ -612,11 +630,15 @@ def check_review_result(
                              behavior_bearing=applicability.get("behavior_bearing_change") is True)
     errors.extend(f"review_body:{reason}" for reason in body["invalid_reasons"])
     body_text = str(result.get("review_body") or "")
-    errors.extend(_reviewer_errors(result.get("reviewer"), body_text))
     from ...control_plane.effect_runtime import effect_runtime_result
 
     execution = packet.get("reviewer_execution")
     declaration = result.get("reviewer")
+    observed = current_execution or execution
+    runtime_reported = isinstance(observed, Mapping) and observed.get("status") == "runtime_reported"
+    errors.extend(_reviewer_errors(
+        declaration, body_text, execution_present=execution is not None, runtime_reported=runtime_reported,
+    ))
     if execution is not None or current_execution is not None or (
         isinstance(declaration, Mapping) and declaration.get("declaration_source") == "runtime_reported"
     ):
@@ -625,20 +647,6 @@ def check_review_result(
             params["current"] = current_execution
         matched = effect_runtime_result("runtime.execution_identity.match", params)
         errors.extend(f"reviewer:{reason}" for reason in matched["errors"])
-        if isinstance(declaration, Mapping) and declaration.get("actor_kind") == "model_agent" and (
-            execution is not None or declaration.get("declaration_source") == "runtime_reported"
-            or current_execution is not None and current_execution.get("status") == "runtime_reported"
-        ):
-            lines = reviewer_declaration_lines(body_text)
-            public_fields = [declaration.get("declaration_source")]
-            observed = current_execution or execution
-            if isinstance(observed, Mapping) and observed.get("status") == "runtime_reported":
-                public_fields.append(declaration.get("declared_reasoning_effort") or "effort_unavailable")
-            if len(lines) == 1 and any(
-                isinstance(value, str) and not _published_as_token(value.casefold(), lines[0].casefold())
-                for value in public_fields
-            ):
-                errors.append("reviewer:runtime_basis_not_published")
     problem_context = evidence.get("problem_context")
     impact = problem_context.get("outcome_impact") if isinstance(problem_context, Mapping) else None
     experience = impact.get("user_experience") if isinstance(impact, Mapping) else None

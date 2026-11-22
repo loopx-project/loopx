@@ -21,6 +21,14 @@ tasks requires a qualified Node runtime (22.22.3+ and the existing SQLite
 reliability checks), an explicitly selected host and its own prerequisites.
 Use the existing `turn run-once --host generic-cli` entry, a separate validation
 command, `turn inspect-journal` and `--resume-turn-key` for execution and recovery.
+
+When recovering a generic CLI Turn with a saved result, use the original
+`--resume-turn-key`, Goal, Agent, and approved project path. Omit
+`--host-adapter-command-json` and `--host-adapter-request-schema`. If the result
+still needs validation, supply its independent `--validation-command-json`.
+An already settled result can be read back without either command. The recovery
+decision asks for the adapter if the original Turn needs another Host attempt.
+
 Start with one natural-language goal in your existing model host:
 
 ```sh
@@ -38,11 +46,12 @@ caller's selected executable. Deep diagnosis still requires recorded module and
 console entrypoints; redirected or missing records fail. The host supplies
 the model, tools and scheduler; the wheel does not provide them or activate an
 optional capability from goal wording. `connect` and `configure-goal` remain
-available for explicit setup. Create and claim work through the existing `todo`
-commands. An ordinary managed claim
-prepares the default SQLite lease without asking the task model to manage lease
-flags. Completion carries the original captured lease generation; recovery
-refuses a renewed, released or replaced generation rather than adopting it.
+available for explicit setup. Create work through `todo add`. With an explicitly
+selected `generic-cli` v1 adapter and an independent validator, `turn run-once
+--execute` prepares a missing lease for the eligible Todo before dispatch.
+Completion and recovery use the original captured lease generation. Recovery
+refuses a renewed, released or replaced lease. The ordinary `todo claim`
+command is available for explicit preparation.
 The installed-only qualification in
 [`tests/test_core_distribution.py`](../../tests/test_core_distribution.py)
 exercises setup, independent result validation, process loss, replay and refusal.

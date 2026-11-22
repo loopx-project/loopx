@@ -35,6 +35,7 @@ def test_first_capture_allocates_identity_and_recovers_without_rewriting_scope(
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
                         *binding,  cwd=project)
     assert rc == 0, guard
+    proof = guard["execution_preparation"]["lease_proof"]
     attachment = deepcopy(ATTACHMENT)
     del attachment["node_id"]
     packet = {"schema_version": "goal_vision_replan_contract_v0",
@@ -52,6 +53,8 @@ def test_first_capture_allocates_identity_and_recovers_without_rewriting_scope(
     vision = tmp_path / "vision.json"
     args = ("refresh-state", *binding, "--classification", "validated_change",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--task-lease-idempotency-key", proof["idempotency_key"],
+            "--task-lease-expected-version", str(proof["expected_version"]),
             "--no-global-sync", "--suppress-external-sinks", "--agent-vision-json", str(vision))
     log = explore_result_log_path(runtime, GOAL_ID)
     if conflict:

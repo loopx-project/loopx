@@ -68,6 +68,8 @@ def test_turn_envelope_renders_typed_failure_when_context_preparation_fails(
     assert payload.get("decision") == "skip"
     assert payload.get("error_code")
     if turn_envelope:
-        # The envelope is additive; on a failure payload it degrades to the
-        # typed diagnostic instead of masking it with a renderer crash.
-        assert payload.get("turn_envelope_skipped") or payload.get("view") == "turn_envelope"
+        # Collection/validation failures without an interaction contract
+        # retain the exact typed diagnostic without crashing or reentering.
+        assert payload.get("error_code") == "QUOTA_VALIDATION_FAILED"
+        assert "interaction_contract" not in payload
+        assert "turn_envelope_skipped" not in payload

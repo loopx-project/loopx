@@ -49,6 +49,8 @@ def settings(tmp_path, **changes):
         {"mode": "turn", "validation_command": "true"},
         {"mode": "turn", "validation_command": {"command": "true"}},
         {"sandbox": "unrecognised"},
+        {"mode": "plain", "official_stop_hook": "true"},
+        {"mode": "native-goal", "official_stop_hook": True},
     ],
 )
 def test_invalid_execution_rejected_before_host(kwargs):
@@ -285,14 +287,51 @@ def test_process_failure_is_not_reported_as_success(tmp_path):
     assert receipt["return_code"] == 7
 
 
+def _sqlite_heartbeat_env(tmp_path, monkeypatch):
+    from loopx.global_registry import sync_project_registry_to_global
+    from tests.control_plane import test_quota_settlement_cli as fixture
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2]))
+    project, runtime, source = fixture._write_fixture(tmp_path)
+    fixture._initialize_fixture_authority(project, runtime, provider="sqlite")
+    assert sync_project_registry_to_global(
+        registry_path=source, runtime_root_override=str(runtime), goal_id=fixture.GOAL_ID
+    )["ok"]
+    env = worker_env(project)
+    skills = tmp_path / "shared-skills"
+    skills.mkdir()
+    env.update(
+        LOOPX_EXECUTION_MODE="heartbeat",
+        LOOPX_ITERATION_CONTEXT="resume",
+        LOOPX_TASK_ENTRY="seeded-todo",
+        LOOPX_TASK_STAGE="execute",
+        LOOPX_RUNTIME_ROOT=str(runtime),
+        LOOPX_REGISTRY=str(runtime / "registry.global.json"),
+        LOOPX_GOAL_ID=fixture.GOAL_ID,
+        LOOPX_AGENT_ID=fixture.AGENT_ID,
+        LOOPX_SHARED_SKILLS=str(skills),
+        LOOPX_CODEX_TURN_TIMEOUT_SEC="90",
+    )
+    env["LOOPX_CLI"] = str(
+        write_python_host_fixture(
+            tmp_path / "loopx-cli",
+            f"#!{sys.executable}\nfrom loopx.cli import main\nraise SystemExit(main())\n",
+        )
+    )
+    return env
+
+
 @pytest.mark.parametrize("code,expected", [("insufficient_quota", "quota_exhausted"),
                                            ("model_at_capacity", "provider_capacity"),
                                            ("unrecognized", "unknown")])
 def test_heartbeat_real_native_process_preserves_content_free_host_failure(tmp_path, monkeypatch, code, expected):
     import benchmark.runtime.worker as worker
-    from tests.control_plane.test_benchmark_current_admission import _environment
 
-    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    env = _sqlite_heartbeat_env(tmp_path, monkeypatch)
     monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
     event = {"type": "turn.failed", "error": {"code": code, "message": "PRIVATE-SENTINEL"}}
     Path(env["CODEX_BIN"]).write_text(
@@ -330,10 +369,9 @@ def test_host_retry_session_mismatch_refuses_native_process(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
 def test_native_heartbeat_retry_uses_real_session_owner(tmp_path, monkeypatch, context):
-    from tests.control_plane.test_benchmark_current_admission import _environment
     import benchmark.runtime.worker as worker
 
-    env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
+    env = _sqlite_heartbeat_env(tmp_path, monkeypatch)
     env["LOOPX_ITERATION_CONTEXT"] = context
     # This fake executable models session retries, not native hook discovery.
     env["LOOPX_CONTEXT_DELIVERY"] = "off"
@@ -675,6 +713,273 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert env["LOOPX_PROJECT"] == "/workspace"
         assert env["MODEL_NAME"] == "fixture"
         assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
+
+
+def test_harbor_owns_official_stop_hook_opt_in(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from benchmark.runtime.scheduler import phase_work_reserve
+
+    monkeypatch.setenv("LOOPX_OFFICIAL_STOP_HOOK", "1")
+    for enabled in (False, True):
+        agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture",
+                               execution_mode="plain", **({"official_stop_hook": True} if enabled else {}))
+        assert agent._worker_env(cwd="/workspace")["LOOPX_OFFICIAL_STOP_HOOK"] == str(int(enabled))
+        reserve = phase_work_reserve(agent.execution.mode, official_stop_hook=agent.execution.official_stop_hook)
+        assert (reserve == 0) is enabled
+
+
+@pytest.mark.parametrize("blocked_method", ["initialize", "hooks/list"])
+def test_official_stop_discovery_spends_the_same_phase_clock(tmp_path, blocked_method):
+    env = worker_env(tmp_path)
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(f"#!{sys.executable}\n" + """
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+assert "app-server" in sys.argv
+Path("discovery.pid").write_text(str(os.getpid()))
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    Path("last-method").write_text(method)
+    if method == os.environ["BLOCKED_METHOD"]:
+        time.sleep(60)
+    time.sleep(.4)
+    print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+""")
+    env.update(LOOPX_OFFICIAL_STOP_HOOK="1", BLOCKED_METHOD=blocked_method)
+    started = time.time()
+    env["LOOPX_PHASE_DEADLINE_EPOCH"] = str(started + 2)
+    result = run_once(env)
+    assert time.time() - started < 5
+    assert (tmp_path / "last-method").read_text() == blocked_method
+    assert result["budget_exhausted"] and result["timed_out"]
+    assert result["host_invoked"] is False and "official_stop_hook_verified" not in result
+    assert not (tmp_path / "home" / "sessions").exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((tmp_path / "discovery.pid").read_text()), 0)
+
+
+def test_official_stop_discovery_preserves_a_protocol_rejection(tmp_path):
+    from loopx.control_plane.turn_driver.codex_stdio import NativeGoalProtocolError
+
+    env = worker_env(tmp_path)
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(f"#!{sys.executable}\n" + """
+import json
+import sys
+
+assert "app-server" in sys.argv
+request = json.loads(sys.stdin.readline())
+assert request["method"] == "initialize"
+print(json.dumps({"id": request["id"], "error": {"code": -32603, "message": "rejected"}}), flush=True)
+""")
+    env.update(LOOPX_OFFICIAL_STOP_HOOK="1", LOOPX_PHASE_DEADLINE_EPOCH=str(time.time() + 4))
+    with pytest.raises(NativeGoalProtocolError, match="app_server_request_failed:initialize"):
+        run_once(env)
+    receipt, = (tmp_path / "logs" / "wakes").glob("*/receipt.json")
+    result = json.loads(receipt.read_text())
+    assert not result["timed_out"] and "budget_exhausted" not in result
+    assert not (tmp_path / "home" / "sessions").exists()
+
+
+@pytest.mark.parametrize("case", ["ok", "timeout_initialize", "timeout_hooks_list", "protocol_error", "expired"])
+def test_official_stop_hook_supports_split_pinned_two_arg_transport(tmp_path, monkeypatch, case):
+    from collections.abc import Mapping
+    from loopx.control_plane.turn_driver import codex_stdio
+    from loopx.control_plane.turn_driver.codex_stdio import NativeGoalProtocolError, StdioNativeGoalTransport
+
+    class LegacyTwoArgTransport(StdioNativeGoalTransport):
+        def request(self, method: str, params: Mapping[str, object]) -> Mapping[str, object]:
+            request_id = self._next_request_id
+            self._next_request_id += 1
+            self._send({"id": request_id, "method": method, "params": dict(params)})
+            deadline = time.monotonic() + self.response_timeout_sec
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise NativeGoalProtocolError(f"app_server_response_timeout:{method}")
+                message = self._next_message(timeout_sec=remaining)
+                if message is None:
+                    if self.process.poll() is not None:
+                        raise NativeGoalProtocolError("app_server_exited_before_response")
+                    continue
+                if message.get("id") == request_id:
+                    if message.get("error") is not None:
+                        raise NativeGoalProtocolError(f"app_server_request_failed:{method}")
+                    result = message.get("result")
+                    return result if isinstance(result, Mapping) else {}
+                if message.get("method"):
+                    self._pending_events.append(message)
+
+    monkeypatch.setattr(codex_stdio, "StdioNativeGoalTransport", LegacyTwoArgTransport)
+    env = worker_env(tmp_path)
+    binary = Path(env["CODEX_BIN"])
+    binary.write_text(f"#!{sys.executable}\n" + """
+import json, os, pathlib, sys, time
+
+home = pathlib.Path(os.environ["CODEX_HOME"])
+if "app-server" in sys.argv:
+    pathlib.Path("spawned-discovery").write_text("1")
+    for line in sys.stdin:
+        req = json.loads(line)
+        if "id" not in req:
+            continue
+        method = req["method"]
+        pathlib.Path("last-method").write_text(method)
+        case = os.environ["SPLIT_CASE"]
+        if case == "protocol_error" and method == "initialize":
+            print(json.dumps({"id": req["id"], "error": {"code": -32603, "message": "rejected"}}), flush=True)
+            continue
+        if case == f"timeout_{method.replace('/', '_')}":
+            time.sleep(60)
+        if method == "hooks/list":
+            hook_path = str((home / "hooks.json").resolve())
+            stop = json.loads((home / "hooks.json").read_text())["hooks"]["Stop"][0]["hooks"][0]
+            print(json.dumps({"id": req["id"], "result": {"data": [{"hooks": [{
+                "sourcePath": hook_path, "eventName": "stop", "handlerType": stop["type"],
+                "command": stop["command"], "matcher": None, "timeoutSec": stop["timeout"],
+                "async": False, "enabled": True, "key": "stop-0", "currentHash": "hash-0",
+            }]}]}}), flush=True)
+        else:
+            print(json.dumps({"id": req["id"], "result": {}}), flush=True)
+else:
+    sessions = home / "sessions"
+    sessions.mkdir(exist_ok=True)
+    (sessions / "session-0.jsonl").write_text("{}\\n")
+    print(json.dumps({"argv": sys.argv[1:]}))
+""")
+    env.update(LOOPX_OFFICIAL_STOP_HOOK="1", SPLIT_CASE=case)
+    started = time.time()
+    env["LOOPX_PHASE_DEADLINE_EPOCH"] = str(started + 2)
+    if case == "protocol_error":
+        with pytest.raises(NativeGoalProtocolError, match="app_server_request_failed:initialize"):
+            run_once(env)
+        return
+    if case == "expired":
+        from benchmark.runtime.native_hooks import prepare_official_stop_hook
+        home = Path(env["LOOPX_CODEX_HOME"])
+        home.mkdir(parents=True, exist_ok=True)
+        with pytest.raises(subprocess.TimeoutExpired):
+            prepare_official_stop_hook(env, home, deadline=time.monotonic() - 1)
+        assert not (tmp_path / "spawned-discovery").exists()
+        return
+    result = run_once(env)
+    if case == "ok":
+        assert result["ok"] and result["official_stop_hook_verified"] is True
+        assert result["return_code"] == 0 and "hooks.state=" in (
+            tmp_path / "logs" / "wakes" / result["turn_id"] / "stdout.jsonl"
+        ).read_text()
+        return
+    assert time.time() - started < 5
+    assert result["budget_exhausted"] and result["timed_out"] and result["host_invoked"] is False
+    assert (tmp_path / "last-method").read_text() == (
+        "initialize" if case == "timeout_initialize" else "hooks/list"
+    )
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
+                    reason="Explicit native Codex binary required; inference uses loopback only")
+@pytest.mark.parametrize("enabled", [False, True])
+def test_official_stop_hook_continues_one_real_native_session_until_timeout(tmp_path, enabled):
+    from benchmark.runtime.native_hooks import OFFICIAL_STOP_HOOK_REASON
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+
+    task = tmp_path / "task.md"
+    task.write_text("Synthetic task. Propose an implementation.\n")
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if key in {"PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "SYSTEMROOT"}}
+    env.update(HOME=str(tmp_path), TMPDIR=str(temporary),
+               LOOPX_PROJECT=str(tmp_path), LOOPX_TASK_DOC=str(task),
+               LOOPX_CODEX_HOME=str(tmp_path / "codex-home"),
+               LOOPX_WAKE_LOG_DIR=str(tmp_path / "logs" / "wakes"),
+               LOOPX_EXECUTION_MODE="plain", LOOPX_OFFICIAL_STOP_HOOK=str(int(enabled)),
+               LOOPX_CODEX_TURN_TIMEOUT_SEC="10",
+               CODEX_BIN=os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"],
+               MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_API_KEY="synthetic-local")
+
+    def respond(request, number, message):
+        if number >= 2:
+            # Leave one continued provider request in flight at the runner deadline.
+            time.sleep(11)
+        return message
+
+    with local_inference_provider(response_builder=respond) as (url, calls, requests):
+        receipt = run_once(env | {"OPENAI_BASE_URL": url})
+        assert len(list((tmp_path / "logs" / "sessions").rglob("*.jsonl"))) == 1
+        assert receipt["timed_out"] is enabled
+        assert receipt["ok"] is not enabled
+        assert (tmp_path / "codex-home" / "hooks.json").exists() is enabled
+        if enabled:
+            assert receipt["official_stop_hook_verified"] is True
+            assert len(calls) == 2
+            assert OFFICIAL_STOP_HOOK_REASON in json.dumps(requests[1]["input"])
+        else:
+            assert len(calls) == 1
+            assert "official_stop_hook" not in receipt
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
+                    reason="Explicit native Codex binary required; inference uses loopback only")
+@pytest.mark.skipif(os.name != "posix", reason="Exercises POSIX task-controller cancellation")
+def test_official_stop_hook_without_clock_retains_task_controller_cancellation(tmp_path):
+    from threading import Event
+
+    from benchmark.runtime.native_hooks import OFFICIAL_STOP_HOOK_REASON
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+
+    task = tmp_path / "task.md"
+    task.write_text("Synthetic task. Propose an implementation.\n")
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    env = {key: value for key, value in os.environ.items()
+           if key in {"PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "SYSTEMROOT"}}
+    env.update(HOME=str(tmp_path), TMPDIR=str(temporary),
+               PYTHONPATH=str(Path(__file__).resolve().parents[2]),
+               LOOPX_PROJECT=str(tmp_path), LOOPX_TASK_DOC=str(task),
+               LOOPX_CODEX_HOME=str(tmp_path / "codex-home"),
+               LOOPX_WAKE_LOG_DIR=str(tmp_path / "logs" / "wakes"),
+               LOOPX_EXECUTION_MODE="plain", LOOPX_OFFICIAL_STOP_HOOK="1",
+               CODEX_BIN=os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"],
+               MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_API_KEY="synthetic-local")
+    continued, release = Event(), Event()
+
+    def respond(request, number, message):
+        if number == 2:
+            continued.set()
+            release.wait(20)
+        return message
+
+    with local_inference_provider(response_builder=respond) as (url, calls, requests):
+        process = subprocess.Popen([sys.executable, "-m", "benchmark.runtime.worker"],
+            cwd=tmp_path, env=env | {"OPENAI_BASE_URL": url},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            assert continued.wait(20), "Native Stop hook did not continue the same conversation"
+            # The task's final-submission controller may terminate its worker;
+            # no independent worker/phase deadline is needed for that boundary.
+            process.terminate()
+            process.communicate(timeout=10)
+        finally:
+            release.set()
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=10)
+        receipt, = (tmp_path / "logs" / "wakes").glob("*/receipt.json")
+        result = json.loads(receipt.read_text())
+        assert result["official_stop_hook_verified"] is True
+        assert result["timed_out"] is False and result["ok"] is False
+        assert len(calls) == 2
+        assert OFFICIAL_STOP_HOOK_REASON in json.dumps(requests[1]["input"])
+        assert len(list((tmp_path / "logs" / "sessions").rglob("*.jsonl"))) == 1
 
 
 @pytest.mark.parametrize("option,mode,provider_env", [

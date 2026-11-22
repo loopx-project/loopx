@@ -6,7 +6,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ...release_metadata import checkout_release_metadata
+from .release_evaluation_gate import (
+    RELEASE_EVALUATION_GATE_RECEIPT_SCHEMA_VERSION,
+    classify_semver_transition,
+    parse_semver_tuple,
+    validate_evaluation_document,
+    validate_evaluation_ledger_tree,
+    validate_release_evaluation_gate,
+)
+from .release_metadata import checkout_release_metadata
 from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..runtime.public_safety import public_safe_compact_text
 from .actual_default_model_behavior_portfolio import (
@@ -15,6 +23,23 @@ from .actual_default_model_behavior_portfolio import (
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_SCENARIO_COUNT,
 )
 
+
+__all__ = [
+    "EXACT_RELEASE_CHECK_RECEIPT_SCHEMA_VERSION",
+    "EXACT_RELEASE_COMMIT_MANIFEST_SCHEMA_VERSION",
+    "EXACT_RELEASE_COMMIT_RECEIPT_SCHEMA_VERSION",
+    "EXPECTED_RESULT_SCHEMA_BY_QUALIFICATION",
+    "RELEASE_EVALUATION_GATE_RECEIPT_SCHEMA_VERSION",
+    "REQUIRED_QUALIFICATION_IDS",
+    "build_exact_release_commit_qualification",
+    "classify_semver_transition",
+    "collect_release_source_identity",
+    "parse_semver_tuple",
+    "render_exact_release_commit_qualification_markdown",
+    "validate_evaluation_document",
+    "validate_evaluation_ledger_tree",
+    "validate_release_evaluation_gate",
+]
 
 EXACT_RELEASE_COMMIT_MANIFEST_SCHEMA_VERSION = (
     "exact_release_commit_qualification_manifest_v0"
@@ -416,6 +441,11 @@ def build_exact_release_commit_qualification(
     manifest: Mapping[str, Any],
     *,
     observed_source: Mapping[str, Any] | None = None,
+    evaluations_dir: Path | None = None,
+    prior_stable_version: str | None = None,
+    evaluation_json: Path | None = None,
+    repo_root: Path | None = None,
+    verify_git_tags: bool = False,
 ) -> dict[str, Any]:
     """Validate exact-source release evidence without executing checks or publishing."""
 
@@ -463,16 +493,32 @@ def build_exact_release_commit_qualification(
     if candidate["git_dirty"]:
         source_mismatches.append("candidate:git_dirty")
 
-    ready = not missing and not failures and not source_mismatches
+    evaluation_gate: dict[str, Any] | None = None
+    if evaluations_dir is not None:
+        evaluation_gate = dict(
+            validate_release_evaluation_gate(
+                evaluations_dir=evaluations_dir,
+                candidate_source=candidate,
+                prior_stable_version=prior_stable_version,
+                evaluation_json=evaluation_json,
+                repo_root=repo_root,
+                verify_git_tags=verify_git_tags,
+            )
+        )
+
+    evaluation_ready = evaluation_gate is None or evaluation_gate.get("ready") is True
+    ready = not missing and not failures and not source_mismatches and evaluation_ready
     if source_mismatches:
         decision = "hold_source_mismatch"
     elif missing:
         decision = "hold_missing_qualification"
     elif failures:
         decision = "hold_failed_qualification"
+    elif not evaluation_ready:
+        decision = "hold_evaluation_gate_failed"
     else:
         decision = "ready_for_owner_release"
-    return {
+    receipt: dict[str, Any] = {
         "schema_version": EXACT_RELEASE_COMMIT_RECEIPT_SCHEMA_VERSION,
         "ready_for_release": ready,
         "decision": decision,
@@ -496,6 +542,9 @@ def build_exact_release_commit_qualification(
             "local_paths_recorded": False,
         },
     }
+    if evaluation_gate is not None:
+        receipt["evaluation_gate"] = evaluation_gate
+    return receipt
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -566,6 +615,22 @@ def render_exact_release_commit_qualification_markdown(payload: dict[str, Any]) 
         if values:
             lines.extend(["", f"## {title}"])
             lines.extend(f"- `{value}`" for value in values)
+    eval_gate = payload.get("evaluation_gate")
+    if isinstance(eval_gate, dict):
+        lines.extend(
+            [
+                "",
+                "## Release Evaluation Gate",
+                f"- ready: `{eval_gate.get('ready')}`",
+                f"- transition_kind: `{eval_gate.get('transition_kind')}`",
+                f"- a_scale_score: `{eval_gate.get('a_scale_score')}`",
+                f"- b_scale_score: `{eval_gate.get('b_scale_score')}`",
+            ]
+        )
+        if eval_gate.get("inherited_from"):
+            lines.append(f"- inherited_from: `{eval_gate.get('inherited_from')}`")
+        for issue in eval_gate.get("issues") or []:
+            lines.append(f"- issue: `{issue}`")
     lines.extend(
         [
             "",

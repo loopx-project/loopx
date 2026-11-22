@@ -7,7 +7,7 @@ import test from "node:test";
 import {nativeChildReportAdmission} from "../../loopx/control_plane/capabilities/native_child_admission.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
 import {QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, readQuotaSettlement} from "../../loopx/control_plane/quota/settlement_readback.ts";
-import {heartbeatWorkRequalification} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
+import {heartbeatWorkRequalification, projectHeartbeatReceiptSelection} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
 
 const proof = {
   ok: true, should_run: true, must_attempt_work: true,
@@ -17,6 +17,25 @@ const goalId = "native-report-fixture";
 const agentId = "generic-coordinator";
 const turnId = "turn-native-report";
 const todoId = "todo_source_validation";
+
+test("Python receipt selection transports the shared binding without rewriting its effect", () => {
+  const event = {run_id: turnId, details: {todo_id: todoId}};
+  const originalEffect = `${goalId}:${agentId}:${todoId}:${turnId}`;
+  const select = (events: unknown[]) => projectHeartbeatReceiptSelection({goal_id: goalId, agent_id: agentId, events});
+  assert.deepEqual(select([]), {index: null, binding: null});
+  assert.deepEqual(select([{run_id: turnId}]), {index: 0, binding: null});
+  assert.deepEqual(select([event, {run_id: turnId}]), {
+    index: 0, binding: {binding_kind: "todo", binding_id: todoId, effect_id: originalEffect},
+  });
+  assert.deepEqual(select([event, {...event, details: {...event.details, settlement_effect_id: originalEffect}}]), {
+    index: 1, binding: {binding_kind: "todo", binding_id: todoId, effect_id: originalEffect},
+  });
+  assert.deepEqual(select([{...event, details: {...event.details, settlement_effect_id: "declared-wrong-effect"}}]), {
+    index: 0, binding: {binding_kind: "todo", binding_id: todoId, effect_id: "declared-wrong-effect"},
+  });
+  assert.throws(() => select([event, {...event, details: {todo_id: "todo_other_validation"}}]), /conflicting settlement identities/);
+  assert.throws(() => select([{...event, details: {todo_id: "todo_BAD_ID"}}]), /not a legal Todo id/);
+});
 
 test("committed work admission, not status spelling, admits a report", () => {
   for (const status of ["normal_run", "turn_run_once", "autonomous_replan_required", "future_work_label"]) {
@@ -256,6 +275,37 @@ test("a retained binding cannot replace fresh same-Todo executable selection", a
         {append: false, details: null});
     }
     assert.equal(heartbeatWorkRequalification(original, event.details, identity, "open", false).append, true);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("one prepared Turn admits only renewal of its original lease generation", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const originalDetails = {...event.details, prepared_lease_key_sha256: "a".repeat(64),
+      prepared_lease_version: 3, prepared_lease_epoch: 2};
+    const original = {...event, details: originalDetails};
+    const renewal = {...originalDetails, prepared_lease_version: 4};
+    assert.deepEqual(heartbeatWorkRequalification(original, renewal, identity, "open", false), {
+      append: true,
+      details: {...renewal, settlement_receipt_revision: "lease_readiness"},
+    });
+    for (const changed of [
+      {prepared_lease_epoch: 3},
+      {prepared_lease_key_sha256: "b".repeat(64)},
+      {prepared_lease_epoch: undefined},
+    ]) {
+      const replacement = Object.fromEntries(Object.entries({...renewal, ...changed})
+        .filter(([, value]) => value !== undefined));
+      assert.throws(() => heartbeatWorkRequalification(original, replacement, identity, "open", false),
+        /original task lease generation/);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "settlement_pending", false).append, false);
+      assert.equal(heartbeatWorkRequalification(original, replacement, identity, "open", true).append, false);
+    }
+    const {prepared_lease_epoch: _, ...historicalDetails} = originalDetails;
+    const historical = {...event, details: historicalDetails};
+    assert.equal(heartbeatWorkRequalification(historical, historicalDetails, identity, "open", false).append, false);
+    assert.throws(() => heartbeatWorkRequalification(historical, renewal, identity, "open", false),
+      /original task lease generation/);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
