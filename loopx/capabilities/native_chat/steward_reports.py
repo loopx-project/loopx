@@ -135,7 +135,9 @@ class StewardReports:
             and (turn.get("status") in {"failed", "interrupted", "timed_out"}
                 or native.get("status") == "failed"))
 
-    def _failed_without_generation(self, actor: dict[str, Any], window: dict[str, Any]) -> bool:
+    def _failed_without_generation(
+        self, actor: dict[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
         """Read a terminal report failure under the original execution fence.
 
         The cadence owner holds the generation fence. This proves only that
@@ -208,7 +210,9 @@ class StewardReports:
                 inspection = interpret_turn_journal_projection(journal, goal_id=goal_id, agent_id=agent_id, turn_key=key)
                 return (inspection.get("journal_consistent") is True
                     and inspection.get("completed_phases") == []
-                    and StewardTurnHost(self.controller).report_failure_observation(turn) is not None)
+                    and StewardTurnHost(self.controller).report_window_failure_verified(
+                        turn, window, generation_locked=generation_locked,
+                    ))
 
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:
@@ -407,7 +411,9 @@ class StewardReports:
         admitted = admit_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
             agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
             subscription_resolver=lambda: self.subscription(owner_key, expected_actor=actor),
-            can_replace_failed_window=lambda window: self._failed_without_generation(actor, window))
+            can_replace_failed_window=lambda window: self._failed_without_generation(
+                actor, window, generation_locked=True,
+            ))
         if admitted["status"] != "pending":
             return None, False
         window = admitted["window"]
@@ -450,10 +456,11 @@ class StewardReports:
                 self.controller.registry_path, authority_ids, runtime_root=self.root,
                 channel_id=session["channel_id"]) != authorization_scope_id):
             raise ValueError("the original report authorization changed before collection")
+        from ...chat_manager import manager_reporting_text
         rules = self.managed._workspace(session) / "REPORTING.md"
         if rules.is_symlink():
             raise ValueError("the original reporting criteria changed source")
-        reporting = rules.read_text(encoding="utf-8") if rules.exists() else "Use the existing overview-to-depth report contract and preserve all coverage gaps."
+        reporting = rules.read_text(encoding="utf-8") if rules.exists() else manager_reporting_text()
         frozen = prepare_private_report(root=self.root, window=window, read=lambda query: reader(TOOL_NAME, query),
             authorization_scope_id=authorization_scope_id, reporting=reporting,
             authorization_goal_ids=authority_ids)
@@ -613,10 +620,11 @@ class ManagedSessionReports(StewardReports):
                 "artifact_contents_independently_read": False, "as_of_window_reconstruction": False}
             return {**source, "source_revision": _canonical_digest(source)}
 
+        from ...chat_manager import session_reporting_text
         rules = Path(actor["workspace_path"]) / "REPORTING.md"
         if rules.is_symlink():
             raise ValueError("the original reporting criteria changed source")
-        reporting = rules.read_text(encoding="utf-8") if rules.exists() else "Report this Goal's evidence-backed outcomes, current work, failures and next actions; preserve unknown times and verification gaps."
+        reporting = rules.read_text(encoding="utf-8") if rules.exists() else session_reporting_text()
         with exclusive_file_lock(cadence_journal_path(self.root, actor["goal_id"]), operation="freeze_session_report_source"):
             if self.subscription(actor["session_id"], expected_revision=window["subscription_revision"]) is None:
                 raise ValueError("the original report configuration changed before collection")

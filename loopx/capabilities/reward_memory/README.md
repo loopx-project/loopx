@@ -655,7 +655,8 @@ against OpenViking's current public architecture and code:
   authority scope are independently verified. The content may be inferred; the
   authority may not.
 - Account, user, peer, session, and repository-revision boundaries remain part
-  of scope and privacy.
+  of scope and privacy. A peer label does not grant cross-user or cross-agent
+  authority.
 
 Provider health is intentionally decomposed into `corpus_present`,
 `index_present`, `retrieval_query_succeeded`, `result_readback_verified`, and

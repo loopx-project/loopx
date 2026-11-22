@@ -35,13 +35,15 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 |---|---|---|---|---|
 | Claude Code | ACP（`@agentclientprotocol/claude-agent-acp`，随项目安装） | 有 | 有 | 有 |
 | pi | `pi --mode rpc` | 无（pi 本身没有） | 有。纯文本模型需要装 pi 扩展 `pi-aux-vision` | 有 |
-| Antigravity | `agy` 的无界面 stream-json 模式 | 无（不能询问，只有"自动改文件"和"完全访问"两档） | 有（按文件路径交给它） | 暂无 |
+| Antigravity | `agy acp`（ACP 1） | 有 | 有（原生 ACP 图片） | 暂无 |
 | Codex | `codex app-server` | 有 | 有 | 有 |
 | TRAE CLI | app-server 执行，ACP 模型与历史接口 | 有 | 有 | 有 |
 | zcode | `zcode app-server` 精简接入 | 有 | 按原生模型能力 | 暂无 |
 | DeepSeek Harness | `dsh --profile acp`（ACP） | 有（仅允许一次/拒绝） | 有（按当前模型路由） | 暂无 |
 
 各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
+
+协作成员的回报、模型权限和引用对话预览见 [协作对话与概况侧栏指南](docs/collaboration.md)。
 
 ### Agent 未登录时恢复
 
@@ -65,6 +67,20 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 
 认证识别遵循原生协议：[ACP 的认证错误](https://agentclientprotocol.com/protocol/v1/authentication)、Codex 的 `account/read`（仅在 `requiresOpenaiAuth` 为真且账号为空时判断未登录），以及 CLI 明确的登录或缺失凭据诊断。Codex 自定义服务和旧版账号协议保留原有目录行为。
 
+### Antigravity 模型与思考强度
+
+需要支持 `agy acp` 的原生 CLI。同一模型的多种强度合并为一个模型选项，在输入框的模型控件中打开「思考强度」滑块即可调整。可选档位来自该账号的模型目录；只有一个固定强度的模型保留原 ID，不显示可调滑块。模型列表中可手动刷新，其他客户端刷新的结果也会同步到打开的列表。
+
+模型和强度通过 ACP 在当前会话内切换；调整后继续发送即可。旧的 `模型-high` 等选择在目录可识别时转换为模型与强度，当前会话、归档会话和该账号的已保存偏好保留原强度。明确设置的强度优先，目录读取失败不会重置选择。
+
+Agy 的权限请求使用现有审批入口；已有「完全访问」默认值保留。图片通过原生 ACP 图片块传入，上下文占用使用 ACP 用量事件；`/compact` 在当前会话内执行，并显示成功、失败或取消。旧的原生会话 ID 通过 `session/resume` 恢复。登录和 `/usage` 等账号查询继续走已有原生 CLI 入口。
+
+下图使用隔离测试目录与假 Agent，展示实际构建页面中的模型分组和强度选择：
+
+![按模型归并的目录](docs/images/antigravity-model-families.png)
+
+<img src="docs/images/antigravity-effort-phone.png" alt="手机中调整 Antigravity 思考强度，当前会话保留" width="390" />
+
 ### Antigravity 登录
 
 若读取模型时尚未登录，当前页面会显示「Antigravity 尚未登录」和「去登录」。点击后在原位置展开授权面板；登录验证成功后自动加载模型列表，无需刷新页面。若此时模型读取暂时失败，可以重试读取，不必重复授权。网络或 CLI 故障仍单独显示为错误。
@@ -82,6 +98,18 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 ![桌面 Antigravity 登录](docs/images/antigravity-login-desktop.png)
 
 <img src="docs/images/antigravity-login-phone.png" alt="手机 Antigravity 登录：打开链接后粘贴授权码或回跳地址" width="390" />
+
+## 通过 OAR 接入更多 Agent
+
+支持 Cursor、CodeBuddy Code、Devin、Factory Droid、Grok Build、Kimi Code、OpenCode、Qoder 和 Qwen Code。它们复用现有的「配置 → Agents → 添加 agent」入口；已安装的宿主可以发现并连接，未安装的宿主显示安装指引。Cursor 使用随工作台提供的官方 SDK，并在独立子进程运行。
+
+这些宿主需要 **Node.js 24+**。使用 Node.js 24 启动 workbench 后，在原生客户端完成所需安装或凭据配置，再通过添加页面连接。模型列表来自当前宿主和账号；未登录时可从原位置进入授权，浏览器确认型登录不要求粘贴授权码，设备授权码会直接显示。只读取列表不会开始登录或调用模型。Node.js 22 下既有原生适配器保持可用，OAR 宿主会报告运行环境不满足。
+
+OAR 宿主仅提供「完全访问」模式：原生工具可以直接修改文件和运行命令，不会弹出逐次审批。既有 Agent 的权限模式保持原样。选定模型后可在同一对话连续发送、停止执行；工作台保存原生会话 ID，重启后继续该会话。恢复失败会显示错误，不会自动换成空会话。
+
+本次接入不提供这些宿主的原生历史导入、分叉、账号复制、原生会话删除、订阅额度或实时语音。工作台自己的聊天记录仍可查看。图片按 OAR 和宿主声明的能力开放；各宿主能力及版本条件见 [OAR 运行时矩阵](https://github.com/botiverse/oar/blob/main/docs/spec/runtime-matrix.md)。
+
+可在 Agent 行菜单中隐藏或移除已连接实例；移除不会删除原生客户端的会话和凭据。OAR 与 Cursor SDK 固定版本随 lockfile 更新，故障回退时同时恢复工作台源码和 lockfile，再安装依赖、构建。现有原生适配器不经过 OAR。
 
 ## 插件与参与
 

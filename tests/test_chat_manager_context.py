@@ -1720,3 +1720,72 @@ def test_remote_evidence_without_ssh_grants_recollects_on_concurrent_registry_up
     assert [g["goal_id"] for g in result["goals"]] == expected_ids
     assert result.get("authorization_scope_id")
 
+
+@pytest.mark.parametrize("mutation", ["sync_timestamps_always", "observation_always", "replacement"])
+def test_bound_steward_survives_repeated_sync_timestamp_churn_but_rejects_semantic_changes(
+    monkeypatch, tmp_path, mutation
+):
+    """Repeated updated_at/synced_at touches stay safe on retry; semantic changes still fail closed."""
+    registry = tmp_path / "registry.json"
+    payload = {
+        "updated_at": "2026-11-22T18:00:00Z",
+        "goals": [
+            {
+                "id": "authorized",
+                "goal_instance_id": "ginst_" + "a" * 32,
+                "synced_at": "2026-11-22T18:00:00Z",
+            }
+        ],
+    }
+    registry.write_text(json.dumps(payload))
+    collect = context.build_goal_portfolio
+    calls = []
+    session = {
+        "goal_id": "loopx-manager",
+        "channel_id": "manager.external.native." + "b" * 24 + "." + "c" * 24,
+        "steward_context": {
+            "kind": "bound_steward",
+            "project_ref": "a" * 24,
+            "workspace_path": str(tmp_path),
+            "audience": "bound_owner",
+            "grant": "portfolio_read",
+            "binding_id": "b" * 24,
+            "source_ref": "c" * 24,
+            "provider_ref": "d" * 24,
+            "operator_ref": "e" * 24,
+            "goal_ids": ["authorized"],
+        },
+    }
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        calls.append(result["inventory_revision"])
+        stamp = f"2026-11-22T18:00:0{len(calls)}Z"
+        payload["updated_at"] = stamp
+        payload["goals"][0]["synced_at"] = stamp
+        if mutation == "observation_always" or (mutation == "replacement" and len(calls) == 2):
+            payload["observation_generation"] = len(calls)
+        if mutation == "replacement" and len(calls) == 2:
+            payload["goals"][0]["goal_instance_id"] = "ginst_" + "b" * 32
+        registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    result = context.collect_manager_turn_context(
+        registry,
+        session,
+        tmp_path,
+        lambda _s: ["authorized"],
+        include_details=False,
+        remote_evidence=True,
+    )
+    assert len(calls) == 2
+    if mutation == "sync_timestamps_always":
+        assert result.get("warnings") != ["external_authorization_changed"]
+        assert [g["goal_id"] for g in result["goals"]] == ["authorized"]
+        assert result.get("authorization_scope_id") == context.manager_authorization_scope_id(
+            [{"goal_id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]
+        )
+    else:
+        assert result["goals"] == []
+        assert result["warnings"] == ["external_authorization_changed"]

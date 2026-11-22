@@ -16,7 +16,11 @@ from .chat.manager_details import read_manager_goal_details
 from .chat.manager_history import read_manager_delivery_history
 from .capabilities.manager_context.inspection import agent_work_summary
 from .history import decode_registry_snapshot
-from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable
+from .goal_portfolio import (
+    build_goal_portfolio,
+    lifecycle_readback_unavailable,
+    registry_semantic_revision,
+)
 from .chat import redact_local_paths
 from .control_plane.collaboration import conversation_scope
 from .control_plane.effect_runtime import effect_runtime_result
@@ -421,6 +425,7 @@ def manager_authorization_scope_id_for_registry(
     runtime_root=None,
     channel_id=None,
     expected_inventory_revision: str | None = None,
+    expected_inventory_semantic_revision: str | None = None,
 ) -> str | None:
     """Bind authorized aliases to the current canonical Goal instances."""
 
@@ -430,6 +435,12 @@ def manager_authorization_scope_id_for_registry(
         if (
             expected_inventory_revision is not None
             and revision != expected_inventory_revision
+        ):
+            return None
+        if (
+            expected_inventory_semantic_revision is not None
+            and registry_semantic_revision(registry_path, raw)
+            != expected_inventory_semantic_revision
         ):
             return None
         registry = decode_registry_snapshot(registry_path, raw)
@@ -520,6 +531,7 @@ def manager_turn_context(
     remote_runner=None,
     remote_scope_valid: Callable[[], bool] | None = None,
     remote_config_path=None,
+    ignore_sync_timestamp_churn: bool = False,
 ) -> dict[str, Any]:
     conversation = conversation_scope(session)
     local_goal = conversation["kind"] == "owner_goal"
@@ -592,14 +604,19 @@ def manager_turn_context(
         include_goal_attention=True,
         include_goal_instance_id=True,
         read_status=read_goal_status,
+        ignore_sync_timestamp_churn=ignore_sync_timestamp_churn,
     )
     labels: dict[str, str] = {}
     try:
         raw = registry_path.read_bytes()
-        if (
-            portfolio.get("inventory_revision")
+        expected_semantic = portfolio.get("inventory_semantic_revision")
+        revision_matches = (
+            registry_semantic_revision(registry_path, raw) == expected_semantic
+            if ignore_sync_timestamp_churn and isinstance(expected_semantic, str)
+            else portfolio.get("inventory_revision")
             == "sha256:" + hashlib.sha256(raw).hexdigest()
-        ):
+        )
+        if revision_matches:
             for goal in decode_registry_snapshot(registry_path, raw).get("goals", []):
                 if isinstance(goal, dict) and (
                     scope is None or goal.get("id") in scope
@@ -711,18 +728,32 @@ def manager_turn_context(
         json.dumps(result, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
     if not owner_scope:
-        expected_revision = portfolio.get("inventory_revision")
-        scope_id = (
-            manager_authorization_scope_id_for_registry(
-                registry_path,
-                scope or [],
-                runtime_root=runtime_root,
-                channel_id=session.get("channel_id"),
-                expected_inventory_revision=expected_revision,
+        if ignore_sync_timestamp_churn:
+            expected_semantic = portfolio.get("inventory_semantic_revision")
+            scope_id = (
+                manager_authorization_scope_id_for_registry(
+                    registry_path,
+                    scope or [],
+                    runtime_root=runtime_root,
+                    channel_id=session.get("channel_id"),
+                    expected_inventory_semantic_revision=expected_semantic,
+                )
+                if isinstance(expected_semantic, str)
+                else None
             )
-            if isinstance(expected_revision, str)
-            else None
-        )
+        else:
+            expected_revision = portfolio.get("inventory_revision")
+            scope_id = (
+                manager_authorization_scope_id_for_registry(
+                    registry_path,
+                    scope or [],
+                    runtime_root=runtime_root,
+                    channel_id=session.get("channel_id"),
+                    expected_inventory_revision=expected_revision,
+                )
+                if isinstance(expected_revision, str)
+                else None
+            )
         if scope_id is None:
             return unavailable_manager_context("external_authorization_changed")
         result["authorization_scope_id"] = scope_id
@@ -817,18 +848,23 @@ def collect_manager_turn_context(
     bound_steward = conversation_scope(session).get("bound_steward") is True
 
     for attempt in range(2):
+        kwargs: dict[str, Any] = {
+            "authorized_goal_ids": before,
+            "include_details": include_details,
+            "include_stopped": include_stopped,
+            "read_goal_status": read_goal_status,
+            "remote_evidence": remote_evidence,
+            "remote_runner": remote_runner,
+            # Source reads and the Turn owner check the same exact authority.
+            "remote_scope_valid": scope_unchanged,
+        }
+        if attempt > 0 and bound_steward and not inline_remote:
+            kwargs["ignore_sync_timestamp_churn"] = True
         context = manager_turn_context(
             registry_path,
             session,
             runtime_root,
-            authorized_goal_ids=before,
-            include_details=include_details,
-            include_stopped=include_stopped,
-            read_goal_status=read_goal_status,
-            remote_evidence=remote_evidence,
-            remote_runner=remote_runner,
-            # Source reads and the Turn owner check the same exact authority.
-            remote_scope_valid=scope_unchanged,
+            **kwargs,
         )
         after = resolve()
         after_scope_id = (

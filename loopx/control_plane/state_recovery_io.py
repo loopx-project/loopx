@@ -24,6 +24,7 @@ import zlib
 from typing import Any, BinaryIO, Iterator, NoReturn
 
 from .effect_runtime import _node_executable, effect_runtime_result, effect_runtime_request_scope
+from .runtime.node_probe import node_typescript_flags
 
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 MAX_EXPANDED_BYTES = 512 * 1024 * 1024
@@ -87,6 +88,7 @@ def _runtime(method: str, request: dict[str, Any]) -> dict[str, Any]:
 def _audit_owners(request: dict[str, Any]) -> dict[str, Any]:
     command = [_node_executable(), "--no-warnings", "--max-old-space-size=512",
                "--experimental-sqlite", "--experimental-strip-types",
+               *node_typescript_flags(),
                str(Path(__file__).with_name("state_recovery_worker.ts"))]
     try:
         completed = subprocess.run(command, input=json.dumps(request), text=True, encoding="utf-8",

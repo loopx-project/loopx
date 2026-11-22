@@ -70,7 +70,7 @@ export function configureOriginalConversationGrant(params: JsonObject): JsonObje
 }
 
 /** Retire only this exact native conversation's grants. Historical requests and
- * receipts remain readable;
+ * receipts remain readable.
  */
 export function revokeConversationSources(params: JsonObject): JsonObject {
   const id = requireNonEmptyString(params.binding_id, "conversation binding identity");

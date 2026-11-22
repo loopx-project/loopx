@@ -363,8 +363,7 @@ class ManagedSessionTurn:
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
-        Native
-        submit still rechecks current admission and every validation source.
+        Native submit still rechecks current admission and every validation source.
         """
         from ...control_plane.effect_runtime import effect_runtime_result
         from ...control_plane.goals.acceptance import inspect_goal_acceptance
@@ -452,7 +451,7 @@ class ManagedSessionTurn:
                     retained = report_turn(self.store, request["actor"], report_window)
                     if retained is not None and retained["turn_id"] != existing["turn_id"]:
                         return retained, False
-                    recovery_request = host.report_quota_request(existing)
+                    recovery_request = host.report_quota_request(existing, report_window=report_window)
                     suffix = ".quota-recovery"
                     if recovery_request is None:
                         recovery_request = host.report_timeout_request(existing)

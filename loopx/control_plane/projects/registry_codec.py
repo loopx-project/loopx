@@ -425,6 +425,8 @@ class ProjectRegistryTransaction:
         """Verify a private original-byte backup before a caller's migration."""
         if not self._existed or self._finished:
             raise RuntimeError("registry backup requires an open existing transaction")
+        from ..runtime.document_io import fsync_state_directory
+
         raw = self._document.raw_bytes
         if self._path.read_bytes() != raw:
             raise ProjectRegistryMutationError("Registry changed before preimage backup")

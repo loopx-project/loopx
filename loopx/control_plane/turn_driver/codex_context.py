@@ -22,7 +22,7 @@ from .decision_capture import (
     context_capture_read_command,
 )
 from .native_context_profile import (
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
 )
@@ -916,6 +916,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           continuity_generation: str | None = None,
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
+                          max_page_output_bytes: int | None = None,
                           selection_command_args_template: str | None = None,
                           captured_decision: dict[str, str] | None = None,
                           hook_session: str | None = None,
@@ -1003,6 +1004,11 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 # Legacy direct native callers omitted the presentation option.
                 progressive = progressive_enabled is not False
                 presentation = progressive or selection_command_args_template is not None
+                first_read_output_bytes = (
+                    min(output_bytes, max_page_output_bytes)
+                    if max_page_output_bytes is not None and max_page_output_bytes > 0
+                    else min(output_bytes, NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES)
+                )
                 try:
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
@@ -1014,6 +1020,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                                 if selection_command_args_template is not None else {}),
                             **({"captured_decision": captured_decision} if captured_decision is not None else {}),
                             **({"progressive_enabled": False} if not progressive else {}),
+                            **({"initial_read_output_bytes": first_read_output_bytes}
+                                if include_initial_read_plan and progressive else {}),
                             "command_template": recovery["command"] + " --select '<pointer>'",
                         } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive)

@@ -43,7 +43,7 @@ for (const adapter of adapters()) {
       assert.equal(s.agentSessionId, id);
       if (['codex', 'traex'].includes(adapter.id)) { assert.match(text, /approval:never/); assert.match(text, /model:gpt-big/); }
       if (adapter.id === 'claude') assert.match(text, /mode:bypassPermissions/);
-      if (adapter.id === 'agy') assert.match(text, /mode:always-proceed/);
+      if (adapter.id === 'agy') assert.match(text, /mode:auto/);
     } finally { await s.close(); }
   });
   if (adapter.id === 'agy') continue;

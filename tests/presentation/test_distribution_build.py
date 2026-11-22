@@ -134,6 +134,9 @@ def test_manager_discovery_projection_ships_with_its_skill(checkout, tmp_path):
     resources = (
         "loopx/capabilities/manager_context/discovery_projection.ts",
         "loopx/capabilities/manager_context/skills/loopx-manager/SKILL.md",
+        "loopx/capabilities/manager_context/templates/REPORTING.md",
+        "loopx/capabilities/manager_context/templates/SESSION_REPORTING.md",
+        "loopx/capabilities/manager_context/templates/FOLLOWTHROUGH.md",
     )
     for name in resources:
         target = checkout / name

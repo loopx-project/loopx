@@ -1302,3 +1302,90 @@ def test_cross_project_redundant_syncs_preserve_order_and_do_not_rewrite(
     ]
     assert after_payload["goals"][0]["objective"] == "updated alpha objective"
 
+
+def test_single_goal_sync_with_unchanged_siblings_skips_redundant_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "multi"
+    (project / ".loopx").mkdir(parents=True, exist_ok=True)
+    (project / "GOAL_A.md").write_text("# A\n", encoding="utf-8")
+    (project / "GOAL_B.md").write_text("# B\n", encoding="utf-8")
+    registry_path = project / ".loopx" / "registry.json"
+    registry_payload = {
+        "schema_version": "0.1",
+        "common_runtime_root": str(runtime_root),
+        "goals": [
+            {
+                "id": "goal-a",
+                "domain": "multi-fixture",
+                "status": "active",
+                "repo": str(project),
+                "state_file": "GOAL_A.md",
+                "adapter": {"kind": "fixture", "status": "connected-read-only"},
+                "objective": "goal a objective",
+            },
+            {
+                "id": "goal-b",
+                "domain": "multi-fixture",
+                "status": "active",
+                "repo": str(project),
+                "state_file": "GOAL_B.md",
+                "adapter": {"kind": "fixture", "status": "connected-read-only"},
+                "objective": "goal b objective",
+            },
+        ],
+    }
+    registry_path.write_text(json.dumps(registry_payload), encoding="utf-8")
+    global_path = global_registry_path(runtime_root)
+
+    ticks = iter(
+        [
+            "2026-11-22T18:00:00+00:00",
+            "2026-11-22T18:01:00+00:00",
+            "2026-11-22T18:02:00+00:00",
+        ]
+    )
+    monkeypatch.setattr(global_registry, "now_local", lambda: next(ticks))
+
+    first = sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+    assert first["ok"] is True and first["wrote"] is True
+    before_bytes = global_path.read_bytes()
+
+    writes: list[Path] = []
+    real_write = global_registry.write_json
+
+    def tracking_write(path: Path, payload: dict[str, Any]) -> None:
+        writes.append(path)
+        real_write(path, payload)
+
+    monkeypatch.setattr(global_registry, "write_json", tracking_write)
+
+    noop = sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id="goal-a",
+        dry_run=False,
+    )
+    assert noop["ok"] is True
+    assert writes == []
+    assert global_path.read_bytes() == before_bytes
+
+    registry_payload["goals"][0]["objective"] = "goal a updated objective"
+    registry_path.write_text(json.dumps(registry_payload), encoding="utf-8")
+    changed = sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id="goal-a",
+        dry_run=False,
+    )
+    assert changed["ok"] is True and changed["wrote"] is True
+    assert writes == [global_path]
+    after_payload = json.loads(global_path.read_text(encoding="utf-8"))
+    by_id = {goal["id"]: goal for goal in after_payload["goals"]}
+    assert by_id["goal-a"]["synced_at"] == "2026-11-22T18:02:00+00:00"
+    assert by_id["goal-b"]["synced_at"] == "2026-11-22T18:02:00+00:00"

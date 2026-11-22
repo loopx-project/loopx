@@ -1029,6 +1029,7 @@ const chatQueueSchema = z.object({
     preview: z.string(), character_count: z.number().int().nonnegative(),
     attachment_count: z.number().int().nonnegative(),
     input_revision: z.number().int().nonnegative().default(0),
+    input_mutation_allowed: z.boolean().optional(),
     mutation: z.object({action: z.enum(["edit", "cancel"]), operation_id: z.string().min(1),
       expected_revision: z.number().int().nonnegative(), input_revision: z.number().int().positive(),
       message: z.string().optional()}).nullable().optional().default(null),

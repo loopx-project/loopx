@@ -426,12 +426,12 @@ test('quota checks do not interrupt a running turn awaiting approval', async () 
   } finally { await h.close(); }
 });
 
-test('automatic selection does not broaden an approval-required conversation', async () => {
+test('automatic selection keeps ask when the ACP successor supports approvals', async () => {
   const h = await setup();
   try {
     h.config();
     h.store.updateThread(h.thread.id, { permissionMode: 'ask' });
-    assert.deepEqual(await h.manager.autoHandover.targets(h.thread.id), []);
+    assert.deepEqual(await h.manager.autoHandover.targets(h.thread.id), [{ agent: 'agy2', model: 'gemini-pro' }]);
   } finally { await h.close(); }
 });
 

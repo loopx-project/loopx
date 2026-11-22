@@ -661,6 +661,11 @@ def _dispatch_common_command(
 	if args.command in PROJECT_LIFECYCLE_COMMANDS:
 		from .cli_commands.project_lifecycle import handle_project_lifecycle_command
 		from .cli_rollout import append_cli_rollout_event
+		if args.command == "refresh-state" and getattr(args, "execution_loss_closeout", False):
+			return handle_project_lifecycle_command(
+				args, registry_path=registry_path, print_payload=print_payload,
+				output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
+			)
 		from .capabilities.periodic_report.post_writeback_hook import (
 			build_periodic_report_post_writeback_projection,
 			periodic_report_post_writeback_hooks_for_goal,
