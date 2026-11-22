@@ -8,6 +8,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
 
@@ -820,3 +821,228 @@ def test_runtestloop_entry_aborts_when_session_deadline_already_elapsed(
     assert dsession2.shouldstop == session2.shouldstop
     assert diag_path2.is_file()
     assert json.loads(diag_path2.read_text(encoding="utf-8"))["deadline_exceeded"] is True
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+def test_session_deadline_aborts_blocked_test_promptly_and_writes_junit(
+    tmp_path: Path,
+    workers: int,
+) -> None:
+    (tmp_path / "test_subject.py").write_text(
+        "import time\nfrom pathlib import Path\n"
+        "def test_fast():\n"
+        "    Path('fast.done').touch()\n"
+        "def test_blocked():\n"
+        "    waited = 0.0\n"
+        "    while not Path('fast.done').exists() and waited < 5.0:\n"
+        "        time.sleep(0.02)\n"
+        "        waited += 0.02\n"
+        "    Path('blocked.entered').touch()\n"
+        "    time.sleep(10.0)\n",
+        encoding="utf-8",
+    )
+    log = tmp_path / "deadline-fast-abort.log"
+    junit_path = tmp_path / "out.xml"
+    started = time.monotonic()
+    with log.open("w") as output:
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pytest", "-v", "-n", str(workers),
+                "-p", "scripts.ci.pytest_timing",
+                "--ci-session-deadline=1.3",
+                f"--junitxml={junit_path}",
+            ],
+            cwd=tmp_path,
+            env=environment(),
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            timeout=15,
+            check=False,
+        )
+    wall = time.monotonic() - started
+    log_text = log.read_text(encoding="utf-8")
+    assert result.returncode == 2, log_text
+    assert (tmp_path / "blocked.entered").exists(), log_text
+    assert wall < 6.0, f"Deadline abort should not wait for 10s blocked test, took {wall:.2f}s:\n{log_text}"
+    assert junit_path.is_file(), log_text
+    cases = {
+        name
+        for case in ET.parse(junit_path).findall(".//testcase")
+        if (name := case.attrib.get("name"))
+    }
+    assert "test_fast" in cases
+    assert "LOOPX_PYTEST_DEADLINE " in log_text
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SIG_IGN worker termination")
+def test_session_deadline_flushes_junit_early_and_bounds_uninterruptible_worker(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "test_subject.py").write_text(
+        "import signal, time\nfrom pathlib import Path\n"
+        "def test_fast():\n"
+        "    Path('fast.done').touch()\n"
+        "def test_uninterruptible():\n"
+        "    signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "    waited = 0.0\n"
+        "    while not Path('fast.done').exists() and waited < 5.0:\n"
+        "        time.sleep(0.02)\n"
+        "        waited += 0.02\n"
+        "    Path('blocked.entered').touch()\n"
+        "    time.sleep(20.0)\n",
+        encoding="utf-8",
+    )
+    log = tmp_path / "uninterruptible.log"
+    diag_path = tmp_path / "ci-shard-diagnostics.json"
+    junit_path = tmp_path / "out.xml"
+    started = time.monotonic()
+    junit_readable_while_running = False
+    with log.open("w") as output:
+        process = subprocess.Popen(
+            [
+                sys.executable, "-m", "pytest", "-v", "-n", "2",
+                "-p", "scripts.ci.pytest_timing",
+                "--ci-session-deadline=1.5",
+                "--ci-diagnostics-file", str(diag_path),
+                f"--junitxml={junit_path}",
+            ],
+            cwd=tmp_path,
+            env=environment(),
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            wait_limit = started + 10.0
+            while process.poll() is None and time.monotonic() < wait_limit:
+                if junit_path.is_file():
+                    try:
+                        parsed = {
+                            name
+                            for case in ET.parse(junit_path).findall(".//testcase")
+                            if (name := case.attrib.get("name"))
+                        }
+                        if "test_fast" in parsed:
+                            junit_readable_while_running = True
+                    except ET.ParseError:
+                        pytest.fail("JUnit XML must never be observed partially written/truncated")
+                time.sleep(0.02)
+            returncode = process.wait(timeout=5)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+    wall = time.monotonic() - started
+    log_text = log.read_text(encoding="utf-8")
+    assert returncode == 2, log_text
+    assert (tmp_path / "blocked.entered").exists(), log_text
+    assert wall < 7.0, f"Bounded xdist teardown must not wait 10s+ EXIT_TIMEOUT or 20s sleep, took {wall:.2f}s"
+    assert junit_path.is_file()
+    final_cases = {
+        name
+        for case in ET.parse(junit_path).findall(".//testcase")
+        if (name := case.attrib.get("name"))
+    }
+    assert "test_fast" in final_cases
+    # Partial JUnit must be valid and readable while the uninterruptible worker is still tearing down.
+    assert junit_readable_while_running
+    diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert diag["deadline_exceeded"] is True
+    assert diag["pytest_exit_code"] == 2
+
+
+def test_concurrent_progress_and_deadline_diagnostics_never_corrupt_or_regress(
+    tmp_path: Path,
+) -> None:
+    # 1. Real -n 2 CLI run: overlap a slow progress write with deadline write.
+    (tmp_path / "conftest.py").write_text(
+        "import time\nfrom pathlib import Path\n"
+        "from scripts.ci import pytest_timing as observer\n"
+        "original_write = observer._atomic_write_text\n"
+        "slowed = False\n"
+        "def wrapped_write(path, content):\n"
+        "    global slowed\n"
+        "    if path.endswith('ci-shard-diagnostics.json') and not slowed and '\"deadline_exceeded\": false' in content:\n"
+        "        slowed = True\n"
+        "        Path('slowed.ok').touch()\n"
+        "        time.sleep(0.45)\n"
+        "    return original_write(path, content)\n"
+        "observer._atomic_write_text = wrapped_write\n",
+        encoding="utf-8",
+    )
+    test_lines = ["import time\n"]
+    for idx in range(105):
+        test_lines.append(f"def test_fast_{idx}():\n    time.sleep(0.01)\n")
+    (tmp_path / "test_subject.py").write_text("".join(test_lines), encoding="utf-8")
+
+    log = tmp_path / "concurrent-diag.log"
+    diag_path = tmp_path / "ci-shard-diagnostics.json"
+    parse_errors: list[str] = []
+    seen_deadline_true = False
+    regressed = False
+    stop_polling = threading.Event()
+
+    def poll_diag() -> None:
+        nonlocal seen_deadline_true, regressed
+        while not stop_polling.is_set():
+            if diag_path.is_file():
+                try:
+                    data = json.loads(diag_path.read_text(encoding="utf-8"))
+                    if data.get("deadline_exceeded") is True:
+                        seen_deadline_true = True
+                    elif seen_deadline_true:
+                        regressed = True
+                except (OSError, json.JSONDecodeError) as exc:
+                    parse_errors.append(repr(exc))
+            time.sleep(0.005)
+
+    poller = threading.Thread(target=poll_diag, daemon=True)
+    poller.start()
+    try:
+        with log.open("w") as output:
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "pytest", "-q", "-n", "2",
+                    "-p", "scripts.ci.pytest_timing",
+                    "--ci-session-deadline=0.9",
+                    "--ci-diagnostics-file", str(diag_path),
+                ],
+                cwd=tmp_path,
+                env=environment(),
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+                check=False,
+            )
+    finally:
+        stop_polling.set()
+        poller.join(timeout=5)
+    log_text = log.read_text(encoding="utf-8")
+    assert result.returncode == 2, log_text
+    assert (tmp_path / "slowed.ok").is_file(), log_text
+    assert not parse_errors, f"Observed corrupt diagnostics JSON during concurrent writes: {parse_errors}"
+    assert not regressed, "Older progress snapshot overwrote deadline_exceeded=True"
+    assert seen_deadline_true or json.loads(diag_path.read_text(encoding="utf-8"))["deadline_exceeded"] is True
+    final_diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    assert final_diag["deadline_exceeded"] is True
+    assert final_diag["pytest_exit_code"] == 2
+
+    # 2. Direct unit proof: serialized _write_diagnostics prevents stale progress from overwriting deadline.
+    from types import SimpleNamespace
+    from scripts.ci.pytest_timing import TimingObserver
+
+    unit_diag = tmp_path / "unit-diagnostics.json"
+    config = SimpleNamespace(
+        getoption=lambda key: 0.5 if key == "ci_session_deadline" else (str(unit_diag) if key == "ci_diagnostics_file" else 0),
+        pluginmanager=SimpleNamespace(get_plugin=lambda name: None),
+    )
+    session = SimpleNamespace(shouldstop=False)
+    unit_observer = TimingObserver(config)  # type: ignore[arg-type]
+    unit_observer._on_deadline(session)  # type: ignore[arg-type]
+    assert json.loads(unit_diag.read_text(encoding="utf-8"))["deadline_exceeded"] is True
+
+    # A late periodic progress flush scheduled before deadline must not downgrade deadline_exceeded.
+    unit_observer._write_diagnostics(execution_complete=False, exit_code=None, kind="progress")
+    after = json.loads(unit_diag.read_text(encoding="utf-8"))
+    assert after["deadline_exceeded"] is True
+    assert after["deadline_elapsed_seconds"] is not None

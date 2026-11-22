@@ -11,14 +11,18 @@ import json
 import hashlib
 import math
 import os
+import platform
 import re
+import signal
 import subprocess
+import tempfile
 import time
 import sys
 import threading
 import _thread
+import xml.etree.ElementTree as ET
 from collections.abc import Generator, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from _pytest.subtests import SubtestReport
@@ -29,6 +33,7 @@ from scripts.ci.pytest_failure_context import exception_type_name, failure_conte
 
 PREFIX = "LOOPX_PYTEST_TIMING "
 DEADLINE_PREFIX = "LOOPX_PYTEST_DEADLINE "
+_DEADLINE_WORKER_EXIT_TIMEOUT = 1.0
 _STACK_FD = pytest.StashKey[int]()
 # Tests may replace public subprocess helpers. The observer owns this transport;
 # subprocess.run would still resolve a test's replacement Popen at call time.
@@ -40,6 +45,157 @@ _STACK_WRITE_PROGRAM = (
     "deadline.daemon=True;deadline.start();"
     "os.write(2,sys.stdin.buffer.read())"
 )
+
+
+def _atomic_write_text(path: str, content: str) -> None:
+    """Atomically write UTF-8 text via a unique same-directory temporary file."""
+    abs_path = os.path.abspath(path)
+    parent = os.path.dirname(abs_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp_path: str | None = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f"{os.path.basename(abs_path)}.",
+            suffix=".tmp",
+            dir=parent or ".",
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_path, abs_path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _render_junit_xml(xml: Any) -> str | None:
+    """Serialize current LogXML testcases without mutating observer state."""
+    suite_start = getattr(xml, "suite_start", None)
+    stats = getattr(xml, "stats", None)
+    node_reporters = getattr(xml, "node_reporters_ordered", None)
+    if suite_start is None or not isinstance(stats, dict) or node_reporters is None:
+        return None
+    duration = suite_start.elapsed()
+    numtests = (
+        int(stats.get("passed", 0))
+        + int(stats.get("failure", 0))
+        + int(stats.get("skipped", 0))
+        + int(stats.get("error", 0))
+        - int(getattr(xml, "cnt_double_fail_tests", 0))
+    )
+    suite_name = str(getattr(xml, "suite_name", "pytest"))
+    suite_node = ET.Element(
+        "testsuite",
+        name=suite_name,
+        errors=str(stats.get("error", 0)),
+        failures=str(stats.get("failure", 0)),
+        skipped=str(stats.get("skipped", 0)),
+        tests=str(numtests),
+        time=f"{duration.seconds:.3f}",
+        timestamp=suite_start.as_utc().astimezone().isoformat(),
+        hostname=platform.node(),
+    )
+    get_props = getattr(xml, "_get_global_properties_node", None)
+    if callable(get_props):
+        global_properties = get_props()
+        if global_properties is not None:
+            suite_node.append(global_properties)
+    for node_reporter in node_reporters:
+        suite_node.append(node_reporter.to_xml())
+    testsuites = ET.Element("testsuites")
+    testsuites.set("name", "pytest tests")
+    testsuites.append(suite_node)
+    return '<?xml version="1.0" encoding="utf-8"?>' + ET.tostring(testsuites, encoding="unicode")
+
+
+class _JUnitSummaryHook:
+    """Preserve pytest's JUnit terminal summary line after an early atomic flush."""
+
+    def __init__(self, logfile: str) -> None:
+        self._logfile = logfile
+
+    @pytest.hookimpl
+    def pytest_terminal_summary(
+        self, terminalreporter: Any, config: pytest.Config,
+    ) -> None:
+        if config.get_verbosity() >= 0:
+            terminalreporter.write_sep("-", f"generated xml file: {self._logfile}")
+
+
+def _flush_partial_junit(config: pytest.Config) -> bool:
+    """Atomically flush partial JUnit XML before worker/fixture teardown blocks."""
+    try:
+        from _pytest.junitxml import xml_key
+    except ImportError:
+        return False
+    xml = config.stash.get(xml_key, None)
+    if xml is None:
+        return False
+    logfile = getattr(xml, "logfile", None)
+    if not isinstance(logfile, str) or not logfile:
+        return False
+    try:
+        rendered = _render_junit_xml(xml)
+        if rendered is None:
+            return False
+        _atomic_write_text(logfile, rendered)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    # Unregister LogXML so its non-atomic open('w') does not re-truncate logfile
+    # during teardown, while retaining the terminal summary path line.
+    # Also redirect xml.logfile on POSIX in case pytest_sessionfinish already
+    # started iterating its hookimpl list before unregister(xml).
+    try:
+        del config.stash[xml_key]
+        config.pluginmanager.unregister(xml)
+        if os.name != "nt":
+            xml.logfile = os.devnull
+        config.pluginmanager.register(_JUnitSummaryHook(logfile), "loopx-ci-junit-summary")
+    except Exception:
+        pass
+    return True
+
+
+def _bound_xdist_teardown(config: pytest.Config) -> None:
+    """Signal active local xdist workers to unwind and cap teardown grace on deadline."""
+    dsession = config.pluginmanager.get_plugin("dsession")
+    if dsession is None:
+        return
+    nodemanager = getattr(dsession, "nodemanager", None)
+    if nodemanager is None:
+        return
+    current_timeout = getattr(nodemanager, "EXIT_TIMEOUT", None)
+    if isinstance(current_timeout, (int, float)):
+        nodemanager.EXIT_TIMEOUT = min(float(current_timeout), _DEADLINE_WORKER_EXIT_TIMEOUT)
+    group = getattr(nodemanager, "group", None)
+    if group is None or os.name == "nt":
+        return
+    for gw in list(group):
+        popen = getattr(getattr(gw, "_io", None), "popen", None)
+        if popen is not None and popen.poll() is None:
+            try:
+                popen.send_signal(signal.SIGINT)
+            except OSError:
+                pass
+
+
+class _DeadlineSessionHook:
+    """Flush partial JUnit and bound worker teardown before normal sessionfinish waits."""
+
+    def __init__(self, observer: TimingObserver) -> None:
+        self._observer = observer
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_keyboard_interrupt(self, excinfo: pytest.ExceptionInfo[BaseException]) -> None:
+        self._observer.prepare_deadline_sessionfinish()
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        self._observer.prepare_deadline_sessionfinish()
 
 
 def _sanitize_comm(raw_comm: str) -> str:
@@ -232,7 +388,10 @@ def pytest_configure(config: pytest.Config) -> None:
     # xdist sends TestReports to the controller. Worker output would duplicate
     # reports and can be lost when a worker is killed.
     if not hasattr(config, "workerinput"):
-        config.pluginmanager.register(TimingObserver(config), "loopx-ci-timing-observer")
+        observer = TimingObserver(config)
+        config.pluginmanager.register(observer, "loopx-ci-timing-observer")
+        if observer.deadline_seconds > 0:
+            config.pluginmanager.register(_DeadlineSessionHook(observer), "loopx-ci-deadline-shutdown")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -251,9 +410,12 @@ class TimingObserver:
         raw_deadline = getoption("ci_session_deadline") if callable(getoption) else 0.0
         raw_diag = getoption("ci_diagnostics_file") if callable(getoption) else ""
         self.deadline_seconds = float(raw_deadline or 0.0)
-        self.diagnostics_path = str(raw_diag or "").strip()
+        diag_str = str(raw_diag or "").strip()
+        self.diagnostics_path = os.path.abspath(diag_str) if diag_str else ""
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._finished = False
+        self._deadline_teardown_prepared = False
         self._collection_active = False
         self._loop_active = False
         self._runtestloop_finished = False
@@ -314,7 +476,7 @@ class TimingObserver:
         )[:25]
         in_flight_rows = (
             list(self.deadline_in_flight)
-            if self.deadline_exceeded and self.deadline_in_flight
+            if self.deadline_exceeded
             else self._in_flight_snapshot_locked(now_elapsed)
         )
         active_children = children if children is not None else self.deadline_children
@@ -344,29 +506,57 @@ class TimingObserver:
         execution_complete: bool = False,
         exit_code: int | None = None,
         children: list[dict[str, Any]] | None = None,
+        kind: Literal["progress", "deadline", "final"] = "progress",
     ) -> None:
         if not self.diagnostics_path:
             return
+        with self._write_lock:
+            with self._lock:
+                if kind == "progress" and (self._finished or self.deadline_exceeded):
+                    return
+                if kind == "deadline" and self._finished:
+                    return
+                payload = self._build_diagnostics_locked(
+                    execution_complete=execution_complete,
+                    exit_code=exit_code,
+                    children=children,
+                )
+                self._last_diag_flush_elapsed = payload["observed_elapsed_seconds"]
+                self._last_diag_flush_finished = self.finished_cases
+            try:
+                content = json.dumps(payload, ensure_ascii=True, allow_nan=False, indent=2) + "\n"
+                _atomic_write_text(self.diagnostics_path, content)
+            except OSError:
+                # Optional diagnostics cannot mask test outcomes.
+                pass
+
+    def _interrupt_main_locked(self) -> None:
+        # _thread.interrupt_main() does not interrupt POSIX sleep/wait syscalls;
+        # send SIGINT directly to the main thread when the default handler is active.
+        main_ident = threading.main_thread().ident
+        if (
+            os.name != "nt"
+            and main_ident is not None
+            and hasattr(signal, "pthread_kill")
+            and signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        ):
+            try:
+                signal.pthread_kill(main_ident, signal.SIGINT)
+                return
+            except OSError:
+                pass
+        _thread.interrupt_main()
+
+    def prepare_deadline_sessionfinish(self) -> None:
         with self._lock:
-            payload = self._build_diagnostics_locked(
-                execution_complete=execution_complete,
-                exit_code=exit_code,
-                children=children,
-            )
-            self._last_diag_flush_elapsed = payload["observed_elapsed_seconds"]
-            self._last_diag_flush_finished = self.finished_cases
-        try:
-            parent = os.path.dirname(os.path.abspath(self.diagnostics_path))
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            tmp_path = f"{self.diagnostics_path}.{os.getpid()}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=True, allow_nan=False, indent=2)
-                handle.write("\n")
-            os.replace(tmp_path, self.diagnostics_path)
-        except OSError:
-            # Optional diagnostics cannot mask test outcomes.
-            pass
+            self._finished = True
+            self._collection_active = False
+            self._loop_active = False
+            if not self.deadline_exceeded or self._deadline_teardown_prepared:
+                return
+            self._deadline_teardown_prepared = True
+        _flush_partial_junit(self.config)
+        _bound_xdist_teardown(self.config)
 
     def _record_deadline(self, session: pytest.Session, *, interrupt: bool) -> None:
         with self._lock:
@@ -386,12 +576,12 @@ class TimingObserver:
             dsession = self.config.pluginmanager.get_plugin("dsession")
             if dsession is not None and hasattr(dsession, "shuttingdown") and not getattr(dsession, "shouldstop", False):
                 dsession.shouldstop = reason
-        self._write_diagnostics(execution_complete=False, exit_code=None, children=children)
+        self._write_diagnostics(execution_complete=False, exit_code=None, children=children, kind="deadline")
         if interrupt:
             with self._lock:
                 if not self._finished and (self._collection_active or self._loop_active):
                     # Wake collection or pytest_runtestloop immediately even when blocked in IO/sleep.
-                    _thread.interrupt_main()
+                    self._interrupt_main_locked()
 
     def _on_deadline(self, session: pytest.Session) -> None:
         self._record_deadline(session, interrupt=True)
@@ -465,6 +655,17 @@ class TimingObserver:
                 self._loop_active = False
                 if completed_normally and not self.deadline_exceeded:
                     self._runtestloop_finished = True
+
+    @pytest.hookimpl(wrapper=True, tryfirst=True)
+    def pytest_runtest_protocol(self, item: pytest.Item) -> Generator[None, object, object]:
+        if self.deadline_seconds <= 0:
+            return (yield)
+        self._abort_if_deadline_exceeded(item.session)
+        try:
+            return (yield)
+        finally:
+            if self.deadline_exceeded and not item.session.shouldstop:
+                item.session.shouldstop = f"CI session deadline exceeded ({self.deadline_seconds:g}s)"
 
     def record_collection(self, ids: Sequence[str]) -> None:
         if self.collection is None:
@@ -593,4 +794,4 @@ class TimingObserver:
             and self.invalid_duration_count == 0
         )
         self.emit(event="end", exit_code=final_exit)
-        self._write_diagnostics(execution_complete=complete, exit_code=final_exit)
+        self._write_diagnostics(execution_complete=complete, exit_code=final_exit, kind="final")
