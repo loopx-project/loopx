@@ -27,6 +27,10 @@ from .heartbeat_receipt import (
     requalify_bound_heartbeat_receipt,
     upgrade_identityless_heartbeat_receipt,
 )
+from .selected_todo_projection import (
+    raw_agent_todo_summaries_from_status,
+    resolve_selected_todo_write_contract,
+)
 from .settlement import (
     QuotaSettlementReadback,
     attach_settlement_progress,
@@ -51,6 +55,7 @@ def reconcile_existing_heartbeat_receipt(
     scheduler_execution_context: (
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
+    status_payload: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str]:
     """Bind or qualify same-Turn work without replacing its settlement identity."""
 
@@ -152,6 +157,7 @@ def reconcile_existing_heartbeat_receipt(
                     todo_id=rollout_todo_id,
                     replan_obligation_id=rollout_replan_obligation_id,
                     scheduler_execution_context=scheduler_execution_context,
+                    status_payload=status_payload,
                 )
                 rollout_details["settlement_effect_id"] = expected_effect_id
                 replan_packet = (
@@ -194,6 +200,7 @@ def reconcile_existing_heartbeat_receipt(
                 todo_id=rollout_todo_id,
                 replan_obligation_id=rollout_replan_obligation_id,
                 scheduler_execution_context=scheduler_execution_context,
+                status_payload=status_payload,
             )
             receipt, upgraded = upgrade_identityless_heartbeat_receipt(
                 runtime_root,
@@ -234,6 +241,7 @@ def reconcile_existing_heartbeat_receipt_for_turn(
     scheduler_execution_context: (
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
+    status_payload: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str, bool]:
     """Reconcile an existing receipt and report whether the turn is receipt-ready."""
 
@@ -245,6 +253,7 @@ def reconcile_existing_heartbeat_receipt_for_turn(
         existing=existing,
         goal_ref=goal_ref,
         scheduler_execution_context=scheduler_execution_context,
+        status_payload=status_payload,
     )
     return receipt, status, appended, stall_observation, True
 
@@ -436,6 +445,7 @@ def quota_rollout_details(
     scheduler_execution_context: (
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
+    status_payload: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     successor_todo_ids = (
         payload.get("successor_todo_ids")
@@ -456,7 +466,16 @@ def quota_rollout_details(
         else {}
     )
     retained_disposition = str(retained_selection.get("disposition") or "")
-    workspace_causality = build_delivery_workspace_causality(selected_todo)
+    selected_todo_contract = resolve_selected_todo_write_contract(
+        selected_todo,
+        *raw_agent_todo_summaries_from_status(
+            status_payload,
+            goal_id=str(
+                payload.get("goal_id") or getattr(args, "goal_id", "") or ""
+            ),
+        ),
+    )
+    workspace_causality = build_delivery_workspace_causality(selected_todo_contract)
     interaction = (
         payload.get("interaction_contract")
         if isinstance(payload.get("interaction_contract"), Mapping)

@@ -208,14 +208,10 @@ whole Goal/Todo narrative, source availability/revisions and read routes. Detail
 history and optional authoring recipes remain expandable from the same capture.
 Current narrative sources and their provenance precede other sources, including
 large scoped preferences; both retain their complete selected values.
-During an unbound Todo choice, including during workspace repair, the initial
-read keeps the candidate identities and selection command. It points to long
-candidate write scopes in the original capture when those scopes matter to the
-choice. The guard for the same Turn supplies the current scopes before delivery.
-When a selected Todo needs an ordinary managed claim, the initial read keeps
-the claim and continuation instructions. Read long requested scopes at
-`/selected_todo/required_write_scopes` when needed for preparation. Use the
-same-Turn guard's complete current scopes after the claim and before delivery.
+Todo `required_write_scopes` are omitted from default quota summaries,
+capability gates, action portfolios, and `selected_todo` projections so initial
+decision context stays compact without truncation pointers. Canonical Todo
+reads (`todo list`) retain the full declared scopes when explicitly inspected.
 The preference source's complete `current` view also stays in the initial read:
 corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the
@@ -339,23 +335,24 @@ large for one page, the linked remainder contains its full details and the
 suggested alternatives. The selection commands use the original Turn identity.
 
 Native ready decisions from `quota should-run` and saved `quota context-project`
-can link two reads when Goal or Todo scope details push controls past the serialized
+can link two reads when boundary detail pushes controls past the serialized
 first page budget. When those controls fit, the ordinary reader keeps its cursor.
 Read `first_read_command` for the decision, stop conditions and required reads.
 If `remaining_read_command` is present, follow it and its cursor before work,
 even when the opening reports EOF. The remainder supplies deferred Goal write
-scopes, checkpointed approval entries and the selected Todo's requested write
-scopes. The opening shows the current approval counts and active scope summary.
+scopes, checkpointed `active_write_scope`, and checkpointed approval entries.
+The opening keeps only the current approval counts (`active_count` and
+`inactive_count`), while Goal wildcard subpaths fold automatically.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
 When the guard requires an independent worktree before delivery, the opening
-keeps the relocation instructions and the current decision controls. Large
-Goal and selected Todo write scope lists are available from the same capture
-at `/goal_boundary/write_scope` and `/selected_todo/required_write_scopes`.
-Select them if the relocation needs them. Once relocated, rerun the guard for
-the same Turn and read its complete current scopes before editing. This
-presentation changes neither admission nor the explicit off view.
+keeps the relocation instructions and the current decision controls. If the
+relocation needs a large Goal write scope list, select
+`/goal_boundary/write_scope` from the same capture (and inspect Todo metadata
+with `todo list` if needed). Once relocated, rerun the guard for the same Turn
+and read its complete current scopes before editing. This presentation changes
+neither admission nor the explicit off view.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
@@ -380,15 +377,14 @@ presentation changes neither admission nor the explicit off view.
 控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
-续读提供延后交付的 Goal 写入范围、已记录的审批条目及选中 Todo 的请求写入范围。
-两段绑定同一份捕获。首段保留当前审批数量和生效范围摘要。
+续读提供延后交付的 Goal 写入范围、checkpointed `active_write_scope` 与已记录的
+审批条目。两段绑定同一份捕获；首段仅保留当前审批数量摘要，并自动折叠 Goal 通配符子路径。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
-如迁移需要较长的 Goal 或选中 Todo 写入范围，可从同一捕获按
-`/goal_boundary/write_scope` 和 `/selected_todo/required_write_scopes` 读取。
-切换后以原 Turn 重新准入，编辑前读取其完整的当前范围。该展示调整不改变准入判定
-或显式关闭渐进读取时的视图。
+如迁移需要较长的 Goal 写入范围，可从同一捕获按 `/goal_boundary/write_scope`
+读取（如需查看 Todo 元数据可运行 `todo list`）。切换后以原 Turn 重新准入，编辑前
+读取其完整的当前范围。该展示调整不改变准入判定或显式关闭渐进读取时的视图。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
@@ -560,17 +556,6 @@ required. A retired lease requires a fresh eligible preparation capture.
 The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
-
-A successful managed `todo claim --thin` JSON reply can show peer worktree
-overlap advice with `write_scope_count` in place of long path lists. It keeps
-the other Todo, owner and overlap reason. Run `integration_overlap_detail_command`
-to read the complete advice under `receipts[].result.integration_overlap_advisories`
-for that claim operation. The command uses `todo receipt --thin --format json`
-to return the receipt identity and historical advice without copying the
-claimant's lease. The response includes `thin: true`. This read remains
-available after a lease changes. Omit `--thin` to read the entire receipt.
-Use `task-lease inspect` for a current grant. An ordinary claim reply retains
-the full path lists.
 
 For a selected Todo, preparation reads the canonical Todo and leases at one
 checked provider revision. The internal read returns only that Todo's status,

@@ -223,3 +223,108 @@ def test_real_cli_preserves_class_authority_and_expired_hints(tmp_path, monkeypa
             ["expired-scope-fixture"] if mode == "expired_missing" and required == "src/a.ts" else []
         )
     assert _spend_run_count(runtime) == 0
+
+
+def test_projection_repair_skips_when_goal_covers_repo_or_task_binds_repository(scope_transport) -> None:
+    assert projection_repair.build_boundary_projection_repair_hint(
+        {"write_scope": ["**"]},
+        {},
+        candidate_should_run=True,
+        selected_todo={"todo_id": "todo_a", "required_write_scopes": ["unlisted/**"]},
+    ) is None
+    assert projection_repair.build_boundary_projection_repair_hint(
+        {"write_scope": ["/repos/example/loopx/**"]},
+        {},
+        candidate_should_run=True,
+        selected_todo={"todo_id": "todo_a", "required_write_scopes": ["unlisted/**"]},
+        goal_repo="/repos/example/loopx",
+    ) is None
+    assert projection_repair.build_boundary_projection_repair_hint(
+        {"write_scope": ["docs/**"]},
+        {},
+        candidate_should_run=True,
+        selected_todo={
+            "todo_id": "todo_a",
+            "task_repository": "git:github.com/example/repo",
+            "required_write_scopes": ["src/**"],
+        },
+    ) is None
+    assert scope_transport == []
+    raw_fallback = projection_repair.build_boundary_projection_repair_hint(
+        {"write_scope": ["docs/**"]},
+        {},
+        candidate_should_run=True,
+        selected_todo={"todo_id": "todo_narrow"},
+        raw_agent_todo_summary={"items": [{"todo_id": "todo_narrow", "required_write_scopes": ["src/**"]}]},
+    )
+    assert raw_fallback is not None and raw_fallback["missing_write_scopes"] == ["src/**"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    ("required", "expected_allowed"),
+    [("plans", True), ("plans/draft.md", True), ("elsewhere/draft.md", False)],
+)
+def test_real_cli_preserves_exact_directory_grant_alongside_descendant_glob(
+    tmp_path, monkeypatch, provider, required, expected_allowed
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+        read_fixture_todos,
+    )
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _spend_run_count,
+        _write_fixture,
+    )
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    goal = config["goals"][0]
+    goal["coordination"]["write_scope"] = ["plans", "plans/**"]
+    registry.write_text(json.dumps(config))
+    state = project / goal["state_file"]
+    todos = read_fixture_todos(state)
+    todos[0]["required_write_scopes"] = [required]
+    initialize_canonical_authority(
+        runtime,
+        GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
+        ),
+        state_path=state,
+        provider=provider,
+    )
+    rc, packet = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--codex-app",
+        "--turn-instance-id",
+        f"plans-exact-{provider}-{required.replace('/', '-')}",
+        cwd=project,
+    )
+    assert rc == 0, json.dumps(packet, ensure_ascii=False)
+    assert packet["selected_todo"]["todo_id"] == TODO_ID
+    assert packet["goal_boundary"]["write_scope"] == ["plans", "plans/**"]
+    assert packet["normal_delivery_allowed"] is expected_allowed, packet
+    if expected_allowed:
+        assert packet["effective_action"] == "normal_run", packet
+    else:
+        assert packet["effective_action"] == "boundary_projection_repair", packet
+        assert packet["boundary_projection_gap"]["missing_write_scopes"] == [required]
+    assert _spend_run_count(runtime) == 0

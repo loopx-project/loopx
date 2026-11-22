@@ -426,9 +426,12 @@ function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelec
  * bodies again. A coalesced parent can span both parts; keep only the coverage
  * shared by the verified reduced selection and the ordinary remainder. */
 function withLinkedObservedRemainder(observed: JsonObject | undefined,
-    initial: ReturnType<typeof nativeContextReadPlan> | undefined): JsonObject | undefined {
-  if (!observed || !initial?.linked_opening_detail || !initial.remaining
-      || Object.hasOwn(observed.reused as JsonObject, initial.linked_opening_detail)) return observed;
+    initial: ReturnType<typeof nativeContextReadPlan> | undefined,
+    details?: readonly string[]): JsonObject | undefined {
+  const requiredDetails = details?.length ? details
+    : (initial?.linked_opening_detail ? [initial.linked_opening_detail] : []);
+  if (!observed || !initial?.linked_opening_detail || !initial.remaining || !requiredDetails.length
+      || requiredDetails.every(detail => Object.hasOwn(observed.reused as JsonObject, detail))) return observed;
   const ordinary = initial.plan.selections as ReadSelection[];
   const selected = observedSelection(ordinary, observed);
   if (selected === undefined) return observed;
@@ -750,7 +753,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const initial = request.include_initial_read_plan === true && groups
     ? nativeContextReadPlan(required.context, pointers, groups, openingSplit) : undefined;
   const observed = observe && pointers.length
-    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
+    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial, openingSplit?.details) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
@@ -773,60 +776,73 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
     scope?: Path): InitialOpeningSplit | undefined {
   const cli = jsonObject(jsonObject(context.interaction_contract)?.cli_channel);
   const candidate = "/selected_todo";
+  const controls = new Map<string, string[]>();
+  const details: string[] = [];
+  let linkedDetail: string | undefined;
   if (cli?.selection_required === true && groups.opening.includes(candidate)) {
     // This Todo is a recommendation. The current operation is selection;
     // keep its route and permission controls ahead of the candidate's details.
-    const controls = ["selection_required", "selection_policy_ref", "selection_command",
+    const selectionControls = ["selection_required", "selection_policy_ref", "selection_command",
       "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"]
       .map(field => pointer(["interaction_contract", "cli_channel", field]));
-    for (const control of [...controls, "/action_portfolio/selection_policy",
+    for (const control of [...selectionControls, "/action_portfolio/selection_policy",
       "/action_portfolio/suggested_actions"]) {
       const index = groups.remaining.indexOf(control);
       if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
     }
-    return {controls: new Map([[candidate, []]]), details: [candidate], linkedDetail: candidate};
+    controls.set(candidate, []);
+    details.push(candidate);
+    linkedDetail = candidate;
   }
-  if (!scope) return undefined;
-  const parent = scope.slice(0, -1), detail = scope.at(-1)!;
-  const body = jsonObject(at(context, parent)), boundary = pointer(parent);
-  const controls = new Map<string, string[]>();
-  const details: string[] = [];
-  let linkedDetail: string | undefined;
-  if (groups.opening.includes(boundary) && body && Array.isArray(body[detail]) && body[detail].length) {
-    const boundaryControls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
-    linkedDetail = pointer(scope);
-    details.push(linkedDetail);
-    controls.set(boundary, boundaryControls);
-    const checkpointPath = [...parent, "checkpointed_boundary_authority"];
-    const checkpoint = jsonObject(at(context, checkpointPath));
-    if (checkpoint?.schema_version === "checkpointed_boundary_authority_v0"
-        && Array.isArray(checkpoint.active_write_scope) && Number.isSafeInteger(checkpoint.active_count)
-        && Number.isSafeInteger(checkpoint.inactive_count) && Array.isArray(checkpoint.entries)
-        && checkpoint.entries.length) {
-      // Keep the current approval summary in the opening. Read the exact
-      // entries and write scope from the same capture before work.
-      const checkpointIndex = boundaryControls.indexOf(pointer(checkpointPath));
-      boundaryControls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
-        .map(key => pointer([...checkpointPath, key])));
-      details.push(pointer([...checkpointPath, "entries"]));
+  const parent = scope ? scope.slice(0, -1) : groups.opening
+    .map(field => field.slice(1).split("/").map(part => part.replace(/~1/g, "/").replace(/~0/g, "~")))
+    .find(path => path.length === 1 && jsonObject(jsonObject(at(context, path))?.checkpointed_boundary_authority) != null);
+  if (parent) {
+    const detail = scope?.at(-1);
+    const body = jsonObject(at(context, parent)), boundary = pointer(parent);
+    if (groups.opening.includes(boundary) && body) {
+      const deferWriteScope = Boolean(scope && detail && Array.isArray(body[detail]) && body[detail].length);
+      const checkpointPath = [...parent, "checkpointed_boundary_authority"];
+      const checkpoint = jsonObject(at(context, checkpointPath));
+      const activeWriteScopes = checkpoint?.active_write_scope;
+      const checkpointEntries = checkpoint?.entries;
+      const hasCheckpoint = checkpoint?.schema_version === "checkpointed_boundary_authority_v0"
+        && (activeWriteScopes === undefined || Array.isArray(activeWriteScopes))
+        && Number.isSafeInteger(checkpoint.active_count)
+        && Number.isSafeInteger(checkpoint.inactive_count);
+      const hasActiveScopes = hasCheckpoint && Array.isArray(activeWriteScopes) && activeWriteScopes.length > 0;
+      const hasCheckpointEntries = hasCheckpoint && Array.isArray(checkpointEntries) && checkpointEntries.length > 0;
+      if (deferWriteScope || hasActiveScopes || hasCheckpointEntries) {
+        const boundaryControls = Object.keys(body)
+          .filter(key => !(deferWriteScope && key === detail))
+          .map(key => pointer([...parent, key]));
+        if (deferWriteScope) details.push(pointer(scope!));
+        if (hasActiveScopes || hasCheckpointEntries) {
+          // Keep only approval summary counts on page 0; read active_write_scope and
+          // entries on demand from the same capture.
+          const checkpointIndex = boundaryControls.indexOf(pointer(checkpointPath));
+          if (checkpointIndex >= 0) {
+            boundaryControls.splice(
+              checkpointIndex,
+              1,
+              ...Object.keys(checkpoint)
+                .filter(key => key !== "entries" && key !== "active_write_scope")
+                .map(key => pointer([...checkpointPath, key])),
+            );
+          }
+          if (hasActiveScopes) details.push(pointer([...checkpointPath, "active_write_scope"]));
+          if (hasCheckpointEntries) details.push(pointer([...checkpointPath, "entries"]));
+        }
+        controls.set(boundary, boundaryControls);
+        if (!linkedDetail) linkedDetail = deferWriteScope ? pointer(scope!) : details[0];
+        // Current readiness belongs with the decision. Reorder only the new pinned
+        // reader, so an explicit historical initial-read cursor still replays.
+        const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
+        if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
+      }
     }
   }
-  const selected = jsonObject(context.selected_todo), requested = "required_write_scopes";
-  const scopes = selected?.[requested];
-  if (groups.opening.includes(candidate) && selected?.schema_version === "quota_selected_todo_v0"
-      && Array.isArray(scopes) && scopes.length && scopes.every(value => typeof value === "string" && value)) {
-    controls.set(candidate, Object.keys(selected).filter(key => key !== requested)
-      .map(key => pointer(["selected_todo", key])));
-    // Current requested scopes need this read even when the Goal's exact
-    // write scope can carry forward from an earlier observation.
-    linkedDetail = pointer(["selected_todo", requested]);
-    details.push(linkedDetail);
-  }
   if (!linkedDetail) return undefined;
-  // Current readiness belongs with the decision. Reorder only the new pinned
-  // reader, so an explicit historical initial-read cursor still replays.
-  const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
-  if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
   return {controls, details, linkedDetail};
 }
 

@@ -730,20 +730,17 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
   if (workspace && workspace.repository.toLowerCase() !== repository?.toLowerCase()) {
     return acquireDecisionResult("rejected", "lease_workspace_repository_mismatch");
   }
-  const advisoryIndexes: number[] = [], conflictIndexes: number[] = [];
+  const conflictIndexes: number[] = [];
   for (const [index, other] of input.other_leases.entries()) {
     if (!other.active || !other.effective) continue;
-    const sameCheckout = workspace !== null && sameLeaseCheckout(workspace, other.write_workspace);
-    if ((!sameCheckout && !repositoryScopesMayOverlap(repository, other.write_repository)) ||
-        !writeScopesOverlap(command.write_scopes, other.write_scopes)) continue;
-    // Verified code-edit mode coordinates integration, rather than requesting
-    // cross-checkout file exclusivity. Unknown legacy workspaces stay unknown;
-    // neither their records nor their execution ownership are changed.
-    if (workspace && !sameCheckout) advisoryIndexes.push(index);
-    else conflictIndexes.push(index);
+    // Lease isolation is keyed on Todo ownership plus same physical checkout/worktree
+    // exclusivity; per-path write_scopes conflicts are retired.
+    if (workspace !== null && sameLeaseCheckout(workspace, other.write_workspace)) {
+      conflictIndexes.push(index);
+    }
   }
   if (conflictIndexes.length > 0) {
-    return acquireDecisionResult("conflict", "write_scope_conflict", {
+    return acquireDecisionResult("conflict", "workspace_lease_conflict", {
       conflictIndexes,
     });
   }
@@ -751,7 +748,7 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
     return acquireDecisionResult("rejected", "lease_generation_exhausted");
   }
   return acquireDecisionResult("apply", "lease_acquire", {
-    advisoryIndexes,
+    advisoryIndexes: [],
     nextLease: {
       present: true,
       active: true,
