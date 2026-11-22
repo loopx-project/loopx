@@ -564,10 +564,14 @@ def test_source_can_settle_cancellation_without_reusing_lost_receiver_authority(
 
 
 def test_source_correction_aborts_unknown_effect_and_next_revision_can_continue(source_goal, tmp_path, capsys, monkeypatch):
+    from loopx.capabilities.manager_context.roundtrip import report
     from loopx.control_plane.collaboration import request_amendment as io
+    from loopx.control_plane.collaboration.peers import consume_return, read_inbox
 
     f = source_goal
     rid, commit = _proposal(f, tmp_path, capsys)
+    root, registry, goal_id = f["runtime"], f["registry"], f["ref"]["goal_id"]
+    report(root, goal_id, "agent-a", rid, "conclusion", "Result from the original revision", registry=registry)
     actual = io._goal
 
     def unknown(*args, **kwargs):
@@ -580,6 +584,28 @@ def test_source_correction_aborts_unknown_effect_and_next_revision_can_continue(
                 row = _unfinished_requests(f, capsys, actor)[rid]
                 assert row["step"] == "reconcile_reservation"
                 assert row["request_revision"] == 2
+            code, packet = _inbox(f, capsys, "read", actor="agent-b")
+            assert code == 0, packet
+            attention = packet["unfinished_delegations"]["return_attention"]
+            assert attention["count"] == 1
+            old_return, = attention["items"]
+            assert old_return["request_id"] == rid
+            assert old_return["request_revision"] == 2
+            assert old_return["step"] == "consume_peer_result"
+            assert old_return["returns"] == [{"result_key": "conclusion", "request_revision": 1,
+                "status": "delivered", "consumed": False}]
+            returned, = read_inbox(root, registry, goal_id, "agent-b",
+                turn_instance_id="turn-prior-revision-result")["peer_returns"]["items"]
+            assert returned["request_id"] == rid and returned["request_revision"] == 1
+            assert returned["text"] == "Result from the original revision"
+            consume_return(root, goal_id, "agent-b", rid, registry=registry,
+                turn_instance_id="turn-prior-revision-result", disposition="accepted")
+            assert _control(f, rid, "inspect")["view"]["active_reservation"] == view["active_reservation"]
+            code, packet = _inbox(f, capsys, "read", actor="agent-b")
+            assert code == 0, packet
+            agenda = packet["unfinished_delegations"]
+            assert agenda["items"][0]["step"] == "reconcile_reservation"
+            assert agenda["return_attention"] == {"count": 0, "items": [], "omitted_count": 0}
         return actual(*args, **kwargs)
 
     with monkeypatch.context() as stopped:
