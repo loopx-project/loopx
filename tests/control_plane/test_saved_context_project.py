@@ -35,9 +35,10 @@ def test_stateless_saved_work_keeps_the_captured_preparation_and_readback(tmp_pa
                 "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, cwd=project)
             assert code == 0 and claim["ok"], claim
         directory = tmp_path / phase
-        code, source = _run_cli(registry, runtime, "quota", "should-run", *binding, "--complete-turn",
+        code, source = _run_cli(registry, runtime, "quota", "should-run", *binding,
             "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
         assert code == 0, source
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert source["normal_delivery_allowed"] is (phase == "ready")
         captures.append(directory / "decision.json")
 
