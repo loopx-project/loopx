@@ -1280,7 +1280,7 @@ def test_plan_native_command_exposes_runtime_root_only_during_workspace_write_pl
         "MODEL_NAME": "gpt-5.4",
         "REASONING_EFFORT": "low",
     }
-    expected_flag = f"sandbox_workspace_write.writable_roots={json.dumps(list(dict.fromkeys([str(runtime_root), str(runtime_root.resolve())])))}"
+    expected_flag = f"sandbox_workspace_write.writable_roots={json.dumps([str(runtime_root.resolve())])}"
     ws_exec = Execution(mode="turn", context="fresh", sandbox="workspace-write", validation_command=("true",))
     for session_wake in (None, SimpleNamespace(session_id="sess-1")):
         plan_cmd = native_command(env, ws_exec, "plan", wake, session_wake)
@@ -1293,14 +1293,20 @@ def test_plan_native_command_exposes_runtime_root_only_during_workspace_write_pl
     assert not any("writable_roots" in arg for arg in native_command(env, dfa_exec, "plan", wake, None))
 
 
-@pytest.mark.parametrize("context", ["fresh", "resume"])
-def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, monkeypatch, context):
+def _run_plan_runtime_root_probe(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    context: str,
+    project: Path,
+    raw_runtime_root: str,
+    expected_abs: str,
+    forbidden_roots: list[str],
+):
     from types import SimpleNamespace
     from benchmark.runtime.codex import Execution
     from benchmark.runtime.worker import native_command, run_once
 
-    launcher = tmp_path / "launcher"
-    project = tmp_path / "project"
     wake = tmp_path / "wake"
     home = tmp_path / "home"
     logs = tmp_path / "logs"
@@ -1309,17 +1315,12 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
     loopx_cli = tmp_path / "loopx"
     skills = tmp_path / "skills"
     registry = tmp_path / "registry.json"
-    for d in (launcher, project, wake, home, logs, skills):
+    for d in (wake, home, logs, skills):
         d.mkdir(parents=True, exist_ok=True)
     task_doc.write_text("# Task\n", encoding="utf-8")
     registry.write_text("{}", encoding="utf-8")
-    rel_rt = "rel-runtime"
-    (project / rel_rt).mkdir()
-    (launcher / rel_rt).mkdir()
 
-    monkeypatch.chdir(launcher)
-    expected_abs = os.path.abspath(project / rel_rt)
-    expected_roots = list(dict.fromkeys([expected_abs, str(Path(expected_abs).resolve())]))
+    expected_roots = [expected_abs]
     expected_flag = f"sandbox_workspace_write.writable_roots={json.dumps(expected_roots)}"
 
     ws_exec = Execution(mode="turn", context=context, sandbox="workspace-write", validation_command=("true",))
@@ -1328,7 +1329,7 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
         {
             "CODEX_BIN": str(codex_bin),
             "LOOPX_PROJECT": str(project),
-            "LOOPX_RUNTIME_ROOT": rel_rt,
+            "LOOPX_RUNTIME_ROOT": raw_runtime_root,
             "MODEL_NAME": "gpt-5.4",
             "REASONING_EFFORT": "low",
         },
@@ -1338,9 +1339,10 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
         session,
     )
     assert expected_flag in cmd
-    assert str(launcher / rel_rt) not in json.dumps(cmd)
+    for forbidden in forbidden_roots:
+        assert forbidden not in json.dumps(cmd)
 
-    observed = {}
+    observed: dict[str, object] = {}
     codex_bin.write_text(
         f"#!{sys.executable}\n"
         "import json, os, pathlib, sys\n"
@@ -1381,6 +1383,7 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
         "benchmark.runtime.planning.validate_plan_readback",
         lambda result, before, after: {"status": "ready", "todo_ids": ["t1"], "state_readback_verified": True},
     )
+
     def _fake_session_wake(wake_env, *a, **kw):
         observed["wake_rt"] = wake_env["LOOPX_RUNTIME_ROOT"]
         return SimpleNamespace(
@@ -1391,6 +1394,7 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
             observe=lambda *_: None,
             host_launch_decision=lambda *_: None,
         )
+
     monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", _fake_session_wake)
     monkeypatch.setattr("benchmark.runtime.worker.heartbeat_launch_check", lambda *a, **kw: None)
 
@@ -1400,7 +1404,7 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
             "CODEX_BIN": str(codex_bin),
             "LOOPX_CLI": str(loopx_cli),
             "LOOPX_REGISTRY": str(registry),
-            "LOOPX_RUNTIME_ROOT": rel_rt,
+            "LOOPX_RUNTIME_ROOT": raw_runtime_root,
             "LOOPX_PROJECT": str(project),
             "LOOPX_CODEX_HOME": str(home),
             "LOOPX_WAKE_LOG_DIR": str(logs),
@@ -1422,6 +1426,7 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
         }
     )
     assert receipt["ok"] is True
+    assert len(observed["packets"]) == 2
     for packet in observed["packets"]:
         assert packet["env_rt"] == expected_abs
         assert packet["cli"][packet["cli"].index("--runtime-root") + 1] == expected_abs
@@ -1429,4 +1434,73 @@ def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, 
     codex_seen = json.loads((tmp_path / "codex-observed.json").read_text(encoding="utf-8"))
     assert codex_seen["runtime_root"] == expected_abs
     assert expected_flag in codex_seen["argv"]
-    assert str(launcher / rel_rt) not in json.dumps(codex_seen)
+    for forbidden in forbidden_roots:
+        assert forbidden not in json.dumps(codex_seen)
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_relative_runtime_root_binds_consistently_across_launcher_cwd(tmp_path, monkeypatch, context):
+    launcher = tmp_path / "launcher"
+    project = tmp_path / "project"
+    launcher.mkdir()
+    project.mkdir()
+    rel_rt = "rel-runtime"
+    (project / rel_rt).mkdir()
+    launcher_rt = launcher / rel_rt
+    launcher_rt.mkdir()
+    monkeypatch.chdir(launcher)
+    expected_abs = os.path.realpath(os.path.join(os.path.realpath(project), rel_rt))
+    _run_plan_runtime_root_probe(
+        tmp_path, monkeypatch,
+        context=context,
+        project=project,
+        raw_runtime_root=rel_rt,
+        expected_abs=expected_abs,
+        forbidden_roots=[str(launcher_rt), str(launcher_rt.resolve())],
+    )
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+@pytest.mark.parametrize("path_kind", ["absolute", "relative"])
+def test_symlink_parent_runtime_root_resolves_in_filesystem_order(tmp_path, monkeypatch, context, path_kind):
+    from benchmark.runtime.worker import _normalize_runtime_root
+
+    project = tmp_path / "project"
+    decoy_parent = tmp_path / "isolated_decoy"
+    real_parent = tmp_path / "isolated_real"
+    decoy_target = decoy_parent / "target"
+    real_sub = real_parent / "sub"
+    real_target = real_parent / "target"
+    for directory in (project, decoy_parent, decoy_target, real_sub, real_target):
+        directory.mkdir(parents=True)
+
+    # Folding '..' before expanding the symlink would jump into decoy_target /
+    # project/target instead of resolving through real_sub into real_target.
+    decoy_link = decoy_parent / "link_to_sub"
+    decoy_link.symlink_to(real_sub)
+    project_link = project / "link_to_sub"
+    project_link.symlink_to(real_sub)
+    (project / "target").mkdir()
+
+    expected_physical = str(real_target.resolve())
+    assert str(decoy_target.resolve()) != expected_physical
+    assert str((project / "target").resolve()) != expected_physical
+
+    if path_kind == "absolute":
+        raw_rt = str(decoy_link / ".." / "target")
+        decoy_lexical = os.path.abspath(raw_rt)
+        forbidden = [raw_rt, decoy_lexical, str(decoy_target.resolve())]
+    else:
+        raw_rt = "link_to_sub/../target"
+        decoy_lexical = os.path.abspath(os.path.join(os.path.abspath(project), raw_rt))
+        forbidden = [raw_rt, decoy_lexical, str((project / "target").resolve())]
+
+    assert _normalize_runtime_root(raw_rt, str(project)) == expected_physical
+    _run_plan_runtime_root_probe(
+        tmp_path, monkeypatch,
+        context=context,
+        project=project,
+        raw_runtime_root=raw_rt,
+        expected_abs=expected_physical,
+        forbidden_roots=forbidden,
+    )

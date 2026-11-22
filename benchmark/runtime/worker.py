@@ -478,11 +478,11 @@ def run_native_goal(
 
 
 def _normalize_runtime_root(runtime_root: str, project: str) -> str:
-    """Bind LOOPX_RUNTIME_ROOT to LOOPX_PROJECT regardless of the launcher's CWD."""
+    """Resolve LOOPX_RUNTIME_ROOT in filesystem order relative to LOOPX_PROJECT."""
     root = Path(runtime_root)
     if root.is_absolute():
-        return os.path.abspath(root)
-    return os.path.abspath(os.path.join(os.path.abspath(project), root))
+        return os.path.realpath(root)
+    return os.path.realpath(os.path.join(os.path.realpath(project), root))
 
 
 def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) -> list[str]:
@@ -492,8 +492,7 @@ def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) ->
     if not runtime_root:
         return []
     normalized = _normalize_runtime_root(runtime_root, env["LOOPX_PROJECT"])
-    roots = list(dict.fromkeys([normalized, str(Path(normalized).resolve())]))
-    return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps(roots)}"]
+    return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps([normalized])}"]
 
 
 def native_command(env, execution, stage, wake, session_wake, *, native_hook_args=()):
