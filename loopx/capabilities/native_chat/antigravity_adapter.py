@@ -1130,7 +1130,7 @@ class AntigravityAdapter:
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        from ...chat_attachments import normalize_chat_image_attachments
+        from ...chat.attachments import normalize_chat_image_attachments
 
         normalized = normalize_chat_image_attachments(attachments or [])
         media = [

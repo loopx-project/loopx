@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from ...chat_attachments import (
+from ...chat.attachments import (
     CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES, normalize_chat_image_attachments,
 )
 from .goal_channel_transport import call, json_payload, lark_args

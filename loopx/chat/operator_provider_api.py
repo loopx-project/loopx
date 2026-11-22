@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from .control_plane.operator_provider import (
+from ..control_plane.operator_provider import (
     PROVIDER_KEY_FIELD,
     BASE_URL_FIELD,
     operator_provider_projection,

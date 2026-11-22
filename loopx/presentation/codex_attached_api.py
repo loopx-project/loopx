@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..agent_registry import registered_agent_ids_for_goal
 from ..attached_session import load_attached_session_registry
-from ..chat_attachments import CHAT_JSON_MAX_BYTES
+from ..chat.attachments import CHAT_JSON_MAX_BYTES
 from ..capabilities.native_chat.codex_attached import (
     DesktopProtocolError,
     DesktopClient,
