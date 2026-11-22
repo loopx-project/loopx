@@ -337,7 +337,7 @@ def _unsettled_host_turn_recovery(
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
 ) -> dict[str, Any] | None:
-    if not agent_id or not current_turn_instance_id:
+    if not agent_id:
         return None
     preflight = _prior_closeout_preflight(
         runtime_root=runtime_root,
@@ -438,8 +438,9 @@ def apply_unsettled_host_turn_recovery_if_required(
         current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
     )
-    if verdict["recovery"].get("state") == "attention_required":
-        payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
+    # Refresh scheduler_hint for both recovery_required and attention_required so
+    # an earlier wait or terminal stop hint never overrides recovery arbitration.
+    payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
     return True
 
 

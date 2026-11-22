@@ -73,7 +73,8 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
 
     view = select(
         payload, "ok", "goal_id", "goal_ref", "runtime_root", "state",
-        "error", "error_code", "reason", "status", "recommended_action", "effective_action", "should_run",
+        "decision", "error", "error_code", "reason", "reason_code", "status",
+        "recommended_action", "effective_action", "should_run",
     )
     if payload.get("ok") is not True:
         return view
@@ -94,6 +95,24 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
         ("agent_identity", ("agent_id",)),
         ("autonomous_replan_obligation", ("required", "obligation_id", "agent_id", "resolution_mode")),
         ("heartbeat_receipt", ("settlement_identity",)),
+        (
+            "unsettled_host_turn_recovery",
+            (
+                "schema_version",
+                "state",
+                "reason_code",
+                "scope",
+                "prior_turn_instance_id",
+                "prior_event_id",
+                "binding_kind",
+                "binding_id",
+                "settlement_effect_id",
+                "repair",
+                "missing_receipts",
+                "admissions_without_progress",
+                "admission_limit",
+            ),
+        ),
     ):
         if key in payload:
             view[key] = select(payload[key], *fields)
