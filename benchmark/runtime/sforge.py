@@ -619,23 +619,20 @@ class SForgeWorker(CodexAgent):
                     # The sealed Goal, task graph, review counters and strategy
                     # are the continuing state. Do not bootstrap, seed another
                     # task, or reset an existing configuration during restore.
-                    if self.execution_yardstick_enabled is not None:
-                        if self.native_child_limit is not None:
-                            retained = asyncio.run(self.runtime._loopx(
-                                self.environment, ["configure-goal", "--goal-id", self.runtime.goal_id], cwd=self.cwd,
-                            ))
-                            self.runtime._verify_native_child_configuration(
-                                retained.get("after") or retained.get("before") or {}
-                            )
-                        asyncio.run(self.runtime._apply_warm_start_yardstick(self.environment, cwd=self.cwd))
-                        asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
-                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
-                    else:
-                        if self.native_child_limit is not None:
-                            asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
-                        asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
-                        if self.native_child_limit is None:
-                            asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                    # Read-only pre-context check preserves registry.json bytes
+                    # until _warm_command("context") verifies the sealed source.
+                    pre_verify_kwargs = (
+                        {} if self.execution_yardstick_enabled is None else {"verify_yardstick": False}
+                    )
+                    if self.native_child_limit is not None:
+                        asyncio.run(self.runtime._verify_phase_configuration(
+                            self.environment, cwd=self.cwd, **pre_verify_kwargs,
+                        ))
+                    asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
+                    if self.native_child_limit is None:
+                        asyncio.run(self.runtime._verify_phase_configuration(
+                            self.environment, cwd=self.cwd, **pre_verify_kwargs,
+                        ))
                 else:
                     is_explore_cold = self.profile == "heartbeat-explore"
                     asyncio.run(self.runtime._prepare_phase(
@@ -655,6 +652,9 @@ class SForgeWorker(CodexAgent):
                 asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
             if self.warm_start is not None:
                 self._warm_command("context")
+                if self.runtime.execution.uses_loopx and self.execution_yardstick_enabled is not None:
+                    asyncio.run(self.runtime._apply_warm_start_yardstick(self.environment, cwd=self.cwd))
+                    asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
             if self.warm_start is not None and not self._config.agent_api_base_url:
                 auth = Path(os.environ["CODEX_AUTH_JSON_PATH"]).resolve()
                 asyncio.run(self.environment.upload_file(auth, f"{_CODEX_HOME}/auth.json"))

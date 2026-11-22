@@ -644,6 +644,7 @@ class BenchmarkCodex(CodexOffline):
 
     async def _verify_phase_configuration(
         self, environment: BaseEnvironment, *, cwd: str, verify_explore: bool = True,
+        verify_yardstick: bool = True,
     ) -> None:
         """Read the treatment without reconfiguring a restored Goal or its queue."""
         key, _, expected = self._replan_configuration()
@@ -665,7 +666,7 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
             )
-        if self.execution_yardstick_enabled is not None:
+        if verify_yardstick and self.execution_yardstick_enabled is not None:
             actual_yardstick = configured_state.get("execution_profile", {}).get("yardstick_enabled")
             if type(actual_yardstick) is not bool or actual_yardstick != self.execution_yardstick_enabled:
                 raise RuntimeError("execution_yardstick_enabled readback mismatch")

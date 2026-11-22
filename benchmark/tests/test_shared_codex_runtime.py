@@ -2375,3 +2375,156 @@ def test_sforge_worker_default_off_opt_ins_and_base_verification_before_explore(
         w_stale.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(stale_dir))
     assert not any("--explore-graph-enabled" in call for call in seen_args)
     assert not (logs_stale / "explore-activation.json").exists()
+
+
+@pytest.mark.parametrize("yardstick,native_child_limit", [(False, None), (True, None), (False, 3)])
+def test_sforge_warm_start_verifies_sealed_registry_before_yardstick_toggle(
+    tmp_path, monkeypatch, yardstick, native_child_limit,
+):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    import contextlib
+    import hashlib
+    import io
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+    from loopx.cli import main
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    monkeypatch.chdir(ws)
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(auth_file))
+    monkeypatch.setattr("benchmark.runtime.harbor.BenchmarkCodex.install", lambda self, env: asyncio.sleep(0))
+
+    reg = tmp_path / "donor-reg.json"
+    rt = tmp_path / "donor-rt"
+
+    def run_cli_sync(args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["--format", "json", "--registry", str(reg), "--runtime-root", str(rt), *args])
+        assert code == 0, buf.getvalue()
+        return json.loads(buf.getvalue())
+
+    extra_child = (
+        ["--spawn-allowed", "--max-children", str(native_child_limit)]
+        if native_child_limit is not None else []
+    )
+    run_cli_sync([
+        "bootstrap", "--project", str(ws), "--goal-id", "benchmark-goal",
+        "--objective", "Solve warm start task", "--adapter-kind", "read_only_project_map_v0",
+        "--adapter-status", "connected-read-only", "--write-scope", "**", "--no-global-sync",
+        *extra_child,
+    ])
+    initial_yardstick = "--no-execution-yardstick-enabled" if yardstick else "--execution-yardstick-enabled"
+    run_cli_sync([
+        "configure-goal", "--goal-id", "benchmark-goal",
+        "--registered-agent", "benchmark-agent",
+        "--agent-work-mode", "benchmark-agent=active",
+        "--execution-replan-after-turns", "6",
+        "--execution-planning-horizon-goal",
+        initial_yardstick,
+        "--explore-graph-enabled", "--explore-harness-enabled",
+        "--explore-harness-profile", "adaptive-resilient",
+        "--execute",
+    ])
+    sealed_sha256 = hashlib.sha256(reg.read_bytes()).hexdigest()
+
+    events = []
+
+    class DummyEnv:
+        async def exec(self, command, **_kw):
+            if command.startswith("cat "):
+                return SimpleNamespace(return_code=0, stdout="Solve warm task.\n")
+            return SimpleNamespace(return_code=1, stdout="")
+
+        async def upload_file(self, *a, **kw):
+            return None
+
+    async def cli(environment, args, **kwargs):
+        if any(flag in args for flag in ("--execution-yardstick-enabled", "--no-execution-yardstick-enabled")):
+            events.append("apply_yardstick")
+        return run_cli_sync(args)
+
+    async def noop(*a, **kw):
+        return None
+
+    def verify_seal_then_admit(self, action, *, user="agent"):
+        events.append(f"warm:{action}")
+        if action == "context":
+            observed_sha256 = hashlib.sha256(reg.read_bytes()).hexdigest()
+            if observed_sha256 != sealed_sha256:
+                raise ValueError("restored LoopX registry differs from its sealed source")
+
+    monkeypatch.setattr(SForgeWorker, "_warm_command", verify_seal_then_admit)
+
+    warm_stub = SimpleNamespace(
+        goal_id="benchmark-goal",
+        agent_id="benchmark-agent",
+        stage=lambda *a, **kw: asyncio.sleep(0, result=()),
+        research_sidecar=False,
+        native_child_limit=native_child_limit,
+        deadline_epoch=time.time() + 600,
+        verify=lambda _cwd: None,
+        source_context_dir=lambda: tmp_path / "src-ctx",
+    )
+    (tmp_path / "src-ctx").mkdir(exist_ok=True)
+
+    worker = SForgeWorker(
+        SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore",
+        cwd=str(ws),
+        task_entry="loopx-planned",
+        warm_start=warm_stub,
+        execution_yardstick_enabled=yardstick,
+        native_child_limit=native_child_limit,
+        feedback_prompt="Solve warm task" if native_child_limit is not None else None,
+        workspace_instructions="Solve warm task" if native_child_limit is not None else None,
+    )
+    worker.backend = SimpleNamespace(
+        exec_run=lambda *a, **kw: SimpleNamespace(exit_code=0, output=""),
+        exec_run_with_exit_code=lambda *a, **kw: SimpleNamespace(timed_out=False, exit_code=0, output=""),
+        copy_to_container=lambda *a: None,
+    )
+    logs = tmp_path / "logs-seal"
+    logs.mkdir()
+    worker.install_stop_hook(worker.backend, None, logs, None)
+    worker.environment = DummyEnv()
+    worker.runtime.environment = DummyEnv()
+    monkeypatch.setattr(worker.runtime, "_loopx", cli)
+    monkeypatch.setattr(worker.runtime, "_write_task_document", noop)
+    monkeypatch.setattr(worker.runtime, "_registry_exists", lambda *a, **kw: asyncio.sleep(0, result=reg.is_file()))
+
+    worker.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(ws))
+    assert events.index("warm:context") < events.index("apply_yardstick")
+    assert hashlib.sha256(reg.read_bytes()).hexdigest() != sealed_sha256
+    after = run_cli_sync(["configure-goal", "--goal-id", "benchmark-goal"])
+    assert (after.get("after") or after["before"])["execution_profile"]["yardstick_enabled"] is yardstick
+
+    # Pre-context registry mutation must reject in _warm_command("context") before _apply_warm_start_yardstick runs.
+    events.clear()
+    worker_bad = SForgeWorker(
+        SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore",
+        cwd=str(ws),
+        task_entry="loopx-planned",
+        warm_start=warm_stub,
+        execution_yardstick_enabled=not yardstick,
+        native_child_limit=native_child_limit,
+        feedback_prompt="Solve warm task" if native_child_limit is not None else None,
+        workspace_instructions="Solve warm task" if native_child_limit is not None else None,
+    )
+    worker_bad.backend = worker.backend
+    logs_bad = tmp_path / "logs-seal-bad"
+    logs_bad.mkdir()
+    worker_bad.install_stop_hook(worker_bad.backend, None, logs_bad, None)
+    worker_bad.environment = DummyEnv()
+    worker_bad.runtime.environment = DummyEnv()
+    monkeypatch.setattr(worker_bad.runtime, "_loopx", cli)
+    monkeypatch.setattr(worker_bad.runtime, "_write_task_document", noop)
+    monkeypatch.setattr(worker_bad.runtime, "_registry_exists", lambda *a, **kw: asyncio.sleep(0, result=reg.is_file()))
+    with pytest.raises(ValueError, match="restored LoopX registry differs from its sealed source"):
+        worker_bad.format_run_cmd(str(tmp_path / "prompt.md"), model="fixture", cwd=str(ws))
+    assert "apply_yardstick" not in events

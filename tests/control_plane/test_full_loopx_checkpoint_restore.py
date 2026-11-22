@@ -260,3 +260,111 @@ def test_full_state_cannot_be_substituted_for_research_import(retained_point, ch
     c = retained_point
     with pytest.raises(ValueError):
         replace(c["start"], **change).verify(str(c["workspace"]))
+
+
+@pytest.mark.parametrize("retained_point", [("file", False), ("sqlite", False)], indirect=True)
+def test_pre_verify_yardstick_mutation_fails_restored_seal(retained_point, monkeypatch):
+    c = retained_point
+    _empty_receiver(c)
+    warm.restore_worker(c["declaration"], c["workspace"])
+    # Mutating registry.json before _warm_command("context") breaks the donor seal.
+    c["cli"]("configure-goal", "--goal-id", "research", "--execution-yardstick-enabled", "--execute")
+    with pytest.raises(ValueError, match="restored LoopX registry differs from its sealed source"):
+        verify_restored_loopx_state(c["env"], c["point"], c["metadata"], deadline=time.time() + 60)
+    with pytest.raises(ValueError, match="restored LoopX registry differs from its sealed source"):
+        admit_native_checkpoint_session(
+            c["env"], c["point"], c["sealed"]["sha256"], c["config"],
+            sandbox="read-only", timeout=60, restore_loopx_state=True,
+        )
+
+
+@pytest.mark.parametrize("retained_point", [("file", False), ("sqlite", False)], indirect=True)
+def test_post_verify_yardstick_toggle_preserves_multi_wake_and_warm_readback(retained_point, monkeypatch):
+    c = retained_point
+    manifest = json.loads((c["point"] / "checkpoint.json").read_bytes())
+    full_metadata = json.loads(json.dumps(manifest["point_metadata"]))
+    full_metadata["native_session"].update({
+        "completed_turn_id": "turn-source-1",
+        "turn_ids": ["turn-source-1"],
+        "visible_history_sha256": "a" * 64,
+        "host_version": "codex-fixture-1",
+    })
+    components = [
+        {"id": entry["id"], "source_path": str(c["point"] / "components" / entry["id"])}
+        for entry in manifest["components"]
+    ]
+    probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    full_point = c["tmp_path"] / "point-full"
+    sealed = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "capture",
+        "components": components,
+        "point_metadata": full_metadata,
+        "expected_source_sha256": probe["source_sha256"],
+        "destination": str(full_point),
+    })
+    full_decl = {"root": str(full_point), "sha256": sealed["sha256"], "deadline_epoch": c["start"].deadline_epoch}
+
+    _empty_receiver(c)
+    warm.restore_worker(full_decl, c["workspace"])
+
+    def fork(*args, **kwargs):
+        c["home"].mkdir(exist_ok=True)
+        (c["home"] / "config.toml").write_bytes(c["config"].read_bytes())
+        return {"session_id": "verified-fork", "model_calls": 0}
+
+    def native_check(*args, **kwargs):
+        return {
+            "metadata": {
+                **full_metadata["native_session"],
+                "config_sha256": hashlib.sha256(c["config"].read_bytes()).hexdigest(),
+            }
+        }
+
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.fork_native_checkpoint", fork)
+    monkeypatch.setattr("loopx.hosts.codex_checkpoint.native_session_checkpoint", native_check)
+
+    # 1. Verify sealed donor state + admit verified fork BEFORE any registry override.
+    verify_restored_loopx_state(c["env"], full_point, full_metadata, deadline=time.time() + 60)
+    admitted = admit_native_checkpoint_session(
+        c["env"], full_point, sealed["sha256"], c["config"],
+        sandbox="read-only", timeout=60, restore_loopx_state=True,
+    )
+    assert admitted["session_binding_admitted"] is True
+    assert admitted["session_id"] == "verified-fork"
+    expected_goal_ref = dict(c["wake"].goal_ref) if c["wake"].goal_ref is not None else None
+
+    # 2. Apply authorized post-verify yardstick overrides (True -> False), modifying registry.json.
+    c["cli"]("configure-goal", "--goal-id", "research", "--execution-yardstick-enabled", "--execute")
+    c["cli"]("configure-goal", "--goal-id", "research", "--no-execution-yardstick-enabled", "--execute")
+    assert hashlib.sha256(c["registry"].read_bytes()).hexdigest() != full_metadata["loopx_state"]["registry_sha256"]
+    cfg = c["cli"]("configure-goal", "--goal-id", "research")
+    assert (cfg.get("after") or cfg["before"])["execution_profile"]["yardstick_enabled"] is False
+
+    # Direct pre-restore seal verifier still fails on mismatch (never weakened).
+    with pytest.raises(ValueError, match="restored LoopX registry differs from its sealed source"):
+        verify_restored_loopx_state(c["env"], full_point, full_metadata, deadline=time.time() + 60)
+
+    # 3. Subsequent warm admission readback (fresh_replan / recovery via admit_warm_session)
+    #    and Wake-2 CodexAgentSession(context="resume") both succeed against the bound fork.
+    declaration = {
+        "root": str(full_point),
+        "sha256": sealed["sha256"],
+        "config": str(c["config"]),
+        "deadline_epoch": int(time.time()) + 600,
+    }
+    readback = warm.admit_warm_session(c["env"], declaration)
+    assert readback["session_binding_admitted"] is True
+    assert readback["session_id"] == "verified-fork"
+
+    from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
+
+    warm_json = c["tmp_path"] / "warm-resume.json"
+    warm_json.write_text(json.dumps({**declaration, "goal_id": "research", "agent_id": "researcher", "fresh_replan": False}))
+    wake2 = CodexAgentSession(c["env"], context="resume", sandbox="read-only", receipt={})
+    assert wake2.session_id == "verified-fork"
+    assert wake2.goal_ref == expected_goal_ref
+    assert prepare_session_refresh(
+        {**c["env"], "LOOPX_WARM_START": str(warm_json), "LOOPX_ITERATION_CONTEXT": "resume"},
+        wake2,
+        c["tmp_path"],
+    ) == ""
