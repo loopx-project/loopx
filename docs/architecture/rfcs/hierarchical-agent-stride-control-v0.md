@@ -743,6 +743,45 @@ Equality gives the same expected value as direct `grow`. If a probe can
 return an inconclusive result, include that outcome's probability and its
 continuation value at the remaining budget in the comparison.
 
+**Estimate the inputs before choosing.** Fix the incumbent, peak workload
+and scale, evaluation horizon, and acceptance criteria for the comparison.
+In the actual Todo, $T$ means the current mechanism meets the declared useful
+peak gain at that scale under the existing correctness constraints.
+
+- **Transfer prior.** Use the closest comparable independent evaluations
+  available before the probe, matched by mechanism, workload, scale and
+  acceptance. Report verified transfers over resolved cases, alongside
+  missing labels and uncertainty. Repeated timings can refine a case's
+  noise estimate and share one transfer label.
+- **Probe accuracy.** Use cases with a quick result and an independent
+  reference verdict for the same candidate revision and workload scope.
+  Within each reference state ($T$ or $\neg T$), divide positive, negative
+  and inconclusive counts by the paired-case count to estimate the
+  likelihoods of each result. The two error rates can differ. A state
+  without pairs remains unknown. Report which probe results obtained
+  reference labels and scope the estimates to that coverage. Where useful
+  within budget, check some probe-negative cases for missed transfers.
+- **Route utility.** For `grow` and `switch`, use comparable runs to estimate
+  the possible accepted gains over the same incumbent at the same remaining
+  budget and horizon. Weight the outcomes by their likelihood, including
+  fallback after failure. Include implementation, switching, recovery and
+  final verification in the resource estimates. Use ranges supported by
+  comparable runs or the mechanism's limits, and retain unknowns for
+  quantities those sources cannot bound.
+
+Before results arrive, use the existing Stride plan and probe to record or
+reference the estimates, scope, evidence and what observation could change
+the choice.
+
+**Choose with sparse evidence.** Compare feasible choices across plausible
+ranges for the prior, probe likelihoods, gains and costs. Use the preferred
+route if the ordering is stable. If it can flip, identify the assumption
+that changes the choice. Favor a bounded probe when the expected improvement
+justifies its cost and delay and leaves time and resources for final
+confirmation. Otherwise favor a supported, reversible next slice, or retain
+the incumbent and record the question as unresolved through the existing
+stop or wait conditions.
+
 In a later authorized Turn, use `decision_followthrough` and `previous_review`
 to tie the next choice to the exact candidate, workload and observed result.
 Read back all three outcomes across the trial cases.
@@ -758,6 +797,22 @@ Use the existing Todo, Turn admission and settlement paths. Independently
 verify the action taken. For executed follow-up work, check whether it
 followed the decision and how its result compares with the original acceptance
 criteria. Record complete costs, including inconclusive probes, in all three cases.
+
+**Calibrate from verified outcomes.** Link the original forecast to the
+observed probe result, the route actually executed, the independent verdict
+and full observed cost. Update transfer counts with resolved reference
+labels, probe likelihoods with paired results and labels, and route payoff
+estimates with the executed route's verified outcomes and cost. For example,
+a negative probe followed by an accepted `switch` outcome updates the
+`switch` estimate. The original mechanism's transfer and the probe's
+classification error remain unknown until independently checked.
+
+Keep the original forecast and the evidence for the update. Report unresolved
+labels and unchosen outcomes as unknown. As comparable cases accumulate,
+compare prior and posterior forecasts against verified frequencies separately,
+and check gain and cost ranges against realized results. Keep comparisons
+scoped to the mechanism, workload, horizon, and probe and reference versions.
+Check revised estimates on later comparable cases.
 
 **Follow-up work.** For cross-Todo planning, start with two Todos within one
 Goal. Check that shared validation covers each Todo's acceptance criteria and
