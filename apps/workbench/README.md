@@ -43,6 +43,8 @@ LooChat 不动 agent 本身的目录、配置和会话，装好即用。LooChat 
 
 各家 agent CLI 需要先在主机上装好。没装的 agent 在界面里显示为不可用；已安装的 Claude Code 和 Antigravity 可从 Agents 页发起登录。
 
+协作成员的回报、模型权限和引用对话预览见 [协作对话与概况侧栏指南](docs/collaboration.md)。
+
 ### Agent 未登录时恢复
 
 读取模型时，所有 Agent 明确返回的原生认证失败都会在工作区显示「账号名 尚未登录」。恢复方式按该实例支持的能力提供：

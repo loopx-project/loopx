@@ -1,6 +1,12 @@
 import type { Messages } from './zh';
 
 export const ja: Messages = {
+  'overview.followups': '引き継ぎ後のメッセージを読む',
+  'handover.group.viewing': '表示中',
+  'handover.group.current': '現在',
+  'handover.group.count': (count: number) => `${count} 区間`,
+  'overview.chain': '引き継ぎ',
+  'overview.pictureLarge': '拡大して見る',
   "pwa.title": "LoopX をインストール",
   "pwa.hint": "独立したウィンドウで開き、パソコンからすぐに起動できます。",
   "pwa.install": "インストール",
@@ -1469,6 +1475,7 @@ export const ja: Messages = {
   'handover.mode.continue': '自動引き継ぎ',
   'handover.mode.detached': '自動引き継ぎを取り消し済み',
   'handover.mode.branch': '手動引き継ぎ',
+  'handover.takeTeam': (n: number) => `協力メンバー（サブエージェント ${n} 件）も一緒に引き継ぐ`,
   'handover.title': '引き継ぎ',
   'handover.message': '同じディレクトリと worktree で新しい会話を作り、引き継ぎ内容を入力欄に入れます。編集してから送信できます。そのままコピーすることもできます。',
   'handover.successor': '引き継ぐエージェント',
@@ -2679,6 +2686,7 @@ export const ja: Messages = {
   "extensions.assistant.cancelled": "送信をキャンセルしました",
   "threadPeek.needsAction": "対応が必要です · 全画面で開く",
   "app.machineNotFound": "マシンが見つかりません",
+  "threadPeek.back": "会話に戻る",
   "threadPeek.open": "全画面で開く",
   "extensions.perm.assistant.ask": "個人アシスタントに相談",
   "extensions.perm.assistant.ask.hint": "クリックすると、選択したスレッドの要約をあなたのメッセージとして個人アシスタントに送ります。",

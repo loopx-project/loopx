@@ -37,6 +37,8 @@ export function HandoverDialog({ api, thread, agents, onOpen, onClose }: Props) 
   }, [api, thread.id]);
   const [creating, setCreating] = useState(false);
   const creatingRef = useRef(false);
+  const teamSize = thread.coordination && !thread.coordination.retired ? thread.coordination.children : 0;
+  const [takeTeam, setTakeTeam] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -78,7 +80,7 @@ export function HandoverDialog({ api, thread, agents, onOpen, onClose }: Props) 
     setCreating(true);
     setError('');
     try {
-      const successor = await api.createHandoverThread(thread.id, target, targetModel, 'branch');
+      const successor = await api.createHandoverThread(thread.id, target, targetModel, 'branch', takeTeam);
       onOpen(successor, summary);
       onClose();
     } catch (e) {
@@ -102,6 +104,10 @@ export function HandoverDialog({ api, thread, agents, onOpen, onClose }: Props) 
           </fieldset>
         </div>
         {targetModel && <p className="handover-note">{targetModel}</p>}
+        {teamSize > 0 && <label className="dialog-option">
+          <input type="checkbox" checked={takeTeam} onChange={e => setTakeTeam(e.target.checked)} disabled={creating} />
+          <span>{t('handover.takeTeam', teamSize)}</span>
+        </label>}
         <p className="handover-cwd" title={thread.cwd}>{thread.cwd}</p>
         {summary ? <pre className="handover-summary" tabIndex={0}>{summary}</pre> : !error && <p className="handover-note" role="status">{t('handover.preparing')}</p>}
         {error && <p className="panel-error" role="alert">{error}</p>}

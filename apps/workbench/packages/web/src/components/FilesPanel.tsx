@@ -65,7 +65,7 @@ interface Editing {
   error: string | null;
 }
 
-const WIDTH_KEY = 'calli.files.width';
+export const WIDTH_KEY = 'calli.files.width';
 const WRAP_KEY = 'calli.files.wrap';
 const TREE_KEY = 'calli.files.tree';
 /** The conversation keeps at least this much of the window: its composer's bottom row — the
@@ -75,7 +75,7 @@ const MIN_WIDTH = 360;
 /** The sidebar's width while it is open; the panel is capped before the app is first laid out. */
 const SIDEBAR_W = 288;
 
-function savedWidth(): number {
+export function savedWidth(): number {
   const saved = Number(localStorage.getItem(WIDTH_KEY));
   return saved > 0 ? saved : Math.round(window.innerWidth * 0.45);
 }
@@ -88,7 +88,7 @@ function maxPanelWidth(): number {
   const available = document.querySelector('.shell')?.clientWidth ?? window.innerWidth;
   return Math.max(MIN_WIDTH, available - Math.round(taken) - MIN_CHAT);
 }
-const clampWidth = (w: number) => Math.max(MIN_WIDTH, Math.min(w, maxPanelWidth()));
+export const clampWidth = (w: number) => Math.max(MIN_WIDTH, Math.min(w, maxPanelWidth()));
 
 // The highlighter is a few dozen KB; it is fetched the first time a file is shown, then kept.
 let highlighter: Promise<typeof import('../highlight')> | null = null;

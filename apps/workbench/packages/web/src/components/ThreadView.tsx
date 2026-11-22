@@ -973,7 +973,7 @@ function MarkdownLink({ href, title, children }: { href?: string; title?: string
         role="button"
         tabIndex={0}
         title={title ?? t('view.openThread')}
-        onClick={open}
+        onClick={event => { event.currentTarget.focus({ preventScroll: true }); open(); }}
         onKeyDown={(e: KeyboardEvent) => {
           if (e.key !== 'Enter' && e.key !== ' ') return;
           e.preventDefault();
