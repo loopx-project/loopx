@@ -11,6 +11,7 @@ import atexit
 from collections import deque
 import json
 import os
+import queue
 from datetime import datetime
 from pathlib import Path
 import selectors
@@ -35,6 +36,7 @@ class _CanonicalAuthorityWorker:
         self.key = key
         self.call_lock = threading.Lock()
         self._stderr_tail: deque[str] = deque(maxlen=64)
+        self._line_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._process = self._spawn(Path(key[1]))
 
     @staticmethod
@@ -98,12 +100,36 @@ class _CanonicalAuthorityWorker:
                 pass
 
         threading.Thread(target=_drain_stderr, daemon=True).start()
+        # Windows select() supports sockets only; drain response lines from a
+        # thread instead of the selector-based pipe read in _read_line.
+        if os.name == "nt":
+            self._line_queue = queue.SimpleQueue()
+
+            def _drain_lines() -> None:
+                try:
+                    for raw_line in iter(proc.stdout.readline, b""):
+                        self._line_queue.put(raw_line)
+                except OSError:
+                    pass
+                finally:
+                    self._line_queue.put(None)
+
+            threading.Thread(target=_drain_lines, daemon=True).start()
         return proc
 
     def _read_line(self, timeout_seconds: float) -> bytes:
         stdout = self._process.stdout
         assert stdout is not None
         deadline = time.monotonic() + timeout_seconds
+        if os.name == "nt":
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("canonical authority worker timed out waiting for response")
+                line = self._line_queue.get(timeout=remaining)
+                if line is None:
+                    raise EOFError("canonical authority worker closed stdout")
+                return line
         chunks = bytearray()
         selector = selectors.DefaultSelector()
         selector.register(stdout, selectors.EVENT_READ)
