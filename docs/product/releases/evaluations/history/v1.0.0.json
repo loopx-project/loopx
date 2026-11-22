@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "1.0.0",
+    "version_tag": "v1.0.0",
+    "git_commit": "14c5f877f766ad8a420766ef84a08c7a31c20c94",
+    "git_tree": "519e08aed96945f38850d7fcadf39ceb879d9d0c",
+    "committed_at": "2026-09-06T20:44:32+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v1.0.0",
+      "last_tag": "v1.0.5",
+      "last_commit": "0c3971feab61820adb0754c552afcb2624b79948",
+      "last_committed_at": "2026-09-16T02:45:03+08:00",
+      "tag_count": 6
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v1.0.0",
+      "v1.0.5"
+    ]
+  },
+  "a_scale": {
+    "score": 19.9,
+    "delta_from_prior": 3.1,
+    "domain_scores": {
+      "D1": 24.0,
+      "D2": 16.0,
+      "D3": 15.0,
+      "D4": 17.0,
+      "D5": 25.0,
+      "D6": 22.0,
+      "D7": 16.5,
+      "D8": 29.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 1,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Desktop 1.0 maintenance IPC origin checks, Workspace interrupted-load recovery (#4009), and first-connect contract simplification through v1.0.5 (#4465).",
+  "summary_zh": "交付 Desktop 1.0 维护 IPC 校验、Workspace 中断恢复（#4009）与首连契约收敛至 v1.0.5（#4465）。"
+}

@@ -44,6 +44,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   const sourceDescriptionId = useId();
   const composing = useRef(false);
   const held = turn.steering?.status === "pending" ? turn.steering : null;
+  const steerLabel = held ? (zh ? "核对插入" : "Check insertion") : (zh ? "插入本轮" : "Steer");
   const sourceEditable = turn.origin === "web" && turn.input_mutation_allowed !== false;
   const canSteer = !unresolved && !(sourceEditable && editing) && !recovery.failed
     && Boolean(held || (targetTurnId && !turn.attachment_count));
@@ -165,11 +166,14 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
       {editing ? (zh ? "关闭草稿" : "Close draft") : (zh ? "查看保留的草稿" : "View retained draft")}
     </button> : null}
   </div><button type="button" className="personal-queue-steer" onClick={() => void steer()}
-    disabled={busy || !canSteer} aria-label={zh ? `插入本轮：待处理消息 ${index + 1}` : `Steer with queued message ${index + 1}`}
-    title={turn.attachment_count ? (zh ? "原生本轮插入仅支持文本；附件仍在队列中" : "Native steering supports text only; attachments stay queued")
-      : !targetTurnId && !held ? (zh ? "当前回合或执行器不支持插入，消息仍在队列中" : "This turn or executor cannot be steered; the message stays queued")
-        : (zh ? "插入本轮 · Command+Enter" : "Steer · Command+Enter")}>
-    {busy ? <RefreshCw size={14}/> : <CornerUpLeft size={14}/>}<span>{held ? (zh ? "核对插入" : "Check insertion") : (zh ? "插入本轮" : "Steer")}</span>
+    disabled={busy || !canSteer}
+    aria-label={zh ? `${steerLabel}：待处理消息 ${index + 1}`
+      : held ? `${steerLabel} for queued message ${index + 1}` : `Steer with queued message ${index + 1}`}
+    title={held ? (zh ? "核对该消息在原回合的插入结果" : "Check this message's insertion in its original turn")
+      : turn.attachment_count ? (zh ? "原生本轮插入仅支持文本；附件仍在队列中" : "Native steering supports text only; attachments stay queued")
+        : !targetTurnId ? (zh ? "当前回合或执行器不支持插入，消息仍在队列中" : "This turn or executor cannot be steered; the message stays queued")
+          : (zh ? "插入本轮 · Command+Enter" : "Steer · Command+Enter")}>
+    {busy || held ? <RefreshCw size={14}/> : <CornerUpLeft size={14}/>}<span>{steerLabel}</span>
   </button><div className="personal-queue-actions"><button ref={menuButton} type="button" disabled={busy || !editable}
     aria-label={!sourceEditable
       ? (zh ? `编辑或取消不可用：待处理消息 ${index + 1}` : `Editing or cancelling unavailable for queued message ${index + 1}`)

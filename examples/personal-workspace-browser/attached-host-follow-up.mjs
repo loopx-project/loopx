@@ -191,16 +191,30 @@ export const attachedHostFollowUpScenario = {
         || !await queueMenu.evaluate(element => element === document.activeElement)) {
         throw new Error("Escape must close the queue action menu and restore its trigger focus");
       }
-      // A saved edit can outlive a package that used to offer editing for a bound source.
+      // A saved edit and an unconfirmed insertion can both survive a reload.
       page.__loopxRuntime.queuedTurns.set(attachedSessionId,
         page.__loopxRuntime.queuedTurns.get(attachedSessionId).map(turn =>
-          turn.turn_id === "turn-queued-1" ? { ...turn, input_mutation_allowed: false } : turn));
+          turn.turn_id === "turn-queued-1" ? {
+            ...turn, input_mutation_allowed: false,
+            steering: {
+              schema_version: "loopx_chat_queue_steering_v1",
+              client_ingress_id: "bound-queue-original-ingress",
+              operation_id: "bound-queue-original-insertion",
+              target_turn_id: racedTurnId,
+              status: "pending",
+            },
+          } : turn));
       await page.reload();
       const boundDraft = queuedFollowUp.getByRole("textbox", {name: "保留的编辑草稿", exact: true});
       await boundDraft.waitFor();
       if (await boundDraft.isEditable() || await boundDraft.inputValue() !== retainedDraft
         || await queuedFollowUp.getByRole("button", {name: "保存", exact: true}).count()) {
         throw new Error("A bound queue reopened a retained draft as a writable change");
+      }
+      const checkInsertion = queuedFollowUp.getByRole("button", {name: "核对插入：待处理消息 1", exact: true});
+      if (!await checkInsertion.isEnabled()
+        || await checkInsertion.getAttribute("title") !== "核对该消息在原回合的插入结果") {
+        throw new Error("The bound row must allow checking the existing insertion while its draft is read-only");
       }
 
       for (const [width, height] of [[1440, 900], [390, 844]]) {
