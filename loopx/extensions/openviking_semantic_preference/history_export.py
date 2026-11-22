@@ -33,6 +33,7 @@ from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...entrypoint import pin_utf8_stdio
 from ...history import collect_history, validate_goal_id_path_segment
+from ...paths import PATH_SEGMENT_UNSAFE_RE
 from ...public_safe_text import IDENTITY_TOKEN_PATTERN as _PUBLIC_GOAL_ID_RE
 
 HISTORY_EXPORT_SCHEMA_VERSION = "loopx_history_conclusion_export_v0"
@@ -42,7 +43,6 @@ _MAX_PROGRESS_BULLETS = 3
 _CORPUS_DIR = "history-conclusions"
 _MANIFEST_FILE = ".loopx-history-conclusion-export.json"
 _MANIFEST_SCHEMA_VERSION = "loopx_history_conclusion_export_manifest_v0"
-_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 # Bounded ISO-8601-ish timestamp: digits, T/space, colon, dot, +/- and Z only.
 _TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+\-]{1,20}Z?$")
 _SECRET_SHAPED_GOAL_ID_RE = re.compile(
@@ -88,7 +88,7 @@ def _safe_generated_at(value: Any) -> str:
 
 
 def _slug(value: str) -> str:
-    slug = _SLUG_RE.sub("-", value).strip("-")
+    slug = PATH_SEGMENT_UNSAFE_RE.sub("-", value).strip("-")
     return slug[:80] or "run"
 
 

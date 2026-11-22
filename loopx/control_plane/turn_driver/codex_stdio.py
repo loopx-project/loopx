@@ -109,14 +109,25 @@ class StdioNativeGoalTransport:
             raise NativeGoalProtocolError(str(message)) from message
         return message
 
-    def request(self, method: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
+    def request(
+        self, method: str, params: Mapping[str, Any], *, deadline: float | None = None,
+    ) -> Mapping[str, Any]:
+        """Use a monotonic caller deadline when it is earlier than the RPC limit."""
+        started = time.monotonic()
+        if deadline is not None and deadline <= started:
+            raise subprocess.TimeoutExpired(self.process.args, 0)
         request_id = self._next_request_id
         self._next_request_id += 1
         self._send({"id": request_id, "method": method, "params": dict(params)})
-        deadline = time.monotonic() + self.response_timeout_sec
+        response_deadline = time.monotonic() + self.response_timeout_sec
+        caller_limited = deadline is not None and deadline <= response_deadline
+        if caller_limited:
+            response_deadline = deadline
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = response_deadline - time.monotonic()
             if remaining <= 0:
+                if caller_limited:
+                    raise subprocess.TimeoutExpired(self.process.args, response_deadline - started)
                 raise NativeGoalProtocolError(f"app_server_response_timeout:{method}")
             message = self._next_message(timeout_sec=remaining)
             if message is None:

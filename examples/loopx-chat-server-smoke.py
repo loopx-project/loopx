@@ -221,7 +221,7 @@ def main() -> None:
         ChatHTTPServer,
         ChatRequestHandler,
     )
-    from loopx.chat_endpoints import AgentEndpointRegistry
+    from loopx.chat.endpoints import AgentEndpointRegistry
     from loopx.chat_manager import manager_executor_endpoint_default
 
     try:

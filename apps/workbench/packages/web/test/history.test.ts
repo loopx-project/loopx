@@ -251,3 +251,21 @@ test('reconnect preserves received tool payloads but does not override missed ne
     assert.notEqual(step.output, 'last live output');
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('historical boundary reads retry a failed page and never stream follow-up events', async () => {
+  let reads = 0, errors = 0, pages = 0;
+  const api = {
+    demo: false,
+    historyPage: async (_id: string, before?: number): Promise<HistoryPage> => {
+      assert.equal(before, 37); reads++;
+      if (reads === 1) throw new Error('temporarily unavailable');
+      return { events: [], snapshotSeq: 36, nextCursor: null, hasOlder: false };
+    },
+    stream: async () => { assert.fail('a bounded historical reader must not stream later messages'); },
+  } as unknown as Api;
+  await watchHistory(api, 'historical-boundary', new AbortController().signal, {
+    maximumSeq: 37, page: () => { pages++; }, events: () => assert.fail('no live events'), error: () => { errors++; },
+  });
+  assert.equal(reads, 2); assert.equal(errors, 1); assert.equal(pages, 1);
+});

@@ -3,7 +3,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startDaemon, openUi, launchBrowser } from '../harness.mjs';
+import { startDaemon, openUi, launchBrowser, api } from '../harness.mjs';
 
 let daemon;
 let browser;
@@ -112,6 +112,18 @@ test('asking in the side chat opens a thread of its own', async () => {
   assert.equal(await page.locator('.side-chat-passage').innerText(), 'hi ther');
   assert.equal(await page.locator('.sidebar .thread-row').count(), 1);
 
+  // The side chat starts on the source model but can choose its own before the first question.
+  await api(daemon, '/api/draft-model-preferences', {
+    method: 'PATCH',
+    body: JSON.stringify({ agent: 'pi', model: 'fake/think', effort: 'low' }),
+  });
+  const sideModel = page.locator('.side-chat .model-control-trigger');
+  await sideModel.filter({ hasText: 'Think' }).waitFor({ timeout: 10_000 });
+  await sideModel.click();
+  await page.locator('.model-control-panel .effort-model').click();
+  await page.getByRole('menuitemradio', { name: /^Plain\b/ }).click();
+  await page.keyboard.press('Escape');
+
   await page.locator('.side-chat textarea').click();
   await page.keyboard.type('go on');
   await page.keyboard.press('Enter');
@@ -133,6 +145,21 @@ test('asking in the side chat opens a thread of its own', async () => {
   assert.match(titles.join('\n'), /^追问：hi ther$/m);
   assert.equal(await page.locator('.sidebar .thread-fork').count(), 0);
   assert.match(await page.locator('.sidebar .thread-item').filter({ hasText: '追问：hi ther' }).getAttribute('title'), /分叉/);
+  const sideThread = (await (await api(daemon, '/api/threads')).json()).find(thread => thread.title === '追问：hi ther');
+  assert.equal(sideThread.model, 'fake/plain');
+
+  // After the thread exists, changing the model applies to the same thread rather than a new one,
+  // and switching back to a model restores its remembered thinking effort.
+  const patched = page.waitForResponse(response => response.request().method() === 'PATCH'
+    && new URL(response.url()).pathname === `/api/threads/${sideThread.id}`);
+  await sideModel.click();
+  await page.getByRole('menuitemradio', { name: /^Think\b/ }).click();
+  const patchedThread = await (await patched).json();
+  assert.equal(patchedThread.model, 'fake/think');
+  assert.equal(patchedThread.effort, 'low');
+  assert.equal((await (await api(daemon, '/api/threads')).json()).filter(thread => thread.title === '追问：hi ther').length, 1);
+  await page.locator('.side-chat-title').click();
+  await page.locator('.model-control-panel').waitFor({ state: 'detached' });
 
   // The conversation it came from is untouched underneath.
   assert.equal(await page.locator('.main .thread .markdown').first().innerText(), originalAnswer);
@@ -163,4 +190,52 @@ test('a picture attached to the composer can be looked at full size before sendi
   // Removing the picture still works without opening the preview.
   await page.locator('.attachment-remove').click();
   await page.locator('.attachment img').waitFor({ state: 'detached', timeout: 3_000 });
+});
+
+for (const mobile of [false, true]) for (const theme of ['light', 'dark']) test(`quoted follow-up preserves model choices: ${mobile ? 'phone' : 'desktop'} ${theme}`, { timeout: 45000 }, async () => {
+  const post = async (path, body, method = 'POST') => {
+    const response = await api(daemon, path, { method, body: JSON.stringify(body) });
+    assert.ok(response.ok, await response.clone().text()); return response.json();
+  };
+  const source = await post('/api/threads', { agent: 'pi', cwd: daemon.workdir, model: 'fake/think', effort: 'high', title: `Source ${mobile} ${theme}` });
+  await post(`/api/threads/${source.id}/turns`, { text: 'quote model choices' });
+  for (let i = 0; i < 100; i++) {
+    if ((await (await api(daemon, `/api/threads/${source.id}`)).json()).status === 'idle') break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await post('/api/draft-model-preferences', { agent: 'pi', model: 'fake/think', effort: 'low' }, 'PATCH');
+  const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, isMobile: mobile, hasTouch: mobile, colorScheme: theme });
+  try {
+    const p = await context.newPage();
+    const errors = []; p.on('pageerror', error => errors.push(error.message));
+    await openUi(p, daemon); await p.evaluate(id => { location.hash = `#/thread/${id}`; }, source.id);
+    await p.locator('.main .thread .markdown').first().waitFor();
+    await p.evaluate(() => {
+      const node = document.createTreeWalker(document.querySelector('.main .thread .markdown'), NodeFilter.SHOW_TEXT).nextNode();
+      const range = document.createRange(); range.setStart(node, 0); range.setEnd(node, 7);
+      const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    });
+    await p.locator('.selection-menu button', { hasText: '在侧边栏提问' }).click();
+    const side = p.locator('.side-chat'), picker = side.locator('.model-control-trigger');
+    await picker.waitFor(); await picker.click();
+    await p.locator('.model-control-panel .effort-model').click();
+    await p.getByRole('menuitemradio', { name: /^Plain\b/ }).click(); await p.keyboard.press('Escape');
+    const fork = p.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/threads/${source.id}/fork`);
+    await side.locator('textarea').fill('Follow up with this model'); await side.locator('.send-btn:not(.stop)').click();
+    const child = await (await fork).json();
+    await side.locator('.row.user .bubble').last().waitFor();
+    assert.equal((await (await api(daemon, `/api/threads/${child.id}`)).json()).model, 'fake/plain');
+    const update = p.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/threads/${child.id}`);
+    await picker.click(); await p.getByRole('menuitemradio', { name: /^Think\b/ }).click();
+    const changed = await (await update).json();
+    assert.equal(changed.id, child.id); assert.equal(changed.model, 'fake/think'); assert.equal(changed.effort, 'low');
+    const original = await (await api(daemon, `/api/threads/${source.id}`)).json();
+    assert.equal(original.model, 'fake/think'); assert.equal(original.effort, 'high');
+    await side.locator('.side-chat-title').click();
+    if (process.env.LOOCHAT_E2E_SHOTS_DIR) {
+      const { mkdirSync } = await import('node:fs'); mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true });
+      await p.screenshot({ path: join(process.env.LOOCHAT_E2E_SHOTS_DIR, `side-quote-${mobile ? 'phone' : 'desktop'}-${theme}.png`), animations: 'disabled' });
+    }
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
 });

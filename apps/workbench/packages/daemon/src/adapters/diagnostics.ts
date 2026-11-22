@@ -1,4 +1,18 @@
 import { execFile } from 'node:child_process';
+import { HttpError } from '../errors.js';
+
+export const agentLoginRequired = (label: string): HttpError =>
+  new HttpError(409, `${label} is not signed in`, { code: 'agent_login_required' });
+
+/** Native catalog diagnostics only. A timeout, quota denial or bare HTTP 401 is not proof of logout. */
+export function modelLoginFailure(error: unknown, label: string): unknown {
+  if ((error as { data?: { reason?: string } } | null)?.data?.reason === 'claude_subscription_not_supported') return error;
+  const message = error instanceof Error ? error.message : '';
+  if (/^(?:Error:\s*|zcode：)?(?:not (?:logged|signed) in\b|(?:authentication|login|sign.in) required\b|please (?:sign|log) in\b|no API key (?:found )?for\b)/im.test(message)) {
+    return agentLoginRequired(label);
+  }
+  return error;
+}
 
 export interface RuntimeDiagnostic { protocol: string; version: string | null }
 

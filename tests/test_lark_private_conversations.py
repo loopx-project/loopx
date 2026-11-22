@@ -1590,7 +1590,7 @@ def test_original_worker_queues_only_media_for_a_verified_legacy_answer(ordinary
         _atomic_write_json(manifest, plan)
         if fault == "unlisted_cached_redirect":
             import base64
-            from loopx.chat_attachments import normalize_chat_image_attachments
+            from loopx.chat.attachments import normalize_chat_image_attachments
 
             legacy_attachments = normalize_chat_image_attachments([
                 {"id": f"reply-image-{index}", "name": f"original-{index}.png", "mime_type": "image/png",

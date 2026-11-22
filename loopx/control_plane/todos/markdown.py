@@ -194,6 +194,16 @@ def _render_queue_summary(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_execution_managed_claim_lines(payload: dict[str, Any]) -> list[str]:
+    """Render compact managed-claim lease metadata alongside claim identity."""
+    lines = ["", f"- claim_operation_id: `{payload['claim_operation_id']}`"]
+    if payload.get("lease_expires_at"):
+        lines.append(f"- lease_expires_at: `{payload['lease_expires_at']}`")
+    if payload.get("lease_ttl_seconds") is not None:
+        lines.append(f"- lease_ttl_seconds: `{payload['lease_ttl_seconds']}`")
+    return lines
+
+
 def render_todo_markdown(payload: dict[str, Any]) -> str:
     if payload.get("todo_detail_projection"):
         return _render_todo_detail(payload)
@@ -370,7 +380,7 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
             lines.extend(["", str(payload["instruction"])])
         lines.extend(_render_settlement_plan(payload["settlement_plan"]))
     if not payload.get("error") and payload.get("execution_managed"):
-        lines.extend(["", f"- claim_operation_id: `{payload['claim_operation_id']}`"])
+        lines.extend(_render_execution_managed_claim_lines(payload))
     if not payload.get("error"):
         lines.extend(render_settlement_progress_markdown(payload))
     if not payload.get("error") and (payload.get("execution_managed") or payload.get("settlement_progress")):

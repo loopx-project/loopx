@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ...chat_attachments import require_text_document_route
+from ...chat.attachments import require_text_document_route
 from ...attached_session import enqueue_attached_agent_turn
 from ...chat_store import CHAT_SESSION_MODE_ATTACHED, CHAT_SESSION_MODE_MANAGED
 from ...control_plane.collaboration import conversation_scope

@@ -7,6 +7,7 @@ export async function copyText(text: string): Promise<boolean> {
   try {
     if (window.isSecureContext && navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
+      forgetCopiedQuote();
       return true;
     }
   } catch {
@@ -27,6 +28,7 @@ export async function copyText(text: string): Promise<boolean> {
     ok = false;
   }
   area.remove();
+  if (ok) forgetCopiedQuote();
   return ok;
 }
 
@@ -37,6 +39,37 @@ export function quoteMarkdown(text: string): string {
     .split('\n')
     .map(line => `> ${line}`.trimEnd())
     .join('\n');
+}
+
+const COPIED_QUOTE = 'calli.copiedQuote';
+
+/** An ordinary copy must not inherit provenance from a previous copy-as-quote action. */
+function forgetCopiedQuote(): void {
+  try { localStorage.removeItem(COPIED_QUOTE); } catch { /* storage unavailable */ }
+}
+
+/** A message copied as a quote, remembered so pasting it into a box brings back a quote, not plain lines. */
+export interface CopiedQuote { text: string; threadId?: string; turnId?: string; host?: string | null }
+
+export function rememberCopiedQuote(quote: CopiedQuote): void {
+  try { localStorage.setItem(COPIED_QUOTE, JSON.stringify(quote)); } catch { /* storage off: paste stays plain */ }
+}
+
+/**
+ * What a paste quotes, when it is a quote: the message this page last copied as one (with where it
+ * came from), or any text made only of Markdown `> ` lines, such as a quote copied from another app.
+ */
+export function pastedQuote(pasted: string): CopiedQuote | null {
+  const plain = pasted.replace(/\r\n?/g, '\n').trim();
+  if (!plain) return null;
+  try {
+    const copied = JSON.parse(localStorage.getItem(COPIED_QUOTE) ?? 'null') as CopiedQuote | null;
+    if (copied && typeof copied.text === 'string' && (plain === quoteMarkdown(copied.text) || plain === copied.text.trim())) return copied;
+  } catch { /* unreadable: fall through to the plain form */ }
+  const lines = plain.split('\n');
+  if (!lines.every(line => line.startsWith('>'))) return null;
+  const text = lines.map(line => line.replace(/^>\s?/, '')).join('\n').trim();
+  return text ? { text } : null;
 }
 
 /**

@@ -1860,3 +1860,396 @@ def test_repeated_native_error_plus_thinking_only_planner_retry_times_out_and_ca
     assert raised.value.error_code == "response_timeout"
     assert language_server["now"] == 305.0
     assert language_server["cancelled"].is_set()
+
+
+def test_isolated_cascade_preserves_main_cascade_and_pending_history(tmp_path, monkeypatch) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    state: dict[str, Any] = {
+        "calls": [],
+        "cascade_seq": 0,
+        "prompts_by_cascade": {},
+    }
+    token = "synthetic-csrf-token"
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            method = self.path.rsplit("/", 1)[-1]
+            state["calls"].append((method, body))
+            if method == "GetCascadeModelConfigData":
+                resp = {"clientModelConfigs": [{"modelId": "gemini-4-argon-high", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]}
+            elif method == "StartCascade":
+                state["cascade_seq"] += 1
+                resp = {"cascadeId": f"cascade-{state['cascade_seq']}"}
+            elif method == "GetCascadeTrajectory":
+                cid = body["cascadeId"]
+                prompts = state["prompts_by_cascade"].get(cid, [])
+                resp = {"trajectory": {"cascadeId": cid}, "numTotalSteps": len(prompts) * 2, "status": "CASCADE_RUN_STATUS_IDLE"}
+            elif method == "SendUserCascadeMessage":
+                cid = body["cascadeId"]
+                state["prompts_by_cascade"].setdefault(cid, []).append(body["items"][0]["text"])
+                resp = {}
+            elif method == "GetCascadeTrajectorySteps":
+                cid = body["cascadeId"]
+                prompts = state["prompts_by_cascade"].get(cid, [])
+                answer = "<loopx-review-json>" + json.dumps({"message": f"Answer from {cid}", "proposals": [], "gate": None}) + "</loopx-review-json>"
+                steps = []
+                for idx, text in enumerate(prompts):
+                    meta = {"createdAt": "2026-11-22T01:00:00Z", "executionId": f"exec-{cid}-{idx}"}
+                    steps.extend([
+                        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": idx * 2}},
+                         "userInput": {"items": [{"text": text}]}},
+                        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": idx * 2 + 1}},
+                         "plannerResponse": {"response": answer, "stopReason": "STOP_REASON_STOP_PATTERN"}},
+                    ])
+                resp = {"steps": steps[body["startIndex"]:body["endIndex"]]}
+            elif method == "CancelCascadeInvocation":
+                resp = {}
+            else:
+                raise AssertionError(method)
+            payload = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", token)
+    try:
+        adapter = adapter_for(tmp_path, history=[{"role": "user", "content": "keep prior constraint"}])
+        assert adapter.cascade_id == "cascade-1"
+        events: list[tuple[str, dict[str, Any]]] = []
+        isolated = adapter.start_turn("Run isolated report", lambda k, p: events.append((k, p)), isolated_cascade=True)
+        assert isolated["message"] == "Answer from cascade-2"
+        assert adapter.cascade_id == "cascade-1" and adapter.upstream_thread_id == "cascade-1"
+        assert adapter._pending_history == [{"role": "user", "content": "keep prior constraint"}]
+        assert "keep prior constraint" not in state["prompts_by_cascade"]["cascade-2"][0]
+        assert next(p["threadId"] for k, p in events if k == "turn.started") == "cascade-2"
+        assert next(p["thread_id"] for k, p in events if k == "turn.native_result") == "cascade-2"
+
+        main_resp = adapter.start_turn("Main conversation request")
+        assert main_resp["message"] == "Answer from cascade-1"
+        assert "keep prior constraint" in state["prompts_by_cascade"]["cascade-1"][0]
+        assert adapter._pending_history == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_step_offset_pagination_and_transient_running_lag_across_long_cascades(
+    tmp_path, monkeypatch
+) -> None:
+    """LS honors stepOffset while ignoring startIndex and capping each page."""
+    import hashlib
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from loopx.chat_agent import CodexChatAgentError
+
+    prior_steps: list[dict[str, Any]] = []
+    for idx in range(6):
+        prior_steps.append(
+            {
+                "type": "CORTEX_STEP_TYPE_GENERIC" if idx % 2 else "CORTEX_STEP_TYPE_CHECKPOINT",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {
+                    "createdAt": "2026-11-22T01:00:00Z",
+                    "executionId": "exec-prior",
+                    **({"sourceTrajectoryStepInfo": {"stepIndex": idx}} if idx > 0 else {}),
+                },
+            }
+        )
+
+    state: dict[str, Any] = {
+        "steps": prior_steps,
+        "status": "CASCADE_RUN_STATUS_IDLE",
+        "step_calls": [],
+        "running_empty_polls": 1,
+        "quota_reset": "2099-01-01T00:00:00Z",
+        "truncate_unpaginated": False,
+        "force_incomplete_after_send": False,
+    }
+    token = "synthetic-csrf-token"
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            method = self.path.rsplit("/", 1)[-1]
+            if method == "GetCascadeModelConfigData":
+                resp: dict[str, Any] = {
+                    "clientModelConfigs": [
+                        {
+                            "modelId": "gemini-4-argon-high",
+                            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"},
+                        }
+                    ]
+                }
+            elif method == "GetUserStatus":
+                resp = {
+                    "userStatus": {
+                        "email": "synthetic@invalid.example",
+                        "cascadeModelConfigData": {
+                            "clientModelConfigs": [
+                                {
+                                    "modelId": "gemini-4-argon-high",
+                                    "quotaInfo": {
+                                        "remainingFraction": 1.0,
+                                        "resetTime": state["quota_reset"],
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            elif method == "StartCascade":
+                resp = {"cascadeId": "long-cascade"}
+            elif method == "GetCascadeTrajectory":
+                resp = {
+                    "trajectory": {"cascadeId": "long-cascade"},
+                    "numTotalSteps": len(state["steps"]),
+                    "status": state["status"],
+                }
+            elif method == "SendUserCascadeMessage":
+                base_idx = len(state["steps"])
+                prompt_text = body["items"][0]["text"]
+                if state["force_incomplete_after_send"]:
+                    state["steps"].append(
+                        {
+                            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": {
+                                "createdAt": "2026-11-22T02:00:00Z",
+                                "executionId": "exec-fail",
+                                "sourceTrajectoryStepInfo": {"stepIndex": base_idx},
+                            },
+                            "userInput": {"items": [{"text": prompt_text}]},
+                        }
+                    )
+                    state["status"] = "CASCADE_RUN_STATUS_IDLE"
+                else:
+                    answer = (
+                        "<loopx-review-json>"
+                        + json.dumps(
+                            {
+                                "message": "Paginated answer",
+                                "proposals": [],
+                                "gate": None,
+                            }
+                        )
+                        + "</loopx-review-json>"
+                    )
+                    exec_id = f"exec-{base_idx}"
+                    extra = [
+                        {
+                            "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": {
+                                "createdAt": "2026-11-22T02:00:00Z",
+                                "executionId": exec_id,
+                                "sourceTrajectoryStepInfo": {"stepIndex": base_idx},
+                            },
+                            "userInput": {"items": [{"text": prompt_text}]},
+                        },
+                        {
+                            "type": "CORTEX_STEP_TYPE_GENERIC",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": {
+                                "createdAt": "2026-11-22T02:00:01Z",
+                                "executionId": exec_id,
+                                "sourceTrajectoryStepInfo": {"stepIndex": base_idx + 1},
+                            },
+                        },
+                        {
+                            "type": "CORTEX_STEP_TYPE_CHECKPOINT",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": {
+                                "createdAt": "2026-11-22T02:00:02Z",
+                                "executionId": exec_id,
+                                "sourceTrajectoryStepInfo": {"stepIndex": base_idx + 2},
+                            },
+                        },
+                        {
+                            "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                            "status": "CORTEX_STEP_STATUS_DONE",
+                            "metadata": {
+                                "createdAt": "2026-11-22T02:00:03Z",
+                                "executionId": exec_id,
+                                "sourceTrajectoryStepInfo": {"stepIndex": base_idx + 3},
+                            },
+                            "plannerResponse": {
+                                "response": answer,
+                                "stopReason": "STOP_REASON_STOP_PATTERN",
+                            },
+                        },
+                    ]
+                    state["steps"].extend(extra)
+                    state["status"] = "CASCADE_RUN_STATUS_RUNNING"
+                resp = {}
+            elif method == "GetCascadeTrajectorySteps":
+                state["step_calls"].append(body)
+                if state["force_incomplete_after_send"]:
+                    resp = {"steps": state["steps"][: len(state["steps"]) - 1]}
+                elif state["running_empty_polls"] > 0 and state["status"] == "CASCADE_RUN_STATUS_RUNNING":
+                    state["running_empty_polls"] -= 1
+                    state["status"] = "CASCADE_RUN_STATUS_IDLE"
+                    resp = {"steps": []}
+                else:
+                    # Simulate LS: ignore startIndex/endIndex, only honor stepOffset, max 2 steps/page.
+                    offset = 0 if state["truncate_unpaginated"] else int(body.get("stepOffset") or 0)
+                    resp = {"steps": state["steps"][offset : offset + 2]}
+            elif method == "CancelCascadeInvocation":
+                state["status"] = "CASCADE_RUN_STATUS_IDLE"
+                resp = {}
+            else:
+                raise AssertionError(method)
+            payload = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", token)
+    try:
+        from loopx.capabilities.native_chat.manager_input import manager_turn_input
+
+        adapter = AntigravityAdapter.start(
+            work_dir=tmp_path, objective="Test", resume_thread_id="long-cascade"
+        )
+        # 1. Recover from one transient RUNNING step flush lag + paginate across 2-step pages.
+        events: list[tuple[str, dict[str, Any]]] = []
+        turn_message = manager_turn_input(
+            adapter,
+            "Paginated user ask",
+            json.dumps({"schema_version": "manager_turn_context_v1", "context_delegation": {"source_id": "a" * 24}}),
+        )
+        result = adapter.start_turn(turn_message, lambda k, p: events.append((k, p)))
+        assert result["message"] == "Paginated answer"
+        assert [c.get("stepOffset") for c in state["step_calls"]] == [6, 6, 8]
+
+        # 2. Anchored completed_result_observation paginates from anchor without fetching step 0.
+        started_event = next(p for k, p in events if k == "turn.started")
+        state["step_calls"].clear()
+        proof = AntigravityAdapter.completed_result_observation(
+            cascade_id="long-cascade",
+            request_ref="a" * 24,
+            message="Paginated user ask",
+            started_at="2026-11-22T01:59:00Z",
+            completed_at="2026-11-22T02:01:00Z",
+            work_dir=tmp_path,
+            input_anchor=started_event["native_input"],
+        )
+        assert proof is not None and proof["response"]["message"] == "Paginated answer"
+        assert [c.get("stepOffset") for c in state["step_calls"]] == [6, 8]
+
+        # 3. Unanchored completed_result_observation paginates all the way from step 0 across pages.
+        state["step_calls"].clear()
+        unanchored = AntigravityAdapter.completed_result_observation(
+            cascade_id="long-cascade",
+            request_ref="a" * 24,
+            message="Paginated user ask",
+            started_at="2026-11-22T01:59:00Z",
+            completed_at="2026-11-22T02:01:00Z",
+            work_dir=tmp_path,
+            input_anchor=None,
+        )
+        assert unanchored is not None and unanchored["response"]["message"] == "Paginated answer"
+        assert [c.get("stepOffset") for c in state["step_calls"]] == [0, 2, 4, 6, 8]
+
+        # 4. metadata_review_capacity paginates too.
+        state["step_calls"].clear()
+        cap = AntigravityAdapter.metadata_review_capacity(
+            cascade_id="long-cascade", model_id="gemini-4-argon-high"
+        )
+        assert cap is not None and cap["normal_completion"] is True
+        assert [c.get("stepOffset") for c in state["step_calls"]] == [0, 2, 4, 6, 8]
+
+        # 5. interrupted_answer_observation paginates cleanly with stepOffset across 2-step pages.
+        err_base = len(state["steps"])
+        err_prompt = "Original interrupted ask"
+        err_framed = manager_turn_input(
+            adapter,
+            err_prompt,
+            json.dumps({"schema_version": "manager_turn_context_v1", "context_delegation": {"source_id": "b" * 24}}),
+        )
+        err_meta = {"createdAt": "2026-11-22T03:00:00Z", "executionId": "exec-err"}
+        target_file = (tmp_path / "note.txt").as_uri()
+        state["steps"].extend(
+            [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {**err_meta, "sourceTrajectoryStepInfo": {"stepIndex": err_base}},
+                    "userInput": {"items": [{"text": err_framed}]},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_VIEW_FILE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {**err_meta, "sourceTrajectoryStepInfo": {"stepIndex": err_base + 1}},
+                    "viewFile": {"absolutePathUri": target_file, "content": "Visible file"},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {**err_meta, "sourceTrajectoryStepInfo": {"stepIndex": err_base + 2}},
+                    "errorMessage": {"error": {"errorCode": 500}},
+                },
+            ]
+        )
+        state["step_calls"].clear()
+        interrupted = AntigravityAdapter.interrupted_answer_observation(
+            cascade_id="long-cascade",
+            request_ref="b" * 24,
+            message=err_prompt,
+            started_at="2026-11-22T02:59:00Z",
+            completed_at="2026-11-22T03:01:00Z",
+            input_anchor={
+                "thread_id": "long-cascade",
+                "start_step_index": err_base,
+                "input_sha256": hashlib.sha256(err_framed.encode()).hexdigest(),
+            },
+        )
+        assert interrupted is not None and interrupted["visible_results"] == [
+            {"file_uri": target_file, "content": "Visible file"}
+        ]
+        assert [c.get("stepOffset") for c in state["step_calls"]] == [10, 12, 10, 12]
+
+        # 6. Non-advancing truncated response fails fast instead of looping.
+        state["truncate_unpaginated"] = True
+        assert (
+            AntigravityAdapter.completed_result_observation(
+                cascade_id="long-cascade",
+                request_ref="a" * 24,
+                message="Paginated user ask",
+                started_at="2026-11-22T01:59:00Z",
+                completed_at="2026-11-22T02:01:00Z",
+                work_dir=tmp_path,
+                input_anchor=started_event["native_input"],
+            )
+            is None
+        )
+        state["truncate_unpaginated"] = False
+        state["force_incomplete_after_send"] = True
+        with pytest.raises(CodexChatAgentError) as exc:
+            adapter.start_turn("Fail fast on incomplete idle read")
+        assert exc.value.error_code == "antigravity_rpc_error"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

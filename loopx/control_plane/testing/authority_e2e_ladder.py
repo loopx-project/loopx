@@ -31,6 +31,7 @@ from ..coordination.nokv_qualification import (
     QUALIFIED_NOKV_API_VERSION as QUALIFIED_NOKV_API_VERSION,
     QUALIFIED_NOKV_SDK_VERSION as QUALIFIED_NOKV_SDK_VERSION,
 )
+from ..runtime.node_probe import node_typescript_flags
 from .authority_e2e_row_support import (
     AGENT_A,
     RowAssertionError,
@@ -208,7 +209,7 @@ def _row_local_conformance(context: RowContext, provider: str) -> RowOutcome:
         return unverified("local_conformance_suite_missing")
     summary = tap_summary(
         [node, "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
-         "--test", "--test-reporter=tap", str(suite)],
+         *node_typescript_flags(), "--test", "--test-reporter=tap", str(suite)],
         env=context.environ,
         timeout=900,
     )
@@ -347,6 +348,7 @@ def _row_nokv_live_qualification(context: RowContext) -> RowOutcome:
             node,
             "--no-warnings",
             "--experimental-strip-types",
+            *node_typescript_flags(),
             str(REPO_ROOT / NOKV_QUALIFICATION_SCRIPT),
             "--execute-live",
             "--config-json",
@@ -457,6 +459,7 @@ def _row_postgresql_conformance_live(context: RowContext) -> RowOutcome:
             node,
             "--no-warnings",
             "--experimental-strip-types",
+            *node_typescript_flags(),
             "--test",
             "--test-reporter=tap",
             str(PG_INTEGRATION_TEST),

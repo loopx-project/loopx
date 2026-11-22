@@ -135,7 +135,9 @@ class StewardReports:
             and (turn.get("status") in {"failed", "interrupted", "timed_out"}
                 or native.get("status") == "failed"))
 
-    def _failed_without_generation(self, actor: dict[str, Any], window: dict[str, Any]) -> bool:
+    def _failed_without_generation(
+        self, actor: dict[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
         """Read a terminal report failure under the original execution fence.
 
         The cadence owner holds the generation fence. This proves only that
@@ -181,7 +183,7 @@ class StewardReports:
                     or turn.get("session_id") != sid or request.get("actor") != actor
                     or request.get("work_kind") != "report" or request.get("report_window_id") != window["window_id"]
                     or request.get("report_subscription_revision") != window["subscription_revision"]
-                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery"}
+                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery", operation + ".timeout-recovery"}
                     or not request.get("todo_id") or result.get("status") != "failed"
                     or result.get("result_kind") != "host_failure" or failure.get("retryable") is not False
                     or receipt.get("ok") is not True or receipt.get("failed_phase") != "host_execute"
@@ -208,7 +210,9 @@ class StewardReports:
                 inspection = interpret_turn_journal_projection(journal, goal_id=goal_id, agent_id=agent_id, turn_key=key)
                 return (inspection.get("journal_consistent") is True
                     and inspection.get("completed_phases") == []
-                    and StewardTurnHost(self.controller).report_failure_observation(turn) is not None)
+                    and StewardTurnHost(self.controller).report_window_failure_verified(
+                        turn, window, generation_locked=generation_locked,
+                    ))
 
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:
@@ -407,7 +411,9 @@ class StewardReports:
         admitted = admit_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
             agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
             subscription_resolver=lambda: self.subscription(owner_key, expected_actor=actor),
-            can_replace_failed_window=lambda window: self._failed_without_generation(actor, window))
+            can_replace_failed_window=lambda window: self._failed_without_generation(
+                actor, window, generation_locked=True,
+            ))
         if admitted["status"] != "pending":
             return None, False
         window = admitted["window"]

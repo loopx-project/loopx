@@ -3,6 +3,7 @@
 // for the reading, and against the demo workspace for the tall panel that must not scroll.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
 import { startDaemon, launchBrowser, openUi, api, openCollaboration } from '../harness.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -77,6 +78,10 @@ test('the overview panel reads the thread from one top-bar button, and a change 
     await panel.locator('.overview-row', { hasText: 'app.ts' }).click();
     const diff = page.locator('.change-diff-dialog');
     await diff.waitFor();
+    // On a computer it takes the side column and the conversation stays beside it.
+    assert.equal(await page.locator('.dock-panel .change-diff-dialog').count(), 1, 'the diff is docked, not a dialog');
+    assert.equal(await page.locator('.dialog-scrim').count(), 0);
+    await page.locator('.thread').waitFor();
     await diff.locator('.diff-line.add', { hasText: 'const c = 4' }).first().waitFor();
     const head = await diff.locator('.change-diff-head').innerText();
     assert.match(head, /app\.ts/);
@@ -84,6 +89,7 @@ test('the overview panel reads the thread from one top-bar button, and a change 
     assert.match(head, /共 2 轮/);
     // Newest turn first, one section each.
     assert.deepEqual(await diff.locator('.change-diff-turn h3').allTextContents(), ['第 2 轮', '第 1 轮']);
+    if (process.env.LOOCHAT_E2E_SHOTS_DIR) { mkdirSync(process.env.LOOCHAT_E2E_SHOTS_DIR, { recursive: true }); await page.screenshot({ path: `${process.env.LOOCHAT_E2E_SHOTS_DIR}/overview-change-column.png`, animations: 'disabled' }); }
     await diff.locator('.change-diff-head .icon-btn').click();
     await diff.waitFor({ state: 'detached' });
 
@@ -93,10 +99,18 @@ test('the overview panel reads the thread from one top-bar button, and a change 
     await htmlRow.locator('.overview-row').waitFor();
     await htmlRow.locator('.overview-row').hover();
     await htmlRow.locator('.overview-preview').click();
-    await page.locator('.preview-scrim').waitFor();
+    await page.locator('.preview-scrim, .dock-panel .preview').waitFor();
     assert.match(await page.locator('.preview-name').innerText(), /report\.html/);
     await page.locator('.preview-bar').getByRole('button', { name: '关闭预览' }).click();
-    await page.locator('.preview-scrim').waitFor({ state: 'detached' });
+    await page.locator('.preview-scrim, .dock-panel .preview').waitFor({ state: 'detached' });
+
+    // A picture opens in the column too, fitted, and closes back to the panel's place.
+    await panel.locator('.overview-picture-row').first().click();
+    await page.locator('.dock-panel .picture-dock-stage img').waitFor();
+    assert.equal(await page.locator('.lightbox').count(), 0, 'no full-screen viewer until asked for');
+    await page.locator('.dock-panel .preview-bar button[aria-label="关闭"]').click();
+    await page.locator('.dock-panel').waitFor({ state: 'detached' });
+    await panel.waitFor();
 
     // The more menu keeps the terminal and the trace beside the thread.
     await page.locator('.topbar-more').click();

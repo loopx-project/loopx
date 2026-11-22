@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'loopx-project/loopx' && github.ref_type == 'tag' && github.ref_name == inputs.release_tag
+    if: github.repository == 'loopx-project/loopx' && ((github.ref_type == 'tag' && github.ref_name == inputs.release_tag) || (github.ref == 'refs/heads/main' && startsWith(inputs.release_tag, 'dsh-loopx-plugin-v')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: refs/tags/${{ inputs.release_tag }}
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
@@ -47,7 +47,7 @@ jobs:
           const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
           assert.equal(process.env.RELEASE_TAG, `dsh-loopx-plugin-v${manifest.version}`)
           mkdirSync('output', { recursive: true })
-          appendFileSync(process.env.GITHUB_ENV, `DSH_ARTIFACT=output/${manifest.name}-${manifest.version}.tgz\n`)
+          appendFileSync(process.env.GITHUB_ENV, `DSH_ARTIFACT=./output/${manifest.name}-${manifest.version}.tgz\n`)
           NODE
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft > output/release.json
           node -e 'const r=require("./output/release.json"); require("node:assert/strict").equal(r.isDraft, false)'
@@ -70,8 +70,38 @@ jobs:
           const exists = response.ok && !!(await response.json()).versions?.[source.version]
           appendFileSync(process.env.GITHUB_ENV, `DSH_ALREADY_PUBLISHED=${exists}\n`)
           NODE
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs'
+          const source = JSON.parse(readFileSync('package.json', 'utf8'))
+          const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(source.name)}`, {
+            signal: AbortSignal.timeout(15_000),
+          })
+          const missing = response.status === 404
+          const body = response.ok ? await response.json() : null
+          const versions = Object.keys(body?.versions ?? {})
+          const stagingOnly = versions.length > 0 && versions.every(v => v === '0.0.0-stage') && !versions.includes(source.version)
+          appendFileSync(process.env.GITHUB_ENV, `DSH_NPM_PACKAGE_MISSING=${missing}\nDSH_NPM_STAGING_PLACEHOLDER=${stagingOnly}\n`)
+          NODE
       - name: Publish the same bytes with npm trusted publishing
         if: env.DSH_ALREADY_PUBLISHED != 'true'
-        run: npm publish "$DSH_ARTIFACT" --access public --tag latest --ignore-scripts --provenance
+        run: |
+          set +e
+          npm publish "$DSH_ARTIFACT" --access public --tag latest --ignore-scripts --provenance
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            if [ "${DSH_NPM_PACKAGE_MISSING:-false}" = "true" ]; then
+              echo "::error title=npm package bootstrap required::dsh-loopx-plugin returns HTTP 404 on registry.npmjs.org. npm OIDC Trusted Publishing cannot create a brand-new package: enable 2FA (auth-and-writes), run one-time web-auth 'npm publish <release.tgz> --access public --tag latest --ignore-scripts', run 'npm logout', then bind Trusted Publisher (loopx-project / loopx / dsh-plugin-publish.yml / blank Environment name / Allow npm publish checked)."
+            elif [ "${DSH_NPM_STAGING_PLACEHOLDER:-false}" = "true" ]; then
+              echo "::error title=npm package staging scan active::registry.npmjs.org still holds 0.0.0-stage from initial publish scan; wait 1-3 minutes for the target version to activate and re-dispatch."
+            else
+              echo "::error title=npm Trusted Publisher failed::Verify npmjs Trusted Publisher settings on https://www.npmjs.com/package/dsh-loopx-plugin/access (Provider: GitHub Actions, Organization or user: loopx-project, Repository: loopx, Workflow filename: dsh-plugin-publish.yml, Environment name: empty, Allow npm publish: checked)."
+            fi
+            exit "$rc"
+          fi
       - name: Read back npm bytes, latest, and marketplace repository discovery
-        run: node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT"
+        run: |
+          if git cat-file -e origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs 2>/dev/null; then
+            git show origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs > scripts/verify-distribution.mjs
+          fi
+          node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT"

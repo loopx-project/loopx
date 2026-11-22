@@ -76,6 +76,7 @@ SUPPORT_CONTROL_COMMANDS = {
     "chat",
     "chat-endpoint",
     "dashboard",
+    "workbench",
     "dsh-launch",
     "heartbeat-prequota",
     "promotion-gate",
@@ -109,6 +110,8 @@ def register_support_control_commands(
 
     register_update_command(subparsers, add_subcommand_format)
     register_dsh_launch_command(subparsers, add_subcommand_format)
+    from .workbench import register_workbench_command
+    register_workbench_command(subparsers, add_subcommand_format)
 
     _register_registry_inspection_commands(subparsers)
 
@@ -211,6 +214,10 @@ def handle_support_control_command(
             registry_path=registry_path,
             print_payload=print_payload,
         )
+
+    if args.command == "workbench":
+        from .workbench import handle_workbench_command
+        return handle_workbench_command(args, print_payload=print_payload, output_format=output_format)
 
     if args.command == "dsh-launch":
         return handle_dsh_launch_command(args)

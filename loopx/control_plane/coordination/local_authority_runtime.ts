@@ -1057,6 +1057,12 @@ export async function claimLocalCoordinationTodo(
     }
     if (Object.hasOwn(input, "manage_execution") && !managed)
       throw new TypeError("Managed execution requires claim request v2");
+    const hasTopLevelTtl = Object.hasOwn(input, "ttl_seconds")
+      && input.ttl_seconds !== undefined && input.ttl_seconds !== null;
+    if (hasTopLevelTtl && !managed) {
+      throw new TypeError("Managed execution TTL requires claim request v2");
+    }
+    const topLevelTtl = hasTopLevelTtl ? normalizeTtl(input.ttl_seconds) : undefined;
     if (reviewed ? input.manage_execution !== true || typeof input.expected_registry_sha256 !== "string"
         : Object.hasOwn(input, "expected_registry_sha256"))
       throw new TypeError("A Todo claim review basis requires a reviewed managed claim");
@@ -1116,6 +1122,7 @@ export async function claimLocalCoordinationTodo(
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_request: leaseRequest,
         ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
+        ...(topLevelTtl === undefined ? {} : {ttl_seconds: topLevelTtl}),
         ...(expectedRevision === undefined ? {} : {expected_provider_revision: expectedRevision}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),

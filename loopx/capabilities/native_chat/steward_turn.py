@@ -22,6 +22,13 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ...file_lock import exclusive_file_lock
+from .report_failure_proof import (
+    build_report_quota_request,
+    build_report_timeout_request,
+    is_report_failure_contradicted,
+    observe_report_failure,
+    verify_report_window_failure,
+)
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
@@ -74,12 +81,20 @@ def report_turn(store: Any, actor: Mapping[str, Any], window: Mapping[str, Any])
     """Read the one bounded continuation, retaining the original failed Turn."""
     operation = "report." + window["window_id"]
     original = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation))
-    continued = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
-    if continued is not None:
+    quota = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
+    timeout_retry = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".timeout-recovery"))
+    if quota is not None and timeout_retry is not None:
+        raise ValueError("conflicting report continuations exist")
+    for suffix, key, label, continued in (
+        (".quota-recovery", "report_quota_recovery", "quota", quota),
+        (".timeout-recovery", "report_timeout_recovery", "timeout", timeout_retry),
+    ):
+        if continued is None:
+            continue
         request = continued.get("loopx_request") or {}
-        if (not original or (request.get("report_quota_recovery") or {}).get("original_turn_id") != original["turn_id"]
-                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + ".quota-recovery"):
-            raise ValueError("the report quota continuation changed its original identity")
+        if (not original or (request.get(key) or {}).get("original_turn_id") != original["turn_id"]
+                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + suffix):
+            raise ValueError(f"the report {label} continuation changed its original identity")
         return continued
     return original
 
@@ -318,6 +333,7 @@ class StewardTurnHost:
             **({"report_launch_recovery": launch_recovery} if launch_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **self.report_quota_basis(request),
+            **self.report_timeout_basis(request),
             **self.monitor_restart_basis(request),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
@@ -413,9 +429,10 @@ class StewardTurnHost:
             next_client_id = base + "." + carrier["turn_id"]
         return {"request": request, "client_id": next_client_id}
 
-    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def _report_continuation_basis(self, request: Mapping[str, Any], *,
+                                   recovery_key: str, basis_key: str) -> dict[str, Any]:
         """Transport original journal observations; the typed owner admits work."""
-        recovery = request.get("report_quota_recovery")
+        recovery = request.get(recovery_key)
         if recovery is None:
             return {}
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
@@ -427,54 +444,52 @@ class StewardTurnHost:
         reports, owner = report_service(self.controller, actor)
         _, window = reports.current_window(owner)
         folder = attempt_directory(reports.root, window) if window else None
-        return {"report_quota_basis": {"original": original,
+        return {basis_key: {"original": original,
             "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                 agent_id=actor["agent_id"], turn_key=result["resume_turn_key"]),
             "generation_present": folder is None or any((folder / name).exists() for name in
                 ("editorial-response.json", "private-generation.json", "private-delivery.json")),
             "observed_at": time.time()}}
 
+    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._report_continuation_basis(request, recovery_key="report_quota_recovery",
+            basis_key="report_quota_basis")
+
+    def report_timeout_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        return self._report_continuation_basis(request, recovery_key="report_timeout_recovery",
+            basis_key="report_timeout_basis")
+
     def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Read the original native failure without starting or resuming work."""
-        result = (original.get("response") or {}).get("native_loopx") or {}
-        request = original.get("loopx_request") or {}
-        if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or result.get("result_kind") != "host_failure" or not original.get("upstream_turn_id")):
-            return None
-        from .codex_adapter import CodexAppServerAdapter
-        from .codex_context import checked_session_home
-        session = self.store.load_session(original["session_id"])
-        if not session or not session.get("codex_home") or not session.get("upstream_thread_id"):
-            return None
-        history = session.get("upstream_context_history") or []
-        if not isinstance(history, list) or any(not isinstance(item, dict)
-                or not isinstance(item.get("thread_id"), str) or not item["thread_id"]
-                for item in history):
-            return None
-        # Context replacement retains native provenance on this same Session.
-        # Read the original refusal there; never resume a historical thread.
-        threads = [session["upstream_thread_id"], *(item["thread_id"] for item in reversed(history))]
-        proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
-            codex_home=Path(session["codex_home"]),
-            model_auth_home=checked_session_home(self.controller.codex_home, session),
-            thread_ids=list(dict.fromkeys(threads)), turn_id=original["upstream_turn_id"])
-        if (not proof or proof.get("turn_id") != original["upstream_turn_id"]
-                or proof.get("thread_id") not in threads or proof.get("only_original_user_item") is not True
-                or not proof.get("codex_error_info")):
-            return None
-        return proof
+        return observe_report_failure(self.controller, self.store, original)
 
-    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+    def report_window_failure_verified(
+        self, original: Mapping[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+    ) -> bool:
+        """Query live provider history first; fall back to retained proof only if unavailable."""
+        return verify_report_window_failure(
+            self.controller, self.store, original, window, generation_locked=generation_locked,
+        )
+
+    def report_failure_contradicted(self, original: Mapping[str, Any], window: dict[str, Any]) -> bool:
+        """Return True when a prior live observation contradicted this Turn's failure proof."""
+        return is_report_failure_contradicted(self.controller.coordination_runtime_root, original, window)
+
+    def report_quota_request(self, original: Mapping[str, Any], *,
+                             report_window: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Observe quota recovery, never resume or rewrite the failed native Turn."""
-        request = original.get("loopx_request") or {}
-        if request.get("report_quota_recovery") is not None:
-            return None
-        proof = self.report_failure_observation(original)
-        if (not proof or proof.get("only_original_user_item") is not True
-                or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
-            return None
-        return {**request, "turn_instance_id": request["turn_instance_id"] + ".quota-recovery",
-            "report_quota_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
+        fallback = (
+            None
+            if getattr(self.report_failure_observation, "__func__", None) is _DEFAULT_REPORT_FAILURE_OBSERVATION
+            else self.report_failure_observation
+        )
+        return build_report_quota_request(
+            self.controller, self.store, original, report_window=report_window, fallback_observe_fn=fallback,
+        )
+
+    def report_timeout_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Observe idle Antigravity timeout for one bounded isolated-cascade retry."""
+        return build_report_timeout_request(original, observe_fn=self.report_failure_observation)
 
     def report_selection_recovery(self, original: dict[str, Any], *,
                                   probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1148,7 +1163,11 @@ class StewardTurnHost:
         quota_observation = None
         if "quota_probe" in prepared:
             quota_observation = prepared["quota_probe"]
-            quota_observation["request"] = self.report_quota_request(quota_observation["original"])
+            original_turn = quota_observation["original"]
+            quota_observation["request"] = (
+                self.report_quota_request(original_turn, report_window=report_window)
+                or self.report_timeout_request(original_turn)
+            )
             prepared = inspect_submission(quota_observation)
         if "turn" in prepared:
             return prepared["turn"], False
@@ -1588,7 +1607,7 @@ class StewardTurnHost:
                 followup_ctx = self._steward_followup_context(actor, session_id, request, authority)
                 prompt += (
                     "\nSteward advancement instructions: Evaluate the monitor prompt and signal snapshot against authorized recipients (`context_delegation.targets`), prior receipts (`prior_handoff_receipts`, avoid duplicate delivery for unchanged PR@headRefOid), and open user todos (`open_user_todos`). "
-                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
+                    "When `signal_snapshot.repository_snapshot.items` is present, each PR carries `mergeable`, `checks_summary`, `bypassed_gates`, `stalled_since`, `author_replied_after_request_changes`, optional `stalled_bucket` (`awaiting_maintainer_reply` | `under_24h` | `24h_to_72h` | `72h_plus` | `7d_plus`), and `review_summary` (`effective_verdict`, `has_review_conflict`, `stale_review_count`, `latest_request_changes_review_id`, `stalled_since`, `author_replied_after_request_changes`, `exact_head_reviews` with `reviewer_declaration`, `valid_verdict_review`, `author_owned_fallback`). Keep triage read-only; never execute merges here. "
                     "You may include optional top-level JSON fields alongside the normal kernel fields: "
                     "`context_handoff` (single object or array <=32 of {goal_id, agent_id, brief} with `schema_version='collaboration_brief_v0'` and `inputs=[]` when referencing URLs/PRs, restricted to `context_delegation.targets`), "
                     "`steward_owner_report` (optional non-empty Markdown string <=24000 chars or `{markdown}` delivered once directly to the bound Steward App and Feishu conversation; omit or set `null` when silent/no report should be sent), "
@@ -1653,7 +1672,10 @@ class StewardTurnHost:
                         if (governance_work and event_sink is not None)
                         else event_sink
                     )
-                    response = adapter.start_turn(prompt, invocation_sink)
+                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                        response = adapter.start_turn(prompt, invocation_sink, isolated_cascade=True)
+                    else:
+                        response = adapter.start_turn(prompt, invocation_sink)
             finally:
                 guard_owner._launch_guard = previous_guard
             current()  # Revocation/stop/retarget after a long model call wins.
@@ -1895,3 +1917,6 @@ class StewardTurnHost:
             **({"context_handoff": committed_handoff} if committed_handoff else {}),
             **({"steward_owner_report_queued": True} if owner_report else {}),
             **({"steward_user_action_receipts": user_action_receipts} if user_action_receipts else {})}
+
+
+_DEFAULT_REPORT_FAILURE_OBSERVATION = StewardTurnHost.report_failure_observation

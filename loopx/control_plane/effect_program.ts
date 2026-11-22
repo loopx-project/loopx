@@ -1,6 +1,6 @@
 import {assertActionSelectionConsistency} from "./work_items/action_selection_admission.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { isStringLiteral, type JsonObject } from "./runtime_decode.ts";
+import { isStringLiteral, pythonString, type JsonObject } from "./runtime_decode.ts";
 import { decodeInteractionContract } from "./work_items/interaction_contract.ts";
 import { EffectiveAction } from "./quota/effective_action.generated.ts";
 import {BARE_SHA256_PATTERN} from "./content_digest.ts";
@@ -256,13 +256,6 @@ function asObject(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)
     : {};
-}
-
-function pythonString(value: unknown): string {
-  if (value === null || value === undefined) return "None";
-  if (value === true) return "True";
-  if (value === false) return "False";
-  return String(value);
 }
 
 function truthyString(value: unknown): string {
