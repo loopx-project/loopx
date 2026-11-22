@@ -415,17 +415,20 @@ function fitDraftModelPreference(value: DraftModelPreference, models: ModelOptio
 }
 
 /** The model and thinking effort for one instance's members: a quiet mark until something is chosen. */
-function MemberModel({ agent, models, value, permission, onNeed, onChange, onPermission }: {
+function MemberModel({ agent, models, value, permission, part, onNeed, onChange, onPermission }: {
   agent: AgentInfo; models: ModelOption[]; value: MemberDefault; onNeed: (agent: string, refresh?: boolean) => void; onChange: (value: MemberDefault) => void;
   /** The level in force, and how to change it; left out where the agent has no levels. */
   permission?: string; onPermission?: (mode: string) => void;
+  /** One half only, drawn as the composer's own control rather than a quiet line: a member's box sits like the lead's. */
+  part?: 'permission' | 'model';
 }) {
-  useEffect(() => { onNeed(agent.id); }, [agent.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (part !== 'permission') onNeed(agent.id); }, [agent.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const efforts = agent.capabilities.effortLevels ?? [];
+  const quiet = part ? undefined : agent.label;
   return (<>
-    {permission && onPermission && <PermissionPicker quietFor={agent.label} modes={agent.capabilities.permissionModes} value={permission} canAsk={agent.capabilities.approvals ?? true} onChange={onPermission} />}
-    <ModelPicker
-      quietFor={agent.label}
+    {part !== 'model' && permission && onPermission && <PermissionPicker quietFor={quiet} modes={agent.capabilities.permissionModes} value={permission} canAsk={agent.capabilities.approvals ?? true} onChange={onPermission} />}
+    {part !== 'permission' && <ModelPicker
+      quietFor={quiet}
       catalog={agent.capabilities.modelCatalog}
       models={models}
       model={value.model}
@@ -435,7 +438,7 @@ function MemberModel({ agent, models, value, permission, onNeed, onChange, onPer
       // An effort the newly picked model does not take goes back to the default with it.
       onModel={(model) => onChange({ ...value, model, effort: value.effort && effortsForModel(models, model, efforts).includes(value.effort) ? value.effort : null })}
       onEffort={(effort) => onChange({ ...value, effort })}
-    />
+    />}
   </>);
 }
 
@@ -1893,6 +1896,36 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   /** The thread's trace, beside the conversation on a desktop, a page of its own on a phone. */
   const [traceOpen, setTraceOpen] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
+  const [referenceId, setReferenceId] = useState<string | null>(null);
+  const referenceOrigin = useRef<{ focus: HTMLElement | null; top: number; offset: number } | null>(null);
+  const referenceOverlay = !useMinWidth(901);
+  const openReference = (id: string) => {
+    const focus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    referenceOrigin.current ??= { focus, top: scrollerRef.current?.scrollTop ?? 0, offset: focus?.getBoundingClientRect().top ?? 0 };
+    stickToBottom.current = false;
+    setFiles(null); setTraceOpen(false); setGitOpen(false); setAgentsOpen(false); setOverviewDetail(null);
+    setReferenceId(id);
+  };
+  useLayoutEffect(() => {
+    const origin = referenceOrigin.current;
+    if (!origin || !scrollerRef.current) return;
+    if (referenceId) {
+      if (origin.focus?.isConnected) scrollerRef.current.scrollTop += origin.focus.getBoundingClientRect().top - origin.offset;
+    } else {
+      stickToBottom.current = false;
+      scrollerRef.current.scrollTop = origin.top;
+      origin.focus?.focus({ preventScroll: true });
+      referenceOrigin.current = null;
+    }
+  }, [referenceId]);
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!referenceId || !referenceOverlay || !main) return;
+    main.inert = true;
+    return () => { main.inert = false; };
+  }, [referenceId, referenceOverlay]);
+  useLayoutEffect(() => { setReferenceId(null); referenceOrigin.current = null; }, [api, selectedId, onPage]);
+  useEffect(() => { if (files || traceOpen || agentsOpen || gitOpen) setReferenceId(null); }, [files, traceOpen, agentsOpen, gitOpen]);
   useLayoutEffect(() => { setGitOpen(false); }, [selectedId, api]);
   useEffect(() => { if (files || traceOpen || agentsOpen) setGitOpen(false); }, [files, traceOpen, agentsOpen]);
   const filesSeq = useRef(0);
@@ -1914,7 +1947,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   };
   /** A side panel takes the same edge as the overview, so the panel steps aside while one is open —
    *  but the person's own switch is left alone: it comes back when the side panel closes. */
-  const sideOpen = Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
+  const sideOpen = Boolean(referenceId) || Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
   const overviewShown = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && Boolean(selected) && hostUp;
   /** Only the person turns the standing panel off; the switch above remembers it. */
   const closeOverview = useCallback(() => { if (overviewDock) setOverviewOpen(false); }, [overviewDock, setOverviewOpen]);
@@ -2236,6 +2269,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // The hub's "back", for a back swipe or the browser's back button (see appHistory.ts): the same
   // steps as the top-left button, one at a time. Nothing left to undo hands the swipe to the browser.
   appBack.current = () => {
+    if (referenceId) { setReferenceId(null); return true; }
     if (listOpen) { setDrawer(false); return true; }
     if (activeOverviewDetail) { closeOverviewDetail(); return true; }
     if (onSettings) {
@@ -3451,9 +3485,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 if (known) { openThread(known); return; }
                 if (api) void api.thread(id).then(openThread).catch(handleError);
               }}
-              // A message names another thread in passing; the link opens it like a pick in the list.
+              // Read a referenced conversation beside this one, keeping the draft and reading position.
               threads={threads}
-              onOpenThread={openThreadById}
+              onOpenThread={openReference}
               hasOlder={hasOlder}
               loadingOlder={loadingOlder}
               onLoadOlder={loadOlder}
@@ -3652,9 +3686,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         </div>
       )}
 
-      {agentsOpen && coordination && <AgentPanel key={`${coordination.rootId}:${agentsStart ?? ''}`} start={agentsStart} api={api} memberApi={(id) => new Api(token ?? '', '', id)} team={coordination} agents={agents} memberModel={(thread) => {
+      {referenceId && <ThreadPeek key={`${hostId ?? 'local'}:${referenceId}`} side api={api} initial={referenceId}
+        draftKey={hostId ? `host:${hostId}:${referenceId}` : referenceId} returnFocus={null}
+        onClose={() => setReferenceId(null)} onOpen={() => { setReferenceId(null); openThreadById(referenceId); }}
+        onChange={() => { void refreshThreads(); }} />}
+      {agentsOpen && coordination && <AgentPanel key={`${coordination.rootId}:${agentsStart ?? ''}`} start={agentsStart} api={api} memberApi={(id) => new Api(token ?? '', '', id)} team={coordination} agents={agents} memberModel={(thread, part) => {
         const a = agents.find((v) => v.id === thread.agent);
-        return a ? <MemberModel agent={a} models={modelsByAgent[a.id] ?? []} value={{ model: thread.model ?? null, effort: thread.effort ?? null }} onNeed={needModels} onChange={({ model, effort }) => { void api.updateThread(thread.id, { model, effort }).then(() => refreshThreads()).catch(handleError); }}
+        return a ? <MemberModel part={part} agent={a} models={modelsByAgent[a.id] ?? []} value={{ model: thread.model ?? null, effort: thread.effort ?? null }} onNeed={needModels} onChange={({ model, effort }) => { void api.updateThread(thread.id, { model, effort }).then(() => refreshThreads()).catch(handleError); }}
           permission={a.capabilities.permissionModes.length ? thread.permissionMode : undefined} onPermission={(permissionMode) => { void api.updateThread(thread.id, { permissionMode }).then(() => refreshThreads()).catch(handleError); }} /> : null;
       }} leadAgent={threads.find((t) => t.id === coordination.rootId)?.agent} phone={compact} onClose={() => setAgentsOpen(false)} onOpen={thread => { openThread(thread); setAgentsOpen(false); }} onAdjust={(name, draft) => { setAgentsOpen(false); setSelectedId(coordination.rootId); setRestore({ text: t('app.adjustTask', name) + draft, nonce: Date.now() }); }} onRefresh={() => { void refreshThreads(); }} onError={handleError} />}
       {files && filesThread && api && <FilesPanel api={api} threadId={filesThread.id} target={files} phone={compact} revision={filesThread.updatedAt} writingStage={filesThread.writing?.stage ?? null} writingHabits={filesThread.writing?.habits ?? null} noted={{ count: noteCount, nonce: filesNotePulse }} onClose={() => setFiles(null)} />}

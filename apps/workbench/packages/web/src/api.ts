@@ -1875,8 +1875,8 @@ export class Api {
   cancelAutoHandover(id: string): Promise<AutoHandoverView> { return this.request('DELETE', `/api/threads/${id}/auto-handover`); }
   setCollaborationHandover(id: string, enabled: boolean): Promise<Coordination> { return this.request('PATCH', `/api/threads/${id}/collaboration-handover`, { enabled }); }
 
-  createHandoverThread(threadId: string, agent: string, model?: string, mode?: 'continue' | 'branch'): Promise<Thread> {
-    return this.request('POST', `/api/threads/${threadId}/handover-thread`, { agent, model, mode });
+  createHandoverThread(threadId: string, agent: string, model?: string, mode?: 'continue' | 'branch', takeTeam?: boolean): Promise<Thread> {
+    return this.request('POST', `/api/threads/${threadId}/handover-thread`, { agent, model, mode, ...(takeTeam === false ? { takeTeam: false } : {}) });
   }
   /** Hands the thread to `target` now: its conversation, queue and any collaboration lead. */
   takeOver(threadId: string, target: string | HandoverTarget, note?: string): Promise<Thread> {
