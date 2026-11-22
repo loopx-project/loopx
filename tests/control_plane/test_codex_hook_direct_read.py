@@ -705,25 +705,24 @@ def test_combined_compact_direct_read_and_epoch_prefetch_generated_hook_lifecycl
     env_clean["HOME"] = str(tmp_path)
     env_clean["PYTHONPATH"] = worktree_root
 
-    # 1. PostCompact records compactDirectRead AND explicit deferral metadata for epochPrefetch.
+    # 1. PostCompact stays inert ({}) without setting compact_hook_wake or running prefetch.
     r_post = subprocess.run(
         hook_cmd,
         input=json.dumps({"session_id": "s-combo", "cwd": str(repo), "hook_event_name": "PostCompact"}),
         capture_output=True, text=True, env=env_clean, cwd=repo, check=True,
     )
-    post_out = json.loads(r_post.stdout)["hookSpecificOutput"]
-    assert post_out["compactDirectRead"]["operator"] == "EpochReset"
-    assert post_out["epochPrefetch"]["configured"] is True
-    assert post_out["epochPrefetch"]["executed"] is False
-    assert post_out["epochPrefetch"]["reason"] == "post_compact_defers_to_session_start"
+    assert json.loads(r_post.stdout) == {}
+    assert "compact_hook_wake" not in ctx._state(journal_dir)
 
-    # 2. SessionStart(compact) runs BOTH: compactDirectRead (deduped) AND real EpochReset prefetch!
+    # 2. First SessionStart(compact) runs BOTH: non-deduped compactDirectRead AND real EpochReset prefetch!
     start_evt = {"session_id": "s-combo", "cwd": str(repo), "hook_event_name": "SessionStart", "source": "compact"}
     r_start = subprocess.run(
         hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
         env=env_clean, cwd=repo, check=True,
     )
     start_out = json.loads(r_start.stdout)["hookSpecificOutput"]
+    assert start_out["compactDirectRead"]["operator"] == "EpochReset"
+    assert start_out["compactDirectRead"]["deduplicated"] is False
     assert start_out["compactDirectRead"]["composed_with_epoch_prefetch"] is True
     assert start_out["epochPrefetch"]["configured"] is True
     assert start_out["epochPrefetch"]["superseded"] is False
@@ -732,14 +731,16 @@ def test_combined_compact_direct_read_and_epoch_prefetch_generated_hook_lifecycl
     assert start_out["epochPrefetch"]["executed"] is True
     assert start_out["epochPrefetch"]["replayed"] is False
     assert start_out["epochPrefetch"]["bytes_saved"] > 0
+    assert "todo_combo" in start_out["additionalContext"]
     assert "dirty.txt" in start_out["additionalContext"]
 
-    # 3. Replay on same epoch NEVER re-executes prefetch_command.
+    # 3. Replay on same epoch deduplicates compactDirectRead and NEVER re-executes prefetch_command.
     r_replay = subprocess.run(
         hook_cmd, input=json.dumps(start_evt), capture_output=True, text=True,
         env=env_clean, cwd=repo, check=True,
     )
     replay_out = json.loads(r_replay.stdout)["hookSpecificOutput"]
+    assert replay_out["compactDirectRead"]["deduplicated"] is True
     assert replay_out["epochPrefetch"]["replayed"] is True
     assert replay_out["epochPrefetch"]["executed"] is False
     assert replay_out["epochPrefetch"]["superseded"] is False
