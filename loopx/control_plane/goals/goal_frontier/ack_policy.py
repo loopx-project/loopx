@@ -44,14 +44,13 @@ def autonomous_replan_ack_satisfies_obligation(
     replan_obligation: dict[str, Any] | None,
     acceptance_gaps: list[dict[str, Any]] | None,
     todo_succession_gap_open: bool = False,
-    stride_strategy: str = "off",
 ) -> bool:
     """Reject ACKs that miss the obligation's typed semantic outcome."""
 
     if not autonomous_replan_ack_has_frontier_delta(ack):
         return False
     if ack.get("source") == "todo_replan_successor_transition" and not replan_successor_transition_allowed(
-        replan_obligation or {}, stride_strategy=stride_strategy,
+        replan_obligation or {},
     ):
         return False
     semantic_delta = ack.get("semantic_delta") if isinstance(ack, dict) else {}
@@ -90,7 +89,6 @@ def replan_successor_transition_ack(
     agent_id: str | None,
     replan_obligation: dict[str, Any] | None,
     agent_todo_items: Iterable[dict[str, Any]] | None = None,
-    stride_strategy: str = "off",
 ) -> dict[str, Any] | None:
     """Project an exact runnable-successor Todo as the replan receipt.
 
@@ -168,7 +166,7 @@ def replan_successor_transition_ack(
     if successor_binding is None:
         return None
     if not replan_successor_transition_allowed(
-        replan_obligation or {}, stride_strategy=stride_strategy,
+        replan_obligation or {},
     ):
         return None
     if trigger_checkpoints is None:

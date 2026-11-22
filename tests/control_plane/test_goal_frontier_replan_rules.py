@@ -680,14 +680,10 @@ def test_exact_replan_successor_uses_authoritative_todo_source() -> None:
     due = {"obligation_id": obligation_id, "triggers": [{"kind": "periodic_review_due"}]}
     assert replan_successor_transition_ack(
         None, agent_id="current-agent", replan_obligation=due,
-        agent_todo_items=[successor], stride_strategy="evidence_conditioned_v1",
+        agent_todo_items=[successor],
     ) is None
     assert not autonomous_replan_ack_satisfies_obligation(
         ack, replan_obligation=due, acceptance_gaps=None,
-        stride_strategy="evidence_conditioned_v1",
-    )
-    assert autonomous_replan_ack_satisfies_obligation(
-        ack, replan_obligation=due, acceptance_gaps=None, stride_strategy="off",
     )
 
 

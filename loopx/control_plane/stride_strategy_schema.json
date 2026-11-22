@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Stride strategy version",
+  "description": "evidence_conditioned_v1 is the only live strategy. \"off\" remains decodable only in historical records.",
   "type": "string",
   "enum": ["off", "evidence_conditioned_v1"],
-  "default": "off"
+  "default": "evidence_conditioned_v1"
 }

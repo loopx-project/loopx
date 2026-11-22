@@ -122,6 +122,44 @@ def test_runtime_protocol_attests_only_official_stop_hook(profile, monkeypatch):
     assert protocol["stop_hook_enabled"] is (profile == "official")
 
 
+@pytest.mark.parametrize("profile,expected", [
+    ("official", None), ("single", None), ("native-goal", None),
+    ("heartbeat-resume", "evidence_conditioned_v1"),
+    ("heartbeat-explore", "evidence_conditioned_v1"),
+])
+def test_worker_profile_records_live_stride_only_for_loopx(tmp_path, monkeypatch, profile, expected):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+
+    async def installed(self, environment):
+        pass
+
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                          profile=profile, cwd="/task")
+    assert worker.stride_strategy == expected
+    if expected is not None:
+        worker.install_stop_hook(None, None, tmp_path, None)
+        recorded = json.loads((tmp_path / "worker-profile.json").read_text())
+        assert recorded["stride_strategy"] == worker.runtime.stride_strategy == expected
+
+
+def test_removed_worker_stride_selection_is_not_accepted(monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    with pytest.raises(TypeError, match="stride_strategy"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                     profile="heartbeat-resume", cwd="/task", stride_strategy="off")
+
+
 def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -416,7 +454,8 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
                         if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
     assert worker.runtime._replan_receipt() == {**expected_cadence,
-        **({"planning_horizon_goal": True} if profile.startswith("heartbeat-") else {})}
+        **({"planning_horizon_goal": True, "stride_strategy": "evidence_conditioned_v1"}
+           if profile.startswith("heartbeat-") else {})}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
@@ -878,9 +917,10 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     ("native-goal", ["--replan-after-todos", "3"]),
     ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
     ("heartbeat-explore", ["--replan-after-todos", "0"]),
+    # The live stride switch is removed; LoopX workers always record v1.
     ("official", ["--stride-strategy", "off"]),
-    ("native-goal", ["--stride-strategy", "evidence_conditioned_v1"]),
-    ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
+    ("heartbeat-resume", ["--stride-strategy", "off"]),
+    ("heartbeat-resume", ["--stride-strategy", "evidence_conditioned_v1"]),
     ("official", ["--checkpoint-request", "missing.json"]),
     ("native-goal", ["--checkpoint-request", "missing.json"]),
     ("heartbeat-explore", ["--checkpoint-retention-policy", "policy.json"]),
@@ -1107,6 +1147,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     horizon = (True if "--planning-horizon-goal" in cadence_args else
                False if "--no-planning-horizon-goal" in cadence_args else True)
     assert receipt["planning_horizon_goal"] is horizon
+    assert receipt["stride_strategy"] == "evidence_conditioned_v1"
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
@@ -1195,7 +1236,9 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
                           profile=profile, cwd="/task", replan_after_todos=3)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.replan_after_turns is None
-    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3, "planning_horizon_goal": True}
+    assert worker.runtime._replan_receipt() == {
+        "replan_after_completed_todos": 3, "planning_horizon_goal": True,
+        "stride_strategy": "evidence_conditioned_v1"}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt
@@ -1674,6 +1717,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         worker.install_stop_hook(backend, None, trial, None)
         profile_receipt = json.loads((trial / "worker-profile.json").read_text())
         assert profile_receipt.get("execution_observation") == producer
+        profiles.append(profile_receipt)
         assert profile_receipt.get("native_result_comparison") is (True if compare else None)
         assert installed_tools == ([
             ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
@@ -1682,6 +1726,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert ("content refs do not cover modes" in worker.workspace_instructions) is selected
         raise RuntimeError("isolated install boundary")
 
+    profiles = []
     monkeypatch.setattr(run, "run_agent", stop_before_model)
     args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "probe", "--worker", profile, "--model", "fixture",
@@ -1700,6 +1745,9 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         run.main(args)
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt.get("execution_observation") == producer
+    # New LoopX runs stamp the live stride policy identically in both records.
+    profile_receipt, = profiles
+    assert receipt["stride_strategy"] == profile_receipt["stride_strategy"] == "evidence_conditioned_v1"
     assert receipt.get("native_result_comparison") is (True if compare else None)
     assert installed == (["loopx-bind-native-candidate"] if selected or compare else [])
     assert bool(scopes) is compare

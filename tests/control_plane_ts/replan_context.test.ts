@@ -648,9 +648,11 @@ test("stall frontier projects its current strategy through the shared outcome ow
     const enabled = projectReplanContext({...request, obligation, stride_strategy: "evidence_conditioned_v1"});
     assert.ok(((enabled.uncovered_frontier as JsonObject).required_any_of as string[])
       .includes("fresh_vision_path_outcome"));
+    // Legacy "off" input is accepted on read/transport but cannot opt live contexts out of stride.
     const off = projectReplanContext({...request, obligation, stride_strategy: "off"});
+    assert.equal(off.stride_strategy, "evidence_conditioned_v1");
     assert.equal(((off.uncovered_frontier as JsonObject).required_any_of as string[])
-      .includes("fresh_vision_path_outcome"), false);
+      .includes("fresh_vision_path_outcome"), true);
     const restricted = projectReplanContext({...request, stride_strategy: "evidence_conditioned_v1",
       obligation: {...obligation, satisfying_semantic_outcomes: ["new_runnable_successor"]}});
     assert.deepEqual((restricted.uncovered_frontier as JsonObject).required_any_of, ["new_runnable_successor"]);
@@ -674,7 +676,7 @@ test("generic followthrough is available with strategy off without enabling stri
   }
   assert.deepEqual(validateReplanContext({...enabled, stride_strategy: "off"}).decision_followthrough, enabled.decision_followthrough);
 
-  assert.notEqual(enabled.context_id, off.context_id);
+  assert.equal(enabled.context_id, off.context_id);
   for (const field of ["evidence", "coverage_ledger", "uncovered_frontier", "evidence_count"]) {
     assert.deepEqual(enabled[field], off[field]);
   }

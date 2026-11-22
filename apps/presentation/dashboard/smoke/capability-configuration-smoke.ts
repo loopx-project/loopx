@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { changeStewardExecutorDraft, goalExploreEditorValue, goalExploreWriteValue, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+import { changeStewardExecutorDraft, goalExploreEditorValue, goalExploreWriteValue, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults, replanCadenceEditorValue } from "../src/data/capability-configuration.js";
 
 const exploreEditor = {fields: [{key: "mode"}, {key: "profile"}, {key: "composition_mode"}, {key: "composition_scope_id", nullable: true}]};
 const exploreEffective = {mode: "planning", profile: "generic", composition_mode: "disabled", composition_scope_id: null};
@@ -40,53 +40,65 @@ const periodicReportEditor = {
 };
 
 const storageEditor = { fields: [{ key: "new_goal_provider" }, { key: "canonical_creation" }, { key: "new_goal_handoff_mode" }] };
-const cadenceEditor = { fields: [{ key: "count_unit" }, { key: "count" }, { key: "stride_strategy" }] };
-const cadenceDefault = { count_unit: "effective_turns", count: 6, stride_strategy: "off" };
+const cadenceEditor = { fields: [{ key: "count_unit" }, { key: "count" }, { key: "planning_horizon_goal" }] };
+const cadenceDefault = { count_unit: "effective_turns", count: 6 };
 assert.deepEqual(projectEditableCapabilityConfiguration(cadenceEditor,
-  { stride_strategy: "evidence_conditioned_v1" },
-  replanCadenceEditorDefaults({ count_unit: "effective_turns", count: 3, stride_strategy: "off" }, cadenceDefault)),
-  { count_unit: "effective_turns", count: 3, stride_strategy: "evidence_conditioned_v1" },
+  { planning_horizon_goal: false },
+  replanCadenceEditorDefaults({ count_unit: "effective_turns", count: 3 }, cadenceDefault)),
+  { count_unit: "effective_turns", count: 3, planning_horizon_goal: false },
   "a sparse JSON draft returning to the form preserves the effective review interval");
 assert.deepEqual(projectEditableCapabilityConfiguration(cadenceEditor,
   { count_unit: "completed_todos", count: 2 },
-  replanCadenceEditorDefaults({ count_unit: "effective_turns", count: 3, stride_strategy: "evidence_conditioned_v1" }, cadenceDefault)),
-  { count_unit: "completed_todos", count: 2, stride_strategy: "off" },
-  "an explicit cadence wins and omitted strategy retains default-off semantics");
+  replanCadenceEditorDefaults({ count_unit: "effective_turns", count: 3 }, cadenceDefault)),
+  { count_unit: "completed_todos", count: 2 },
+  "an explicit cadence wins over the effective interval");
 assert.deepEqual(replanCadenceEditorDefaults(
   { schema_version: "todo_replan_cadence_machine_defaults_v0", completed_todos: 4 }, cadenceDefault),
-  { count_unit: "completed_todos", count: 4, stride_strategy: "off" },
+  { count_unit: "completed_todos", count: 4 },
   "legacy effective intervals retain their own unit and count");
-const inheritedReview = { count_unit: "effective_turns", count: 3, stride_strategy: "off" };
+// The stride switch was removed: evidence-conditioned v1 is always on. Legacy
+// saved values are history only and never displayed or resubmitted.
+for (const legacy of ["off", "evidence_conditioned_v1"]) {
+  assert.deepEqual(replanCadenceEditorValue({ count_unit: "effective_turns", count: 3, stride_strategy: legacy }),
+    { count_unit: "effective_turns", count: 3 }, `legacy stride_strategy=${legacy} is not displayed`);
+  assert.equal(Object.hasOwn(goalReplanCadenceEditorValue({ stride_strategy: legacy }, cadenceDefault), "stride_strategy"), false,
+    `legacy Goal stride_strategy=${legacy} is not displayed`);
+  assert.equal(Object.hasOwn(replanCadenceEditorDefaults({ ...cadenceDefault, stride_strategy: legacy }, cadenceDefault), "stride_strategy"), false);
+}
+assert.deepEqual(replanCadenceEditorValue({ completed_todos: 2 }), { count_unit: "completed_todos", count: 2 });
+assert.equal(parseEditableCapabilityJson(cadenceEditor, JSON.stringify({ stride_strategy: "off" })), null,
+  "the removed stride switch is not an editable JSON field");
+const inheritedReview = { count_unit: "effective_turns", count: 3 };
 assert.deepEqual(goalReplanCadenceWriteValue({...inheritedReview, planning_horizon_goal: true}, false, false),
-  {stride_strategy: "off"}, "displaying the default Goal context does not create an override");
+  {}, "displaying the default Goal context does not create an override");
 for (const enabled of [true, false]) {
   assert.deepEqual(goalReplanCadenceWriteValue({...inheritedReview, planning_horizon_goal: enabled}, false, true),
-    {stride_strategy: "off", planning_horizon_goal: enabled}, "explicit horizon choices survive a form save");
+    {planning_horizon_goal: enabled}, "explicit horizon choices survive a form save");
 }
 assert.equal(replanCadenceEditorDefaults({...inheritedReview, planning_horizon_goal: false},
   {...cadenceDefault, planning_horizon_goal: true}).planning_horizon_goal, false,
   "a sparse Goal form displays the effective machine opt-out");
-assert.deepEqual(goalReplanCadenceEditorValue({ stride_strategy: "evidence_conditioned_v1" }, inheritedReview),
-  { ...inheritedReview, stride_strategy: "evidence_conditioned_v1" },
-  "strategy-only Goal settings display the live review interval");
-assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, stride_strategy: "evidence_conditioned_v1" }, false),
-  { stride_strategy: "evidence_conditioned_v1" },
-  "changing only the strategy must not pin the displayed interval");
-assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, count: 2, stride_strategy: "evidence_conditioned_v1" }, true),
-  { count_unit: "effective_turns", count: 2, stride_strategy: "evidence_conditioned_v1" },
+assert.deepEqual(goalReplanCadenceEditorValue({ planning_horizon_goal: false }, inheritedReview),
+  { ...inheritedReview, planning_horizon_goal: false },
+  "horizon-only Goal settings display the live review interval");
+assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, planning_horizon_goal: false }, false),
+  { planning_horizon_goal: false },
+  "changing only the horizon must not pin the displayed interval");
+assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, count: 2 }, true),
+  { count_unit: "effective_turns", count: 2 },
   "an edited interval remains an explicit Goal override");
-assert.deepEqual(goalReplanCadenceWriteValue({ count_unit: "completed_todos", count: 2, stride_strategy: "off" },
+assert.deepEqual(goalReplanCadenceWriteValue({ count_unit: "completed_todos", count: 2 },
   false),
-  { stride_strategy: "off" },
+  {},
   "legacy device units can be inherited without pinning their count");
-assert.equal(hasReplanCadenceOverride({ stride_strategy: "evidence_conditioned_v1" }), false);
+assert.equal(hasReplanCadenceOverride({ planning_horizon_goal: false }), false);
 assert.equal(hasReplanCadenceOverride({ count_unit: "effective_turns", count: 3 }), true);
 assert.equal(hasReplanCadenceOverride({ completed_todos: 2 }), true, "legacy pinned cadences stay explicit");
-assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview, stride_strategy: "evidence_conditioned_v1" }, true),
-  { ...inheritedReview, stride_strategy: "evidence_conditioned_v1" },
+assert.deepEqual(goalReplanCadenceWriteValue({ ...inheritedReview }, true),
+  { ...inheritedReview },
   "an explicit interval remains pinned even when it matches the machine policy");
-assert.deepEqual(goalReplanCadenceWriteValue({ count_unit: "effective_turns", count: 2, stride_strategy: "evidence_conditioned_v1" }, false),
-  { stride_strategy: "evidence_conditioned_v1" },
+assert.deepEqual(goalReplanCadenceWriteValue({ count_unit: "effective_turns", count: 2, yardstick_enabled: true }, false),
+  { yardstick_enabled: true },
   "removing JSON interval fields clears only the cadence, including a previously pinned value");
 const storageDefault = { schema_version: "loopx_goal_storage_defaults_v1", new_goal_provider: "sqlite",
   canonical_creation: true, new_goal_handoff_mode: "hard_lease" };
@@ -172,12 +184,8 @@ assert.deepEqual(
   "an explicit Goal CI opt-out must survive default projection and omit envelope fields",
 );
 
-// Capability defaults may enable Stride without changing saved legacy choices.
-const enabledStrideDefault = {...cadenceDefault, stride_strategy: "evidence_conditioned_v1"};
-assert.deepEqual(goalReplanCadenceEditorValue(null, enabledStrideDefault), enabledStrideDefault);
-assert.equal(goalReplanCadenceEditorValue({stride_strategy: "off"}, enabledStrideDefault).stride_strategy, "off");
-assert.equal(goalReplanCadenceEditorValue({count_unit: "effective_turns", count: 3}, enabledStrideDefault).stride_strategy, "off");
-assert.equal(projectEditableCapabilityConfiguration(cadenceEditor, {}, enabledStrideDefault).stride_strategy, "evidence_conditioned_v1");
+// An unconfigured Goal displays the live inherited review value unchanged.
+assert.deepEqual(goalReplanCadenceEditorValue(null, cadenceDefault), cadenceDefault);
 
 // Independent Yardstick inheritance must not be pinned by editing the interval.
 const yardstickEffective = {...inheritedReview, yardstick_enabled: true};
@@ -186,6 +194,6 @@ assert.deepEqual(goalReplanCadenceWriteValue({...yardstickEffective, count: 2}, 
   {...inheritedReview, count: 2}, "an unchanged inherited measurement choice stays live");
 for (const enabled of [true, false]) {
   assert.deepEqual(goalReplanCadenceWriteValue({...yardstickEffective, yardstick_enabled: enabled}, false, false, true),
-    {stride_strategy: "off", yardstick_enabled: enabled}, "explicit measurement opt-in and opt-out survive form saving");
+    {yardstick_enabled: enabled}, "explicit measurement opt-in and opt-out survive form saving");
 }
 assert.equal(replanCadenceEditorDefaults(yardstickEffective, {...cadenceDefault, yardstick_enabled: false}).yardstick_enabled, true);

@@ -549,59 +549,30 @@ fresh-path 决定仍受既有结构校验约束。这些是机器执行的字段
 ### Configure and roll back the stride strategy
 
 Use the existing **Goal review and stride** capability editor, selecting device
-defaults or an explicit Goal target. Preview, confirm and read back the effective
-configuration/source. A Goal can select only the strategy and keep inheriting
-the live device review interval (six settled work Turns by default). An explicit
-Goal review unit/count still pins that interval; an older cadence-only override
-without a strategy remains `off`, even when the device strategy is enabled.
-Clearing the interval alone retains the Goal strategy, while clearing both
-restores device defaults. There is no separate stride timer. Switching between
-JSON and the form preserves that choice: omitted interval fields keep inheritance,
-while explicit fields remain pinned even when they equal the current device value.
-A strategy-only Goal capability JSON object clears an existing interval override.
-The CLI's single-field strategy option retains a stored interval; use its explicit
-cadence-clear options to restore inheritance.
+defaults or an explicit Goal target to configure the review cadence (six settled
+work Turns by default). Evidence-conditioned stride (`evidence_conditioned_v1`)
+is unconditionally enabled as the live strategy; there is no live on/off toggle
+and no separate stride timer. An explicit Goal review unit/count still pins that
+interval, and clearing the cadence restores live device defaults via the editor
+or `--clear-execution-replan-after-turns --clear-execution-replan-after-todos --execute`.
+Legacy saved `stride_strategy` fields in `registry.json` or
+`machine_configuration.json` remain readable on load, are ignored at runtime,
+and are dropped on rewrite. Activation cannot authorize experiments, spend
+quota, clone a checkpoint, relax acceptance or rewrite a frozen experiment.
 
-![Versioned stride strategy in the existing capability editor](assets/stride-strategy-editor.png)
-
-Isolated packaged editor with the real revision-checked configuration handler;
-workspace discovery is synthetic. This demonstrates configuration readback, not
-installed-App adoption or research utility.
-
-CLI preview/apply and readback (replace `GOAL`):
-
-```sh
-loopx configure-goal --goal-id GOAL --execution-stride-strategy evidence_conditioned_v1
-loopx configure-goal --goal-id GOAL --execution-stride-strategy evidence_conditioned_v1 --execute
-loopx --format json configure-goal --goal-id GOAL
-loopx configure-goal --goal-id GOAL --execution-stride-strategy off --execute
-```
-
-Turning the strategy off retains the review interval and ordinary review. To
-restore device defaults for the entire review configuration, clear the cadence
-and strategy through the editor or `--clear-execution-replan-after-turns
---clear-execution-replan-after-todos --clear-execution-stride-strategy --execute`.
-Historical evidence remains readable after disabling. Activation cannot authorize
-experiments, spend quota, clone a checkpoint, relax acceptance or rewrite a
-frozen experiment. Configuration is versioned; preregister the selected version
-and captured input scope for comparisons.
-
-在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal，预览、确认并
-回读生效来源。Goal 可仅选择策略，继续沿用设备的实时复盘周期（默认每 6 个已结算
-工作 Turn）；显式设置 Goal 计数依据和数量仍会固定该周期。旧的仅含周期覆盖没有
-策略时仍为 off。单独清除周期会保留 Goal 策略；两者都清除才恢复设备默认值。
-步幅策略没有第二个独立计时器。JSON 与表单切换保留原选择：省略周期字段继续
-继承，显式字段即使等于当前设备值也保持固定。Goal 能力 JSON 仅含策略时清除
-已有周期覆盖；CLI 单字段策略选项仍保留已存周期，要恢复继承须显式使用周期
-清除选项。关闭策略保留复盘周期。
-历史引用仍可读取。启用不会授权实验、消耗配额、复制 checkpoint、放宽验收或
-改写冻结实验；比较时预先记录策略版本与输入覆盖范围。
+在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal 来配置复盘周期
+（默认每 6 个已结算工作 Turn）。基于证据的步幅策略（`evidence_conditioned_v1`）
+现为无条件生效的在线策略，不再提供在线开关，也没有第二个独立计时器。显式设置 Goal
+计数依据和数量仍会固定该周期，可通过编辑器或 `--clear-execution-replan-after-turns
+--clear-execution-replan-after-todos --execute` 恢复设备默认值。旧配置文件中残留的
+`stride_strategy` 字段在读取时保持兼容、运行时忽略、重写时移除；历史引用仍可读取。
+策略不会授权实验、消耗配额、复制 checkpoint、放宽验收或改写冻结实验。
 
 ### Structured stride control
 
-One opt-in strategy is selectable: `off | evidence_conditioned_v1`. The existing
-activation token remains stable; the initial implementation now replaces its
-fixed evidence-label mapping with **three independently justified coordinates**.
+The sole live strategy is `evidence_conditioned_v1` (historical `"off"` records
+remain readable for read-only audit/replay). The initial implementation replaces
+its fixed evidence-label mapping with **three independently justified coordinates**.
 Pin the exact source revision when comparing runs. Frozen workers retain their
 installed source; historical fixed-vector declarations remain readable without
 being reinterpreted as new decisions.

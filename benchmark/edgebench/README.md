@@ -601,8 +601,9 @@ official feedback; best-only retains its strictly improving snapshot channel.
 
 Shared `loopx-planned` entry also drops the adapter's research-strategy prefix.
 The product planning packet, including Core first-delivery guidance, is unchanged
-and remains a separate experimental variable. Optional execution observations,
-stride settings and checkpoint storage guidance retain their explicit selection.
+and remains a separate experimental variable. Optional execution observations
+and checkpoint storage guidance retain their explicit selection; LoopX arms
+always run the `evidence_conditioned_v1` stride policy.
 Budgets and deadlines stay with the existing runner. Opted-in native Goal
 continuation retains the original task and evaluation rules without requiring a
 prior improvement claim before submission.
@@ -969,7 +970,7 @@ New `heartbeat-resume` and `heartbeat-explore` trials include the same-source
 original Goal and acceptance in preselection planning context by default.
 `--no-planning-horizon-goal` disables it for rollback or comparison;
 `--planning-horizon-goal` explicitly enables it. Plain and native-Goal workers reject
-this setting. It does not enable stride, Explore or TurnEnvelope.
+this setting. It does not change stride, Explore or TurnEnvelope.
 
 The adapter writes the shared `execution_profile.planning_horizon_goal` through
 `configure-goal`, checks the effective readback before work, and records an
@@ -984,17 +985,22 @@ Compare on/off from the same qualified pre-replan checkpoint with equal remainin
 budget, source and other settings. Input fidelity does not establish better
 research or scores. See the [shared Goal configuration and rollback](../../docs/reference/protocols/quota-planning-horizon-v0.md#enable-read-back-and-disable).
 
-### Optional structured stride strategy
+### Structured stride strategy (always on for LoopX arms)
 
-Add `--stride-strategy evidence_conditioned_v1` to a new `heartbeat-resume`
-or `heartbeat-explore` trial to opt into the existing Goal review strategy.
-The runner writes the option together with the resolved cadence and checks
-the real Goal configuration before planning or execution. The install,
-worker-profile and runtime receipts record an explicitly selected version.
-Omitting the option preserves ordinary off commands and receipt shapes;
-`--stride-strategy off` explicitly selects the disabled treatment. Plain and
-native-goal profiles reject this option before creating a trial. Unknown
-versions also fail before registration or execution.
+`evidence_conditioned_v1` is the only live LoopX stride policy. New
+`heartbeat-resume`, `heartbeat-explore` and `turn-resume` trials run it
+unconditionally; there is no on/off switch, and the former `--stride-strategy`
+option has been removed (passing it fails argument parsing before a trial is
+created). The runner no longer sends a stride setting to `configure-goal`.
+The install, worker-profile and runtime receipts of every new LoopX trial record
+`"stride_strategy": "evidence_conditioned_v1"`, and report export requires the
+worker profile and runtime receipt to agree. Plain and native-Goal workers do not
+run LoopX and keep their previous receipt shape without this field.
+
+Historical receipts remain readable as recorded: absence, `"off"` and
+`"evidence_conditioned_v1"` all validate in report export and causal
+attribution, so archived studies are not rewritten or relabeled. Comparisons
+with older off-treatment runs must pin their original product/runner revisions.
 
 The [Goal review contract](../../docs/reference/protocols/goal-vision-replan-contract-v0.md)
 defines structured proposals and the three independently controlled axes.

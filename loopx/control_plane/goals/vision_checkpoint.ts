@@ -236,7 +236,6 @@ interface VisionRefreshPrepareRequest {
   existing_agent_vision: JsonObject | null;
   merge_patch: boolean;
   require_path_delta_for_durable_change: boolean;
-  allow_terminal_stride_path: boolean;
 }
 
 interface VisionRefreshFinalizeRequest {
@@ -679,8 +678,6 @@ function decodePrepareRequest(request: JsonObject): VisionRefreshPrepareRequest 
       request.require_path_delta_for_durable_change,
       "require_path_delta_for_durable_change",
     ),
-    allow_terminal_stride_path: request.allow_terminal_stride_path === undefined ? false
-      : requiredBoolean(request.allow_terminal_stride_path, "allow_terminal_stride_path"),
   };
 }
 
@@ -772,9 +769,8 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   Object.assign(fieldUsage, pathDeltaUsage);
   const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision,
     (field, value, limit) => boundedPublicText(field, value, limit, diagnostics));
-  const allowedStridePaths = request.allow_terminal_stride_path
-    ? ["continue", "no_change", "replan", "stop"]
-    : ["continue", "no_change", "replan"];
+  // The live stride strategy always admits a supported terminal stop path.
+  const allowedStridePaths = ["continue", "no_change", "replan", "stop"];
   // An oversized list has not supplied a validated evidence set yet; report its
   // count first rather than diagnosing the temporary placeholder as missing.
   if (diagnostics.completeUsage && strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
