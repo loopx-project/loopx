@@ -4,7 +4,7 @@ import {createHash} from "node:crypto";
 
 import {
   negotiateVerifierHooks, recommendVerifiedClose, type VerifiedCloseReader,
-  type VerifiedCloseRequest, type VerifierHookEvent, type VerifierScopeReceipt,
+  type VerifiedCloseRequest, type VerifiedScopeEvidence, type VerifierHookEvent, type VerifierScopeReceipt,
 } from "../../loopx/control_plane/turn_driver/verifier_hook_contract.ts";
 import {capturedContextSelection} from "../../loopx/control_plane/quota/context_selection.ts";
 
@@ -41,14 +41,22 @@ const source = {
 };
 
 const passed = { ...source, verdict: "passed", summary_ref: "capture:child-receipt" } as const;
-const readable = new Set([source.oracle_evidence_ref, source.source_ref, passed.summary_ref, "oracle:counterexample"]);
-function authority(receipt?: VerifierScopeReceipt): VerifiedCloseReader {
+const evidence = new Map<string, VerifiedScopeEvidence>([
+  [source.oracle_evidence_ref, { ref: source.oracle_evidence_ref, role: "oracle_evidence", identity }],
+  [source.source_ref, { ref: source.source_ref, role: "source", identity }],
+  [passed.summary_ref, { ref: passed.summary_ref, role: "summary", identity }],
+  ["oracle:counterexample", { ref: "oracle:counterexample", role: "counterexample", identity }],
+]);
+function authority(
+  receipt?: VerifierScopeReceipt,
+  readEvidence: VerifiedCloseReader["readEvidence"] = ref => evidence.get(ref),
+): VerifiedCloseReader {
   return {
     readReceipt(ref) {
       assert.equal(ref, request.receipt_ref);
       return receipt;
     },
-    canReadEvidence: ref => readable.has(ref),
+    readEvidence,
   };
 }
 
@@ -95,6 +103,45 @@ test("the verifier, raw source and compact result must each remain readable", ()
   assert.deepEqual(recommendVerifiedClose(request, authority({
     ...source, verdict: "failed", counterexample_ref: "capture:unavailable",
   })), { action: "KeepRaw" });
+});
+
+test("readable evidence must match the recorded role, reference and exact work scope", () => {
+  for (const receipt of [
+    { ...passed, source_ref: passed.summary_ref, summary_ref: passed.source_ref },
+    { ...passed, oracle_evidence_ref: passed.summary_ref },
+    { ...passed, source_ref: passed.oracle_evidence_ref },
+  ]) {
+    assert.deepEqual(recommendVerifiedClose(request, authority(receipt)), { action: "KeepRaw" });
+  }
+  for (const ref of [passed.oracle_evidence_ref, passed.source_ref, passed.summary_ref]) {
+    for (const field of Object.keys(identity) as (keyof typeof identity)[]) {
+      const scopedReader = (key: string) => {
+        const record = evidence.get(key);
+        return record && key === ref
+          ? { ...record, identity: { ...identity, [field]: "another-scope" } }
+          : record;
+      };
+      assert.deepEqual(recommendVerifiedClose(request, authority(passed, scopedReader)), { action: "KeepRaw" });
+    }
+  }
+  assert.deepEqual(recommendVerifiedClose(request, authority(passed, ref => {
+    const record = evidence.get(ref);
+    return record && ref === passed.source_ref ? { ...record, ref: "another-source" } : record;
+  })), { action: "KeepRaw" });
+  assert.deepEqual(recommendVerifiedClose(request, authority({
+    ...source, verdict: "failed", counterexample_ref: passed.summary_ref,
+  })), { action: "KeepRaw" });
+});
+
+test("matching blank identity fields do not authorize a receipt read", () => {
+  const reader = {
+    readReceipt: () => assert.fail("invalid identity reached receipt authority"),
+    readEvidence: () => assert.fail("invalid identity reached evidence authority"),
+  };
+  for (const field of Object.keys(identity) as (keyof typeof identity)[]) {
+    const invalid = { ...identity, [field]: "  " };
+    assert.deepEqual(recommendVerifiedClose({ ...request, identity: invalid }, reader), { action: "KeepRaw" });
+  }
 });
 
 test("startup and recovery use the same captured C1 Goal boundary", () => {

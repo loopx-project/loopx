@@ -98,42 +98,64 @@ export type VerifiedCloseRecommendation =
   | { action: "KeepRaw"; counterexample_ref?: string }
   | { action: "FoldToReceipt"; receipt_ref: string; source_ref: string; summary_ref: string };
 
+export type VerifiedScopeEvidence = Readonly<{
+  ref: string;
+  role: "oracle_evidence" | "source" | "summary" | "counterexample";
+  identity: VerifiedScopeIdentity;
+}>;
+
 export type VerifiedCloseReader = Readonly<{
   readReceipt: (ref: string) => VerifierScopeReceipt | undefined;
-  canReadEvidence: (ref: string) => boolean;
+  readEvidence: (ref: string) => VerifiedScopeEvidence | undefined;
 }>;
+
+const scopeIdentityFields = [
+  "goal_id", "todo_id", "parent_epoch_ref", "child_scope_ref", "candidate_sha", "verifier_version",
+] as const;
 
 function hasReference(ref: string): boolean {
   return typeof ref === "string" && ref.trim().length > 0;
 }
 
-// The adapter binds both reads to their authoritative stores and current scope.
-// It reports absent, inaccessible or mismatched evidence as unreadable.
+function matchesScope(expected: VerifiedScopeIdentity, observed?: VerifiedScopeIdentity): boolean {
+  return observed != null && scopeIdentityFields.every(field => observed[field] === expected[field]);
+}
+
+function matchesEvidence(
+  reader: VerifiedCloseReader,
+  identity: VerifiedScopeIdentity,
+  ref: string,
+  role: VerifiedScopeEvidence["role"],
+): boolean {
+  const evidence = hasReference(ref) ? reader.readEvidence(ref) : undefined;
+  return evidence != null && evidence.ref === ref && evidence.role === role && matchesScope(identity, evidence.identity);
+}
+
+// The adapter resolves receipts and evidence from their independent stores.
+// Evidence describes its recorded role and scope and is absent when unreadable.
 export function recommendVerifiedClose(
   request: VerifiedCloseRequest,
   reader: VerifiedCloseReader,
 ): VerifiedCloseRecommendation {
-  const receipt = hasReference(request.receipt_ref) ? reader.readReceipt(request.receipt_ref) : undefined;
   const expected = request.identity;
-  const observed = receipt?.identity;
-  if (!receipt || !observed
-    || observed.goal_id !== expected.goal_id || observed.todo_id !== expected.todo_id
-    || observed.parent_epoch_ref !== expected.parent_epoch_ref
-    || observed.child_scope_ref !== expected.child_scope_ref
-    || observed.candidate_sha !== expected.candidate_sha
-    || observed.verifier_version !== expected.verifier_version) {
+  if (!expected || !scopeIdentityFields.every(field => hasReference(expected[field]))
+    || !hasReference(request.receipt_ref)) {
+    return { action: "KeepRaw" };
+  }
+  const receipt = reader.readReceipt(request.receipt_ref);
+  if (!receipt || !matchesScope(expected, receipt.identity)) {
     return { action: "KeepRaw" };
   }
   if (receipt.verdict === "failed") {
-    if (hasReference(receipt.counterexample_ref) && reader.canReadEvidence(receipt.counterexample_ref) === true) {
+    if (matchesEvidence(reader, expected, receipt.counterexample_ref, "counterexample")) {
       return { action: "KeepRaw", counterexample_ref: receipt.counterexample_ref };
     }
     return { action: "KeepRaw" };
   }
   if (receipt.verdict !== "passed" || request.open_obligations !== false || request.overlap !== "low"
-    || ![receipt.oracle_evidence_ref, receipt.source_ref, receipt.summary_ref].every(
-      ref => hasReference(ref) && reader.canReadEvidence(ref) === true
-    )) {
+    || !matchesEvidence(reader, expected, receipt.oracle_evidence_ref, "oracle_evidence")
+    || !matchesEvidence(reader, expected, receipt.source_ref, "source")
+    || !matchesEvidence(reader, expected, receipt.summary_ref, "summary")) {
     return { action: "KeepRaw" };
   }
   return {

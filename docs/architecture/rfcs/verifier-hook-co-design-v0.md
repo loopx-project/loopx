@@ -1,9 +1,10 @@
 # RFC: Verifier Hook Co-Design (v0)
 
-- **RFC status:** Proposed
+- **RFC status:** Accepted (upon merge)
+- **Supersedes / closes:** none
 - **Delivery maturity:** TypeScript contract. Host adapters and outcome qualification are pending.
 - **Related contracts:** [Controller and executor](controller-executor-unified-contract-v0.md), [History working sets](history-working-set-context-policy-v0.md), [Target, Yardstick and Stride](target-yardstick-stride-decisions-v0.md), [Capability portfolio](goal-scoped-capability-portfolio-v0.md)
-- **Language mirror:** [中文版](verifier-hook-co-design-v0.zh-CN.md)
+- **Language mirror:** [中文版 — semantic mirror](verifier-hook-co-design-v0.zh-CN.md)
 
 ## 1. Authority and solver view
 
@@ -40,7 +41,7 @@ Official Codex and DSH are complementary reference adapters. Use official Codex 
 
 1. Branch from a known session and parent epoch using a public host or controller operation. Isolate the candidate workspace. Conversation branching grants no new write lease, verifier authority, credentials or cache guarantee.
 2. Capture the exact candidate for the independent Oracle. Its immutable receipt binds Goal, Todo, parent epoch, child scope, `candidate_sha` and `verifier_version`. It identifies available fast and slow readings, verdict, falsified hypotheses and original observations or transcript. Matching failure carries a reproducible counterexample. Missing readings stay unknown.
-3. Resolve the receipt through the trusted verifier owner. Only an exact, passed receipt with no open obligations and evidenced low overlap permits a `FoldToReceipt` recommendation. The authoritative reader must resolve the Oracle evidence, original source and compact result. An empty, mismatched or unreadable reference keeps `KeepRaw`. Append its compact evidence-linked result at a supported parent boundary. Preserve original evidence for independent readback. A missing, mismatched or failed receipt keeps `KeepRaw`, as does high or unknown overlap. Return a matching counterexample when available.
+3. Resolve the receipt through the trusted verifier owner. Only an exact, passed receipt with nonblank scope identifiers, no open obligations and evidenced low overlap permits a `FoldToReceipt` recommendation. The authoritative reader resolves the Oracle evidence, original source and compact result with their recorded roles and scope. Each binding must match the requested reference, its role and the exact receipt identity. An empty, mismatched or unreadable reference keeps `KeepRaw`. Append its compact evidence-linked result at a supported parent boundary. Preserve original evidence for independent readback. A missing, mismatched or failed receipt keeps `KeepRaw`, as does high or unknown overlap. Return an available counterexample whose role and scope match.
 
 Classify overlap from the next work's evidence dependencies. High overlap means the next probe still needs intermediate candidate state, unresolved counterexamples or the raw comparison history. Low overlap means the next scope can act from the verified result and its bounded evidence references. Treat an unbound next step or an incomplete dependency read as unknown. Apply the existing reset break-even against the saved context bytes, cold prefill and any expected recovery reads.
 

@@ -1,9 +1,10 @@
 # RFC：面向独立验证的 Hook 协同契约（v0）
 
-- **RFC 状态：** Proposed
+- **RFC 状态：** Accepted (upon merge)
+- **替代 / 关闭：** 无
 - **交付成熟度：** TypeScript 契约。宿主适配与成果验收待验证。
 - **关联契约：** [控制器与执行器](controller-executor-unified-contract-v0.zh-CN.md)、[历史工作集](history-working-set-context-policy-v0.zh-CN.md)、[Target、Yardstick 与 Stride](target-yardstick-stride-decisions-v0.zh-CN.md)、[能力组合](goal-scoped-capability-portfolio-v0.zh-CN.md)
-- **语言镜像：** [English](verifier-hook-co-design-v0.md)
+- **语言镜像：** [English（语义镜像）](verifier-hook-co-design-v0.md)
 
 ## 1. 权限与求解视图
 
@@ -40,7 +41,7 @@ Goal Verifier Profile 绑定外部权威验证器（Oracle）的版本，可引�
 
 1. 以公开宿主或控制器操作，从已识别会话及父纪元派生分支，隔离候选工作区。复制会话不授予写租约、验证权限或凭据，也不证明缓存命中。
 2. 捕获确切候选交给独立 Oracle。其不可变回执绑定 Goal、Todo、父纪元、子作用域、`candidate_sha` 和 `verifier_version`，记录可用快慢尺读数、裁决及证伪条目，包含原始观测或轨迹引用。身份匹配的失败回执提供可复现反例，缺失读数保持未知。
-3. 通过受信任原验证器解析回执。只有身份一致且通过验证、无未决义务并有证据支持低重叠时，才能提议 `FoldToReceipt`。权威读取方须能读回 Oracle 证据、原始来源和摘要。任一引用为空、错绑或无法读取时维持 `KeepRaw`。在受支持的父会话边界追加精简证据，原件可独立重读。缺失、不匹配、失败或重叠高或未知时保持 `KeepRaw`。有身份匹配的反例则回传。
+3. 通过受信任原验证器解析回执。作用域标识都非空、回执身份一致且通过验证、无未决义务并有证据支持低重叠时，才能提议 `FoldToReceipt`。权威读取方为 Oracle 证据、原始来源和摘要返回各自登记的角色与作用域。每项都须匹配所请求的引用、对应的角色和确切回执身份。任一引用为空、错绑或无法读取时维持 `KeepRaw`。在受支持的父会话边界追加精简证据，原件可独立重读。缺失、不匹配、失败或重叠高或未知时保持 `KeepRaw`。有角色和作用域都匹配的反例则回传。
 
 按下一步工作的证据依赖判断重叠。下一探针仍需中间候选状态、未决反例或原始比较历史时为高重叠。下一作用域凭已核验结果及有界证据引用即可推进时为低重叠。下一步未绑定或依赖未读全时保持未知。结合节省的上下文字节、冷前缀重建和预期恢复读取，沿既有策略判断重置能否回本。
 
