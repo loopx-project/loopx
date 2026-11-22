@@ -927,3 +927,49 @@ def test_stop_runs_closeout_when_readback_raises(
     assert "Input/output error" in first["readback"]["error"], first
     assert first["closeout"]["status"] == "success", first
     assert len(_ledger(runtime_root, "readback-stop")) == 1
+
+
+def test_stop_without_hook_ignores_unusable_state_file(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry = project / ".loopx" / "registry.json"
+    _write_json(
+        source_registry,
+        {
+            "schema_version": "0.1",
+            "common_runtime_root": str(runtime_root),
+            "goals": [
+                {
+                    "id": "stale-stop",
+                    "display_name": "Stale alias stop fixture",
+                    "repo": str(project),
+                    # A stale user alias raises on expansion; with no hook
+                    # configured the stop must never resolve it.
+                    "state_file": "~loopx-stale-operator/goals/stale/ACTIVE_GOAL_STATE.md",
+                    "quota": {"compute": 1, "allowed_slots": 4, "spent_slots": 0},
+                }
+            ],
+        },
+    )
+    synced = sync_project_registry_to_global(
+        registry_path=source_registry,
+        runtime_root_override=str(runtime_root),
+        goal_id="stale-stop",
+        dry_run=False,
+    )
+    assert synced["ok"] is True
+    global_registry = runtime_root / "registry.global.json"
+
+    stopped = set_goal_activation_state(
+        registry_path=global_registry,
+        goal_id="stale-stop",
+        state="stopped",
+        actor_kind="owner",
+        execute=True,
+    )
+    assert stopped["ok"] is True, stopped
+    assert stopped["written"] is True, stopped
+    assert stopped["closeout"]["status"] == "not_configured", stopped
+    assert stopped["closeout"]["ledger_recorded"] is False, stopped
+    assert "error" not in stopped["closeout"], stopped
+    assert not (runtime_root / "goals" / "stale-stop").exists()

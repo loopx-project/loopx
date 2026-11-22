@@ -653,7 +653,11 @@ def _stop_closeout_payload(
     the hook result instead of raising past the committed receipt.
     """
 
-    from ...lifecycle.goal_closeout import run_goal_closeout
+    from ...lifecycle.goal_closeout import (
+        GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
+        goal_closeout_configuration,
+        run_goal_closeout,
+    )
 
     try:
         closeout_runtime_root = resolve_runtime_root(
@@ -661,6 +665,22 @@ def _stop_closeout_payload(
             runtime_root_override,
             registry_path=source_registry,
         )
+        # No configured command means no hook-only preparation: resolving a
+        # historical state path (say, an expired user alias) must not turn an
+        # otherwise clean stop into a preparation error. Retire and archive
+        # apply the same short-circuit.
+        configuration, configuration_error = goal_closeout_configuration(
+            closeout_runtime_root
+        )
+        if configuration_error is None and not (configuration or {}).get("command"):
+            return {
+                "schema_version": GOAL_CLOSEOUT_LEDGER_SCHEMA_VERSION,
+                "goal_id": goal_id,
+                "trigger": "goal-lifecycle-stop",
+                "terminal_reason": "stopped",
+                "status": "not_configured",
+                "ledger_recorded": False,
+            }
         declared = goal_state_file_from_record(
             closeout_goal,
             registry_path=source_registry,
