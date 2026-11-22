@@ -1860,3 +1860,88 @@ def test_repeated_native_error_plus_thinking_only_planner_retry_times_out_and_ca
     assert raised.value.error_code == "response_timeout"
     assert language_server["now"] == 305.0
     assert language_server["cancelled"].is_set()
+
+
+def test_isolated_cascade_preserves_main_cascade_and_pending_history(tmp_path, monkeypatch) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    state: dict[str, Any] = {
+        "calls": [],
+        "cascade_seq": 0,
+        "prompts_by_cascade": {},
+    }
+    token = "synthetic-csrf-token"
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            method = self.path.rsplit("/", 1)[-1]
+            state["calls"].append((method, body))
+            if method == "GetCascadeModelConfigData":
+                resp = {"clientModelConfigs": [{"modelId": "gemini-4-argon-high", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]}
+            elif method == "StartCascade":
+                state["cascade_seq"] += 1
+                resp = {"cascadeId": f"cascade-{state['cascade_seq']}"}
+            elif method == "GetCascadeTrajectory":
+                cid = body["cascadeId"]
+                prompts = state["prompts_by_cascade"].get(cid, [])
+                resp = {"trajectory": {"cascadeId": cid}, "numTotalSteps": len(prompts) * 2, "status": "CASCADE_RUN_STATUS_IDLE"}
+            elif method == "SendUserCascadeMessage":
+                cid = body["cascadeId"]
+                state["prompts_by_cascade"].setdefault(cid, []).append(body["items"][0]["text"])
+                resp = {}
+            elif method == "GetCascadeTrajectorySteps":
+                cid = body["cascadeId"]
+                prompts = state["prompts_by_cascade"].get(cid, [])
+                answer = "<loopx-review-json>" + json.dumps({"message": f"Answer from {cid}", "proposals": [], "gate": None}) + "</loopx-review-json>"
+                steps = []
+                for idx, text in enumerate(prompts):
+                    meta = {"createdAt": "2026-11-22T01:00:00Z", "executionId": f"exec-{cid}-{idx}"}
+                    steps.extend([
+                        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": idx * 2}},
+                         "userInput": {"items": [{"text": text}]}},
+                        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": idx * 2 + 1}},
+                         "plannerResponse": {"response": answer, "stopReason": "STOP_REASON_STOP_PATTERN"}},
+                    ])
+                resp = {"steps": steps[body["startIndex"]:body["endIndex"]]}
+            elif method == "CancelCascadeInvocation":
+                resp = {}
+            else:
+                raise AssertionError(method)
+            payload = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", token)
+    try:
+        adapter = adapter_for(tmp_path, history=[{"role": "user", "content": "keep prior constraint"}])
+        assert adapter.cascade_id == "cascade-1"
+        events: list[tuple[str, dict[str, Any]]] = []
+        isolated = adapter.start_turn("Run isolated report", lambda k, p: events.append((k, p)), isolated_cascade=True)
+        assert isolated["message"] == "Answer from cascade-2"
+        assert adapter.cascade_id == "cascade-1" and adapter.upstream_thread_id == "cascade-1"
+        assert adapter._pending_history == [{"role": "user", "content": "keep prior constraint"}]
+        assert "keep prior constraint" not in state["prompts_by_cascade"]["cascade-2"][0]
+        assert next(p["threadId"] for k, p in events if k == "turn.started") == "cascade-2"
+        assert next(p["thread_id"] for k, p in events if k == "turn.native_result") == "cascade-2"
+
+        main_resp = adapter.start_turn("Main conversation request")
+        assert main_resp["message"] == "Answer from cascade-1"
+        assert "keep prior constraint" in state["prompts_by_cascade"]["cascade-1"][0]
+        assert adapter._pending_history == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
