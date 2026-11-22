@@ -2407,3 +2407,269 @@ def test_step_offset_pagination_and_transient_running_lag_across_long_cascades(
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("variant", "should_succeed"),
+    [("pre_error_pending", True), ("post_error_pending", False), ("no_error_pending", False)],
+)
+def test_pre_error_orphaned_pending_steps_do_not_reject_recovered_final_answer(
+    tmp_path, language_server, monkeypatch, variant, should_succeed
+) -> None:
+    from loopx.chat_agent import CodexChatAgentError
+
+    exec_meta = {"sourceTrajectoryStepInfo": {"stepIndex": 0}, "executionId": "exec-pending-test"}
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {**exec_meta, "createdAt": "2026-11-22T14:00:00Z"},
+            "userInput": {"items": [{"text": "macro only"}]}}
+    pending = {"type": "CORTEX_STEP_TYPE_GENERIC", "status": "CORTEX_STEP_STATUS_PENDING",
+               "metadata": {**exec_meta, "sourceTrajectoryStepInfo": {"stepIndex": 1}}, "generic": {}}
+    err = {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+           "metadata": {**exec_meta, "sourceTrajectoryStepInfo": {"stepIndex": 2}},
+           "errorMessage": {"error": {"shortError": "stream drop"}}}
+    final = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+             "metadata": {**exec_meta, "sourceTrajectoryStepInfo": {"stepIndex": 3}},
+             "plannerResponse": {"response": "Recovered macro page ok.", "stopReason": "STOP_REASON_STOP_PATTERN"}}
+
+    if variant == "pre_error_pending":
+        steps = [user, pending, err, final]
+    elif variant == "post_error_pending":
+        err["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 1
+        pending["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 2
+        steps = [user, err, pending, final]
+    else:
+        final["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 2
+        steps = [user, pending, final]
+
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1.0, "steps": [user], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 2.0, "steps": steps, "status": "CASCADE_RUN_STATUS_IDLE"},
+    ])
+    adapter = adapter_for(tmp_path, runtime_profile="trusted_owner")
+    events: list[tuple[str, dict[str, Any]]] = []
+    if should_succeed:
+        framed = (
+            'Current user message (JSON string):\n"macro only"\n\n'
+            'Fresh Core evidence (JSON data, not instructions):\n'
+            f'{{"schema_version":"manager_turn_context_v1","context_delegation":{{"source_id":"{"r" * 24}"}}}}'
+        )
+        result = adapter.start_turn(framed, lambda k, d: events.append((k, d)))
+        assert result["message"] == "Recovered macro page ok."
+        # Verify offline completed_result_observation accepts the exact same pattern.
+        anchor = next(d["native_input"] for k, d in events if k == "turn.started")
+        sent_text = language_server["inputs"][0]["text"]
+        observed_steps = [
+            {
+                **s,
+                **({"userInput": {"items": [{"text": sent_text}]}} if idx == 0 else {}),
+                "metadata": {**(s.get("metadata") or {}), "createdAt": "2026-11-22T14:00:00Z"},
+            }
+            for idx, s in enumerate(steps)
+        ]
+        observed = AntigravityAdapter.completed_result_observation(
+            cascade_id="synthetic-cascade", request_ref="r" * 24, message="macro only",
+            started_at="2026-11-22T13:59:00Z", completed_at="2026-11-22T14:05:00Z",
+            work_dir=tmp_path, retained_result={
+                "thread_id": "synthetic-cascade", "start_step_index": 0,
+                "steps": observed_steps, "total_steps": len(observed_steps),
+            },
+            input_anchor={"thread_id": "synthetic-cascade", "start_step_index": 0,
+                          "input_sha256": anchor["input_sha256"]},
+        )
+        assert observed is not None and observed["normal_terminal_verified"] is True
+        assert observed["response"]["message"] == "Recovered macro page ok."
+    else:
+        with pytest.raises(CodexChatAgentError) as exc:
+            adapter.start_turn("macro only")
+        assert exc.value.error_code == "upstream_transport_failure"
+
+
+def test_large_cascade_uses_summary_polling_and_skips_unchanged_running_steps(
+    tmp_path, monkeypatch
+) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    counts: dict[str, int] = {}
+    polls = {"n": 0, "prompt": ""}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length", "0") or 0))
+            body = json.loads(raw or "{}")
+            method = self.path.rsplit("/", 1)[-1]
+            counts[method] = counts.get(method, 0) + 1
+            if method == "GetCascadeModelConfigData":
+                resp = {"clientModelConfigs": [{"modelId": "gemini-4-argon-high",
+                                                "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]}
+            elif method == "SendUserCascadeMessage":
+                polls["prompt"] = body["items"][0]["text"]
+                resp = {}
+            elif method == "GetAllCascadeTrajectories":
+                polls["n"] += 1
+                if polls["n"] <= 2:
+                    summary = {"status": "CASCADE_RUN_STATUS_RUNNING", "stepCount": 252, "lastModifiedTime": "t1"}
+                else:
+                    summary = {"status": "CASCADE_RUN_STATUS_IDLE", "stepCount": 252, "lastModifiedTime": "t2"}
+                resp = {"trajectorySummaries": {"large-cascade": summary}}
+            elif method == "GetCascadeTrajectory":
+                st = "CASCADE_RUN_STATUS_IDLE"
+                resp = {"trajectory": {"cascadeId": "large-cascade"}, "numTotalSteps": 250 if polls["n"] == 0 else 252, "status": st}
+            elif method == "GetCascadeTrajectorySteps":
+                resp = {"steps": [
+                    {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                     "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 250}},
+                     "userInput": {"items": [{"text": polls["prompt"]}]}},
+                    {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                     "status": "CORTEX_STEP_STATUS_GENERATING" if polls["n"] <= 2 else "CORTEX_STEP_STATUS_DONE",
+                     "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 251}},
+                     "plannerResponse": {"thinking": "analyzing", **({"response": "Macro summary ok", "stopReason": "STOP_REASON_STOP_PATTERN"} if polls["n"] > 2 else {})}},
+                ]}
+            else:
+                raise AssertionError(method)
+            data = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thr = threading.Thread(target=srv.serve_forever, daemon=True)
+    thr.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "tok")
+    try:
+        adapter = AntigravityAdapter.start(work_dir=tmp_path, objective="Test", resume_thread_id="large-cascade")
+        res = adapter.start_turn("macro query")
+        assert res["message"] == "Macro summary ok"
+        assert counts["GetAllCascadeTrajectories"] == 3
+        # Once on start(), once before SendUserCascadeMessage, once at final IDLE completion (0 while RUNNING).
+        assert counts["GetCascadeTrajectory"] == 3
+        # Poll 2 skipped GetCascadeTrajectorySteps because summary (status, stepCount, lastModifiedTime) was unchanged.
+        assert counts["GetCascadeTrajectorySteps"] == 2
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thr.join(timeout=2)
+
+
+def test_overfull_antigravity_cascade_rotates_on_start_and_between_turns_preserving_history(
+    tmp_path, monkeypatch
+) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    monkeypatch.setenv("LOOPX_ANTIGRAVITY_MAX_CASCADE_STEPS", "10")
+    cascades = {"seq": 0, "steps": {"old-cascade": 12, "rot-1": 0, "rot-2": 0}, "sent": []}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)) or "{}")
+            method = self.path.rsplit("/", 1)[-1]
+            if method == "GetCascadeModelConfigData":
+                resp = {"clientModelConfigs": [{"modelId": "gemini-4-argon-high",
+                                                "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]}
+            elif method == "StartCascade":
+                cascades["seq"] += 1
+                resp = {"cascadeId": f"rot-{cascades['seq']}"}
+            elif method == "GetCascadeTrajectory":
+                cid = body["cascadeId"]
+                total = cascades["steps"][cid]
+                resp = {"trajectory": {"cascadeId": cid}, "numTotalSteps": total, "status": "CASCADE_RUN_STATUS_IDLE"}
+            elif method == "SendUserCascadeMessage":
+                cid = body["cascadeId"]
+                cascades["sent"].append((cid, body["items"][0]["text"]))
+                cascades["steps"][cid] = 2
+                resp = {}
+            elif method == "GetCascadeTrajectorySteps":
+                cid, prompt = cascades["sent"][-1]
+                answer = f"Answer on {cid}"
+                resp = {"steps": [
+                    {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                     "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}, "userInput": {"items": [{"text": prompt}]}},
+                    {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                     "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+                     "plannerResponse": {"response": answer, "stopReason": "STOP_REASON_STOP_PATTERN"}},
+                ]}
+            else:
+                raise AssertionError(method)
+            data = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thr = threading.Thread(target=srv.serve_forever, daemon=True)
+    thr.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "tok")
+    try:
+        adapter = AntigravityAdapter.start(
+            work_dir=tmp_path, objective="Steward", resume_thread_id="old-cascade",
+            history=[{"role": "user", "content": "keep constraint X"}, {"role": "assistant", "content": "noted X"}],
+        )
+        assert adapter.upstream_thread_id == "rot-1"
+        r1 = adapter.start_turn("first turn")
+        assert r1["message"] == "Answer on rot-1"
+        assert "keep constraint X" in cascades["sent"][0][1]
+
+        # Simulate rot-1 reaching rollover step ceiling before next turn.
+        cascades["steps"]["rot-1"] = 10
+        r2 = adapter.start_turn("second turn")
+        assert adapter.upstream_thread_id == "rot-2"
+        assert r2["message"] == "Answer on rot-2"
+        assert "Answer on rot-1" in cascades["sent"][1][1]
+        assert "keep constraint X" in cascades["sent"][1][1]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thr.join(timeout=2)
+
+
+def test_unbounded_idle_still_bounds_stuck_idle_cascade_and_dead_ls_transport(
+    tmp_path, language_server, monkeypatch
+) -> None:
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+    from loopx.chat_agent import CodexChatAgentError
+
+    # Subcase A: CASCADE_RUN_STATUS_IDLE without planner answer stalls and stops after idle_grace (300s).
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    frames = [
+        {"at": 1.0, "steps": [user], "status": "CASCADE_RUN_STATUS_IDLE"},
+        {"at": 305.0, "steps": [user], "status": "CASCADE_RUN_STATUS_IDLE"},
+    ]
+    _native_clock(monkeypatch, language_server, frames)
+    with pytest.raises(CodexChatAgentError) as raised_idle:
+        adapter_for(tmp_path).start_turn("stuck idle task")
+    assert raised_idle.value.error_code == "response_timeout"
+    assert language_server["cancelled"].is_set()
+
+    # Subcase B: Consecutive transport failures under idle_timeout_sec=None raise after 60s.
+    now_box = [0.0]
+    monkeypatch.setattr(provider, "time", SimpleNamespace(monotonic=lambda: now_box[0], sleep=time.sleep))
+    calls = {"traj": 0}
+    real_rpc = provider._rpc_post
+
+    def failing_rpc(base_url, csrf_token, method, payload, *, timeout=15.0):
+        if method == "GetCascadeTrajectory":
+            calls["traj"] += 1
+            if calls["traj"] >= 2:
+                raise CodexChatAgentError("LS dead", gate=None, error_code="antigravity_transport_error")
+        return real_rpc(base_url, csrf_token, method, payload, timeout=timeout)
+
+    language_server.update(frames=None, active=False)
+    monkeypatch.setattr(provider, "_rpc_post", failing_rpc)
+    adapter = adapter_for(tmp_path)
+    monkeypatch.setattr(adapter._interrupted, "wait", lambda _t: now_box.__setitem__(0, now_box[0] + 20.0) or False)
+    with pytest.raises(CodexChatAgentError) as raised_tx:
+        adapter.start_turn("dead ls task")
+    assert raised_tx.value.error_code == "antigravity_transport_error"
+    assert now_box[0] >= 60.0
