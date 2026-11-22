@@ -469,7 +469,7 @@ export class AgentRegistry {
       const claimed = (account: DiscoveredAccount) =>
         instances.some(
           (i) =>
-            Object.entries(i.env ?? {}).some(([k, v]) => account.env[k] === v) ||
+            Object.entries(i.env ?? {}).some(([k, v]) => sameEnvValue(account.env[k], v)) ||
             (!i.env || Object.keys(i.env).length === 0) && account.isDefault === true,
         );
       for (const account of await adapter.discoverAccounts(home)) {
@@ -658,7 +658,8 @@ export class AgentRegistry {
     }
     for (const account of await this.discoverAccounts()) {
       // Any env entry matching a removed one names the same account the person put away.
-      if (Object.entries(account.env).some(([k, v]) => this.removed.envs.includes(`${k}=${v}`))) continue;
+      const removedEnvs = new Set(this.removed.envs.map(canonicalEnvEntry));
+      if (Object.entries(account.env).some(([k, v]) => removedEnvs.has(canonicalEnvEntry(`${k}=${v}`)))) continue;
       try {
         added.push(await this.add({
           id: this.freeId(account.id),
@@ -786,6 +787,20 @@ function realPathOf(path: string): string {
   } catch {
     return resolve(path);
   }
+}
+
+/** Whether two env values name the same thing: equal, or the same path reached through a
+ *  symlink (`/home/me/.claude-2` and `/data00/home/me/.claude-2` are one account directory). */
+function sameEnvValue(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  return a === b || (isAbsolute(a) && isAbsolute(b) && realPathOf(a) === realPathOf(b));
+}
+
+/** A `KEY=value` entry with a path value resolved, so a removed account is recognised under any spelling of its directory. */
+function canonicalEnvEntry(entry: string): string {
+  const at = entry.indexOf('=');
+  const value = entry.slice(at + 1);
+  return at < 0 || !isAbsolute(value) ? entry : `${entry.slice(0, at)}=${realPathOf(value)}`;
 }
 
 /** Installer backups are files, not additional CLI accounts. */

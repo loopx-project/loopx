@@ -338,6 +338,30 @@ test('account discovery still sees an adapter after every instance of it is remo
   }
 });
 
+test('account discovery recognises an account linked through a symlinked spelling of its directory', async () => {
+  const home = fakeClaudeHome();
+  const alias = `${home}-alias`; // as /home/me and /data00/home/me are one directory
+  symlinkSync(home, alias);
+  const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
+  const oldHome = process.env.HOME;
+  process.env.LOOCHAT_CLAUDE_BIN = fakeClaudeBin(home);
+  process.env.HOME = home;
+  try {
+    const instances: AgentInstance[] = [
+      ...defaults,
+      { id: 'claude-2', adapter: 'claude', env: { CLAUDE_CONFIG_DIR: join(alias, '.claude-2') } },
+      { id: 'claude-3', adapter: 'claude', env: { CLAUDE_CONFIG_DIR: join(alias, '.claude-3') } },
+    ];
+    assert.deepEqual(await new AgentRegistry(instances, null).discoverAccounts(), []);
+  } finally {
+    rmSync(alias, { force: true });
+    if (oldBin === undefined) delete process.env.LOOCHAT_CLAUDE_BIN;
+    else process.env.LOOCHAT_CLAUDE_BIN = oldBin;
+    if (oldHome === undefined) delete process.env.HOME;
+    else process.env.HOME = oldHome;
+  }
+});
+
 test('account discovery skips accounts an instance already links, and ids keep counting', async () => {
   const home = fakeClaudeHome();
   const oldBin = process.env.LOOCHAT_CLAUDE_BIN;
