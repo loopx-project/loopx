@@ -18,8 +18,9 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const control = receipt.request_control_view as JsonObject | null | undefined;
   const cancellationRequested = control?.control_state === "cancelled"
     || control?.control_state === "cancellation_pending";
+  const reservationPending = control?.active_reservation != null;
   // Cancellation of a request does not release an in-flight publication reservation.
-  if (cancellationRequested && control?.active_reservation == null) return null;
+  if (cancellationRequested && !reservationPending) return null;
   if (!Array.isArray(row.results)) throw new EffectRuntimeRequestError("delegation results are required");
   // A correction changes the work brief, not an earlier result's delivery or
   // consumption receipt. Keep unresolved returns at their original revision;
@@ -34,7 +35,7 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const unconsumed = request.source_kind === "peer" ? results.filter(result => result.consumed !== true) : [];
   let step: string;
   if (kind === "receipt_unavailable" || row.evidence_unavailable === true) step = "recover_evidence";
-  else if (cancellationRequested) step = "reconcile_reservation";
+  else if (reservationPending) step = "reconcile_reservation";
   else if (direction === "outgoing" && unconsumed.length) step = "consume_peer_result";
   else if (kind !== "settled") step = direction === "outgoing" ? "await_peer_result"
     : receipt.recorded_decision == null ? "assess_request"

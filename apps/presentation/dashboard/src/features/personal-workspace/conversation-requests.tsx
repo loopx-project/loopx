@@ -120,6 +120,9 @@ export function OriginalProjectRequests({sessionId, refreshKey}: {sessionId: str
 function requestStage(row: ConversationRequest, zh: boolean) {
   if (!row.unfinished) return row.control_state === "cancelled" ? (zh ? "已取消" : "Cancelled")
     : (zh ? "已回传" : "Returned");
+  if (row.control_state === "effect_pending" && row.agenda?.step === "reconcile_reservation") {
+    return zh ? "原操作待收尾" : "Original operation settling";
+  }
   switch (row.agenda?.step) {
     case "recover_evidence": return zh ? "待恢复" : "Readback unavailable";
     case "reconcile_reservation": return zh ? "取消待收尾" : "Cancellation settling";
