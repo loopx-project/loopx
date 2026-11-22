@@ -49,9 +49,9 @@ export const SAFE_HOST_ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 
 const FORBIDDEN_CREDENTIAL_OR_PATH_PATTERNS: readonly RegExp[] = [
   /(?:\/(?:Users|home|private|tmp|var)\/|~[\\/]|[A-Za-z]:[\\/]|\\\\[A-Za-z0-9_.-]+\\|\.ssh[\\/])/i,
-  /(?<![A-Za-z0-9])sk-(?:proj-|ant-|live-|test-|svcacct-|admin-)?[A-Za-z0-9_-]{8,}/i,
-  /(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9_-]{8,}/i,
-  /(?<![A-Za-z0-9_])(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{4,}/i,
+  /(?<![A-Za-z0-9._-])sk-(?:(?:proj|ant|live|test|svcacct|admin)-[A-Za-z0-9_-]{8,}|(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{8,}|[A-Za-z0-9]{16,})/i,
+  /(?<![A-Za-z0-9._-])(?:sk|rk)_(?:live|test)_[A-Za-z0-9_-]{8,}/i,
+  /(?<![A-Za-z0-9._-])(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{4,}/i,
   /\bbearer(?:\s+[^\s]+|\s*[:=]\s*[^\s]+)/i,
 ];
 
@@ -118,7 +118,7 @@ export function requireSafeHostAlias(
   if (typeof value !== "string" || !value.trim()) {
     throw fail(`${label} must be a non-empty string`);
   }
-  const alias = assertPublicSafeFabricText(value, label, fail);
+  const alias = value.trim();
   if (!isSafeHostAlias(alias)) {
     throw fail(`${label} must be an explicit safe OpenSSH Host alias`);
   }
@@ -140,7 +140,11 @@ export function decodeSshHostObservationWith(
   if (raw.schema_version !== SESSION_FABRIC_SSH_OBSERVATION_SCHEMA) {
     throw fail("ssh_host_observation schema_version mismatch");
   }
-  const alias = requireSafeHostAlias(raw.alias, "ssh_host_observation.alias", fail);
+  const alias = assertPublicSafeFabricText(
+    requireSafeHostAlias(raw.alias, "ssh_host_observation.alias", fail),
+    "ssh_host_observation.alias",
+    fail,
+  );
   const rawConnectionState = raw.connection_state;
   if (typeof rawConnectionState !== "string" || !rawConnectionState.trim()) {
     throw fail("ssh_host_observation.connection_state must be a non-empty string");

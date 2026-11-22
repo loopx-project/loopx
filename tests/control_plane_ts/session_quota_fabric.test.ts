@@ -32,7 +32,17 @@ test("ssh_host_catalog_v0 preserves byte-identical shape when L0 observations ar
 });
 
 test("valid OpenSSH aliases and identifiers containing sk- substrings are allowed while real secret prefixes and paths fail closed", () => {
-  const validAliases = ["desk-box", "task-worker", "disk-01", "kiosk-2", "flask-api"];
+  const validAliases = [
+    "desk-box",
+    "task-worker",
+    "disk-01",
+    "kiosk-2",
+    "flask-api",
+    "lab.sk-integration",
+    "sk-integration",
+    "prod-sk-integration",
+    "host.ghp_gateway",
+  ];
   for (const alias of validAliases) {
     assert.equal(isSafeHostAlias(alias), true);
     assert.equal(SAFE_HOST_ALIAS.test(alias), true);
@@ -40,23 +50,81 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
   const catalog = projectSshHostCatalogPayload(validAliases);
   assert.deepEqual(catalog.hosts, validAliases.map((alias) => ({ alias })));
 
+  const observedCatalogWithSubdomainAlias = projectSshHostCatalogPayload(
+    ["jump-box", "lab.sk-integration", "desk-box"],
+    [
+      {
+        schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+        alias: "jump-box",
+        connection_state: "connected",
+        failure_code: null,
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: 8,
+      },
+    ],
+  );
+  assert.deepEqual(observedCatalogWithSubdomainAlias.hosts, [
+    {
+      alias: "jump-box",
+      observation: {
+        schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+        alias: "jump-box",
+        connection_state: "connected",
+        failure_code: null,
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: 8,
+      },
+    },
+    { alias: "lab.sk-integration" },
+    { alias: "desk-box" },
+  ]);
+
+  const directlyObservedSubdomainAlias = projectSshHostCatalogPayload(
+    ["jump-box", "lab.sk-integration", "desk-box"],
+    [
+      {
+        schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+        alias: "lab.sk-integration",
+        connection_state: "degraded",
+        failure_code: "unreachable",
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: null,
+      },
+    ],
+  );
+  assert.deepEqual(directlyObservedSubdomainAlias.hosts, [
+    { alias: "jump-box" },
+    {
+      alias: "lab.sk-integration",
+      observation: {
+        schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+        alias: "lab.sk-integration",
+        connection_state: "degraded",
+        failure_code: "unreachable",
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: null,
+      },
+    },
+    { alias: "desk-box" },
+  ]);
+
   const safeWindow = decodeSessionQuotaWindowObservation({
     schema_version: SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA,
-    profile_id: "task-worker",
+    profile_id: "lab.sk-integration",
     availability: "near_limit",
     used_ratio: 0.91,
     resets_at: null,
-    eligible_models: ["desk-box-model", "deepseek-chat", "kiosk-2"],
+    eligible_models: ["desk-box-model", "deepseek-chat", "kiosk-2", "lab.sk-integration"],
   });
-  assert.equal(safeWindow.profile_id, "task-worker");
-  assert.deepEqual(safeWindow.eligible_models, ["desk-box-model", "deepseek-chat", "kiosk-2"]);
+  assert.equal(safeWindow.profile_id, "lab.sk-integration");
+  assert.deepEqual(safeWindow.eligible_models, ["desk-box-model", "deepseek-chat", "kiosk-2", "lab.sk-integration"]);
 
   const safeHandover = evaluateGovernedSessionHandover({
     schema_version: GOVERNED_SESSION_HANDOVER_PROPOSAL_SCHEMA,
     goal_id: "task-worker-goal",
     todo_id: "todo_desk-box",
     agent_id: "kiosk-2-agent",
-    from_profile_id: "task-worker",
+    from_profile_id: "lab.sk-integration",
     to_profile_id: "disk-01",
     from_session_mode: SESSION_MODES[0],
     to_session_mode: SESSION_MODES[0],
@@ -79,7 +147,31 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
     "github_pat" + "_abcdef12",
   ];
   for (const secret of secretInputs) {
-    assert.throws(() => projectSshHostCatalogPayload([secret]), EffectRuntimeRequestError);
+    // An unrelated catalog entry keeps its bare row without aborting observations on another host,
+    // while sensitive values in new observation, quota, or handover fields fail closed.
+    const preservedUnobserved = projectSshHostCatalogPayload(
+      ["jump-box", secret],
+      [
+        {
+          schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+          alias: "jump-box",
+          connection_state: "connected",
+          failure_code: null,
+          checked_at: null,
+          tunnel_latency_ms: 5,
+        },
+      ],
+    );
+    assert.equal((preservedUnobserved.hosts as Record<string, unknown>[]).length, 2);
+
+    assert.throws(() => decodeSshHostObservation({
+      schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+      alias: secret,
+      connection_state: "connected",
+      failure_code: null,
+      checked_at: null,
+      tunnel_latency_ms: 5,
+    }), /credentials/);
     assert.throws(() => decodeSessionQuotaWindowObservation({
       schema_version: SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA,
       profile_id: secret,
@@ -87,7 +179,7 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
       used_ratio: 0.9,
       resets_at: null,
       eligible_models: [],
-    }), EffectRuntimeRequestError);
+    }), /credentials/);
     assert.throws(() => decodeSessionQuotaWindowObservation({
       schema_version: SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA,
       profile_id: "profile-a",
@@ -95,7 +187,7 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
       used_ratio: 0.9,
       resets_at: null,
       eligible_models: [secret],
-    }), EffectRuntimeRequestError);
+    }), /credentials/);
   }
 
   for (const unsafeText of [
@@ -104,6 +196,15 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
     "/" + "home/fixture/key",
     "~/.ssh" + "/id_ed25519",
   ]) {
+    assert.throws(() => projectSshHostCatalogPayload([unsafeText]), /explicit safe OpenSSH Host alias/);
+    assert.throws(() => decodeSshHostObservation({
+      schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+      alias: "jump-box",
+      connection_state: "connected",
+      failure_code: null,
+      checked_at: unsafeText,
+      tunnel_latency_ms: null,
+    }), EffectRuntimeRequestError);
     assert.throws(() => decodeSessionQuotaWindowObservation({
       schema_version: SESSION_QUOTA_WINDOW_OBSERVATION_SCHEMA,
       profile_id: "profile-a",
@@ -113,6 +214,25 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
       eligible_models: [unsafeText],
     }), EffectRuntimeRequestError);
   }
+
+  assert.throws(() => projectSshHostCatalogPayload(["jump-box"], [
+    {
+      schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+      alias: "jump-box",
+      connection_state: "connected",
+      failure_code: null,
+      checked_at: null,
+      tunnel_latency_ms: 5,
+    },
+    {
+      schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+      alias: "jump-box",
+      connection_state: "unknown",
+      failure_code: null,
+      checked_at: null,
+      tunnel_latency_ms: null,
+    },
+  ]), /duplicate SSH host observation/);
 });
 
 test("SSH observations accept all seven typed failure codes and fail closed on contradictions or unknown aliases", () => {

@@ -5,7 +5,7 @@
 - **Delivery maturity:** Partial. The additive L0 codecs, zero-import frontend/control-plane contract (`session_quota_fabric_contract.ts`), `effect_runtime_handlers.ts` registrations, optional `ssh_host_catalog_v0` observation pass-through, and handover guard (`session_quota_fabric.ts`) ship on this baseline; host runtime adapters and dashboard UI composition remain staged follow-on slices.
 - **Authors / owners:** Architecture convergence workgroup; control-plane ownership, package boundaries, and merge authorization belong to LoopX maintainers
 - **Created:** 2026-11-17
-- **Last normative revision:** 2026-11-20
+- **Last normative revision:** 2026-11-22
 - **Implementation baseline:** `45c015ffd9`
 - **Related contracts:**
   [Agent session execution modes](agent-session-execution-modes-v0.md),
@@ -156,9 +156,11 @@ single Goal Workbench.
    `connection_state` (`connected | degraded | disconnected | unknown`),
    `failure_code` (strictly the seven codes `no_ssh | host_key | auth | unreachable | ssh_failed | daemon_missing | forward_denied`,
    required when `degraded | disconnected` and forbidden otherwise),
-   `checked_at`, and `tunnel_latency_ms`. `projectSshHostCatalogPayload` attaches
-   observations strictly to known `ssh_host_catalog_v0` aliases and leaves
-   un-observed hosts as bare `{ alias }`.
+   `checked_at`, and `tunnel_latency_ms`. `projectSshHostCatalogPayload` validates
+   authoritative `configured_aliases` strictly under `isSafeHostAlias`
+   (`SAFE_HOST_ALIAS`), attaches validated observations strictly to known
+   `ssh_host_catalog_v0` aliases, and leaves un-observed catalog hosts as bare
+   `{ alias }`.
 2. `session_quota_window_observation_v0`: validates opaque `profile_id`
    (forbidding `@`, `/`, private paths, and boundary-anchored credential prefixes
    such as `sk-...`, `ghp_...`, `github_pat_...`, `Bearer ...`), `availability`
@@ -188,11 +190,15 @@ Directly answers open convergence review question D1/D2 across #8778, #8782–#8
 - **Default-off parity:** Absence of L0 observation payloads keeps `ssh_host_catalog_v0`
   output identical to `loopx/control_plane/status/ssh_host_catalog.py`.
 - **Credential & path fail-closed:** `session_quota_fabric_contract.ts` /
-  `session_quota_fabric.ts` rejects private home/SSH paths (`/Users/`, `/home/`,
-  `/private/`, `~/`, `.ssh/`) and boundary-anchored credential prefixes (`sk-...`,
-  `sk_live_...`, `ghp_...`, `github_pat_...`, `Bearer ...`) without falsely
-  rejecting valid OpenSSH host aliases or identifiers such as `desk-box`,
-  `task-worker`, `disk-01`, or `kiosk-2`.
+  `session_quota_fabric.ts` preserves authoritative `ssh_host_catalog_v0`
+  catalog entries validated by `isSafeHostAlias` (`SAFE_HOST_ALIAS`) and applies
+  `assertPublicSafeFabricText` to new observation, quota, and handover fields,
+  rejecting private home/SSH paths (`/Users/`, `/home/`, `/private/`, `~/`,
+  `.ssh/`) and identifier-boundary-anchored credential prefixes (`sk-proj-...`,
+  `sk-ant-...`, `sk_live_...`, `ghp_...`, `github_pat_...`, `Bearer ...`)
+  without falsely rejecting valid OpenSSH host aliases or identifiers such as
+  `desk-box`, `task-worker`, `disk-01`, `kiosk-2`, `lab.sk-integration`, or
+  `sk-integration`.
 - **Unknown and available window safety:** Missing/unknown and `available`
   quota observations force `handover_eligible=false` and
   `disposition="no_handover_needed"`, while `exhausted` remains handover-eligible

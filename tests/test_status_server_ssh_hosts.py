@@ -174,7 +174,8 @@ def test_ssh_host_catalog_feature_off_parity_and_sk_substring_aliases(
     ssh_dir.mkdir(parents=True)
     config = ssh_dir / "config"
     config.write_text(
-        "Host desk-box task-worker disk-01 kiosk-2 bad..alias\n  HostName 192.0.2.20\n",
+        "Host jump-box lab.sk-integration desk-box task-worker disk-01 kiosk-2 sk-integration bad..alias\n"
+        "  HostName 192.0.2.20\n",
         encoding="utf-8",
     )
 
@@ -182,10 +183,13 @@ def test_ssh_host_catalog_feature_off_parity_and_sk_substring_aliases(
         "ok": True,
         "schema_version": "ssh_host_catalog_v0",
         "hosts": [
+            {"alias": "jump-box"},
+            {"alias": "lab.sk-integration"},
             {"alias": "desk-box"},
             {"alias": "task-worker"},
             {"alias": "disk-01"},
             {"alias": "kiosk-2"},
+            {"alias": "sk-integration"},
         ],
     }
     assert ssh_host_catalog_payload(config) == expected
@@ -204,36 +208,56 @@ def test_ssh_host_catalog_observation_round_trip_and_handover_handler(tmp_path: 
     ssh_dir = tmp_path / ".ssh"
     ssh_dir.mkdir(parents=True)
     config = ssh_dir / "config"
-    config.write_text("Host desk-box task-worker\n", encoding="utf-8")
+    config.write_text("Host jump-box lab.sk-integration desk-box task-worker\n", encoding="utf-8")
 
+    jump_observation = {
+        "schema_version": "session_fabric_ssh_observation_v0",
+        "alias": "jump-box",
+        "connection_state": "disconnected",
+        "failure_code": "unreachable",
+        "checked_at": "2026-11-20T00:00:00Z",
+        "tunnel_latency_ms": None,
+    }
     projected = ssh_host_catalog_payload(
         config,
-        observations=[
-            {
-                "schema_version": "session_fabric_ssh_observation_v0",
-                "alias": "desk-box",
-                "connection_state": "disconnected",
-                "failure_code": "unreachable",
-                "checked_at": "2026-11-20T00:00:00Z",
-                "tunnel_latency_ms": None,
-            }
-        ],
+        observations=[jump_observation],
     )
     assert projected == {
         "ok": True,
         "schema_version": "ssh_host_catalog_v0",
         "hosts": [
             {
-                "alias": "desk-box",
-                "observation": {
-                    "schema_version": "session_fabric_ssh_observation_v0",
-                    "alias": "desk-box",
-                    "connection_state": "disconnected",
-                    "failure_code": "unreachable",
-                    "checked_at": "2026-11-20T00:00:00Z",
-                    "tunnel_latency_ms": None,
-                },
+                "alias": "jump-box",
+                "observation": jump_observation,
             },
+            {"alias": "lab.sk-integration"},
+            {"alias": "desk-box"},
+            {"alias": "task-worker"},
+        ],
+    }
+
+    lab_observation = {
+        "schema_version": "session_fabric_ssh_observation_v0",
+        "alias": "lab.sk-integration",
+        "connection_state": "connected",
+        "failure_code": None,
+        "checked_at": "2026-11-22T00:00:00Z",
+        "tunnel_latency_ms": 9,
+    }
+    projected_lab = ssh_host_catalog_payload(
+        config,
+        observations=[lab_observation],
+    )
+    assert projected_lab == {
+        "ok": True,
+        "schema_version": "ssh_host_catalog_v0",
+        "hosts": [
+            {"alias": "jump-box"},
+            {
+                "alias": "lab.sk-integration",
+                "observation": lab_observation,
+            },
+            {"alias": "desk-box"},
             {"alias": "task-worker"},
         ],
     }
@@ -251,6 +275,12 @@ def test_ssh_host_catalog_observation_round_trip_and_handover_handler(tmp_path: 
                     "tunnel_latency_ms": 5,
                 }
             ],
+        )
+
+    with pytest.raises(ValueError, match="duplicate SSH host observation"):
+        project_ssh_host_catalog(
+            ["jump-box"],
+            [jump_observation, jump_observation],
         )
 
     handover = effect_runtime_result(
@@ -309,11 +339,96 @@ def test_ssh_host_catalog_observation_round_trip_and_handover_handler(tmp_path: 
     assert handover_exhausted["disposition"] == "ready_for_lease_reacquisition"
     assert handover_exhausted["ready_for_reacquisition"] is True
 
+    sensitive_observation = {
+        "schema_version": "session_fabric_ssh_observation_v0",
+        "alias": "sk-" + "proj-abcdef12",
+        "connection_state": "connected",
+        "failure_code": None,
+        "checked_at": None,
+        "tunnel_latency_ms": 5,
+    }
     with pytest.raises(ValueError, match="credentials"):
-        project_ssh_host_catalog(["sk-" + "proj-abcdef12"])
+        project_ssh_host_catalog(["jump-box"], [sensitive_observation])
 
     with pytest.raises(EffectRuntimeRejected, match="credentials"):
         effect_runtime_result(
             "collaboration.session_fabric.project_ssh_host_catalog",
-            {"configured_aliases": ["sk-" + "proj-abcdef12"]},
+            {"configured_aliases": ["jump-box"], "observations": [sensitive_observation]},
         )
+
+    with pytest.raises(ValueError, match="explicit safe OpenSSH Host alias"):
+        project_ssh_host_catalog(["../bad"])
+
+
+def _fetch_http_ssh_hosts(
+    server_cls: type[StatusHTTPServer] | type[ChatHTTPServer],
+    handler_cls: type[StatusRequestHandler] | type[ChatRequestHandler],
+    config: Path,
+    path: str,
+) -> bytes:
+    server = server_cls(("127.0.0.1", 0), handler_cls)
+    server.ssh_config_path = config
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        connection.request("GET", path)
+        response = connection.getresponse()
+        assert response.status == 200
+        return response.read()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_ssh_hosts_http_servers_and_opt_in_observation_preserve_unobserved_aliases(
+    tmp_path: Path,
+) -> None:
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    config = ssh_dir / "config"
+    config.write_text(
+        "Host jump-box lab.sk-integration desk-box\n  HostName 192.0.2.30\n",
+        encoding="utf-8",
+    )
+
+    status_raw = _fetch_http_ssh_hosts(
+        StatusHTTPServer, StatusRequestHandler, config, DEFAULT_SSH_HOSTS_PATH,
+    )
+    chat_raw = _fetch_http_ssh_hosts(
+        ChatHTTPServer, ChatRequestHandler, config, SSH_HOST_CATALOG_PATH,
+    )
+    expected_default = {
+        "ok": True,
+        "schema_version": "ssh_host_catalog_v0",
+        "hosts": [
+            {"alias": "jump-box"},
+            {"alias": "lab.sk-integration"},
+            {"alias": "desk-box"},
+        ],
+    }
+    assert json.loads(status_raw.decode("utf-8")) == expected_default
+    assert json.loads(chat_raw.decode("utf-8")) == expected_default
+    assert status_raw == json.dumps(expected_default, indent=2).encode("utf-8")
+    assert chat_raw == json.dumps(expected_default, separators=(",", ":")).encode("utf-8")
+
+    jump_observation = {
+        "schema_version": "session_fabric_ssh_observation_v0",
+        "alias": "jump-box",
+        "connection_state": "connected",
+        "failure_code": None,
+        "checked_at": "2026-11-22T00:00:00Z",
+        "tunnel_latency_ms": 11,
+    }
+    projected = ssh_host_catalog_payload(config, observations=[jump_observation])
+    assert projected == {
+        "ok": True,
+        "schema_version": "ssh_host_catalog_v0",
+        "hosts": [
+            {"alias": "jump-box", "observation": jump_observation},
+            {"alias": "lab.sk-integration"},
+            {"alias": "desk-box"},
+        ],
+    }

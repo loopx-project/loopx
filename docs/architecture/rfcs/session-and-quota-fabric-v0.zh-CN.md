@@ -5,7 +5,7 @@
 - **交付成熟度：** Partial。本基线已交付增量 L0 编解码、零导入前后端共享契约（`session_quota_fabric_contract.ts`）、`effect_runtime_handlers.ts` 注册入口、可选 `ssh_host_catalog_v0` 观测透传及交接守卫模块（`session_quota_fabric.ts`）；宿主运行时适配器与主工作台 UI 嵌入保留为后续分阶段切片。
 - **作者 / 负责人：** 架构收敛工作组；控制面归属、包边界及合并授权归属 LoopX 维护者
 - **创建日期：** 2026-11-17
-- **最近规范性修订：** 2026-11-20
+- **最近规范性修订：** 2026-11-22
 - **实现基线：** `45c015ffd9`
 - **相关契约：**
   [Agent 会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、
@@ -82,7 +82,7 @@ Calli/LooChat 系列 PR（#8778、#8782–#8784、#8843）反映出统一接入�
 
 ### 状态模型与 Schema
 
-1. `session_fabric_ssh_observation_v0`：校验 `alias`、`connection_state`（`connected | degraded | disconnected | unknown`）、`failure_code`（严格限定 Calli 已验证的 7 个失败码 `no_ssh | host_key | auth | unreachable | ssh_failed | daemon_missing | forward_denied`，仅在 `degraded | disconnected` 时必填，其余状态必须为 `null`）、`checked_at` 与 `tunnel_latency_ms`。`projectSshHostCatalogPayload` 仅向已知别名增量附加 `observation`，无观测条目保持纯 `{ alias }`。
+1. `session_fabric_ssh_observation_v0`：校验 `alias`、`connection_state`（`connected | degraded | disconnected | unknown`）、`failure_code`（严格限定 Calli 已验证的 7 个失败码 `no_ssh | host_key | auth | unreachable | ssh_failed | daemon_missing | forward_denied`，仅在 `degraded | disconnected` 时必填，其余状态必须为 `null`）、`checked_at` 与 `tunnel_latency_ms`。`projectSshHostCatalogPayload` 严格沿 `isSafeHostAlias`（`SAFE_HOST_ALIAS`）校验权威 `configured_aliases` 目录条目，仅向已知别名增量附加经校验的 `observation`，无观测条目保持纯 `{ alias }`。
 2. `session_quota_window_observation_v0`：校验不透明 `profile_id`（拒绝 `@`、`/`、私人路径及边界锚定凭据前缀 `sk-...`、`ghp_...`、`github_pat_...`、`Bearer ...`）、`availability`（`available | near_limit | exhausted | unknown`）、`used_ratio`（`unknown` 时强制为 `null`，其余必须在 `[0, 1]`）、`resets_at` 与 `eligible_models`，并仅对 `near_limit` 与 `exhausted` 置 `handover_eligible=true`。
 3. `governed_session_handover_proposal_v0`：禁止跨执行模式切换（`from_session_mode !== to_session_mode`）与同 profile 切换；当 `!observation.handover_eligible`（`unknown` 或 `available`）或 `near_limit` 低于 `threshold_ratio` 时返回 `no_handover_needed`，`exhausted` 无论 `used_ratio` 均进入交接门控；开启询问时返回 `user_gate_required`，围栏或租约释放未完成时返回 `await_turn_fence`，仅当全部前置成立时返回 `ready_for_lease_reacquisition`。
 
@@ -99,7 +99,7 @@ Calli/LooChat 系列 PR（#8778、#8782–#8784、#8843）反映出统一接入�
 ## 7. 安全性、隐私与兼容性
 
 - **关闭态对等：** 无 L0 观测传入时，`ssh_host_catalog_v0` 输出与 `ssh_host_catalog.py` 完全一致。
-- **凭据与路径 fail-closed：** `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` 在解码边界拒绝私人路径（`/Users/`、`/home/`、`/private/`、`~/`、`.ssh/`）与边界锚定的凭据前缀（`sk-...`、`sk_live_...`、`ghp_...`、`github_pat_...`、`Bearer ...`），同时正常放行 `desk-box`、`task-worker`、`disk-01`、`kiosk-2` 等合法 OpenSSH 别名与标识。
+- **凭据与路径 fail-closed：** `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` 按既有 `isSafeHostAlias`（`SAFE_HOST_ALIAS`）边界保留权威 `ssh_host_catalog_v0` 目录条目，并对新增观测、额度与交接字段应用 `assertPublicSafeFabricText`——在解码边界拒绝私人路径（`/Users/`、`/home/`、`/private/`、`~/`、`.ssh/`）及标识符边界锚定的凭据前缀（`sk-proj-...`、`sk-ant-...`、`sk_live_...`、`ghp_...`、`github_pat_...`、`Bearer ...`），同时正常放行 `desk-box`、`task-worker`、`disk-01`、`kiosk-2`、`lab.sk-integration`、`sk-integration` 等合法 OpenSSH 别名与标识。
 - **未知与可用额度保护：** `unknown` 与 `available` 窗口强制 `handover_eligible=false` 与 `no_handover_needed`，而 `exhausted` 即使 `used_ratio < threshold_ratio` 仍保持交接资格。
 
 ## 8. 迁移与回滚

@@ -72,11 +72,11 @@ function requireHostAlias(value: unknown, label: string): string {
 }
 
 function requireOpaqueProfileId(value: unknown, label: string): string {
-  const profileId = assertPublicSafeText(requireNonEmptyString(value, label), label);
+  const profileId = requireNonEmptyString(value, label).trim();
   if (profileId.includes("@") || profileId.includes("/") || !OPAQUE_PROFILE_ID.test(profileId)) {
     throw new EffectRuntimeRequestError(`${label} must be an opaque profile identifier`);
   }
-  return profileId;
+  return assertPublicSafeText(profileId, label);
 }
 
 function optionalIsoTimestamp(value: unknown, label: string): string | null {
