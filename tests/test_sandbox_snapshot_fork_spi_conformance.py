@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Mapping
 
 import pytest
@@ -75,19 +77,57 @@ class SandboxPauseReceipt:
     active_pid_digest: str
 
 
+def _freeze_snapshot_fields(instance: object) -> None:
+    for attr in ("rootfs", "symlinks", "env", "processes", "memory_pages"):
+        object.__setattr__(
+            instance,
+            attr,
+            MappingProxyType(dict(getattr(instance, attr))),
+        )
+
+
+@dataclass(frozen=True)
+class _SealedSnapshot:
+    """Internal immutable sealed snapshot kept separate from caller descriptors."""
+
+    snapshot_id: str
+    parent_sandbox_id: str
+    fidelity_tier: str
+    rootfs: Mapping[str, str]
+    symlinks: Mapping[str, str]
+    env: Mapping[str, str]
+    processes: Mapping[int, str]
+    memory_pages: Mapping[str, str]
+    scrubbed_keys: tuple[str, ...]
+    rootfs_digest: str
+    env_manifest_digest: str
+    memory_digest: str | None
+    digest: str
+    refcount: int = 1
+
+    def __post_init__(self) -> None:
+        _freeze_snapshot_fields(self)
+
+
 @dataclass(frozen=True)
 class SandboxSnapshotDescriptor:
     snapshot_id: str
     parent_sandbox_id: str
     fidelity_tier: str
-    rootfs: dict[str, str]
-    symlinks: dict[str, str]
-    env: dict[str, str]
-    processes: dict[int, str]
-    memory_pages: dict[str, str]
+    rootfs: Mapping[str, str]
+    symlinks: Mapping[str, str]
+    env: Mapping[str, str]
+    processes: Mapping[int, str]
+    memory_pages: Mapping[str, str]
     scrubbed_keys: tuple[str, ...]
     digest: str
     refcount: int = 1
+    rootfs_digest: str = ""
+    env_manifest_digest: str = ""
+    memory_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        _freeze_snapshot_fields(self)
 
 
 @dataclass
@@ -110,6 +150,39 @@ _TIER_TO_REPLAY_FIDELITY: dict[str, ReplayFidelity] = {
 }
 
 
+def _json_sha256(payload: object) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _digest_rootfs(
+    rootfs: Mapping[str, str],
+    symlinks: Mapping[str, str],
+) -> str:
+    return _json_sha256(
+        {
+            "rootfs": dict(sorted(rootfs.items())),
+            "symlinks": dict(sorted(symlinks.items())),
+        }
+    )
+
+
+def _digest_env(env: Mapping[str, str]) -> str:
+    return _json_sha256(dict(sorted(env.items())))
+
+
+def _digest_memory(
+    processes: Mapping[int, str],
+    memory_pages: Mapping[str, str],
+) -> str:
+    return _json_sha256(
+        {
+            "processes": {str(k): v for k, v in sorted(processes.items())},
+            "memory_pages": dict(sorted(memory_pages.items())),
+        }
+    )
+
+
 def _digest_state(
     *,
     rootfs: Mapping[str, str],
@@ -117,18 +190,62 @@ def _digest_state(
     env: Mapping[str, str],
     processes: Mapping[int, str],
     memory_pages: Mapping[str, str],
+    include_env: bool = True,
     include_memory: bool,
 ) -> str:
     payload: dict[str, Any] = {
         "rootfs": dict(sorted(rootfs.items())),
         "symlinks": dict(sorted(symlinks.items())),
-        "env": dict(sorted(env.items())),
     }
+    if include_env:
+        payload["env"] = dict(sorted(env.items()))
     if include_memory:
         payload["processes"] = {str(k): v for k, v in sorted(processes.items())}
         payload["memory_pages"] = dict(sorted(memory_pages.items()))
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    return _json_sha256(payload)
+
+
+def _observe_sandbox_digest(
+    sb: SandboxInstanceState,
+    *,
+    fidelity_tier: str,
+) -> str | None:
+    if sb.status == "destroyed":
+        return None
+    if fidelity_tier == "microvm_memory_exact" and not (
+        sb.processes or sb.memory_pages
+    ):
+        return None
+    include_env = fidelity_tier != "filesystem_only"
+    include_mem = fidelity_tier == "microvm_memory_exact"
+    return _digest_state(
+        rootfs=sb.rootfs,
+        symlinks=sb.symlinks,
+        env=sb.env if include_env else {},
+        processes=sb.processes if include_mem else {},
+        memory_pages=sb.memory_pages if include_mem else {},
+        include_env=include_env,
+        include_memory=include_mem,
+    )
+
+
+def _descriptor_from_sealed(sealed: _SealedSnapshot) -> SandboxSnapshotDescriptor:
+    return SandboxSnapshotDescriptor(
+        snapshot_id=sealed.snapshot_id,
+        parent_sandbox_id=sealed.parent_sandbox_id,
+        fidelity_tier=sealed.fidelity_tier,
+        rootfs=sealed.rootfs,
+        symlinks=sealed.symlinks,
+        env=sealed.env,
+        processes=sealed.processes,
+        memory_pages=sealed.memory_pages,
+        scrubbed_keys=sealed.scrubbed_keys,
+        digest=sealed.digest,
+        refcount=sealed.refcount,
+        rootfs_digest=sealed.rootfs_digest,
+        env_manifest_digest=sealed.env_manifest_digest,
+        memory_digest=sealed.memory_digest,
+    )
 
 
 class InMemorySandboxSpiProvider:
@@ -137,8 +254,17 @@ class InMemorySandboxSpiProvider:
     def __init__(self, *, provider_id: str = "e2b_microvm") -> None:
         self.provider_id = provider_id
         self.sandboxes: dict[str, SandboxInstanceState] = {}
+        self._sealed_snapshots: dict[str, _SealedSnapshot] = {}
         self.snapshots: dict[str, SandboxSnapshotDescriptor] = {}
         self._seq = 0
+
+    def sealed_snapshot(self, snapshot_id: str) -> _SealedSnapshot:
+        if snapshot_id not in self._sealed_snapshots:
+            raise SandboxSpiError("snapshot_missing", f"unknown snapshot {snapshot_id}")
+        return self._sealed_snapshots[snapshot_id]
+
+    def get_snapshot(self, snapshot_id: str) -> SandboxSnapshotDescriptor:
+        return _descriptor_from_sealed(self.sealed_snapshot(snapshot_id))
 
     def create_sandbox(
         self,
@@ -202,45 +328,89 @@ class InMemorySandboxSpiProvider:
         if target_tier not in _TIER_TO_REPLAY_FIDELITY:
             raise SandboxSpiError("invalid_tier", f"unknown tier {target_tier}")
         sb = self.sandboxes[sandbox_id]
+        if sb.status == "destroyed":
+            raise SandboxSpiError("sandbox_destroyed", "cannot snapshot destroyed sandbox")
         requires_pause = target_tier in {"process_tree_quiesced", "microvm_memory_exact"}
         if requires_pause and sb.status != "paused":
             raise SandboxSpiError(
                 "quiescence_required",
                 f"{target_tier} snapshot requires paused sandbox",
             )
-        scrubbed_env = {k: v for k, v in sb.env.items() if k not in scrub_keys}
+        include_env = target_tier != "filesystem_only"
+        include_mem = target_tier == "microvm_memory_exact"
+        scrubbed_env = (
+            {k: v for k, v in sb.env.items() if k not in scrub_keys}
+            if include_env
+            else {}
+        )
         scrubbed_rootfs = {
             k: v
             for k, v in sb.rootfs.items()
             if not k.startswith(".loopx/") and k != "loopx.lease.json"
         }
+        symlinks_copy = dict(sb.symlinks)
+        processes_copy = dict(sb.processes) if include_mem else {}
+        memory_copy = dict(sb.memory_pages) if include_mem else {}
         removed_keys = tuple(sorted(k for k in sb.env if k in scrub_keys))
-        include_mem = target_tier == "microvm_memory_exact"
+        rootfs_digest = _digest_rootfs(scrubbed_rootfs, symlinks_copy)
+        env_manifest_digest = _digest_env(scrubbed_env)
+        memory_digest = (
+            _digest_memory(processes_copy, memory_copy)
+            if include_mem and (processes_copy or memory_copy)
+            else None
+        )
         digest = _digest_state(
             rootfs=scrubbed_rootfs,
-            symlinks=sb.symlinks,
+            symlinks=symlinks_copy,
             env=scrubbed_env,
-            processes=sb.processes if include_mem else {},
-            memory_pages=sb.memory_pages if include_mem else {},
+            processes=processes_copy,
+            memory_pages=memory_copy,
+            include_env=include_env,
             include_memory=include_mem,
         )
         self._seq += 1
         snap_id = f"snap-{self._seq:04d}"
-        desc = SandboxSnapshotDescriptor(
+        sealed = _SealedSnapshot(
             snapshot_id=snap_id,
             parent_sandbox_id=sandbox_id,
             fidelity_tier=target_tier,
             rootfs=scrubbed_rootfs,
-            symlinks=dict(sb.symlinks),
+            symlinks=symlinks_copy,
             env=scrubbed_env,
-            processes=dict(sb.processes) if include_mem else {},
-            memory_pages=dict(sb.memory_pages) if include_mem else {},
+            processes=processes_copy,
+            memory_pages=memory_copy,
             scrubbed_keys=removed_keys,
+            rootfs_digest=rootfs_digest,
+            env_manifest_digest=env_manifest_digest,
+            memory_digest=memory_digest,
             digest=digest,
             refcount=1,
         )
-        self.snapshots[snap_id] = desc
-        return desc
+        self._sealed_snapshots[snap_id] = sealed
+        self.snapshots[snap_id] = _descriptor_from_sealed(sealed)
+        return _descriptor_from_sealed(sealed)
+
+    def _set_snapshot_refcount(self, snapshot_id: str, refcount: int) -> _SealedSnapshot:
+        sealed = self.sealed_snapshot(snapshot_id)
+        updated = _SealedSnapshot(
+            snapshot_id=sealed.snapshot_id,
+            parent_sandbox_id=sealed.parent_sandbox_id,
+            fidelity_tier=sealed.fidelity_tier,
+            rootfs=sealed.rootfs,
+            symlinks=sealed.symlinks,
+            env=sealed.env,
+            processes=sealed.processes,
+            memory_pages=sealed.memory_pages,
+            scrubbed_keys=sealed.scrubbed_keys,
+            rootfs_digest=sealed.rootfs_digest,
+            env_manifest_digest=sealed.env_manifest_digest,
+            memory_digest=sealed.memory_digest,
+            digest=sealed.digest,
+            refcount=refcount,
+        )
+        self._sealed_snapshots[snapshot_id] = updated
+        self.snapshots[snapshot_id] = _descriptor_from_sealed(updated)
+        return updated
 
     def fork(
         self,
@@ -249,22 +419,8 @@ class InMemorySandboxSpiProvider:
         child_id: str,
         egress_policy_id: str = "isolated-offline",
     ) -> tuple[SandboxInstanceState, str]:
-        if snapshot_id not in self.snapshots:
-            raise SandboxSpiError("snapshot_missing", f"unknown snapshot {snapshot_id}")
-        snap = self.snapshots[snapshot_id]
-        self.snapshots[snapshot_id] = SandboxSnapshotDescriptor(
-            snapshot_id=snap.snapshot_id,
-            parent_sandbox_id=snap.parent_sandbox_id,
-            fidelity_tier=snap.fidelity_tier,
-            rootfs=snap.rootfs,
-            symlinks=snap.symlinks,
-            env=snap.env,
-            processes=snap.processes,
-            memory_pages=snap.memory_pages,
-            scrubbed_keys=snap.scrubbed_keys,
-            digest=snap.digest,
-            refcount=snap.refcount + 1,
-        )
+        sealed = self.sealed_snapshot(snapshot_id)
+        self._set_snapshot_refcount(snapshot_id, sealed.refcount + 1)
         self._seq += 1
         fork_id = f"sb-fork-{child_id}-{self._seq:04d}"
         isolation_id = f"iso-{child_id}-{self._seq:04d}"
@@ -272,15 +428,37 @@ class InMemorySandboxSpiProvider:
             sandbox_id=fork_id,
             provider_id=self.provider_id,
             status="running",
-            rootfs=dict(snap.rootfs),
-            symlinks=dict(snap.symlinks),
-            env=dict(snap.env),
-            processes=dict(snap.processes),
-            memory_pages=dict(snap.memory_pages),
+            rootfs=dict(sealed.rootfs),
+            symlinks=dict(sealed.symlinks),
+            env=dict(sealed.env),
+            processes=dict(sealed.processes),
+            memory_pages=dict(sealed.memory_pages),
             egress_policy_id=egress_policy_id,
         )
         self.sandboxes[fork_id] = child
         return child, isolation_id
+
+    def restore_snapshot(
+        self,
+        sandbox_id: str,
+        snapshot_id: str,
+    ) -> SandboxInstanceState:
+        sealed = self.sealed_snapshot(snapshot_id)
+        if sandbox_id not in self.sandboxes:
+            raise SandboxSpiError("sandbox_missing", f"unknown sandbox {sandbox_id}")
+        sb = self.sandboxes[sandbox_id]
+        if sb.status == "destroyed":
+            raise SandboxSpiError(
+                "sandbox_destroyed",
+                "cannot restore destroyed sandbox",
+            )
+        sb.rootfs = dict(sealed.rootfs)
+        sb.symlinks = dict(sealed.symlinks)
+        sb.env = dict(sealed.env)
+        sb.processes = dict(sealed.processes)
+        sb.memory_pages = dict(sealed.memory_pages)
+        sb.status = "running"
+        return sb
 
     def destroy_sandbox(self, sandbox_id: str) -> None:
         sb = self.sandboxes.get(sandbox_id)
@@ -288,26 +466,15 @@ class InMemorySandboxSpiProvider:
             sb.status = "destroyed"
 
     def release_snapshot(self, snapshot_id: str) -> None:
-        snap = self.snapshots.get(snapshot_id)
-        if snap is None:
+        sealed = self._sealed_snapshots.get(snapshot_id)
+        if sealed is None:
             return
-        remaining = snap.refcount - 1
+        remaining = sealed.refcount - 1
         if remaining <= 0:
-            del self.snapshots[snapshot_id]
+            del self._sealed_snapshots[snapshot_id]
+            self.snapshots.pop(snapshot_id, None)
         else:
-            self.snapshots[snapshot_id] = SandboxSnapshotDescriptor(
-                snapshot_id=snap.snapshot_id,
-                parent_sandbox_id=snap.parent_sandbox_id,
-                fidelity_tier=snap.fidelity_tier,
-                rootfs=snap.rootfs,
-                symlinks=snap.symlinks,
-                env=snap.env,
-                processes=snap.processes,
-                memory_pages=snap.memory_pages,
-                scrubbed_keys=snap.scrubbed_keys,
-                digest=snap.digest,
-                refcount=remaining,
-            )
+            self._set_snapshot_refcount(snapshot_id, remaining)
 
 
 class SpiAgentStateStore:
@@ -360,6 +527,57 @@ class SpiReplayAdapter:
             projection_digest=desc.digest,
         )
 
+    def _build_equivalence_report(
+        self,
+        *,
+        sealed: _SealedSnapshot,
+        sb: SandboxInstanceState,
+        achieved_fidelity: ReplayFidelity,
+        check_prefix: str = "sandbox",
+    ) -> EquivalenceReport:
+        live_alive = sb.status != "destroyed"
+        fs_ok = live_alive and _digest_rootfs(sb.rootfs, sb.symlinks) == sealed.rootfs_digest
+        observed_digest = _observe_sandbox_digest(
+            sb,
+            fidelity_tier=sealed.fidelity_tier,
+        )
+        if sealed.fidelity_tier == "filesystem_only":
+            checks: tuple[EquivalenceCheck, ...] = (
+                EquivalenceCheck(f"{check_prefix}-rootfs-symlinks", fs_ok),
+            )
+        elif sealed.fidelity_tier in {"filesystem_and_env", "process_tree_quiesced"}:
+            env_ok = live_alive and _digest_env(sb.env) == sealed.env_manifest_digest
+            checks = (
+                EquivalenceCheck(f"{check_prefix}-rootfs-symlinks", fs_ok),
+                EquivalenceCheck(f"{check_prefix}-env-only", env_ok),
+            )
+        else:
+            has_mem_evidence = bool(sb.processes or sb.memory_pages)
+            mem_ok = (
+                live_alive
+                and has_mem_evidence
+                and sealed.memory_digest is not None
+                and _digest_memory(sb.processes, sb.memory_pages) == sealed.memory_digest
+            )
+            env_ok = live_alive and _digest_env(sb.env) == sealed.env_manifest_digest
+            checks = (
+                EquivalenceCheck(f"{check_prefix}-rootfs-symlinks", fs_ok),
+                EquivalenceCheck(f"{check_prefix}-env-manifest", env_ok),
+                EquivalenceCheck(f"{check_prefix}-process-memory", mem_ok),
+            )
+        equivalent = (
+            observed_digest is not None
+            and observed_digest == sealed.digest
+            and all(check.passed for check in checks)
+        )
+        return EquivalenceReport(
+            achieved_fidelity=achieved_fidelity,
+            equivalent=equivalent,
+            expected_digest=sealed.digest,
+            observed_digest=observed_digest,
+            checks=checks,
+        )
+
     def restore_replay_state(
         self,
         binding_key: object,
@@ -367,10 +585,18 @@ class SpiReplayAdapter:
     ) -> RestoreReceipt:
         del request
         assert isinstance(binding_key, _SnapshotRef)
-        snap = self.provider.snapshots[binding_key.snapshot_id]
+        sealed = self.provider.sealed_snapshot(binding_key.snapshot_id)
+        restored_sb = self.provider.restore_snapshot(
+            self.source_sandbox_id,
+            binding_key.snapshot_id,
+        )
+        observed_digest = _observe_sandbox_digest(
+            restored_sb,
+            fidelity_tier=sealed.fidelity_tier,
+        )
         return RestoreReceipt(
-            achieved_fidelity=_TIER_TO_REPLAY_FIDELITY[snap.fidelity_tier],
-            restored_projection_digest=snap.digest,
+            achieved_fidelity=_TIER_TO_REPLAY_FIDELITY[sealed.fidelity_tier],
+            restored_projection_digest=observed_digest,
             prefix_reused=self.prefix_reused,
         )
 
@@ -380,21 +606,12 @@ class SpiReplayAdapter:
         receipt: RestoreReceipt,
     ) -> EquivalenceReport:
         assert isinstance(binding_key, _SnapshotRef)
-        snap = self.provider.snapshots[binding_key.snapshot_id]
-        return EquivalenceReport(
+        sealed = self.provider.sealed_snapshot(binding_key.snapshot_id)
+        sb = self.provider.sandboxes[self.source_sandbox_id]
+        return self._build_equivalence_report(
+            sealed=sealed,
+            sb=sb,
             achieved_fidelity=receipt.achieved_fidelity,
-            equivalent=receipt.restored_projection_digest == snap.digest,
-            expected_digest=snap.digest,
-            observed_digest=receipt.restored_projection_digest,
-            checks=(
-                EquivalenceCheck("sandbox-rootfs-symlinks", True),
-                EquivalenceCheck(
-                    "sandbox-process-memory"
-                    if snap.fidelity_tier == "microvm_memory_exact"
-                    else "sandbox-env-only",
-                    True,
-                ),
-            ),
         )
 
     def release_replay_state(self, binding_key: object) -> None:
@@ -412,19 +629,23 @@ class SpiReplayAdapter:
             binding_key.snapshot_id,
             child_id=request.child_id,
         )
-        snap = self.provider.snapshots[binding_key.snapshot_id]
+        sealed = self.provider.sealed_snapshot(binding_key.snapshot_id)
         branch_ref = _BranchRef(
             branch_sandbox_id=child_sb.sandbox_id,
-            source_snapshot_id=snap.snapshot_id,
+            source_snapshot_id=sealed.snapshot_id,
             branch_isolation_id=isolation_id,
+        )
+        observed_digest = _observe_sandbox_digest(
+            child_sb,
+            fidelity_tier=sealed.fidelity_tier,
         )
         return ReplayChildLease(
             child_key=branch_ref,
             concurrency=ReplayChildConcurrency.PROCESS_ISOLATED,
             worker_identity=isolation_id,
             receipt=RestoreReceipt(
-                achieved_fidelity=_TIER_TO_REPLAY_FIDELITY[snap.fidelity_tier],
-                restored_projection_digest=snap.digest,
+                achieved_fidelity=_TIER_TO_REPLAY_FIDELITY[sealed.fidelity_tier],
+                restored_projection_digest=observed_digest,
                 prefix_reused=self.prefix_reused,
             ),
         )
@@ -435,22 +656,13 @@ class SpiReplayAdapter:
         receipt: RestoreReceipt,
     ) -> EquivalenceReport:
         assert isinstance(child_key, _BranchRef)
-        snap = self.provider.snapshots[child_key.source_snapshot_id]
+        sealed = self.provider.sealed_snapshot(child_key.source_snapshot_id)
         sb = self.provider.sandboxes[child_key.branch_sandbox_id]
-        observed = _digest_state(
-            rootfs=sb.rootfs,
-            symlinks=sb.symlinks,
-            env=sb.env,
-            processes=sb.processes if snap.fidelity_tier == "microvm_memory_exact" else {},
-            memory_pages=sb.memory_pages if snap.fidelity_tier == "microvm_memory_exact" else {},
-            include_memory=snap.fidelity_tier == "microvm_memory_exact",
-        )
-        return EquivalenceReport(
+        return self._build_equivalence_report(
+            sealed=sealed,
+            sb=sb,
             achieved_fidelity=receipt.achieved_fidelity,
-            equivalent=observed == snap.digest,
-            expected_digest=snap.digest,
-            observed_digest=observed,
-            checks=(EquivalenceCheck("fork-child-equivalence", observed == snap.digest),),
+            check_prefix="fork-child",
         )
 
     def release_replay_child(self, child_key: object) -> None:
@@ -616,18 +828,26 @@ def test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks(
     )
 
     observed_isolations: list[str] = []
+    start_barrier = threading.Barrier(2)
+    treatment_mutated = threading.Event()
 
     def run_arm(ctx: Any, req: Any) -> Mapping[str, bool]:
         del req
         assert isinstance(ctx.adapter_child_key, _BranchRef)
         sb = provider.sandboxes[ctx.adapter_child_key.branch_sandbox_id]
         observed_isolations.append(ctx.adapter_child_key.branch_isolation_id)
+        start_barrier.wait(timeout=2.0)
         if ctx.child_id == "treatment":
             sb.rootfs["packages/core/index.ts"] = "export const v = 2;"
             sb.memory_pages["module_graph"] = "mutated-in-treatment"
+            treatment_mutated.set()
             fix_ok = True
         else:
-            fix_ok = sb.rootfs["packages/core/index.ts"] == "export const v = 2;"
+            assert treatment_mutated.wait(timeout=2.0)
+            fix_ok = (
+                sb.rootfs["packages/core/index.ts"] == "export const v = 2;"
+                or sb.memory_pages["module_graph"] == "mutated-in-treatment"
+            )
         symlink_ok = sb.symlinks.get("packages/core/node_modules/dep") == "../../node_modules/.pnpm/dep"
         warm_ok = sb.processes.get(700) == "vitest-worker-warm"
         return {"target-fix": fix_ok, "guard-symlink": symlink_ok and warm_ok}
@@ -700,18 +920,27 @@ def test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_ke
         hypothesis=hypothesis,
         candidates=(
             CounterfactualChildCandidate(
-                candidate=CounterfactualCandidate("denied-lease", {"kind": "bad"}),
-                target_branch_id="bad-branch",
+                candidate=CounterfactualCandidate("denied-lease", {"kind": "bad-lease"}),
+                target_branch_id="bad-branch-lease",
                 intent={"clone_parent_lease": True},
+                execute_suffix=lambda _ctx, _req: {"fix": True, "guard": True},
+            ),
+            CounterfactualChildCandidate(
+                candidate=CounterfactualCandidate("denied-egress", {"kind": "bad-egress"}),
+                target_branch_id="bad-branch-egress",
+                intent={"egress": "shared_prod"},
                 execute_suffix=lambda _ctx, _req: {"fix": True, "guard": True},
             ),
         ),
     )
-    child_res = group.candidates[0]
-    assert not child_res.evaluated
-    assert child_res.execution_failure is not None
-    assert child_res.execution_failure.risk_assessment is not None
-    assert child_res.execution_failure.risk_assessment.disposition == ReplayRiskDisposition.DENY
+    for child_res in group.candidates:
+        assert not child_res.evaluated
+        assert child_res.execution_failure is not None
+        assert child_res.execution_failure.risk_assessment is not None
+        assert (
+            child_res.execution_failure.risk_assessment.disposition
+            == ReplayRiskDisposition.DENY
+        )
 
     serialized = json.dumps(registry.records()) + json.dumps(group.to_record())
     assert "binding_key" not in serialized
@@ -847,3 +1076,239 @@ def test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy()
 
     registry.release(point.replay_point_id)
     assert snap_id not in provider.snapshots
+
+
+def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence() -> (
+    None
+):
+    class _NonRestoringSpiProvider(InMemorySandboxSpiProvider):
+        def restore_snapshot(
+            self, sandbox_id: str, snapshot_id: str
+        ) -> SandboxInstanceState:
+            self.sealed_snapshot(snapshot_id)
+            return self.sandboxes[sandbox_id]
+
+    class _MemoryDroppingSpiProvider(InMemorySandboxSpiProvider):
+        def restore_snapshot(
+            self, sandbox_id: str, snapshot_id: str
+        ) -> SandboxInstanceState:
+            sb = super().restore_snapshot(sandbox_id, snapshot_id)
+            sb.processes = {}
+            sb.memory_pages = {}
+            return sb
+
+    def _setup_resumed_drift(
+        provider: InMemorySandboxSpiProvider,
+        trace_id: str,
+    ) -> tuple[TraceLog, Any, SpiReplayAdapter, ReplayPointRegistry]:
+        sb = provider.create_sandbox(
+            sandbox_id="sb-single",
+            rootfs={"src/app.py": "v1-captured"},
+            symlinks={"bin/tool": "v1-target"},
+            env={"MODE": "v1"},
+            processes={42: "lsp-v1"},
+            memory_pages={"lsp_cache": "v1-mem"},
+        )
+        provider.pause("sb-single")
+        adapter = SpiReplayAdapter(
+            provider,
+            source_sandbox_id="sb-single",
+            target_tier="microvm_memory_exact",
+        )
+        registry = ReplayPointRegistry()
+        store = SpiAgentStateStore()
+        trace, point = _prepare_trace_point(
+            trace_id, registry=registry, store=store, adapter=adapter
+        )
+
+        # Resume the original live instance and advance both workspace & memory.
+        provider.resume("sb-single")
+        sb.rootfs["src/app.py"] = "v2-post-capture"
+        sb.symlinks["bin/tool"] = "v2-target"
+        sb.memory_pages["lsp_cache"] = "v2-post-capture-mem"
+        return trace, point, adapter, registry
+
+    def _hyp(trace_id: str) -> CounterfactualHypothesis:
+        return CounterfactualHypothesis(
+            hypothesis_id=f"hyp-{trace_id}",
+            first_affected_event_id=f"{trace_id}-evt-2-fail",
+            first_affected_sequence=2,
+            fix_set=(ValidationTarget("fix", baseline_passed=False),),
+            guard_set=(ValidationTarget("guard", baseline_passed=True),),
+            minimum_fidelity=ReplayFidelity.EXACT,
+        )
+
+    # 1) Genuine reference provider restores sb-single before equivalence check & suffix.
+    real_provider = InMemorySandboxSpiProvider()
+    trace_ok, point_ok, adapter_ok, reg_ok = _setup_resumed_drift(
+        real_provider, "trace-real-restore"
+    )
+    observed_in_suffix: list[tuple[str, str, str]] = []
+
+    def read_restored(_req: Any) -> Mapping[str, bool]:
+        sb = real_provider.sandboxes["sb-single"]
+        observed_in_suffix.append(
+            (
+                sb.rootfs["src/app.py"],
+                sb.symlinks["bin/tool"],
+                sb.memory_pages["lsp_cache"],
+            )
+        )
+        return {
+            "fix": sb.rootfs["src/app.py"] == "v1-captured",
+            "guard": sb.memory_pages["lsp_cache"] == "v1-mem"
+            and sb.processes.get(42) == "lsp-v1",
+        }
+
+    promoted = run_counterfactual_suffix_replay(
+        reg_ok,
+        trace=trace_ok,
+        hypothesis=_hyp("trace-real-restore"),
+        candidate=CounterfactualCandidate("real-restore", {"op": "restore"}),
+        execute_suffix=read_restored,
+    )
+    assert promoted.decision == CounterfactualDecision.PROMOTED
+    assert observed_in_suffix == [("v1-captured", "v1-target", "v1-mem")]
+
+    # A candidate checking for post-capture state cannot pass after real restore.
+    post_capture_check = run_counterfactual_suffix_replay(
+        reg_ok,
+        trace=trace_ok,
+        hypothesis=_hyp("trace-real-restore"),
+        candidate=CounterfactualCandidate("check-post-capture", {"op": "probe"}),
+        execute_suffix=lambda _req: {
+            "fix": real_provider.sandboxes["sb-single"].rootfs["src/app.py"]
+            == "v2-post-capture",
+            "guard": True,
+        },
+    )
+    assert post_capture_check.decision == CounterfactualDecision.REJECTED
+
+    # Independent post-restore drift before equivalence verification is rejected.
+    real_provider.sandboxes["sb-single"].memory_pages["lsp_cache"] = "drifted-after-restore"
+    drifted_report = adapter_ok.validate_replay_equivalence(
+        _SnapshotRef(snapshot_id=next(iter(real_provider.snapshots))),
+        RestoreReceipt(
+            achieved_fidelity=ReplayFidelity.EXACT,
+            restored_projection_digest=point_ok.captured_projection_digest,
+        ),
+    )
+    assert not drifted_report.equivalent
+    assert drifted_report.observed_digest != drifted_report.expected_digest
+    assert any(
+        c.check_id == "sandbox-process-memory" and not c.passed
+        for c in drifted_report.checks
+    )
+
+    # 2) Non-restoring provider leaves post-capture state; promotion must be refused.
+    stale_provider = _NonRestoringSpiProvider()
+    trace_stale, _, _, reg_stale = _setup_resumed_drift(
+        stale_provider, "trace-stale-restore"
+    )
+    stale_suffix_called = False
+
+    def stale_cb(_req: Any) -> Mapping[str, bool]:
+        nonlocal stale_suffix_called
+        stale_suffix_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(ValueError, match="exact replay requires equal"):
+        run_counterfactual_suffix_replay(
+            reg_stale,
+            trace=trace_stale,
+            hypothesis=_hyp("trace-stale-restore"),
+            candidate=CounterfactualCandidate("stale-restore", {"op": "noop"}),
+            execute_suffix=stale_cb,
+        )
+    assert stale_suffix_called is False
+
+    # 3) Missing exact memory/process evidence on restore must refuse promotion.
+    mem_drop_provider = _MemoryDroppingSpiProvider()
+    trace_drop, _, _, reg_drop = _setup_resumed_drift(
+        mem_drop_provider, "trace-drop-mem"
+    )
+    drop_suffix_called = False
+
+    def drop_cb(_req: Any) -> Mapping[str, bool]:
+        nonlocal drop_suffix_called
+        drop_suffix_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(ValueError, match="exact replay requires equal"):
+        run_counterfactual_suffix_replay(
+            reg_drop,
+            trace=trace_drop,
+            hypothesis=_hyp("trace-drop-mem"),
+            candidate=CounterfactualCandidate("drop-mem", {"op": "partial"}),
+            execute_suffix=drop_cb,
+        )
+    assert drop_suffix_called is False
+
+
+def test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_forks() -> (
+    None
+):
+    provider = InMemorySandboxSpiProvider()
+    sb = provider.create_sandbox(
+        sandbox_id="sb-seal",
+        rootfs={"src/main.py": "sealed-v1"},
+        symlinks={"current": "releases/v1"},
+        env={"SAFE_ENV": "1", "CLOUD_API_TOKEN": "secret-tok"},
+        processes={88: "daemon-v1"},
+        memory_pages={"heap": "sealed-heap-v1"},
+    )
+    provider.pause("sb-seal")
+    desc = provider.snapshot("sb-seal", target_tier="microvm_memory_exact")
+
+    # Descriptor mappings are deeply immutable; caller mutations fail closed.
+    for mapping in (
+        desc.rootfs,
+        desc.symlinks,
+        desc.env,
+        desc.processes,
+        desc.memory_pages,
+    ):
+        with pytest.raises(TypeError):
+            mapping["caller_note"] = "mutated"  # type: ignore[index]
+
+    # Even if a caller replaces the public descriptor entry with an annotated
+    # copy carrying the same digest, sealed state, readback, and forks stay intact.
+    tampered = SandboxSnapshotDescriptor(
+        snapshot_id=desc.snapshot_id,
+        parent_sandbox_id=desc.parent_sandbox_id,
+        fidelity_tier=desc.fidelity_tier,
+        rootfs={**desc.rootfs, "src/main.py": "caller-tampered", "note.txt": "x"},
+        symlinks=desc.symlinks,
+        env=desc.env,
+        processes=desc.processes,
+        memory_pages={**desc.memory_pages, "heap": "caller-tampered-heap"},
+        scrubbed_keys=desc.scrubbed_keys,
+        digest=desc.digest,
+        refcount=desc.refcount,
+        rootfs_digest=desc.rootfs_digest,
+        env_manifest_digest=desc.env_manifest_digest,
+        memory_digest=desc.memory_digest,
+    )
+    provider.snapshots[desc.snapshot_id] = tampered
+
+    # Resuming and mutating the live parent also cannot mutate the sealed snapshot.
+    provider.resume("sb-seal")
+    sb.rootfs["src/main.py"] = "parent-resumed-v2"
+    sb.memory_pages["heap"] = "parent-resumed-heap-v2"
+
+    readback = provider.get_snapshot(desc.snapshot_id)
+    assert readback.digest == desc.digest
+    assert readback.rootfs == {"src/main.py": "sealed-v1"}
+    assert "note.txt" not in readback.rootfs
+    assert readback.memory_pages == {"heap": "sealed-heap-v1"}
+
+    child, _ = provider.fork(desc.snapshot_id, child_id="isolated-after-tamper")
+    assert child.rootfs == {"src/main.py": "sealed-v1"}
+    assert "note.txt" not in child.rootfs
+    assert child.symlinks == {"current": "releases/v1"}
+    assert child.processes == {88: "daemon-v1"}
+    assert child.memory_pages == {"heap": "sealed-heap-v1"}
+    assert (
+        _observe_sandbox_digest(child, fidelity_tier="microvm_memory_exact")
+        == desc.digest
+    )

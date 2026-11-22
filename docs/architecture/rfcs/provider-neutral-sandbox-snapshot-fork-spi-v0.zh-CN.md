@@ -50,8 +50,10 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 存在四类结构性缺口：
 
 1. **符号链接拒绝与容量/时间上限：** [`checkpoint_artifacts.ts`](../../../loopx/control_plane/runtime/checkpoint_artifacts.ts)
-   出于一致性安全拒绝 symlink 并设定了 64 MiB 本地快照上限与 30s/90s 捕获窗口，
-   而现代 `.pnpm`、`.venv`、Cargo 构建缓存高度依赖符号链接与大体积产物树。
+   出于一致性安全拒绝 symlink 并设定了 `MAX_LOCAL_SNAPSHOT_BYTES`（64 MiB）本地快照上限，
+   而 [`checkpoint.py`](../../../benchmark/runtime/checkpoint.py) 设定了 30s/90s
+   （`CHECKPOINT_CAPTURE_SECONDS = 90`）捕获窗口；现代 `.pnpm`、`.venv`、Cargo
+   构建缓存高度依赖符号链接与大体积产物树。
 2. **进程与内存现场丢失：** 目录拷贝会丢弃常驻 LSP、构建守护进程、本地数据库、
    打开的文件描述符与 GPU/内存现场，使本可精确分叉的试验退化为冷启动重建。
 3. **跨分支污染与租约脑裂风险：** 若将 `.loopx/` 控制面库、`claim_operation_id`
@@ -200,9 +202,9 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 | 声明 | 验证命令 / 测试用例 | 验收判据 | 边界与未覆盖说明 |
 | --- | --- | --- | --- |
 | V1：精确内存快照前置静止屏障 | `test_exact_memory_snapshot_requires_paused_quiescence_barrier` | `running` 态精确快照 fail-closed 拒绝；`paused` 后成功生成 `EXACT` 点 | 基于内存级参考 SPI 模型，尚未在真实 Firecracker/KVM 上实测 |
-| V2：1:1 挂起与 1:N 分叉非干扰及 symlink 保留 | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`、`test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks` | 同 `sandbox_id`/PID 无损恢复；并行分叉保留 `.pnpm`/`.venv` 且内存与文件互不污染 | 不代表生产级冷/热延迟与内存去重实测数据 |
-| V3：控制面租约/密钥擦除与公开载荷防泄 | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | 擦除母快照敏感键；子分支复用父租约或无墙出网被风控拒绝；公开记录无运行时句柄 | 真机部署前需对特定云镜像做实测擦除审计 |
-| V4：保真度过滤降级与快照引用寿命 | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`、`test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | 仅低保真时无法 `PROMOTED` 到 `EXACT`；释放子分支不影响母快照至显式销毁 | 真实 E2B/Firecracker 接入与 UI 回读属 M1–M3 范围 |
+| V2：1:1 挂起与 1:N 分叉非干扰、快照不可变性及 symlink 保留 | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`、`test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks`、`test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_forks` | 同 `sandbox_id`/PID 无损恢复；并行分叉保留 `.pnpm`/`.venv` 且内存与文件互不污染；对外描述符与封存快照严格隔离 | 不代表生产级冷/热延迟与内存去重实测数据 |
+| V3：控制面租约/密钥擦除与公开载荷防泄 | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | 擦除母快照敏感键；子分支复用父租约或 `shared_prod` 出网被风控拒绝；公开记录无运行时句柄 | 真机部署前需对特定云镜像做实测擦除审计 |
+| V4：保真度过滤降级、单分支恢复等价校验与快照引用寿命 | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`、`test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`、`test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | 非 EXACT、未恢复或缺失内存证据时拒绝 `PROMOTED`，真实恢复保留 `EXACT` 资格；释放子分支不影响母快照至显式销毁 | 真实 E2B/Firecracker 接入与 UI 回读属 M1–M3 范围 |
 
 ---
 
@@ -216,7 +218,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 | 里程碑 | 交付行为 | 进入门禁 | 退出证据 | 回退方式 |
 | --- | --- | --- | --- | --- |
-| M0 | 双语 SPI RFC + 6 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461`/`#8516` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
+| M0 | 双语 SPI RFC + 8 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461`/`#8516` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
 | M1 | 首个可选扩展实现（`firecracker_local` 或 `e2b_microvm`） | M0 合入；固定 Linux/E2B 验证镜像 | 真机 `pause`/`resume`/`snapshot`/`fork`、密钥擦除、symlink 与关闭态等价性 | 停用扩展 profile |
 | M2 | 与热 `git worktree` / `layerfs_cow` 的配对反事实对比 | M1 通过；冻结题目、预算与评估器 | 基于 `#8516` 输出完整 5 维成本向量与 $\tau_B(s; a, a_0, \pi)$ 对照结论 | 终止试验，如实保留负结果/平手数据 |
 | M3 | 可选产品/评测推广评审 | M2 复现净收益（$\Delta J(B \mid s_0) > 0$）且 UI 回读齐备 | 维护者批准与打包态不可用/恢复闭环验收 | 维持默认关闭或退役扩展 |

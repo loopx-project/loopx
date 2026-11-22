@@ -60,9 +60,11 @@ while comparing treatment and control continuations under matched budgets.
 Today's shipped file-only capture path reveals four structural blockers:
 
 1. **Symlink rejection & capture ceilings:** [`checkpoint_artifacts.ts`](../../../loopx/control_plane/runtime/checkpoint_artifacts.ts)
-   rightly rejects symlinks and enforces a 64 MiB local snapshot bound with a
-   30 s / 90 s capture window. Modern Node (`.pnpm`), Python (`.venv`), and Rust
-   workspaces depend heavily on symlinks and gigabyte-scale build caches.
+   rightly rejects symlinks and enforces `MAX_LOCAL_SNAPSHOT_BYTES` (64 MiB),
+   while [`checkpoint.py`](../../../benchmark/runtime/checkpoint.py) enforces a
+   30 s / 90 s capture window (`CHECKPOINT_CAPTURE_SECONDS = 90`). Modern Node
+   (`.pnpm`), Python (`.venv`), and Rust workspaces depend heavily on symlinks
+   and gigabyte-scale build caches.
 2. **Process/memory state erasure:** File copies lose running language servers,
    build daemons, local databases, open sockets, and GPU/in-memory state,
    converting `exact` microVM continuations into cold reconstruction attempts.
@@ -268,9 +270,9 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
 | Claim | Verification command / test | Required result | Boundary / exclusions |
 | --- | --- | --- | --- |
 | V1: Quiescence barrier for exact memory snapshot | `test_exact_memory_snapshot_requires_paused_quiescence_barrier` | Fails closed if `running`; succeeds with `EXACT` once `paused` | Synthetic SPI fixture; does not test Linux Firecracker KVM page flush |
-| V2: 1:1 suspend/resume vs. 1:N fork isolation & symlinks | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`, `test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks` | Same ID + PID across `pause`/`resume`; isolated CoW/RAM + `.pnpm`/`.venv` across parallel `fork`s | Does not prove E2B wall-clock latency or memory overhead in production |
-| V3: Authority/secret scrub & public boundary | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | Scrubbed parent secrets; parent-lease reuse denied by `assess_replay_child_intent`; zero leaked keys | Requires real provider scrub audit before M1 live traffic |
-| V4: Fidelity filtering & child/snapshot lifetime | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`, `test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | Non-EXACT points cannot `PROMOTED` under `minimum_fidelity=EXACT`; released children leave snapshot pinned until explicit destroy | Live E2B/Firecracker qualification and packaged UI remain M1–M3 |
+| V2: 1:1 suspend/resume vs. 1:N fork isolation, immutability & symlinks | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`, `test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks`, `test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_forks` | Same ID + PID across `pause`/`resume`; isolated CoW/RAM + `.pnpm`/`.venv` across parallel `fork`s; sealed snapshot isolated from descriptor edits | Does not prove E2B wall-clock latency or memory overhead in production |
+| V3: Authority/secret scrub & public boundary | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | Scrubbed parent secrets; parent-lease reuse and `shared_prod` egress denied by `assess_replay_child_intent`; zero leaked keys | Requires real provider scrub audit before M1 live traffic |
+| V4: Fidelity filtering, live-restore equivalence & snapshot lifetime | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`, `test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`, `test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | Non-EXACT, un-restored, or memory-missing restores refuse `PROMOTED`; real restore preserves `EXACT`; released children leave snapshot pinned until explicit destroy | Live E2B/Firecracker qualification and packaged UI remain M1–M3 |
 
 ---
 
@@ -289,7 +291,7 @@ Explore/Benchmark run surfaces.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0 | Bilingual RFC + 6-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461`/`#8516` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
+| M0 | Bilingual RFC + 8-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461`/`#8516` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
 | M1 | First opt-in provider adapter (`firecracker_local` or `e2b_microvm`) behind extension package | M0 accepted; Linux/E2B test fixture pinned | Real pause/resume/snapshot/fork + scrub + symlink preservation + feature-off parity | Disable extension profile |
 | M2 | Paired 5-tuple counterfactual pilot against warm `git worktree` / `layerfs_cow` | M1 conformance green; frozen task/budget manifest | Complete 5D cost vector + $\tau_B(s; a, a_0, \pi)$ evaluation via `#8516` owner | Stop pilot; retain negative/null data |
 | M3 | Optional product / benchmark promotion decision | M2 replicated net gain ($\Delta J(B \mid s_0) > 0$) + UI readback | Maintainer sign-off + packaged unavailability/recovery UX | Keep optional / retire adapter |
