@@ -158,10 +158,13 @@ export async function observeFencedExecution(root: string, identity: ReturnType<
       || todo.archive_state !== "active" || !rawLease) return null;
   const lease = canonicalTaskLease(rawLease, identity.goal_id, identity.todo_id);
   if (!fencesPreparedGeneration(prepared, lease)) return null;
+  const writerMatches = todo.claimed_by === identity.agent_id && lease.owner === identity.agent_id
+    && todo.done !== true && leaseRepositoryRejection(todo, lease) === null
+    && canonicalLeaseTodoFact(todo)?.excluded_agents.includes(identity.agent_id) === false;
+  const active = writerMatches && leaseIsActive(lease, new Date());
   return {original_prepared_epoch: prepared.prepared_lease_epoch, current_lease_epoch: lease.lease_epoch,
     current_lease_version: lease.version, current_owner: lease.owner,
-    current_control_writer_active: todo.claimed_by === identity.agent_id && lease.owner === identity.agent_id
-      && leaseRepositoryRejection(todo, lease) === null && leaseIsActive(lease, new Date())};
+    current_control_writer_active: active, can_reclaim_control_writer: writerMatches && !active};
 }
 
 function optionalAssignedReplan(receipt: JsonObject): boolean {
