@@ -47,6 +47,8 @@ export interface ThreadSummary {
   title: string;
   /** Agent instance id, e.g. `codex` or `claude-2`. Use capabilities, never branch on it. */
   agent: string;
+  /** The bound long-horizon Goal, read by the built-in host. No workspace or authority state. */
+  goal?: { goalId: string; title: string; status: string | null };
   /**
    * Project directory with symlinks resolved, so two spellings of one directory are one project
    * (worktrees resolve to the directory they were made from). `''` for a thread in no project.

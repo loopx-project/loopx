@@ -499,3 +499,68 @@ test('when apply receives 409 conflict because Settings updated concurrently, sw
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }
 });
+
+test('a Goal-reader entry opens no session until the first explicit message and rejects duplicate sends', async () => {
+  const saved = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  let renderer: ReactTestRenderer | undefined;
+  let sessions = 0, sends = 0;
+  let release!: (response: Response) => void;
+  const opening = new Promise<Response>(resolve => { release = resolve; });
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    if (path.endsWith('/sessions')) { sessions++; return opening; }
+    if (path.endsWith('/sessions/reader')) return json({ messages: [] });
+    if (path.endsWith('/turns')) { sends++; assert.equal(JSON.parse(String(init?.body)).message, 'Explicit question'); return json({ turn_id: 't-reader', events_url: '/api/chat/sessions/reader/turns/t-reader/events' }); }
+    if (path.endsWith('/events')) return new Response('event: turn.completed\ndata: {}\n\n');
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    await act(async () => { renderer = create(createElement(StewardConversation, { token: 'reader-token', failure: null, deferSessionOpen: true }), { createNodeMock: () => ({ scrollIntoView() {} }) }); await tick(); });
+    assert.equal(sessions, 0);
+    assert.equal(renderer!.root.findByType('textarea').props.disabled, false);
+    await act(async () => renderer!.root.findByType('textarea').props.onChange({ target: { value: 'Explicit question' } }));
+    await act(async () => { renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(sessions, 1);
+    assert.equal(sends, 0);
+    assert.equal(renderer!.root.findByType('textarea').props.disabled, true);
+    await act(async () => { release(json({ session_id: 'reader' })); await tick(); });
+    assert.equal(sends, 1);
+  } finally {
+    await act(async () => renderer?.unmount()); globalThis.fetch = saved;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});
+
+test('a delayed session open from the prior token never sends into the new owner context', async () => {
+  const saved = globalThis.fetch;
+  const oldLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://localhost' } });
+  let renderer: ReactTestRenderer | undefined;
+  let release!: (response: Response) => void;
+  let sessions = 0;
+  const messages: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    if (path.endsWith('/sessions')) return ++sessions === 1 ? new Promise<Response>(resolve => { release = resolve; }) : json({ session_id: 'new-reader' });
+    if (/\/sessions\/[^/]+$/.test(path)) return json({ messages: [] });
+    if (path.endsWith('/turns')) { messages.push(JSON.parse(String(init?.body)).message); return json({ turn_id: 'new-turn', events_url: '/api/chat/sessions/new-reader/turns/new-turn/events' }); }
+    if (path.endsWith('/events')) return new Response('event: turn.completed\ndata: {}\n\n');
+    throw new Error(`unexpected request: ${path}`);
+  };
+  try {
+    await act(async () => { renderer = create(createElement(StewardConversation, { token: 'old-token', failure: null, deferSessionOpen: true }), { createNodeMock: () => ({ scrollIntoView() {} }) }); });
+    await act(async () => renderer!.root.findByType('textarea').props.onChange({ target: { value: 'Old question' } }));
+    await act(async () => { renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); });
+    await act(async () => { renderer!.update(createElement(StewardConversation, { token: 'new-token', failure: null, deferSessionOpen: true })); await tick(); });
+    assert.equal(renderer!.root.findByType('textarea').props.value, '');
+    await act(async () => renderer!.root.findByType('textarea').props.onChange({ target: { value: 'New question' } }));
+    await act(async () => { renderer!.root.findByType('form').props.onSubmit({ preventDefault() {} }); await tick(); });
+    await act(async () => { release(json({ session_id: 'old-reader' })); await tick(); });
+    assert.deepEqual(messages, ['New question']);
+  } finally {
+    await act(async () => renderer?.unmount()); globalThis.fetch = saved;
+    if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
+  }
+});

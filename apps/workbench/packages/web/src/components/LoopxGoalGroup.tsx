@@ -1,60 +1,68 @@
 import { useEffect, useRef, useState } from 'react';
-import '../loopx/loopx.css';
 import { fetchGoalBar, goalOf, statusWord, type GoalBarRead } from '../loopx/launch';
-import { wakeOwner } from '../loopx/session';
+import type { LoopxAttention, LoopxGoal } from '../loopx/status';
 import type { Thread } from '../api';
 import { t } from '../i18n';
+import { GoalDetails } from './GoalDetails';
+import { GoalLifecycle } from './GoalLifecycle';
 import { IconCrab } from './icons';
 
-const WAKE_WORDS = { app: 'loopx.panel.wake.app', cli: 'loopx.panel.wake.cli', ide: 'loopx.panel.wake.ide', workbench: 'loopx.panel.wake.workbench', unknown: 'loopx.panel.wake.unknown' } as const;
-
-/**
- * The Goal a conversation is on, first in the session panel: its name and where it stands, what
- * is being done now, who has open work, and who wakes it. The conversation page itself carries no
- * Goal strip. A Goal the core no longer has is only named, struck through.
- */
-export function LoopxGoalGroup({ token, thread, onOpenGoal }: { token: string | undefined; thread: Thread; onOpenGoal: (goalId: string) => void }) {
+/** The current Goal stays compact and can be managed without leaving the conversation. */
+export function LoopxGoalGroup({ token, thread, goal, attention, onChanged, threads = [thread], onBrowseFiles = () => {}, initiallyExpanded = false, onExpandedChange }: {
+  token: string | undefined; thread: Thread; goal?: LoopxGoal; attention?: LoopxAttention;
+  onChanged: () => void; threads?: Thread[]; onBrowseFiles?: (threadId: string) => void; initiallyExpanded?: boolean; onExpandedChange?: (threadId: string, expanded: boolean) => void;
+}) {
   const info = thread.loopxInfo;
   const bound = Boolean(goalOf(thread));
   const [read, setRead] = useState<GoalBarRead | null>(null);
-  const alive = useRef(true);
-  // The core moves on its own (its heartbeat advances the Goal with no turn here), so the panel polls while it is open.
+  const [expanded, setExpanded] = useState(initiallyExpanded);
+  useEffect(() => { setExpanded(initiallyExpanded); }, [thread.id, info?.goalId, initiallyExpanded]);
+  useEffect(() => { onExpandedChange?.(thread.id, expanded); }, [thread.id, expanded, onExpandedChange]);
+  const [revision, setRevision] = useState(0);
+  // A scoped effect rejects late reads from a previous conversation or lifecycle refresh.
   useEffect(() => {
-    if (!info || info.missing || !bound) { setRead(null); return; }
-    alive.current = true;
-    const load = () => { fetchGoalBar(token, thread.id).then((next) => { if (alive.current) setRead(next); }, () => { if (alive.current) setRead(null); }); };
+    setRead(null);
+    if (!info || info.missing || !bound) return;
+    let active = true;
+    const load = () => { void fetchGoalBar(token, thread.id, revision > 0).then(
+      next => { if (active) setRead(next); },
+      () => { if (active) setRead({ binding: goalOf(thread)!, state: null, freshness: 'unavailable', observedAt: '' }); },
+    ); };
     load();
     const timer = setInterval(load, 20000);
-    return () => { alive.current = false; clearInterval(timer); };
-  }, [thread.id, token, info?.goalId, info?.missing, bound]);
-  const wasRunning = useRef(thread.status === 'running');
+    return () => { active = false; clearInterval(timer); };
+  }, [thread.id, token, info?.goalId, info?.missing, bound, revision]);
+  const wasRunning = useRef({ id: thread.id, running: thread.status === 'running' });
   useEffect(() => {
-    if (wasRunning.current && thread.status !== 'running' && bound && info && !info.missing) fetchGoalBar(token, thread.id, true).then((next) => { if (alive.current) setRead(next); }, () => undefined);
-    wasRunning.current = thread.status === 'running';
-  }, [thread.status]);
-  if (!info) return null;
+    if (wasRunning.current.id === thread.id && wasRunning.current.running && thread.status !== 'running' && bound && !info?.missing) setRevision(value => value + 1);
+    wasRunning.current = { id: thread.id, running: thread.status === 'running' };
+  }, [thread.id, thread.status, bound, info?.missing]);
+  if (!info?.goalId) return null;
 
   const state = read?.state ?? null;
-  const title = state && state.title !== info.goalId ? state.title : info.goalTitle;
-  const open = (g: { open: number; total: number } | undefined) => g ? `${g.open}/${g.total}` : '—';
-  return (
-    <section className="overview-group open loopx-group" aria-label={t('loopx.panel.title')}>
-      <div className="overview-head">
-        <div className="overview-toggle loopx-group-head">
-          <span className="overview-head-icon"><IconCrab size={14} /></span>
-          <strong>{t('loopx.panel.title')}</strong>
-          <span className="overview-summary">{info.missing ? t('sidebar.loopxDeleted') : state ? statusWord(state.status) : ''}</span>
-        </div>
+  const title = goal?.title ?? (state && state.title !== info.goalId ? state.title : info.goalTitle);
+  const total = state ? state.agentTodos.total + state.userTodos.total : attention ? attention.agentTodos.total + attention.userTodos.total : null;
+  const done = state ? state.agentTodos.total + state.userTodos.total - state.agentTodos.open - state.userTodos.open : attention ? attention.agentTodos.done + attention.userTodos.done : null;
+  const summary = state?.summary ?? attention?.topTodo?.text ?? attention?.nextAction;
+  const changed = () => { setRevision(value => value + 1); onChanged(); };
+  return <section className="overview-group open loopx-group" aria-label={t('loopx.panel.title')}>
+    <div className="overview-head">
+      <div className="overview-toggle loopx-group-head">
+        <span className="overview-head-icon"><IconCrab size={14} /></span>
+        <strong className={`loopx-group-name${info.missing ? ' gone' : ''}`} title={title}>{title}</strong>
+        <span className="overview-summary">{info.missing ? t('sidebar.loopxDeleted') : goal?.activationState === 'stopped' ? t('loopx.stoppedShort') : state || goal ? statusWord(state?.status ?? goal!.status) : ''}</span>
       </div>
-      <div className="overview-body loopx-group-body">
-        <div className={`loopx-group-name${info.missing ? ' gone' : ''}`} title={info.goalId}>{title}</div>
-        {!info.missing && state?.summary && <div className="loopx-group-line"><span>{t('loopx.panel.current')}</span><span className="loopx-group-value" title={state.summary}>{state.summary}</span></div>}
-        {!info.missing && state && <div className="loopx-group-line"><span>{t('loopx.panel.todos')}</span><span className="loopx-group-value">{t('loopx.goal.agentTodos')} {open(state.agentTodos)} · {t('loopx.goal.yourTodos')} {open(state.userTodos)}</span></div>}
-        {!info.missing && <div className="loopx-group-line"><span>{t('loopx.panel.heartbeat')}</span><span className="loopx-group-value">{t('loopx.panel.wakenBy', t(WAKE_WORDS[wakeOwner(info, thread.origin)]))}</span></div>}
-        {!info.missing && bound && !read && <p className="loopx-group-note" role="status">{t('loopx.goal.reading')}</p>}
-        {!info.missing && read?.freshness === 'unavailable' && <p className="loopx-group-note" role="status">{t('loopx.goal.stateUnavailable')}</p>}
-        {!info.missing && <button type="button" className="overview-more loopx-group-open" onClick={() => onOpenGoal(info.goalId)}>{t('loopx.panel.openGoal')}</button>}
+    </div>
+    {!info.missing && <div className="overview-body loopx-group-body">
+      {summary && <div className="overview-goal-summary" title={summary}>{summary}</div>}
+      {total !== null && done !== null && <div className="loopx-group-line">{t('loopx.overview.todoProgress', done, total)}</div>}
+      {bound && !read && !goal && <p className="loopx-group-note" role="status">{t('loopx.goal.reading')}</p>}
+      {read?.freshness === 'unavailable' && <p className="loopx-group-note" role="status">{t('loopx.goal.stateUnavailable')}</p>}
+      <div className="overview-goal-actions">
+        {goal && (goal.activationState === 'active' || goal.activationState === 'stopped') && <GoalLifecycle token={token} goal={goal} onChanged={changed} />}
+        <button type="button" className="overview-more loopx-group-open" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{t(expanded ? 'loopx.panel.closeGoal' : 'loopx.panel.openGoal')}</button>
       </div>
-    </section>
-  );
+      {expanded && <GoalDetails key={info.goalId} token={token} goalId={info.goalId} goal={goal} threads={threads} refreshKey={revision} onBrowseFiles={onBrowseFiles} onOpenConversation={() => setExpanded(false)} />}
+    </div>}
+  </section>;
 }
