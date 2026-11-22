@@ -303,11 +303,20 @@ candidates as immutable prereleases for explicit verification. Test a Runtime
 candidate with `loopx update check --ref <source-sha>` and the corresponding
 `apply` command in a qualification installation. A signed Desktop candidate
 uses the immutable release for its exact build.
-The automatic `runtime-main` and `desktop-main` feeds continue serving their
-published defaults until `public_channel` in
-`loopx/cli_commands/public_default_contract.json` names the reviewed profile.
-Promote C1 by reviewing that policy change with the supported installation,
-adoption, matched outcome, and complete-cost evidence under RFC §9.
+The Runtime and Desktop update channels use the same reviewed `public_channel`
+in `loopx/cli_commands/public_default_contract.json` for main and stable.
+The named release uploader verifies the stable Runtime archive and its
+qualification against the release source before uploading any package assets.
+A held stable Runtime fails that upload and therefore blocks its PyPI job.
+Desktop uploads the exact tagged build for verification and keeps
+`desktop-stable` on its published profile until the gate passes.
+Archive updaters shipped before this cutover still resolve stable through
+GitHub Latest. Before setting a product release as Latest, run
+`python scripts/release_artifacts.py check-stable-runtime --dist-dir dist`
+against the qualified bundle. Keep C1 candidates on their immutable main
+revision while the stable gate is held. Promote C1 by reviewing the policy
+change with the supported installation, adoption, matched outcome and
+complete-cost evidence under RFC §9.
 Desktop packaging observes its actual archived source
 through the same probe and support validator. Runtime updates reject an unsupported
 declared contract before downloading or activating it, and bind the archive's
@@ -328,9 +337,15 @@ comparison under [RFC §9](../architecture/rfcs/controller-executor-unified-cont
 通过工程资格的 main 候选可从不可变预发布版本取得，供显式验证。用
 `loopx update check --ref <source-sha>` 和对应的 `apply` 命令在资格验证安装中测试
 Runtime 候选。签名 Desktop 候选使用其精确构建的不可变发布。
-`runtime-main` 和 `desktop-main` 自动更新渠道继续提供已发布的默认契约，直到
-`loopx/cli_commands/public_default_contract.json` 的 `public_channel` 指向通过评审的
-profile。推进 C1 时，按 RFC §9 一并评审受支持的安装、采用、匹配成果和完整成本。
+Runtime 与 Desktop 的 main 和 stable 更新渠道共用
+`loopx/cli_commands/public_default_contract.json` 中通过评审的 `public_channel`。
+正式版本的上传步骤先核对 stable Runtime 归档、安装资格回执与版本来源，再上传包制品。
+stable Runtime 资格未通过时，上传失败，其 PyPI 任务也不会执行。
+Desktop 保留按具体标签验证的签名构建，`desktop-stable` 继续提供已发布的契约。
+切换前已安装的归档更新器经 GitHub Latest 解析 stable。将正式版本设为 Latest 前，
+对合格制品执行 `python scripts/release_artifacts.py check-stable-runtime --dist-dir dist`。
+stable 门禁未通过时，继续通过不可变的 main 提交验证 C1 候选。推进 C1 时，按
+RFC §9 一并评审受支持的安装、采用、匹配成果和完整成本。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
 已发布的 `v2.4.0` 标签保留 `quota_packet`。新的 runtime 和 Desktop 构建只为

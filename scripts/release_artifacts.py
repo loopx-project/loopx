@@ -199,9 +199,50 @@ def publication_files(dist_dir: Path, identity: ReleaseIdentity) -> tuple[Path, 
     return tuple(files)
 
 
+def require_stable_runtime_publication(dist_dir: Path, identity: ReleaseIdentity) -> None:
+    # Resolve the policy from the reviewed publication tooling. The selected tag
+    # supplies data and attested bytes, while package identity stays a static read.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from loopx.cli_commands.update_artifact import (
+            HISTORICAL_DEFAULT_CONTRACT,
+            public_channel_allows_default,
+            validate_published_manifest,
+            validate_manifest,
+            verify_runtime_installation_qualification,
+        )
+    finally:
+        sys.path.pop(0)
+
+    runtime = dist_dir / "runtime"
+    try:
+        raw = json.loads((runtime / "loopx-runtime.json").read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("default_contract") == HISTORICAL_DEFAULT_CONTRACT:
+            manifest = validate_manifest(raw)
+        else:
+            manifest = validate_published_manifest(raw)
+        sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text(encoding="utf-8"))
+        revision = manifest["source_revision"]
+        if (
+            not isinstance(sources, dict)
+            or sources.get("product_tag") != identity.tag
+            or sources.get("product_commit") != revision
+            or manifest["package_version"] != identity.version
+        ):
+            raise ValueError("Bundle product identity differs from the stable runtime")
+        qualification = json.loads((runtime / "qualification.json").read_text(encoding="utf-8"))
+        archive = runtime / f"loopx-runtime-{revision}.tar.gz"
+        verify_runtime_installation_qualification(manifest, qualification, archive, channel="stable")
+        if not public_channel_allows_default(manifest["default_contract"]):
+            raise ValueError("Stable runtime is pending public channel qualification")
+    except (OSError, ValueError) as exc:
+        raise ReleaseArtifactError(str(exc)) from exc
+
+
 def upload_immutable(dist_dir: Path, identity: ReleaseIdentity, repo: str,
                      *, recover: bool = False, dry_run: bool = False) -> None:
     files = publication_files(dist_dir, identity)
+    require_stable_runtime_publication(dist_dir, identity)
     if recover:
         commit = gh("api", f"repos/{repo}/commits/{identity.tag}", "--jq", ".sha").decode().strip()
         sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text())
@@ -269,6 +310,9 @@ def build_parser() -> argparse.ArgumentParser:
     recovery.add_argument("--repo", required=True)
     recovery.add_argument("--run-id", required=True)
     recovery.add_argument("--commit", required=True)
+    stable = subparsers.add_parser("check-stable-runtime", help="check the tagged bundle before making it the stable default")
+    stable.add_argument("--dist-dir", type=Path, required=True)
+
     upload = subparsers.add_parser("upload-immutable", help="resume publication without replacing existing bytes")
     upload.add_argument("--repo", required=True)
     upload.add_argument("--dist-dir", type=Path, required=True)
@@ -298,6 +342,10 @@ def main(argv: list[str] | None = None) -> int:
             verify_manifest(args.dist_dir, args.checksum_file, identity)
         elif args.command == "verify-publication-run":
             verify_publication_run(args.repo, args.run_id, identity.tag, args.commit)
+        elif args.command == "check-stable-runtime":
+            publication_files(args.dist_dir, identity)
+            require_stable_runtime_publication(args.dist_dir, identity)
+            print(f"verified stable runtime publication policy for {identity.tag}")
         elif args.command == "upload-immutable":
             upload_immutable(args.dist_dir, identity, args.repo,
                              recover=args.recover, dry_run=args.dry_run)

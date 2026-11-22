@@ -367,6 +367,13 @@ class FeedTests(unittest.TestCase):
         self.assertIn(f"release upload {tag} dist/updater/desktop-updater.json --clobber", calls)
         self.assertFalse(any(call.split()[2] == "desktop-main" for call in calls))
 
+    def test_unqualified_c1_desktop_candidate_does_not_advance_stable_channel(self):
+        tag = "v1.2.4"
+        calls = self._run_upload_step("stable", "1.2.4", tag, False, channel_qualified=False)
+        self.assertIn(f"release upload {tag} dist/updater/LoopX.app.tar.gz", calls)
+        self.assertIn(f"release upload {tag} dist/updater/desktop-updater.json --clobber", calls)
+        self.assertFalse(any(call.split()[2] == "desktop-stable" for call in calls))
+
     def test_upload_step_rejects_main_without_windows_artifact(self):
         case_dir = self.root / "upload-main-missing"
         updater = case_dir / "dist" / "updater"

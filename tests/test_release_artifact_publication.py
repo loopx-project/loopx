@@ -9,6 +9,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from loopx.cli_commands import update_artifact
+from loopx.cli_commands.update_artifact import (
+    HISTORICAL_DEFAULT_CONTRACT,
+    PUBLIC_DEFAULT_CONTRACT,
+    QUALIFIED_DEFAULT_CONTRACT_FIELD,
+    RUNTIME_ARTIFACT_SCHEMA_VERSION,
+)
 
 SPEC = importlib.util.spec_from_file_location(
     "publication_artifacts", Path(__file__).parents[1] / "scripts/release_artifacts.py"
@@ -54,6 +61,33 @@ def test_colocated_artifact_cli_never_initializes_the_candidate(tmp_path, isolat
             assert "version mismatch" in result.stderr
 
 
+def stable_runtime(root, identity, *, current):
+    revision = "a" * 40
+    profile = PUBLIC_DEFAULT_CONTRACT if current else HISTORICAL_DEFAULT_CONTRACT
+    archive = root / "runtime" / f"loopx-runtime-{revision}.tar.gz"
+    archive.write_bytes(b"qualified runtime bytes")
+    manifest = {
+        "schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION,
+        "source_revision": revision,
+        "package_version": identity.version,
+        "channel": "stable",
+        "size": archive.stat().st_size,
+        "sha256": owner.sha256(archive),
+        "urls": [f"https://github.com/owner/repo/releases/download/{identity.tag}/{archive.name}"],
+        (QUALIFIED_DEFAULT_CONTRACT_FIELD if current else "default_contract"): profile,
+    }
+    (archive.parent / "loopx-runtime.json").write_text(json.dumps(manifest))
+    qualification = dict.fromkeys((
+        "ok", "clean_install", "upgrade", "doctor", "skills", "frontend_bundle_contract",
+        "frontend_http", "no_frontend_build_tools", "license_notices", "activation_failure_restored",
+    ), True)
+    qualification.update(
+        source_revision=revision, bytes=manifest["size"], sha256=manifest["sha256"],
+        channel="stable", default_contract=profile,
+    )
+    (archive.parent / "qualification.json").write_text(json.dumps(qualification))
+
+
 @pytest.fixture
 def bundle(tmp_path):
     identity = owner.ReleaseIdentity("loopx", "1.2.3")
@@ -61,7 +95,7 @@ def bundle(tmp_path):
     (tmp_path / "runtime").mkdir()
     for name in ["loopx-1.2.3-py3-none-any.whl", "loopx-1.2.3.tar.gz"]:
         (tmp_path / "packages" / name).write_bytes(name.encode())
-    (tmp_path / "runtime/qualification.json").write_bytes(b'{"ok":true}')
+    stable_runtime(tmp_path, identity, current=False)
     (tmp_path / "RELEASE-SOURCES.json").write_text(json.dumps({
         "product_tag": identity.tag, "product_commit": "a" * 40,
     }))
@@ -93,6 +127,38 @@ def transport(files, *, mismatch=False, wrong_case=False, attestation_failure=Fa
         return subprocess.CompletedProcess(argv, 0)
 
     return calls, gh, download
+
+
+def test_engineering_qualified_c1_cannot_reach_unqualified_stable_release(bundle):
+    root, identity = bundle
+    stable_runtime(root, identity, current=True)
+    calls, gh, download = transport([])
+    with patch.object(owner, "gh", gh), patch.object(owner.subprocess, "run", download):
+        with pytest.raises(owner.ReleaseArtifactError, match="pending public channel qualification"):
+            owner.upload_immutable(root, identity, "owner/repo")
+    assert not calls
+
+
+def test_adoption_qualified_c1_can_publish_stable_runtime(bundle, monkeypatch):
+    root, identity = bundle
+    stable_runtime(root, identity, current=True)
+    monkeypatch.setitem(update_artifact._ARTIFACT_DEFAULT_CONTRACTS, "public_channel", "current")
+    calls, gh, download = transport([])
+    with patch.object(owner, "gh", gh), patch.object(owner.subprocess, "run", download):
+        owner.upload_immutable(root, identity, "owner/repo")
+    uploads = [call for call in calls if call[:2] == ("release", "upload")]
+    assert len(uploads) == 1 and uploads[0][2] == identity.tag
+    assert str(root / "runtime/loopx-runtime.json") in uploads[0]
+
+
+def test_stable_runtime_refuses_changed_bytes_before_github(bundle):
+    root, identity = bundle
+    (root / "runtime" / ("loopx-runtime-" + "a" * 40 + ".tar.gz")).write_bytes(b"changed")
+    calls, gh, download = transport([])
+    with patch.object(owner, "gh", gh), patch.object(owner.subprocess, "run", download):
+        with pytest.raises(owner.ReleaseArtifactError, match="bytes differ"):
+            owner.upload_immutable(root, identity, "owner/repo")
+    assert not calls
 
 
 @pytest.mark.parametrize("dry_run", [True, False])

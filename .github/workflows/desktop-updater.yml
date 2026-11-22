@@ -296,15 +296,12 @@ jobs:
           # nullglob, Bash passes the unmatched pattern to `gh`, which exits
           # before the feed and channel pointer are published.
           shopt -s nullglob
-          channel_action=promote
-          if [ "$CHANNEL" = main ]; then
-            channel_action="$(python - <<'PY'
+          channel_action="$(python - <<'PY'
           from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, public_channel_allows_default
 
           print("promote" if public_channel_allows_default(PUBLIC_DEFAULT_CONTRACT) else "hold")
           PY
-            )"
-          fi
+          )"
           if [ "$EVENT_NAME" != release ]; then
             gh release create "$RELEASE_TAG" --prerelease --latest=false --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime candidate for exact-revision qualification."
           fi

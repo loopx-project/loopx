@@ -168,6 +168,30 @@ def public_channel_allows_default(observed: dict[str, Any]) -> bool:
     return observed == _ARTIFACT_DEFAULT_CONTRACTS[approved]
 
 
+def verify_runtime_installation_qualification(
+    manifest: dict[str, Any], qualification: dict[str, Any], archive: Path, *, channel: str,
+) -> None:
+    checks = (
+        "ok", "clean_install", "upgrade", "doctor", "skills", "frontend_bundle_contract",
+        "frontend_http", "no_frontend_build_tools", "license_notices", "activation_failure_restored",
+    )
+    if not isinstance(qualification, dict) or any(qualification.get(check) is not True for check in checks):
+        raise ValueError("Runtime installation qualification is missing or failed")
+    if manifest.get("default_contract") is None or qualification.get("default_contract") != manifest["default_contract"]:
+        raise ValueError("Runtime default-contract qualification is missing or mismatched")
+    if manifest.get("channel") != channel or any(
+        qualification.get(key) != manifest[key] for key in ("source_revision", "channel", "sha256")
+    ):
+        raise ValueError("Runtime qualification does not match the candidate")
+    if (
+        type(qualification.get("bytes")) is not int
+        or qualification["bytes"] != manifest["size"]
+        or archive.stat().st_size != manifest["size"]
+        or file_hash(archive) != manifest["sha256"]
+    ):
+        raise ValueError("Qualified runtime bytes differ from the candidate")
+
+
 def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
     if not REPOSITORY_PATTERN.fullmatch(repo):
         raise ValueError("Update repo must use GitHub owner/name syntax")
