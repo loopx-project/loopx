@@ -12,6 +12,8 @@ import { PiRpcAdapter, PI_METADATA } from './adapters/pi.js';
 import { TraexAcpAdapter, TRAEX_METADATA } from './adapters/traex.js';
 import type { AgentAdapter, DiscoveredAccount, LoginSession } from './adapters/types.js';
 import { HttpError } from './errors.js';
+import { OAR_AGENTS, OarAdapter, isOarAgent, type OarAgentId } from './adapters/oar.js';
+import { isWorkbenchDependency } from './adapters/session-location.js';
 
 /**
  * One configured agent instance: an adapter (how to talk to it) plus everything that makes this
@@ -21,7 +23,7 @@ import { HttpError } from './errors.js';
 export interface AgentInstance {
   /** What threads store; also the key in the adapter map. */
   id: string;
-  adapter: 'claude' | 'pi' | 'agy' | 'traex' | 'codex' | 'zcode' | 'dsh';
+  adapter: 'claude' | 'pi' | 'agy' | 'traex' | 'codex' | 'zcode' | 'dsh' | OarAgentId;
   label?: string;
   /** Hidden from the new-thread picker; threads and settings keep working. */
   hidden?: boolean;
@@ -57,6 +59,7 @@ const ADAPTER_LABELS: Record<AgentInstance['adapter'], string> = {
   codex: 'Codex',
   zcode: 'ZCode',
   dsh: 'DeepSeek Harness',
+  ...Object.fromEntries(OAR_AGENTS.map(agent => [agent.adapter, agent.label])) as Record<OarAgentId, string>,
 };
 
 /** How each adapter is built. One line per protocol; instances differ only in command and env. */
@@ -68,7 +71,8 @@ function buildAdapter(
   const command = instance.command ?? defaults.get(instance.adapter) ?? [];
   const env = instance.env ?? {};
   let adapter: AgentAdapter;
-  switch (instance.adapter) {
+  if (isOarAgent(instance.adapter)) adapter = new OarAdapter(instance.adapter, command, env);
+  else switch (instance.adapter) {
     case 'claude':
       adapter = new ClaudeAcpAdapter(command, env);
       break;
@@ -122,6 +126,7 @@ export interface SupportedAgent {
   label: string;
   icon?: string;
   installGuide?: string;
+  installUrl?: string;
   capabilities?: { createAccount: boolean; streamBridge?: AgentAdapter['capabilities']['streamBridge'] };
 }
 
@@ -133,6 +138,7 @@ export const SUPPORTED_AGENTS: SupportedAgent[] = [
   TRAEX_METADATA,
   ZCODE_METADATA,
   DSH_METADATA,
+  ...OAR_AGENTS.map(({ binary: _binary, ...meta }) => meta),
 ];
 
 /** An executable on PATH that looks like another copy of a known agent CLI. */
@@ -141,7 +147,7 @@ export interface DiscoveredAgent {
   id: string;
   adapter: AgentInstance['adapter'];
   /** The absolute path found on PATH. */
-  command: string;
+  command?: string;
   label?: string;
   icon?: string;
 }
@@ -164,6 +170,7 @@ export interface AccountToLink {
  * does not turn another tool into a copy.
  */
 const KNOWN_PREFIXES: Array<[AgentInstance['adapter'], RegExp]> = [
+  ...OAR_AGENTS.flatMap(agent => agent.binary ? [[agent.adapter, copyOf(agent.binary)] as [OarAgentId, RegExp]] : []),
   ['claude', copyOf('claude')],
   ['pi', copyOf('pi')],
   ['agy', copyOf('agy')],
@@ -188,6 +195,7 @@ const PREFERRED_NAMES: Record<AgentInstance['adapter'], string[]> = {
   codex: ['codex'],
   zcode: ['zcode'],
   dsh: ['dsh'],
+  ...Object.fromEntries(OAR_AGENTS.map(agent => [agent.adapter, agent.binary ? [agent.binary] : []])) as Record<OarAgentId, string[]>,
 };
 
 /**
@@ -580,7 +588,7 @@ export class AgentRegistry {
    * to the same executable are listed once, and an executable an instance already runs (including
    * through a path argument such as Claude's ACP bridge) is not offered again.
    */
-  async discover(): Promise<DiscoveredAgent[]> {
+  async discover(includeBundled = true): Promise<DiscoveredAgent[]> {
     const dirs = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
     const taken = new Set(this.instances.keys());
     const takenPaths = new Set<string>();
@@ -618,7 +626,7 @@ export class AgentRegistry {
           continue;
         }
         seen.add(name);
-        if (takenPaths.has(realPath)) continue;
+        if (takenPaths.has(realPath) || isWorkbenchDependency(realPath)) continue;
         const meta = SUPPORTED_AGENTS.find((s) => s.adapter === adapter);
         const candidate: DiscoveredAgent = {
           id: name,
@@ -632,6 +640,14 @@ export class AgentRegistry {
           found.set(realPath, candidate);
         }
       }
+    }
+    // SDK runtimes and vendor installations outside PATH use the same add flow.
+    for (const meta of OAR_AGENTS) {
+      if ((!includeBundled && !meta.binary) || this.instances.has(meta.adapter) || [...found.values()].some(item => item.adapter === meta.adapter)) continue;
+      const installed = await new OarAdapter(meta.adapter).discoverInstallation();
+      if (installed?.command && takenPaths.has(realPathOf(installed.command))) continue;
+      if (!meta.binary && [...this.instances.values()].some(instance => instance.adapter === meta.adapter)) continue;
+      if (installed) found.set(`oar:${meta.adapter}`, { id: meta.adapter, adapter: meta.adapter, label: meta.label, ...installed });
     }
     return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
@@ -648,10 +664,10 @@ export class AgentRegistry {
   async autoJoin(): Promise<AgentInstance[]> {
     if (!this.file) return [];
     const added: AgentInstance[] = [];
-    for (const found of await this.discover()) {
-      if (this.removed.paths.includes(realPathOf(found.command))) continue;
+    for (const found of await this.discover(false)) {
+      if (found.command && this.removed.paths.includes(realPathOf(found.command))) continue;
       try {
-        added.push(await this.add({ id: this.freeId(found.id), adapter: found.adapter, command: [found.command] }));
+        added.push(await this.add({ id: this.freeId(found.id), adapter: found.adapter, ...(found.command ? { command: [found.command] } : {}) }));
       } catch (error) {
         console.warn(`warning: could not auto-join ${found.id}: ${error instanceof Error ? error.message : error}`);
       }

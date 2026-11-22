@@ -12971,7 +12971,6 @@ button.trace-step-head:hover { background: var(--hover); }
 }
 
 .onboard-row-uninstalled {
-  opacity: 0.55;
   background: var(--surface-2);
   cursor: default;
 }
@@ -13015,6 +13014,8 @@ button.trace-step-head:hover { background: var(--hover); }
   white-space: nowrap;
   font-family: var(--mono);
 }
+
+.onboard-item-hint a { color: var(--text); display: inline-flex; align-items: center; min-height: 24px; }
 
 .onboard-badge {
   flex-shrink: 0;

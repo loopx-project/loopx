@@ -816,6 +816,7 @@ export interface AgentInfo {
   /** The login this instance runs as, when it is a linked account (an email). */
   account?: string | null;
   available: boolean;
+  unavailableReason?: string;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
   /** In-progress wizard login that can be resumed after navigation. */
@@ -862,7 +863,8 @@ export interface AgentLogin {
   id: string;
   status: 'starting' | 'waiting' | 'submitting' | 'success' | 'error' | 'cancelled';
   url?: string;
-  input?: 'code-or-url';
+  input?: 'code-or-url' | 'none';
+  userCode?: string;
   error?: 'failed' | 'expired' | 'unavailable' | 'verification';
 }
 
@@ -871,6 +873,7 @@ export interface SupportedAgent {
   label: string;
   icon?: string;
   installGuide?: string;
+  installUrl?: string;
   capabilities?: { createAccount: boolean; streamBridge?: StreamBridgeCapability };
 }
 

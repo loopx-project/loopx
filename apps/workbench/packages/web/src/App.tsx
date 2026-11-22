@@ -2539,7 +2539,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // Adds a discovered CLI as its own instance and selects it for the new thread.
   const addDiscoveredAgent = async (found: DiscoveredAgent) => {
     if (!api) return;
-    await api.addAgent({ id: found.id, adapter: found.adapter, command: [found.command] });
+    await api.addAgent({ id: found.id, adapter: found.adapter, ...(found.command ? { command: [found.command] } : {}) });
     const [list, more] = await Promise.all([api.agents(), api.discoverAgents()]);
     setAgents(list);
     setDiscovered(more);
