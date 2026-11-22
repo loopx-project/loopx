@@ -766,3 +766,25 @@ def test_combined_compact_direct_read_and_epoch_prefetch_generated_hook_lifecycl
     assert fail_out["epochPrefetch"]["operator"] == "KeepRaw"
     assert "todo_combo" in fail_out["additionalContext"]
     assert "Prefetch fallback notice (KeepRaw)" in fail_out["additionalContext"]
+
+
+def test_read_json_pointers_paginated_fails_closed_over_pointer_cap(tmp_path: Path) -> None:
+    capture = tmp_path / "capture-overcap.json"
+    payload = {f"k{idx}": idx for idx in range(direct_read.MAX_POINTERS_PER_HOOK)}
+    digest, _ = _write_private_json(capture, payload)
+
+    # 24 valid pointers + 25th nonexistent pointer MUST fail closed rather than silently
+    # truncating to 24 and reporting ok=True, eof=True.
+    requested = [f"/k{idx}" for idx in range(direct_read.MAX_POINTERS_PER_HOOK)] + ["/nonexistent_25th"]
+    ok, result, decoded = direct_read.read_json_pointers_paginated(
+        capture,
+        digest,
+        pointers=requested,
+        require_all_pointers=True,
+    )
+    assert ok is False
+    assert decoded is None
+    assert result["ok"] is False
+    assert result["eof"] is False
+    assert result["reason"] == "too_many_json_pointers"
+    assert result["requested_count"] == direct_read.MAX_POINTERS_PER_HOOK + 1
