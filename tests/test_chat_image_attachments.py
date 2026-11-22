@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from loopx.chat_attachments import normalize_chat_image_attachments
-from loopx.chat_attachments import CHAT_TURN_MAX_BODY_BYTES, validate_chat_turn_envelope
+from loopx.chat.attachments import normalize_chat_image_attachments
+from loopx.chat.attachments import CHAT_TURN_MAX_BODY_BYTES, validate_chat_turn_envelope
 
 
 PNG_BYTES = base64.b64decode(

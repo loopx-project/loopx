@@ -9,7 +9,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ...chat_attachments import CHAT_IMAGE_MAX_COUNT
+from ...chat.attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...capabilities.native_chat.file_discovery import (

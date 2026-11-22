@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from .chat import (
+from ..chat import (
     CHAT_REVIEW_CLOSE_TAG,
     CHAT_REVIEW_OPEN_TAG,
     VisibleResponseStreamFilter,
@@ -20,7 +20,7 @@ from .chat import (
     parse_agent_response,
     redact_local_paths,
 )
-from .chat_agent import (
+from ..chat_agent import (
     CodexChatAgentError,
     CodexChatTimeoutError,
     _host_tool_gate,

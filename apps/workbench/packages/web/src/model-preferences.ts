@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import type { Api } from './api';
-import { applyModelPreference, type DraftModelPreferences, type ModelPreferencePatch } from '../../daemon/src/model-preferences';
+import { applyModelPreference, type DraftModelPreference, type DraftModelPreferences, type ModelPreferencePatch } from '../../daemon/src/model-preferences';
+
+export { applyModelPreference, type DraftModelPreference, type DraftModelPreferences, type ModelPreferencePatch };
 
 /** The daemon owns preferences. Pending explicit edits are replayed over its last answer. */
 export function useModelPreferences(api: Api, onError: (error: unknown) => void) {

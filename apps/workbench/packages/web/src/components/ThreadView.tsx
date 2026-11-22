@@ -11,7 +11,7 @@ import { threadLinkIndex, threadMentions, trimAutolinkJunk, type ThreadLinkIndex
 import { placeImages, stripPaths } from '../image-places';
 import { highlightLanguage, languageName } from '../code-language';
 import { enlargeMermaidDiagram, renderMermaidDiagram } from '../mermaid';
-import { copyRich, copyText, quoteMarkdown } from '../clipboard';
+import { copyRich, copyText, quoteMarkdown, rememberCopiedQuote } from '../clipboard';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { diffLines, numberLines } from '../diff';
@@ -152,7 +152,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
   useEffect(() => { setSelection(null); setContextMenu(null); }, [historyThreadId]);
   const actionsFor = (text: string, turnId: string, element?: HTMLElement): MessageAction[] => [
     { key: 'copy', label: t('view.copyAnswer'), icon: IconCopy, run: async () => { if (!await copyText(text)) throw new Error(t('view.copyFailed')); } },
-    { key: 'copyQuote', label: t('view.copyQuote'), icon: IconClipboard, run: async () => { if (!await copyRich(quoteMarkdown(text), quoteHtml(text))) throw new Error(t('view.copyFailed')); } },
+    { key: 'copyQuote', label: t('view.copyQuote'), icon: IconClipboard, run: async () => { if (!await copyRich(quoteMarkdown(text), quoteHtml(text))) throw new Error(t('view.copyFailed')); rememberCopiedQuote({ text, turnId, host: historyApi?.host ?? null, ...(historyThreadId ? { threadId: historyThreadId } : {}) }); } },
     ...(onQuote ? [{ key: 'quote', label: t('references.quote'), icon: IconQuote, run: () => onQuote(text, turnId, historyThreadId) }] : []),
     ...(onHandToAssistant ? [{ key: 'assistant', label: t('messageActions.assistant'), icon: IconSparkle, run: () => onHandToAssistant(text, turnId, historyThreadId) }] : []),
     ...(onMessageContext ? [{ key: 'context', label: t('messageActions.context'), icon: IconPaperclip, run: () => onMessageContext(text, turnId, historyThreadId) }] : []),
@@ -973,7 +973,7 @@ function MarkdownLink({ href, title, children }: { href?: string; title?: string
         role="button"
         tabIndex={0}
         title={title ?? t('view.openThread')}
-        onClick={open}
+        onClick={event => { event.currentTarget.focus({ preventScroll: true }); open(); }}
         onKeyDown={(e: KeyboardEvent) => {
           if (e.key !== 'Enter' && e.key !== ' ') return;
           e.preventDefault();

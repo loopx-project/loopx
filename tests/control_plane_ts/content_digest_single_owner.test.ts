@@ -167,6 +167,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/quota/settlement_readback.ts",
   "control_plane/quota/stage_then_swap.ts",
   "control_plane/quota/turn_envelope.ts",
+  "control_plane/quota/turn_envelope_references.ts",
   "control_plane/runtime/checkpoint_artifacts.ts",
   "control_plane/runtime/checkpoint_retention.ts",
   "control_plane/runtime/execution_identity.ts",

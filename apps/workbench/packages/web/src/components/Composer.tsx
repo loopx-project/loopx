@@ -1,3 +1,4 @@
+import { pastedQuote } from '../clipboard';
 import { referencePreview, mergeReferences, splitReferences, withReferences, type ContextReference } from '../context-references';
 import { ReferenceChips, ReferencePicker, type ReferenceSource } from './ContextReferences';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
@@ -10,7 +11,7 @@ import { sizeLabel } from '../files';
 import { mentionAt } from '../mentions';
 import { takeoverMention } from '../handover';
 import { MAX_IMAGES, prepareImage, restoreImage, type PreparedImage } from '../images';
-import { channelRows, splitNotes, withNotes, type Note } from '../timeline';
+import { channelRows, splitNotes, withNotes, type Note, type NoteSource } from '../timeline';
 import { Popover } from './Popover';
 import { ComposerMenu, goalMenuActions, type GoalAction, type GoalCapability, type WritingMode } from './ComposerMenu';
 import { GoalCard } from './GoalCard';
@@ -209,6 +210,8 @@ interface Props {
   onNoteConsumed?: (id: string) => void;
   /** Told which notes are in the box, so their passages can stay highlighted in the conversation. */
   onNotesChange?: (notes: DraftNote[]) => void;
+  /** Resolve provenance only when the pasted quote belongs to this machine. */
+  quoteSource?: (threadId: string, turnId: string, host?: string | null) => NoteSource | undefined;
   /** The thread's latest message from the user, as it was sent; null when there is none or it is not known yet. */
   lastSent?: { turnId: string; text: string } | null;
 }
@@ -265,6 +268,7 @@ export function Composer({
   note,
   onNoteConsumed,
   onNotesChange,
+  quoteSource,
   lastSent = null,
   mentionOptions = [],
   collaboration,
@@ -996,7 +1000,13 @@ export function Composer({
     if (files.length) {
       e.preventDefault();
       void addFiles(files);
+      return;
     }
+    const quote = pastedQuote(e.clipboardData.getData('text/plain'));
+    if (!quote) return;
+    e.preventDefault();
+    const source = quote.threadId && quote.turnId ? quoteSource?.(quote.threadId, quote.turnId, quote.host) : undefined;
+    setNotes(previous => [...previous, { id: noteId(), quote: quote.text, comment: '', ...(source ? { source } : {}) }]);
   };
 
   const hasFiles = (e: DragEvent) => [...e.dataTransfer.types].includes('Files');

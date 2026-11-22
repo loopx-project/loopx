@@ -3,7 +3,7 @@ if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'
 // ZCode's strict NDJSON protocol: no jsonrpc field, reverse runtime preferences, native events.
 import { DatabaseSync } from 'node:sqlite';
 import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { existsSync, appendFileSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { coordinationFixture } from './coordination.mjs';
@@ -48,6 +48,7 @@ async function handle(message) {
   if (!message.method) { pending.get(message.id)?.(message.result); pending.delete(message.id); return; }
   const { id, method, params: p = {} } = message;
   if (process.env.FAKE_ZCODE_LOG) appendFileSync(process.env.FAKE_ZCODE_LOG, JSON.stringify({ method, params: p }) + '\n');
+  if (process.env.FAKE_LOGIN_FILE && !existsSync(process.env.FAKE_LOGIN_FILE)) return error(id, 'Not logged in');
   switch (method) {
     case 'provider/updateAccountConfig': {
       const path = process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;

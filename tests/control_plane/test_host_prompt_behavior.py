@@ -176,3 +176,46 @@ def test_attempted_failure_is_not_reported_as_environment_skip(monkeypatch, caps
     result = capsys.readouterr().out
     assert "private provider" not in result
     assert json.loads(result)["status"] == "failed"
+
+
+def test_release_probe_supports_deepseek_provider_and_fails_closed(monkeypatch, capsys):
+    script = Path(__file__).resolve().parents[2] / "scripts/qualify-host-prompt-release.py"
+    main = runpy.run_path(str(script))["main"]
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    assert main(["--release-live", "--provider", "deepseek"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "skipped"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only-unused")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://evil.example/v1")
+    assert main(["--release-live", "--provider", "deepseek"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"status": "failed", "reason": "probe_execution_failed"}
+
+    seen = []
+
+    def fake_probe(client, *, repeats):
+        seen.append((client.actor_ref, repeats))
+        return {"qualification_passed": True, "actor_ref": client.actor_ref, "provider_call_count": 0}
+
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setitem(main.__globals__, "run_probe", fake_probe)
+    assert main(["--release-live", "--provider", "deepseek", "--model", "deepseek-v4-pro", "--repeats", "1"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["actor_ref"] == "deepseek:deepseek-v4-pro"
+    assert seen == [("deepseek:deepseek-v4-pro", 1)]
+
+
+def test_probe_handles_dual_global_roots_and_json_fences(monkeypatch, tmp_path):
+    (tmp_path / ".loopx").mkdir()
+    (tmp_path / ".loopx" / "registry.global.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".codex" / "loopx").mkdir(parents=True)
+    (tmp_path / ".codex" / "loopx" / "registry.global.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    class FencedClient(ScriptedClient):
+        def next_final_content(self, messages):
+            return f"```json\n{super().next_final_content(messages)}\n```"
+
+    report = run_probe(FencedClient(), repeats=1)
+    assert report["qualification_passed"] is True
+    assert report["provider_call_count"] == 10
