@@ -89,7 +89,6 @@ class CappedProcessResult:
     returncode: int
     stdout: bytes
     failure_kind: str | None = None
-    stderr: bytes = b""
 
 
 def _wait_for_process(process: subprocess.Popen[bytes] | subprocess.Popen[str], timeout: float) -> bool:
@@ -714,5 +713,4 @@ def run_capped_process(
         returncode=returncode,
         stdout=bytes(stdout),
         failure_kind="timeout" if timed_out else limit_kind,
-        stderr=bytes(stderr),
     )

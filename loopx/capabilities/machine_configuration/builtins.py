@@ -32,11 +32,6 @@ _BUILTIN_NAMESPACES = (
         "goal_storage_machine_configuration_namespace",
     ),
     (
-        "goal_closeout",
-        "loopx.capabilities.goal_closeout.machine_defaults",
-        "goal_closeout_machine_configuration_namespace",
-    ),
-    (
         "manager_runtime",
         "loopx.capabilities.manager_runtime.machine_profile",
         "manager_runtime_machine_configuration_namespace",
