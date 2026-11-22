@@ -76,7 +76,54 @@ async function digest(path: string): Promise<string> {
   for await (const block of createReadStream(path)) hash.update(block);
   return hash.digest("hex");
 }
-async function members(root: string, sourceObservation: boolean): Promise<Member[]> {
+function normalizeComponentExclusions(
+  raw: unknown,
+  sources: readonly Component[],
+): Map<string, readonly string[]> {
+  const map = new Map<string, readonly string[]>();
+  if (raw === undefined) return map;
+  const record = requireJsonObject(raw, "checkpoint component_exclusions");
+  const ids = new Set(sources.map(entry => entry.id));
+  for (const [id, patternsRaw] of Object.entries(record)) {
+    if (!ids.has(id)) throw new Error("checkpoint component_exclusions references an unknown component");
+    if (!Array.isArray(patternsRaw) || patternsRaw.length === 0) {
+      throw new Error("checkpoint component_exclusions entries must be non-empty pattern lists");
+    }
+    const patterns = patternsRaw.map(item => {
+      const pattern = requireNonEmptyString(item, "checkpoint exclude pattern");
+      if (pattern.includes("\\") || pattern.includes("\0") || pattern.includes("..")) {
+        throw new Error("checkpoint exclude pattern contains unsupported characters");
+      }
+      const body = pattern.endsWith("/") ? pattern.slice(0, -1) : pattern;
+      if (!body || body.includes("/")) {
+        throw new Error("checkpoint exclude pattern must be a single name or suffix glob");
+      }
+      return pattern;
+    });
+    map.set(id, patterns);
+  }
+  return map;
+}
+function isExcludedEntry(relativeName: string, isDirectory: boolean, patterns: readonly string[]): boolean {
+  if (relativeName === "" || patterns.length === 0) return false;
+  const slash = relativeName.lastIndexOf("/");
+  const base = slash === -1 ? relativeName : relativeName.slice(slash + 1);
+  for (const pattern of patterns) {
+    if (pattern.endsWith("/")) {
+      if (isDirectory && base === pattern.slice(0, -1)) return true;
+    } else if (pattern.startsWith("*.")) {
+      if (!isDirectory && base.endsWith(pattern.slice(1))) return true;
+    } else if (base === pattern) {
+      return true;
+    }
+  }
+  return false;
+}
+async function members(
+  root: string,
+  sourceObservation: boolean,
+  excludePatterns: readonly string[] = [],
+): Promise<Member[]> {
   await physical(root);
   const output: Member[] = [];
   async function visit(path: string, name: string): Promise<void> {
@@ -94,6 +141,7 @@ async function members(root: string, sourceObservation: boolean): Promise<Member
         if (sourceObservation && name !== "" && stat.isFile() &&
             (await sqliteSidecar(path, ["-shm"]) ||
              (stat.size === 0 && await sqliteSidecar(path, ["-wal"])))) return [];
+        if (sourceObservation && isExcludedEntry(name, stat.isDirectory(), excludePatterns)) return [];
         if (stat.isDirectory()) {
           node.member = {path: name, kind: "directory", mode: stat.mode & 0o777};
           return (await readdir(path)).sort().map(child => {
@@ -125,9 +173,15 @@ async function members(root: string, sourceObservation: boolean): Promise<Member
   }
   return output;
 }
-async function witness(entries: Component[], sourceObservation = true): Promise<JsonObject> {
+async function witness(
+  entries: Component[],
+  sourceObservation = true,
+  exclusions: ReadonlyMap<string, readonly string[]> = new Map(),
+): Promise<JsonObject> {
   const result: JsonObject = {};
-  for (const entry of entries) result[entry.id] = await members(entry.source_path, sourceObservation);
+  for (const entry of entries) {
+    result[entry.id] = await members(entry.source_path, sourceObservation, exclusions.get(entry.id) ?? []);
+  }
   return result;
 }
 function unchanged(a: unknown, b: unknown, message = "checkpoint source moved; retry at a new owned barrier"): void {
@@ -192,20 +246,27 @@ async function flushCopiedFile(path: string): Promise<void> {
     finally {await chmod(path, mode);}
   }
 }
-async function copyComponent(source: string, destination: string, snapshotDatabases = true): Promise<void> {
-  let frontier = [{source, destination, nested: false}];
+async function copyComponent(
+  source: string,
+  destination: string,
+  snapshotDatabases = true,
+  excludePatterns: readonly string[] = [],
+): Promise<void> {
+  let frontier = [{source, destination, nested: false, relativeName: ""}];
   while (frontier.length) {
     frontier = (await mapMembers(frontier, async entry => {
-      const {source, destination, nested} = entry, stat = await lstat(source);
+      const {source, destination, nested, relativeName} = entry, stat = await lstat(source);
       if (stat.isSymbolicLink()) throw new Error("checkpoint source became a symlink");
       // An explicitly selected standalone sidecar remains a byte artifact.
       // Directory participants seal their databases through the existing WAL
       // snapshot owner rather than copying those databases' live sidecars.
       if (snapshotDatabases && nested && await sqliteSidecar(source, ["-wal", "-shm", "-journal"])) return [];
+      if (isExcludedEntry(relativeName, stat.isDirectory(), excludePatterns)) return [];
       if (stat.isDirectory()) {
         await mkdir(destination, {mode: 0o700});
         return (await readdir(source)).sort().map(child => ({source: join(source, child),
-          destination: join(destination, child), nested: true}));
+          destination: join(destination, child), nested: true,
+          relativeName: relativeName ? `${relativeName}/${child}` : child}));
       }
       if (!stat.isFile()) throw new Error("checkpoint source contains an unsupported file type");
       if (snapshotDatabases && await sqliteFile(source)) await snapshotSqliteDatabase(source, destination);
@@ -508,7 +569,12 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     request.action === "capture" ? ["action", "components", "destination", "point_metadata", "expected_source_sha256"] :
     request.action === "materialize" ? ["action", "root", "expected_sha256", "destination"] : null;
   if (fields === null) throw new Error("unsupported checkpoint artifact operation");
-  if (!hasExactAuthorityKeys(request, [...fields, ...(request.deadline_epoch_ms === undefined ? [] : ["deadline_epoch_ms"])])) {
+  const allowsExclusions = request.action === "probe" || request.action === "capture";
+  if (!hasExactAuthorityKeys(request, [
+    ...fields,
+    ...(request.deadline_epoch_ms === undefined ? [] : ["deadline_epoch_ms"]),
+    ...(allowsExclusions && request.component_exclusions !== undefined ? ["component_exclusions"] : []),
+  ])) {
     throw new Error("checkpoint request fields are invalid");
   }
   const deadline = request.deadline_epoch_ms;
@@ -521,7 +587,8 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   withinDeadline();
   if (request.action === "probe") {
     const sources = components(request.components);
-    const observed = await witness(sources);
+    const exclusions = normalizeComponentExclusions(request.component_exclusions, sources);
+    const observed = await witness(sources, true, exclusions);
     return {source_witness: observed, source_sha256: canonicalAuthoritySha256(observed)};
   }
   if (request.action === "verify") return verify(absolute(request.root, "checkpoint root"), request.expected_sha256);
@@ -540,12 +607,15 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       return {...verification, materialized: true, activation_performed: false};
     }
     const sources = components(request.components);
+    const exclusions = normalizeComponentExclusions(request.component_exclusions, sources);
     if (sources.some(c => destination === c.source_path || destination.startsWith(c.source_path + sep) || c.source_path.startsWith(destination + sep))) throw new Error("checkpoint output overlaps its source");
-    const before = await witness(sources);
+    const before = await witness(sources, true, exclusions);
     if (request.expected_source_sha256 !== canonicalAuthoritySha256(before)) throw new EffectRuntimeConflictError("checkpoint source moved before capture");
     await mkdir(join(staging, "components"), {mode: 0o700});
-    for (const c of sources) await copyComponent(c.source_path, join(staging, "components", c.id));
-    unchanged(before, await witness(sources));
+    for (const c of sources) {
+      await copyComponent(c.source_path, join(staging, "components", c.id), true, exclusions.get(c.id) ?? []);
+    }
+    unchanged(before, await witness(sources, true, exclusions));
     const artifacts = await witness(sources.map(c => ({id: c.id, source_path: join(staging, "components", c.id)})), false);
     // Byte-copy members must match the reviewed source, including ABA movement
     // that could otherwise escape a before/after comparison. SQLite is sealed
@@ -569,7 +639,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     const manifest = {...body, sha256: canonicalAuthoritySha256(body)};
     await durableWriteJson(join(staging, "checkpoint.json"), manifest);
     await verify(staging, manifest.sha256);
-    unchanged(before, await witness(sources));
+    unchanged(before, await witness(sources, true, exclusions));
     withinDeadline();
     await publishCheckpointDirectory(staging, destination);
     return {...await verify(destination, manifest.sha256), source_stability_verified: true};

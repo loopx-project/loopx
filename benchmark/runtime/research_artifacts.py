@@ -5,12 +5,42 @@ submitted files nor changes the task's evaluator or feedback permissions.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from pathlib import PurePosixPath
+from typing import Any
 
 
 RESEARCH_DIRECTORY = "/tmp/loopx-benchmark-research"
 RESEARCH_COMPONENT = "benchmark_research"
+RESEARCH_EXCLUDE_PATTERNS = ("*.raw.gz", "core", "target/", ".cargo-target/")
+
+
+def research_component_exclusions(
+    components: Sequence[Mapping[str, Any]],
+) -> dict[str, list[str]]:
+    """Return bounded source-exclusion patterns only when benchmark research is attached."""
+    if any(entry.get("id") == RESEARCH_COMPONENT for entry in components if isinstance(entry, dict)):
+        return {RESEARCH_COMPONENT: list(RESEARCH_EXCLUDE_PATTERNS)}
+    return {}
+
+
+def is_excluded_research_relpath(parts: tuple[str, ...], *, is_dir: bool) -> bool:
+    """Match a component-relative path tuple against RESEARCH_EXCLUDE_PATTERNS."""
+    if not parts:
+        return False
+    for index, name in enumerate(parts):
+        entry_is_dir = is_dir or index < len(parts) - 1
+        for pattern in RESEARCH_EXCLUDE_PATTERNS:
+            if pattern.endswith("/"):
+                if entry_is_dir and name == pattern[:-1]:
+                    return True
+            elif pattern.startswith("*."):
+                if not entry_is_dir and name.endswith(pattern[1:]):
+                    return True
+            elif name == pattern:
+                return True
+    return False
 
 
 def validate_research_scope(workspace: str, submit_paths: list[str]) -> None:

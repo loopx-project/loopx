@@ -14,8 +14,11 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
+from collections.abc import Mapping
+
 from benchmark.runtime.codex import (
     Execution,
+    claim_ttl_seconds_from_env,
     explicit_turn_display,
     prepare_codex_home,
     process_environment,
@@ -81,6 +84,18 @@ def loopx_command(env: dict[str, str]) -> list[str]:
     ]
 
 
+def _claim_ttl_guidance(env: Mapping[str, str]) -> str:
+    ttl = claim_ttl_seconds_from_env(env)
+    if ttl is None:
+        return ""
+    return (
+        f"\nLong-wake lease TTL opt-in (`LOOPX_BENCHMARK_CLAIM_TTL_SECONDS={ttl}`): "
+        f"when claiming a Todo with `loopx todo claim`, pass `--ttl-seconds {ttl}` "
+        f"(or renew via `loopx task-lease renew --ttl-seconds {ttl}` before expiry) "
+        "so long execution wakes retain their lease.\n"
+    )
+
+
 def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
                    decision_handoff_socket: str | None = None) -> str:
     command = loopx_command(env) + [
@@ -139,7 +154,12 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
 
     from .interruption_recovery import recovery_handoff
     _, handoff = recovery_handoff(env)
-    return body + runtime_execution_guidance(env) + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
+    return (
+        body
+        + runtime_execution_guidance(env)
+        + _claim_ttl_guidance(env)
+        + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
+    )
 
 
 @contextmanager
@@ -686,6 +706,7 @@ def run_once(env: dict[str, str]) -> dict:
             )
         if execution.turn_envelope and not _qualify_short_envelope(env, receipt):
             return receipt
+        claim_ttl_seconds = claim_ttl_seconds_from_env(env)
         prepare_codex_home(
             home,
             execution=execution,
@@ -700,6 +721,7 @@ def run_once(env: dict[str, str]) -> dict:
             model_catalog=(
                 Path(env["LOOPX_MODEL_CATALOG"]) if env.get("LOOPX_MODEL_CATALOG") else None
             ),
+            claim_ttl_seconds=claim_ttl_seconds,
         )
         if execution.mode == "heartbeat":
             # Checkpoint capture needs the LoopX control plane, which only
@@ -874,7 +896,12 @@ def run_once(env: dict[str, str]) -> dict:
                 )
             if (execution.mode == "heartbeat" and stage == "execute"
                     and not receipt["ok"] and not receipt.get("budget_exhausted")):
-                receipt["host_failure"] = heartbeat_host_failure(wake, receipt)
+                try:
+                    receipt["host_failure"] = heartbeat_host_failure(wake, receipt)
+                except Exception as exc:
+                    receipt["host_failure_record_error"] = (
+                        f"{type(exc).__name__}: {str(exc)[:300]}"
+                    )
             (wake / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt
 

@@ -443,3 +443,39 @@ def test_readiness_reports_a_live_locator_when_node_is_unavailable(
     assert lifecycle["locator_state"] == "valid"
     assert lifecycle["recorded_pid_alive"] is True
     assert lifecycle["diagnostic_code"] == "node_unavailable"
+
+
+def test_linux_zombie_thread_group_is_reported_not_alive_during_locator_recovery(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _isolate_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(effect_runtime.sys, "platform", "linux")
+    monkeypatch.setattr(effect_runtime, "process_is_alive", lambda pid: pid == 424242)
+    zombie = True
+    monkeypatch.setattr(effect_runtime, "_linux_thread_group_is_zombie", lambda pid: zombie and pid == 424242)
+
+    assert effect_runtime._pid_is_alive(424242) is False
+    fingerprint = effect_runtime._runtime_fingerprint()
+    info_path = effect_runtime._runtime_info_path(fingerprint)
+    info_path.parent.mkdir(parents=True)
+    info_path.write_text(
+        json.dumps({
+            "schema_version": effect_runtime.EFFECT_RUNTIME_INFO_SCHEMA_VERSION,
+            "fingerprint": fingerprint,
+            "host": "127.0.0.1",
+            "port": 1,
+            "token": "stale-token",
+            "pid": 424242,
+        }),
+        encoding="utf-8",
+    )
+
+    readiness = effect_runtime.collect_effect_runtime_readiness()
+    lifecycle = readiness["runtime_lifecycle"]
+    assert lifecycle["state"] == "stopped"
+    assert lifecycle["recorded_pid_alive"] is False
+    assert lifecycle["diagnostic_code"] == "runtime_locator_pid_not_alive"
+
+    zombie = False
+    assert effect_runtime._pid_is_alive(424242) is True

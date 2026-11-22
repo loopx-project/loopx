@@ -22,6 +22,11 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
 from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
+from benchmark.runtime.research_artifacts import (
+    RESEARCH_COMPONENT,
+    is_excluded_research_relpath,
+    research_component_exclusions,
+)
 
 from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
@@ -128,7 +133,14 @@ class _ArchiveReader:
         return block
 
 
-def _archive(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
+def _archive(
+    container,
+    remote: str,
+    destination: Path,
+    *,
+    deadline: float | None = None,
+    exclude_research: bool = False,
+) -> Path:
     """Read through the daemon, rejecting symlinks/devices and archive traversal.
 
     Docker's archive reader works while paused, unlike exec-based file readers.
@@ -177,6 +189,12 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
                             path.parts[0] != root or str(path) in names or
                             not (member.isfile() or member.isdir() or member.islnk())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
+                    if (
+                        exclude_research
+                        and len(path.parts) > 1
+                        and is_excluded_research_relpath(path.parts[1:], is_dir=member.isdir())
+                    ):
+                        continue
                     names[str(path)] = member
                     members.append(member)
 
@@ -219,7 +237,14 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
     return _physical(destination / root)
 
 
-def _archive_component(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
+def _archive_component(
+    container,
+    remote: str,
+    destination: Path,
+    *,
+    deadline: float | None = None,
+    exclude_research: bool = False,
+) -> Path:
     """Transport a standalone SQLite participant's committed storage too.
 
     A paused process can still have committed data only in its WAL. Reading
@@ -230,7 +255,13 @@ def _archive_component(container, remote: str, destination: Path, *, deadline: f
     """
     from docker.errors import NotFound
 
-    copied = _archive(container, remote, destination, deadline=deadline)
+    copied = _archive(
+        container,
+        remote,
+        destination,
+        deadline=deadline,
+        exclude_research=exclude_research,
+    )
     if not copied.is_file():
         return copied
     with copied.open("rb") as source:
@@ -351,15 +382,22 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                         client.api.timeout = _remaining(deadline)
                         try:
                             copied = _archive_component(
-                                container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
+                                container,
+                                entry["source_path"],
+                                stage / "workers" / entry["id"],
+                                deadline=deadline,
+                                exclude_research=entry["id"] == RESEARCH_COMPONENT,
+                            )
                         except docker.errors.NotFound as error:
                             # Keep the provider exception for direct capture callers.
                             error.checkpoint_component_id = entry["id"]
                             raise
                         components.append({"id": entry["id"], "source_path": str(copied)})
+                    exclusions = research_component_exclusions(components)
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
                             "action": "probe", "components": components,
+                            **({"component_exclusions": exclusions} if exclusions else {}),
                         }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
                         if observed["source_sha256"] != prepared["source_sha256"]:
                             changed = []
@@ -417,12 +455,14 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                 if prepared is not None:
                     metadata["writer_barrier"] = "docker_pause"
                 probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components,
-                    "deadline_epoch_ms": sealing_epoch_ms},
+                    "deadline_epoch_ms": sealing_epoch_ms,
+                    **({"component_exclusions": exclusions} if exclusions else {})},
                                               timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
                 return effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "capture", "components": components, "destination": str(destination),
                     "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
                     "deadline_epoch_ms": sealing_epoch_ms,
+                    **({"component_exclusions": exclusions} if exclusions else {}),
                 }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
     finally:
         client.close()

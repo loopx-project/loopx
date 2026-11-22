@@ -409,3 +409,40 @@ test("committed semantic replan can capture before work selection without invent
   await assert.rejects(checkpointArtifacts({...request, quota: {...quota,
     agent_identity: {...quota.agent_identity, registered: false}}}));
 });
+
+test("component_exclusions skips ephemeral research outputs in probe and capture without weakening verify", async t => {
+  const {root, request} = await fixture(t);
+  const research = join(root, "research");
+  await mkdir(join(research, "target/release"), {recursive: true});
+  await mkdir(join(research, ".cargo-target/debug"), {recursive: true});
+  await writeFile(join(research, "dump.raw.gz"), "ephemeral");
+  await writeFile(join(research, "core"), "core-dump");
+  await writeFile(join(research, "target/release/bin"), "compiled");
+  await writeFile(join(research, ".cargo-target/debug/lib.rlib"), "compiled");
+  await writeFile(join(research, "candidate.py"), "score = 1\n");
+
+  const components = [...request.components, {id: "benchmark_research", source_path: research}];
+  const exclusions = {benchmark_research: ["*.raw.gz", "core", "target/", ".cargo-target/"]};
+  const probe = await checkpointArtifacts({action: "probe", components, component_exclusions: exclusions});
+  const names = (probe.source_witness as Record<string, Array<{path: string}>>).benchmark_research.map(m => m.path);
+  assert.deepEqual(names, ["", "candidate.py"]);
+
+  const captured = await checkpointArtifacts({
+    ...request,
+    components,
+    expected_source_sha256: probe.source_sha256,
+    component_exclusions: exclusions,
+  });
+  assert.equal(captured.integrity_verified, true);
+  assert.deepEqual(await readdir(join(root, "captured/components/benchmark_research")), ["candidate.py"]);
+
+  await assert.rejects(
+    checkpointArtifacts({action: "verify", root: request.destination, expected_sha256: captured.sha256,
+      component_exclusions: exclusions} as never),
+    /invalid/,
+  );
+  await assert.rejects(
+    checkpointArtifacts({action: "probe", components, component_exclusions: {unknown_component: ["core"]}}),
+    /unknown component/,
+  );
+});

@@ -25,6 +25,7 @@ from loopx.hosts.research_checkpoint import (
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 from .codex import explicit_turn_display
+from .research_artifacts import research_component_exclusions
 
 
 def normalize_checkpoint_request_path(value: str) -> str:
@@ -565,9 +566,11 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 metadata["native_session"] = {**native["metadata"], "store_members": [
                     {**member, "id": native_ids[member["id"]]}
                     for member in native["metadata"]["store_members"]]}
+            exclusions = research_component_exclusions(components)
             probe = effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "probe", "components": components,
                 "deadline_epoch_ms": deadline * 1000,
+                **({"component_exclusions": exclusions} if exclusions else {}),
             }, timeout=max(.1, deadline - time.time()), retry_safe=False, large_local_snapshot=True)
             if request.get("native_session"):
                 # Native readback precedes the byte witness. A completed later Turn
@@ -606,6 +609,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                 "components": components, "point_metadata": metadata,
                 "expected_source_sha256": probe["source_sha256"],
                 "deadline_epoch_ms": deadline * 1000,
+                **({"component_exclusions": exclusions} if exclusions else {}),
             }, timeout=max(.1, deadline - time.time()), retry_safe=False, large_local_snapshot=True)
             receipt["checkpoint"] = {"captured": True, "destination": str(destination), **captured}
     except Exception as error:

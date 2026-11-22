@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import inspect
 import ipaddress
 import json
+import shutil
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -15,6 +17,28 @@ from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
 from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 from .provider_failure import observe_terminal_provider_failure
+from .research_artifacts import is_excluded_research_relpath
+
+_RESEARCH_DISK_HEADROOM_FLOOR_BYTES = 10 * 1024**3
+
+
+class InsufficientDiskHeadroomError(OSError):
+    """Raised before optional research collection breaches the host disk floor."""
+
+
+def _minimum_free_bytes(*paths: Path) -> int:
+    return min(shutil.disk_usage(path).free for path in paths)
+
+
+def _filter_research_members(members: list[tarfile.TarInfo]) -> list[tarfile.TarInfo]:
+    """Keep real research outputs while omitting ephemeral large dumps/build dirs."""
+    kept: list[tarfile.TarInfo] = []
+    for member in members:
+        parts = PurePosixPath(member.name).parts
+        if len(parts) > 1 and is_excluded_research_relpath(parts[1:], is_dir=member.isdir()):
+            continue
+        kept.append(member)
+    return kept
 
 
 class RecordingDockerBackend(DockerBackend):
@@ -191,19 +215,59 @@ class RecordingDockerBackend(DockerBackend):
             raise RuntimeError("Best-only publisher is unavailable")
         self.feedback.start(self, handle)
 
-    def _extract_artifact_archive(self, handle, remote, target):
+    def _extract_artifact_archive(
+        self,
+        handle,
+        remote,
+        target,
+        *,
+        research_cleanup: bool = False,
+    ):
         """Collect one native archive without materializing it as Python bytes."""
+        free_before: int | None = None
+        if research_cleanup:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            free_before = _minimum_free_bytes(Path(tempfile.gettempdir()), target.parent)
+            if free_before <= _RESEARCH_DISK_HEADROOM_FLOOR_BYTES:
+                raise InsufficientDiskHeadroomError(
+                    errno.ENOSPC,
+                    "host temp/log disk headroom below 10 GiB floor before research collection",
+                )
         chunks, _ = self._raw(handle).get_archive(str(remote))
         try:
             # A seekable spool preserves the existing tar extraction/filter
             # behavior. Its lifetime is independent of TarFile reference cycles.
+            written = 0
             with tempfile.TemporaryFile() as archive_file:
                 for chunk in chunks:
+                    written += len(chunk)
+                    if (
+                        free_before is not None
+                        and free_before - written < _RESEARCH_DISK_HEADROOM_FLOOR_BYTES
+                    ):
+                        raise InsufficientDiskHeadroomError(
+                            errno.ENOSPC,
+                            "research archive spool aborted before breaching 10 GiB free-disk floor",
+                        )
                     archive_file.write(chunk)
                 archive_file.seek(0)
                 target.mkdir(exist_ok=True)
                 with tarfile.open(fileobj=archive_file) as archive:
-                    archive.extractall(target, filter="data")
+                    if not research_cleanup:
+                        archive.extractall(target, filter="data")
+                    else:
+                        members = _filter_research_members(archive.getmembers())
+                        extract_bytes = sum(m.size for m in members if m.isfile())
+                        if (
+                            free_before is not None
+                            and free_before - written - extract_bytes
+                            < _RESEARCH_DISK_HEADROOM_FLOOR_BYTES
+                        ):
+                            raise InsufficientDiskHeadroomError(
+                                errno.ENOSPC,
+                                "research archive extraction aborted before breaching 10 GiB free-disk floor",
+                            )
+                        archive.extractall(target, members=members, filter="data")
         finally:
             close = getattr(chunks, "close", None)
             if close is not None:
@@ -242,8 +306,19 @@ class RecordingDockerBackend(DockerBackend):
                 for remote, name in sources:
                     try:
                         self._extract_artifact_archive(
-                            handle, PurePosixPath(remote), self.log_dir / name)
+                            handle,
+                            PurePosixPath(remote),
+                            self.log_dir / name,
+                            research_cleanup=(name == "research"),
+                        )
                         observations.append({"artifact": name, "collected": True})
+                    except InsufficientDiskHeadroomError as error:
+                        observations.append({
+                            "artifact": name,
+                            "collected": False,
+                            "error_kind": type(error).__name__,
+                            "reason": "insufficient_host_disk_headroom",
+                        })
                     except Exception as error:
                         observations.append({"artifact": name, "collected": False,
                                              "error_kind": type(error).__name__})

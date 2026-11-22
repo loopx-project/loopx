@@ -806,3 +806,52 @@ def test_declared_directory_includes_research_created_after_declaration(controll
     assert json.loads((research / "negative.json").read_text()) == {"accepted": False}
     assert not list(restored.rglob("outside-report.json"))
     assert request.read_text() == json.dumps(payload) and not grades
+
+
+def test_archive_exclude_research_skips_ephemeral_dumps(tmp_path):
+    import io
+    import tarfile
+    from types import SimpleNamespace
+    from benchmark.edgebench import checkpoint_worker
+
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        root_info = tarfile.TarInfo("loopx-benchmark-research")
+        root_info.type = tarfile.DIRTYPE
+        root_info.mode = 0o700
+        archive.addfile(root_info)
+        for rel, body in (
+            ("loopx-benchmark-research/candidate.py", b"print('ok')\n"),
+            ("loopx-benchmark-research/dump.raw.gz", b"gz"),
+            ("loopx-benchmark-research/core", b"core"),
+            ("loopx-benchmark-research/target/release/bin", b"bin"),
+            ("loopx-benchmark-research/.cargo-target/x.rlib", b"rlib"),
+        ):
+            info = tarfile.TarInfo(rel)
+            info.size = len(body)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(body))
+
+    response = SimpleNamespace(
+        headers={"x-docker-container-path-stat": json.dumps({"linkTarget": ""})},
+        iter_content=lambda chunk_size, decode_unicode=False: iter([payload.getvalue()]),
+        close=lambda: None,
+    )
+    container = SimpleNamespace(
+        id="c1",
+        client=SimpleNamespace(
+            api=SimpleNamespace(
+                _url=lambda tpl, cid: tpl.format(cid),
+                _get=lambda url, **kwargs: response,
+                _raise_for_status=lambda resp: None,
+            )
+        ),
+    )
+    extracted = checkpoint_worker._archive(
+        container, "/tmp/loopx-benchmark-research", tmp_path / "dest", exclude_research=True,
+    )
+    assert (extracted / "candidate.py").read_bytes() == b"print('ok')\n"
+    assert not (extracted / "dump.raw.gz").exists()
+    assert not (extracted / "core").exists()
+    assert not (extracted / "target").exists()
+    assert not (extracted / ".cargo-target").exists()
