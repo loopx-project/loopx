@@ -814,14 +814,25 @@ with empty references. The enclosing Stride `action` and `next_probe` express
 the chosen response and the first work slice.
 
 An open meta-goal follows the Todo across ordinary Turns in
-`work_context.stride_meta_goal`. In the next applicable Stride review, carry
-the same objective and criterion with `previous_decision_ref` from
-`todo_meta_goals`. Cite the exact references to subsequent work on that Todo
-when changing the action or recording a `resolution`. The journal's append
-order and the settled work identity qualify the references, including evidence
-against a route. Omission preserves the last recorded question. A resolution
-ends the question, and a later review can start another one on the same Todo.
-All authored text and refs share the existing Vision budget.
+`work_context.stride_meta_goal`. In the next applicable Stride review, submit
+`todo_id` and the exact `previous_decision_ref` from `todo_meta_goals`. Readback
+recovers the recorded objective and criterion. A continuation with the original
+text remains readable and writable.
+
+When the continuation omits `evidence_refs`, it reuses up to three distinct
+citations from the same writeback's `path_delta` and `previous_review`, in that
+order. Each must resolve to subsequent settled work on the same Todo and Agent
+within the current Goal lifetime. A typed progress citation can resolve to the
+exact settlement reference for the same observation. Explicit `evidence_refs`
+select different evidence under the same scope checks. Changing the action or
+recording a `resolution` requires qualified evidence. Omitting the whole
+`meta_goal` preserves the last question. A resolution ends the question and a
+later review can start another on the same Todo.
+
+Keep new questions brief. Put actions and probes in their existing Stride
+fields and give each axis its own decision-relevant reason. Use a citation
+once when it serves both the Vision path and the meta-goal. The same
+1,800-character Vision budget counts the authored text and references.
 
 Read the latest question, action, probe and cited evidence in the App's Task
 Request details or with `loopx --format json todo list --goal-id <goal> --todo-id
@@ -838,11 +849,20 @@ Execution, Goal acceptance and gain follow their existing evidence contracts.
 精确 ID。首次写入 `todo_id`、`objective`、`resolution_criterion` 和空的 `evidence_refs`。
 外层的 `action` 和 `next_probe` 表达所选元决策动作及首个工作切片。
 
-普通工作 Turn 通过 `work_context.stride_meta_goal` 接续未决目标。复盘时从
-`todo_meta_goals` 取得 `previous_decision_ref`，沿用原目标和证据条件。改变动作或写入
-`resolution` 时，引用该 Todo 后续工作的精确证据。系统核对日志追加顺序和已结算工作身份，
-并保留反证。省略字段则沿用上次记录。元目标收口后，可在后续复盘中为同一 Todo 提出新问题。
-字段与引用计入已有 Vision 预算。
+普通工作 Turn 通过 `work_context.stride_meta_goal` 接续未决目标。后续复盘提交
+`todo_id` 和从 `todo_meta_goals` 取得的精确 `previous_decision_ref`。读取时沿用
+已记录的目标和判据。仍可读写带原文的续写。
+
+续写省略 `evidence_refs` 时，按顺序从本次写回的 `path_delta` 和 `previous_review`
+复用至多三条不同引用。证据须来自当前 Goal 生命周期内同一 Agent、同一 Todo 的
+后续已结算工作。类型化进展引用可解析为同一观测的精确结算引用。需要选择其他证据时，
+可显式填写 `evidence_refs`，沿用相同范围校验。改变动作或写入 `resolution` 时须有
+合格证据。省略整个 `meta_goal` 会沿用上次问题。收口后可在后续复盘中为同一 Todo
+提出新问题。
+
+简洁提出新问题。动作和探针沿用现有 Stride 字段，各轴说明各自影响决策的依据。
+一条引用可同时支持 Vision 路径和元目标，只填写一次。实际写入的文字和引用计入原有
+1,800 字符 Vision 预算。
 
 在 App 的任务要求详情或用 `todo list --todo-id` 回读元目标、动作、探针及证据。
 关闭 Stride 后仍可查看已保存的元目标。详情仅在当前 Goal 实例下的该 Todo 有记录来源时读取决策日志。

@@ -14,7 +14,8 @@ import test_quota_settlement_cli as fixture
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("compact", [False, True], ids=["inline", "by-reference"])
+def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, monkeypatch, provider, compact):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     project, runtime, registry = fixture._write_fixture(tmp_path)
@@ -109,30 +110,60 @@ def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, mon
     assert initial["meta_goal"] == meta and initial["action"] == "verify"
     spend("review-initial-question", todo)
 
-    cadence(3)
+    cadence(1 if compact else 3)
     work("peak-representative", todo, [17, 25], meta_decision=initial["decision_ref"])
+    previous = initial["decision_ref"]
+    if compact:
+        context, stride = review("review-still-open")
+        stride["meta_goal"] = {"todo_id": todo, "previous_decision_ref": previous}
+        packet = proposal(context, stride)
+        [representative] = context["decision_followthrough"]["observations"]
+        assert representative["todo_id"] == todo
+        packet["path_delta"]["evidence_refs"] = [representative["evidence_ref"]]
+        store("review-still-open", packet)
+        checkpoint = task_record()
+        assert checkpoint["meta_goal"]["objective"] == meta["objective"]
+        assert len(checkpoint["meta_goal"]["evidence_refs"]) == 1
+        previous = checkpoint["decision_ref"]
+        spend("review-still-open", todo)
+        cadence(2)
+
     work("peak-unrelated", other, [6, 8])
-    work("peak-tail", todo, [22, 32], meta_decision=initial["decision_ref"], expect_gap=True)
+    work("peak-tail", todo, [22, 32], meta_decision=previous, expect_gap=True)
     context, stride = review("review-peak-result")
     [basis] = context["todo_meta_goals"]
-    assert basis["decision_ref"] == initial["decision_ref"]
-    assert len(basis["evidence"]) == 2
+    assert basis["decision_ref"] == previous
+    assert len(basis["evidence"]) == (1 if compact else 2)
     tail = next(row for row in basis["evidence"] if row["result_class"] == "unchanged")
-    foreign = next(row for row in context["decision_followthrough"]["observations"] if row["todo_id"] == other)
-    stride.update(action="switch", meta_goal={**meta, "previous_decision_ref": initial["decision_ref"],
-        "resolution": "The tail exceeded the limit at 32 seconds. Compare a different mechanism next.",
-        "evidence_refs": [foreign["evidence_ref"]]})
+    resolution = "The tail exceeded the limit at 32 seconds. Compare a different mechanism next."
+    stride.update(action="switch", meta_goal={"todo_id": todo, "previous_decision_ref": previous,
+        "resolution": resolution})
     stride["next_probe"]["scope"] = "Test the streaming mechanism on the 32-second tail workload."
     packet = proposal(context, stride)
+    observations = context["decision_followthrough"]["observations"]
+    foreign = next(row for row in observations if row["todo_id"] == other)
+    if compact:
+        packet["path_delta"]["evidence_refs"] = [foreign["evidence_ref"]]
+    else:
+        stride["meta_goal"] = {**meta, "previous_decision_ref": previous, "resolution": resolution,
+            "evidence_refs": [foreign["evidence_ref"]]}
     before = journal.read_bytes()
-    assert "subsequent settled work on the same Todo" in store("review-peak-result", packet, expected=1)["error"]
+    assert "subsequent settled work" in store("review-peak-result", packet, expected=1)["error"]
     assert journal.read_bytes() == before
-    stride["meta_goal"]["evidence_refs"] = [tail["evidence_ref"]]
+    if compact:
+        tail_path = next(row["evidence_ref"] for row in observations
+            if row["todo_id"] == todo and row["result_class"] == "unchanged")
+        assert tail_path != tail["evidence_ref"]
+        packet["path_delta"]["evidence_refs"] = [tail_path]
+    else:
+        stride["meta_goal"]["evidence_refs"] = [tail["evidence_ref"]]
     accepted = store("review-peak-result", packet)
     assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"]
     assert json.loads(Path(accepted["json_path"]).read_text())["agent_vision"]["stride_decision"]["meta_goal"] == stride["meta_goal"]
     current = task_record()
-    assert current["action"] == "switch" and current["meta_goal"]["previous_decision_ref"] == initial["decision_ref"]
+    assert current["action"] == "switch"
+    assert current["meta_goal"] == {**meta, "previous_decision_ref": previous, "resolution": resolution,
+        "evidence_refs": [tail["evidence_ref"]]}
     assert current["next_probe"]["scope"] == "Test the streaming mechanism on the 32-second tail workload."
     assert current["evidence"][0]["evidence_ref"] == tail["evidence_ref"]
     exact = cli("history", *identity, "--evidence-ref", tail["evidence_ref"])["evidence"]

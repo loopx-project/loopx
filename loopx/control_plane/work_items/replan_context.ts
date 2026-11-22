@@ -282,34 +282,92 @@ function metaGoalTodoId(row: JsonObject): unknown {
   return objectOrNull(objectOrNull(vision?.stride_decision)?.meta_goal)?.todo_id;
 }
 
+function recordedMetaGoal(row: JsonObject): MetaGoalDecision {
+  const decision = recordedDecision(row);
+  const stride = objectOrNull(decision?.stride_decision);
+  const goal = objectOrNull(stride?.meta_goal);
+  if (!decision || !stride || !goal) {
+    throw new EffectRuntimeRequestError("Recorded Todo meta-goal is unavailable; reread the original decision");
+  }
+  return {row, decision, stride, goal};
+}
+
 function metaGoalDecisions(scoped: JsonObject[], todoIds: ReadonlySet<unknown>): Map<unknown, MetaGoalDecision> {
   const latest = new Map<unknown, MetaGoalDecision>();
-  const seen = new Set<unknown>();
-  for (const row of scoped) {
+  for (const [index, row] of scoped.entries()) {
     const todoId = metaGoalTodoId(row);
-    if (!todoIds.has(todoId) || seen.has(todoId) || !acceptedDecisionSource(row)) continue;
-    seen.add(todoId);
-    const decision = recordedDecision(row);
-    const stride = objectOrNull(decision?.stride_decision);
-    const goal = objectOrNull(stride?.meta_goal);
-    if (!decision || !stride || !goal) {
-      throw new EffectRuntimeRequestError("Recorded Todo meta-goal is unavailable; reread the original decision");
-    }
-    latest.set(todoId, {row, decision, stride, goal});
+    if (!todoIds.has(todoId) || latest.has(todoId) || !acceptedDecisionSource(row)) continue;
+    latest.set(todoId, hydrateMetaGoal(scoped, index, recordedMetaGoal(row)));
   }
   return latest;
+}
+
+function hydrateMetaGoal(scoped: JsonObject[], index: number, current: MetaGoalDecision): MetaGoalDecision {
+  const goal = current.goal;
+  if (goal.objective !== undefined && goal.evidence_refs !== undefined) return current;
+  let expected = goal.previous_decision_ref;
+  let prior: MetaGoalDecision | undefined;
+  let priorIndex = index;
+  for (let i = index + 1; i < scoped.length; i++) {
+    const row = scoped[i];
+    if (row.agent_id !== current.row.agent_id || metaGoalTodoId(row) !== goal.todo_id || !acceptedDecisionSource(row)) continue;
+    const source = recordedMetaGoal(row);
+    if (source.decision.evidence_ref !== expected || source.goal.resolution) break;
+    if (!prior) { prior = source; priorIndex = i; }
+    const definition = goal.objective === undefined ? source.goal : goal;
+    if (definition.objective !== undefined) {
+      const evidence = metaGoalCitations(goal, current.stride, current.decision.path_delta, prior, scoped.slice(index + 1, priorIndex));
+      return {...current, goal: {...goal, objective: definition.objective,
+        resolution_criterion: definition.resolution_criterion, evidence_refs: evidence}};
+    }
+    expected = source.goal.previous_decision_ref;
+  }
+  throw new EffectRuntimeRequestError("Recorded Todo meta-goal reference is unavailable; reread the original decision");
 }
 
 function metaGoalWorkEvidence(scoped: JsonObject[], todoId: unknown, after: JsonObject): {ref: string; row: JsonObject}[] {
   const position = Number(objectOrNull(after._source_facts)?.history_position);
   return scoped.flatMap(row => {
     const order = Number(objectOrNull(row._source_facts)?.history_position);
-    if (order <= position || observationTodo(row) !== todoId || isAccountingRow(row) ||
+    if (order <= position || row.agent_id !== after.agent_id || observationTodo(row) !== todoId || isAccountingRow(row) ||
         acceptedDecisionSource(row) || hasConflictingTodoSettlement(row) ||
         !MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome)) return [];
     const ref = settledTodoEvidenceRef(row);
     return ref ? [{ref, row}] : [];
   });
+}
+
+function sharedDecisionCitations(path: unknown, stride: JsonObject | null): string[] {
+  const pathRefs = objectOrNull(path)?.evidence_refs;
+  const reviewRefs = objectOrNull(stride?.previous_review)?.evidence_refs;
+  return [...(Array.isArray(pathRefs) ? pathRefs : []), ...(Array.isArray(reviewRefs) ? reviewRefs : [])] as string[];
+}
+
+function metaGoalCitations(goal: JsonObject, stride: JsonObject, path: unknown, prior: MetaGoalDecision, scoped: JsonObject[]): string[] {
+  const work = metaGoalWorkEvidence(scoped, goal.todo_id, prior.row);
+  const allowed = new Set(work.map(({ref}) => ref));
+  let refs = goal.evidence_refs as string[] | undefined;
+  if (!refs) {
+    // A typed progress row can have an older replan reference as well as its
+    // exact settlement reference. Resolve the citation through this scoped work.
+    const aliases = new Map<string, string | null>();
+    for (const {ref, row} of work) {
+      const alias = workEvidenceRef(row);
+      const match = aliases.get(alias);
+      aliases.set(alias, match === undefined || match === ref ? ref : null);
+    }
+    const shared = sharedDecisionCitations(path, stride)
+      .map(ref => allowed.has(ref) ? ref : aliases.get(ref))
+      .filter((ref): ref is string => typeof ref === "string");
+    refs = [...new Set(shared)].slice(0, STRIDE_REVIEW_REFERENCE_LIMIT);
+  }
+  if (refs.some(ref => !allowed.has(ref))) {
+    throw new EffectRuntimeRequestError("Meta-goal evidence must come from subsequent settled work on the same Todo");
+  }
+  if ((stride.action !== prior.stride.action || goal.resolution !== undefined) && refs.length === 0) {
+    throw new EffectRuntimeRequestError("Changing a meta-decision action or resolving the question requires subsequent settled work evidence on the same Todo");
+  }
+  return refs;
 }
 
 function metaGoalEvidencePreview(recorded: MetaGoalDecision, scoped: JsonObject[]): JsonObject[] {
@@ -358,17 +416,11 @@ function todoMetaGoal(request: JsonObject, scoped: JsonObject[], goal: string, a
     return {current: null};
   }
   if (proposed.previous_decision_ref !== previous.decision.evidence_ref ||
-      proposed.objective !== previous.goal.objective || proposed.resolution_criterion !== previous.goal.resolution_criterion) {
+      (proposed.objective !== undefined && (proposed.objective !== previous.goal.objective ||
+        proposed.resolution_criterion !== previous.goal.resolution_criterion))) {
     throw new EffectRuntimeRequestError("Carry forward the current Todo meta-goal and its exact previous decision reference");
   }
-  const refs = proposed.evidence_refs as string[];
-  if (decision!.action !== previous.stride.action && refs.length === 0) {
-    throw new EffectRuntimeRequestError("Changing a meta-decision action requires subsequent evidence for the same Todo");
-  }
-  const allowed = new Set(metaGoalWorkEvidence(scoped, todoId, previous.row).map(({ref}) => ref));
-  if (refs.some(ref => !allowed.has(ref))) {
-    throw new EffectRuntimeRequestError("Meta-goal evidence must come from subsequent settled work on the same Todo");
-  }
+  metaGoalCitations(proposed, decision!, request.path_delta, previous, scoped);
   return {current: metaGoalView(previous)};
 }
 
@@ -419,13 +471,11 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
       const id = String(decision.evidence_ref), targets = plannedTodoIds(source);
       const path = decision.path_delta as JsonObject;
       const stride = objectOrNull(decision.stride_decision);
-      const review = objectOrNull(stride?.previous_review);
       const metaGoal = objectOrNull(stride?.meta_goal);
       if (metaGoal) hasMetaGoal = true;
-      const pathRefs = [...(path.evidence_refs as string[]),
-        ...(Array.isArray(review?.evidence_refs) ? review.evidence_refs as string[] : [])];
+      const pathRefs = sharedDecisionCitations(path, stride);
       for (const todo of targets) {
-        const metaRefs = metaGoal?.todo_id === todo ? metaGoal.evidence_refs as string[] : [];
+        const metaRefs = metaGoal?.todo_id === todo && Array.isArray(metaGoal.evidence_refs) ? metaGoal.evidence_refs as string[] : [];
         const refs = [...pathRefs, ...metaRefs]
           .map(ref => pending.has(ref) ? ref : legacyResultRefs.get(ref) ?? ref)
           .filter(ref => pending.has(ref));

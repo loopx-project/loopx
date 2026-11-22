@@ -66,21 +66,24 @@ function normalizeMetaGoal(value: unknown, checked: BoundedText, usage: Record<s
   exactFields(input, ["todo_id", "objective", "resolution_criterion", "previous_decision_ref", "evidence_refs", "resolution"], label);
   const todoId = requireNonEmptyString(input.todo_id, `${label}.todo_id`);
   if (!PLANNING_TODO_ID.test(todoId)) throw new EffectRuntimeRequestError(`${label} requires an exact Todo id`);
-  const evidence = refs(input.evidence_refs, `${label}.evidence_refs`);
   const prior = input.previous_decision_ref;
   if (prior !== undefined && (typeof prior !== "string" || !/^replan-decision-[a-f0-9]{24}$/.test(prior))) {
     throw new EffectRuntimeRequestError(`${label} requires a recorded previous decision reference`);
   }
-  if ((!prior && evidence.length) || (input.resolution !== undefined && !evidence.length)) {
+  const evidence = prior && input.evidence_refs === undefined ? undefined : refs(input.evidence_refs, `${label}.evidence_refs`);
+  if ((!prior && (evidence?.length || input.resolution !== undefined)) ||
+      (input.resolution !== undefined && evidence?.length === 0)) {
     throw new EffectRuntimeRequestError(`${label} resolution and evidence require a previous decision and subsequent Todo evidence`);
   }
   usage[`${label}.todo_id`] = todoId.length;
   if (typeof prior === "string") usage[`${label}.previous_decision_ref`] = prior.length;
-  usage[`${label}.evidence_refs`] = evidence.join("").length;
-  return {todo_id: todoId,
+  if (evidence) usage[`${label}.evidence_refs`] = evidence.join("").length;
+  const definition = prior && input.objective === undefined && input.resolution_criterion === undefined ? {} : {
     objective: checked("meta_goal.objective", input.objective, STRIDE_META_GOAL_LIMITS.objective),
     resolution_criterion: checked("meta_goal.resolution_criterion", input.resolution_criterion, STRIDE_META_GOAL_LIMITS.resolution_criterion),
-    ...(prior ? {previous_decision_ref: prior} : {}), evidence_refs: evidence,
+  };
+  return {todo_id: todoId, ...definition,
+    ...(prior ? {previous_decision_ref: prior} : {}), ...(evidence ? {evidence_refs: evidence} : {}),
     ...(input.resolution !== undefined ? {resolution: checked("meta_goal.resolution", input.resolution, STRIDE_META_GOAL_LIMITS.resolution)} : {})};
 }
 function selectedCandidate(value: unknown): JsonObject {
@@ -440,10 +443,12 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     meta_goal_option: {
       attachment: "agent_vision.stride_decision.meta_goal",
       required_fields: ["todo_id", "objective", "resolution_criterion", "evidence_refs"],
+      continuation_required_fields: ["todo_id", "previous_decision_ref"],
       field_limits: STRIDE_META_GOAL_LIMITS,
       rule: "Optionally set a question and evidence criterion for one open Todo you can retain. Add retain:<todo_id> to todo_delta. " +
-        "Start with empty evidence_refs. To carry an open question forward, copy its objective, criterion and previous_decision_ref. " +
-        "Cite exact subsequent work evidence for this Todo when changing the action or recording a resolution. Leave resolution absent while the question remains open.",
+        "Start with empty evidence_refs. To carry an open question, supply the Todo id and its exact previous_decision_ref. " +
+        "The original objective and criterion are read from that decision. When evidence_refs is omitted, reuse eligible subsequent same-Todo references from path_delta and previous_review. " +
+        "Changing the action or resolving the question requires that evidence. Add resolution only when answered. Keep each axis reason distinct and state a fact or reference once where it serves both decisions.",
     },
     previous_decision_ref: previous,
     ...(follow ? {decision_followthrough: follow} : {}),

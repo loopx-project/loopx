@@ -327,6 +327,7 @@ def qualify_todo_stride_meta_goal_writeback(
         runs=replan_history_from_status(status_payload, goal_id),
         history_newest_first=not bool(status_payload.get("registry") and status_payload.get("runtime_root")),
         proposal=agent_vision["stride_decision"], todo_delta=agent_vision.get("todo_delta"),
+        path_delta=agent_vision.get("path_delta"),
         todo=matches[0], settlement_todo_id=settlement_todo_id,
     )
 
