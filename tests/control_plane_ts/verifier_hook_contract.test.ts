@@ -30,7 +30,7 @@ test("enabled negotiation uses observed capabilities and never infers pre-tool o
 
 const identity = {
   goal_id: "goal", todo_id: "todo", parent_epoch_ref: "epoch:9", child_scope_ref: "scope:3",
-  candidate_sha: "candidate:26", verifier_version: "verifier:4",
+  candidate_sha: "sha256:" + "a".repeat(64), verifier_version: "verifier:4",
 };
 const request: VerifiedCloseRequest = {
   identity, receipt_ref: "receipt:21", overlap: "low", open_obligations: false,
@@ -68,6 +68,30 @@ test("verified return resolves the named oracle receipt and stages the exact sou
   });
 });
 
+test("matching candidate identifiers must still identify immutable content", () => {
+  for (const candidate_sha of [
+    "main", "candidate:26", "a".repeat(64),
+    "sha256:" + "a".repeat(63), "sha256:" + "g".repeat(64), "sha256:" + "A".repeat(64),
+  ]) {
+    const invalid = { ...identity, candidate_sha };
+    const reads: string[] = [];
+    const reader = {
+      readReceipt(ref: string): VerifierScopeReceipt {
+        reads.push(ref);
+        return { ...passed, identity: invalid };
+      },
+      readEvidence(ref: string): VerifiedScopeEvidence | undefined {
+        reads.push(ref);
+        const record = evidence.get(ref);
+        return record && { ...record, identity: invalid };
+      },
+    };
+    assert.deepEqual(recommendVerifiedClose({ ...request, identity: invalid }, reader),
+      { action: "KeepRaw" }, candidate_sha);
+    assert.deepEqual(reads, [], candidate_sha);
+  }
+});
+
 test("open, overlapping, unknown and mismatched work stays raw", () => {
   for (const variant of [
     { ...request, overlap: "high" as const },
@@ -79,7 +103,8 @@ test("open, overlapping, unknown and mismatched work stays raw", () => {
   const missingObligations = { ...request, open_obligations: undefined } as unknown as VerifiedCloseRequest;
   assert.deepEqual(recommendVerifiedClose(missingObligations, authority(passed)), { action: "KeepRaw" });
   for (const key of Object.keys(identity) as (keyof typeof identity)[]) {
-    const mismatch = { ...identity, [key]: "different" };
+    const different = key === "candidate_sha" ? "sha256:" + "b".repeat(64) : "different";
+    const mismatch = { ...identity, [key]: different };
     assert.deepEqual(recommendVerifiedClose(request, authority({ ...passed, identity: mismatch })),
       { action: "KeepRaw" });
   }

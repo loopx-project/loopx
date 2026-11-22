@@ -1,5 +1,6 @@
 // Host-neutral contract for the proposed verifier Hook adapter. The C1,
 // working-set and capability-portfolio owners still admit every effect.
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import type { QuotaGoalBoundaryReference } from "../quota/turn_envelope.ts";
 import type { WorkYardstickProfile } from "../work_items/yardstick_decision.ts";
 
@@ -71,6 +72,7 @@ export type VerifiedScopeIdentity = Readonly<{
   todo_id: string;
   parent_epoch_ref: string;
   child_scope_ref: string;
+  /** Canonical SHA-256 digest of the candidate submitted to the verifier. */
   candidate_sha: string;
   verifier_version: string;
 }>;
@@ -139,6 +141,7 @@ export function recommendVerifiedClose(
 ): VerifiedCloseRecommendation {
   const expected = request.identity;
   if (!expected || !scopeIdentityFields.every(field => hasReference(expected[field]))
+    || !ENVELOPED_SHA256_PATTERN.test(expected.candidate_sha)
     || !hasReference(request.receipt_ref)) {
     return { action: "KeepRaw" };
   }
