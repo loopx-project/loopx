@@ -625,7 +625,7 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     prefetch_command: config.prefetch_command,
     initiator: config.initiator,
   });
-  const requiresVerifiedPage = source_ref !== null || isContextReadCommand(config.prefetch_command);
+  const requiresVerifiedPage = source_ref !== null || isContextReadCommand(safety.argv);
   const pageStatus = inspectStructuredPrefetchOutput(prefetched_output, source_ref, requiresVerifiedPage);
   const effectiveTruncated = truncated || pageStatus.incomplete;
 

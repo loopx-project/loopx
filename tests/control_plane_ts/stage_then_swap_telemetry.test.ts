@@ -415,4 +415,29 @@ test("evaluateEpochPrefetchSwap enforces offset === 0, contiguous length, and so
   assert.equal(unpaginatedJson.fallback_reason, "incomplete_output");
   assert.equal(unpaginatedJson.round_trips_saved, 0);
   assert.equal(unpaginatedJson.bytes_saved, 0);
+
+  // prefetch_command: null without source_ref MUST fail closed cleanly instead of throwing TypeError.
+  const nullCmd = evaluateEpochPrefetchSwap({
+    ...base,
+    source_ref: null,
+    epoch_prefetch: {enabled: true, prefetch_command: null},
+    prefetched_output: "",
+  });
+  assert.equal(nullCmd.operator, "KeepRaw");
+  assert.equal(nullCmd.fallback_reason, "policy_violation:missing_command");
+  assert.equal(nullCmd.round_trips_saved, 0);
+  assert.equal(nullCmd.bytes_saved, 0);
+
+  // String quota context-read command without source_ref MUST still enforce verified typed pagination.
+  const stringCmdMdTail = evaluateEpochPrefetchSwap({
+    ...base,
+    source_ref: null,
+    epoch_prefetch: {enabled: true, prefetch_command: "loopx --format json quota context-read"},
+    prefetched_output: "# Capture tail markdown\n...tail bytes only...",
+  });
+  assert.equal(stringCmdMdTail.operator, "KeepRaw");
+  assert.equal(stringCmdMdTail.fallback_reason, "incomplete_output");
+  assert.equal(stringCmdMdTail.truncated, true);
+  assert.equal(stringCmdMdTail.round_trips_saved, 0);
+  assert.equal(stringCmdMdTail.bytes_saved, 0);
 });
