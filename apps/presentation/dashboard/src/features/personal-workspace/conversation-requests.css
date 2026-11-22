@@ -28,6 +28,7 @@
 .conversation-request-row > summary {display:grid;grid-template-columns:16px minmax(0,1fr) auto auto;align-items:center;gap:4px 16px;padding:16px 0;cursor:pointer;list-style:none;}
 .conversation-request-row > summary strong {grid-column:2;font-weight:500;overflow-wrap:anywhere;}
 .conversation-request-row > summary > span {grid-column:3;grid-row:1;color:var(--pw-muted);}
+.conversation-request-return-verification {display:block;}
 .conversation-request-row > summary > time {grid-column:4;grid-row:1;align-self:center;color:var(--pw-muted);font-size:var(--text-caption);font-variant-numeric:tabular-nums;white-space:nowrap;}
 .conversation-request-detail {padding:0 0 20px;overflow-wrap:anywhere;}
 .conversation-request-detail h4 {font-size:var(--text-body);margin:16px 0 4px;}
