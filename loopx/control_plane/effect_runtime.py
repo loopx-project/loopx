@@ -15,7 +15,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -1301,11 +1301,16 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
         else:
             identity = None
             try:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
-                    identity = _effect_file_identity_from_fd(lock_file.fileno())
-                    lock_file.write(f"{os.getpid()}\n")
-                    lock_file.flush()
-                    os.fsync(lock_file.fileno())
+                try:
+                    identity = _effect_file_identity_from_fd(descriptor)
+                    # Keep the raw descriptor owned here across stream construction.
+                    with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as lock_file:
+                        lock_file.write(f"{os.getpid()}\n")
+                        lock_file.flush()
+                        os.fsync(lock_file.fileno())
+                finally:
+                    with suppress(OSError):
+                        os.close(descriptor)
             except BaseException:
                 _remove_created_effect_file(lock, identity)
                 raise

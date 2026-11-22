@@ -1088,10 +1088,12 @@ def test_dead_startup_lock_is_reclaimed_without_waiting_for_age_timeout(
 
 
 @pytest.mark.parametrize("replace_lock", [False, True], ids=["owned-lock", "replacement-lock"])
+@pytest.mark.parametrize("failure_at", ["sync", "fdopen"])
 def test_failed_startup_lock_publication_allows_recovery(
     tmp_path: Path,
     monkeypatch,
     replace_lock: bool,
+    failure_at: str,
 ) -> None:
     runtime_dir = tmp_path / "runtime"
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
@@ -1104,34 +1106,53 @@ def test_failed_startup_lock_publication_allows_recovery(
         replacement.write_text(replacement_owner, encoding="utf-8")
     stat_path = Path.stat
     fsync = os.fsync
-    failed_sync = False
+    fdopen = os.fdopen
+    failed_descriptor = None
+    failure_errno = errno.ENOSPC if failure_at == "sync" else errno.EMFILE
 
-    def fail_lock_sync(descriptor: int) -> None:
-        nonlocal failed_sync
+    def fail_owned_lock(descriptor: int) -> None:
+        nonlocal failed_descriptor
         try:
             lock_stat = stat_path(lock)
         except FileNotFoundError:
-            fsync(descriptor)
             return
         if os.path.samestat(os.fstat(descriptor), lock_stat):
-            failed_sync = True
-            raise OSError(errno.ENOSPC, "synthetic startup lock sync failure")
+            failed_descriptor = descriptor
+            raise OSError(failure_errno, f"synthetic startup lock {failure_at} failure")
+
+    def fail_lock_sync(descriptor: int) -> None:
+        fail_owned_lock(descriptor)
         fsync(descriptor)
 
+    def fail_lock_fdopen(descriptor: int, *args, **kwargs):
+        fail_owned_lock(descriptor)
+        return fdopen(descriptor, *args, **kwargs)
+
     def observe_path(path: Path, *args, **kwargs):
-        if path == lock and failed_sync and replacement.exists():
+        if path == lock and failed_descriptor is not None and replacement.exists():
             replacement.replace(lock)
         return stat_path(path, *args, **kwargs)
 
     with monkeypatch.context() as failing_io:
-        failing_io.setattr(os, "fsync", fail_lock_sync)
+        if failure_at == "sync":
+            failing_io.setattr(os, "fsync", fail_lock_sync)
+        else:
+            failing_io.setattr(os, "fdopen", fail_lock_fdopen)
         failing_io.setattr(Path, "stat", observe_path)
         with pytest.raises(effect_runtime.EffectRuntimeStartupError) as failure:
             effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
 
     assert failure.value.diagnostic_code == "runtime_request_failed"
     assert isinstance(failure.value.__cause__, OSError)
-    assert failure.value.__cause__.errno == errno.ENOSPC
+    assert failure.value.__cause__.errno == failure_errno
+    assert failed_descriptor is not None
+    try:
+        os.fstat(failed_descriptor)
+    except OSError as closed:
+        assert closed.errno == errno.EBADF
+    else:
+        os.close(failed_descriptor)
+        pytest.fail("failed startup retained the raw lock descriptor")
     assert not info_path.exists()
     if replace_lock:
         assert lock.read_text(encoding="utf-8") == replacement_owner
