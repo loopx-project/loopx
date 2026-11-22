@@ -1,0 +1,732 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "superseded",
+  "evaluation_mode": "release_gate_qualified",
+  "semver": {
+    "major": 2,
+    "minor": 3,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "2.3.0",
+    "version_tag": "v2.3.0",
+    "git_commit": "92271fe114916428be6fd36558bb7a93fbe49da8",
+    "git_tree": "4a806dfaa4cde387d8067705b938bfd028afa092",
+    "committed_at": "2026-11-09T07:29:33+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v2.3.0",
+      "last_tag": "v2.3.0",
+      "last_commit": "92271fe114916428be6fd36558bb7a93fbe49da8",
+      "last_committed_at": "2026-11-09T07:29:33+08:00",
+      "tag_count": 1
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": "exact_release_commit_qualification_receipt_v0",
+    "claims_net_benchmark_uplift": false,
+    "release_notes_path": "docs/product/releases/v2.3.0.md",
+    "audit_basis": "Release-gate-qualified 41-battleline commander evaluation anchored to tagged commit."
+  },
+  "a_scale": {
+    "score": 50.7,
+    "delta_from_prior": 4.1,
+    "domain_scores": {
+      "D1": 52.0,
+      "D2": 48.0,
+      "D3": 45.0,
+      "D4": 46.5,
+      "D5": 58.5,
+      "D6": 56.5,
+      "D7": 43.5,
+      "D8": 63.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 2,
+    "battleline_count": 30,
+    "score": 59.1,
+    "delta_from_prior": null,
+    "domain_scores": {
+      "D1": 61.0,
+      "D2": 57.0,
+      "D3": 58.7,
+      "D4": 55.8,
+      "D5": 66.6,
+      "D6": 56.5,
+      "D7": 52.2,
+      "D8": 68.0
+    }
+  },
+  "battleline_breakdown_scope": "full_41_battlelines",
+  "battlelines": [
+    {
+      "id": "1.1",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 16,
+        "D": 17
+      },
+      "score": 72,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "docs/product/releases/v2.3.0.md"
+      ]
+    },
+    {
+      "id": "1.2",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 19,
+        "B": 18,
+        "C": 14,
+        "D": 15
+      },
+      "score": 66,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "loopx-overall-roadmap-v0#S2"
+      ]
+    },
+    {
+      "id": "1.3",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 11,
+        "D": 11
+      },
+      "score": 56,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "docs/product/releases/v2.3.0.md"
+      ]
+    },
+    {
+      "id": "1.4",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 16,
+        "B": 14,
+        "C": 10,
+        "D": 10
+      },
+      "score": 50,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "1.5",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 16,
+        "B": 13,
+        "C": 8,
+        "D": 9
+      },
+      "score": 46,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.3.0",
+        "shared-goal-authority-state-provider-v0"
+      ]
+    },
+    {
+      "id": "1.6",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 9,
+        "B": 6,
+        "C": 4,
+        "D": 3
+      },
+      "score": 22,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T05"
+      ]
+    },
+    {
+      "id": "2.1",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 18,
+        "B": 17,
+        "C": 15,
+        "D": 14
+      },
+      "score": 64,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "loopx-overall-roadmap-v0#C2"
+      ]
+    },
+    {
+      "id": "2.2",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 15,
+        "D": 15
+      },
+      "score": 69,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "2.3",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 16,
+        "B": 13,
+        "C": 7,
+        "D": 6
+      },
+      "score": 42,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "controller-executor-unified-contract-v0"
+      ]
+    },
+    {
+      "id": "2.4",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 17,
+        "B": 15,
+        "C": 10,
+        "D": 11
+      },
+      "score": 53,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "2.5",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 14,
+        "B": 10,
+        "C": 6,
+        "D": 6
+      },
+      "score": 36,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.3.0",
+        "T02"
+      ]
+    },
+    {
+      "id": "2.6",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 10,
+        "B": 6,
+        "C": 4,
+        "D": 4
+      },
+      "score": 24,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T09"
+      ]
+    },
+    {
+      "id": "3.1",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 17,
+        "B": 15,
+        "C": 11,
+        "D": 11
+      },
+      "score": 54,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "3.2",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 14,
+        "D": 13
+      },
+      "score": 66,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "3.3",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 11,
+        "D": 11
+      },
+      "score": 56,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "3.4",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 11,
+        "B": 8,
+        "C": 4,
+        "D": 4
+      },
+      "score": 27,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T07"
+      ]
+    },
+    {
+      "id": "3.5",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 9,
+        "B": 6,
+        "C": 4,
+        "D": 3
+      },
+      "score": 22,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T04"
+      ]
+    },
+    {
+      "id": "4.1",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 20,
+        "B": 18,
+        "C": 15,
+        "D": 15
+      },
+      "score": 68,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "#8356"
+      ]
+    },
+    {
+      "id": "4.2",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 11,
+        "D": 11
+      },
+      "score": 56,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "4.3",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 17,
+        "B": 15,
+        "C": 11,
+        "D": 10
+      },
+      "score": 53,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "4.4",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 16,
+        "B": 13,
+        "C": 8,
+        "D": 9
+      },
+      "score": 46,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "4.5",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 13,
+        "B": 9,
+        "C": 6,
+        "D": 6
+      },
+      "score": 34,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "loopx-overall-roadmap-v0#G3"
+      ]
+    },
+    {
+      "id": "4.6",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 9,
+        "B": 6,
+        "C": 4,
+        "D": 3
+      },
+      "score": 22,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "loopx-overall-roadmap-v0#G4"
+      ]
+    },
+    {
+      "id": "5.1",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 16,
+        "D": 17
+      },
+      "score": 72,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "5.2",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 19,
+        "B": 18,
+        "C": 14,
+        "D": 15
+      },
+      "score": 66,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "5.3",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 18,
+        "B": 17,
+        "C": 14,
+        "D": 13
+      },
+      "score": 62,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "5.4",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 19,
+        "B": 18,
+        "C": 15,
+        "D": 14.5
+      },
+      "score": 66.5,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "5.5",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 10,
+        "B": 7,
+        "C": 5,
+        "D": 4
+      },
+      "score": 26,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "loopx-overall-roadmap-v0"
+      ]
+    },
+    {
+      "id": "6.1",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 20,
+        "B": 18,
+        "C": 15,
+        "D": 15
+      },
+      "score": 68,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "6.2",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 17,
+        "B": 15,
+        "C": 12,
+        "D": 11
+      },
+      "score": 55,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "6.3",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 17,
+        "B": 15,
+        "C": 12,
+        "D": 12
+      },
+      "score": 56,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "6.4",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 13,
+        "D": 12
+      },
+      "score": 59,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "#8387"
+      ]
+    },
+    {
+      "id": "6.5",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 15,
+        "B": 12,
+        "C": 8,
+        "D": 8
+      },
+      "score": 43,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "6.6",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 12,
+        "D": 12
+      },
+      "score": 58,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "7.1",
+      "domain_id": "D7",
+      "dimensions": {
+        "A": 19,
+        "B": 17,
+        "C": 13,
+        "D": 12
+      },
+      "score": 61,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "7.2",
+      "domain_id": "D7",
+      "dimensions": {
+        "A": 15,
+        "B": 12,
+        "C": 8.5,
+        "D": 8
+      },
+      "score": 43.5,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0#explicit-non-claim"
+      ]
+    },
+    {
+      "id": "7.3",
+      "domain_id": "D7",
+      "dimensions": {
+        "A": 10,
+        "B": 7,
+        "C": 5,
+        "D": 4
+      },
+      "score": 26,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T01"
+      ]
+    },
+    {
+      "id": "8.1",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 18,
+        "B": 15,
+        "C": 10,
+        "D": 11
+      },
+      "score": 54,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "8.2",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 22,
+        "B": 21,
+        "C": 18,
+        "D": 18
+      },
+      "score": 79,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0"
+      ]
+    },
+    {
+      "id": "8.3",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 16,
+        "D": 16
+      },
+      "score": 71,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0#community-contributors"
+      ]
+    },
+    {
+      "id": "8.4",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 16,
+        "B": 14,
+        "C": 9,
+        "D": 9
+      },
+      "score": 48,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.3.0",
+        "saas-opportunity-assessment.md"
+      ]
+    }
+  ],
+  "summary": "First release_gate_qualified 41-battleline baseline: legacy Steward continuation adoption, native frame compatibility (#8395), and research case readable series (#8387).",
+  "summary_zh": "首个正式全量 41 条战线评估基线：采纳失联确认后旧管家延续、原生帧兼容（#8395）与研究案例系列（#8387）。"
+}

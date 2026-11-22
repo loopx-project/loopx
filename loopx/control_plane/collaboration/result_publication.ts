@@ -17,6 +17,12 @@ function decisionKey(revision: number): string {
 }
 const UPDATE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 
+export function returnMessageId(requestId: string, resultKey: string): string {
+  // Retain Python json.dumps' spaces in the existing ASCII-only message identity.
+  const identity = JSON.stringify([requestId, resultKey]).replace(",", ", ");
+  return "handoff." + createHash("sha256").update(identity).digest("hex");
+}
+
 /** Receiver-authored scope on an immutable result, not a completion verdict or scheduler. */
 export function resultRemainingWork(value: unknown): JsonObject | null {
   if (value === undefined || value === null) return null;
@@ -62,6 +68,15 @@ export function resultAttachmentRefs(params: JsonObject): JsonObject {
   const refs = params.refs.map(workspaceRef);
   if (new Set(refs).size !== refs.length) throw new EffectRuntimeRequestError("duplicate result attachment refs");
   return {refs};
+}
+
+/** Match the exact bytes normal publication writes to the original Chat. */
+export function returnTranscriptText(reply: JsonObject, exact: boolean): string {
+  const prefix = exact ? (reply.phase === "conclusion" ? "处理结论" : "处理进展")
+    : (reply.phase === "conclusion" ? "协作回复" : "协作进展");
+  const provenance = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}`;
+  const body = collaborationResultText(reply);
+  return usesReaderReturnFormat(reply) ? `${body}\n\n${provenance}` : `${provenance}\n\n${body}`;
 }
 
 /** Explicit result files are content-bound observations, never new grants. */

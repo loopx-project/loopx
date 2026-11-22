@@ -194,7 +194,7 @@ both exit successfully. Telling them apart requires the writeback and spend hist
 **Boundary one: a heartbeat does not create a frontier.** A Goal with no Todos will not produce a next step
 because it was woken more often. With no runnable candidate, enter wait or monitor and let the cadence slow.
 
-Do not copy the quota state machine into
+**Boundary two: the automation is not a second control plane.** Do not copy the quota state machine into
 the automation prompt, and do not let it resolve runnable Todos on its own. The stable prompt carries
 protocol; the judgment belongs to the packet read on each wake.
 
@@ -261,7 +261,7 @@ repeat reminders so that a wait does not become a high-frequency notification.
    this turn's receipt is grounds to slow the cadence. Slowing happens when the current `scheduler_hint`
    proposes it (`apply_needed=true`), through the four steps below.
 4. **A cadence change needs all four steps**: proposal, host apply, host readback, ACK.
-5. Only a Host readback that matches the target closes the
+5. **A local ACK ledger does not prove Host state.** Only a Host readback that matches the target closes the
    loop; a mismatch is repaired as `drift_detected`.
 6. **Switching Hosts needs explicit handoff.** Shared Goal reads do not replace current authority, claim/lease, and fence checks.
 

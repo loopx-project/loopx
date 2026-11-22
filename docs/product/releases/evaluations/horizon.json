@@ -1,0 +1,2197 @@
+{
+  "schema_version": "loopx_commander_horizon_v0",
+  "rubric_version": "rubric_v0",
+  "scale_definitions": {
+    "a_scale": {
+      "name": "Global Cross-Generation Commander Scale",
+      "name_zh": "全局跨代指挥官标尺（a-Scale）",
+      "battleline_count": 41,
+      "formula": "weighted sum over D1..D8 where each domain averages all its battlelines across 2.x, 3.x, and 4.x tiers",
+      "invariant": "Weights and battleline denominator remain constant across generations (v0.1.3 -> v4.0) so scores are strictly comparable over time."
+    },
+    "b_scale": {
+      "name": "Intra-Generation Core Readiness Scale",
+      "name_zh": "代内核心战线就绪标尺（b-Scale）",
+      "formula": "weighted sum over D1..D8 restricting each domain average to battlelines with target_generation_major <= active_major",
+      "invariant": "Measures execution completeness of the active generation (30 lines in 2.x; expands to 36 in 3.x and 41 in 4.x)."
+    },
+    "dimensions": {
+      "A": {
+        "max": 25,
+        "label": "Architecture, Typed State Kernel & Formal Soundness"
+      },
+      "B": {
+        "max": 25,
+        "label": "Engineering Determinism, Verification & Anti-Tamper Gates"
+      },
+      "C": {
+        "max": 25,
+        "label": "Paired Causality, Real-World Uplift & Complete-Cost ROI"
+      },
+      "D": {
+        "max": 25,
+        "label": "Default-On Product Usability, Ergonomics & Adoption"
+      }
+    }
+  },
+  "anti_bloat_caps": {
+    "c_without_paired_public_evidence_max": 15.0,
+    "d_when_default_off_max": 12.0,
+    "enforcement_rule": "Any battleline lacking reproducible paired public baseline evidence is capped at C <= 15/25; any capability shipped behind an opt-in or default-off flag is capped at D <= 12/25."
+  },
+  "domains": [
+    {
+      "id": "D1",
+      "name": "Typed State Kernel, Authority Stores & Formal Recovery",
+      "name_zh": "类型化状态内核、权威存储与形式化恢复",
+      "weight": 0.16,
+      "rfc_refs": [
+        "S2",
+        "S9",
+        "S10",
+        "R4",
+        "R5",
+        "R6",
+        "T05"
+      ],
+      "battlelines": [
+        {
+          "id": "1.1",
+          "name": "Single-owner AuthorityStore, conditional CAS, hard lease & generation fencing (File/SQLite)",
+          "name_zh": "单主 AuthorityStore、条件 CAS、硬租约与代数围栏（File/SQLite）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S9",
+            "R4",
+            "R5"
+          ]
+        },
+        {
+          "id": "1.2",
+          "name": "Effect-program Turn kernel (EffectTurn), quota_settlement_plan_v2 & once-only idempotent settlement",
+          "name_zh": "Effect 程序 Turn 内核（EffectTurn）、quota_settlement_plan_v2 与幂等一次结算",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S7",
+            "R5"
+          ]
+        },
+        {
+          "id": "1.3",
+          "name": "Canonical storage backup, authority-archive upgrade & controlled Goal reactivation (M1-M3)",
+          "name_zh": "权威存储备份、authority-archive 升级与受控 Goal 恢复激活（M1-M3）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S10",
+            "G0"
+          ]
+        },
+        {
+          "id": "1.4",
+          "name": "Low-ceremony lease & write-scope ergonomics (wildcard collapse & zero-tax routine updates)",
+          "name_zh": "低仪式感租约与写域减税（通配符折叠与日常更新零噪声）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S7"
+          ]
+        },
+        {
+          "id": "1.5",
+          "name": "Outbound RemoteAuthority wire protocol, openPostgresqlStore SPI & lossless portable export",
+          "name_zh": "出站 RemoteAuthority 线级契约、openPostgresqlStore SPI 与无损可迁移导出",
+          "target_generation_major": 3,
+          "tier": "3.x_horizon",
+          "open_source_license_scope": "open_protocol_core",
+          "rfc_refs": [
+            "S2",
+            "S9",
+            "R6",
+            "G3"
+          ],
+          "open_protocol_core_criteria": "Apache-2.0 permanently owns local File/SQLite AuthorityStore, StorageConfig & openPostgresqlStore SPI, wire-neutral RemoteAuthority outbound client schemas, and lossless authority-archive export; private loopx-cloud owns multi-tenant hosted PostgreSQL runtime, connection pooling, RLS isolation, and managed backup/failover."
+        },
+        {
+          "id": "1.6",
+          "name": "Formalized small-kernel invariants & checked transition certificates (T05)",
+          "name_zh": "形式化小核不变式与可校验状态迁移证书（T05）",
+          "target_generation_major": 4,
+          "tier": "4.x_north_star",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "T05"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "name": "Prefix-Preserving Context, Compaction & Stride Control",
+      "name_zh": "前缀保序上下文、压缩保真与步幅控制",
+      "weight": 0.16,
+      "rfc_refs": [
+        "S2",
+        "S6",
+        "S7",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C9",
+        "T02",
+        "T03"
+      ],
+      "battlelines": [
+        {
+          "id": "2.1",
+          "name": "Append-only canonical prefix stability & exact differential delta delivery",
+          "name_zh": "只追加规范前缀 KV-Cache 保序与精确差分投递",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S6",
+            "C1",
+            "C2",
+            "T02"
+          ]
+        },
+        {
+          "id": "2.2",
+          "name": "Progressive JSON-pointer context-read & strict model-facing CLI output budgets",
+          "name_zh": "渐进 JSON-Pointer context-read 与模型可见输出字节预算门禁",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S7"
+          ]
+        },
+        {
+          "id": "2.3",
+          "name": "Unified C1 TurnEnvelope default cutover (<5% control tax) & legacy quota_packet retirement (C9)",
+          "name_zh": "C1 统一契约默认切换（控制面税 <5%）与旧包格式 C9 退役",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "C1",
+            "C9"
+          ]
+        },
+        {
+          "id": "2.4",
+          "name": "Event-triggered Stride & evidence-conditioned replan governance",
+          "name_zh": "事件触发步幅控制（Stride）与基于证据的重规划治理",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S3",
+            "S7",
+            "T03"
+          ]
+        },
+        {
+          "id": "2.5",
+          "name": "Decision-preserving compaction (FoldToReceipt / EpochReset) under native host compression",
+          "name_zh": "原生宿主压缩下的决策保真与验证回执恢复（FoldToReceipt / EpochReset）",
+          "target_generation_major": 3,
+          "tier": "3.x_horizon",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S2",
+            "S4",
+            "T02"
+          ]
+        },
+        {
+          "id": "2.6",
+          "name": "Recoverable history working sets & multiscale predictive control state (T09)",
+          "name_zh": "可恢复历史工作集与多尺度预测控制状态（T09）",
+          "target_generation_major": 4,
+          "tier": "4.x_north_star",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S6",
+            "T02",
+            "T09"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "name": "Non-Scalar Yardstick Calibration, Out-of-Tree Verifier & Domain RSI",
+      "name_zh": "非标量标尺校准、树外防篡改验证与受控领域自进化",
+      "weight": 0.15,
+      "rfc_refs": [
+        "S6",
+        "S8",
+        "S11",
+        "T01",
+        "T04",
+        "T06",
+        "T07",
+        "T08"
+      ],
+      "battlelines": [
+        {
+          "id": "3.1",
+          "name": "Non-scalar Target/Yardstick/Stride co-decision & proxy-vs-native reversal detection",
+          "name_zh": "非标量 Target/Yardstick/Stride 协同决策与代理指标倒挂检测",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S6",
+            "S11",
+            "T03"
+          ]
+        },
+        {
+          "id": "3.2",
+          "name": "Out-of-tree deterministic Merge, Visual & Benchmark verifier isolation (anti-reward-hacking)",
+          "name_zh": "树外确定性合入门禁、视觉验证与基准挂载防篡改审计",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S8",
+            "S11",
+            "S12"
+          ]
+        },
+        {
+          "id": "3.3",
+          "name": "Authority source registry, material lifecycle & decision provenance binding",
+          "name_zh": "权威资料注册、材料生命周期与决策引用同源溯源绑定",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S6"
+          ]
+        },
+        {
+          "id": "3.4",
+          "name": "Held-out Kendall tau-b fast-yardstick calibration & controlled Domain RSI loop (T07)",
+          "name_zh": "留出集 Kendall τ_b 快尺校准与受控领域自进化闭环（T07）",
+          "target_generation_major": 3,
+          "tier": "3.x_horizon",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S8",
+            "S11",
+            "T07"
+          ]
+        },
+        {
+          "id": "3.5",
+          "name": "Causal memory utility attribution, contrastive curriculum & active experiment design (T04/T06/T08)",
+          "name_zh": "因果记忆效用归因、对比课程与主动实验设计（T04/T06/T08）",
+          "target_generation_major": 4,
+          "tier": "4.x_north_star",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S6",
+            "S11",
+            "T04",
+            "T06",
+            "T08"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "name": "Multi-Agent Collaboration, Steward Handoff & Fleet Scale",
+      "name_zh": "多智能体协作、管家异步移交与百 Agent 编队",
+      "weight": 0.14,
+      "rfc_refs": [
+        "S1",
+        "S3",
+        "S7",
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R6",
+        "R7",
+        "C6",
+        "C7",
+        "C8"
+      ],
+      "battlelines": [
+        {
+          "id": "4.1",
+          "name": "Steward async manager_context inbox, read_peer_returns & original-route return closure",
+          "name_zh": "管家异步 manager_context 收件箱、同伴直读返回与原路径闭环",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S1",
+            "S3",
+            "R1",
+            "R3"
+          ]
+        },
+        {
+          "id": "4.2",
+          "name": "Small-team 2-3 worker two-cycle dependency collaboration, handoff & recovery (G1/G2/R2)",
+          "name_zh": "2-3 角色小团队两轮真实依赖协作、移交与中断恢复（G1/G2/R2）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S1",
+            "S3",
+            "G1",
+            "G2",
+            "R2"
+          ]
+        },
+        {
+          "id": "4.3",
+          "name": "Shared Goal alignment, governed amendment & cross-Agent acceptance aggregation (R4)",
+          "name_zh": "共享 Goal 方向对齐、受控修订与跨 Agent 聚合验收（R4）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S3",
+            "R4"
+          ]
+        },
+        {
+          "id": "4.4",
+          "name": "Dual-role Controller-Executor separation & non-blocking busy-time steering (C6-C8)",
+          "name_zh": "双角色 Controller-Executor 解耦与忙时无阻塞纠偏（C6-C8）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S3",
+            "S4",
+            "C6",
+            "C7",
+            "C8"
+          ]
+        },
+        {
+          "id": "4.5",
+          "name": "Cross-host task division, shared budget fencing & returning-worker lease protocol (G3/R6)",
+          "name_zh": "跨机任务分工、共享预算围栏与回传租约开放协议（G3/R6）",
+          "target_generation_major": 3,
+          "tier": "3.x_horizon",
+          "open_source_license_scope": "open_protocol_core",
+          "rfc_refs": [
+            "S3",
+            "S4",
+            "S7",
+            "G3",
+            "R6"
+          ],
+          "open_protocol_core_criteria": "Apache-2.0 permanently owns single-writer claim/lease, handoff envelope, returning-worker fencing, and shared budget contracts; private loopx-cloud owns multi-region hosted worker fleets, encrypted secret brokering, and cross-tenant scheduler placement."
+        },
+        {
+          "id": "4.6",
+          "name": "10-to-100+ Agent cohort convergence, bounded projections & fairness/anti-loop contract (G4/R7)",
+          "name_zh": "10→100+ Agent 编队收敛、有界投影与公平/防死循环调度契约（G4/R7）",
+          "target_generation_major": 4,
+          "tier": "4.x_north_star",
+          "open_source_license_scope": "open_protocol_core",
+          "rfc_refs": [
+            "S5",
+            "S7",
+            "S10",
+            "G4",
+            "R7"
+          ],
+          "open_protocol_core_criteria": "Apache-2.0 permanently owns bounded projection contracts, fairness/anti-loop schemas, and self-hosted small-cohort execution; private loopx-cloud owns 10-to-100+ hosted cohort control, quota billing/metering, and elastic fleet autoscaling."
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "name": "Runtime/Model/Sandbox Neutrality & L1-L4 Adoption Connectors",
+      "name_zh": "运行时/模型/沙箱双中立连接器与 L1-L4 渐进接入",
+      "weight": 0.12,
+      "rfc_refs": [
+        "S4",
+        "S8",
+        "S10",
+        "C1",
+        "C9",
+        "T09"
+      ],
+      "battlelines": [
+        {
+          "id": "5.1",
+          "name": "Neutral CLI/ACP host adapters (Codex App/CLI, Antigravity, Claude Code, OpenCode, ZCode, Pi)",
+          "name_zh": "中立 CLI/ACP 宿主适配器（Codex、Antigravity、Claude Code、OpenCode、ZCode、Pi）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S4"
+          ]
+        },
+        {
+          "id": "5.2",
+          "name": "dsh-loopx-plugin admission, PreStepDecision hook & version-fenced registry integration",
+          "name_zh": "dsh-loopx-plugin 准入、PreStepDecision 钩子与版本围栏注册集成",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S4",
+            "S8"
+          ]
+        },
+        {
+          "id": "5.3",
+          "name": "Bidirectional executor failover (codex <-> antigravity), endpoint profiles & capacity aliases",
+          "name_zh": "双向执行器容灾切换（codex <-> antigravity）、端点偏好与容量别名解析",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S4"
+          ]
+        },
+        {
+          "id": "5.4",
+          "name": "Ephemeral sandbox / worktree isolation, Windows PowerShell parity & rollout fencing",
+          "name_zh": "临时沙箱 / worktree 隔离、Windows PowerShell 对齐与 rollout 围栏",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S4",
+            "S10"
+          ]
+        },
+        {
+          "id": "5.5",
+          "name": "Third-party agent framework L1->L4 zero-rewrite progressive adoption standard",
+          "name_zh": "第三方 Agent 框架 L1→L4 零重写渐进接入开放标准",
+          "target_generation_major": 4,
+          "tier": "4.x_north_star",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S8",
+            "T09"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D6",
+      "name": "Omnichannel Human-Agent Workbench (Desktop, Web, Lark)",
+      "name_zh": "全渠道人机共生工作台（Desktop、Web、Lark）",
+      "weight": 0.1,
+      "rfc_refs": [
+        "S1",
+        "S4",
+        "S5",
+        "S12",
+        "G1",
+        "G2"
+      ],
+      "battlelines": [
+        {
+          "id": "6.1",
+          "name": "Named release lifecycle, one-command upgrade & atomic rollback (update / authority-archive)",
+          "name_zh": "命名版本发布周期、一键升级与原子回滚（update / authority-archive）",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S1",
+            "S12"
+          ]
+        },
+        {
+          "id": "6.2",
+          "name": "macOS/Windows Desktop shell, startup freshness reconciliation & signed preview updater",
+          "name_zh": "macOS/Windows Desktop 壳层、启动新鲜度协调与签名热更新",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S4",
+            "S5"
+          ]
+        },
+        {
+          "id": "6.3",
+          "name": "Goal workspace, live team map (W1 / L1 correction view) & full-history conversation search",
+          "name_zh": "Goal 工作区、实时团队地图（W1/L1 纠偏视图）与会话全文检索",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S5",
+            "G1"
+          ]
+        },
+        {
+          "id": "6.4",
+          "name": "Research breakthrough workbench & 5-minute verifier-backed case diff inspection",
+          "name_zh": "研究突破工作台与 5 分钟人类可懂验证证据分析面",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S5",
+            "S11"
+          ]
+        },
+        {
+          "id": "6.5",
+          "name": "Experimental LooChat (@loopx/loochat) standalone web conversation surface",
+          "name_zh": "实验性 LooChat（@loopx/loochat）独立 Web 会话工作台",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S5"
+          ]
+        },
+        {
+          "id": "6.6",
+          "name": "Hardened Lark group / private channel cards & App-Lark cursor continuity",
+          "name_zh": "加固飞书群/私聊卡片交互与 App-Lark 同会话游标连续性",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S5",
+            "G1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D7",
+      "name": "Long-Horizon Public Benchmarks, Causal Uplift & Statistical Inference",
+      "name_zh": "长程公开基准、同源因果实证与连续有效统计推断",
+      "weight": 0.1,
+      "rfc_refs": [
+        "S11",
+        "S13",
+        "T01",
+        "T10"
+      ],
+      "battlelines": [
+        {
+          "id": "7.1",
+          "name": "Benchmark toolkit, quiescent same-state checkpoint (tau_B) & matched Stop-Hook isolation",
+          "name_zh": "基准工具包、同起点静默检查点（τ_B）与 Stop-Hook 反混杂基线隔离",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S11"
+          ]
+        },
+        {
+          "id": "7.2",
+          "name": "Six public benchmarks reproducible paired net uplift (Delta J > 0) & complete-cost accounting",
+          "name_zh": "外部公榜可复现同源配对净收益（ΔJ > 0）与完整控制面成本核算",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S11",
+            "S13"
+          ]
+        },
+        {
+          "id": "7.3",
+          "name": "Anytime-valid sequential inference (e-processes / confidence sequences) & scientific campaign infrastructure",
+          "name_zh": "连续有效序贯统计推断（e-Process / 置信序列）与科学实验战役基础设施（T01/T10）",
+          "target_generation_major": 3,
+          "tier": "3.x_horizon",
+          "open_source_license_scope": "open_protocol_core",
+          "rfc_refs": [
+            "S11",
+            "T01",
+            "T10"
+          ],
+          "open_protocol_core_criteria": "Apache-2.0 permanently owns the open benchmark toolkit, quiescent tau_B & Stop-Hook anti-confounding contracts, and anytime-valid e-process verification scripts; enterprise hosted replay clusters, confidential customer dataset vaults, and regression dashboards belong to loopx-cloud."
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "name": "Open-Source Governance, Protected Domain Packs & Commercial Ecosystem",
+      "name_zh": "开源治理、受保护领域包与开闭源商业生态",
+      "weight": 0.07,
+      "rfc_refs": [
+        "S8",
+        "S12",
+        "S13",
+        "G5"
+      ],
+      "battlelines": [
+        {
+          "id": "8.1",
+          "name": "Protected domain capability packs (domain_pack_contract_v0), human gates & third-party SDK",
+          "name_zh": "受保护领域能力包（domain_pack_contract_v0）、人工确认门与扩展 SDK",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S8"
+          ]
+        },
+        {
+          "id": "8.2",
+          "name": "Exact-head pr-review, risk canary, bilingual RFC parity, a/b eval gate & attested artifacts",
+          "name_zh": "精确头 pr-review、风险 Canary、双语 RFC 门禁、a/b 评估门与制品溯源签名",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S12"
+          ]
+        },
+        {
+          "id": "8.3",
+          "name": "Global contributor ladder governance, complexity ratchets & zero-Any type-safety baseline",
+          "name_zh": "全球贡献者阶梯治理、复杂度棘轮与零 Any 类型安全基线",
+          "target_generation_major": 2,
+          "tier": "2.x_core",
+          "open_source_license_scope": "apache_2_0_in_repo",
+          "rfc_refs": [
+            "S12"
+          ]
+        },
+        {
+          "id": "8.4",
+          "name": "Independent external adoption funnel, reproducible cases & Apache-2.0 OSS / loopx-cloud commercial boundary",
+          "name_zh": "独立外部采用漏斗、可复现案例库与 Apache-2.0 / loopx-cloud 开闭源边界（G5）",
+          "target_generation_major": 3,
+          "tier": "3.x_horizon",
+          "open_source_license_scope": "open_protocol_core",
+          "rfc_refs": [
+            "S13",
+            "G5"
+          ],
+          "open_protocol_core_criteria": "Apache-2.0 permanently owns domain_pack_contract_v0, PR/merge/canary/a+b qualification gates, and portable open artifacts with zero vendor lock-in; private loopx-cloud owns SaaS/BYOC billing, SOC2/audit trails, org SSO/RBAC, and managed FDE enterprise onboarding connectors."
+        }
+      ]
+    }
+  ],
+  "generations": [
+    {
+      "major": 0,
+      "codename": "Bootstrap CLI & Workspace Ledger",
+      "codename_zh": "引导期 CLI 与工作区账本",
+      "status": "eol",
+      "series_covered": [
+        "0.1",
+        "0.2",
+        "0.3",
+        "0.4",
+        "0.5"
+      ],
+      "exit_gates": [
+        {
+          "id": "G-0to1-1",
+          "summary": "SemVer release contract, quota durability, and initial Desktop workbench shell shipped."
+        }
+      ]
+    },
+    {
+      "major": 1,
+      "codename": "Multi-Surface Workbench & Steward Emergence",
+      "codename_zh": "多端工作台与管家异步协议萌芽",
+      "status": "eol",
+      "series_covered": [
+        "1.0",
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4"
+      ],
+      "exit_gates": [
+        {
+          "id": "G-1to2-1",
+          "summary": "TypeScript control-plane spine cutover, lease/CAS kernel, and retirement of Markdown authority dual-write."
+        }
+      ]
+    },
+    {
+      "major": 2,
+      "codename": "Deterministic Single-Host Multi-Agent Control Plane",
+      "codename_zh": "确定性单机多智能体控制面",
+      "status": "active_stable",
+      "series_covered": [
+        "2.0",
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4"
+      ],
+      "exit_gates": [
+        {
+          "id": "G-2to3-1",
+          "summary": "v3.0 candidate achieves a_scale >= 72.0 and D1..D5 >= 72.0 with b_scale >= 78.0.",
+          "threshold": {
+            "a_scale_min": 72.0,
+            "b_scale_min": 78.0,
+            "d1_to_d5_min": 72.0
+          }
+        },
+        {
+          "id": "G-2to3-2",
+          "summary": "Reproducible paired net benchmark uplift (Delta J > 0) across >= 3 external public benchmarks under quiescent tau_B & Stop-Hook isolation, unlocking battleline 7.2."
+        },
+        {
+          "id": "G-2to3-3",
+          "summary": "Plan B Open-Core separation live: clean openPostgresqlStore SPI, outbound RemoteAuthority client, and cross-host task/lease open protocols (1.5, 4.5)."
+        },
+        {
+          "id": "G-2to3-4",
+          "summary": "C1 TurnEnvelope default cutover (<5% control tax, 2.3) and FoldToReceipt / EpochReset compaction recovery (2.5) enabled cleanly."
+        },
+        {
+          "id": "G-2to3-5",
+          "summary": "Documented, smoke-verified 2.x -> 3.0 upgrade/archive/downgrade migration contract."
+        }
+      ]
+    },
+    {
+      "major": 3,
+      "codename": "Cross-Host Federated Swarm & Causally Calibrated Loop",
+      "codename_zh": "跨机联邦编队与因果校准闭环",
+      "status": "horizon",
+      "target_version": "3.0.0",
+      "target_a_scale": 76.1,
+      "target_a_domain_scores": {
+        "D1": 76.0,
+        "D2": 75.0,
+        "D3": 74.0,
+        "D4": 75.0,
+        "D5": 79.0,
+        "D6": 78.0,
+        "D7": 76.0,
+        "D8": 78.0
+      },
+      "target_b_scale": 79.8,
+      "target_b_domain_scores": {
+        "D1": 82.0,
+        "D2": 79.2,
+        "D3": 79.0,
+        "D4": 79.2,
+        "D5": 84.8,
+        "D6": 78.0,
+        "D7": 76.0,
+        "D8": 78.0
+      },
+      "target_b_battleline_count": 36,
+      "target_battlelines": [
+        {
+          "id": "1.1",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "1.2",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "1.3",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 18,
+            "D": 19
+          },
+          "score": 80,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "1.4",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 18,
+            "D": 19
+          },
+          "score": 80,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "1.5",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 22,
+            "B": 20,
+            "C": 18,
+            "D": 18
+          },
+          "score": 78,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "1.6",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 15,
+            "B": 13,
+            "C": 9,
+            "D": 9
+          },
+          "score": 46,
+          "paired_public_evidence": false,
+          "default_off": true,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "2.1",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 19,
+            "D": 20
+          },
+          "score": 82,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "2.2",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 19,
+            "D": 20
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "2.3",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 22,
+            "B": 20,
+            "C": 18,
+            "D": 18
+          },
+          "score": 78,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "2.4",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 17,
+            "D": 18
+          },
+          "score": 76,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "2.5",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 17,
+            "D": 18
+          },
+          "score": 76,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "2.6",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 17,
+            "B": 14,
+            "C": 12,
+            "D": 11
+          },
+          "score": 54,
+          "paired_public_evidence": false,
+          "default_off": true,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "3.1",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 19,
+            "D": 18
+          },
+          "score": 80,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "3.2",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "3.3",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 18,
+            "D": 19
+          },
+          "score": 80,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "3.4",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 20,
+            "B": 18,
+            "C": 16,
+            "D": 16
+          },
+          "score": 70,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "3.5",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 17,
+            "B": 14,
+            "C": 12,
+            "D": 11
+          },
+          "score": 54,
+          "paired_public_evidence": false,
+          "default_off": true,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "4.1",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "4.2",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 19,
+            "D": 20
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "4.3",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 18,
+            "D": 19
+          },
+          "score": 78,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "4.4",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 17,
+            "D": 18
+          },
+          "score": 76,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "4.5",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 20,
+            "B": 19,
+            "C": 17,
+            "D": 16
+          },
+          "score": 72,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "4.6",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 16,
+            "B": 14,
+            "C": 12,
+            "D": 12
+          },
+          "score": 54,
+          "paired_public_evidence": false,
+          "default_off": true,
+          "evidence_refs": [
+            "horizon:v3.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "5.1",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 21,
+            "D": 22
+          },
+          "score": 88,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "5.2",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 20,
+            "D": 21
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "5.3",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 20,
+            "D": 21
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "5.4",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 20,
+            "D": 20
+          },
+          "score": 83,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "5.5",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 17,
+            "B": 15,
+            "C": 13,
+            "D": 11
+          },
+          "score": 56,
+          "paired_public_evidence": false,
+          "default_off": true,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "6.1",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 19,
+            "D": 20
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "6.2",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 18,
+            "D": 17
+          },
+          "score": 76,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "6.3",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 18,
+            "D": 19
+          },
+          "score": 80,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "6.4",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 18,
+            "D": 19
+          },
+          "score": 78,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "6.5",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 20,
+            "B": 19,
+            "C": 16,
+            "D": 17
+          },
+          "score": 72,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "6.6",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 18,
+            "D": 19
+          },
+          "score": 78,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "7.1",
+          "domain_id": "D7",
+          "dimensions": {
+            "A": 22,
+            "B": 22,
+            "C": 20,
+            "D": 20
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "7.2",
+          "domain_id": "D7",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 19,
+            "D": 18
+          },
+          "score": 78,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "7.3",
+          "domain_id": "D7",
+          "dimensions": {
+            "A": 19,
+            "B": 18,
+            "C": 15,
+            "D": 14
+          },
+          "score": 66,
+          "paired_public_evidence": false,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "8.1",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 21,
+            "B": 20,
+            "C": 17,
+            "D": 18
+          },
+          "score": 76,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "8.2",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 20,
+            "D": 21
+          },
+          "score": 88,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "8.3",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 19,
+            "D": 18
+          },
+          "score": 80,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0"
+          ]
+        },
+        {
+          "id": "8.4",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 20,
+            "B": 18,
+            "C": 15,
+            "D": 15
+          },
+          "score": 68,
+          "paired_public_evidence": false,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v3.0",
+            "open_protocol_core"
+          ]
+        }
+      ],
+      "exit_gates": [
+        {
+          "id": "G-3to4-1",
+          "summary": "v4.0 candidate achieves a_scale >= 88.0 across all 41 battlelines.",
+          "threshold": {
+            "a_scale_min": 88.0
+          }
+        },
+        {
+          "id": "G-3to4-2",
+          "summary": "T05 checked transition certificates (1.6) and multiscale recoverable working sets (2.6) enabled by default."
+        },
+        {
+          "id": "G-3to4-3",
+          "summary": "10-to-100+ Agent cohort convergence, bounded projection, and fairness/anti-loop contract (4.6) proven at scale."
+        },
+        {
+          "id": "G-3to4-4",
+          "summary": "Third-party L1->L4 zero-rewrite adoption standard (5.5) and causal memory utility attribution (3.5) verified externally."
+        }
+      ]
+    },
+    {
+      "major": 4,
+      "codename": "Autonomous Long-Horizon Engineering Civilization (North Star)",
+      "codename_zh": "自主长程工程与科学研究自治体系（北极星目标）",
+      "status": "horizon",
+      "target_version": "4.0.0",
+      "target_a_scale": 90.8,
+      "target_a_domain_scores": {
+        "D1": 91.0,
+        "D2": 90.0,
+        "D3": 90.0,
+        "D4": 91.0,
+        "D5": 92.0,
+        "D6": 90.0,
+        "D7": 91.0,
+        "D8": 92.0
+      },
+      "target_b_scale": 90.8,
+      "target_b_domain_scores": {
+        "D1": 91.0,
+        "D2": 90.0,
+        "D3": 90.0,
+        "D4": 91.0,
+        "D5": 92.0,
+        "D6": 90.0,
+        "D7": 91.0,
+        "D8": 92.0
+      },
+      "target_b_battleline_count": 41,
+      "target_battlelines": [
+        {
+          "id": "1.1",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 24
+          },
+          "score": 95,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "1.2",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 24
+          },
+          "score": 95,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "1.3",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "1.4",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "1.5",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 23,
+            "B": 23,
+            "C": 22,
+            "D": 22
+          },
+          "score": 90,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "1.6",
+          "domain_id": "D1",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 19,
+            "D": 20
+          },
+          "score": 82,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "2.1",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 23
+          },
+          "score": 94,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "2.2",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 23
+          },
+          "score": 94,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "2.3",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "2.4",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 23,
+            "B": 23,
+            "C": 22,
+            "D": 22
+          },
+          "score": 90,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "2.5",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 21,
+            "D": 22
+          },
+          "score": 88,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "2.6",
+          "domain_id": "D2",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 19,
+            "D": 20
+          },
+          "score": 82,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "3.1",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "3.2",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 25,
+            "B": 24,
+            "C": 23,
+            "D": 24
+          },
+          "score": 96,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "3.3",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "3.4",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "3.5",
+          "domain_id": "D3",
+          "dimensions": {
+            "A": 22,
+            "B": 21,
+            "C": 20,
+            "D": 21
+          },
+          "score": 84,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "4.1",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 24
+          },
+          "score": 95,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "4.2",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 23
+          },
+          "score": 94,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "4.3",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "4.4",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 23,
+            "B": 23,
+            "C": 22,
+            "D": 22
+          },
+          "score": 90,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "4.5",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 22,
+            "D": 22
+          },
+          "score": 89,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "4.6",
+          "domain_id": "D4",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "5.1",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 24,
+            "D": 24
+          },
+          "score": 96,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "5.2",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 23,
+            "D": 23
+          },
+          "score": 93,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "5.3",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 23,
+            "D": 23
+          },
+          "score": 93,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "5.4",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "5.5",
+          "domain_id": "D5",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 20,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "6.1",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 23,
+            "D": 23
+          },
+          "score": 93,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "6.2",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 22,
+            "D": 22
+          },
+          "score": 89,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "6.3",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "6.4",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 23,
+            "B": 23,
+            "C": 22,
+            "D": 22
+          },
+          "score": 90,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "6.5",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 22,
+            "B": 22,
+            "C": 21,
+            "D": 21
+          },
+          "score": 86,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "6.6",
+          "domain_id": "D6",
+          "dimensions": {
+            "A": 23,
+            "B": 23,
+            "C": 22,
+            "D": 22
+          },
+          "score": 90,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "7.1",
+          "domain_id": "D7",
+          "dimensions": {
+            "A": 24,
+            "B": 24,
+            "C": 23,
+            "D": 23
+          },
+          "score": 94,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "7.2",
+          "domain_id": "D7",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "7.3",
+          "domain_id": "D7",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 21,
+            "D": 21
+          },
+          "score": 87,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0",
+            "open_protocol_core"
+          ]
+        },
+        {
+          "id": "8.1",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 22
+          },
+          "score": 91,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "8.2",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 25,
+            "B": 24,
+            "C": 23,
+            "D": 24
+          },
+          "score": 96,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "8.3",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 24,
+            "B": 23,
+            "C": 22,
+            "D": 23
+          },
+          "score": 92,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0"
+          ]
+        },
+        {
+          "id": "8.4",
+          "domain_id": "D8",
+          "dimensions": {
+            "A": 23,
+            "B": 22,
+            "C": 22,
+            "D": 22
+          },
+          "score": 89,
+          "paired_public_evidence": true,
+          "default_off": false,
+          "evidence_refs": [
+            "horizon:v4.0",
+            "open_protocol_core"
+          ]
+        }
+      ],
+      "exit_gates": []
+    }
+  ]
+}

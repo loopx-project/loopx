@@ -460,6 +460,9 @@ def handle_refresh_state_command(
         try:
             ref = (exact_goal_ref(args.goal_id, args.goal_instance_id) if args.goal_instance_id
                    else capture_first_party_host_goal_ref(registry_path=registry_path, goal_id=args.goal_id))
+            # The launcher override only controls how subsequent commands are rendered.
+            requested_effects = vars(args).copy()
+            requested_effects.pop("control_cli_bin", None)
             payload = commit_execution_loss_closeout(
                 registry_path=registry_path, runtime_root_override=args.runtime_root,
                 goal_id=args.goal_id, agent_id=args.agent_id or "", todo_id=args.todo_id or "",
@@ -468,7 +471,7 @@ def handle_refresh_state_command(
                                  "expected_version": args.task_lease_expected_version},
                 progress_observation=inline_progress_observation(args),
                 delivery_outcome=args.delivery_outcome, delivery_boundary=args.delivery_boundary,
-                requested_effects=vars(args), dry_run=args.dry_run,
+                requested_effects=requested_effects, dry_run=args.dry_run,
             )
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             code = getattr(exc, "code", None)

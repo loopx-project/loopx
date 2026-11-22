@@ -678,8 +678,12 @@ an ambiguous later scope change remains retained, without another model run.
 
 The existing idle Chat wake producer admits one calendar window and creates
 one native finite generation Todo for it. The original Chat worker and native
-thread author the report, using complete frozen source records and the owner's
-`REPORTING.md` criteria. Public-safe Turn fields remain separate from private
+thread author the report, using complete frozen source records and the
+workspace `REPORTING.md` criteria (seeded from the repository-maintained
+`loopx/capabilities/manager_context/templates/REPORTING.md` for steward
+workspaces, or `SESSION_REPORTING.md` when a local Goal workspace has no
+custom `REPORTING.md`, while preserving any owner-customized workspace file).
+Public-safe Turn fields remain separate from private
 editorial content. A report-specific opt-in allows the kernel's existing
 `validated_completion`; its original task lease and independent artifact
 validator must pass before the generation Todo closes. Ordinary host prompts
