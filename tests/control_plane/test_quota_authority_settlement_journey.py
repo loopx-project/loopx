@@ -952,3 +952,106 @@ def test_spend_index_conflict_keeps_its_diagnostic_and_retries_the_same_turn(
     assert code == 0 and replay["appended"] is False, replay
     assert replay["settlement_identity"] == recovered["settlement_identity"]
     assert cli._spend_run_count(runtime) == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_default_refresh_spend_conflict_recovers_across_profiles_and_remote_wait(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    reg_data = json.loads(registry.read_text(encoding="utf-8"))
+    reg_data["goals"][0]["quota"]["allowed_slots"] = 10
+    registry.write_text(json.dumps(reg_data, indent=2), encoding="utf-8")
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0, guard
+    code, refreshed = cli._run_cli(
+        registry, runtime, "refresh-state",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
+        "--classification", "verified", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync",
+        "--suppress-external-sinks", cwd=project,
+    )
+    assert code == 0, refreshed
+    assert refreshed["settlement_progress"]["state"] == "spend_required", refreshed
+    command = refreshed["settlement_owed"]["command"]
+
+    commit = slot_accounting.record_quota_slot_spend_from_preview
+
+    def spend_with_competing_write(preview, status, **kwargs):
+        comp_code, competing = cli._run_cli(
+            registry, runtime, "quota", "spend-slot", "--execute", "--source", "controller",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, cwd=project,
+        )
+        assert comp_code == 0 and competing["appended"] is True, competing
+        return commit(preview, status, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.chdir(project)
+        patch.setattr(
+            slot_accounting, "record_quota_slot_spend_from_preview", spend_with_competing_write,
+        )
+        code = cli_main(shlex.split(command)[1:])
+    rejected = json.loads(capsys.readouterr().out)
+    assert code == 1 and rejected["error_code"] == "index_digest_conflict", rejected
+    assert rejected["appended"] is False and cli._spend_run_count(runtime) == 1
+
+    readback = read_heartbeat_settlement(
+        runtime,
+        goal_id=cli.GOAL_ID,
+        agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID,
+        turn_instance_id=cli.TURN_ID,
+        registry_path=registry,
+    )
+    assert readback is not None and readback.replay_phase.value == "settlement_pending"
+
+    for extra in (
+        ["--codex-app", "--todo-id", cli.TODO_ID],
+        ["--codex-app"],
+        ["--runtime-profile", "generic_cli"],
+        [],
+    ):
+        code, rerun = cli._run_cli(
+            registry, runtime, "quota", "should-run",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+            "--turn-instance-id", cli.TURN_ID, *extra, cwd=project,
+        )
+        assert code == 0, (extra, rerun)
+        assert rerun["decision"] == "unsettled_host_turn_recovery", (extra, rerun)
+        assert rerun["effective_action"] == "unsettled_host_turn_recovery", (extra, rerun)
+        assert rerun["unsettled_host_turn_recovery"]["repair"] == "quota_spend", (extra, rerun)
+        assert rerun["settlement_progress"]["state"] == "spend_required", (extra, rerun)
+        assert rerun["settlement_owed"]["command"] == command, (extra, rerun)
+        assert rerun["interaction_contract"]["cli_channel"]["next_cli_actions"] == [command]
+
+    # Remote authority wait gating on readback.replay_phase == SETTLEMENT_PENDING must also recover.
+    remote_reg = json.loads(registry.read_text(encoding="utf-8"))
+    remote_reg["goals"][0]["remote_authority"] = {"enabled": True}
+    registry.write_text(json.dumps(remote_reg, indent=2), encoding="utf-8")
+    try:
+        for extra in (["--codex-app", "--todo-id", cli.TODO_ID], ["--codex-app"], []):
+            code, remote_rerun = cli._run_cli(
+                registry, runtime, "quota", "should-run",
+                "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+                "--turn-instance-id", cli.TURN_ID, *extra, cwd=project,
+            )
+            assert code == 0, (extra, remote_rerun)
+            assert remote_rerun["decision"] == "unsettled_host_turn_recovery", (extra, remote_rerun)
+            assert remote_rerun["effective_action"] == "unsettled_host_turn_recovery", (extra, remote_rerun)
+            assert remote_rerun["unsettled_host_turn_recovery"]["repair"] == "quota_spend", (extra, remote_rerun)
+            assert remote_rerun["settlement_owed"]["command"] == command, (extra, remote_rerun)
+    finally:
+        registry.write_text(json.dumps(reg_data, indent=2), encoding="utf-8")
+
+    code, recovered = _execute(command, project, runtime, registry)
+    assert code == 0 and recovered["appended"] is True, recovered
+    assert recovered["settlement_progress"]["state"] == "settled", recovered
+    assert cli._spend_run_count(runtime) == 2
+
+    code, next_turn = _guard(project, runtime, registry, turn_id=f"{cli.TURN_ID}-next")
+    assert code == 0 and next_turn["effective_action"] != "unsettled_host_turn_recovery", next_turn
