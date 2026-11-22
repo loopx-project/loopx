@@ -1,0 +1,57 @@
+# RFC: Verifier Hook Co-Design (v0)
+
+- **RFC status:** Proposed
+- **Delivery maturity:** TypeScript contract. Host adapters and outcome qualification are pending.
+- **Related contracts:** [Controller and executor](controller-executor-unified-contract-v0.md), [History working sets](history-working-set-context-policy-v0.md), [Target, Yardstick and Stride](target-yardstick-stride-decisions-v0.md), [Capability portfolio](goal-scoped-capability-portfolio-v0.md)
+- **Language mirror:** [中文版](verifier-hook-co-design-v0.zh-CN.md)
+
+## 1. Authority and solver view
+
+Use public host hooks and session branching at four boundaries to improve independently accepted outcomes and reduce full cost. C1 remains the authority for Goal, Todo, acceptance, evidence and settlement. The solver receives a projection of the objective, cumulative acceptance and constraints, verifier profile, best verified incumbent and falsification references. The controller keeps the complete decision and uses existing admission and settlement. A successful model response, a hook event and accepted work are distinct facts.
+
+The Goal verifier profile identifies a version-bound external Oracle and may refer to the existing work-yardstick profile. The cheap yardstick steers exploration. The independent Oracle validates the exact candidate under current acceptance. Missing observations remain unknown. Run the verifier outside the solver's writable checkout with independent process and file permissions. Use existing controls for external actions. Attribute candidate and evaluator changes separately at settlement. Diff audit can withhold acceptance after a discrepancy. Filesystem isolation and external authorization enforce the boundary before effects.
+
+Use official extension interfaces with unmodified host kernels and supported authentication for each host. Credentials stay with the client they were issued for. Adapters report observed behavior for their version and surface. Feature off leaves current execution, C1 transport and settlement unchanged.
+
+## 2. Capability negotiation and boundaries
+
+No verifier hook route participates when the feature is off. When enabled, L0 uses bounded launch and stop with the same independent Oracle and settlement semantics. L1 adds observed session lineage and bounded context delivery at supported boundaries. L2 additionally requires milestone observation, isolated child work and verified return. The highest supported tier applies. Opt-in for the optional pre-tool extension requires explicit policy and an observed matching hook. It is off in ordinary solve at every tier. Capabilities and tiers grant no authority.
+
+| Boundary | Behavior | Fallback |
+| --- | --- | --- |
+| Start or resume | At a real resume or phase change, deliver the bounded solver view or exact evidence references. Quiet turns skip recurring administrative context. | Deliver the view at bounded launch. Measure actual cache use separately from prefix equality. |
+| Milestone probe | Enqueue a configured, budgeted observation outside the synchronous tool path. Feed back evidenced plateau, regression or proxy rank reversal at the next supported boundary. | Read at the next bounded turn. An unavailable probe stays unknown. |
+| Compaction or subscope | Capture open constraints and falsification references before the boundary, then restore their verified projection. Verify a child branch before returning a compact result. | Keep original inputs and defer the return to the next supported boundary. |
+| Stop or completion claim | Submit the exact candidate to the independent Oracle. Return a reproducible counterexample after a bounded failure. The controller owns pending or expensive evaluation. | Normal settlement withholds acceptance when the host cannot continue in place. |
+
+Transitions report `completion_claim` to the Oracle, `yardstick_plateau_or_regression` to Stride, and `proxy_order_reversed` to the yardstick owner for verification or replacement. `protected_boundary_touch` retains isolation refusal or audit evidence, stops the affected attempt and re-enters under original authority. Observations cannot directly change the Todo, activate a capability, publish or spend. Regular work avoids a per-tool synchronous verifier.
+
+| Host | Start / resume | Milestone | Compaction / subscope | Stop |
+| --- | --- | --- | --- | --- |
+| Official Codex | `SessionStart`, supported `UserPromptSubmit` context, native lineage and Turn-bound MCP probes | Selected `PostToolUse` or tool-completion observation with bounded asynchronous work | `PreCompact` / `PostCompact` observe compaction. Restore through supported start context or a bound read. Use `SubagentStart` / `SubagentStop` for lifecycle and App Server `thread/fork` for a separate branch | `Stop` blocking feedback where supported. Otherwise use controller settlement |
+| DSH Cordis | Plugin observes the session and first bound turn | `session/event` with `step/end` | Observe supported session events and qualify concrete branch, restore and verified return before declaring L2 | `turn/end` through `session/event`, then controller acceptance |
+| Claude Code | `SessionStart` and supported `UserPromptSubmit` | Selected `PostToolUse` | Supported `PreCompact` / `PostCompact` and `SubagentStart` / `SubagentStop`. Verify post-compact output on the installed version or restore on next start | `Stop` feedback where supported |
+| Google Antigravity | `SessionStart` or next bounded `PreInvocation` | Selected `PostToolUse` or meaningful `PostInvocation` | Keep raw and recover at the next supported start | `Stop`, with independent controller acceptance |
+| Generic CLI or Pi compatibility | Controller-supplied bounded start | Read at the turn boundary | Keep raw, qualify richer behavior by adapter | Outer Stop-Hook or bounded exit |
+
+Official Codex and DSH are complementary reference adapters. Use official Codex for same-host strong-model comparison and consequential candidate or verifier design. Use DSH for approved high-throughput candidate screening and plugin trials. Preserve shared artifact identity and report cross-host outcomes separately from same-host comparisons. Pi remains an optional capability-based route. Optional pre-tool entries include Codex, Claude and Antigravity `PreToolUse`, and DSH `agent/pre-step` at its own granularity. A hook registration alone provides no filesystem fence. [Codex Hooks](https://learn.chatgpt.com/docs/hooks), [Codex App Server](https://learn.chatgpt.com/docs/app-server), [Claude Code Hooks](https://code.claude.com/docs/en/hooks), [Antigravity Hooks](https://antigravity.google/docs/hooks), [DSH adapter](../../../packages/dsh-loopx-plugin/src/driver.ts).
+
+## 3. VerifiedClose
+
+1. Branch from a known session and parent epoch using a public host or controller operation. Isolate the candidate workspace. Conversation branching grants no new write lease, verifier authority, credentials or cache guarantee.
+2. Capture the exact candidate for the independent Oracle. Its immutable receipt binds Goal, Todo, parent epoch, child scope, `candidate_sha` and `verifier_version`. It identifies available fast and slow readings, verdict, falsified hypotheses and original observations or transcript. Matching failure carries a reproducible counterexample. Missing readings stay unknown.
+3. Resolve the receipt through the trusted verifier owner. Only an exact, passed receipt with no open obligations and evidenced low overlap permits a `FoldToReceipt` recommendation. Append its compact evidence-linked result at a supported parent boundary. Preserve original evidence for independent readback. A missing, mismatched or failed receipt keeps `KeepRaw`, as does high or unknown overlap. Return a matching counterexample when available.
+
+Classify overlap from the next work's evidence dependencies. High overlap means the next probe still needs intermediate candidate state, unresolved counterexamples or the raw comparison history. Low overlap means the next scope can act from the verified result and its bounded evidence references. Treat an unbound next step or an incomplete dependency read as unknown. Apply the existing reset break-even against the saved context bytes, cold prefill and any expected recovery reads.
+
+The history policy owns the transitions, including `EpochReset` as the only explicit prefix rebase after its break-even and exact-source checks. Branch return alone does not start a new epoch. Use compact events as boundary observations. Restore through a model-visible hook or a bound read after invalidation. Codex compact events alone do not deliver arbitrary model context or replace the sampling compiler. Spine motivates protecting parent context through structured child work. Its in-core compiler and reported results do not qualify the hook route. Measure cache hits, full cost and outcome quality independently. [Spine](https://arxiv.org/abs/2610.37224), [History working sets](history-working-set-context-policy-v0.md).
+
+## 4. Verifier-gated domain plugins
+
+The solver may stage content-addressed yardsticks, diagnostics or verification recipes. An independent trial tests held-out failures, benign cases, overhead and, for a new yardstick, rank fidelity against the Oracle. Bind the trial receipt to the exact artifact, verifier and configured scope. Trial success supports adoption through existing Goal configuration and capability portfolio ownership. It cannot activate the artifact, grant permissions or replace the Oracle. Observe post-adoption utility and use existing degrade or retire routes when cost or fidelity regresses. Keep prior revisions and negative results readable. DSH is one delivery adapter. [Capability portfolio](goal-scoped-capability-portfolio-v0.md).
+
+## 5. Acceptance
+
+- Contract checks cover feature off, L0/L1/L2 negotiation, explicit pre-tool opt-in, exact accepted return and refusal of foreign receipts. Run bilingual and diff-based premerge validation.
+- Qualify the deployed host path on one original Goal/Todo, with an ordinary turn, missing or failed verification, compact or branch readback and exact settlement replay. Confirm the actual Hook outputs on that version and surface. Contract tests establish neither native adoption nor cache retention.
+- Compare with the same host's Stop-Hook baseline at matched model, task, access and budget. Record accepted outcomes, invalid completions, elapsed time, cached and uncached tokens, verifier calls, retries, storage and human intervention. Include high and low overlap. Keep cross-host results outside causal attribution for the same-host treatment.

@@ -201,6 +201,8 @@ Paired diffs do not certify translation accuracy.
     Existing Core/request/session owners retain authority, identity and recovery.
     C1–C9 connect concrete refactors, real host adoption and complete-cost
     qualification without changing defaults or launching experiments.
+- [Verifier Hook Co-Design v0](verifier-hook-co-design-v0.md)
+  ([中文版](verifier-hook-co-design-v0.zh-CN.md))
 - [Recoverable History Working Sets and Context Policy Extensions v0](history-working-set-context-policy-v0.md)
   ([中文版](history-working-set-context-policy-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; tracking [#8450](https://github.com/loopx-project/loopx/issues/8450).
