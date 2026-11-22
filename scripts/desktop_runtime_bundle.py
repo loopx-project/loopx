@@ -23,9 +23,18 @@ from loopx.file_lock import exclusive_file_lock
 from scripts.qualify_runtime_artifact import observe_default_contract
 
 
+_ARCHIVE_NAME = "runtime-source.tar.gz"
+_PREVIOUS_ARCHIVE_NAME = ".runtime-source.previous.tar.gz"
+
+
 def build(root: Path) -> None:
     destination = root / "apps/desktop/loopx-control-plane/runtime"
     destination.mkdir(parents=True, exist_ok=True)
+    publish_lock = root / ".local/desktop-runtime-bundle"
+    previous_archive = destination / _PREVIOUS_ARCHIVE_NAME
+    if previous_archive.exists() or previous_archive.is_symlink():
+        with exclusive_file_lock(publish_lock, operation="desktop-runtime-publish"):
+            _recover_previous_bundle(destination)
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
@@ -57,7 +66,7 @@ def build(root: Path) -> None:
         }
         identity_file = staging / "identity.json"
         identity_file.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
-        with exclusive_file_lock(root / ".local/desktop-runtime-bundle", operation="desktop-runtime-publish"):
+        with exclusive_file_lock(publish_lock, operation="desktop-runtime-publish"):
             _publish_bundle(destination, archive, identity_file)
     print(
         f"Prepared exact desktop runtime: {revision[:12]} ({entries} installable entries)"
@@ -65,7 +74,7 @@ def build(root: Path) -> None:
 
 
 def _build_archive(root: Path, revision: str, staging: Path) -> Path:
-    archive = staging / "runtime-source.tar.gz"
+    archive = staging / _ARCHIVE_NAME
     subprocess.run(
         [
             "git",
@@ -140,22 +149,47 @@ def _build_archive(root: Path, revision: str, staging: Path) -> Path:
     return archive
 
 
-def _publish_bundle(destination: Path, archive: Path, identity: Path) -> None:
-    # The old identity stays in place until the candidate archive is ready.
-    target_archive = destination / archive.name
-    previous_archive = archive.with_name("previous-runtime-source.tar.gz")
-    had_previous = target_archive.is_file() or target_archive.is_symlink()
-    if had_previous:
-        target_archive.rename(previous_archive)
+def _recover_previous_bundle(destination: Path) -> None:
+    """Recover an interrupted publication under the existing publish lock."""
+    previous_archive = destination / _PREVIOUS_ARCHIVE_NAME
+    if not previous_archive.exists() and not previous_archive.is_symlink():
+        return
+    target_archive = destination / _ARCHIVE_NAME
+    identity = destination / "identity.json"
     try:
+        expected_digest = json.loads(identity.read_text(encoding="utf-8"))["sha256"]
+    except (KeyError, TypeError, ValueError, FileNotFoundError) as error:
+        raise RuntimeError(f"Cannot recover Desktop runtime from its identity; preserved {previous_archive}") from error
+    if target_archive.is_file() and file_hash(target_archive) == expected_digest:
+        previous_archive.unlink()
+    elif previous_archive.is_file() and file_hash(previous_archive) == expected_digest:
+        previous_archive.replace(target_archive)
+    else:
+        raise RuntimeError(f"No Desktop runtime archive matches its identity; preserved {previous_archive}")
+
+
+def _publish_bundle(destination: Path, archive: Path, identity: Path) -> None:
+    _recover_previous_bundle(destination)
+    target_archive = destination / _ARCHIVE_NAME
+    previous_archive = destination / _PREVIOUS_ARCHIVE_NAME
+    had_previous = target_archive.is_file() or target_archive.is_symlink()
+    try:
+        if had_previous:
+            target_archive.rename(previous_archive)
         archive.replace(target_archive)
         identity.replace(destination / identity.name)
-    except OSError:
-        if had_previous:
+    except (OSError, KeyboardInterrupt):
+        # The atomic identity move commits the new pair. Until that move, the
+        # previous archive stays available even if staging cleanup runs.
+        if not identity.exists():
+            previous_archive.unlink(missing_ok=True)
+        elif previous_archive.exists() or previous_archive.is_symlink():
             previous_archive.replace(target_archive)
-        elif not archive.exists():
-            target_archive.unlink()
+        elif not had_previous and not archive.exists():
+            target_archive.unlink(missing_ok=True)
         raise
+    else:
+        previous_archive.unlink(missing_ok=True)
 
 
 def archive_package_version(archive: Path) -> str:

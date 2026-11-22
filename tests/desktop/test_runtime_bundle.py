@@ -136,6 +136,111 @@ class RuntimeBundleBuildTests(unittest.TestCase):
         self.assertEqual(identity.read_bytes(), b"previous identity")
         self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
 
+    def test_interrupt_before_identity_commit_restores_the_previous_pair(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        real_replace = Path.replace
+
+        def replace(path: Path, target: Path):
+            if target == identity:
+                self.assertNotEqual(archive.read_bytes(), b"previous archive")
+                self.assertEqual(identity.read_bytes(), b"previous identity")
+                raise KeyboardInterrupt
+            return real_replace(path, target)
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), b"previous identity")
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_interrupt_after_identity_commit_preserves_the_new_pair(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        real_replace = Path.replace
+
+        def replace(path: Path, target: Path):
+            result = real_replace(path, target)
+            if target == identity:
+                raise KeyboardInterrupt
+            return result
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            bundle.build(self.root)
+
+        installed = json.loads(identity.read_text())
+        self.assertNotEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(installed["source_revision"], self.revision)
+        self.assertEqual(installed["sha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_failed_cancel_rollback_retains_archive_until_the_next_build(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        identity.write_text(json.dumps({"sha256": hashlib.sha256(b"previous archive").hexdigest()}))
+        previous_identity = identity.read_bytes()
+        real_replace = Path.replace
+        recovery_attempts = []
+
+        def replace(path: Path, target: Path):
+            if target == identity:
+                raise KeyboardInterrupt
+            if target == archive and path.read_bytes() == b"previous archive":
+                recovery_attempts.append(path)
+                raise OSError("synthetic rollback failure")
+            return real_replace(path, target)
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaises((OSError, KeyboardInterrupt)),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(len(recovery_attempts), 1)
+        backup = recovery_attempts[0]
+        self.assertEqual(backup.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), previous_identity)
+        self.assertNotEqual(archive.read_bytes(), b"previous archive")
+        with (
+            patch.object(bundle, "observe_default_contract", return_value={"surface": "unsupported"}),
+            self.assertRaisesRegex(ValueError, "unqualified for public adoption"),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), previous_identity)
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_retry_keeps_the_committed_pair_when_an_old_backup_survives(self):
+        archive, identity = self.previous_outputs()
+        identity.write_text(json.dumps({"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}))
+        committed_identity = identity.read_bytes()
+        backup = archive.with_name(bundle._PREVIOUS_ARCHIVE_NAME)
+        backup.write_bytes(b"older archive")
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value={"surface": "unsupported"}),
+            self.assertRaisesRegex(ValueError, "unqualified for public adoption"),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), committed_identity)
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
 
 class ArchiveQualificationTests(unittest.TestCase):
     def setUp(self):
