@@ -1018,6 +1018,7 @@ class ChatSessionLifecycleMixin:
             native_history = (
                 None if answer_fallback or working_continuation else history
                 if legacy_provider_context or legacy_manager_context or legacy_project_context
+                or selected_agent == "antigravity"
                 or session.get("agent_id") in {"anthropic-api", "openai-api", MANAGED_TURN_HOST} else None)
             if (selected_agent == "codex" and accepted_turn_id is not None
                     and not (self.store.load_turn(session_id, accepted_turn_id) or {}).get("native_context_preparation")):
@@ -1116,7 +1117,7 @@ class ChatSessionLifecycleMixin:
                     if history_restore.parked_working is not None or session.get("parked_native_working") is not None:
                         changes.update(parked_native_working=history_restore.parked_working,
                                        expected_upstream_thread_id=session["upstream_thread_id"])
-                    if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
+                    if (legacy_manager_context or selected_agent == "antigravity") and adapter.upstream_thread_id != session.get("upstream_thread_id"):
                         # Preserve provenance for read-only checks of failed
                         # native requests after this history migration. Publish
                         # the native binding and representation version together;
