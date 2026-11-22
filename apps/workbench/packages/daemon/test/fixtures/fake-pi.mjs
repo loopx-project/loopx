@@ -513,7 +513,7 @@ rl.on('line', (line) => {
             out({ type: 'message_start', message: { role: 'assistant', timestamp: Date.now() - 200 } });
             out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi ' } });
             const marker = process.env.FAKE_PI_LABEL ? `[${process.env.FAKE_PI_LABEL}] ` : '';
-            out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + cmd.message } });
+            out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + (process.env.FAKE_PI_VISIBLE_ECHO === '1' ? cmd.message.split(/\n\n<loochat-/)[0] : cmd.message) } });
             if (/\bfail\b/.test(cmd.message)) {
               out({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'provider exploded' } });
               running = false;
@@ -535,7 +535,7 @@ rl.on('line', (line) => {
       if (process.env.FAKE_TELEMETRY) out({ type: 'message_start', message: { role: 'assistant', timestamp: Date.now() - 250 } });
       out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi ' } });
       const marker = process.env.FAKE_PI_LABEL ? `[${process.env.FAKE_PI_LABEL}] ` : '';
-      out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + cmd.message } });
+      out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + (process.env.FAKE_PI_VISIBLE_ECHO === '1' ? cmd.message.split(/\n\n<loochat-/)[0] : cmd.message) } });
       // Whole word only: protocol envelopes (the Router's INTRO names push.failure) must not
       // turn an unrelated reply into a failure, while fail markers anywhere (work fail,
       // router-fixture-fail in a signal ref) still do.
