@@ -30,6 +30,11 @@ _SOURCE_SUMMARY_MAX_CHARS = 512
 _TODOS_MAX_ITEMS = 64
 
 
+def _utf16_code_unit_len(value: str) -> int:
+    """Count UTF-16 code units so Python limits match TypeScript String.length."""
+    return len(value.encode("utf-16-le")) // 2
+
+
 class PlanningBatchCommandError(ValueError):
     """Preserve structured LoopX CLI rejection details without leaking stdout noise."""
 
@@ -42,6 +47,7 @@ def planning_batch_schema() -> dict[str, object]:
     """Return the complete self-contained JSON proposal schema and field rules."""
     return {
         "schema_version": "benchmark_planning_batch_proposal_v1",
+        "length_unit": "utf16_code_units",
         "required_fields": ["input_digest", "expected_provider_revision", "outcome", "todos"],
         "fields": {
             "input_digest": {
@@ -56,7 +62,12 @@ def planning_batch_schema() -> dict[str, object]:
                 "type": "object",
                 "required_fields": ["objective", "requirements", "source"],
                 "properties": {
-                    "objective": {"type": "string", "min_chars": 1, "max_chars": _OBJECTIVE_MAX_CHARS},
+                    "objective": {
+                        "type": "string",
+                        "length_unit": "utf16_code_units",
+                        "min_utf16_code_units": 1,
+                        "max_utf16_code_units": _OBJECTIVE_MAX_CHARS,
+                    },
                     "requirements": {
                         "type": "array",
                         "min_items": 1,
@@ -65,15 +76,17 @@ def planning_batch_schema() -> dict[str, object]:
                             "required_fields": ["id", "description"],
                             "id": {
                                 "type": "string",
-                                "min_chars": 1,
-                                "max_chars": _OPAQUE_ID_MAX_CHARS,
+                                "length_unit": "utf16_code_units",
+                                "min_utf16_code_units": 1,
+                                "max_utf16_code_units": _OPAQUE_ID_MAX_CHARS,
                                 "pattern": _OPAQUE_ID_PATTERN.pattern,
                                 "unique": True,
                             },
                             "description": {
                                 "type": "string",
-                                "min_chars": 1,
-                                "max_chars": _REQUIREMENT_DESCRIPTION_MAX_CHARS,
+                                "length_unit": "utf16_code_units",
+                                "min_utf16_code_units": 1,
+                                "max_utf16_code_units": _REQUIREMENT_DESCRIPTION_MAX_CHARS,
                             },
                         },
                     },
@@ -82,12 +95,18 @@ def planning_batch_schema() -> dict[str, object]:
                         "required_fields": ["ref", "summary"],
                         "ref": {
                             "type": "string",
-                            "min_chars": 1,
-                            "max_chars": _OPAQUE_ID_MAX_CHARS,
+                            "length_unit": "utf16_code_units",
+                            "min_utf16_code_units": 1,
+                            "max_utf16_code_units": _OPAQUE_ID_MAX_CHARS,
                             "pattern": _OPAQUE_ID_PATTERN.pattern,
                             "note": "Use an opaque identifier such as checkpoint:initial or task:readme; never file paths or spaces.",
                         },
-                        "summary": {"type": "string", "min_chars": 1, "max_chars": _SOURCE_SUMMARY_MAX_CHARS},
+                        "summary": {
+                            "type": "string",
+                            "length_unit": "utf16_code_units",
+                            "min_utf16_code_units": 1,
+                            "max_utf16_code_units": _SOURCE_SUMMARY_MAX_CHARS,
+                        },
                     },
                 },
             },
@@ -98,13 +117,13 @@ def planning_batch_schema() -> dict[str, object]:
                 "items": {
                     "required_fields": ["text", "action_kind"],
                     "optional_fields": ["target_key"],
-                    "text": {"type": "string", "min_chars": 1, "unique": True},
+                    "text": {"type": "string", "min_utf16_code_units": 1, "unique": True},
                     "action_kind": {
                         "type": "string",
                         "pattern": TODO_ACTION_KIND_PATTERN.pattern,
                         "examples": ["implement", "validate", "investigate", "submit"],
                     },
-                    "target_key": {"type": "string", "optional": True, "min_chars": 1},
+                    "target_key": {"type": "string", "optional": True, "min_utf16_code_units": 1},
                 },
             },
         },
@@ -112,11 +131,11 @@ def planning_batch_schema() -> dict[str, object]:
             "input_digest": "<packet.input_digest>",
             "expected_provider_revision": "<packet.goal_acceptance.provider_revision>",
             "outcome": {
-                "objective": "Concise task objective (<=1024 chars).",
+                "objective": "Concise task objective (<=1024 UTF-16 code units).",
                 "requirements": [
-                    {"id": "req-1", "description": "Verifiable requirement description (<=2000 chars)."},
+                    {"id": "req-1", "description": "Verifiable requirement description (<=2000 UTF-16 code units)."},
                 ],
-                "source": {"ref": "checkpoint:initial", "summary": "Host-supplied planning checkpoint (<=512 chars)."},
+                "source": {"ref": "checkpoint:initial", "summary": "Host-supplied planning checkpoint (<=512 UTF-16 code units)."},
             },
             "todos": [
                 {"text": "[P0] First ordered work step", "action_kind": "implement"},
@@ -134,12 +153,13 @@ def planning_batch_guidance() -> str:
         "LOOPX_PLANNING_RESULT with exact keys: "
         '{"input_digest": "<checkpoint.input_digest>", '
         '"expected_provider_revision": "<checkpoint.goal_acceptance.provider_revision>", '
-        '"outcome": {"objective": "<str <=1024>", '
-        '"requirements": [{"id": "<opaque-id>", "description": "<str <=2000>"}], '
-        '"source": {"ref": "<opaque-id>", "summary": "<str <=512>"}}, '
+        '"outcome": {"objective": "<str <=1024 UTF-16 code units>", '
+        '"requirements": [{"id": "<opaque-id>", "description": "<str <=2000 UTF-16 code units>"}], '
+        '"source": {"ref": "<opaque-id>", "summary": "<str <=512 UTF-16 code units>"}}, '
         '"todos": [{"text": "<str>", "action_kind": "<lowercase token>", "target_key": "<optional str>"}]}. '
-        "Constraint: outcome.source.ref and requirements[*].id must be opaque ASCII IDs "
-        f"(1..{_OPAQUE_ID_MAX_CHARS} chars matching ^[A-Za-z0-9][A-Za-z0-9_.:@-]*$, NO '/' paths or spaces, "
+        "Constraint: bounded string limits are measured in UTF-16 code units (non-BMP emoji count as 2); "
+        "outcome.source.ref and requirements[*].id must be opaque ASCII IDs "
+        f"(1..{_OPAQUE_ID_MAX_CHARS} UTF-16 code units matching ^[A-Za-z0-9][A-Za-z0-9_.:@-]*$, NO '/' paths or spaces, "
         'e.g. "checkpoint:initial"); todos[*].action_kind must match ^[a-z][a-z0-9_-]{0,63}$ '
         "(e.g. implement, validate, investigate, submit); inspect full schema with "
         f"`{command} --schema`. "
@@ -182,19 +202,24 @@ def _text(value, *, path: str = "field", max_chars: int | None = None, strip: bo
         raise ValueError(f"Planning proposal requires non-empty text at {path}")
     if not strip and value != value.strip():
         raise ValueError(f"Planning proposal forbids leading/trailing whitespace at {path}")
-    if max_chars is not None and len(normalized) > max_chars:
-        raise ValueError(f"Planning proposal field {path} exceeds max length (got {len(normalized)} chars, max {max_chars})")
+    if max_chars is not None:
+        units = _utf16_code_unit_len(normalized)
+        if units > max_chars:
+            raise ValueError(
+                f"Planning proposal field {path} exceeds max length (got {units} UTF-16 code units, max {max_chars})"
+            )
     return normalized
 
 
 def _opaque_id(value, *, path: str) -> str:
     text = _text(value, path=path, strip=False)
-    too_long = len(text) > _OPAQUE_ID_MAX_CHARS
+    units = _utf16_code_unit_len(text)
+    too_long = units > _OPAQUE_ID_MAX_CHARS
     invalid_chars = not _OPAQUE_ID_PATTERN.match(text)
     if too_long or invalid_chars:
         reasons = []
         if too_long:
-            reasons.append(f"got {len(text)} chars, max {_OPAQUE_ID_MAX_CHARS}")
+            reasons.append(f"got {units} UTF-16 code units, max {_OPAQUE_ID_MAX_CHARS}")
         if invalid_chars:
             reasons.append(f"must match {_OPAQUE_ID_PATTERN.pattern} ({_OPAQUE_ID_HINT})")
         raise ValueError(
@@ -403,13 +428,13 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Submit an initial planning batch proposal (outcome declaration + ordered advancement Todos).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Proposal JSON schema summary:\n"
+            "Proposal JSON schema summary (text limits in UTF-16 code units; non-BMP emoji count as 2):\n"
             "  Required root fields: input_digest, expected_provider_revision, outcome, todos\n"
-            f"  outcome.objective: non-empty string (max {_OBJECTIVE_MAX_CHARS} chars)\n"
+            f"  outcome.objective: non-empty string (max {_OBJECTIVE_MAX_CHARS} UTF-16 code units)\n"
             f"  outcome.requirements: 1..{_REQUIREMENTS_MAX_ITEMS} items of {{id, description}} "
-            f"(description max {_REQUIREMENT_DESCRIPTION_MAX_CHARS} chars)\n"
-            f"  outcome.source: {{ref, summary}} (summary max {_SOURCE_SUMMARY_MAX_CHARS} chars)\n"
-            f"  Opaque IDs (outcome.requirements[*].id, outcome.source.ref): 1..{_OPAQUE_ID_MAX_CHARS} chars "
+            f"(description max {_REQUIREMENT_DESCRIPTION_MAX_CHARS} UTF-16 code units)\n"
+            f"  outcome.source: {{ref, summary}} (summary max {_SOURCE_SUMMARY_MAX_CHARS} UTF-16 code units)\n"
+            f"  Opaque IDs (outcome.requirements[*].id, outcome.source.ref): 1..{_OPAQUE_ID_MAX_CHARS} UTF-16 code units "
             f"matching {_OPAQUE_ID_PATTERN.pattern} (no '/' paths or spaces)\n"
             f"  todos: 1..{_TODOS_MAX_ITEMS} items of {{text, action_kind, target_key?}}\n"
             f"  action_kind: lowercase ASCII token matching {TODO_ACTION_KIND_PATTERN.pattern}\n\n"

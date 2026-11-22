@@ -152,6 +152,7 @@ def test_planning_batch_cli_help_and_schema_are_self_contained():
     assert help_proc.returncode == 0, help_proc.stderr
     assert "--schema" in help_proc.stdout
     assert "outcome.source.ref" in help_proc.stdout
+    assert "UTF-16 code units" in help_proc.stdout
 
     schema_proc = subprocess.run(
         [sys.executable, "-m", "benchmark.runtime.planning_batch", "--schema"],
@@ -160,11 +161,13 @@ def test_planning_batch_cli_help_and_schema_are_self_contained():
     assert schema_proc.returncode == 0, schema_proc.stderr
     schema = json.loads(schema_proc.stdout)
     assert schema == planning_batch_schema()
-    assert schema["fields"]["outcome"]["properties"]["source"]["ref"]["max_chars"] == 128
+    assert schema["length_unit"] == "utf16_code_units"
+    assert schema["fields"]["outcome"]["properties"]["source"]["ref"]["max_utf16_code_units"] == 128
     assert schema["fields"]["outcome"]["properties"]["requirements"]["max_items"] == 32
     guidance = planning_batch_guidance()
     assert "--schema" in guidance
     assert 'status="ready"' in guidance
+    assert "UTF-16 code units" in guidance
 
 
 def _base_proposal():
@@ -183,7 +186,7 @@ def _base_proposal():
 @pytest.mark.parametrize(("mutate", "expected_substrings", "forbidden"), [
     (
         lambda p: p["outcome"]["source"].__setitem__("ref", "/frontier/task/repo/SECRET_REF/" + "x" * 120),
-        ("outcome.source.ref", "got 151 chars, max 128", "no '/' paths or spaces"),
+        ("outcome.source.ref", "got 151 UTF-16 code units, max 128", "no '/' paths or spaces"),
         "SECRET_REF",
     ),
     (
@@ -203,18 +206,33 @@ def _base_proposal():
     ),
     (
         lambda p: p["outcome"]["source"].__setitem__("summary", "S" * 513),
-        ("outcome.source.summary", "got 513 chars, max 512"),
+        ("outcome.source.summary", "got 513 UTF-16 code units, max 512"),
         "SSSSSSSS",
     ),
     (
         lambda p: p["outcome"].__setitem__("objective", "O" * 1025),
-        ("outcome.objective", "got 1025 chars, max 1024"),
+        ("outcome.objective", "got 1025 UTF-16 code units, max 1024"),
         "OOOOOOOO",
     ),
     (
         lambda p: p["outcome"]["requirements"][0].__setitem__("description", "D" * 2001),
-        ("outcome.requirements[0].description", "got 2001 chars, max 2000"),
+        ("outcome.requirements[0].description", "got 2001 UTF-16 code units, max 2000"),
         "DDDDDDDD",
+    ),
+    (
+        lambda p: p["outcome"].__setitem__("objective", "\U0001f600" * 513),
+        ("outcome.objective", "got 1026 UTF-16 code units, max 1024"),
+        "\U0001f600",
+    ),
+    (
+        lambda p: p["outcome"]["requirements"][0].__setitem__("description", "\U0001f600" * 1001),
+        ("outcome.requirements[0].description", "got 2002 UTF-16 code units, max 2000"),
+        "\U0001f600",
+    ),
+    (
+        lambda p: p["outcome"]["source"].__setitem__("summary", "\U0001f600" * 257),
+        ("outcome.source.summary", "got 514 UTF-16 code units, max 512"),
+        "\U0001f600",
     ),
     (
         lambda p: p["outcome"].__setitem__(
@@ -286,7 +304,7 @@ if "goal-acceptance" in args and "refine" in args:
         "ok": False,
         "error": "goal_acceptance_invalid_request",
         "error_code": "goal_acceptance_invalid_request",
-        "error_detail": "source ref must be bounded nonempty text (got 144 chars, max 128)",
+        "error_detail": "source ref must be bounded nonempty text (got 144 UTF-16 code units, max 128)",
     }}))
     raise SystemExit(1)
 raise AssertionError(args)
@@ -317,5 +335,46 @@ raise AssertionError(args)
     assert payload["ok"] is False
     assert payload["stage"] == "goal-acceptance refine"
     assert payload["error_code"] == "goal_acceptance_invalid_request"
-    assert payload["error_detail"] == "source ref must be bounded nonempty text (got 144 chars, max 128)"
+    assert payload["error_detail"] == "source ref must be bounded nonempty text (got 144 UTF-16 code units, max 128)"
     assert payload["error_detail"] in payload["error"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_planning_batch_non_bmp_utf16_boundaries_match_real_cli(tmp_path, monkeypatch, provider):
+    from benchmark.runtime.planning_batch import apply_initial_plan
+
+    env, _, _, _, _ = _environment(tmp_path, monkeypatch, provider, replan="empty")
+    env["LOOPX_TASK_STAGE"] = "plan"
+    packet = task_plan_packet(env, loopx_command(env))
+    emoji = "\U0001f600"
+
+    # Over-limit non-BMP counts (1026, 2002, 514 UTF-16 code units) fail upfront in
+    # planning_batch using the same UTF-16 unit rule enforced by TS goal acceptance.
+    base = {
+        "input_digest": packet["input_digest"],
+        "expected_provider_revision": packet["goal_acceptance"]["provider_revision"],
+        "outcome": {
+            "objective": emoji * 512,
+            "requirements": [{"id": "req-1", "description": emoji * 1000}],
+            "source": {"ref": "checkpoint:emoji", "summary": emoji * 256},
+        },
+        "todos": [{"text": "[P0] Deliver non-BMP boundary test", "action_kind": "implement"}],
+    }
+    for bad_outcome, snippet in [
+        ({**base["outcome"], "objective": emoji * 513}, "got 1026 UTF-16 code units, max 1024"),
+        ({**base["outcome"], "requirements": [{"id": "req-1", "description": emoji * 1001}]}, "got 2002 UTF-16 code units, max 2000"),
+        ({**base["outcome"], "source": {"ref": "checkpoint:emoji", "summary": emoji * 257}}, "got 514 UTF-16 code units, max 512"),
+    ]:
+        with pytest.raises(ValueError, match=snippet):
+            apply_initial_plan(env, {**base, "outcome": bad_outcome})
+
+    # Exact-limit non-BMP counts (512, 1000, 256 emoji = 1024, 2000, 512 UTF-16 units)
+    # pass planning_batch and commit through the real File/SQLite goal-acceptance CLI.
+    ready = apply_initial_plan(env, base)
+    assert ready["status"] == "ready"
+    assert len(ready["todo_ids"]) == 1
+    after = task_plan_packet(env, loopx_command(env))
+    outcome = after["goal_acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["objective"] == emoji * 512
+    assert outcome["requirements"][0]["description"] == emoji * 1000
+    assert outcome["sources"][0]["summary"] == emoji * 256

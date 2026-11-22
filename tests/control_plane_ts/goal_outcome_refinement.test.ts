@@ -548,7 +548,7 @@ test("outcome validation errors report exact limits, missing keys and opaque-id 
   assert.throws(
     () => refineGoalOutcome(head, goal, null, "author", patch({source: {ref: "/tmp/SECRET_PATH/" + "x".repeat(130), summary: "ok"}})),
     error => {
-      assert.match(String(error), /source ref must be bounded nonempty text \(got 147 chars, max 128\)/);
+      assert.match(String(error), /source ref must be bounded nonempty text \(got 147 UTF-16 code units, max 128\)/);
       assert.match(String(error), /must also be an opaque identifier/);
       assert.doesNotMatch(String(error), /SECRET_PATH/);
       return true;
@@ -571,8 +571,20 @@ test("outcome validation errors report exact limits, missing keys and opaque-id 
     })),
     /requirements exceeds its supported capacity \(got 33 items, max 32\)/,
   );
-  assert.throws(
-    () => refineGoalOutcome(head, goal, null, "author", patch({objective: "o".repeat(1025)})),
-    /outcome objective must be bounded nonempty text \(got 1025 chars, max 1024\)/,
-  );
+  const emoji = "\u{1F600}";
+  const accepted = refineGoalOutcome(head, goal, null, "author", patch({
+    objective: emoji.repeat(512),
+    requirements: [{id: "opening", description: emoji.repeat(1000)}],
+    source: {ref: "message:emoji-boundary", summary: emoji.repeat(256)},
+  }));
+  assert.equal(accepted.outcomes[0].objective.length, 1024);
+  assert.equal(accepted.outcomes[0].requirements[0].description.length, 2000);
+  assert.equal(accepted.outcomes[0].sources[0].summary.length, 512);
+  for (const [overflow, expected] of [
+    [{objective: emoji.repeat(513)}, /outcome objective must be bounded nonempty text \(got 1026 UTF-16 code units, max 1024\)/],
+    [{requirements: [{id: "opening", description: emoji.repeat(1001)}]}, /requirement description must be bounded nonempty text \(got 2002 UTF-16 code units, max 2000\)/],
+    [{source: {ref: "message:emoji-over", summary: emoji.repeat(257)}}, /source summary must be bounded nonempty text \(got 514 UTF-16 code units, max 512\)/],
+  ] as const) {
+    assert.throws(() => refineGoalOutcome(head, goal, null, "author", patch(overflow)), expected);
+  }
 });

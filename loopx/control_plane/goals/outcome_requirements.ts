@@ -42,12 +42,12 @@ function requireValue(condition: unknown, reason: string): asserts condition {
 function describeTextFailure(value: unknown, max: number): string {
   if (typeof value !== "string") {
     const kind = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
-    return `expected string, got ${kind}; max ${max} chars`;
+    return `expected string, got ${kind}; max ${max} UTF-16 code units`;
   }
-  if (value.length === 0) return `must not be empty; max ${max} chars`;
-  if (value.includes("\0")) return `NUL characters are not allowed; max ${max} chars`;
-  if (value !== value.trim()) return `no leading/trailing whitespace; max ${max} chars`;
-  return `got ${value.length} chars, max ${max}`;
+  if (value.length === 0) return `must not be empty; max ${max} UTF-16 code units`;
+  if (value.includes("\0")) return `NUL characters are not allowed; max ${max} UTF-16 code units`;
+  if (value !== value.trim()) return `no leading/trailing whitespace; max ${max} UTF-16 code units`;
+  return `got ${value.length} UTF-16 code units, max ${max}`;
 }
 function text(value: unknown, label: string, max = 512): string {
   if (typeof value !== "string" || value !== value.trim() || !value || value.length > max || value.includes("\0")) {
