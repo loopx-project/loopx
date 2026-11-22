@@ -271,6 +271,39 @@ Phase 4 —— 通过 BYOC 或 managed private 运行 Managed Semantic Control P
 
 现有证据足以支持 design partner 与有节制的商业假设，但不足以跳过 LoopX 自身对复用频率、业务结果、付费意愿和单位经济性的验证。
 
+## 开闭源商业协同与 Plan B 物理分界
+
+为了消除“开源协议扩散”与“商业 SaaS 变现”之间的结构张力，LoopX 将商业化路径直接锚定到四态全局指挥官评估体系（[evaluations/horizon.md](../releases/evaluations/horizon.md)）与仓库许可边界（[licensing.md](../../project/licensing.md)）之上，执行明确的 **Plan B Open-Core 物理拆分**：
+
+- **开源主仓（`loopx-project/loopx`，Apache-2.0）**：永久拥有全部语义状态契约、单机 File / SQLite `AuthorityStore`、宿主/模型中立适配器、全部验证门禁、`openPostgresqlStore` SPI 与线级中立的出站 `RemoteAuthority` 客户端（已由 PR `#9223` 推进解耦，不在 OSS 仓内保留半托管服务端代码）。
+- **私有商业仓（`loopx-project/loopx-cloud`）**：承载多租户 PostgreSQL RLS 服务、托管 `RemoteAuthority` 服务端、组织治理、计量计费与弹性编队调度。
+
+### 四项永久 Apache-2.0 开源基线
+
+1. **单机持久控制面内核**：File / SQLite `AuthorityStore`、`EffectTurn`、条件 CAS、硬租约与代数围栏、无损 `authority-archive` 导入导出（保证用户语义状态永久可迁移、无锁定）。
+2. **运行时 / 模型 / 沙箱双中立与 `L1-L4` 渐进接入**：覆盖主流编码宿主的 CLI / ACP 适配器、`dsh-loopx-plugin` 与本地 worktree 沙箱隔离。
+3. **跨主机与验证开放协议族（`open_protocol_core`）**：`StorageConfig` + `openPostgresqlStore` SPI、出站 `RemoteAuthority` 线级协议、管家移交/租约契约、`tau_B` + Stop-Hook 反混杂基准套件、`pr-review` / `canary` 及 `a+b` 发版评估门禁。
+4. **本地全渠道工作台与社区领域包契约**：CLI、本地 Desktop / LooChat 工作台与 `domain_pack_contract_v0` 人工确认门模板。
+
+### 六项闭源商业 Cloud / BYOC 护城河
+
+1. **托管多租户 PostgreSQL 与 `RemoteAuthority` 服务端**：连接池、租户 RLS 隔离、高可用 WAL/PITR 容灾与跨区状态复制。
+2. **企业级身份认证、组织治理与合规平面**：SSO / SCIM、细粒度 RBAC、集中凭证代理与不可篡改审计存证。
+3. **跨机弹性智能体编队与百 Agent 调度器**：托管 10→100+ 协作编队、跨团队预算围栏、公平队列与防死循环 fleet 调度（承接 `4.5` / `4.6` 企业运行时）。
+4. **企业级基准回放集群与回归智能中心**：机密代码库隔离回放舱、车队遥测聚合及组织级 Kendall `tau_b` 发布看板。
+5. **托管全渠道网关与企业连接器枢纽**：多工作区飞书/Slack/Webhook 桥接与私有 VPC 中继通道。
+6. **用量计量、计费、SLA 与行业认证商业包**：席位 + 控制面执行计量账单、合同级 SLA 保障与合规垂直行业能力包。
+
+### 三层变现飞轮与代际演化联动
+
+| 交付形态 | 控制面托管方 | 代码与执行位置 | 核心收入与增长飞轮 |
+|---|---|---|---|
+| **Tier 1 — Team Cloud（托管 SaaS）** | 托管 `loopx-cloud` | 云端托管工作区 + GitHub / 飞书协同 | 零运维团队开箱即用；席位费 + 控制面用量计费 |
+| **Tier 2 — Hybrid BYOC（控制面托管 / 数据面留客户 VPC）** | 托管控制面或自建企业服务端 | 客户 VPC 内通过 SPI 与出站 `RemoteAuthority` 执行 | 满足合规与代码不出域诉求，同时保留云端协同、审计与回归遥测 |
+| **Tier 3 — Enterprise Harness + 有界产品化 FDE** | 专属 `loopx-cloud` 集群 | 客户私有网络与内部 CI | 有界前线部署工程（FDE）：通用内核改进回流 OSS，客户专有连接器与高 SLA 转为年度平台经常性收入（ARR） |
+
+所有来自 Tier 2-3 的通用状态机与协议改进均回流 Apache-2.0 `open_protocol_core` 战线（对应 [horizon.md](../releases/evaluations/horizon.md) 中的 `1.5`、`4.5`、`4.6`、`7.3`、`8.4`），形成 `2.x -> 3.0 -> 4.0` “开源协议建立标准 + Cloud/BYOC 承接规模组织护城河”的正向飞轮。
+
 ## 与现有文档的关系
 
 - `../foundations/server-client-product-shape.md` 定义了本评估要商业化的 durable control-plane server、client 与 executor 角色。

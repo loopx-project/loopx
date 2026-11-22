@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 1,
+    "minor": 4,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "1.4.0",
+    "version_tag": "v1.4.0",
+    "git_commit": "1b452b00a114bd9f0d9c24868c9f45df42661748",
+    "git_tree": "d9e4ff7e573c1cca63fb536e0c60ad0a54f89997",
+    "committed_at": "2026-10-11T21:22:13+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v1.4.0",
+      "last_tag": "v1.4.2",
+      "last_commit": "77d6b07fb65c7ddffe14f45549f97295aca995d6",
+      "last_committed_at": "2026-10-16T03:23:19+08:00",
+      "tag_count": 3
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v1.4.0",
+      "v1.4.2"
+    ]
+  },
+  "a_scale": {
+    "score": 27.4,
+    "delta_from_prior": 1.5,
+    "domain_scores": {
+      "D1": 31.0,
+      "D2": 24.0,
+      "D3": 22.0,
+      "D4": 25.0,
+      "D5": 34.0,
+      "D6": 30.0,
+      "D7": 22.0,
+      "D8": 36.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 1,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Repaired source builds & regression ownership (#6238), scoped vision authoring closeout (#6236), and preserved cycle recovery fixtures through v1.4.2 (#6572).",
+  "summary_zh": "修复源码构建与回归归属（#6238），收敛愿景编写边界（#6236）并保留恢复夹具至 v1.4.2（#6572）。"
+}

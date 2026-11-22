@@ -1,0 +1,739 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "active_stable",
+  "evaluation_mode": "release_gate_qualified",
+  "semver": {
+    "major": 2,
+    "minor": 4,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "2.4.0",
+    "version_tag": "v2.4.0",
+    "git_commit": "a6ffb3be6e7bdb48e02311ec58d618200fe0501c",
+    "git_tree": "99010e6455d9b15140572da6d549208800c39e8f",
+    "committed_at": "2026-11-22T01:31:12+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v2.4.0",
+      "last_tag": "v2.4.0",
+      "last_commit": "a6ffb3be6e7bdb48e02311ec58d618200fe0501c",
+      "last_committed_at": "2026-11-22T01:31:12+08:00",
+      "tag_count": 1
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": "exact_release_commit_qualification_receipt_v0",
+    "claims_net_benchmark_uplift": false,
+    "release_notes_path": "docs/product/releases/v2.4.0.md",
+    "audit_basis": "Release-gate-qualified 41-battleline commander evaluation anchored to tagged commit."
+  },
+  "a_scale": {
+    "score": 54.6,
+    "delta_from_prior": 3.9,
+    "domain_scores": {
+      "D1": 54.7,
+      "D2": 51.8,
+      "D3": 49.4,
+      "D4": 50.7,
+      "D5": 63.2,
+      "D6": 61.0,
+      "D7": 47.0,
+      "D8": 66.2
+    }
+  },
+  "b_scale": {
+    "generation_major": 2,
+    "battleline_count": 30,
+    "score": 63.8,
+    "delta_from_prior": 4.7,
+    "domain_scores": {
+      "D1": 64.8,
+      "D2": 61.0,
+      "D3": 64.3,
+      "D4": 61.2,
+      "D5": 72.0,
+      "D6": 61.0,
+      "D7": 56.5,
+      "D8": 71.7
+    }
+  },
+  "battleline_breakdown_scope": "full_41_battlelines",
+  "battlelines": [
+    {
+      "id": "1.1",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 21,
+        "B": 20,
+        "C": 17,
+        "D": 17
+      },
+      "score": 75,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "docs/product/releases/v2.4.0.md"
+      ]
+    },
+    {
+      "id": "1.2",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 20,
+        "B": 20,
+        "C": 16,
+        "D": 16
+      },
+      "score": 72,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9154"
+      ]
+    },
+    {
+      "id": "1.3",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 19,
+        "B": 17,
+        "C": 13,
+        "D": 13
+      },
+      "score": 62,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#8431"
+      ]
+    },
+    {
+      "id": "1.4",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 16,
+        "B": 14,
+        "C": 10,
+        "D": 10
+      },
+      "score": 50,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "1.5",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 16,
+        "B": 14,
+        "C": 8,
+        "D": 9
+      },
+      "score": 47,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.4.0",
+        "PR#9223-plan-b-staged"
+      ]
+    },
+    {
+      "id": "1.6",
+      "domain_id": "D1",
+      "dimensions": {
+        "A": 9,
+        "B": 6,
+        "C": 4,
+        "D": 3
+      },
+      "score": 22,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T05"
+      ]
+    },
+    {
+      "id": "2.1",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 19,
+        "B": 18,
+        "C": 15,
+        "D": 15
+      },
+      "score": 67,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9154"
+      ]
+    },
+    {
+      "id": "2.2",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 21,
+        "B": 20,
+        "C": 16,
+        "D": 16
+      },
+      "score": 73,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#8940"
+      ]
+    },
+    {
+      "id": "2.3",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 17,
+        "B": 14,
+        "C": 8,
+        "D": 8
+      },
+      "score": 47,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9084"
+      ]
+    },
+    {
+      "id": "2.4",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 12,
+        "D": 11
+      },
+      "score": 57,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9209"
+      ]
+    },
+    {
+      "id": "2.5",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 15,
+        "B": 12,
+        "C": 7,
+        "D": 8
+      },
+      "score": 42,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.4.0",
+        "#8928"
+      ]
+    },
+    {
+      "id": "2.6",
+      "domain_id": "D2",
+      "dimensions": {
+        "A": 10,
+        "B": 7,
+        "C": 4,
+        "D": 4
+      },
+      "score": 25,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T09"
+      ]
+    },
+    {
+      "id": "3.1",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 13,
+        "D": 12
+      },
+      "score": 59,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "3.2",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 21,
+        "B": 20,
+        "C": 16,
+        "D": 15
+      },
+      "score": 72,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9208"
+      ]
+    },
+    {
+      "id": "3.3",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 19,
+        "B": 17,
+        "C": 13,
+        "D": 13
+      },
+      "score": 62,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "3.4",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 12,
+        "B": 9,
+        "C": 5,
+        "D": 4
+      },
+      "score": 30,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T07"
+      ]
+    },
+    {
+      "id": "3.5",
+      "domain_id": "D3",
+      "dimensions": {
+        "A": 10,
+        "B": 6,
+        "C": 4,
+        "D": 4
+      },
+      "score": 24,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T04"
+      ]
+    },
+    {
+      "id": "4.1",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 21,
+        "B": 20,
+        "C": 17,
+        "D": 17
+      },
+      "score": 75,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "docs/product/releases/v2.4.0.md"
+      ]
+    },
+    {
+      "id": "4.2",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 19,
+        "B": 17,
+        "C": 13,
+        "D": 13
+      },
+      "score": 62,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "4.3",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 12,
+        "D": 12
+      },
+      "score": 58,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "4.4",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 17,
+        "B": 14,
+        "C": 9,
+        "D": 10
+      },
+      "score": 50,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "4.5",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 14,
+        "B": 10,
+        "C": 6,
+        "D": 6
+      },
+      "score": 36,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "loopx-overall-roadmap-v0#G3"
+      ]
+    },
+    {
+      "id": "4.6",
+      "domain_id": "D4",
+      "dimensions": {
+        "A": 10,
+        "B": 6,
+        "C": 4,
+        "D": 3
+      },
+      "score": 23,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "loopx-overall-roadmap-v0#G4"
+      ]
+    },
+    {
+      "id": "5.1",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 21,
+        "B": 20,
+        "C": 17,
+        "D": 18
+      },
+      "score": 76,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "docs/product/releases/v2.4.0.md"
+      ]
+    },
+    {
+      "id": "5.2",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 16,
+        "D": 17
+      },
+      "score": 72,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "5.3",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 19,
+        "B": 19,
+        "C": 16,
+        "D": 16
+      },
+      "score": 70,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "5.4",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 16,
+        "D": 15
+      },
+      "score": 70,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#8772"
+      ]
+    },
+    {
+      "id": "5.5",
+      "domain_id": "D5",
+      "dimensions": {
+        "A": 11,
+        "B": 7,
+        "C": 5,
+        "D": 5
+      },
+      "score": 28,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "loopx-overall-roadmap-v0"
+      ]
+    },
+    {
+      "id": "6.1",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 21,
+        "B": 19,
+        "C": 16,
+        "D": 16
+      },
+      "score": 72,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9215"
+      ]
+    },
+    {
+      "id": "6.2",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 13,
+        "D": 11
+      },
+      "score": 58,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "6.3",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 18,
+        "B": 16,
+        "C": 13,
+        "D": 13
+      },
+      "score": 60,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "6.4",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 19,
+        "B": 17,
+        "C": 13,
+        "D": 13
+      },
+      "score": 62,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "6.5",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 17,
+        "B": 14,
+        "C": 10,
+        "D": 11
+      },
+      "score": 52,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "6.6",
+      "domain_id": "D6",
+      "dimensions": {
+        "A": 19,
+        "B": 17,
+        "C": 13,
+        "D": 13
+      },
+      "score": 62,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "7.1",
+      "domain_id": "D7",
+      "dimensions": {
+        "A": 20,
+        "B": 19,
+        "C": 14,
+        "D": 14
+      },
+      "score": 67,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "7.2",
+      "domain_id": "D7",
+      "dimensions": {
+        "A": 16,
+        "B": 12,
+        "C": 9,
+        "D": 9
+      },
+      "score": 46,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0#explicit-non-claim"
+      ]
+    },
+    {
+      "id": "7.3",
+      "domain_id": "D7",
+      "dimensions": {
+        "A": 11,
+        "B": 7,
+        "C": 5,
+        "D": 5
+      },
+      "score": 28,
+      "paired_public_evidence": false,
+      "default_off": true,
+      "evidence_refs": [
+        "frontier-science-research-program-v0#T01"
+      ]
+    },
+    {
+      "id": "8.1",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 19,
+        "B": 16,
+        "C": 11,
+        "D": 12
+      },
+      "score": 58,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "8.2",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 23,
+        "B": 22,
+        "C": 19,
+        "D": 19
+      },
+      "score": 83,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "#9244"
+      ]
+    },
+    {
+      "id": "8.3",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 21,
+        "B": 20,
+        "C": 17,
+        "D": 16
+      },
+      "score": 74,
+      "paired_public_evidence": true,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0"
+      ]
+    },
+    {
+      "id": "8.4",
+      "domain_id": "D8",
+      "dimensions": {
+        "A": 17,
+        "B": 14,
+        "C": 9,
+        "D": 10
+      },
+      "score": 50,
+      "paired_public_evidence": false,
+      "default_off": false,
+      "evidence_refs": [
+        "v2.4.0",
+        "saas-opportunity-assessment.md"
+      ]
+    }
+  ],
+  "summary": "Active stable release: mechanism caller cutover (#9208), EffectTurn & settlement invariants, CAS/Steward/LooChat/Lark hardening, and zero-Wait-CI release preflight readiness.",
+  "summary_zh": "当前稳定基线：机制调用方统一切换（#9208）、EffectTurn 与结算不变式、CAS/管家/LooChat/飞书加固及零等待 CI 发版就绪。"
+}
