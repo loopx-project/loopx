@@ -490,9 +490,17 @@ export function buildAntiWhitewashingReceiptHeader(params: {
   return {header, fields};
 }
 
+function isContextReadCommand(command: readonly string[]): boolean {
+  for (let idx = 0; idx < command.length; idx++) {
+    if (command[idx] === "quota" && command[idx + 1] === "context-read") return true;
+  }
+  return false;
+}
+
 function inspectStructuredPrefetchOutput(
   output: string,
   sourceRef: {path: string; sha256: string} | null = null,
+  requiresVerifiedPage = false,
 ): {
   failed: boolean;
   incomplete: boolean;
@@ -500,44 +508,43 @@ function inspectStructuredPrefetchOutput(
 } {
   const trimmed = output.trim();
   if (!trimmed.startsWith("{")) {
-    return {failed: false, incomplete: false, sourceMismatch: false};
+    return {failed: false, incomplete: requiresVerifiedPage, sourceMismatch: false};
   }
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {failed: false, incomplete: false, sourceMismatch: false};
+      return {failed: false, incomplete: requiresVerifiedPage, sourceMismatch: false};
     }
     const obj = parsed as Record<string, unknown>;
     const failed = obj.ok === false;
     const schema = typeof obj.schema_version === "string" ? obj.schema_version : "";
+    const isTypedCapturePage =
+      schema === "context_capture_page_v1" || schema === "context_capture_selection_page_v1";
     const isPageSchema =
-      schema === "context_capture_page_v1"
-      || schema === "context_capture_selection_page_v1"
+      isTypedCapturePage
       || "eof" in obj
       || "offset" in obj
       || "next_offset" in obj
       || "total_bytes" in obj;
+    if (requiresVerifiedPage && !failed && !isTypedCapturePage) {
+      return {failed: false, incomplete: true, sourceMismatch: false};
+    }
     if (!isPageSchema) {
       return {failed, incomplete: false, sourceMismatch: false};
     }
     let incomplete = obj.eof === false || obj.truncated === true;
-    if (
-      !failed
-      && (schema === "context_capture_page_v1" || schema === "context_capture_selection_page_v1")
-    ) {
+    if (!failed && (isTypedCapturePage || requiresVerifiedPage)) {
       const hasZeroOffset =
         typeof obj.offset === "number"
         && Number.isInteger(obj.offset)
         && obj.offset === 0;
-      const hasClosedNextOffset =
-        obj.next_offset === null || obj.next_offset === undefined;
+      const hasClosedNextOffset = obj.next_offset === null;
       const hasCompleteEof = obj.eof === true && obj.truncated !== true;
       const hasContiguousLength =
-        typeof obj.total_bytes !== "number"
-        || (
-          typeof obj.content === "string"
-          && Buffer.byteLength(obj.content, "utf8") === obj.total_bytes
-        );
+        typeof obj.total_bytes === "number"
+        && Number.isInteger(obj.total_bytes)
+        && typeof obj.content === "string"
+        && Buffer.byteLength(obj.content, "utf8") === obj.total_bytes;
       if (!hasZeroOffset || !hasClosedNextOffset || !hasCompleteEof || !hasContiguousLength) {
         incomplete = true;
       }
@@ -561,7 +568,7 @@ function inspectStructuredPrefetchOutput(
       && (
         (reportedDigest !== null && reportedDigest !== sourceRef.sha256)
         || (
-          (schema === "context_capture_page_v1" || schema === "context_capture_selection_page_v1")
+          (isTypedCapturePage || requiresVerifiedPage)
           && reportedDigest === null
         )
       ),
@@ -569,7 +576,8 @@ function inspectStructuredPrefetchOutput(
     return {failed, incomplete, sourceMismatch};
   } catch {
     if (
-      trimmed.includes("context_capture_page_v1")
+      requiresVerifiedPage
+      || trimmed.includes("context_capture_page_v1")
       || trimmed.includes("context_capture_selection_page_v1")
     ) {
       return {failed: false, incomplete: true, sourceMismatch: false};
@@ -617,7 +625,8 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     prefetch_command: config.prefetch_command,
     initiator: config.initiator,
   });
-  const pageStatus = inspectStructuredPrefetchOutput(prefetched_output, source_ref);
+  const requiresVerifiedPage = source_ref !== null || isContextReadCommand(config.prefetch_command);
+  const pageStatus = inspectStructuredPrefetchOutput(prefetched_output, source_ref, requiresVerifiedPage);
   const effectiveTruncated = truncated || pageStatus.incomplete;
 
   const {header, fields} = buildAntiWhitewashingReceiptHeader({
@@ -642,6 +651,8 @@ export function evaluateEpochPrefetchSwap(rawRequest: JsonObject): JsonObject {
     fallback_reason = "timeout";
   } else if (exit_code === null || exit_code !== 0 || pageStatus.failed) {
     fallback_reason = "command_failed";
+  } else if (config.reject_on_truncation && truncated) {
+    fallback_reason = "output_truncated";
   } else if (pageStatus.incomplete) {
     fallback_reason = "incomplete_output";
   } else if (pageStatus.sourceMismatch) {

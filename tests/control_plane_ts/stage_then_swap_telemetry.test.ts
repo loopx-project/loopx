@@ -86,8 +86,17 @@ test('EpochReset builds deterministic anti-whitewashing receipt header with tool
     exit_code: 0,
     timed_out: false,
     truncated: false,
-    raw_bytes_read: 64,
-    prefetched_output: '{"summary":"narrow repro isolated"}',
+    raw_bytes_read: 192,
+    prefetched_output: JSON.stringify({
+      ok: true,
+      schema_version: 'context_capture_page_v1',
+      sha256: sourceSha,
+      offset: 0,
+      next_offset: null,
+      total_bytes: Buffer.byteLength('{"summary":"narrow repro isolated"}', 'utf8'),
+      eof: true,
+      content: '{"summary":"narrow repro isolated"}',
+    }),
     baseline_bytes: 4096,
     latency_ms: 12,
   });
@@ -105,7 +114,7 @@ test('EpochReset builds deterministic anti-whitewashing receipt header with tool
   assert.ok(text.includes('truncated: false'));
   assert.ok(text.includes('todo_1: fix test_bar'));
   assert.ok(text.includes(`sha256:${sourceSha}`));
-  assert.ok(text.endsWith('{"summary":"narrow repro isolated"}'));
+  assert.ok(text.includes('narrow repro isolated'));
 
   const headerAgain = buildAntiWhitewashingReceiptHeader({
     context_epoch: 'epoch-2',
@@ -169,6 +178,7 @@ test('failed, timed-out, policy-denied, truncated-strict, or negative-savings pr
 
   const negativeSavings = evaluateEpochPrefetchSwap({
     ...base,
+    source_ref: null,
     baseline_bytes: 100,
     exit_code: 0,
     prefetched_output: 'x'.repeat(200),
@@ -384,4 +394,25 @@ test("evaluateEpochPrefetchSwap enforces offset === 0, contiguous length, and so
   assert.equal(validFull.status, "committed");
   assert.equal(validFull.round_trips_saved, 1);
   assert.ok(Number(validFull.bytes_saved) > 0);
+
+  // Non-JSON capture tail (mdTail) or unpaginated JSON with bound source_ref / quota context-read
+  // MUST fail closed identically to jsonTail (KeepRaw incomplete_output, saved=0, round_trips_saved=0).
+  const mdTail = evaluateEpochPrefetchSwap({
+    ...base,
+    prefetched_output: "# Capture tail markdown\n...tail bytes only...",
+  });
+  assert.equal(mdTail.operator, "KeepRaw");
+  assert.equal(mdTail.fallback_reason, "incomplete_output");
+  assert.equal(mdTail.truncated, true);
+  assert.equal(mdTail.round_trips_saved, 0);
+  assert.equal(mdTail.bytes_saved, 0);
+
+  const unpaginatedJson = evaluateEpochPrefetchSwap({
+    ...base,
+    prefetched_output: JSON.stringify({ok: true, summary: "missing page metadata"}),
+  });
+  assert.equal(unpaginatedJson.operator, "KeepRaw");
+  assert.equal(unpaginatedJson.fallback_reason, "incomplete_output");
+  assert.equal(unpaginatedJson.round_trips_saved, 0);
+  assert.equal(unpaginatedJson.bytes_saved, 0);
 });
