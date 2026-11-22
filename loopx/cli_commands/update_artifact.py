@@ -31,8 +31,13 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
 from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
-PUBLIC_DEFAULT_CONTRACT = json.loads(
+_ARTIFACT_CONTRACT_POLICY = json.loads(
     Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
+)
+_READABLE_DEFAULT_CONTRACTS = _ARTIFACT_CONTRACT_POLICY["readable_contracts"]
+PUBLIC_DEFAULT_CONTRACT, = (
+    contract for contract in _READABLE_DEFAULT_CONTRACTS
+    if contract["surface"] == _ARTIFACT_CONTRACT_POLICY["publication_surface"]
 )
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST = 256 * 1024
@@ -64,11 +69,11 @@ def standalone_source() -> str:
         source = source.replace(old, "\n" + binding + "\n", 1)
     # The public installer is one file, so embed the policy that the Python
     # publishers and the native updater read from the distribution contract.
-    binding_start = source.index("\nPUBLIC_DEFAULT_CONTRACT = ")
-    binding_end = source.index("\nSHA = ", binding_start)
+    binding_start = source.index("\n_ARTIFACT_CONTRACT_POLICY = ")
+    binding_end = source.index("\n_READABLE_DEFAULT_CONTRACTS = ", binding_start)
     return (
         source[:binding_start]
-        + f"\nPUBLIC_DEFAULT_CONTRACT = {PUBLIC_DEFAULT_CONTRACT!r}"
+        + f"\n_ARTIFACT_CONTRACT_POLICY = {_ARTIFACT_CONTRACT_POLICY!r}"
         + source[binding_end:]
     )
 
@@ -141,10 +146,12 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         raise ValueError("Runtime artifact has no bounded download sources")
     for url in urls:
         safe_url(url)
-    # Historical v1 snapshots remain readable. Newly produced artifacts and
-    # the publisher require the observed contract; absence is not qualification.
+    # Readers can cross a version boundary in either direction. Publication
+    # still checks the observed writer against the single declared default.
     if "default_contract" in value:
-        validate_default_contract(value["default_contract"])
+        contract = value["default_contract"]
+        if not isinstance(contract, dict) or contract not in _READABLE_DEFAULT_CONTRACTS:
+            raise ValueError("Unsupported runtime default contract in artifact metadata")
     return dict(value)
 
 
