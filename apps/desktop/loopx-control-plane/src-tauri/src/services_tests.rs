@@ -363,11 +363,14 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
     );
     assert_demoted_nvm_bin_is_last_resort(&nvm_root, &stale, demoted.as_os_str());
 
-    // Nothing else on the PATH: the activation is the only candidate, so it
-    // stays authoritative and nvm-only hosts keep working.
+    // A PATH that resolves no Node at all: `NVM_BIN` is not evidence the shell
+    // still selects that version, so it is demoted — yet still discovered, so
+    // an nvm-only host keeps working.
+    let no_node_on_path = home.path().join("empty-bin");
+    fs::create_dir_all(&no_node_on_path).expect("empty bin fixture");
     let only_nvm = runtime_search_path_from(
         Some(home.path().to_path_buf().into()),
-        Some("/usr/bin:/bin".into()),
+        Some(no_node_on_path.to_string_lossy().into_owned().into()),
         Some(&nvm_root),
         Some(stale_nvm_bin),
     );
@@ -376,6 +379,20 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
         only_nvm_paths.contains(&stale),
         "an activation with no competing Node stays in the search"
     );
+    assert_ne!(
+        only_nvm_paths.first(),
+        Some(&stale),
+        "a stale NVM_BIN must not take the promoted activation position"
+    );
+    assert!(
+        only_nvm_paths
+            .iter()
+            .position(|directory| directory == &stale)
+            > only_nvm_paths
+                .iter()
+                .position(|directory| directory == &nvm_root.join("versions/node/v24.22.1/bin")),
+        "a stale NVM_BIN ranks behind a discovered qualified version"
+    );
     let mut unique = only_nvm_paths.clone();
     unique.sort();
     unique.dedup();
@@ -383,6 +400,101 @@ fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
         unique.len(),
         only_nvm_paths.len(),
         "no duplicate directories"
+    );
+}
+
+// The reviewer's regression: a launch with a minimal PATH that resolves no
+// Node and a residual `NVM_BIN` pointing at an unsupported version. Promoting
+// the residual variable would place it ahead of the standard Homebrew entries
+// and break a host whose Homebrew Node qualified before.
+#[test]
+#[cfg(unix)]
+fn residual_nvm_bin_does_not_outrank_the_standard_host_node() {
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v24.22.1");
+    let stale = nvm_root.join("versions/node/v20.18.0/bin");
+    node_fixture(&stale, "20.18.0");
+    let qualified_node = node_fixture(&nvm_root.join("versions/node/v24.22.1/bin"), "24.22.1");
+    let empty_bin = home.path().join("empty-bin");
+    fs::create_dir_all(&empty_bin).expect("empty bin fixture");
+    let inherited: std::ffi::OsString = empty_bin.clone().into_os_string();
+    assert!(
+        resolve_executable_path("node", Some(inherited.as_os_str())).is_none(),
+        "the inherited PATH must resolve no Node for this scenario"
+    );
+
+    let search = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(inherited),
+        Some(&nvm_root),
+        Some(stale.as_os_str()),
+    );
+    let paths: Vec<_> = env::split_paths(&search).collect();
+    let position = |candidate: &Path| {
+        paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    // The promoted activation position belongs to `~/.local/bin` only; the
+    // residual variable must rank behind every standard host entry.
+    assert_eq!(paths[0], home.path().join(".local/bin"));
+    #[cfg(target_os = "macos")]
+    {
+        assert!(
+            position(Path::new("/opt/homebrew/bin")) < position(&stale),
+            "a residual NVM_BIN must not precede the standard Homebrew Node"
+        );
+        assert!(
+            position(Path::new("/usr/local/bin")) < position(&stale),
+            "a residual NVM_BIN must not precede /usr/local/bin"
+        );
+    }
+    assert!(
+        position(&nvm_root.join("versions/node/v24.22.1/bin")) < position(&stale),
+        "a residual NVM_BIN must rank behind a discovered qualified version"
+    );
+    assert!(
+        paths
+            .iter()
+            .filter(|directory| *directory == &stale)
+            .count()
+            == 1,
+        "the demoted NVM_BIN appears once: {paths:?}"
+    );
+
+    // Core qualifies the Node the search resolves first, so the qualified
+    // discovered version must win rather than the residual one.
+    let resolved = resolve_executable_path("node", Some(search.as_os_str()))
+        .expect("the search must resolve a Node");
+    assert_eq!(
+        resolved, qualified_node,
+        "the residual NVM_BIN must not win resolution over a qualified version"
+    );
+
+    // An nvm-only host with nothing else still finds the residual directory, so
+    // the demotion never makes nvm invisible.
+    let isolated_root = tempfile::tempdir().expect("isolated nvm fixture");
+    let isolated_nvm = isolated_root.path().join(".nvm");
+    let isolated = isolated_nvm.join("versions/node/v20.18.0/bin");
+    fs::create_dir_all(&isolated).expect("isolated nvm version bin");
+    fs::create_dir_all(isolated_nvm.join("alias")).expect("isolated alias directory");
+    fs::write(isolated_nvm.join("alias/default"), "v20.18.0\n").expect("isolated default");
+    node_fixture(&isolated, "20.18.0");
+    let isolated_search = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(empty_bin.clone().into_os_string()),
+        Some(&isolated_nvm),
+        Some(isolated.as_os_str()),
+    );
+    assert!(
+        env::split_paths(&isolated_search).any(|directory| directory == isolated),
+        "a residual NVM_BIN is still discovered when nothing else provides Node"
+    );
+    assert_eq!(
+        resolve_executable_path("node", Some(isolated_search.as_os_str())),
+        Some(isolated.join("node")),
+        "an nvm-only host resolves its only Node"
     );
 }
 

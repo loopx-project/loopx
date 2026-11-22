@@ -319,9 +319,11 @@ including standard Homebrew locations on macOS and nvm-managed Node
 directories on Unix, without loading interactive shell profiles. Finder
 launches therefore do not depend on terminal PATH setup. nvm resolution is
 read-only and never runs nvm or sources a startup file. An `NVM_BIN` the
-launching shell exported stays first while it still matches the Node that PATH
-selects; once the shell selects a different Node, the variable is stale and its
-directory drops to the last resort, behind every discovered nvm location. nvm
+launching shell exported keeps the first position only while the inherited PATH
+resolves the same Node; a PATH that resolves no Node is not evidence the shell
+still selects that version, so a residual variable — left by a launchd plist or
+an earlier shell — drops to the last resort, behind Homebrew, the inherited
+PATH and every discovered nvm location. nvm
 locations this App discovers on disk — the recorded `default` alias, then the
 installed versions newest-first — are appended behind Homebrew and the
 inherited PATH, so an inferred stale default cannot displace a Node the host

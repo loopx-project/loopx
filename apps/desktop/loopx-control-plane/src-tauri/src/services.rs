@@ -1161,8 +1161,11 @@ fn installed_nvm_versions(root: &Path) -> Vec<String> {
 // terminal-launched App) is explicit intent, but only while it still matches
 // the Node that PATH selects. A shell can keep a stale `NVM_BIN` after putting
 // another Node first, and preferring the stale directory there would replace a
-// working Node with an unsupported one. Without that agreement the directory is
-// only a fallback, ranked behind every discovered nvm location.
+// working Node with an unsupported one. A PATH that resolves no Node at all is
+// not evidence either: the variable may be residue from a launchd plist or an
+// earlier shell, and the standard Homebrew entries below may still hold a
+// supported Node. Without that agreement the directory is only a fallback,
+// ranked behind every discovered nvm location.
 #[cfg(unix)]
 fn explicit_nvm_directories(
     nvm_bin: Option<&std::ffi::OsStr>,
@@ -1180,9 +1183,11 @@ fn explicit_nvm_directories(
     directories
 }
 
-// `NVM_BIN` agrees when the inherited PATH has no Node of its own, or when the
-// Node it resolves to is the same executable nvm activated. Anything else means
-// the shell moved on and left the variable behind.
+// `NVM_BIN` agrees only when the inherited PATH resolves a Node and that Node
+// is the same executable nvm activated. Both other shapes mean the variable is
+// not the shell's current choice: PATH selected a different Node, or PATH has no
+// Node at all and the value may simply be residue, which must not outrank a
+// supported Homebrew Node the same launch would otherwise find.
 #[cfg(unix)]
 fn nvm_bin_agrees_with_inherited_node(nvm_bin: &Path, inherited: Option<&std::ffi::OsStr>) -> bool {
     match resolve_executable_path("node", inherited) {
@@ -1190,7 +1195,7 @@ fn nvm_bin_agrees_with_inherited_node(nvm_bin: &Path, inherited: Option<&std::ff
             &inherited_node.to_string_lossy(),
             &nvm_bin.join("node").to_string_lossy(),
         ),
-        None => true,
+        None => false,
     }
 }
 
@@ -1350,9 +1355,12 @@ fn runtime_search_path_from(
         .filter(|nvm_bin| explicit_nvm_bin.as_deref() != Some(Path::new(nvm_bin)))
         .map(PathBuf::from);
     #[cfg(unix)]
-    let discovered = nvm_root
-        .map(|nvm_root| discovered_nvm_directories(nvm_root, demoted_nvm_bin.as_deref()))
-        .unwrap_or_default();
+    let discovered = match nvm_root {
+        Some(nvm_root) => discovered_nvm_directories(nvm_root, demoted_nvm_bin.as_deref()),
+        // Without an nvm root to enumerate, the demoted directory is still the
+        // last-resort candidate rather than being dropped from the search.
+        None => demoted_nvm_bin.iter().cloned().collect(),
+    };
     extend_unique(
         &mut paths,
         inherited
