@@ -7235,6 +7235,19 @@ def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_pat
             assert status == 202 and pending["status"] == "queued"
             qid = pending["turn_id"]
             original_queued = store.load_turn(sid, qid)
+            queue_status, queue = request("GET", f"{session_path}/queue")
+            assert queue_status == 200
+            queued_input, = queue["turns"]
+            assert queued_input["turn_id"] == qid and queued_input["origin"] == "web"
+            assert queued_input["input_mutation_allowed"] is False
+            for mutation in (
+                {"action": "edit", "message": "A different input.", "operation_id": "edit",
+                 "expected_revision": 0},
+                {"action": "cancel", "operation_id": "cancel", "expected_revision": 0},
+            ):
+                status, denied = request("POST", f"{session_path}/queue/{qid}/input", mutation)
+                assert status == 400 and "external source admission" in denied["error"]
+            assert store.load_turn(sid, qid) == original_queued
             endpoint = wrong_endpoint = f"{session_path}/queue/{qid}/steer"
             body = {"target_turn_id": tid, "client_ingress_id": "app-correction"}
             wrong_body = {"target_turn_id": "old-turn", "client_ingress_id": "wrong-turn"}
