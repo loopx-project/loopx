@@ -298,6 +298,7 @@ def merge_goal_entries(
     }
     resolved_incoming: dict[str, dict[str, Any]] = {}
     added_goals: list[dict[str, Any]] = []
+    incoming_changed = False
 
     for goal in incoming:
         goal_id = str(goal.get("id") or "")
@@ -319,8 +320,11 @@ def merge_goal_entries(
                 == {k: v for k, v in goal.items() if k != "synced_at"}
             ):
                 goal["synced_at"] = existing_goal["synced_at"]
+            else:
+                incoming_changed = True
             resolved_incoming[goal_id] = goal
         else:
+            incoming_changed = True
             added_goals.append(goal)
         actions.append(f"{goal_id}:{action}")
         synced_ids.append(goal_id)
@@ -335,6 +339,7 @@ def merge_goal_entries(
             sibling = sibling_by_id.get(str(item.get("id") or ""))
             if (
                 sibling is not None
+                and (incoming_changed or not item.get("synced_at"))
                 and same_source_registry(item, sibling)
                 and preserve_attention_override({}, {**item, "synced_at": ""})
                 == preserve_attention_override(item, {**sibling, "synced_at": ""})
