@@ -127,6 +127,25 @@ projection. Candidate lists and peer action lists retain counts and point to
 `--include-detail vision`; `--include-detail all` restores every supported
 detail section.
 
+Complete Turn output may also share the narrower
+`interaction_contract.cli_channel.vision_continuation_audit` when its entire
+value equals the CLI view of the root audit. The wire reference uses
+`projection_ref: "$.vision_continuation_audit"` and
+`projection_view: "cli_channel"`. A different channel obligation stays inline.
+The native first read and digest-pinned `quota context-read --select` and
+`--list` resolve the CLI view at its original address, including nested
+obligations such as `required_before_closeout`. An explicit empty pointer
+returns the signed source object. The capture and its digest bind subsequent
+reads and their native section observations.
+
+Complete Turn 也可以共享与根审核的 CLI 视图完全相同的
+`interaction_contract.cli_channel.vision_continuation_audit`。传输引用包含
+`projection_ref: "$.vision_continuation_audit"` 和
+`projection_view: "cli_channel"`。通道义务有差异时保留原文。
+原生首读和绑定捕获摘要的 `quota context-read --select`、`--list` 都在原地址
+还原 CLI 视图，支持读取 `required_before_closeout` 等子字段。显式选择空指针会返回
+带签名的源对象。后续读取及其原生区段观察均以原捕获及其摘要为准。
+
 When a bounded next-action label still carries the complete Task again in
 `agent_lane_next_action.title`, the default view may replace that exact duplicate
 with `title_ref`. The reference resolves to `text` or `title` in the single

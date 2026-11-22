@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..quota.turn_envelope import bind_turn_decision_capture
+from ..quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION, bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
 from ..content_digest import BARE_SHA256_PATTERN
 from .native_context_profile import (
@@ -731,12 +731,14 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
     """Render TS-verified addresses from the original, digest-checked values."""
     if text_append is not None and (list_fields or not isinstance(text_append, dict)):
         raise ValueError("observed text append requires a selected value")
+    presentation = context_vision_audit_view(payload)
     views: list[dict[str, Any]] = []
     presented: list[str] = []
     append_rendered = False
     for item in selections:
-        selected: Any = payload
         path, pointer = item["path"], item["pointer"]
+        # The empty pointer still returns the signed Complete Turn source.
+        selected: Any = presentation if path else payload
         for key in path:
             if type(key) is str and isinstance(selected, dict) and key in selected:
                 selected = selected[key]
@@ -754,7 +756,7 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
             presented.append(pointer)
             append_rendered = True
         elif list_fields:
-            views.append({"pointer": pointer, "fields": context_index_fields(payload, item["children"])})
+            views.append({"pointer": pointer, "fields": context_index_fields(presentation, item["children"])})
         elif opening_context_instruction is not None and pointer == "/context_details/instruction":
             presented.append(pointer)
             views.append({"pointer": pointer, "value": opening_context_instruction,
@@ -830,6 +832,35 @@ class ContextSelectionDigestChanged(ValueError):
     """The rendered selection no longer matches its recorded digest."""
 
 
+def context_vision_audit_view(payload: dict[str, Any]) -> dict[str, Any]:
+    # Before planning explicit addresses or replaying a pinned native read,
+    # restore the exact named view from the same capture. Its bytes and digest
+    # remain the authority, and unrelated historical references stay literal.
+    if payload.get("schema_version") != COMPLETE_TURN_DECISION_VERSION:
+        return payload
+    interaction = payload.get("interaction_contract")
+    if not isinstance(interaction, dict):
+        return payload
+    cli = interaction.get("cli_channel")
+    if not isinstance(cli, dict):
+        return payload
+    audit = cli.get("vision_continuation_audit")
+    if not (isinstance(audit, dict) and audit.get("projection_view") == "cli_channel"):
+        return payload
+    owner = payload.get("vision_continuation_audit")
+    if (audit != {"projection_ref": "$.vision_continuation_audit", "projection_view": "cli_channel", "required": True}
+            or audit["required"] is not True
+            or not isinstance(owner, dict) or owner.get("schema_version") != "vision_continuation_audit_v0"
+            or owner.get("required") is not True or "projection_ref" in owner or "projection_view" in owner
+            or (isinstance(judge := owner.get("vision_gap_judge"), dict) and "projection_ref" in judge)):
+        raise ValueError("CLI Vision audit view requires a complete inline owner in the same capture")
+    from ..work_items.interaction_contract import cli_vision_audit_view
+
+    return {**payload, "interaction_contract": {**interaction, "cli_channel": {
+        **cli, "vision_continuation_audit": cli_vision_audit_view(owner),
+    }}}
+
+
 def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            initial_read: bool, list_fields: bool, list_depth: int | None,
                            expected_sha256: str | None, preserve_selection_order: bool = False,
@@ -848,8 +879,9 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
     else:
         from ..quota.turn_envelope import _turn_envelope_result
 
-        context = payload if initial_read else context_selection_transport(
-            payload, select, list_fields=list_fields, list_depth=list_depth)
+        view = context_vision_audit_view(payload)
+        context = view if initial_read else context_selection_transport(
+            view, select, list_fields=list_fields, list_depth=list_depth)
         selection = {"initial_read": True} if initial_read else {"select": select}
         depth = {"list_depth": list_depth} if list_depth is not None else {}
         order = {"preserve_selection_order": True} if preserve_selection_order else {}
