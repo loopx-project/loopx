@@ -165,7 +165,10 @@ def commit_execution_loss_closeout(
 
     registry_path = registry_path.expanduser().resolve()
     registry = load_project_registry(registry_path)
-    root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+    # Cross-runtime lock witnesses carry the physical target paths.
+    root = resolve_runtime_root(
+        registry, runtime_root_override, registry_path=registry_path,
+    ).resolve()
     identity = SettlementIdentity(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
         turn_instance_id=turn_instance_id).as_dict()
     progress = (normalize_progress_observation(progress_observation, work_item_id=todo_id)

@@ -112,13 +112,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
-    def pin_initial_selection(plan: dict[str, Any]) -> None:
+    def pin_initial_selection(plan: dict[str, Any], *, opening_context_instruction: str | None = None) -> None:
         nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
-                current_document, selections)
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(
+                Path(current["path"]), current["sha256"], current_document, selections,
+                opening_context_instruction=opening_context_instruction)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
             # metadata is optional and never a read/authority receipt.
@@ -145,7 +146,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         try:
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
             if initial:
-                pin_initial_selection(plan)
+                pin_initial_selection(plan, opening_context_instruction=initial_read_plan.get("opening_context_instruction"))
             else:
                 field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -307,7 +308,8 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         surface=quota_context_surface(payload),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
         progressive_enabled=progressive_enabled,
-        captured_decision=decision_ref)
+        captured_decision=decision_ref,
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,

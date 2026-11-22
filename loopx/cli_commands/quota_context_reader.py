@@ -258,11 +258,17 @@ def _validate_context_page_window(offset: int, size: int, output_limit: int | No
 
 
 def _validate_pinned_selection(selection: dict[str, Any]) -> None:
-    if (set(selection) - {"present_goal_narrative"} != {"select", "initial_read", "list_fields", "list_depth", "sha256"}
+    if (set(selection) - {"present_goal_narrative", "opening_context_instruction"}
+            != {"select", "initial_read", "list_fields", "list_depth", "sha256"}
             or type(selection["initial_read"]) is not bool or type(selection["list_fields"]) is not bool
             or ("present_goal_narrative" in selection and (
                 selection["present_goal_narrative"] is not True
                 or selection["list_fields"] or selection["initial_read"]))
+            or ("opening_context_instruction" in selection and (
+                not isinstance(selection["opening_context_instruction"], str)
+                or not selection["opening_context_instruction"]
+                or selection["list_fields"] or selection["initial_read"]
+                or "/context_details/instruction" not in (selection.get("select") or ())))
             or not isinstance(selection["sha256"], str)
             or BARE_SHA256_PATTERN.fullmatch(selection["sha256"]) is None):
         raise ValueError("reader selection reference is incomplete or unsupported")
@@ -395,7 +401,9 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
                         if pinned_selection is not None else None),
                     selection_paths=reference.get("selection_paths") if pinned_selection is not None else None,
-                    text_append=text_append)
+                    text_append=text_append,
+                    opening_context_instruction=(pinned_selection.get("opening_context_instruction")
+                        if pinned_selection is not None else None))
             except ContextSelectionDigestChanged as exc:
                 # A verified file digest only binds bytes. Preserve an explicit
                 # selection or listing, including a receipt-only diagnostic.
@@ -722,12 +730,15 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
         digest = plan["capture"]["sha256"]
         if ordinary_page and _contains_ordinary_opening(ordinary_page["content"], document, plan):
             return None
-        opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
+        opening_instruction = plan.get("opening_context_instruction")
+        opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"],
+            opening_context_instruction=opening_instruction)
         if len(content) > page_bytes or len(content) >= output_bytes:
             return None
         remaining = remaining_reference
         if remaining is None:
-            remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"])
+            remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"],
+                opening_context_instruction=opening_instruction)
 
         def command(reference: Path) -> str:
             return context_capture_read_command(path, digest, page_bytes=page_bytes,

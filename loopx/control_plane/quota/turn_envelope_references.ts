@@ -305,12 +305,28 @@ export function referenceExploreGuidance(payload: JsonObject): JsonObject {
     work_context: {...context, sources}}}};
 }
 
-/** Keep the complete vision audit once. These existing projection references
- * share identical facts only; a channel-specific obligation is never a summary
- * of the root. The old display adapter delegates here before adding metadata. */
+const VISION_AUDIT_PATH = "$.vision_continuation_audit";
+const CLI_VISION_AUDIT_REFERENCE = {
+  projection_ref: VISION_AUDIT_PATH, projection_view: "cli_channel", required: true,
+};
+
+/** The writer checks the entire view against the root fields before sharing
+ * them. The capture reader uses the existing interaction owner to present it. */
+function cliVisionAuditView(owner: JsonObject): JsonObject | undefined {
+  if (owner.schema_version !== "vision_continuation_audit_v0" || owner.required !== true) return undefined;
+  const view = pickOwn(owner, ["required", "required_before_closeout", "recommended_action"]);
+  const judge = object(owner.vision_gap_judge);
+  if (Object.keys(judge).length) view.vision_gap_judge = pickOwn(judge, [
+    "done", "decision", "reason", "agent_judge_instruction", "evidence_read_instruction",
+    "registry_read_instruction", "done_only_when", "continue_when", "otherwise",
+  ]);
+  return view;
+}
+
+/** Exact copies use the complete root as their projection. */
 function visionAuditReference(audit: JsonObject): JsonObject {
   const reference: JsonObject = {
-    projection_ref: "$.vision_continuation_audit",
+    projection_ref: VISION_AUDIT_PATH,
     ...pickOwn(audit, ["schema_version", "required", "decision"]),
   };
   if (typeof audit.vision_gap_judge === "object" && audit.vision_gap_judge !== null &&
@@ -342,12 +358,15 @@ function mapNestedVisionAudits(payload: JsonObject,
 
 export function requireVisionAuditReferences(payload: JsonObject): void {
   const owner = object(payload.vision_continuation_audit);
-  const chained = Object.hasOwn(owner, "projection_ref") || Object.hasOwn(object(owner.vision_gap_judge), "projection_ref");
-  if (chained) throw new EffectRuntimeRequestError("Vision audit reference requires a complete inline root owner");
-  mapNestedVisionAudits(payload, audit => {
-    if (Object.hasOwn(audit, "projection_ref") || Object.hasOwn(object(audit.vision_gap_judge), "projection_ref")) {
+  const hasReference = (audit: JsonObject) => Object.hasOwn(audit, "projection_ref") ||
+    Object.hasOwn(audit, "projection_view") || Object.hasOwn(object(audit.vision_gap_judge), "projection_ref");
+  if (hasReference(owner)) throw new EffectRuntimeRequestError("Vision audit reference requires a complete inline root owner");
+  mapNestedVisionAudits(payload, (audit, path) => {
+    if (hasReference(audit)) {
+      const expected = audit.projection_view === "cli_channel" && path[1] === "cli_channel" && cliVisionAuditView(owner)
+        ? CLI_VISION_AUDIT_REFERENCE : visionAuditReference(owner);
       if (!Object.keys(owner).length ||
-          JSON.stringify(canonicalValue(audit)) !== JSON.stringify(canonicalValue(visionAuditReference(owner)))) {
+          JSON.stringify(canonicalValue(audit)) !== JSON.stringify(canonicalValue(expected))) {
         throw new EffectRuntimeRequestError("Vision audit reference must match its complete inline root owner without conflicting facts");
       }
     }
@@ -356,16 +375,27 @@ export function requireVisionAuditReferences(payload: JsonObject): void {
 }
 
 export function referenceVisionContinuation(payload: JsonObject,
-    identity = contextSourceIdentity(payload)): JsonObject {
+    identity = contextSourceIdentity(payload), shareCliView = false): JsonObject {
   requireVisionAuditReferences(payload);
   const owner = object(payload.vision_continuation_audit);
   if (!Object.keys(owner).length) return payload;
   const encoded = JSON.stringify(canonicalValue(owner)), reference = visionAuditReference(owner);
-  // A short audit is cheaper inline. Do not create a reference merely to count sharing.
-  if (Buffer.byteLength(encoded, "utf8") <= Buffer.byteLength(JSON.stringify(reference), "utf8")) return payload;
+  const smallerThanRoot = Buffer.byteLength(JSON.stringify(reference)) < Buffer.byteLength(encoded);
+  const cliView = shareCliView ? cliVisionAuditView(owner) : undefined;
+  // A short audit is cheaper inline.
+  if (!smallerThanRoot && !cliView) return payload;
   const source = identity(owner, ["vision_continuation_audit"]);
-  return mapNestedVisionAudits(payload, (audit, path) =>
-    identity(audit, path) === source ? structuredClone(reference) : audit);
+  const cliIdentity = cliView && identity(cliView, ["vision_continuation_audit"]);
+  const cliReferenceBytes = Buffer.byteLength(JSON.stringify(CLI_VISION_AUDIT_REFERENCE));
+  return mapNestedVisionAudits(payload, (audit, path) => {
+    const candidate = identity(audit, path);
+    if (smallerThanRoot && candidate === source) return structuredClone(reference);
+    if (path[1] === "cli_channel" && candidate === cliIdentity &&
+        cliReferenceBytes < Buffer.byteLength(JSON.stringify(audit))) {
+      return {...CLI_VISION_AUDIT_REFERENCE};
+    }
+    return audit;
+  });
 }
 
 /** The verified current Task is the only owner of a shared lane title. Keep

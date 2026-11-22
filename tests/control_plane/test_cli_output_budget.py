@@ -9,11 +9,13 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.control_plane.testing.cli_output_budget import (
@@ -1175,6 +1177,72 @@ def test_unmigrated_malformed_todo_state_stays_bounded_and_refuses_ordinary_read
             assert "todo_fixture_000" not in text
             assert measure_cli_output(text, output_format="json")["chars"] < 2_000
         assert state_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_turn_shares_vision_audit_with_exact_native_and_stateless_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from loopx.control_plane.turn_driver.native_context_selection import verified_context_selection
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+    with _stable_budget_fixture_root(tmp_path / "complete-vision-audit") as stable_root:
+        isolate_sqlite_runtime(stable_root, monkeypatch)
+        project, runtime, registry, _ = _write_fixture(stable_root, SCENARIOS[1], include_agent_vision=True)
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        monkeypatch.chdir(project)
+        common = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
+        guard = common + ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]]
+        fixed_route = ["--cli-bin", "/fixture/bin/loopx"]
+        code, text = _invoke_cli(fixed_route + guard + ["--context-delivery", "off"])
+        assert code == 0, text
+        assert len(text) <= CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"].max_chars["json"]
+        payload = json.loads(text)
+        assert_complete_turn_decision(payload)
+        root_audit = payload["vision_continuation_audit"]
+        cli_audit = payload["interaction_contract"]["cli_channel"]["vision_continuation_audit"]
+        assert cli_audit == {"projection_ref": "$.vision_continuation_audit",
+            "projection_view": "cli_channel", "required": True}
+        assert root_audit["required_before_closeout"] and root_audit["vision_gap_judge"]["registry_read_instruction"]
+
+        captures = stable_root / "decisions"
+        captures.mkdir(mode=0o700)
+        code, text = _invoke_cli(guard + ["--codex-app", "--context-delivery", "on",
+            "--turn-instance-id", "fixture-vision-audit", "--decision-output-root", str(captures)])
+        assert code == 0, text
+        navigation = json.loads(text)
+        _, reference = read_context_read_reference(navigation["recovery"]["reference_file"])
+        capture = Path(reference["path"])
+        original = capture.read_bytes()
+        assert sha256(original).hexdigest() == reference["sha256"]
+        assert json.loads(original)["interaction_contract"]["cli_channel"]["vision_continuation_audit"] == cli_audit
+        section = "/interaction_contract/cli_channel/vision_continuation_audit"
+        child = section + "/required_before_closeout"
+        judge = section + "/vision_gap_judge/registry_read_instruction"
+        initial, _, _ = read_pinned_cli_body(navigation["first_read_command"])
+        first = selected_context_values(initial)
+        assert first[child] == root_audit["required_before_closeout"]
+        assert first[judge] == root_audit["vision_gap_judge"]["registry_read_instruction"]
+
+        select = common + ["quota", "context-read", "--capture-file", str(capture),
+            "--capture-sha256", reference["sha256"]]
+        code, text = _invoke_cli(select + ["--select", child, "--select", judge])
+        assert code == 0, text
+        page = json.loads(text)
+        values = selected_context_values(page["content"])
+        assert values[child] == first[child] and values[judge] == first[judge]
+        observation = verified_context_selection({"source_recovery": reference}, page)
+        assert observation is not None and observation["source_sha256"] == reference["sha256"]
+        assert set(observation["selected_pointers"]) == {child, judge}
+        code, text = _invoke_cli(select + ["--select", section, "--list", "--list-depth", "2"])
+        assert code == 0, text
+        fields = json.loads(json.loads(text)["content"])["selections"][0]["fields"]
+        assert {child, judge} <= {field["pointer"] for field in fields}
+        whole, _, _ = read_pinned_cli_body(navigation["recovery"]["command"] + " --select ''")
+        assert json.loads(whole)["selections"] == [{"pointer": "", "value": json.loads(original)}]
+        assert capture.read_bytes() == original
 
 
 def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(

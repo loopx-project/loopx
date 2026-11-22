@@ -198,6 +198,22 @@ try {
   await citation.getByRole("button", {name: "关闭原文", exact: true}).click();
   assert.equal(new URL(page.url()).hash, address.hash);
   assert.equal(await citation.count(), 0);
+  // A stale link can arrive while the current original is scrolled into view.
+  await page.evaluate(href => {window.location.assign(href);}, bookmark.href);
+  await citation.locator("pre").first().waitFor();
+  const missingCitation = new URL(bookmark);
+  missingCitation.hash = bookmark.hash.replace(/~[0-9]+$/, "~99");
+  const readsBeforeUnknown = sourceRequests.length;
+  await page.evaluate(href => {window.location.assign(href);}, missingCitation.href);
+  await page.waitForFunction(() => {
+    const notice = document.activeElement;
+    if (!notice?.matches(".case-read-warning[role=status]") ||
+        !notice.textContent.includes("这条链接在所选解读中找不到原文")) return false;
+    const rect = notice.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= innerHeight && rect.width > 0;
+  });
+  assert.equal(sourceRequests.length, readsBeforeUnknown);
+  assert.equal(await citation.count(), 0);
   // A valid position from another pack must never fall through to this pack.
   const misplaced = new URL(bookmark);
   misplaced.searchParams.set("research_pack", otherPack.pack_id);
