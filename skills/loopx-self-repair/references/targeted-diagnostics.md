@@ -1,7 +1,8 @@
 # Targeted diagnosis and command cost
 
 Choose the missing fact, then the existing owner that can answer it. Preserve
-the current Goal, runtime/registry route, Agent and Turn identity.
+the current Goal, runtime/registry route, Agent and Turn identity; diagnosis
+does not authorize borrowing another session's identity or changing providers.
 
 | Missing fact | First useful surface |
 | --- | --- |
@@ -94,7 +95,9 @@ The child output budget does not raise the enclosing code cell's output budget.
 
 If the handle was already lost and the operation may have committed, recover its
 original receipt or digest-bound capture before considering another execution.
-Preserve Goal, Agent, Turn and operation identity. A directory listing.
+Preserve Goal, Agent, Turn and operation identity. A directory listing, a wrapper's
+"completed" label or a later file's existence does not prove the child outcome,
+full context delivery or current authority.
 
 ### Separate tool waits from command duration
 

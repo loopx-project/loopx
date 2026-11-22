@@ -334,7 +334,7 @@ D1 user gate open
 P1 independent and runnable
 ```
 
-结果：user channel 通知 D1；agent channel 执行 P1；
+结果：user channel 通知 D1；agent channel 执行 P1；不是全局 wait。
 
 ### Case C：只有未到期 monitor
 

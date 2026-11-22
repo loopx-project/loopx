@@ -298,6 +298,11 @@ it or starts model work. Before every write and receipt recovery, Core rechecks
 the Session, current binding and audience, and the provider verifies the original
 source. Posts identify the App speaker, stay in canonical append order within
 that outbox and retain complete long text through the existing rich-post parts.
+When Lark supplies a message link for the verified App input mirror, a new
+answer includes a link to the question from the same Turn. Multipart inputs
+use the last concrete post. The outbox retains the link before the first send
+and reuses it when recovering the same attempt. If Lark cannot supply a link in
+the original private chat, the existing body delivery proceeds.
 An exact App-origin terminal error also projects a public-safe failure notice
 with the original completion time. The notice is derived from the stored Turn
 and its matching error row, without exporting raw diagnostics. It uses the same
@@ -336,10 +341,10 @@ actual provider presentation remain separate acceptance work.
 
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
-This checkpoint covers text and bounded App image projection, not reply/thread
-relation mirroring, retroactive insertion into Lark chronology or all-channel
-broadcast. Canonical App images reuse the existing resource uploader and post
-sender, retaining caption and ordered inline images in the original private
+This checkpoint covers text, question links and bounded App image projection.
+Native reply and topic placement, retroactive insertion into Lark chronology,
+and all-channel broadcast remain open. Canonical App images reuse the existing
+resource uploader and post sender, retaining caption and ordered inline images in the original private
 chat. Long captions keep images on the final concrete post only. Every upload
 and send rechecks the original source and current Core message/grant. Sends and
 edits check again after provider preview, before recording the write intent;

@@ -207,7 +207,7 @@ source-session 保留独立的生命周期边界，这项验证不会启用其 C
 的 `plain`、`native-goal`、`loopx-goal` 模式继续使用各自原 owner，不属于这个 quota
 回调。从归档 checkpoint 恢复时，使用目的 Goal 的当前 guard，不导入源 Goal 的
 claim、Turn 或扣额权限。已有待结算义务的 Todo-bound guard 直接返回原进程继续
-收尾，不捕获或重启；
+收尾，不捕获或重启；完成这项工作不构成新的 checkpoint 机会。
 
 ### Persistent replan attempts and truthful readback
 

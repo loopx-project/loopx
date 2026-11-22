@@ -12,18 +12,19 @@ import threading
 import time
 from typing import Any, Callable
 
-from .chat import (
+from ..chat import (
     CHAT_REVIEW_CLOSE_TAG,
     CHAT_REVIEW_OPEN_TAG,
     VisibleResponseStreamFilter,
+    _turn_prompt,
     parse_agent_response,
     redact_local_paths,
 )
-from .chat_agent import (
+from ..chat_agent import (
     CodexChatAgentError,
     CodexChatTimeoutError,
     _host_tool_gate,
-    _turn_prompt,
+    _reader,
 )
 
 
@@ -31,22 +32,6 @@ EventSink = Callable[[str, dict[str, Any]], None]
 ACP_PROTOCOL_VERSION = 1
 ACP_INITIALIZE_TIMEOUT_DEFAULT_SEC = 30.0
 ACP_SESSION_STARTUP_TIMEOUT_DEFAULT_SEC = 45.0
-
-
-def _reader(stream: Any, messages: "queue.Queue[dict[str, Any] | Exception]") -> None:
-    try:
-        for line in stream:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except Exception as exc:  # pragma: no cover - defensive transport path.
-                messages.put(exc)
-                continue
-            if isinstance(payload, dict):
-                messages.put(payload)
-    finally:
-        messages.put(EOFError("ACP stdio stream closed"))
 
 
 def _compact_label(value: Any, *, fallback: str) -> str:
@@ -120,7 +105,12 @@ class ACPStdioAdapter:
             ) from exc
         messages: "queue.Queue[dict[str, Any] | Exception]" = queue.Queue()
         assert process.stdout is not None
-        threading.Thread(target=_reader, args=(process.stdout, messages), daemon=True).start()
+        threading.Thread(
+            target=_reader,
+            args=(process.stdout, messages),
+            kwargs={"eof_message": "ACP stdio stream closed"},
+            daemon=True,
+        ).start()
         initialize_timeout_sec = (
             ACP_INITIALIZE_TIMEOUT_DEFAULT_SEC
             if startup_timeout_sec is None

@@ -11,6 +11,8 @@ export interface Config {
   dataDir: string;
   /** Directories the UI may start threads in. Empty means the daemon's cwd only. */
   workdirs: string[];
+  /** Directories whose agent sessions the session list leaves out. Every other one is listed. */
+  hiddenSessionDirs: string[];
   /** Full argv used to start the Claude ACP adapter. */
   claudeCommand: string[];
   /** Executable used to start pi in RPC mode. */
@@ -127,6 +129,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const dataDir = resolve(env.LOOCHAT_DATA_DIR || './data');
 
   const workdirs = splitList(env.LOOCHAT_WORKDIRS).map((d) => (isAbsolute(d) ? d : resolve(d)));
+  const hiddenSessionDirs = splitList(env.LOOCHAT_HIDDEN_SESSION_DIRS).map((d) => (isAbsolute(d) ? d : resolve(d)));
 
   const claudeCommand = env.LOOCHAT_CLAUDE_ACP_BIN ? [env.LOOCHAT_CLAUDE_ACP_BIN] : defaultClaudeCommand();
   const piCommand = [env.LOOCHAT_PI_BIN || 'pi'];
@@ -153,6 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     token,
     dataDir,
     workdirs,
+    hiddenSessionDirs,
     claudeCommand,
     piCommand,
     agyCommand,

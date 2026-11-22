@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
 from ..quota.effective_action import EffectiveAction
 from ..quota.should_run import build_quota_should_run
 from ..work_items.interaction_contract import build_interaction_contract
@@ -369,9 +368,7 @@ def validate_external_wait_fallback_scenario(
     resume_blocked = list(summary.get("resume_blocked_items") or [])
     first_resume_blocked = dict(resume_blocked[0]) if resume_blocked else {}
     condition = dict(first_resume_blocked.get("resume_condition") or {})
-    compact = compact_quota_should_run_cli_payload(dict(source_packet))
-    compact_portfolio = dict(compact.get("action_portfolio") or {})
-    suggested = list(compact_portfolio.get("suggested_actions") or [])
+    suggested = list(portfolio.get("suggested_actions") or [])
     first_suggested = dict(suggested[0]) if suggested else {}
     if not (
         selected.get("todo_id") == "todo_external_wait_fallback"
@@ -391,7 +388,7 @@ def validate_external_wait_fallback_scenario(
     ):
         raise ValueError(
             "external-wait scenario must expose the pending P0 condition while "
-            "executing the bounded fallback from the compact default packet"
+            "executing the bounded fallback from the complete quota source"
         )
 
 

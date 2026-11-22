@@ -17,7 +17,7 @@ import zlib
 import pytest
 
 from loopx.chat_runtime import ChatRuntimeController
-from loopx.chat_attachments import CHAT_TURN_MAX_BODY_BYTES
+from loopx.chat.attachments import CHAT_TURN_MAX_BODY_BYTES
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
 

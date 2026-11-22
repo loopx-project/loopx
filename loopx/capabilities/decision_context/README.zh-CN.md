@@ -18,7 +18,7 @@ LoopX Core 仍是生命周期和动作权限的唯一 authority。
 
 - 项目状态和信源文档各自变化；
 - 旧判断可能已经过期；
-- 语义召回可以找到线索
+- 语义召回可以找到线索，但不能证明当前事实；
 - 模型建议容易被误当成事实；
 - 如果决策和后续结果没有关联，就难以校准下一次决策。
 
@@ -31,7 +31,7 @@ flowchart LR
     READ["有界扫描 + exact read<br/>freshness · revision · conflict"]
     EVIDENCE["Evidence packet<br/>采纳 · 拒绝 · 过期 · 冲突"]
     PROPOSAL["Decision proposal<br/>建议 · 备选 · stop list"]
-    REVIEW["Review settlement<br/>approve · reject · defer · no change"]
+    REVIEW["Review settlement<br/>approve · reject · defer · observed · no change"]
     CORE["LoopX lifecycle<br/>todo · user gate · event"]
     OUTCOME["Outcome receipt<br/>后续真实结果"]
     MEMORY["Reward Memory<br/>经评审的可复用经验"]
@@ -122,7 +122,7 @@ exact-read 完整度和未覆盖的 P0 source 投影为公开安全的回执。`
 |---|---|---|
 | `decision_evidence_packet_v0` | 这次决策现在应该相信什么？ | changed facts、采纳的召回、过期/拒绝 claim、冲突、revision、provider health |
 | `decision_proposal_v0` | 下一步建议做什么？ | objective score、推荐决策、备选方案、行动、stop list |
-| `decision_review_receipt_v0` | Owner 如何处理这次建议？ | approve/reject/defer 的 gate 证据，或显式 quiet no-change settlement |
+| `decision_review_receipt_v0` | 本次事实或建议如何完成评审？ | approve/reject/defer 的 gate 证据、无行动权限的 observed 新事实，或显式 quiet no-change |
 | `decision_outcome_receipt_v0` | 决策之后实际发生了什么？ | 接受的决策、状态迁移、真实结果、失效假设、复核时间 |
 
 Evidence packet 尽量确定性和可审计；proposal 明确只是建议；review receipt
@@ -291,7 +291,10 @@ loopx decision-context settle-review \
 ```
 
 显式语义 `no_change` 不传 `--proposal-json` 和 `--source-event-id`，也不会创建
-user gate。去掉 `--execute` 即为预览。这些命令只写调用方指定的私有 pending/
+user gate。已读到新事实但不提出行动时，另传 `--disposition observed`：必须已有
+material-change 语义 rebase，空 rebase 或仅采集正文不能结算。此 receipt 不属于
+quiet no-op，也不确认行动权限或批准任何 proposal。
+去掉 `--execute` 即为预览。这些命令只写调用方指定的私有 pending/
 cursor 状态和现有本地 rollout event log。
 移除私有 profile 即关闭入口；删除尚未结算的 pending checkpoint 不会改变 active
 cursor。
@@ -432,7 +435,7 @@ hold 是显式恢复操作，默认来源窗口则阻止高频来源借走其他
 
 #### 来源新鲜度合同
 
-profile 已启用、`loopx doctor` 健康或已有结算投影。
+profile 已启用、`loopx doctor` 健康或已有结算投影，都不代表来源是新鲜的。
 每个 `prepare-evidence` / `prepare-review` 组装结果，以及每次 `capture` /
 `capture-status` 输出，都携带 `source_freshness`（`decision_source_freshness_v0`）：
 每个已启用来源一行，包含 `last_read_at`（最近一次**成功**读取）、`staleness_seconds`、

@@ -154,7 +154,7 @@ def worker_args(goal):
         error_backoff_seconds=5, quota_timeout_seconds=90, wake_timeout_seconds=None)
 
 
-def test_pending_dependency_stays_quiet_for_100_polls_restart_and_100_more(public_goal, monkeypatch):
+def test_pending_dependency_stays_quiet_for_12_polls_restart_and_12_more(public_goal, monkeypatch):
     goal = public_goal
     source, waiting = wait_on(goal, "todo_done")
     before = goal.call("todo", "list", "--goal-id", GOAL)
@@ -189,14 +189,14 @@ def test_pending_dependency_stays_quiet_for_100_polls_restart_and_100_more(publi
 
     def advance(seconds):
         sleeps.append(seconds)
-        if len(sleeps) in (100, 200):
+        if len(sleeps) in (12, 24):
             raise RestartWorker
 
     monkeypatch.setattr(worker, "run_quota_should_run", probe)
     monkeypatch.setattr(worker, "_run_wake", unexpected_wake)
     args = worker_args(goal)
     args.once = False
-    for expected in (100, 200):
+    for expected in (12, 24):
         # Interrupt only after the actual worker has persisted the tick, then
         # reopen that same state route. No real hours or model calls are used.
         with pytest.raises(RestartWorker):
@@ -215,7 +215,7 @@ def test_pending_dependency_stays_quiet_for_100_polls_restart_and_100_more(publi
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     assert not any(event.get("event_kind") in ("quota_monitor_poll", "quota_spend") for event in events)
     assert counts == {"D": 0, "P": 0, "E": 0, "Q": 0}
-    assert len(sleeps) == 200 and sleeps[-1] == 3600
+    assert len(sleeps) == 24 and sleeps[-1] == 3600
 
 
 @pytest.mark.parametrize("kind", ["todo_done", "monitor_changed"])

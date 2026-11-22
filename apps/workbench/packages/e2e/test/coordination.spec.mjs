@@ -47,7 +47,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       assert.equal(await page.locator('.coord-row').count(), 0);
       const choiceRow = list.getByRole('menuitem', { name: /claude/i }).first();
       assert.ok(await choiceRow.locator('svg').count());
-      const shots = '/tmp/loochat-coordination-shots'; mkdirSync(shots, { recursive: true });
+      const shots = process.env.LOOCHAT_E2E_SHOTS_DIR ?? '/tmp/loochat-coordination-shots'; mkdirSync(shots, { recursive: true });
       await page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-menu.png` });
       await choiceRow.click();
       assert.equal(await box.inputValue(), 'Keep this draft while choosing a collaborator');
@@ -140,9 +140,11 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await page.route(`**/threads/${child}/events?tail=1`, route => route.fulfill({ status: 503, body: '{"error":"offline"}' }), { times: 1 });
       await card.click();
       await panel.getByText('文档审查完成。', { exact: false }).waitFor();
-      const own = panel.locator('.agent-panel-head .member-model.set', { hasText: picked });
+      assert.equal(await panel.locator('.agent-panel-head .member-model').count(), 0);
+      if (phone) await panel.locator('.composer textarea').click();
+      const own = panel.locator('.agent-panel-composer .model-control-trigger');
       await own.waitFor();
-      // Opened from the top of the panel, the member's own setting is all on screen.
+      // Opened from the bottom of the panel, the member's own setting is all on screen.
       await own.click();
       const ownPanel = page.getByRole('menu', { name: '模型与思考强度', exact: true });
       await ownPanel.waitFor();
@@ -153,6 +155,13 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-own-model.png` });
       await page.keyboard.press('Escape');
       await ownPanel.waitFor({ state: 'detached' });
+      const originalLead = await (await api(daemon, `/api/threads/${root.id}`)).json();
+      await panel.locator('.composer-permission').click();
+      const permissionSaved = page.waitForResponse(res => res.url().endsWith(`/threads/${child}`) && res.request().method() === 'PATCH');
+      await page.getByRole('menuitemradio', { name: /^完全访问/ }).click();
+      assert.equal((await permissionSaved).status(), 200);
+      assert.equal((await (await api(daemon, `/api/threads/${child}`)).json()).permissionMode, 'full_access');
+      assert.equal((await (await api(daemon, `/api/threads/${root.id}`)).json()).permissionMode, originalLead.permissionMode, 'member settings never change the lead');
       // A member has a box of its own, saying whom it writes to.
       await panel.getByRole('textbox', { name: '消息', exact: true }).waitFor();
       assert.equal(await panel.getByRole('textbox', { name: '消息', exact: true }).getAttribute('placeholder'), '发给 文档审查…');
@@ -162,6 +171,7 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
         assert.ok(rect && rect.x === 0 && Math.abs(rect.width - 390) < 2);
       }
       await page.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-detail.png` });
+      await panel.screenshot({ path: `${shots}/${phone ? 'phone' : 'desktop'}-${colorScheme}-member-panel.png` });
       await panel.getByRole('button', { name: '返回智能体列表' }).click();
       await card.waitFor();
       await panel.locator('.coord-unread').waitFor({ state: 'detached' });
@@ -255,6 +265,19 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       await page.getByRole('button', { name: '查看智能体', exact: true }).click();
       await card.click();
       assert.equal(await direct.inputValue(), '');
+      await panel.getByRole('button', { name: '关闭智能体面板' }).click();
+      await page.getByLabel('这个对话的更多操作').click();
+      await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
+      await page.getByRole('menuitem', { name: '交接', exact: true }).click();
+      const handover = page.getByRole('dialog', { name: '交接', exact: true });
+      const takeTeam = handover.getByRole('checkbox', { name: /协作成员随交接带走/ });
+      assert.equal(await takeTeam.isChecked(), true);
+      await takeTeam.uncheck();
+      const handoverRequest = page.waitForRequest(req => req.url().endsWith(`/threads/${root.id}/handover-thread`) && req.method() === 'POST');
+      await handover.getByRole('button', { name: '新建接手对话', exact: true }).click();
+      assert.equal((await handoverRequest).postDataJSON().takeTeam, false);
+      await handover.waitFor({ state: 'detached' });
+      assert.equal((await (await api(daemon, `/api/threads/${root.id}/coordination`)).json()).rootId, root.id);
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   });

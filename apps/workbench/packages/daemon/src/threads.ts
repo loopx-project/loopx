@@ -14,8 +14,8 @@ import type { VoiceTransport } from './voice-sessions.js';
 import { VoiceConversation } from './voice-conversation.js';
 import { turnOutcome } from './lifecycle.js';
 import { UserInputs } from './user-input.js';
-import type { SystemPrompt, WorkMode } from './adapters/types.js';
-import { diagnosticFailure } from './adapters/diagnostics.js';
+import type { LoginState, SystemPrompt, WorkMode } from './adapters/types.js';
+import { diagnosticFailure, modelLoginFailure } from './adapters/diagnostics.js';
 import { turnAnswer, type CoordinationManager, type CoordinationSetup } from './coordination.js';
 import { Injections, type InjectionGate } from './injections.js';
 import type { LoopxHooks } from './adapters/loopx/service.js';
@@ -61,7 +61,7 @@ import { aggregateThreadStats, statsOfTrace, type ThreadStats, type TurnStatsRow
 import { askedText } from './util.js';
 import { MessageEdits } from './message-edits.js';
 import { addWorktree, countChanges, findCheckout, initRepository, removeWorktree, samePath, worktreeLeftovers, type Checkout, type Worktree } from './worktrees.js';
-import { isProbeSession } from './local-sessions.js';
+import { isProbeSession, offeredSessionDir } from './local-sessions.js';
 
 /** Why a copy cannot get a worktree of its own, said to whoever asked for one anyway. */
 const WORKTREE_REFUSALS = {
@@ -272,9 +272,12 @@ export interface AgentInfo {
   /** The account this instance runs as, when it is a linked second login (an email). */
   account?: string | null;
   available: boolean;
+  unavailableReason?: string;
   streamBridgeEnabled?: boolean;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
+  /** In-progress login owned by the daemon, recoverable after page navigation. */
+  activeLogin?: { id: string } & LoginState;
   capabilities: AgentAdapter['capabilities'];
 }
 
@@ -394,7 +397,7 @@ export class ThreadManager {
     workdirs: string[] | Workdirs,
     private readonly attachments: AttachmentStore,
     /** What each instance is beyond its adapter: its adapter kind and linked account. */
-    private readonly agentMeta: () => Array<{ id: string; adapter?: string; account?: string | null; hidden?: boolean }> = () => [],
+    private readonly agentMeta: () => Array<{ id: string; adapter?: string; account?: string | null; hidden?: boolean; activeLogin?: { id: string } & LoginState }> = () => [],
   ) {
     this.dirs = Array.isArray(workdirs) ? new Workdirs(workdirs) : workdirs;
     this.references = new ContextReferences(store, this);
@@ -435,6 +438,8 @@ export class ThreadManager {
   /** The LoopX Goal adapter, when one is attached: a thread it binds is a Goal conversation, every other is ordinary. */
   loopx: LoopxHooks | null = null;
   /** What the last local-session scan knows of a native session: where it came from, and its Goal. */
+  /** Directories whose sessions are not offered for import (`LOOCHAT_HIDDEN_SESSION_DIRS`). */
+  hiddenSessionDirs: string[] = [];
   sessionIndex: ((sessionId: string) => { origin?: 'app' | 'cli' | null; loopx?: import('./session-enrich.js').SessionLoopx } | undefined) | null = null;
 
   /** The skills every agent instance on this machine can reach. Read-mostly, by the skills page. */
@@ -473,7 +478,9 @@ export class ThreadManager {
         ...(m?.account !== undefined ? { account: m.account } : {}),
         ...(m?.hidden !== undefined ? { hidden: m.hidden } : {}),
         available: await a.available(),
+        ...(a.unavailableReason ? { unavailableReason: a.unavailableReason } : {}),
         ...(a.startLogin ? { login: 'wizard' as const } : a.loginCommand ? { login: 'terminal' as const } : {}),
+        ...(m?.activeLogin ? { activeLogin: m.activeLogin } : {}),
         capabilities: a.capabilities,
         ...(a.capabilities.streamBridge ? { streamBridgeEnabled: a.streamBridgeEnabled ?? false } : {}),
       });
@@ -592,7 +599,9 @@ export class ThreadManager {
   }
 
   /**
-   * Conversations the agent already has, in directories the hub is allowed to work in.
+   * Conversations the agent already has, in any directory that still exists, is not hidden and
+   * could be a workdir (the sidebar's rule, {@link offeredSessionDir}): importing one from outside
+   * the workdirs adds its directory (see {@link importSession}).
    * `threadId` is set for those that are already a thread here (including archived ones).
    */
   async listAgentSessions(agent: string): Promise<Array<AgentSessionSummary & { threadId: string | null }>> {
@@ -602,14 +611,16 @@ export class ThreadManager {
       throw new HttpError(400, `${agent} has no session history to import`);
     }
     const sessions = await adapter.listSessions();
-    const allowed = new Map<string, boolean>();
+    const offered = new Map<string, boolean>();
     const workdirs = this.workdirs;
+    const hidden = this.hiddenSessionDirs;
     return sessions
       .filter((s) => !isProbeSession(s.title))
-      // A session whose directory has since been removed cannot be continued, so it is not offered.
+      // A session whose directory has since been removed, or that could never become a workdir,
+      // cannot be continued, so it is not offered.
       .filter((s) => {
-        if (!allowed.has(s.cwd)) allowed.set(s.cwd, !!s.cwd && isWithinWorkdirs(s.cwd, workdirs) && isDirectory(s.cwd));
-        return allowed.get(s.cwd);
+        if (!offered.has(s.cwd)) offered.set(s.cwd, offeredSessionDir(s.cwd, workdirs, hidden) && isDirectory(s.cwd));
+        return offered.get(s.cwd);
       })
       .map((s) => ({ ...s, threadId: this.store.findThreadByAgentSession(agent, s.id)?.id ?? null }))
       // Newest first; sessions with no date go last.
@@ -620,8 +631,15 @@ export class ThreadManager {
    * Makes a thread out of a conversation the agent already has. Its past turns are written to the
    * event log once; the thread then continues the same agent session, so the terminal and the hub
    * keep sharing it.
+   *
+   * A session outside the workdirs is imported only with `addDirectory`, which the person's own
+   * import click sets: its directory then becomes a workdir, as if added from the page (a home
+   * directory or the root itself is refused as too wide). The directory and thread are committed
+   * as one recoverable operation: either failure restores the previous workdirs and leaves no
+   * importable thread.
+   * Imports nobody clicked, such as the LoopX Goal sync, never widen where threads may work.
    */
-  async importSession(input: { agent?: unknown; sessionId?: unknown }): Promise<ThreadView> {
+  async importSession(input: { agent?: unknown; sessionId?: unknown; addDirectory?: boolean }): Promise<ThreadView> {
     const agent = String(input.agent ?? '');
     const sessionId = String(input.sessionId ?? '');
     const adapter = this.adapters.get(agent);
@@ -630,12 +648,15 @@ export class ThreadManager {
     const summary = adapter.getSession
       ? await adapter.getSession(sessionId)
       : (await this.listAgentSessions(agent)).find((s) => s.id === sessionId);
-    if (!summary || summary.id !== sessionId || !summary.cwd || !isWithinWorkdirs(summary.cwd, this.workdirs) || !isDirectory(summary.cwd)) {
+    const outside = !!summary?.cwd && !isWithinWorkdirs(summary.cwd, this.workdirs);
+    if (!summary || summary.id !== sessionId || !summary.cwd || (outside && !input.addDirectory) || !isDirectory(summary.cwd)) {
       throw new HttpError(404, 'session not found, or it is outside the allowed workdirs');
     }
     const key = `${agent}:${sessionId}`;
     if (this.store.findThreadByAgentSession(agent, sessionId) || this.importing.has(key)) throw new HttpError(409, 'this session is already a thread');
     if (!adapter.loadHistory) throw new HttpError(400, `${agent} has no session history to import`);
+    const refused = outside ? this.dirs.refusal(summary.cwd) : null;
+    if (refused) throw new HttpError(400, refused);
 
     this.importing.add(key);
     try {
@@ -643,19 +664,25 @@ export class ThreadManager {
       const title = (summary.title || turns[0]?.text || '').split('\n')[0].trim().slice(0, 60) || '导入的会话';
       const permissionMode = 'auto_edit'; // the same default a new thread gets
       const id = randomUUID();
+      let undoWorkdir: (() => void) | null = null;
+      let threadCommitted = false;
 
-      // Images are files, written before the database work so a failure there leaves nothing half-done.
-      const images: StoredAttachment[][] = turns.map((turn) => {
-        if (turn.images.length === 0) return [];
-        try {
-          return this.attachments.save(id, turn.images.slice(0, MAX_IMAGES)).stored;
-        } catch {
-          return []; // an image the hub would not accept is left out; the text still comes across
-        }
-      });
-
-      const events: StoredEvent[] = [];
       try {
+        // Publish the durable root before creating its thread, and keep the undo until the thread
+        // transaction commits. A save failure therefore cannot report success or leave a retry 409.
+        if (outside) undoWorkdir = this.dirs.add(summary.cwd);
+
+        // Images are files, written before the database work so a failure there leaves nothing half-done.
+        const images: StoredAttachment[][] = turns.map((turn) => {
+          if (turn.images.length === 0) return [];
+          try {
+            return this.attachments.save(id, turn.images.slice(0, MAX_IMAGES)).stored;
+          } catch {
+            return []; // an image the hub would not accept is left out; the text still comes across
+          }
+        });
+
+        const events: StoredEvent[] = [];
         this.store.transaction(() => {
           this.store.createThread({ id, agent, cwd: summary.cwd, title, permissionMode, model: null, effort: null });
           this.store.updateThread(id, { agentSessionId: sessionId, hubTurnAt: new Date().toISOString() });
@@ -669,12 +696,31 @@ export class ThreadManager {
             add(turnId, 'turn.done', { stopReason: 'end_turn', imported: true });
           });
         });
+        threadCommitted = true;
+        for (const ev of events) for (const l of this.listeners) l(ev);
+        return this.threadView(id);
       } catch (err) {
-        this.attachments.removeThread(id);
+        if (threadCommitted) {
+          try {
+            this.store.deleteThread(id);
+          } catch (cleanupErr) {
+            console.error(`import: could not remove thread ${id} after failed import: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+          }
+        }
+        try {
+          this.attachments.removeThread(id);
+        } catch (cleanupErr) {
+          console.error(`import: could not remove attachments after failed import: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+        }
+        if (undoWorkdir) {
+          try {
+            undoWorkdir();
+          } catch (rollbackErr) {
+            console.error(`import: could not restore workdirs after ${summary.cwd} import failed: ${rollbackErr instanceof Error ? rollbackErr.message : rollbackErr}`);
+          }
+        }
         throw err;
       }
-      for (const ev of events) for (const l of this.listeners) l(ev);
-      return this.threadView(id);
     } finally {
       this.importing.delete(key);
     }
@@ -1042,16 +1088,45 @@ export class ThreadManager {
     return entry.value;
   }
 
+  private splitCombinedModel(models: ModelOption[], model: string | null | undefined): { option: ModelOption; effort: EffortLevel } | null {
+    if (!model || models.some((m) => m.id === model)) return null;
+    for (const option of models) {
+      for (const effort of option.efforts ?? []) {
+        if (model === `${option.id}-${effort}`) return { option, effort };
+      }
+    }
+    return null;
+  }
+
+  private migrateCombinedModels(agent: string, models: ModelOption[]): void {
+    if (!models.length) return;
+    for (const thread of [...this.store.listThreads(), ...this.store.listThreads({ archived: true })]) {
+      if (thread.agent !== agent || !thread.model) continue;
+      const split = this.splitCombinedModel(models, thread.model);
+      if (!split) continue;
+      this.store.updateThread(thread.id, { model: split.option.id, effort: (thread.effort as EffortLevel | null) ?? split.effort });
+      this.emitThreadEvent(thread.id, null, 'thread.updated', {});
+    }
+    const saved = readModelPreferences(this.store.hubSetting<unknown>(DRAFT_MODEL_PREFERENCES_KEY, {}))[agent];
+    const split = this.splitCombinedModel(models, saved?.model);
+    if (split) this.rememberModelPreference(agent, { model: split.option.id, effort: (saved?.effort as EffortLevel | null) ?? split.effort });
+  }
+
   private adapterModels(adapter: AgentAdapter, refresh = false): Promise<ModelOption[]> {
+    const agent = [...this.adapters].find(([, current]) => current === adapter)?.[0];
     adapter.onModelsChanged = models => {
       // Instance ids can differ from adapter ids; removed/replaced instances must not publish.
-      const agent = [...this.adapters].find(([, current]) => current === adapter)?.[0];
-      if (!agent) return;
+      const id = [...this.adapters].find(([, current]) => current === adapter)?.[0];
+      if (!id) return;
+      this.migrateCombinedModels(id, models);
       const event: StoredEvent = { threadId: '', seq: 0, turnId: null, type: 'agent.modelsChanged',
-        ts: new Date().toISOString(), data: { agent, models } };
+        ts: new Date().toISOString(), data: { agent: id, models } };
       for (const listener of this.listeners) listener(event);
     };
-    return adapter.models(refresh);
+    return adapter.models(refresh).then(models => {
+      if (agent && this.adapters.get(agent) === adapter) this.migrateCombinedModels(agent, models);
+      return models;
+    }).catch(error => { throw modelLoginFailure(error, adapter.label); });
   }
 
   async listModels(agent: string, refresh = false): Promise<ModelOption[]> {
@@ -1265,10 +1340,8 @@ export class ThreadManager {
 
   private view(thread: ThreadRecord): ThreadView {
     const adapter = this.adapters.get(thread.agent);
-    const resumeCommand =
-      adapter && thread.agentSessionId
-        ? `cd ${shellQuote(thread.cwd)} && ${adapter.resumeCommand(thread.agentSessionId)}`
-        : null;
+    const nativeResume = adapter && thread.agentSessionId ? adapter.resumeCommand(thread.agentSessionId) : '';
+    const resumeCommand = nativeResume ? `cd ${shellQuote(thread.cwd)} && ${nativeResume}` : null;
     let cwdReal = thread.cwd;
     let cwdGone = false;
     try {
@@ -1808,7 +1881,7 @@ export class ThreadManager {
       if (updates.model === null) {
         // Back to the agent's own default: only a restart can do that.
         patch.model = null;
-        await this.restartForChange(thread, 'model');
+        if (thread.model !== null) await this.restartForChange(thread, 'model');
       } else {
         const model = await this.validateModel(thread.agent, updates.model);
         patch.model = model;
@@ -1820,7 +1893,7 @@ export class ThreadManager {
     if (updates.effort !== undefined) {
       if (updates.effort === null) {
         patch.effort = null;
-        await this.restartForChange(thread, 'effort');
+        if (thread.effort !== null) await this.restartForChange(thread, 'effort');
       } else {
         const effort = await this.validateEffort(thread.agent, nextModel, updates.effort);
         patch.effort = effort;
@@ -1963,7 +2036,7 @@ export class ThreadManager {
    */
   private async modelOption(adapter: AgentAdapter, model: string | null): Promise<ModelOption | undefined> {
     const options = await this.adapterModels(adapter);
-    if (model !== null) return options.find((o) => o.id === model);
+    if (model !== null) return options.find((o) => o.id === model) ?? this.splitCombinedModel(options, model)?.option;
     return options.find((o) => o.id === 'default') ?? options.find((o) => o.isDefault);
   }
 
@@ -2248,9 +2321,12 @@ export class ThreadManager {
   }
 
   /** A fresh conversation in the source's exact directory, sharing its existing worktree. No agent is started. */
-  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method']): Promise<ThreadView> {
+  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method'], takeTeam = true): Promise<ThreadView> {
     const source = this.getThread(threadId);
     if (mode !== undefined && mode !== 'continue' && mode !== 'branch') throw new HttpError(400, 'invalid handover mode');
+    if (takeTeam && this.coordination?.metadata(threadId) && source.status === 'running') {
+      throw new HttpError(409, '请等待当前轮结束后带走协作成员');
+    }
     // Whoever takes over from here, the work leaves this thread; stop waiting for its quota.
     this.quotaResume.drop(threadId);
     const selected = mode ?? 'branch';
@@ -2278,6 +2354,8 @@ export class ThreadManager {
     }, source.worktree, { sourceId: source.id, title: source.title, agent: source.agent, mode: selected,
       sourceSeq: this.store.history.latest(source.id), ...(method ? { method } : {}) });
     this.personal.inherit(source.id, successor.id);
+    // Manual handover carries the collaboration; automatic handover waits for the successor claim.
+    if (takeTeam && this.coordination?.metadata(source.id)) this.coordination.replaceHandoverMember(source.id, successor.id, null);
     return successor;
   }
 
@@ -2874,7 +2952,7 @@ export class ThreadManager {
   async executeResumeHandover(id: string, target: HandoverTarget, sessionId: string, failedTurn: string | null, note?: string): Promise<ThreadView> {
     const source = this.getThread(id);
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume');
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume', false);
     this.store.updateThread(successor.id, { agentSessionId: sessionId });
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
@@ -2907,7 +2985,7 @@ export class ThreadManager {
     const source = this.getThread(id);
     // The work moves; waiting for this agent's quota to come back is moot.
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary');
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary', false);
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
     // Preserve the user's execution and permission choices when the successor supports them.

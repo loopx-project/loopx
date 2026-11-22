@@ -313,6 +313,58 @@ def test_steward_executor_editor_is_machine_only_and_typed() -> None:
     )
 
 
+def test_steward_executor_editor_documents_json_endpoint_models_and_preserves_catalog_values() -> None:
+    editor = capability_configuration_editor("steward_executor")
+    fields = {field["key"]: field for field in editor["fields"]}
+    assert "endpoint_models" not in fields
+    assert {field["input_kind"] for field in editor["fields"]} <= {
+        "boolean",
+        "number",
+        "select",
+        "string_list",
+        "text",
+        "periodic_report_schedule",
+    }
+    assert "endpoint_models" in fields["eligible_endpoints"]["description"]
+    assert "JSON mode" in fields["eligible_endpoints"]["description"]
+    assert "endpoint_models" in fields["executor_model"]["description"]
+    assert "JSON mode" in fields["executor_model"]["description"]
+
+    configured = {
+        "schema_version": "steward_executor_machine_defaults_v1",
+        "selection_policy": "flexible",
+        "executor_endpoint": "codex",
+        "eligible_endpoints": ["codex", "antigravity"],
+        "executor_model": "gpt-6.2-sol",
+        "executor_reasoning_effort": "xhigh",
+        "endpoint_models": {
+            "antigravity": {"model": "carbon", "reasoning_effort": "medium"},
+        },
+    }
+    catalog = build_capability_configuration_catalog(
+        machine_namespaces=[
+            {
+                "namespace": "steward_executor",
+                "title": "Steward executor",
+                "current": configured,
+                "configuration_template": {
+                    "schema_version": "steward_executor_machine_defaults_v1",
+                    "selection_policy": "preferred",
+                    "executor_endpoint": "codex",
+                    "eligible_endpoints": [],
+                    "executor_model": None,
+                    "executor_reasoning_effort": None,
+                },
+            }
+        ]
+    )
+    capability = catalog["capabilities"][0]
+    assert capability["machine_current"]["endpoint_models"] == {
+        "antigravity": {"model": "carbon", "reasoning_effort": "medium"},
+    }
+    assert capability["effective_configuration"]["configuration"] == configured
+
+
 def test_catalog_merges_machine_and_goal_descriptors_without_losing_scope() -> None:
     catalog = build_capability_configuration_catalog(
         machine_namespaces=[

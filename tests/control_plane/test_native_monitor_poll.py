@@ -1,16 +1,17 @@
 """Actual CLI -> quota -> canonical transaction -> projection -> quota receipt."""
 from __future__ import annotations
 
-import pytest
 import hashlib
 import json
 
+import pytest
+
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from test_monitor_followthrough_contract import _write_fixture, GOAL_ID, AGENT_ID
+from test_monitor_followthrough_contract import _add_monitor, _write_fixture, GOAL_ID, AGENT_ID
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.scheduler.monitor_poll_writeback import write_monitor_poll_todo_state
-from loopx.control_plane.testing.canary_harness import run_json_cli
+from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
 
 
 def _canonical(
@@ -82,6 +83,47 @@ def test_public_cli_native_monitor_settles_with_independent_successor(tmp_path, 
     assert readback["source_authority"] == ("sqlite_v0" if provider == "sqlite" else "file_v0")
     assert len(readback["todos"]) == 2
     assert state.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_due_monitor_key_cannot_replace_selected_todo(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _state, first = _canonical(tmp_path, native=True, provider=provider)
+    second_key = "secondary-watch"
+    second = _add_monitor(
+        registry, text="Observe a second public target", target_key=second_key,
+        next_due_at="2001-01-01T00:00:00Z",
+    )
+    route = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--runtime-profile", "generic_cli")
+    lookup = {"registry_path": registry, "runtime_root": runtime}
+    guard = run_json_cli("quota", "should-run", *route, **lookup)
+    assert guard["work_lane_contract"]["obligation"] == "attempt_due_monitor"
+    targets = {first["todo_id"]: first["target_key"], second["todo_id"]: second_key}
+    selected_id = guard["selected_todo"]["todo_id"]
+    selected_key = targets.pop(selected_id)
+    alternate_id, alternate_key = next(iter(targets.items()))
+
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+
+    before = snapshot()
+    poll = ("quota", "monitor-poll", *route, "--result-hash", "observed-revision", "--execute")
+    code, rejected = run_json_cli_result(*poll, "--target-key", alternate_key, **lookup)
+    assert code != 0 and not rejected["ok"], rejected
+    assert "monitor-poll requires" in rejected["reason"]
+    assert snapshot() == before
+
+    admitted = run_json_cli(
+        *poll, "--todo-id", alternate_id, "--target-key", alternate_key, **lookup,
+    )
+    assert admitted["todo_writeback"]["todo_id"] == alternate_id
+    after = snapshot()
+    assert int(after["cursor"]) == int(before["cursor"]) + 1
+    prior_selected = next(row for row in before["todos"] if row["todo_id"] == selected_id)
+    assert next(row for row in after["todos"] if row["todo_id"] == selected_id) == prior_selected
+
+    matching_key = run_json_cli(*poll, "--target-key", selected_key, **lookup)
+    assert matching_key["todo_writeback"]["todo_id"] == selected_id
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

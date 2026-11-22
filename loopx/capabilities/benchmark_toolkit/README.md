@@ -483,7 +483,8 @@ result, observed provider credential value, or missing isolation attestation rem
 disqualifying. The receipt publishes only the
 authorization id and digest, purpose, counts and a digest of sorted variable names.
 Raw names and values remain in the private trajectory. The declaration must be
-derived from the immutable benchmark task contract; Because this is a qualification-time
+derived from the immutable benchmark task contract; the toolkit validates its bounded
+shape but does not grant that task authority. Because this is a qualification-time
 task permission, it is excluded from the digest of the run-admitted evaluation policy.
 The private trajectory records this exact request/result shape:
 
@@ -972,7 +973,7 @@ The TypeScript policy checks the exact admission generation (`admitted_at` as
 well as run/case/role). The existing local ledger transports lock the concurrency
 envelope and board in that order, recheck the policy's input snapshot, write and
 read back the terminal row, then release and read back that original slot.
-An intervening write requires retrying the original proof; A process interruption after the board write can be
+An intervening write requires retrying the original proof. A process interruption after the board write can be
 replayed. Same-terminal replay preserves later scores, insight and observation
 time, and an already released run is idempotent. This is process-crash recovery,
 not a new power-loss durability guarantee. New state transitions use the actual

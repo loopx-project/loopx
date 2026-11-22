@@ -46,7 +46,7 @@ def test_current_repository_debt_is_reviewed_without_line_count_pins() -> None:
     baseline = module_metric_baseline(
         REPOSITORY_ROOT / "loopx" / "canary" / "module_metric_baseline.json"
     )
-    assert "lines" not in baseline["loopx/extensions/lark/goal_topic_runtime.py"]
+    assert "lines" not in baseline["loopx/canary/planner.py"]
     assert baseline["loopx/heartbeat_prompt.py"]["lines"] == 1199
     for relative_path, ceilings in baseline.items():
         if ceilings.get("lines", MODULE_LINE_LIMIT) > MODULE_LINE_LIMIT:

@@ -209,6 +209,9 @@ def test_replan_stages_read_original_authority_capture_without_registry(
                 assert page["next_offset"] == len(observed)
                 command = page["next_command"]
             guard = json.loads(observed)
+        from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+        assert "review" not in guard["replan_action_packet"]
+        staged = _turn_envelope_result("replan_cli_view", payload=source)["replan_action_packet"]
         missing = tmp_path / "unrelated-missing-registry.json"
 
         def snapshot():
@@ -228,7 +231,7 @@ def test_replan_stages_read_original_authority_capture_without_registry(
                     assert value["obligation_id"] == source["replan_action_packet"]["obligation_id"]
                     return value
 
-                review = read(guard["replan_action_packet"]["review"])
+                review = read(staged["review"])
                 writer = read(review["next"]["writeback"])
                 assert writer["context_id"] == review["context_id"]
                 assert writer["source_hash"] == review["source_hash"]
@@ -237,7 +240,7 @@ def test_replan_stages_read_original_authority_capture_without_registry(
                 assert len(index["outcomes"]) == 1
                 acceptance = read(index["read_action_template"].replace("{outcome_ref}", index["outcomes"][0]["outcome_ref"]))
                 assert acceptance["outcome"]["requirements"][0]["description"] == "Stop before publication."
-                explore = read(guard["replan_action_packet"]["review"].replace("--replan-stage review", "--replan-stage explore"))
+                explore = read(staged["review"].replace("--replan-stage review", "--replan-stage explore"))
                 assert explore["explore_basis"] == source["autonomous_replan_obligation"]["replan_context"].get("explore_basis")
         assert snapshot() == before, "captured readers cannot admit, settle, repair routes or rewrite authority"
         assert not missing.exists()

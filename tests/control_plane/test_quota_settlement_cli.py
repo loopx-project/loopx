@@ -5109,13 +5109,19 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     )
 
 
-@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
-def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+@pytest.mark.parametrize(
+    "profile",
+    [None, "generic_cli", "codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"],
+)
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(
+    tmp_path: Path, profile: str | None,
+) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime)
+    profile_args = ("--runtime-profile", profile) if profile else ()
     rc, preview = _run_cli(
-        registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
+        registry_path, runtime, "quota", "should-run", *profile_args,
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
     )
     assert rc == 0, preview
@@ -5135,9 +5141,131 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, pr
     assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == ALTERNATIVE_TODO_ID
-    assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    if profile is None:
+        assert "settlement_plan" not in bound["interaction_contract"]["cli_channel"]
+    else:
+        assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
     assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
+    tmp_path: Path, provider: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, handoff_mode="hard_lease", provider=provider)
+
+    preview_rc, preview = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert preview_rc == 0, preview
+    selection = preview["interaction_contract"]["cli_channel"]["selection_command"]
+    command = (
+        selection["route_prefix"] + " " + selection["command_args_template"]
+    ).replace("{todo_id}", ALTERNATIVE_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert selected_rc == 0, selected
+    assert selected["execution_preparation"]["state"] == "claim_required"
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    turn_instance_id = identity["turn_instance_id"]
+    receipt_events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert receipt_events[-1]["details"]["quota_spend_source"] == "visible-goal"
+
+    claim_rc, claim = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "claim",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--claimed-by",
+        AGENT_ID,
+    )
+    assert claim_rc == 0 and claim["execution_managed"] is True, claim
+    ready_rc, ready = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    assert ready_rc == 0, ready
+    assert ready["execution_preparation"]["state"] == "ready"
+    lease_proof = ready["execution_preparation"]["lease_proof"]
+
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--classification",
+        "visible_goal_hard_lease_progress",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
+        "--progress-result-class",
+        "advanced",
+        "--progress-work-item-id",
+        ALTERNATIVE_TODO_ID,
+        "--progress-evidence-id",
+        "evidence:visible-goal-hard-lease",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    before = rollout_event_log_path(runtime, GOAL_ID).read_bytes()
+    refused_rc, refused = _run_cli(registry_path, runtime, *refresh_args, cwd=project)
+    assert refused_rc == 1, refused
+    assert refused["error_code"] == "refresh_task_lease_unavailable"
+    assert refused["appended"] is False
+    assert refused["settlement_recovery"]["settlement_identity"] == identity
+    assert rollout_event_log_path(runtime, GOAL_ID).read_bytes() == before
+
+    # Manual writeback carries the proof returned by this same guard; it must
+    # not borrow a lease merely because the current Todo has an active holder.
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, *refresh_args,
+        "--task-lease-idempotency-key", str(lease_proof["idempotency_key"]),
+        "--task-lease-expected-version", str(lease_proof["expected_version"]),
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_progress"]["quota_spend_source"] == "visible-goal"
+    assert "--source visible-goal" in refresh["settlement_owed"]["command"]
 
 
 @pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
@@ -5660,10 +5788,12 @@ def test_pending_deferred_p0_allows_independent_p1_selection(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("renew_before_wait", [False, True])
 def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     tmp_path: Path,
     provider: str,
     monkeypatch: pytest.MonkeyPatch,
+    renew_before_wait: bool,
 ) -> None:
     from canonical_authority_fixture import (
         isolate_sqlite_runtime,
@@ -5702,6 +5832,19 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     assert prepared["heartbeat_receipt"]["settlement_identity"] == (
         first["heartbeat_receipt"]["settlement_identity"]
     )
+    original_proof = prepared["execution_preparation"]["lease_proof"]
+    lease_version = original_proof["expected_version"]
+    if renew_before_wait:
+        renew_rc, renewed = _run_cli(
+            registry_path, runtime, "task-lease", "renew", "--goal-id", GOAL_ID,
+            "--todo-id", TODO_ID, "--owner", AGENT_ID,
+            "--idempotency-key", original_proof["idempotency_key"],
+            "--expected-version", str(lease_version), "--ttl-seconds", "3600",
+        )
+        assert renew_rc == 0 and renewed["renewed"], renewed
+        assert renewed["lease"]["idempotency_key"] == original_proof["idempotency_key"]
+        assert renewed["lease"]["version"] > lease_version
+        lease_version = renewed["lease"]["version"]
     # This result exists before the lifecycle wait; recovery must account for
     # it without executing more work or rebinding the original Turn.
     artifact = project / "verified-before-wait.txt"
@@ -5723,6 +5866,8 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "--todo-id", TODO_ID,
     )
     assert inspect_rc == 0 and inspected["lease"]["status"] == "released", inspected
+    assert inspected["lease"]["version"] == lease_version
+    assert inspected["lease"]["idempotency_key"] == original_proof["idempotency_key"]
     replay_rc, replay = _run_cli(registry_path, runtime, *guard)
     assert replay_rc == 0, replay
     assert replay["effective_action"] == "unsettled_host_turn_recovery"
@@ -5777,6 +5922,15 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     write_args = ("refresh-state", *binding, "--classification", "verified_before_wait",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks")
+    if renew_before_wait:
+        stale_rc, stale = _run_cli(
+            registry_path, runtime, *write_args,
+            "--task-lease-idempotency-key", original_proof["idempotency_key"],
+            "--task-lease-expected-version", str(original_proof["expected_version"]), cwd=project,
+        )
+        assert stale_rc == 1 and stale["error_code"] == "refresh_task_lease_unavailable", stale
+        assert stale["appended"] is False
+        assert _classification_count(runtime, "verified_before_wait") == _spend_run_count(runtime) == 0
     rc, written = _run_cli(registry_path, runtime, *write_args, cwd=project)
     assert rc == 0, written
     rc, replayed_write = _run_cli(registry_path, runtime, *write_args, cwd=project)

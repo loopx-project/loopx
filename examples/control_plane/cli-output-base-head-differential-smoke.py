@@ -33,25 +33,50 @@ SEMANTICS_SOURCE = (
 )
 
 
-def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
+def _run(
+    command: list[str], *, cwd: Path, env: dict[str, str] | None = None,
+    input_bytes: bytes | None = None,
+) -> bytes:
     completed = subprocess.run(
         command,
         cwd=cwd,
         env=env,
+        input=input_bytes,
         check=False,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=240,
     )
     if completed.returncode != 0:
+        stdout = completed.stdout.decode("utf-8", errors="replace")
+        stderr = completed.stderr.decode("utf-8", errors="replace")
         raise AssertionError(
             f"command failed ({completed.returncode}): {' '.join(command)}\n"
-            f"stdout:\n{completed.stdout[-4000:]}\n"
-            f"stderr:\n{completed.stderr[-4000:]}"
+            f"stdout:\n{stdout[-4000:]}\n"
+            f"stderr:\n{stderr[-4000:]}"
         )
+    return completed.stdout
+
+
+def _materialize_base_source(base_ref: str, base_root: Path) -> None:
+    """Export the pinned CLI source and its resources using a private Git index."""
+    env = {**os.environ, "GIT_INDEX_FILE": str(base_root.with_suffix(".index"))}
+    _run(["git", "read-tree", base_ref], cwd=REPO_ROOT, env=env)
+    # Root files include build manifests. The probe itself comes from the
+    # candidate, so docs, test fixtures and other product trees are unnecessary.
+    paths = _run(
+        ["git", "ls-files", "-z", "--", ":(top,glob)*", "loopx/", "packages/", "scripts/", "skills/"],
+        cwd=REPO_ROOT, env=env,
+    )
+    if b"loopx/__init__.py" not in paths.split(b"\0"):
+        raise ValueError(f"CLI comparison base {base_ref} has no LoopX Python source")
+    base_root.mkdir()
+    # Resolve checkout attributes from the historical index.
+    _run(
+        ["git", f"--work-tree={base_root}", "checkout-index",
+         f"--prefix={base_root.as_posix()}/", "--stdin", "-z"],
+        cwd=REPO_ROOT, env=env, input_bytes=paths,
+    )
 
 
 def _run_probe(
@@ -227,65 +252,39 @@ def main() -> int:
         shutil.copy2(FIXTURE_SUPPORT, temp_root / FIXTURE_SUPPORT.name)
         shutil.copy2(SEMANTICS_SOURCE, semantics_source)
 
-        _run(
-            [
-                "git",
-                "-c",
-                f"core.hooksPath={os.devnull}",
-                "worktree",
-                "add",
-                "--detach",
-                str(base_root),
-                base_ref,
-            ],
-            cwd=REPO_ROOT,
+        _materialize_base_source(base_ref, base_root)
+        _run_probe(
+            source_root=base_root,
+            probe_runner=probe_runner,
+            probe_test=probe_test,
+            semantics_source=semantics_source,
+            fixture_root=fixture_root,
+            receipt_path=base_receipt,
+            cwd=temp_root,
+            enforce_budget=False,
         )
-        try:
-            _run_probe(
-                source_root=base_root,
-                probe_runner=probe_runner,
-                probe_test=probe_test,
-                semantics_source=semantics_source,
-                fixture_root=fixture_root,
-                receipt_path=base_receipt,
-                cwd=temp_root,
-                enforce_budget=False,
+        base_observation = _base_ceiling_observation(_load_receipt(base_receipt))
+        if base_observation["failure_count"]:
+            # Candidate assertions still run unchanged. These metrics are
+            # attribution evidence, not a waiver for an over-budget base.
+            print(
+                "cli-output-base-current-ceilings "
+                + json.dumps(
+                    {"base_ref": base_ref, **base_observation},
+                    sort_keys=True, separators=(",", ":"),
+                ),
+                flush=True,
             )
-            base_observation = _base_ceiling_observation(_load_receipt(base_receipt))
-            if base_observation["failure_count"]:
-                # Candidate assertions still run unchanged. These metrics are
-                # attribution evidence, not a waiver for an over-budget base.
-                print(
-                    "cli-output-base-current-ceilings "
-                    + json.dumps(
-                        {"base_ref": base_ref, **base_observation},
-                        sort_keys=True, separators=(",", ":"),
-                    ),
-                    flush=True,
-                )
-            _run_probe(
-                source_root=REPO_ROOT,
-                probe_runner=probe_runner,
-                probe_test=probe_test,
-                semantics_source=semantics_source,
-                fixture_root=fixture_root,
-                receipt_path=candidate_receipt,
-                cwd=temp_root,
-                enforce_budget=True,
-            )
-        finally:
-            _run(
-                [
-                    "git",
-                    "-c",
-                    f"core.hooksPath={os.devnull}",
-                    "worktree",
-                    "remove",
-                    "--force",
-                    str(base_root),
-                ],
-                cwd=REPO_ROOT,
-            )
+        _run_probe(
+            source_root=REPO_ROOT,
+            probe_runner=probe_runner,
+            probe_test=probe_test,
+            semantics_source=semantics_source,
+            fixture_root=fixture_root,
+            receipt_path=candidate_receipt,
+            cwd=temp_root,
+            enforce_budget=True,
+        )
 
         comparison = compare_cli_output_receipts(
             _load_receipt(base_receipt),

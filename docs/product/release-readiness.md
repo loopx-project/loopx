@@ -41,22 +41,31 @@ is an independent readback and recovery entry point. A provider that still
 fails remains closed until its per-extension doctor result is repaired and the
 command passes. See [Extension lifecycle](../reference/extensions.md#runtime-lifecycle).
 
+For an archive installed with custom directories, keep the same
+`LOOPX_BIN_DIR` and `LOOPX_RELEASES_DIR` overrides when rolling back.
+Unset or empty overrides use the default locations.
+
 Do not collapse package acquisition, host-material delivery, core runtime
 activation, and enabled-extension readiness into one "installed" claim. The
 [installation guide's active-layer checklist](../guides/installing-loopx.md#verify-the-active-layers)
 names the readback and recovery command for each layer.
 
 For a pip or pipx distribution, apply delegates to that owner. For an archive
-snapshot, apply uses the public `stable` ref by default and preserves atomic
-snapshot rollback. Before replacing the launcher, `loopx update --rollback
-previous` checks that the selected release can read the current authoritative
-Todos for registered local File and SQLite Goals. If it cannot verify the read,
-the running version and Goal state stay in place. Both the registry's configured
-runtime and an explicit runtime override participate in this check. Rollback
-holds the installer's existing promotion lock through Todo checks, activation,
-Doctor and recovery. Recovery restores only the launcher installed by that
-operation, preserving a later replacement. Use a release with a matching state
-backup if older code cannot read the current data. Use `loopx update plan
+snapshot, apply uses the public `stable` ref by default. Before replacing the
+launchers, `loopx update --rollback previous` checks that the selected release
+can read the current authoritative Todos for registered local File and SQLite
+Goals. Both the registry's configured runtime and an explicit runtime override
+participate in this check. Rollback switches `loopx` and an archive-managed
+`loopx-apply-rrule` to the selected release under the installer's promotion lock.
+A selected release must provide an executable scheduler helper if the helper
+is managed by that archive installation. The lock covers Todo checks, both
+replacements, Doctor and recovery. Rollback verifies each destination against
+its original inode immediately before replacing it. A changed destination,
+an interrupted or failed switch, or a failed core Doctor triggers recovery
+only for links still owned by the rollback. A failed extension Doctor leaves
+the selected release active so the extension can be repaired.
+Use a release with a matching state backup if older code cannot read the
+current data. Use `loopx update plan
 --ref main` and `loopx update apply --ref main` only for maintainer/dev archive
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
@@ -940,7 +949,7 @@ path, and canary route rather than as a user-facing release baseline.
   rendering. At the frozen source, 515 public smokes and 360 affected Python
   checks passed; the authorized DS Flash/high alternative passed all 22
   scenarios twice and six contrasts, with zero failures or skips. Earlier
-  Doubao qualification failures remain unqualified; Windows execution, Apple notarization,
+  Doubao qualification failures remain unqualified. Windows execution, Apple notarization,
   authenticated Host interaction, external backend execution and sustained
   SQLite qualification remain unqualified. No paired-version benchmark uplift
   or isolated Astra causal effect is claimed.
@@ -1047,6 +1056,27 @@ path, and canary route rather than as a user-facing release baseline.
   Check the installation owner and read back an existing Goal after updating.
   [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.3.0/docs/product/releases/v2.3.0.md#upgrade).
 
+- `v2.4.0` release at commit
+  `a6ffb3be6e7bdb48e02311ec58d618200fe0501c` (2026-11-22).
+  The Git `stable` ref, CLI archive
+  (`loopx-runtime-a6ffb3be6e7bdb48e02311ec58d618200fe0501c.tar.gz`), and bundled
+  macOS runtime match the tag with verified GitHub artifact attestations.
+  GitHub and PyPI carry matching Python wheel and source packages.
+  The signed `desktop-stable` updater serves Apple Silicon macOS
+  (`LoopX_2.4.0_aarch64.dmg`, `LoopX.app.zip`, and `LoopX.app.tar.gz`).
+  Windows stable upgrades use `LoopX_2.4.0_x64-setup.exe` or
+  `LoopX_2.4.0_x64_en-US.msi`.
+  The companion
+  [DSH plugin 0.1.1-beta.7](https://github.com/loopx-project/loopx/releases/tag/dsh-loopx-plugin-v0.1.1-beta.7)
+  GitHub prerelease tarball targets LoopX 2.4.0+ and DSH `0.2.2-rc.1..rc.3`
+  (npm trusted publishing remains gated on npmjs owner setup).
+  [Published release](https://github.com/loopx-project/loopx/releases/tag/v2.4.0),
+  [PyPI packages](https://pypi.org/project/loopx/2.4.0/#files),
+  [Personal illustrated guide](https://my.feishu.cn/docx/JXvbdWcFDoZJgvxktvScYfJwnRf).
+  Run `loopx authority-archive upgrade --all-known --require-current` first,
+  check the installation owner, and read back an existing Goal after updating.
+  [Versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/product/releases/v2.4.0.md#upgrade).
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 
@@ -1076,10 +1106,24 @@ After the individual lanes pass, bind their compact receipts to the exact clean
 release checkout before tagging or moving `stable`:
 
 ```bash
+python3 scripts/qualify_release_commit.py \
+  --repo-root . \
+  --output-dir .local/release-qualification \
+  --preflight-since v2.3.0 \
+  --resume
 loopx canary release-qualification \
   --manifest-json release-qualification.json \
   --repo-root .
 ```
+
+For clean full-suite release runs, `scripts/qualify_release_commit.py` runs an
+optional changed-file preflight first (`--preflight-since`), then executes
+hardware-sized single-wave isolated pytest shards (defaulting to
+two-thirds of host CPUs capped at 12, with optional `--durations-path`,
+`--durations-out`, and fail-closed exact-commit/tree `--resume`) and reduces
+the shards into `receipt-pytest.json` with no local paths. Keep
+`scripts/qualify-doubao-model-behavior-live.py` or `scripts/qualify-deepseek-model-behavior-live.py` (`--max-workers 6` by default)
+concurrent with network/CPU lanes without mutating the clean candidate tree.
 
 The `exact_release_commit_qualification_manifest_v0` contract requires the
 same Git commit, Git tree id, package version, and version tag across pytest,
@@ -1279,7 +1323,7 @@ PR numbers in commit titles are navigation, not a completeness check. Confirm
 that metadata coverage reaches the whole range, resolving unmatched integration
 commits through their associated merged PRs. Check an author's earlier merged
 PR history before calling a contribution first-time. Reconcile both language
-lists and their summary counts against that verified set; Refresh this evidence when the final
+lists and their summary counts against that verified set. Refresh this evidence when the final
 release range changes.
 
 Organize the remaining release note into the following stable groups. Omit an

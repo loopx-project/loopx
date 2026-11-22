@@ -1,9 +1,8 @@
 """Loopback-only exact Task request reads over the existing Todo owner."""
 
-import hashlib
 from urllib.parse import parse_qs, urlparse
 
-from .status_api import goal_read_runtime_root
+from .todo_source import resolve_chat_todo_source
 from ..status_server import is_loopback_host
 from ..control_plane.todos.list_readback import list_goal_todos
 
@@ -23,12 +22,10 @@ class TodoDetailRequestMixin:
         try:
             if not self.server.registry_path.is_file():
                 raise OSError("Task registry is unavailable")
-            registry_digest = hashlib.sha256(self.server.registry_path.read_bytes()).hexdigest()
-            self._registry_and_goal(goal_id)
+            source = resolve_chat_todo_source(self.server, goal_id)
             payload = list_goal_todos(
-                registry_path=self.server.registry_path, goal_id=goal_id,
+                **source.writer_scope(), goal_id=goal_id,
                 role="agent", todo_id=todo_id,
-                runtime_root_arg=goal_read_runtime_root(self.server),
             )
             if payload.get("ambiguous"):
                 self._send_error("The Task source is ambiguous. Refresh its Goal.", status=409)
@@ -37,7 +34,9 @@ class TodoDetailRequestMixin:
             if item is None:
                 self._send_error("The Task is no longer available in this Goal.", status=404)
                 return
-            if hashlib.sha256(self.server.registry_path.read_bytes()).hexdigest() != registry_digest:
+            current = resolve_chat_todo_source(self.server, goal_id)
+            if (current.source_identity, current.registry_sha256) != (
+                    source.source_identity, source.registry_sha256):
                 raise OSError("Task registration changed during the read")
             authority = payload.get("authority_read") or {}
             # Echo the same canonical CAS used by the existing Chat edit owner.
@@ -45,7 +44,8 @@ class TodoDetailRequestMixin:
             basis = ({"schema_version": "loopx_chat_canonical_update_basis_v0",
                 "provider_revision": authority["provider_revision"],
                 "source_authority": authority["source_authority"],
-                "registry_sha256": registry_digest}
+                "source_identity": source.source_identity,
+                "registry_sha256": source.registry_sha256}
                 if authority.get("decision_read_from_provider") is True else None)
             self._send_json({
                 "ok": True, "goal_id": goal_id, "todo_id": item["todo_id"],

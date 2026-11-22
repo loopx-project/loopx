@@ -384,7 +384,8 @@ CLI validation
 这里有三个不能省略的性质：
 
 - `agent-a` 必须是注册 peer；
-- claim 是 soft ownership
+- claim 是 soft ownership，不是永久权限；
+- status 看到 claim 不等于 status 自己写了 claim。
 
 ## 为什么不能直接编辑 Projection
 
@@ -677,6 +678,7 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id>
 
 ### 读完这一段应能回答
 
+1. Registry 为什么不是 todo truth？
 2. 为什么 event id 冲突必须 fail closed？
 3. Markdown fallback 为什么应保留，但不能继续定义新 runtime 语义？
 4. `state_projection_gap` 在哪一层产生，又在哪一层改变执行选择？

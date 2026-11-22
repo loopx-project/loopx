@@ -2032,11 +2032,16 @@ def test_rpc_json_preserves_legacy_values_with_valid_utf8(text: str) -> None:
     ).encode("ascii")
 
 
+@pytest.mark.parametrize("transport", [
+    "tcp",
+    pytest.param("stdio", marks=pytest.mark.skipif(os.name != "posix", reason="POSIX pipes")),
+])
 @pytest.mark.parametrize("repeats,snapshot", [(380_000, False), (900_000, True)])
 def test_complete_unicode_context_uses_actual_wire_bytes_and_snapshot_fallback(
-    tmp_path: Path, monkeypatch, repeats: int, snapshot: bool,
+    tmp_path: Path, monkeypatch, repeats: int, snapshot: bool, transport: str,
 ) -> None:
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_TRANSPORT", transport)
     # The smaller source fits 8 MiB in UTF-8 but exceeds it when ASCII-escaped.
     text = "保留🙂" * repeats + "\nFinal constraint: retain the original Goal."
     params = {
@@ -2048,11 +2053,11 @@ def test_complete_unicode_context_uses_actual_wire_bytes_and_snapshot_fallback(
         "require_full_goal_source": True,
     }
     assert len(json.dumps(params).encode()) > 8 * 1024 * 1024
-    original_send = socket.socket.sendall
     captured: list[dict[str, object]] = []
+    delivered_snapshots: list[str] = []
     temporary_paths: list[Path] = []
 
-    def observe_send(connection, data, flags=0):
+    def observe_request(data):
         request = json.loads(data)
         if request["method"] == "work_item.context.project":
             captured.append(request)
@@ -2067,9 +2072,26 @@ def test_complete_unicode_context_uses_actual_wire_bytes_and_snapshot_fallback(
                 temporary_paths.extend([path, Path(request["response_sink"])])
             else:
                 assert "保留🙂".encode() in data and request["params"] == params
+    original_send = socket.socket.sendall
+    original_exchange = effect_runtime.EffectRuntimeStdio.exchange
+    original_read_snapshot = effect_runtime._read_local_snapshot_response
+
+    def observe_send(connection, data, flags=0):
+        observe_request(data)
         return original_send(connection, data, flags)
 
+    def observe_exchange(pipe, data, timeout, limit):
+        observe_request(data)
+        return original_exchange(pipe, data, timeout, limit)
+
+    def observe_read_snapshot(envelope, sink, **kwargs):
+        result = original_read_snapshot(envelope, sink, **kwargs)
+        delivered_snapshots.append(kwargs["request_id"])
+        return result
+
     monkeypatch.setattr(socket.socket, "sendall", observe_send)
+    monkeypatch.setattr(effect_runtime.EffectRuntimeStdio, "exchange", observe_exchange)
+    monkeypatch.setattr(effect_runtime, "_read_local_snapshot_response", observe_read_snapshot)
     try:
         result = effect_runtime.effect_runtime_result(
             "work_item.context.project", params, large_local_snapshot=snapshot,
@@ -2078,10 +2100,62 @@ def test_complete_unicode_context_uses_actual_wire_bytes_and_snapshot_fallback(
         assert result["work_context"]["sources"][0]["content"]["text"] == text
         assert len(captured) == 1
         assert ("params_ref" in captured[0]) is snapshot
+        assert delivered_snapshots == ([captured[0]["request_id"]] if snapshot else [])
         assert all(not path.exists() for path in temporary_paths)
         assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] > 0
     finally:
         effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX pipes")
+def test_stdio_runtime_is_process_owned_and_never_uses_tcp(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    monkeypatch.delenv("LOOPX_EFFECT_RUNTIME_TRANSPORT", raising=False)
+    tcp = effect_runtime.effect_runtime_result("runtime.ping", {})
+    try:
+        with monkeypatch.context() as pipe_env:
+            pipe_env.setenv("LOOPX_EFFECT_RUNTIME_TRANSPORT", "stdio")
+
+            def refuse_tcp(*args, **kwargs):
+                pytest.fail("stdio tried to discover or connect to the TCP daemon")
+
+            pipe_env.setattr(socket, "create_connection", refuse_tcp)
+            pipe_env.setattr(effect_runtime, "_inspect_runtime_locator", refuse_tcp)
+            assert effect_runtime.restart_effect_runtime()["status"] == "not_running"
+            shallow = effect_runtime.collect_effect_runtime_readiness()
+            assert shallow["runtime_lifecycle"]["state"] == "stopped"
+            try:
+                ping = effect_runtime.effect_runtime_result("runtime.ping", {})
+                assert ping["pid"] != tcp["pid"]
+                ids = {
+                    "goal_id": "pipe-fixture", "agent_id": "pipe-agent",
+                    "todo_id": "pipe-todo",
+                }
+
+                def effect_id(index: int) -> str:
+                    result = effect_runtime.effect_runtime_result(
+                        "settlement.identity", {**ids, "turn_instance_id": str(index)},
+                    )
+                    return result["effect_id"]
+
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    assert list(pool.map(effect_id, range(8))) == [
+                        f"pipe-fixture:pipe-agent:pipe-todo:{index}" for index in range(8)
+                    ]
+                deep = effect_runtime.collect_effect_runtime_readiness(deep=True)
+                assert deep["semantic_probe"] == "passed"
+                assert deep["runtime_lifecycle"]["transport"] == "stdio"
+                assert deep["runtime_lifecycle"]["locator_state"] == "missing"
+                assert deep["runtime_identity"] == effect_runtime.runtime_identity_from_info(ping)
+                assert effect_runtime.effect_runtime_result("runtime.ping", {}) == ping
+            finally:
+                assert effect_runtime.restart_effect_runtime(wait_for_exit=True)["status"] == "stopped"
+
+        assert effect_runtime.effect_runtime_result("runtime.ping", {}) == tcp
+    finally:
+        effect_runtime.restart_effect_runtime(wait_for_exit=True)
 
 
 def test_fragmented_utf8_request_dispatches_only_the_first_complete_frame(

@@ -3,7 +3,7 @@ import type { PlanQuota, QuotaWindow, WorkMode } from './types.js';
 import { acpUsage } from './usage.js';
 import { timedUsage, type LiveUsage } from './live-usage.js';
 import type { UsageSample } from '../telemetry.js';
-import { cliDiagnostic, probeWithDeadline } from './diagnostics.js';
+import { agentLoginRequired, cliDiagnostic, probeWithDeadline } from './diagnostics.js';
 import { isCompaction, trackCompaction } from './compaction.js';
 import { sessionEnvironment } from './types.js';
 import { spawn } from 'node:child_process';
@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { EmittedEvent } from '../events.js';
 import { textOf, commandExists } from '../util.js';
-import { JsonRpcPeer } from './jsonrpc.js';
+import { JsonRpcPeer, RpcError } from './jsonrpc.js';
 import type {
   AgentAdapter,
   AgentSession,
@@ -596,6 +596,9 @@ export abstract class AcpAdapter implements AgentAdapter {
     if (refresh) this.modelProbe = null;
     this.modelProbe ??= this.readModels().catch((err) => {
       this.modelProbe = null;
+      // ACP's auth_required code is shared by Claude, TRAE and DeepSeek Harness.
+      // An explicitly unsupported subscription cannot be fixed by signing in again.
+      if (err instanceof RpcError && err.code === -32000 && err.data?.reason !== 'claude_subscription_not_supported') throw agentLoginRequired(this.label);
       throw err;
     });
     return this.modelProbe;

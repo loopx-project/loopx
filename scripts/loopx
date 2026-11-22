@@ -71,7 +71,15 @@ if [[ "$loopx_command" == "quota" \
     exit 2
   fi
   export LOOPX_RELEASE_ROOT="$repo_root"
-  exec node --no-warnings --experimental-strip-types "$native_scheduler_entry" "$@"
+  node_ts_flags=()
+  if [[ "$(uname -s 2>/dev/null || true)" == Linux* ]]; then
+    case "$(uname -m 2>/dev/null || true)" in
+      x86_64|amd64)
+        node_ts_flags=(--liftoff-only --no-wasm-tier-up --no-wasm-dynamic-tiering)
+        ;;
+    esac
+  fi
+  exec node --no-warnings --experimental-strip-types ${node_ts_flags[@]+"${node_ts_flags[@]}"} "$native_scheduler_entry" "$@"
 fi
 
 # Codex host-match ACKs need the entrypoint's fresh App read before TS commit.

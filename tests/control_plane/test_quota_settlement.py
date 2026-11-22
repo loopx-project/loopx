@@ -437,6 +437,27 @@ def test_turn_guard_remains_readable_after_a_torn_rollout_tail(
     assert readback["event_id"] == written["event_id"]
 
 
+@pytest.mark.parametrize("lease_epoch", [None, 3])
+def test_managed_turn_binding_preserves_qualified_lease_epoch(tmp_path: Path, lease_epoch: int | None) -> None:
+    runtime_root = tmp_path / "runtime"
+    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
+    receipt = ensure_turn_heartbeat_settlement_receipt(
+        runtime_root, identity, semantic_replan_guard_scoped=False,
+        semantic_replan_obligation_id=None,
+        task_lease_proof={"idempotency_key": "fixture-managed-lease", "expected_version": 7},
+        task_lease_epoch=lease_epoch,
+    )
+    assert receipt["details"]["prepared_lease_version"] == 7
+    assert receipt["details"].get("prepared_lease_epoch") == lease_epoch
+    readback = read_heartbeat_settlement(
+        runtime_root, goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
+    )
+    assert readback is not None and readback.prepared_lease_required
+    assert readback.prepared_lease is not None
+    assert readback.prepared_lease["prepared_lease_version"] == 7
+    assert readback.prepared_lease.get("prepared_lease_epoch") == lease_epoch
+
+
 def test_turn_guard_refuses_to_change_an_existing_semantic_selection(
     tmp_path: Path,
 ) -> None:

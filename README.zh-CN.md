@@ -18,6 +18,10 @@
 
 </div>
 
+https://github.com/user-attachments/assets/eeb95ecd-6e5b-43d7-a8aa-b3d1b4449423
+
+<p align="center"><sub><b>60 秒看懂 LoopX</b>：一句话设定长程目标，跨 Codex、Claude Code、Gemini 与 DeepSeek 分工协作、未过校验自动重规划、关键决策人类拍板、首读上下文压至 3% 跨会话续跑 200+ 小时（社区贡献者 <a href="https://x.com/lemomo_ai">@lemomo_ai</a> 制作 · <a href="#看看-loopx-如何工作">更多实录演示见下文</a>）。</sub></p>
+
 ---
 
 <a id="快速开始"></a>
@@ -122,7 +126,7 @@ LoopX 适合：
 - 需要 ownership、lease 和 handoff 的平级 agent team；
 - 需要把进展、阻塞和反馈入口清晰呈现给非技术用户的创作、研究或运营工作。
 
-危险权限、生产写入、公开发布和最终 ownership
+LoopX 不是生产自动化控制器。危险权限、生产写入、公开发布和最终 ownership
 仍由人类负责。
 
 </details>
@@ -236,7 +240,7 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 | DeepSeek Harness | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中选 `loopx`，然后直接描述任务 |
 
 LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并引导宿主激活。
-让 Agent 回报当前 Goal、下一条 Todo 和实际续跑机制；
+让 Agent 回报当前 Goal、下一条 Todo 和实际续跑机制；生成 setup packet 不等于循环已经启动。
 持续工作需要宿主保持可用。`loopx status` 显示目标、等你处理的决策和下一条 Todo；
 `loopx doctor` 诊断安装。
 
@@ -351,7 +355,7 @@ loopx doctor
 Benchmark 之外，LoopX 也有可检查的长程项目证据。
 OpenViking 的公开贡献序列跨越
 **200+ 小时自然时长**，保留多轮 Todo、决策和证据更新。这里衡量的是项目经过的
-wall-clock 时间。点击原图查看
+wall-clock 时间，不是连续模型执行时长或无人值守的生产自治。点击原图查看
 公开安全的任务图、证据分支和跨轮决策；案例说明了来源与可复现边界。
 
 ### 开源 Issue Fix

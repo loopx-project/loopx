@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -12,6 +11,7 @@ from typing import Any
 
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
+from ...paths import PATH_SEGMENT_UNSAFE_RE
 from ..context_providers.base import ContextProvider
 from ..reward_memory.experiment import (
     resolve_reward_memory_experiment,
@@ -27,11 +27,10 @@ from .core import (
 
 
 AGENT_TURN_RECALL_RECEIPT_SCHEMA_VERSION = "agent_turn_recall_receipt_v1"
-_SAFE_PATH_TOKEN = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _safe_token(value: str, *, fallback: str) -> str:
-    readable = _SAFE_PATH_TOKEN.sub("-", value).strip("-") or fallback
+    readable = PATH_SEGMENT_UNSAFE_RE.sub("-", value).strip("-") or fallback
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
     return f"{readable[:60]}-{digest}"
 

@@ -90,6 +90,15 @@ same operation ID is a conflict. No provider promotion or receipt rewrite occurs
 
 ## Write Contract
 
+When a Chat confirmation has recorded its Todo, the original card keeps the
+retry. It verifies the original create receipt and store history. Recovery
+can read a saved assignment or an already dispatched Turn. A pending dispatch
+also checks the current Goal, claimant and lease. A proposal that recorded a
+Todo cannot be regenerated.
+
+Chat 确认一旦记录 Todo，就从原卡重试，以验证原创建回执和存储历史。重试可取回已保存的
+指派或已启动的 Turn。仍待启动时须检查当前 Goal、认领者和租约。已记录 Todo 的确认不能重新生成。
+
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:
 
@@ -1390,6 +1399,33 @@ create/update/poll/terminal receipt is recovered before checking current source
 contents. Claim replay retains its current acceptance check and rejects a stale
 source while preserving `original_receipt`; this adds no new claim grant.
 
+Chat Task detail and reviewed actions resolve the Goal's source registry and
+runtime before reading or writing. The review basis carries the source identity,
+source registry digest and provider revision. A created Task checkpoint also
+retains the authority store identity and original operation.
+If an unrelated write advances the same store, assignment and managed claim can
+refresh their provider revision after the native owner rejects the previous one.
+The current Todo must match the record in the original native create receipt.
+Chat saves the new revision before dispatch so an interrupted response replays
+the same assignment.
+
+For an older Chat confirmation whose assignment evidence is missing, the card
+can show the verified creation and current assignee from the original store.
+A matching assignee and update reason do not establish that the original
+confirmation made the assignment. Open the existing Todo to review ownership
+when the card cannot verify that step.
+
+When a separate directory supplies the Goal route, Chat Task, Monitor and Gate
+mutations carry its byte witness as `registry_source.routing_registry`. The
+native transaction checks both registry files at admission and before commit.
+Restore the original source and inspect the retained Task when either source
+changes or the original Todo no longer matches.
+
+The local v3 Todo create and managed claim wires require both
+`expected_provider_revision` and `expected_registry_sha256`. The source check
+uses the existing registry witness. Earlier wire versions retain their original
+behavior.
+
 On `authority_source_changed`, inspect current registration and the Todo again
 before issuing new work. The rejected attempt writes no canonical head or receipt;
 an external validator already executed may have its own effects. This is an
@@ -1412,6 +1448,10 @@ registry 来源校验。Python 在采集注册/grant 事实前后比较来源摘
 该机制是乐观字节快照校验，不是跨资源原子事务或线性一致的撤权保证；provider CAS
 继续负责状态与回执的原子持久化，不改变默认 provider、promotion 或 PostgreSQL 的
 service-owned 认证边界。
+
+旧 Chat 确认缺少指派凭证时，原卡可以展示经核验的创建结果和原存储中的当前负责人。
+负责人和更新理由一致也无法证明指派来自原确认。原卡无法核验这一步时，可打开已有
+Todo 查看归属。
 
 ### Canonical nonterminal planning updates
 

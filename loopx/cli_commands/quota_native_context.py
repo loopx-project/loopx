@@ -280,6 +280,7 @@ def project_saved_context_capture(
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision=captured_decision if activation["progressive_enabled"]
+                and not args.select and not getattr(args, "list_fields", False)
                 and (args.initial_read or "sha256" in captured_decision) else None,
             hook_session=hook_session, saved_capture=True, publication_guard=publication_guard)
         projected = prepared.delivery
@@ -404,6 +405,7 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
     )
     from ..control_plane.turn_driver.codex_execution_preparation import (
         LegacyNativePreparationCapture,
+        NativePreparationTurnUnavailable,
         codex_execution_preparation_context,
         codex_execution_preparation_readback_context,
         execute_codex_execution_preparation,
@@ -422,6 +424,8 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                 and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
             directory = codex_context_directory(directory=args.codex_context_dir,
                 root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
+            if directory is None:
+                raise ValueError("context directory unavailable")
             scenario = activation["scenario"]
             progressive_enabled = activation["progressive_enabled"]
             payload = codex_context_hook(directory, event)
@@ -482,6 +486,12 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                         preparation_context = codex_execution_preparation_context(receipt)
             except LegacyNativePreparationCapture as error:
                 preparation_context = str(error)
+            except NativePreparationTurnUnavailable as error:
+                preparation_context = str(error)
+                if request is not None:
+                    record_native_execution_preparation(
+                        directory, event, source_sha256=request["source_sha256"], receipt=None,
+                    )
             except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
                 # Reconcile only the attempted source. A concurrent guard
                 # can replace recovery, so it must never be reserved here.

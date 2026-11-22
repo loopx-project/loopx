@@ -99,6 +99,10 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
     refresh = (
         "refresh-state",
         *binding,
+        "--task-lease-idempotency-key",
+        "private-evidence-fixture",
+        "--task-lease-expected-version",
+        "1",
         "--classification",
         "validated_change",
         "--delivery-batch-scale",
