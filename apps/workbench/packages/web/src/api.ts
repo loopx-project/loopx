@@ -818,6 +818,8 @@ export interface AgentInfo {
   available: boolean;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
+  /** In-progress wizard login that can be resumed after navigation. */
+  activeLogin?: AgentLogin;
   streamBridgeEnabled?: boolean;
   capabilities: {
     workModes?: WorkMode[];
@@ -860,6 +862,7 @@ export interface AgentLogin {
   id: string;
   status: 'starting' | 'waiting' | 'submitting' | 'success' | 'error' | 'cancelled';
   url?: string;
+  input?: 'code-or-url';
   error?: 'failed' | 'expired' | 'unavailable' | 'verification';
 }
 

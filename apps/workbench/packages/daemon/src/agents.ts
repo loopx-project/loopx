@@ -207,7 +207,7 @@ export class AgentRegistry {
   private creating: Promise<unknown> = Promise.resolve();
   private writing: Promise<unknown> = Promise.resolve();
 
-  /** Entries of agents.json whose adapter this version does not have: kept, never started. */
+  /** Inactive agents.json entries (unsupported adapters or installer backups): kept, never started. */
   private readonly retired: AgentInstance[] = [];
 
   constructor(
@@ -223,7 +223,16 @@ export class AgentRegistry {
     // left out, so an old agents.json neither stops the hub nor loses the entry on the next save.
     const known = new Set<string>(SUPPORTED_AGENTS.map(meta => meta.adapter));
     instances = instances.filter(instance => {
-      if (known.has(instance?.adapter)) return true;
+      // Keep mistakenly auto-discovered backup executables on disk, outside the active registry.
+      if (known.has(instance?.adapter)) {
+        const name = basenameOf(instance.command);
+        if (!instance.account && !Object.keys(instance.env ?? {}).length && instance.id === name &&
+            isCliBackup(name) && KNOWN_PREFIXES.some(([adapter, re]) => adapter === instance.adapter && re.test(name))) {
+          this.retired.push(instance);
+          return false;
+        }
+        return true;
+      }
       this.retired.push(instance);
       console.warn(`warning: agents.json entry ${JSON.stringify(instance?.id ?? null)} uses ${JSON.stringify(instance?.adapter ?? null)}, which this version no longer supports; it is kept in the file and not started`);
       return false;
@@ -411,6 +420,15 @@ export class AgentRegistry {
     return login.session;
   }
 
+  /** Returns the in-progress login session for an agent, so any client can resume entering its code. */
+  activeLogin(agent: string): ({ id: string } & ReturnType<LoginSession['state']>) | undefined {
+    const entry = this.logins.get(agent);
+    if (!entry) return undefined;
+    const state = entry.session.state();
+    if (!['starting', 'waiting', 'submitting'].includes(state.status)) return undefined;
+    return { id: entry.id, ...state };
+  }
+
   dispose(): void {
     if (this.autoJoinTimer) clearInterval(this.autoJoinTimer);
     this.autoJoinTimer = null;
@@ -588,7 +606,7 @@ export class AgentRegistry {
         continue; // unreadable or gone
       }
       for (const name of names) {
-        if (taken.has(name) || seen.has(name)) continue;
+        if (taken.has(name) || seen.has(name) || isCliBackup(name)) continue;
         const adapter = KNOWN_PREFIXES.find(([, re]) => re.test(name))?.[0];
         if (!adapter) continue;
         const full = join(dir, name);
@@ -768,4 +786,9 @@ function realPathOf(path: string): string {
   } catch {
     return resolve(path);
   }
+}
+
+/** Installer backups are files, not additional CLI accounts. */
+function isCliBackup(name: string): boolean {
+  return /(?:\.(?:old|bak|backup|orig|tmp)|~)$/i.test(name);
 }

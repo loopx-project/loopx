@@ -1,3 +1,4 @@
+import { AgentLoginRecovery, needsAgentLogin } from './components/AgentLoginRecovery';
 import { GitPanel } from './components/GitPanel';
 import { SettingsPage, type SettingsGroup } from './components/SettingsPage';
 import { AssistantSettingsPage, assistantTitle } from './components/AssistantSettingsPage';
@@ -94,6 +95,7 @@ import { SchedulesPage } from './components/SchedulesPage';
 import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
 import { GoalsPage, type GoalsFilter } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
+import { PwaInstallPromotion, PwaInstallSettings } from './components/PwaInstall';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
 import { StewardActions, StewardPage } from './components/StewardPage';
 import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
@@ -133,7 +135,7 @@ import { ConnectDialog, DemoBar } from './components/ConnectDialog';
 import { DemoApi, DemoError } from './demo/DemoApi';
 import { EMPTY_MODEL_PREFERENCE, type DraftModelPreference } from '../../daemon/src/model-preferences';
 import { QUICK_SWITCH_HIDDEN_KEY, clampQuickSwitchBottom, savedQuickSwitchBottom, saveQuickSwitchBottom } from './quick-switch';
-import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
+import { IconDownload, IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
 import { StatReadings } from './components/SessionStats';
 import { ThreadTracePanel } from './components/TracePanel';
 import { chooseLocale, locale, LOCALES, localeChoice, t } from './i18n';
@@ -812,6 +814,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [writingBusy, setWritingBusy] = useState(false);
   const [draftPermission, setDraftPermission] = useState('auto_edit');
   const modelPreferences = useModelPreferences(api, error => setError(message(error)));
+  const [modelLogin, setModelLogin] = useState<{ agent: string; label: string; login?: AgentInfo['login']; empty?: boolean; key: string; client: Api; scope: Api } | null>(null);
   const [modelsByAgent, setModelsByAgent] = useState<Record<string, ModelOption[]>>(() => (keepThreads ? cachedModels(hostId) ?? {} : {}));
   const draftCaps = agents.find(agent => agent.id === draftAgent)?.capabilities;
   const goalCap = goalCaps.find(cap => cap.agent === draftAgent);
@@ -968,6 +971,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [api, demo]);
   /** The terminal a login started; null attaches to the newest live one. */
   const [terminalTarget, setTerminalTarget] = useState<string | null>(null);
+  const [terminalClient, setTerminalClient] = useState<Api | null>(null);
   const [observabilityTab, setObservabilityTab] = useState<'usage' | 'diagnostics'>('usage');
   const [observabilityFocus, setObservabilityFocus] = useState<string | undefined>(undefined);
   // Bumped on every visit so the page opens on the requested tab, even when it is already showing.
@@ -1492,6 +1496,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 const { agent, models } = ev.data as { agent: string; models: ModelOption[] };
                 modelVersions.current[agent] = (modelVersions.current[agent] ?? 0) + 1;
                 setModelsByAgent(previous => ({ ...previous, [agent]: models }));
+                setModelLogin(current => models.length && current?.scope === api && current.client === api && current.key === agent ? null : current);
               } else refresh();
             },
             ctrl.signal,
@@ -1758,6 +1763,25 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const activeAgent = selected?.agent ?? draftTeamDefinition?.entryAgent ?? draftAgent;
   const activeCwd = selected?.cwd ?? draftCwd;
   const commandsKey = `${activeAgent}\n${activeCwd}`;
+  const activeCatalog = useRef({ api, agent: activeAgent });
+  activeCatalog.current = { api, agent: activeAgent };
+  useEffect(() => { setModelLogin(null); }, [api, activeAgent]);
+  const acceptModelCatalog = (agent: string, list: ModelOption[], client = api, id = agent) => {
+    setModelsByAgent(previous => ({ ...previous, [agent]: list }));
+    const info = agents.find(item => item.id === agent) ?? remoteAgents.find(item => item.id === agent);
+    if (!list.length && info?.available && info.capabilities.modelCatalog !== false) {
+      setModelLogin({ agent: id, key: agent, client, scope: api, label: info.label, login: info.login, empty: true });
+      return;
+    }
+    setModelLogin(current => current?.scope === api && current.key === agent ? null : current);
+  };
+  const handleModelError = (error: unknown, agent: string, client = api, key = agent, report = true) => {
+    if (!needsAgentLogin(error)) { if (report) handleError(error); return; }
+    modelVersions.current[key] = (modelVersions.current[key] ?? 0) + 1;
+    setModelsByAgent(previous => { const next = { ...previous }; delete next[key]; return next; });
+    const info = agents.find(item => item.id === key) ?? remoteAgents.find(item => item.id === key);
+    setModelLogin({ agent, key, client, scope: api, label: info?.label ?? agent, login: info?.login });
+  };
   const lastFocusModelRefresh = useRef<{ agent: string; at: number } | null>(null);
   const refreshActiveModels = useCallback((force = false) => {
     if (!api || !activeAgent || document.hidden) return;
@@ -1769,9 +1793,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     void api
       .models(activeAgent, force)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [activeAgent]: list }));
+        if (activeCatalog.current.api === api && activeCatalog.current.agent === activeAgent && (modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(error => { if (force) handleError(error); });
+      .catch(error => { if (activeCatalog.current.api === api && activeCatalog.current.agent === activeAgent && (modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent, api, activeAgent, force); });
   }, [api, activeAgent]);
 
   // Models of an agent other than the thread's own, for choosing what its members start with.
@@ -1782,21 +1806,25 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const version = modelVersions.current[agent] ?? 0;
     // An instance of another machine is asked there, under the id it has on that machine.
     const remote = remoteAgents.find((a) => a.id === agent);
-    (remote && token ? new Api(token, '', remote.host).models(agent.slice(0, -(remote.host.length + 1)), refresh) : api.models(agent, refresh)).then((list) => {
-      if ((modelVersions.current[agent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [agent]: list }));
-    }).catch(error => { if (refresh) handleError(error); }).finally(() => { modelsAsked.current.delete(agent); });
+    const client = remote && token ? new Api(token, '', remote.host) : api;
+    const id = remote && token ? agent.slice(0, -(remote.host.length + 1)) : agent;
+    client.models(id, refresh).then((list) => {
+      if ((modelVersions.current[agent] ?? 0) === version) acceptModelCatalog(agent, list, client, id);
+    }).catch(error => { if ((modelVersions.current[agent] ?? 0) === version) handleModelError(error, id, client, agent, refresh); }).finally(() => { modelsAsked.current.delete(agent); });
   };
 
   // Models for that agent, loaded once per agent.
   useEffect(() => {
-    if (!api || !activeAgent || modelsByAgent[activeAgent]) return;
+    if (!api || !activeAgent || modelsByAgent[activeAgent]?.length) return;
+    let live = true;
     const version = modelVersions.current[activeAgent] ?? 0;
     api
       .models(activeAgent)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [activeAgent]: list }));
+        if (live && (modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(handleError);
+      .catch(error => { if (live && (modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent); });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, activeAgent]);
 
@@ -2323,12 +2351,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const openAgents = () => { openSettings('agents'); void reloadAgents().catch(handleError); };
 
-  const openTerminal = () => { setTerminalTarget(null); setTermOpen(true); };
+  const openTerminal = () => { setTerminalTarget(null); setTerminalClient(null); setTermOpen(true); };
 
   /** Starts an instance's CLI login in a fresh terminal and shows that terminal. */
-  const openAgentLogin = async (agent: AgentInfo) => {
-    const { terminalId } = await api.loginAgentTerminal(agent.id);
+  const openAgentLogin = async (agent: Pick<AgentInfo, 'id'>, client = api) => {
+    const { terminalId } = await client.loginAgentTerminal(agent.id);
     setTerminalTarget(terminalId);
+    setTerminalClient(client);
     setTermOpen(true);
   };
 
@@ -2429,6 +2458,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const agentLabel = (id: string) => agents.find((a) => a.id === id)?.label ?? id;
   const capsOf = (id: string) => agents.find((a) => a.id === id)?.capabilities;
   const activeCaps = capsOf(activeAgent);
+  const sideAgent = sideAsk?.source?.agent ?? activeAgent;
+  const sideAgentInfo = agents.find(agent => agent.id === sideAgent);
   const models = modelsByAgent[activeAgent] ?? [];
   const permissionModes = activeCaps?.permissionModes ?? [];
   const effortLevels = activeCaps?.effortLevels ?? [];
@@ -2829,6 +2860,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     { label: t('settings.preferences'), entries: [
       ...(!demo ? [{ id: 'general', label: t('general.title'), icon: IconSettings, render: () => <GeneralSettingsDialog api={api} onSave={value => { setStartupSettings(value); setExternalNonce(n => n + 1); }} onClose={closeSettings} /> }] : []),
       { id: 'appearance', label: t('appearance.title'), icon: IconPalette, render: () => <AppearancePanel appearance={appearance} theme={theme} onChange={setAppearance} onClose={closeSettings} /> },
+      ...(!showcase ? [{ id: 'install', label: t('pwa.title'), icon: IconDownload, render: () => <PwaInstallSettings /> }] : []),
       { id: 'language', label: t('locale.menu'), icon: IconLanguage, render: () => <SettingsSection title={t('locale.menu')} hint={t('settings.automatic')}><div className="settings-options">
         {[{ id: 'system' as const, name: t('locale.system') }, ...LOCALES].map(l => <button key={l.id} className="settings-link-row" role="radio" aria-checked={localeChoice() === l.id} onClick={() => navigate(() => chooseLocale(l.id))}><span>{l.name}</span>{localeChoice() === l.id && <IconCheck size={16} />}</button>)}
       </div></SettingsSection> },
@@ -3020,7 +3052,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           schedulesActive={onSchedules}
           extensionNav={extensionNav}
           notice={demo && compact ? showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact onConnect={askToConnect} /> : undefined}
-          footerNotice={authKind?.kind === 'link' && !showcase ? <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} /> : undefined}
+          footerNotice={!showcase ? <>
+            <PwaInstallPromotion onHelp={() => openSettings('install')} />
+            {authKind?.kind === 'link' && <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} />}
+          </> : undefined}
         />
       </aside>
       {!compact && !sidebarHidden && (
@@ -3177,6 +3212,15 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         )}
 
         {demo && (showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact={compact} onConnect={askToConnect} />)}
+
+        {modelLogin?.scope === api && <AgentLoginRecovery key={`${modelLogin.key}:${hostId ?? 'local'}`}
+          api={modelLogin.client} agent={{ id: modelLogin.agent, label: modelLogin.label, login: modelLogin.login }} empty={modelLogin.empty}
+          onTerminalLogin={() => openAgentLogin({ id: modelLogin.agent }, modelLogin.client)} onRecovered={list => {
+            modelVersions.current[modelLogin.key] = (modelVersions.current[modelLogin.key] ?? 0) + 1;
+            setModelsByAgent(previous => ({ ...previous, [modelLogin.key]: list }));
+            setModelLogin(current => current === modelLogin ? null : current);
+            void reloadAgents().catch(handleError);
+          }} />}
 
         {error && (
           <div className="banner" role="alert">
@@ -3565,6 +3609,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           note={noteSignal?.draftKey === composerDraftKey ? noteSignal.note : null}
           onNoteConsumed={consumeNote}
           onNotesChange={onNotesChange}
+          quoteSource={(threadId, turnId, sourceHost) => sourceHost === (hostId ?? null) && threadId !== selectedId && threads.some(thread => thread.id === threadId)
+            ? { threadId, turnId, elsewhere: true } : undefined}
           lastSent={selected ? lastSent : null}
         />}
         </>}
@@ -3632,10 +3678,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       )}
       {termOpen && (
         <TerminalPanel
-          api={api}
+          api={terminalClient ?? api}
           cwd={selected?.cwd || draftCwd || workdirs[0] || ''}
           terminalId={terminalTarget}
-          onClose={() => { setTermOpen(false); setTerminalTarget(null); }}
+          onClose={() => { setTermOpen(false); setTerminalTarget(null); setTerminalClient(null); }}
           onError={handleError}
         />
       )}
@@ -3734,8 +3780,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       {sideAsk && (
         <SideChat
           api={api}
-          agent={sideAsk.source?.agent ?? activeAgent}
-          agentLabel={agentLabel(sideAsk.source?.agent ?? activeAgent)}
+          agent={sideAgent}
+          agentInfo={sideAgentInfo}
+          models={modelsByAgent[sideAgent] ?? []}
+          savedPreference={modelPreferences.preferences[sideAgent]}
+          onModelsLoaded={(list) => acceptModelCatalog(sideAgent, list)}
+          onPreferenceChanged={() => void modelPreferences.refresh()}
+          agentLabel={agentLabel(sideAgent)}
           cwd={sideAsk.source?.cwd ?? activeCwd}
           permissionMode={sideAsk.source?.permissionMode ?? permission}
           model={sideAsk.source ? sideAsk.source.model : model}
@@ -3743,9 +3794,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           quoteText={sideAsk.text}
           sourceTitle={(sideAsk.source ?? selected)?.title ?? null}
           forkSourceId={sideAsk.source ? (capsOf(sideAsk.source.agent)?.fork && !forkBlocked(sideAsk.source) ? sideAsk.source.id : null) : selected && activeCaps?.fork && !forkBlocked(selected) ? selected.id : null}
-          attachBlocked={sideAsk.source ? (capsOf(sideAsk.source.agent)?.images ? null : t('app.noImages', agentLabel(sideAsk.source.agent))) : attachBlocked}
+          attachBlocked={sideAgentInfo?.capabilities.images === false ? t('app.noImages', agentLabel(sideAgent)) : null}
           onClose={() => setSideAsk(null)}
-          onError={handleError}
+          onError={error => handleModelError(error, sideAgent)}
           onThreadCreated={(t) => setThreads((prev) => [t, ...prev.filter((x) => x.id !== t.id)])}
           threads={threads}
           onOpenThread={(id) => { setSideAsk(null); openThreadById(id); }}

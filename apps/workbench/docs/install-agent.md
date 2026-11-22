@@ -46,6 +46,15 @@ LOOCHAT_LOOPX_REGISTRY=/path/to/registry.global.json
 3. 通过带 Workbench token 的 `/api/loopx/healthz` 检查 Core 代理；无法连接时应返回 `502`、`loopx_core_unavailable` 和目标地址。
 4. 修正 `.env` 或启动 Core 后，按下节方式重启 Workbench 并重试。连通性通过不代表已验证 Goal 创建和会话恢复，需按用户授权另外验收。
 
+## 用 LoopX CLI 管理 Workbench
+
+新版 LoopX CLI 提供 `loopx workbench start|status|stop`，用法见
+[统一启动命令](../README.md#统一启动命令)。它需要已安装并构建的 Workbench，
+默认不接管本安装器创建的 systemd 服务，也不改变 Core 的独立安装边界。
+使用 `--no-service` 安装后，可通过 `start --workbench-dir` 指定应用，
+通过 `--env-file` 和 `--state-dir` 复用安装器的配置与数据。
+`status` 只读；`stop` 不删除数据，有正在运行的会话时需等结束或明确加 `--force`。
+
 ## 更新、重启与卸载
 
 更新时重跑同一个安装入口；分支 ref 获取最新提交，完整 SHA 则保持固定版本。安装器打印实际检出的 SHA。存在源码改动或安装后新增的本地提交时，先保存到另一个工作目录，再更新。上游 Calli 的已有克隆不能就地当作本仓库更新：请选择新的 `LOOCHAT_HOME`；原有配置与数据仍保留。

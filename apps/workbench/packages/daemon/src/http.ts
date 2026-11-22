@@ -601,7 +601,10 @@ export function createHttpServer(deps: HttpDeps): Server {
     }
 
     // GET /api/agents
-    if (method === 'GET' && path === '/api/agents') return sendJson(res, 200, await manager.listAgents());
+    if (method === 'GET' && path === '/api/agents') {
+      res.setHeader('Cache-Control', 'no-store');
+      return sendJson(res, 200, await manager.listAgents());
+    }
 
     // GET /api/agents/supported: all agent types supported by the hub
     if (method === 'GET' && path === '/api/agents/supported') {

@@ -509,6 +509,7 @@ export interface AgentAdapter {
 export interface LoginState {
   status: 'starting' | 'waiting' | 'submitting' | 'success' | 'error' | 'cancelled';
   url?: string;
+  input?: 'code-or-url';
   error?: 'failed' | 'expired' | 'unavailable' | 'verification';
 }
 
