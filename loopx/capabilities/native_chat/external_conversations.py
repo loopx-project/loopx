@@ -17,7 +17,7 @@ import time
 from datetime import datetime as datetime, timezone as timezone
 from typing import Any
 
-from ...chat_attachments import normalize_chat_image_attachments
+from ...chat.attachments import normalize_chat_image_attachments
 
 from ...chat_ingress import (
     STEWARD_BINDING_ADOPTION_PENDING as STEWARD_BINDING_ADOPTION_PENDING,

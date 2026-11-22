@@ -282,7 +282,7 @@ export interface Thread {
   sectionId: string | null;
   /** The thread this one was forked from, if it is a fork. */
   forkedFrom: string | null;
-  handover?: { sourceId: string; title: string; agent: string; mode?: 'continue' | 'branch'; automatic?: boolean; detached?: boolean; method?: 'resume' | 'summary'; sourceMoved?: boolean } | null;
+  handover?: { sourceId: string; title: string; agent: string; mode?: 'continue' | 'branch'; automatic?: boolean; detached?: boolean; method?: 'resume' | 'summary'; sourceSeq?: number; sourceMoved?: boolean } | null;
   /**
    * The git worktree the thread runs in, when a fork was given one. `of` is the directory it would
    * be in otherwise, which is the project it is listed under; `ofReal` is that with symlinks
@@ -816,8 +816,11 @@ export interface AgentInfo {
   /** The login this instance runs as, when it is a linked account (an email). */
   account?: string | null;
   available: boolean;
+  unavailableReason?: string;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
+  /** In-progress wizard login that can be resumed after navigation. */
+  activeLogin?: AgentLogin;
   streamBridgeEnabled?: boolean;
   capabilities: {
     workModes?: WorkMode[];
@@ -860,6 +863,8 @@ export interface AgentLogin {
   id: string;
   status: 'starting' | 'waiting' | 'submitting' | 'success' | 'error' | 'cancelled';
   url?: string;
+  input?: 'code-or-url' | 'none';
+  userCode?: string;
   error?: 'failed' | 'expired' | 'unavailable' | 'verification';
 }
 
@@ -868,6 +873,7 @@ export interface SupportedAgent {
   label: string;
   icon?: string;
   installGuide?: string;
+  installUrl?: string;
   capabilities?: { createAccount: boolean; streamBridge?: StreamBridgeCapability };
 }
 
@@ -1872,8 +1878,8 @@ export class Api {
   cancelAutoHandover(id: string): Promise<AutoHandoverView> { return this.request('DELETE', `/api/threads/${id}/auto-handover`); }
   setCollaborationHandover(id: string, enabled: boolean): Promise<Coordination> { return this.request('PATCH', `/api/threads/${id}/collaboration-handover`, { enabled }); }
 
-  createHandoverThread(threadId: string, agent: string, model?: string, mode?: 'continue' | 'branch'): Promise<Thread> {
-    return this.request('POST', `/api/threads/${threadId}/handover-thread`, { agent, model, mode });
+  createHandoverThread(threadId: string, agent: string, model?: string, mode?: 'continue' | 'branch', takeTeam?: boolean): Promise<Thread> {
+    return this.request('POST', `/api/threads/${threadId}/handover-thread`, { agent, model, mode, ...(takeTeam === false ? { takeTeam: false } : {}) });
   }
   /** Hands the thread to `target` now: its conversation, queue and any collaboration lead. */
   takeOver(threadId: string, target: string | HandoverTarget, note?: string): Promise<Thread> {

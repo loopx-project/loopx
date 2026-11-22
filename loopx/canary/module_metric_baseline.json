@@ -57,8 +57,9 @@
       "lines": 379
     },
     "loopx/chat_actions.py": {
-      "any_count": 52,
-      "dict_any_count": 0
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1766
     },
     "loopx/chat_runtime.py": {
       "any_count": 29,
@@ -111,7 +112,7 @@
       "lines": 691
     },
     "loopx/control_plane/work_items/interaction_contract.py": {
-      "any_count": 85,
+      "any_count": 0,
       "dict_any_count": 0
     },
     "loopx/domain_packs/issue_fix.py": {
@@ -126,7 +127,7 @@
     "loopx/extensions/lark/manager_returns.py": {
       "any_count": 0,
       "dict_any_count": 0,
-      "lines": 443
+      "lines": 500
     },
     "loopx/extensions/lark/presentation/explore_results.py": {
       "any_count": 45,
@@ -137,7 +138,7 @@
       "dict_any_count": 0
     },
     "loopx/heartbeat_prompt.py": {
-      "any_count": 17,
+      "any_count": 0,
       "dict_any_count": 0,
       "lines": 1199
     },
@@ -178,7 +179,7 @@
       "lines": 1999
     },
     "loopx/todos.py": {
-      "any_count": 48,
+      "any_count": 0,
       "dict_any_count": 0
     },
     "loopx/upgrade.py": {

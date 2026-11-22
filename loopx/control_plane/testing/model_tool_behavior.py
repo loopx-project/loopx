@@ -10,17 +10,22 @@ from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
+from ..quota.turn_envelope import quota_action_signature_document
 from .doubao_model_behavior_actor import (
     ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
     ALLOWED_MODEL_BEHAVIOR_MODELS,
+    ARK_API_KEY_ENV,
     DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
     DEEPSEEK_FLASH_MODEL,
+    DOUBAO_2_1_PRO_MODEL,
     DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+    DOUBAO_MODEL_ENV,
     DoubaoActorTransport,
     DoubaoActorTransportError,
     _deepseek_env_config,
+    _direct_ark_transport,
     _direct_deepseek_transport,
 )
 
@@ -769,6 +774,251 @@ class LoopxCliExecutionError(RuntimeError):
         # Transient tool feedback only. Durable receipts must never serialize
         # this raw output or infer rollback from the presence of valid JSON.
         self.stdout = stdout
+
+
+def qualification_turn_instance_id(qualification_id: str) -> str:
+    """Derive a deterministic Turn instance id for a hermetic qualification."""
+
+    digest = sha256(qualification_id.encode("utf-8")).hexdigest()[:16]
+    return f"qualification-{digest}"
+
+
+def hermetic_clock_output(
+    command: str,
+    *,
+    utc_output: str,
+    local_output: str,
+) -> str | None:
+    """Return fixed host clock output for bounded `date` invocations only."""
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if not tokens or Path(tokens[0]).name != "date" or len(tokens) > 4:
+        return None
+    if any(
+        token in {";", "&&", "||", "|"}
+        or (index > 0 and not token.startswith(("-", "+")))
+        for index, token in enumerate(tokens)
+    ):
+        return None
+    if "-u" in tokens or "--utc" in tokens:
+        return utc_output
+    return local_output
+
+
+def is_fixture_quota_guard(
+    command: str,
+    *,
+    goal_id: str,
+    agent_id: str,
+) -> bool:
+    """Return whether ``command`` invokes the fixture's `quota should-run` guard."""
+
+    tokens = loopx_command_tokens(command)
+    if not tokens:
+        return False
+    try:
+        quota_index = tokens.index("quota")
+    except ValueError:
+        return False
+    return bool(
+        tokens[quota_index : quota_index + 2] == ["quota", "should-run"]
+        and argument_value(tokens, "--goal-id") == goal_id
+        and argument_value(tokens, "--agent-id") == agent_id
+        and "--codex-app" in tokens
+        and argument_value(tokens, "--turn-instance-id")
+    )
+
+
+def extract_quota_action_contract_base(
+    packet: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Extract the shared action signature summary used by qualification contracts."""
+
+    signature = quota_action_signature_document(packet)
+    action = dict(signature.get("action") or {})
+    user = dict(signature.get("user") or {})
+    selected = dict(action.get("selected_todo") or {})
+    contract_base: dict[str, Any] = {
+        "decision": "execute",
+        "selected_todo_id": selected.get("todo_id"),
+        "user_action_required": bool(user.get("action_required")),
+        "must_attempt_work": bool(action.get("must_attempt")),
+        "delivery_allowed": bool(action.get("delivery_allowed")),
+        "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
+        "external_write_requested": False,
+    }
+    return contract_base, signature, action, selected
+
+
+def execute_bounded_read_steps(
+    plan: Sequence[Any],
+    *,
+    cwd: Path,
+    timeout_seconds: float = 10,
+    on_step: Callable[[Any, int, str], None] | None = None,
+) -> tuple[list[tuple[Any, int, str]], int]:
+    """Run parsed bounded-read steps under shell `;`/`&&`/`||` status rules."""
+
+    results: list[tuple[Any, int, str]] = []
+    status = 0
+    for step in plan:
+        should_run = bool(
+            step.operator == ";"
+            or (step.operator == "&&" and status == 0)
+            or (step.operator == "||" and status != 0)
+        )
+        if not should_run:
+            continue
+        completed = subprocess.run(
+            list(step.argv),
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+        )
+        status = completed.returncode
+        output = completed.stdout
+        if step.line_limit is not None:
+            output = "".join(output.splitlines(keepends=True)[: step.line_limit])
+        results.append((step, status, output))
+        if on_step is not None:
+            on_step(step, status, output)
+    return results, status
+
+
+def build_qualification_receipt(
+    *,
+    schema_version: str,
+    qualification_id: str,
+    actor_ref: str,
+    passed: bool,
+    failure_code: str | None,
+    steps: Sequence[Mapping[str, Any]],
+    contract: Mapping[str, Any] | None = None,
+    extra_fields: Mapping[str, Any] | None = None,
+    boundary: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble the standard redacted qualification receipt payload."""
+
+    merged_boundary: dict[str, Any] = {
+        "raw_prompt_persisted": False,
+        "raw_provider_response_persisted": False,
+        "raw_command_persisted": False,
+        "writes_limited_to_temporary_fixture": True,
+        "external_writes_executed": False,
+        "shell_commands_executed": False,
+        **(dict(boundary) if boundary is not None else {}),
+    }
+    receipt: dict[str, Any] = {
+        "schema_version": schema_version,
+        "qualification_id": qualification_id,
+        "actor_ref": actor_ref,
+        "qualification_passed": passed,
+        "failure_code": failure_code,
+        **dict(contract or {}),
+        "observed_tool_sequence": [step["kind"] for step in steps],
+        "tool_call_count": len(steps),
+        **dict(extra_fields or {}),
+        "tool_call_receipts": list(steps),
+        "boundary": merged_boundary,
+    }
+    return receipt
+
+
+def append_exec_tool_exchange(
+    messages: list[dict[str, Any]],
+    tool_call: ExecToolCall,
+    tool_output: str | None,
+    *,
+    include_assistant_content: bool = True,
+) -> None:
+    """Append the assistant exec tool request and tool response to ``messages``."""
+
+    messages.extend(
+        [
+            {
+                "role": "assistant",
+                "content": (
+                    tool_call.assistant_content if include_assistant_content else None
+                ),
+                "tool_calls": [tool_call.provider_value],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.call_id,
+                "content": "" if tool_output is None else tool_output,
+            },
+        ]
+    )
+
+
+class DoubaoExecToolBehaviorActorBase:
+    """Shared lifecycle initialization for exec-tool Doubao/DeepSeek actors."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        model: str = DOUBAO_2_1_PRO_MODEL,
+        timeout_seconds: float = 90.0,
+        transport: DoubaoActorTransport = _direct_ark_transport,
+        client: DoubaoExecToolClient | None = None,
+    ) -> None:
+        self._client = (
+            client
+            if client is not None
+            else DoubaoExecToolClient(
+                api_key=api_key,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            )
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_ark_transport,
+        timeout_seconds: float = 90.0,
+    ) -> Self:
+        values = os.environ if environ is None else environ
+        api_key = values.get(ARK_API_KEY_ENV, "")
+        if not api_key.strip():
+            raise RuntimeError(
+                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
+            )
+        return cls(
+            api_key=api_key,
+            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+        )
+
+    @classmethod
+    def from_deepseek_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> Self:
+        return cls(
+            client=DeepSeekExecToolClient.from_environment(
+                environ=environ,
+                transport=transport,
+                timeout_seconds=timeout_seconds,
+                model=model,
+            )
+        )
 
 
 def snapshot_disposable_fixture(root: Path) -> dict[str, tuple[Any, ...]]:
