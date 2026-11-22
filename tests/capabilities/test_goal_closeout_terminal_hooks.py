@@ -3,8 +3,10 @@ from __future__ import annotations
 import errno
 import json
 import sys
-import pytest
 from pathlib import Path
+from types import MappingProxyType
+
+import pytest
 
 from loopx.capabilities.goal_closeout.machine_defaults import (
     GOAL_CLOSEOUT_CONFIGURATION_SCHEMA,
@@ -16,7 +18,10 @@ from loopx.capabilities.machine_configuration.store import (
     configure_machine_configuration,
 )
 from loopx.control_plane.goals.activation_service import set_goal_activation_state
-from loopx.global_registry import retire_global_registry_goals, sync_project_registry_to_global
+from loopx.global_registry import (
+    retire_global_registry_goals,
+    sync_project_registry_to_global,
+)
 from loopx.lifecycle.goal_closeout import GOAL_CLOSEOUT_LEDGER_FILENAME
 from loopx.runtime import archive_runtime_goal
 
@@ -973,3 +978,26 @@ def test_stop_without_hook_ignores_unusable_state_file(tmp_path: Path) -> None:
     assert stopped["closeout"]["ledger_recorded"] is False, stopped
     assert "error" not in stopped["closeout"], stopped
     assert not (runtime_root / "goals" / "stale-stop").exists()
+
+
+def test_stop_closeout_accepts_a_read_only_registry_mapping(tmp_path: Path) -> None:
+    from loopx.control_plane.goals.activation_service import _stop_closeout_payload
+
+    runtime_root = tmp_path / "runtime"
+    source_registry = tmp_path / "project" / ".loopx" / "registry.json"
+    payload_path = tmp_path / "payloads.jsonl"
+    _configure_closeout(runtime_root, payload_path)
+    snapshot = MappingProxyType({
+        "common_runtime_root": str(runtime_root),
+        "goals": [],
+    })
+    result = _stop_closeout_payload(
+        source_registry=source_registry,
+        registry_snapshot=snapshot,
+        runtime_root_override=None,
+        goal_id="mapping-stop",
+        closeout_goal={"id": "mapping-stop", "repo": str(tmp_path / "project")},
+    )
+
+    assert result["status"] == "success", result
+    assert len(_ledger(runtime_root, "mapping-stop")) == 1

@@ -1,20 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import os
+from collections.abc import Mapping
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from enum import Enum
-import hashlib
-import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..projects.registry_codec import (
-    activation_upgrade_registry_transaction,
-    project_registry_transaction,
-    read_activation_upgrade_registry,
-)
-from ..effect_runtime import effect_runtime_result
+from ...configuration_transaction import configuration_payload_revision
+from ...file_lock import exclusive_cross_runtime_file_lock
+from ...global_registry import sync_project_registry_to_global
+from ...history import load_registry
 from ...paths import (
     GLOBAL_REGISTRY_FILENAME,
     global_registry_path,
@@ -22,13 +21,16 @@ from ...paths import (
     resolve_runtime_root,
     select_default_runtime_root,
 )
-from ...configuration_transaction import configuration_payload_revision
-from ...file_lock import exclusive_cross_runtime_file_lock
-from ...global_registry import sync_project_registry_to_global
-from ...history import load_registry
 from ...registry import registry_goals
 from ...registry_writability import probe_registry_write_path
 from ..actor_identity import OwnerControllerActorKind, normalize_owner_controller_actor
+from ..content_digest import BARE_SHA256_PATTERN
+from ..effect_runtime import effect_runtime_result
+from ..projects.registry_codec import (
+    activation_upgrade_registry_transaction,
+    project_registry_transaction,
+    read_activation_upgrade_registry,
+)
 from ..runtime.time import now_local_iso
 from .activation import (
     GoalActivationState,
@@ -37,9 +39,7 @@ from .activation import (
     goal_owner_resume_id,
     normalize_goal_activation_state,
 )
-from ..content_digest import BARE_SHA256_PATTERN
 from .configure_goal_service import resolve_configure_goal_sync_target
-
 
 GOAL_ACTIVATION_TRANSITION_SCHEMA_VERSION = "loopx_goal_activation_transition_v1"
 GOAL_ACTIVATION_READBACK_SCHEMA_VERSION = "loopx_goal_activation_readback_v1"
@@ -268,6 +268,7 @@ def _project_committed_transition(
                 "after repairing the shared registry route"
             ),
         }
+
 
 def _readback_committed_transition(
     *,
@@ -640,7 +641,7 @@ def set_goal_activation_state(
 def _stop_closeout_payload(
     *,
     source_registry: Path,
-    registry_snapshot: dict[str, Any],
+    registry_snapshot: Mapping[str, Any],
     runtime_root_override: str | None,
     goal_id: str,
     closeout_goal: dict[str, Any],
@@ -661,7 +662,7 @@ def _stop_closeout_payload(
 
     try:
         closeout_runtime_root = resolve_runtime_root(
-            registry_snapshot,
+            dict(registry_snapshot),
             runtime_root_override,
             registry_path=source_registry,
         )
