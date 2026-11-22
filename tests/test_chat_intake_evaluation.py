@@ -288,26 +288,45 @@ def test_review_evidence_retains_brief_without_provider_payload():
 
 @pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
 @pytest.mark.parametrize("custom_owner_instructions", [False, True])
-@pytest.mark.parametrize("previous_marker", ["v3", "v4"])
+@pytest.mark.parametrize("previous_marker", ["v3", "v4", "v6"])
 def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_owner_text(
     tmp_path, profile, custom_owner_instructions, previous_marker
 ):
     from loopx.chat import _turn_prompt
-    from loopx.chat_manager import manager_workspace, MANAGED_SKILL_CURRENT_MARKER
+    from loopx.chat_manager import (
+        MANAGED_FOLLOWTHROUGH_CURRENT_MARKER,
+        MANAGED_REPORTING_CURRENT_MARKER,
+        MANAGED_SKILL_CURRENT_MARKER,
+        manager_workspace,
+    )
 
     workspace = manager_workspace(tmp_path, runtime_profile=profile)
     instructions = workspace / "AGENTS.md"
     skill = workspace / ".agents/skills/loopx-manager/SKILL.md"
+    reporting = workspace / "REPORTING.md"
+    followthrough = workspace / "FOLLOWTHROUGH.md"
     previous = "Custom owner instructions" if custom_owner_instructions else "# LoopX managed manager instructions\nOlder guidance"
     instructions.write_text(previous)
     skill.write_text(f"<!-- loopx-managed-manager-skill:{previous_marker} -->\nOlder managed skill")
+    reporting.write_text("Custom owner reporting" if custom_owner_instructions else f"{MANAGED_REPORTING_CURRENT_MARKER}\nOlder managed reporting")
+    followthrough.write_text("Custom owner followthrough" if custom_owner_instructions else f"{MANAGED_FOLLOWTHROUGH_CURRENT_MARKER}\nOlder managed followthrough")
     manager_workspace(tmp_path, runtime_profile=profile)
     current = instructions.read_text()
     if custom_owner_instructions:
         assert current == previous
+        assert reporting.read_text() == "Custom owner reporting"
+        assert followthrough.read_text() == "Custom owner followthrough"
     else:
         assert "question-form feedback" in current
+        assert "REPORTING.md" in current and "FOLLOWTHROUGH.md" in current
+        assert len(instructions.read_bytes()) <= 24_000
+        assert MANAGED_REPORTING_CURRENT_MARKER in reporting.read_text()
+        assert "360" in reporting.read_text() and "https://github.com/example-org/example-repo/pull/123" in reporting.read_text()
+        assert MANAGED_FOLLOWTHROUGH_CURRENT_MARKER in followthrough.read_text()
+        assert "Carry corrections through to the requested result" in followthrough.read_text()
     assert MANAGED_SKILL_CURRENT_MARKER in skill.read_text()
+    assert len(skill.read_bytes()) <= 24_000
+    assert "REPORTING.md" in skill.read_text() and "FOLLOWTHROUGH.md" in skill.read_text()
     assert "standalone explanation or opinion request" in skill.read_text()
     assert "finish that response before separate repair" in skill.read_text()
     assert "A previous handoff proves where a request was sent, not who owns its subject" in skill.read_text()
@@ -318,6 +337,44 @@ def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_own
     assert "A role alias or matching Agent id is a discovery lead" in turn
     assert "Compare ALL plausible existing work items before selecting" in turn
     assert "no new delivery audience" in skill.read_text()
+
+
+def test_manager_workspace_templates_respect_byte_budgets_hygiene_and_reject_symlinks(tmp_path):
+    from loopx.chat_manager import (
+        manager_followthrough_text,
+        manager_reporting_text,
+        manager_skill_text,
+        manager_workspace,
+        session_reporting_text,
+    )
+
+    for text in (
+        manager_skill_text(),
+        manager_reporting_text(),
+        session_reporting_text(),
+        manager_followthrough_text(),
+    ):
+        assert len(text.encode("utf-8")) <= 24_000
+        for forbidden in ("/Users/", "/home/", "loopx-project/loopx"):
+            assert forbidden not in text
+
+    workspace = manager_workspace(tmp_path, runtime_profile="trusted_owner")
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside secret", encoding="utf-8")
+    for rel in (
+        "REPORTING.md",
+        "FOLLOWTHROUGH.md",
+        "AGENTS.md",
+        ".agents/skills/loopx-manager/SKILL.md",
+    ):
+        target = workspace / rel
+        saved = target.read_text(encoding="utf-8")
+        target.unlink()
+        target.symlink_to(outside)
+        with pytest.raises(ValueError, match="symlink"):
+            manager_workspace(tmp_path, runtime_profile="trusted_owner")
+        target.unlink()
+        target.write_text(saved, encoding="utf-8")
 
 
 def test_manager_refresh_preserves_an_unmanaged_owner_skill(tmp_path):
