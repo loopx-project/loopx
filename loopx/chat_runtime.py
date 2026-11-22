@@ -508,11 +508,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
     def _require_steering_session(self, session_id: str) -> dict[str, Any]:
         session = self._load_open_session(session_id)
         require_managed_agent_session(self, session, Path(session.get("managed_workspace_path") or "."))
-        if session.get("steward_context") is not None:
-            raise ValueError("bound steward Chat requires its external source admission")
+        from .capabilities.native_chat.queued_admission import unbound_input_source_denial
+
+        denial = unbound_input_source_denial(session)
+        if denial:
+            raise ValueError(denial)
         if session.get("project_context") is not None:
-            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
-                raise ValueError("bound project steering requires its external source admission")
             self.project_contexts.session_context(session)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             session = require_current_attached_session(store=self.store, registry_path=self.registry_path, session_id=session_id)

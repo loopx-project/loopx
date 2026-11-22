@@ -65,6 +65,10 @@ def test_edit_cancel_and_admission_retries_keep_exact_input_history_and_active_t
     sid, active, queued, original = held_queue(ordinary)
     path = f"/api/chat/sessions/{sid}/queue/{queued}/input"
     before = capture.read_bytes()
+    code, queue = request(f"/api/chat/sessions/{sid}/queue")
+    assert code == 200
+    pending, = queue["turns"]
+    assert pending["turn_id"] == queued and pending["input_mutation_allowed"] is True
     assert request(path)[0] == 404
     assert store.load_turn(sid, queued)["message"] == original["message"]  # GET never mutates.
     body = queue_input_body()

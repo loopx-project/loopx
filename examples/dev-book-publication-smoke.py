@@ -104,6 +104,62 @@ def assert_bilingual_concepts(
         assert en_marker in en_text, f"{en_path}: missing bilingual marker {en_marker}"
 
 
+def assert_chapter_invariants_and_sequences() -> None:
+    zh_ordinals = ("一", "二", "三", "四", "五", "六")
+    en_ordinals = ("one", "two", "three", "four", "five", "six")
+    for locale_dir in ("chapters", "en/chapters"):
+        for chapter in CHAPTERS:
+            rel = f"{locale_dir}/{chapter}.md"
+            text = read(BOOK / rel)
+            inv_match = re.search(
+                r"^##\s+(?:不变式|Invariants)\b[^\n]*\n(.*?)(?=^##\s+|\Z)",
+                text,
+                re.M | re.S,
+            )
+            if inv_match is not None:
+                items = [
+                    (int(m.group(1)), m.group(2))
+                    for line in inv_match.group(1).splitlines()
+                    for m in [re.match(r"^(\d+)\.\s+(.*)$", line)]
+                    if m is not None
+                ]
+                if items:
+                    numbers = [n for n, _ in items]
+                    assert numbers == list(range(1, len(items) + 1)), (
+                        f"{rel}: non-contiguous Invariants numbering {numbers}"
+                    )
+                    for n, body in items:
+                        assert body.startswith("**"), (
+                            f"{rel}: Invariant {n} missing bold summary lead-in: {body[:60]!r}"
+                        )
+            for prefix in ("代价", "边界", "失败"):
+                found = re.findall(
+                    rf"^\*\*{prefix}([一二三四五六])(?:[：:]([^*]*))?\*\*",
+                    text,
+                    re.M,
+                )
+                if found:
+                    seq = [ordinal for ordinal, _ in found]
+                    assert seq == list(zh_ordinals[: len(seq)]), (
+                        f"{rel}: non-contiguous {prefix} sequence {seq}"
+                    )
+                    for ordinal, title in found:
+                        assert title.strip(), f"{rel}: {prefix}{ordinal} missing bold title"
+            for prefix in ("Cost", "Boundary", "Failure"):
+                found = re.findall(
+                    rf"^\*\*{prefix}\s+(one|two|three|four|five|six)(?:[：:]\s*([^*]*))?\*\*",
+                    text,
+                    re.M | re.I,
+                )
+                if found:
+                    seq = [ordinal.lower() for ordinal, _ in found]
+                    assert seq == list(en_ordinals[: len(seq)]), (
+                        f"{rel}: non-contiguous {prefix} sequence {seq}"
+                    )
+                    for ordinal, title in found:
+                        assert title.strip(), f"{rel}: {prefix} {ordinal} missing bold title"
+
+
 def assert_community_casebook_is_bilingual() -> None:
     protocol_map_zh = read(BOOK / "chapters" / "source-protocol-map.md")
     protocol_map_en = read(BOOK / "en" / "chapters" / "source-protocol-map.md")
@@ -473,6 +529,7 @@ def main() -> int:
         assert (CONTROL_PLANE_COURSE / f"{page}.md").is_file(), page
 
     assert_community_casebook_is_bilingual()
+    assert_chapter_invariants_and_sequences()
 
     reading_guides = (
         read(BOOK / "chapters" / "00-reading-guide.md"),
@@ -524,6 +581,7 @@ def main() -> int:
             ("Stage 3 的第一个 receipt-bound scheduler follow-up 切片", "first receipt-bound scheduler follow-up slice of Stage 3"),
             ("Stage 4 distribution cleanup 仍是后续方向", "Stage 4 distribution cleanup remain future work"),
             ("安装 Provider 不会改变默认本地 authority", "installing a Provider does not change the default local authority"),
+            ("预览、实际执行、读回和测试结果分别记录", "Record preview, execution, readback, and test results separately."),
         ),
     )
     assert_bilingual_concepts(

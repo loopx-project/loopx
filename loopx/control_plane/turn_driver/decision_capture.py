@@ -717,10 +717,17 @@ def _first_read_goal_text(payload: dict[str, Any], path: list[Any], value: Any) 
     return text if text is not None and len(value) - len(text) > len(_GOAL_NARRATIVE_PRESENTATION) + 96 else None
 
 
+_OPENING_CONTEXT_INSTRUCTION_PRESENTATION = (
+    "This native opening omits large suggested outcome bodies; "
+    "read applicable parent pointers from recovery.command before dependent work."
+)
+
+
 def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
                              *, list_fields: bool, list_depth: int | None,
                              present_goal_narrative: bool,
-                             text_append: dict[str, Any] | None = None) -> tuple[bytes, list[str]]:
+                             text_append: dict[str, Any] | None = None,
+                             opening_context_instruction: str | None = None) -> tuple[bytes, list[str]]:
     """Render TS-verified addresses from the original, digest-checked values."""
     if text_append is not None and (list_fields or not isinstance(text_append, dict)):
         raise ValueError("observed text append requires a selected value")
@@ -750,6 +757,10 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
             append_rendered = True
         elif list_fields:
             views.append({"pointer": pointer, "fields": context_index_fields(presentation, item["children"])})
+        elif opening_context_instruction is not None and pointer == "/context_details/instruction":
+            presented.append(pointer)
+            views.append({"pointer": pointer, "value": opening_context_instruction,
+                          "presentation": _OPENING_CONTEXT_INSTRUCTION_PRESENTATION})
         else:
             text = _first_read_goal_text(payload, path, selected) if present_goal_narrative else None
             if text is None:
@@ -766,26 +777,37 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
 
 
 def context_selection_binding(select: list[str], *, list_fields: bool, list_depth: int | None,
-                              sha256: str, presented: bool = False) -> dict[str, Any]:
+                              sha256: str, presented: bool = False,
+                              opening_context_instruction: str | None = None) -> dict[str, Any]:
     return {"select": select, "initial_read": False, "list_fields": list_fields, "list_depth": list_depth,
-        "sha256": sha256, **({"present_goal_narrative": True} if presented else {})}
+        "sha256": sha256, **({"present_goal_narrative": True} if presented else {}),
+        **({"opening_context_instruction": opening_context_instruction}
+           if opening_context_instruction is not None else {})}
 
 
 def initial_context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]], *,
-                                    text_append: dict[str, Any] | None = None) -> tuple[bytes, list[str]]:
+                                    text_append: dict[str, Any] | None = None,
+                                    opening_context_instruction: str | None = None) -> tuple[bytes, list[str]]:
     return _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
-        present_goal_narrative=True, text_append=text_append)
+        present_goal_narrative=True, text_append=text_append,
+        opening_context_instruction=opening_context_instruction)
 
 
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
-                                        observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
+                                        observed_read: dict[str, Any] | None = None,
+                                        opening_context_instruction: str | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
     text_append = observed_read.get("text_append") if observed_read else None
-    raw, presented = initial_context_selection_bytes(payload, selections, text_append=text_append)
+    raw, presented = initial_context_selection_bytes(payload, selections, text_append=text_append,
+        opening_context_instruction=opening_context_instruction)
+    instruction_presented = (opening_context_instruction
+        if opening_context_instruction is not None and "/context_details/instruction" in presented else None)
+    goal_presented = any(pointer != "/context_details/instruction" for pointer in presented)
     reference = write_context_read_reference(path, digest,
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
-            list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
+            list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=goal_presented,
+            opening_context_instruction=instruction_presented),
         selection_paths=[item["path"] for item in selections],
         observed_read=observed_read)
     return reference, raw
@@ -845,6 +867,7 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            present_goal_narrative: bool | None = None,
                            selection_paths: list[list[str | int]] | None = None,
                            text_append: dict[str, Any] | None = None,
+                           opening_context_instruction: str | None = None,
                            ) -> tuple[dict[str, Any], bytes | None, str | None]:
     """Render the digest-pinned view from a new or previously resolved plan."""
     if text_append is not None and (initial_read or list_fields or expected_sha256 is None):
@@ -870,7 +893,8 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
 
     def render(plan: dict[str, Any], present: bool) -> tuple[bytes, str, list[str]]:
         raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
-            list_depth=list_depth, present_goal_narrative=present, text_append=text_append)
+            list_depth=list_depth, present_goal_narrative=present, text_append=text_append,
+            opening_context_instruction=opening_context_instruction)
         return raw, hashlib.sha256(raw).hexdigest(), displayed
 
     raw, digest, displayed = render(plan, presentation)

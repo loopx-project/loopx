@@ -33,7 +33,6 @@ from loopx.control_plane.testing.cli_output_budget import (
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.help_surface import COMMAND_GROUPS
 from loopx.rollout_event_log import rollout_event_log_path
-from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.cli_output_fixture import (
     budget_fixture_path,
     read_cli_context_for_oracle,
@@ -41,7 +40,6 @@ from tests.control_plane.cli_output_fixture import (
     measure_cli_context_for_oracle,
     stable_budget_fixture_root as _stable_budget_fixture_root,
 )
-from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
 GOAL_ID = "cli-output-budget-goal"
 AGENT_IDS = ("codex-alpha", "codex-beta", "codex-gamma")
@@ -1187,6 +1185,8 @@ def test_complete_turn_shares_vision_audit_with_exact_native_and_stateless_reads
 ) -> None:
     from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
     from loopx.control_plane.turn_driver.native_context_selection import verified_context_selection
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
     with _stable_budget_fixture_root(tmp_path / "complete-vision-audit") as stable_root:
         isolate_sqlite_runtime(stable_root, monkeypatch)

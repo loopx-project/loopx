@@ -1,0 +1,60 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 0,
+    "minor": 3,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "0.3.0",
+    "version_tag": "v0.3.0",
+    "git_commit": "89b6089100dec8988a3f23956ab64c72e84e3e5d",
+    "git_tree": "a34ab46dd1d4f15ae8d35f84e9f6340b51d83350",
+    "committed_at": "2026-07-30T18:23:47+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v0.3.0",
+      "last_tag": "v0.3.0",
+      "last_commit": "89b6089100dec8988a3f23956ab64c72e84e3e5d",
+      "last_committed_at": "2026-07-30T18:23:47+08:00",
+      "tag_count": 1
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v0.3.0"
+    ]
+  },
+  "a_scale": {
+    "score": 11.9,
+    "delta_from_prior": 1.6,
+    "domain_scores": {
+      "D1": 14.5,
+      "D2": 9.5,
+      "D3": 9.5,
+      "D4": 9.0,
+      "D5": 15.0,
+      "D6": 12.0,
+      "D7": 10.5,
+      "D8": 19.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 0,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Isolated quota fixture git config (#2668), preserved supported bootstrap Python (#2667), and extension timeout stability (#2665).",
+  "summary_zh": "修复配额夹具隔离（#2668）、bootstrap Python 版本守卫（#2667）与扩展超时终止稳定性（#2665）。"
+}

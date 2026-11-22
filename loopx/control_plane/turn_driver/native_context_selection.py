@@ -113,7 +113,8 @@ def verified_context_selection(
             list_depth=selected.get("list_depth") if selected else None,
             expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
             present_goal_narrative=selected.get("present_goal_narrative") is True if selected else None,
-            selection_paths=selection_paths, text_append=text_append)
+            selection_paths=selection_paths, text_append=text_append,
+            opening_context_instruction=selected.get("opening_context_instruction") if selected else None)
         if selected_raw is None:
             return None
         raw = selected_raw

@@ -354,6 +354,7 @@ loopx --format json configure-goal --goal-id <goal-id>
 2. 阅读 exact delta 和 boundary；
 3. 再显式 `--execute`；
 4. 关闭 feature 时保留历史 evidence，只关闭未来行为；
+5. feature gate 不等于 runtime permission。
 
 ## Explore Graph：探索证据层
 
