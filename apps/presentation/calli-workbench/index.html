@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No interactive-widget=resizes-content: on iOS 26 Safari the layout viewport then resizes
+         for the keyboard while visualViewport.height subtracts the keyboard again, so the app sized
+         to --vvh shrinks twice and the page background shows below the composer. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>Calli</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="application-name" content="Calli" />
+    <meta name="apple-mobile-web-app-title" content="Calli" />
+    <link rel="icon" href="/favicon-32.png?v=crab-1" type="image/png" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg?v=crab-1" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=crab-1" />
+    <!-- The look chosen on this device, put on the page before the first paint so it never opens
+         in the wrong colours. src/hooks.ts (useAppearance) takes over from here and checks the values. -->
+    <script>
+      try {
+        var saved = JSON.parse(localStorage.getItem('calli.appearance') || '{}');
+        var dark = saved.mode === 'dark' || (saved.mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        if (typeof saved.palette === 'string') document.documentElement.setAttribute('data-palette', saved.palette);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
