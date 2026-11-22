@@ -537,7 +537,19 @@ def _apply_recovery_projection(
     if attention:
         from .settlement_precedence import clear_quota_action_projections
 
+        reads = payload.get("required_reads")
         clear_quota_action_projections(payload)
+        # The recovery hold suppresses the stale work selection. The
+        # authorized Inbox read is scoped to the Goal and Agent independently.
+        if isinstance(reads, list):
+            inbox_reads = [
+                read for read in reads
+                if isinstance(read, Mapping)
+                and read.get("source") == "turn_start_capability_hook"
+                and read.get("kind") == "operator_inbox"
+            ]
+            if inbox_reads:
+                payload["required_reads"] = inbox_reads
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)

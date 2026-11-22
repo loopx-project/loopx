@@ -147,7 +147,7 @@ export function MergedHistory({ api, thread, merged, ready, agentLabel, laterOf,
       older={i === 0 ? olderProps : { observeOlder: false, chain: true }} prefix={i === 0 ? beginning : null} />)}
     <div data-history-thread={thread.id} className="history-segment current-segment">
       <ThreadView {...current} {...(segments.length ? { hasOlder: false, observeOlder: false, chain: true } : olderProps)}
-        beforeItems={<>{!segments.length && beginning}{ready && !current.hasOlder && handedOver(thread) && <HandoverBoundary api={api} thread={thread} agentLabel={agentLabel} turnId={current.items.find(item => item.kind === 'user' && item.handoverCollapsed)?.turnId ?? undefined} />}</>}
+        beforeItems={<>{current.beforeItems}{!segments.length && beginning}{ready && !current.hasOlder && handedOver(thread) && <HandoverBoundary api={api} thread={thread} agentLabel={agentLabel} turnId={current.items.find(item => item.kind === 'user' && item.handoverCollapsed)?.turnId ?? undefined} />}</>}
       />
     </div>
     {laterBlock}

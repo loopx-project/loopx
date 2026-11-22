@@ -9,6 +9,7 @@ from threading import Barrier
 
 import pytest
 
+from loopx.capabilities.manager_context import deliver
 from loopx.rollout_event_log import (
     append_rollout_event,
     build_rollout_event,
@@ -122,6 +123,59 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
         assert debt["settlement_effect_id"] == effect
         if reset == "writeback":
             assert debt["missing_receipts"] == ["quota_spend_receipt"]
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_recovery_attention_keeps_inbox_read_without_admitting_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from tests.control_plane.test_context_first_read import read_selection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    rc, original = _run_cli(registry, runtime, *guard, "--turn-instance-id", "owed-original",
+                            "--todo-id", TODO_ID, cwd=project)
+    assert rc == 0 and original["heartbeat_receipt"]["closeout_required"], original
+    for attempt in range(3):
+        rc, admitted = _run_cli(registry, runtime, *guard,
+                                "--turn-instance-id", f"recovery-{attempt}", cwd=project)
+        assert rc == 0 and admitted["should_run"] is True, admitted
+    received = deliver(
+        runtime, registry, session={"session_id": "operator", "channel_id": "manager"},
+        turn={"client_turn_id": "new-request", "origin": "web", "message": "Review the current plan."},
+        request={"goal_id": GOAL_ID, "agent_id": AGENT_ID},
+    )
+
+    rc, wait = _run_cli(registry, runtime, *guard, "--turn-instance-id", "recovery-wait", cwd=project)
+    assert rc == 0 and wait["effective_action"] == "blocked_wait", wait
+    assert wait["unsettled_host_turn_recovery"]["state"] == "attention_required"
+    assert wait["unsettled_host_turn_recovery"]["admissions_without_progress"] == 3
+    interaction = wait["interaction_contract"]
+    channel = interaction["agent_channel"]
+    assert channel["must_attempt"] is False and channel["delivery_allowed"] is False
+    assert interaction["cli_channel"]["spend_allowed_now"] is False
+    read, = channel["required_reads"]
+    assert read["kind"] == "operator_inbox"
+    source, = channel["work_context"]["sources"]
+    assert source["command"] == read["command"]
+    assert source["content"]["read_complete"] is False
+    row, = source["content"]["unfinished_delegations"]["items"]
+    assert row["request_id"] == received["request_id"]
+    assert row["step"] == "assess_request"
+
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    rc, capture = _run_cli(
+        registry, runtime, *guard, "--turn-instance-id", "recovery-wait",
+        "--context-delivery", "on", "--decision-output-root", str(captures), cwd=project,
+    )
+    assert rc == 0 and capture["ok"], json.dumps(capture)
+    _, opening = read_selection(capture["first_read_command"])
+    assert opening["/interaction_contract/agent_channel/required_reads"] == [read]
+    assert opening["/interaction_contract/agent_channel/must_attempt"] is False
+    assert opening["/interaction_contract/cli_channel/spend_allowed_now"] is False
     assert _spend_run_count(runtime) == 0
 
 

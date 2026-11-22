@@ -773,6 +773,53 @@ class AntigravityAdapter:
             return None
 
     @staticmethod
+    def failed_report_observation(
+        *,
+        cascade_id: str,
+        turn_id: str,
+        native_timeout: bool,
+        model_id: str | None = None,
+        reasoning_effort: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Read an idle Antigravity cascade and capacity without starting or mutating work."""
+        found = discover_antigravity_language_server(
+            env=env,
+            include_model_config=True,
+            deadline=time.monotonic() + 3.0,
+        )
+        if found is None:
+            return None
+        try:
+            traj = _rpc_post(
+                str(found["url"]),
+                str(found["csrf_token"]),
+                "GetCascadeTrajectory",
+                {"cascadeId": cascade_id},
+                timeout=2.5,
+            )
+        except CodexChatAgentError:
+            return None
+        if traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
+            return None
+        cap = AntigravityAdapter.endpoint_model_capacity(
+            model_id=str(model_id or ANTIGRAVITY_DEFAULT_MODEL),
+            reasoning_effort=reasoning_effort,
+            env=env,
+            discovered=found,
+        )
+        return {
+            "adapter_kind": "antigravity_ls",
+            "turn_id": turn_id,
+            "thread_id": cascade_id,
+            "cascade_idle": True,
+            "no_final_response": True,
+            "native_timeout": native_timeout,
+            "quota_available": bool(cap and cap.get("normal_completion") is True),
+            "quota_observed_at": time.time(),
+        }
+
+    @staticmethod
     def endpoint_model_capacity(
         *,
         model_id: str,
@@ -960,6 +1007,7 @@ class AntigravityAdapter:
         self._interrupted = threading.Event()
         self._send_lock = threading.Lock()
         self._active_turn_id: str | None = None
+        self._active_cascade_id: str | None = None
         self._cancel_acknowledged = False
         self._launch_guard: Callable[[], AbstractContextManager[None]] | None = None
         self._steward_report_reader: Callable[[str, Any], dict[str, Any]] | None = None
@@ -1080,9 +1128,12 @@ class AntigravityAdapter:
             hard_timeout_sec=hard_timeout_sec,
         )
 
-    def _build_turn_prompt(self, message: str) -> str:
+    def _build_turn_prompt(self, message: str, *, isolated_cascade: bool = False) -> str:
         parts: list[str] = []
-        if not self._system_primed:
+        if isolated_cascade:
+            if self.objective.strip():
+                parts.append(self.objective.strip())
+        elif not self._system_primed:
             if self.objective.strip():
                 parts.append(self.objective.strip())
             if self._pending_history:
@@ -1146,12 +1197,13 @@ class AntigravityAdapter:
     def start_turn(self, message: str,
                    event_sink: Callable[[str, dict[str, Any]], None] | None = None,
                    *, read_only_review: bool = False,
-                   media: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   media: list[dict[str, Any]] | None = None,
+                   isolated_cascade: bool = False) -> dict[str, Any]:
         self._read_only_review = read_only_review
         self._interrupted.clear()
         self._cancel_acknowledged = False
         try:
-            return self._run_turn(message, event_sink, media=media)
+            return self._run_turn(message, event_sink, media=media, isolated_cascade=isolated_cascade)
         except BaseException as failure:
             # A timeout/transport or permission failure is not a successful turn.
             # Retain an unconfirmed cancellation as an error for the caller fence.
@@ -1165,6 +1217,7 @@ class AntigravityAdapter:
             raise
         finally:
             self._active_turn_id = None
+            self._active_cascade_id = None
             self._read_only_review = False
 
     def _run_turn(
@@ -1173,6 +1226,7 @@ class AntigravityAdapter:
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
         *,
         media: list[dict[str, Any]] | None = None,
+        isolated_cascade: bool = False,
     ) -> dict[str, Any]:
         if self._closed:
             raise CodexChatAgentError(
@@ -1182,24 +1236,45 @@ class AntigravityAdapter:
             )
 
         turn_id = f"agy_turn_{uuid.uuid4().hex[:12]}"
-        before_traj = _rpc_post(
-            self.ls_url,
-            self.csrf_token,
-            "GetCascadeTrajectory",
-            {"cascadeId": self.cascade_id},
-            timeout=10.0,
-        )
-        if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
-            raise CodexChatAgentError(
-                "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.",
-                gate=None, error_code="resume_failed",
+        if isolated_cascade:
+            started = _rpc_post(
+                self.ls_url,
+                self.csrf_token,
+                "StartCascade",
+                {
+                    "source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT",
+                    "workspaceUris": [self.work_dir.as_uri()],
+                },
+                timeout=10.0,
             )
-        start_step_index = int(before_traj.get("numTotalSteps") or 0)
+            target_cascade_id = str(started.get("cascadeId") or "").strip()
+            if not target_cascade_id:
+                raise CodexChatAgentError(
+                    f"StartCascade did not return a cascadeId: {started}",
+                    gate=None,
+                    error_code="antigravity_start_failed",
+                )
+            start_step_index = 0
+        else:
+            target_cascade_id = self.cascade_id
+            before_traj = _rpc_post(
+                self.ls_url,
+                self.csrf_token,
+                "GetCascadeTrajectory",
+                {"cascadeId": target_cascade_id},
+                timeout=10.0,
+            )
+            if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
+                raise CodexChatAgentError(
+                    "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.",
+                    gate=None, error_code="resume_failed",
+                )
+            start_step_index = int(before_traj.get("numTotalSteps") or 0)
         user_config = self._build_cascade_config()
-        full_prompt = self._build_turn_prompt(message)
+        full_prompt = self._build_turn_prompt(message, isolated_cascade=isolated_cascade)
 
         send_payload: dict[str, Any] = {
-            "cascadeId": self.cascade_id,
+            "cascadeId": target_cascade_id,
             "items": [{"text": full_prompt}],
             "cascadeConfig": user_config,
             **({"media": media} if media else {}),
@@ -1208,13 +1283,15 @@ class AntigravityAdapter:
             with (self._launch_guard() if self._launch_guard is not None else nullcontext()):
                 self._check_interrupted()
                 self._active_turn_id = turn_id
+                self._active_cascade_id = target_cascade_id
                 if event_sink is not None:
-                    event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id,
-                        "native_input": {"thread_id": self.cascade_id, "start_step_index": start_step_index,
+                    event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": target_cascade_id,
+                        "native_input": {"thread_id": target_cascade_id, "start_step_index": start_step_index,
                                          "input_sha256": hashlib.sha256(full_prompt.encode()).hexdigest()}})
                 _rpc_post(self.ls_url, self.csrf_token, "SendUserCascadeMessage", send_payload, timeout=15.0)
-                self._system_primed = True
-                self._pending_history.clear()
+                if not isolated_cascade:
+                    self._system_primed = True
+                    self._pending_history.clear()
 
         stream_filter = VisibleResponseStreamFilter()
         emitted_visible_delta = False
@@ -1254,7 +1331,7 @@ class AntigravityAdapter:
                     timeout("idle")
             try:
                 return _rpc_post(self.ls_url, self.csrf_token, method,
-                                 {"cascadeId": self.cascade_id, **args}, timeout=remaining)
+                                 {"cascadeId": target_cascade_id, **args}, timeout=remaining)
             except CodexChatAgentError as exc:
                 if exc.error_code != "antigravity_transport_error":
                     raise
@@ -1297,7 +1374,7 @@ class AntigravityAdapter:
                 snapshot_steps = None
                 if final_read_deadline is None:
                     snapshot_steps = _running_snapshot_steps(
-                        traj, cascade_id=self.cascade_id, start=start_step_index,
+                        traj, cascade_id=target_cascade_id, start=start_step_index,
                         total=total_steps, sent_prompt=full_prompt,
                     )
                 if snapshot_steps is not None:
@@ -1519,7 +1596,7 @@ class AntigravityAdapter:
             # never native tool output or raw reasoning. Core consumes this
             # privately and durably before parsing can fail or lose text.
             self._check_interrupted()
-            event_sink("turn.native_result", {**_native_completion_facts(self.cascade_id, current_steps),
+            event_sink("turn.native_result", {**_native_completion_facts(target_cascade_id, current_steps),
                 "upstream_turn_id": turn_id})
             tail = stream_filter.finish()
             if tail:
@@ -1574,13 +1651,14 @@ class AntigravityAdapter:
         if active is None:
             return
         with self._send_lock:
+            target_cascade_id = self._active_cascade_id or self.cascade_id
             if not self._cancel_acknowledged:
                 _rpc_post(self.ls_url, self.csrf_token, "CancelCascadeInvocation",
-                          {"cascadeId": self.cascade_id}, timeout=5.0)
+                          {"cascadeId": target_cascade_id}, timeout=5.0)
                 deadline = time.monotonic() + 5.0
                 while True:
                     trajectory = _rpc_post(self.ls_url, self.csrf_token, "GetCascadeTrajectory",
-                                           {"cascadeId": self.cascade_id}, timeout=2.0)
+                                           {"cascadeId": target_cascade_id}, timeout=2.0)
                     if trajectory.get("status") == "CASCADE_RUN_STATUS_IDLE":
                         break
                     if time.monotonic() >= deadline:

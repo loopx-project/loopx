@@ -64,3 +64,11 @@ export function takeoverMention(mentions: AgentMention[], exhausted: boolean, cu
   const [only] = mentions;
   return exhausted && mentions.length === 1 && only.kind === 'agent' && !only.host && only.id !== current ? only : null;
 }
+
+/** The historical boundary when the overview opens a source segment, excluding later follow-ups. */
+export function overviewHistoryBoundary(id: string, threads: Thread[]): number | undefined {
+  const next = threads.filter(thread => thread.handover?.sourceId === id && !thread.handover.detached)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
+  const seq = next?.handover?.sourceSeq;
+  return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0 ? seq + 1 : undefined;
+}

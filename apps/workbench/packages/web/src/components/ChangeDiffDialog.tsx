@@ -4,7 +4,8 @@ import { diffsOf, type FileDiff } from '../timeline';
 import { t } from '../i18n';
 import { DialogSurface } from './Dialog';
 import { DiffView } from './ThreadView';
-import { IconClose } from './icons';
+import { IconBack, IconClose } from './icons';
+import { DockPanel } from './DockPanel';
 
 type Ref = { turnId: string; id: number; version: number };
 type Loaded = { ref: Ref; diffs: FileDiff[] | null; failed: boolean };
@@ -16,9 +17,11 @@ const refsOf = (file: ChangedFile): Ref[] =>
  * Every change to one file in this thread, a section per turn, read only while the dialog is open.
  * A change that cannot be read says so beside its turn rather than passing for a turn with no diff.
  */
-export function ChangeDiffDialog({ api, threadId, file, turnOrder, onClose, onJumpTurn }: {
+export function ChangeDiffDialog({ api, threadId, file, turnOrder, onClose, onJumpTurn, docked = false, onBack }: {
   api: Api; threadId: string; file: ChangedFile; turnOrder: string[];
   onClose: () => void; onJumpTurn: (turnId: string) => void;
+  /** On a computer it goes in the side column beside the conversation instead of over it; `onBack` returns to the list it was opened from. */
+  docked?: boolean; onBack?: () => void;
 }) {
   const refs = refsOf(file);
   const [loaded, setLoaded] = useState<Loaded[]>([]);
@@ -57,8 +60,9 @@ export function ChangeDiffDialog({ api, threadId, file, turnOrder, onClose, onJu
   const sections = groupTurns(loaded);
   // The daemon keeps the newest 20 references of a heavily edited file; the rest are only counted.
   const older = Math.max(0, (file.detailsTotal ?? 0) - refs.length);
-  return <DialogSurface labelledBy="change-diff-title" className="change-diff-dialog" onClose={onClose}>
+  const content = <>
     <header className="change-diff-head">
+      {docked && onBack && <button type="button" className="icon-btn" aria-label={t('common.back')} onClick={onBack}><IconBack size={18} /></button>}
       <span className="change-diff-path" id="change-diff-title" title={file.path}>{file.path}</span>
       <span className="diff-added">+{file.added}</span>
       <span className="diff-removed">−{file.removed}</span>
@@ -86,7 +90,9 @@ export function ChangeDiffDialog({ api, threadId, file, turnOrder, onClose, onJu
       <button type="button" className="text-btn" onClick={() => { onClose(); onJumpTurn(file.turnId); }}>{t('overview.diffLast')}</button>
       {loaded.some((part) => part.failed) && <button type="button" className="text-btn" onClick={() => setAttempt((n) => n + 1)}>{t('common.retry')}</button>}
     </footer>
-  </DialogSurface>;
+  </>;
+  if (docked) return <DockPanel label={file.path} onDismiss={onBack ?? onClose}><div className="change-diff-dialog docked">{content}</div></DockPanel>;
+  return <DialogSurface labelledBy="change-diff-title" className="change-diff-dialog" onClose={onClose}>{content}</DialogSurface>;
 }
 
 /** The read references grouped by turn, keeping the newest-first order they were read in. */
