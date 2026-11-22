@@ -1126,6 +1126,7 @@ export const en: Messages = {
   'agentAccount.instance': 'Existing instance',
   'agentAccount.connect': 'Connect CLI',
   'agentAccount.localHint': 'Uses the local CLI’s sign-in. Existing instances only update their connection settings; no separate account is created.',
+  'onboard.installGuide': 'Installation guide',
   'onboard.connected': 'Connected',
 
   'agents.login': 'Sign in',
@@ -1185,6 +1186,9 @@ export const en: Messages = {
   "agentLogin.cancel": "Cancel sign-in",
   "agentLogin.waitingBadge": "Waiting for code",
   "agentLogin.keepHint": "Collapsing or leaving this page keeps sign-in active for 10 minutes.",
+  'agentLogin.browserWaitingBadge': 'Waiting for authorization',
+  'agentLogin.browserHint': 'Finish signing in in your browser. This panel updates automatically.',
+  'agentLogin.deviceCode': 'Verification code',
   'agentLogin.empty': (name: string) => `${name} has no available models; check sign-in or model configuration`,
   'agentLogin.noModels': 'No models are available yet. Check the native client and retry.',
   'agentLogin.nativeHint': 'Sign in or configure credentials in the native client, then retry.',

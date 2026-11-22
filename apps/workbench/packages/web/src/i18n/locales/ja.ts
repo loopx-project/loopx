@@ -1124,6 +1124,7 @@ export const ja: Messages = {
   'agentAccount.instance': '既存のインスタンス',
   'agentAccount.connect': 'CLI を接続',
   'agentAccount.localHint': 'ローカル CLI のログインを使います。既存のインスタンスは接続設定のみ更新し、別アカウントは作成しません。',
+  'onboard.installGuide': 'インストール手順',
   'onboard.connected': '接続済み',
 
   'agents.login': 'ログイン',
@@ -1183,6 +1184,9 @@ export const ja: Messages = {
   "agentLogin.cancel": "ログインをキャンセル",
   "agentLogin.waitingBadge": "コード入力待ち",
   "agentLogin.keepHint": "折りたたんだりページを離れてもログインは10分間保持されます。",
+  'agentLogin.browserWaitingBadge': '認証待ち',
+  'agentLogin.browserHint': 'ブラウザーでログインすると、自動的に更新されます。',
+  'agentLogin.deviceCode': '確認コード',
   'agentLogin.empty': (name: string) => `${name} に利用可能なモデルがありません。ログインまたはモデル設定を確認してください`,
   'agentLogin.noModels': '利用可能なモデルがまだありません。ネイティブクライアントを確認してから再試行してください。',
   'agentLogin.nativeHint': 'ネイティブクライアントでログインまたは認証情報を設定してから、再試行してください。',

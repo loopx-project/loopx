@@ -1,6 +1,7 @@
 import { serveLifecycle } from './workbench-lifecycle.js';
 import { once } from 'node:events';
-import { dirname } from 'node:path';
+import { dirname, delimiter } from 'node:path';
+import { isWorkbenchDependency } from './adapters/session-location.js';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { coreUrl } from './adapters/loopx/proxy.js';
@@ -49,6 +50,8 @@ async function main(): Promise<void> {
   // Launch authority belongs to this daemon, never to agent/tool children.
   const lifecycleSocket = process.env.LOOCHAT_LIFECYCLE_SOCKET;
   delete process.env.LOOCHAT_LIFECYCLE_SOCKET;
+  // npm adds server dependency bins to PATH; they must not replace the user's native agents.
+  process.env.PATH = (process.env.PATH ?? '').split(delimiter).filter(directory => !isWorkbenchDependency(directory)).join(delimiter);
   const config = loadConfig();
 
   // Empty LOOCHAT_WORKDIRS means "only the directory the daemon was started in".

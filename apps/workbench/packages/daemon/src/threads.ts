@@ -272,6 +272,7 @@ export interface AgentInfo {
   /** The account this instance runs as, when it is a linked second login (an email). */
   account?: string | null;
   available: boolean;
+  unavailableReason?: string;
   streamBridgeEnabled?: boolean;
   /** How it can be signed in from the hub, when its adapter can start the CLI's login. */
   login?: 'terminal' | 'wizard';
@@ -477,6 +478,7 @@ export class ThreadManager {
         ...(m?.account !== undefined ? { account: m.account } : {}),
         ...(m?.hidden !== undefined ? { hidden: m.hidden } : {}),
         available: await a.available(),
+        ...(a.unavailableReason ? { unavailableReason: a.unavailableReason } : {}),
         ...(a.startLogin ? { login: 'wizard' as const } : a.loginCommand ? { login: 'terminal' as const } : {}),
         ...(m?.activeLogin ? { activeLogin: m.activeLogin } : {}),
         capabilities: a.capabilities,
@@ -1309,10 +1311,8 @@ export class ThreadManager {
 
   private view(thread: ThreadRecord): ThreadView {
     const adapter = this.adapters.get(thread.agent);
-    const resumeCommand =
-      adapter && thread.agentSessionId
-        ? `cd ${shellQuote(thread.cwd)} && ${adapter.resumeCommand(thread.agentSessionId)}`
-        : null;
+    const nativeResume = adapter && thread.agentSessionId ? adapter.resumeCommand(thread.agentSessionId) : '';
+    const resumeCommand = nativeResume ? `cd ${shellQuote(thread.cwd)} && ${nativeResume}` : null;
     let cwdReal = thread.cwd;
     let cwdGone = false;
     try {

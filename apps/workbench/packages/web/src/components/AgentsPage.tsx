@@ -217,11 +217,11 @@ export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
                     <div className="agents-row-name">
                       <strong>{agent.label}</strong>
                       {agent.hidden && <span className="agents-hidden">{t('agents.hidden')}</span>}
-                      {!agent.available && <span className="agents-unavailable">{t('agents.unavailable')}</span>}
+                      {!agent.available && <span className="agents-unavailable">{agent.unavailableReason ?? t('agents.unavailable')}</span>}
                       {pendingLogin && (
                         <span className="agents-login-pending">
                           <span className="agents-login-dot" aria-hidden="true" />
-                          {t('agentLogin.waitingBadge')}
+                          {t(activeLogin?.input === 'none' ? 'agentLogin.browserWaitingBadge' : 'agentLogin.waitingBadge')}
                         </span>
                       )}
                     </div>
