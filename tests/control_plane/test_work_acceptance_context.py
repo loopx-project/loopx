@@ -109,9 +109,12 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id="todo_missing")
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
-    packet = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
+    selected_guard = (
+        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
         "--todo-id", selected, "--runtime-profile", "generic_cli", "--turn-instance-id", "export-context-turn",
-        "--context-delivery", "off", "--delta-delivery", "off")
+        "--context-delivery", "off", "--delta-delivery", "off",
+    )
+    packet = cli(*selected_guard)
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     # The public canonical reader retains its full format metadata. Host context
@@ -160,7 +163,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     from loopx.cli import main
     from loopx.control_plane.work_items import context_readback
 
-    def unavailable(**_kwargs):
+    attempted_acceptance_reads = []
+
+    def unavailable(**kwargs):
+        attempted_acceptance_reads.append(kwargs["todo_id"])
         raise OSError("acceptance source unavailable")
 
     planner_sources = []
@@ -177,8 +183,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--context-delivery", "off"])
-        failed = json.loads(output.getvalue())["interaction_contract"]["agent_channel"]
+                *selected_guard])
+        failure = json.loads(output.getvalue())
+        failed = failure["interaction_contract"]["agent_channel"]
+        assert attempted_acceptance_reads == [selected], failure.get("effective_action")
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
@@ -187,9 +195,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert set(source) == {"selected_todo", "task_orchestration_contract", "effective_action", "interaction_contract"}
         assert set(source["interaction_contract"]["cli_channel"]) <= {"selection_required"}
         assert set(source["task_orchestration_contract"]) <= {"schema_version", "mode", "primary_todo_id"}
-    recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
-        "--context-delivery", "off", "--delta-delivery", "off")
-    assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    recovered = cli(*selected_guard)
+    recovered_context = recovered["interaction_contract"]["agent_channel"]["work_context"]
+    assert recovered_context["complete"] is True
+    assert recovered_context["selected_todo_text_verified"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
