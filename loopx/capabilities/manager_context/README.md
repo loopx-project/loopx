@@ -31,7 +31,8 @@ selected audience's previous enrollment boundary, explicitly set
 `"local_delivery_scope":"selected"` alongside its `targets` list before upgrading.
 Missing policy, missing source, a wrong sender or malformed scope grants nothing.
 Keep the policy private (0600); do not commit it. A read grant without a sender
-grant is insufficient.
+grant is insufficient. This does not grant remote delivery, evidence reads,
+worker launch, Todo/lease changes or protected operations.
 
 ### Readable answers and original-conversation returns
 
@@ -163,7 +164,7 @@ The native postcondition entry retires only its exact operation-owned temporary
 host input before checking a clean delivery worktree; unrelated files and actual
 artifact changes still fail canonical validation. Validation recovery resumes the
 original Turn after its retained host result, without invoking the model again.
-The typed wake owner
+An external conversation is not a native Goal wake owner. The typed wake owner
 settles that separate intent as `no_wake_owner`; the exact original inbox return
 still carries the receiver's conclusion, without a hidden Goal or retry loop.
 
@@ -553,7 +554,11 @@ model/effort environment overrides remain supported). It receives a compact
 authorized Goal directory, then uses
 `loopx_manager_read` to choose registered Agent, portfolio, current Todo and recent delivery reads.
 The packaged `loopx-manager` skill is installed in its dedicated workspace and
-included in its operating instructions. This reuses Core providers and the
+included in its operating instructions alongside the repository-maintained
+companion specifications (`templates/REPORTING.md` and `templates/FOLLOWTHROUGH.md`,
+plus `templates/SESSION_REPORTING.md` as the default single-Goal session report
+specification; local owner edits without managed markers are preserved across
+refreshes). This reuses Core providers and the
 existing manager-context delegation contract; it does not create another source
 of progress or expose a general shell.
 

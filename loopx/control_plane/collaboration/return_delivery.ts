@@ -16,7 +16,9 @@ import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { decideCollaborationLifecycle } from "./goal_instance_lifecycle.ts";
 import { resolveConversationScope } from "./conversation_scope.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText, usesReaderReturnFormat } from "./result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, returnMessageId, returnTranscriptText } from "./result_publication.ts";
+import {confirmedTerminalReturn, observeTerminalReturn, terminalReturnIdentityConflict,
+  TERMINAL_RETURN_READBACK_SUFFIX} from "./terminal_return_readback.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
@@ -257,6 +259,30 @@ async function scanPredecessorReady(command: ReturnCommand): Promise<boolean> {
   }
 }
 
+function privateReadbackCandidate(command: ReturnCommand, state: JsonObject): boolean {
+  return deliveryProfileMatches(command, state)
+    && terminalReturnIdentityConflict(state, String(command.request.request_id), command.key)
+    && state.provider_receipt == null && state.attempt == null && state.reply_verified !== true;
+}
+
+function readbackPath(command: ReturnCommand): string {
+  return join(command.folder, "replies", String(command.request.request_id), command.key + TERMINAL_RETURN_READBACK_SUFFIX);
+}
+
+async function terminalReadback(command: ReturnCommand): Promise<JsonObject | null> {
+  try { return await readReturnRecord(readbackPath(command)); }
+  catch (error) { if (!unavailableRecord(error)) throw error; return null; }
+}
+
+async function scanPrivateReadback(command: ReturnCommand, state: JsonObject): Promise<boolean> {
+  const id = String(command.request.request_id);
+  const route = await readReturnRecord(join(command.folder, "roundtrips", id + ".json"));
+  if (!route || route.kind === "peer" || resolveConversationScope(route).kind === "external_audience") return false;
+  const reply = await readReturnRecord(join(command.folder, "replies", id, command.key + ".json"));
+  return reply?.phase === "conclusion"
+    && confirmedTerminalReturn(await terminalReadback(command), state, reply, route) === null;
+}
+
 async function scanReturns(request: JsonObject): Promise<JsonObject> {
   if (request.schema_version !== RETURN_DELIVERY_TRANSACTION) {
     throw new EffectRuntimeRequestError("return delivery transaction schema mismatch");
@@ -280,7 +306,9 @@ async function scanReturns(request: JsonObject): Promise<JsonObject> {
     const command = returnCommand({...request, ...address, phase: "prepare", facts: {}});
     try {
       const state = deliveryState(await readReturnRecord(command.path, {}));
-      if (TERMINAL.has(String(state.status))) terminalCandidates.push(address);
+      if (privateReadbackCandidate(command, state)) {
+        if (await scanPrivateReadback(command, state)) candidates.push(address);
+      } else if (TERMINAL.has(String(state.status))) terminalCandidates.push(address);
       else if (pendingDelivery(command, state) && await scanPredecessorReady(command)) candidates.push(address);
     } catch (error) { if (!unavailableRecord(error)) throw error; unavailable += 1; }
   }
@@ -418,6 +446,40 @@ function returnAuthorityBlocker(command: ReturnCommand): string | null {
   return null;
 }
 
+async function reconcilePrivateReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {
+  if (!privateReadbackCandidate(command, state) || command.facts.error) return returnResponse();
+  try {
+    const {reply} = await inspectReturnPublication(command);
+    const session = requireJsonObject(command.facts.session, "original session");
+    const turn = requireJsonObject(command.facts.turn, "original Turn");
+    const route = requireJsonObject(command.facts.route, "original route");
+    if (reply.phase !== "conclusion" || route.kind === "peer"
+        || !resolveConversationScope(session).private_conversation
+        || session.session_id !== route.session_id || turn.client_turn_id !== route.client_turn_id
+        || !isDeepStrictEqual(state.goal_ref, reply.goal_ref)
+        || state.result_key !== undefined && state.result_key !== command.key
+        || returnAuthorityBlocker(command)) return returnResponse();
+
+    admitReturnLifetime(command, "original_return_settle");
+    if (confirmedTerminalReturn(await terminalReadback(command), state, reply, route) !== null) return returnResponse();
+    const revision = deliveryRevision(state);
+    const messageId = returnMessageId(String(command.request.request_id), command.key);
+    if (command.request.phase === "prepare") {
+      return returnResponse({action: "reconcile_private", revision, token: null, message_id: messageId});
+    }
+
+    if (command.request.revision !== revision) throw new EffectRuntimeRequestError("return delivery state changed");
+    const message = requireJsonObject(command.request.private_readback, "original return readback");
+    const proof = observeTerminalReturn(message, messageId, turn.turn_id, state, reply, route, command.exact);
+    if (!proof) return returnResponse();
+    await atomicWriteJson(readbackPath(command), proof);
+    return returnResponse({processed: 1});
+  } catch (error) {
+    if (!unavailableRecord(error)) throw error;
+    return returnResponse();
+  }
+}
+
 async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {
   if (command.facts.error) return sourceFailure(command, state);
   let source: Awaited<ReturnType<typeof inspectReturnPublication>>;
@@ -463,21 +525,10 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
     await writeDeliveryState(command, state);
   }
   const verify = priorStatus === "verification_required" || command.exact && state.attempt != null;
-  const prefix = command.exact ? (reply.phase === "conclusion" ? "处理结论" : "处理进展")
-    : (reply.phase === "conclusion" ? "协作回复" : "协作进展");
-  const provenance = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}`;
-  const body = collaborationResultText(reply);
-  const text = usesReaderReturnFormat(reply) ? `${body}\n\n${provenance}` : `${provenance}\n\n${body}`;
-
   return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
-    text, message_id: returnMessageId(command), attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
+    text: returnTranscriptText(reply, command.exact), message_id: returnMessageId(String(command.request.request_id), command.key),
+    attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
     revision: deliveryRevision(state), token: (state.admission as JsonObject | undefined)?.token ?? null });
-}
-
-function returnMessageId(command: ReturnCommand): string {
-  // Retain Python json.dumps' spaces in the existing ASCII-only message identity.
-  const identity = JSON.stringify([command.request.request_id, command.key]).replace(",", ", ");
-  return "handoff." + createHash("sha256").update(identity).digest("hex");
 }
 
 function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject {
@@ -485,7 +536,8 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
   requireStringLiteral(outcome.kind, ["private", "sent", "conflict", "verify_unavailable", "locator_unavailable",
     "verified", "error", "verification_error", "sender_unavailable"], "return outcome kind");
   if (outcome.kind === "private" || outcome.kind === "sent" && outcome.reply_verified === true) {
-    return { status: "delivered", delivered_at: command.now, message_id: returnMessageId(command),
+    return { status: "delivered", delivered_at: command.now,
+      message_id: returnMessageId(String(command.request.request_id), command.key),
       ...(outcome.kind === "sent" ? { provider_receipt: outcome.idempotency_key, reply_verified: true } : {}) };
   }
   if (outcome.kind === "conflict") return { status: "explicit_unverified", error: "manager_return_payload_conflict" };
@@ -502,7 +554,8 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
         status: command.exact ? "retry_pending" : "verification_required" };
     }
     return checked.status === "delivered"
-      ? { status: "delivered", delivered_at: command.now, message_id: returnMessageId(command),
+      ? { status: "delivered", delivered_at: command.now,
+        message_id: returnMessageId(String(command.request.request_id), command.key),
         provider_receipt: normalizeManagerReturnDeliveryAttempt(state.attempt).provider_receipt,
         reply_verified: true, verification: checked.verification }
       : checked.status === "explicit_unverified" ? { status: checked.status, error: checked.error }
@@ -575,7 +628,9 @@ export async function transactManagerReturnDelivery(value: unknown): Promise<Jso
     let state: JsonObject;
     try {
       state = deliveryState(await readReturnRecord(command.path, {}));
-      if (command.request.phase === "prepare" && !pendingDelivery(command, state)) return returnResponse();
+      if (command.request.phase === "prepare" && !pendingDelivery(command, state)) {
+        return reconcilePrivateReturn(command, state);
+      }
     }
     catch (error) {
       if (command.request.phase === "prepare" && unavailableRecord(error)) return returnResponse();
@@ -584,6 +639,10 @@ export async function transactManagerReturnDelivery(value: unknown): Promise<Jso
     if (!deliveryProfileMatches(command, state)) {
       throw new EffectRuntimeRequestError("saved return requires the exact delivery profile");
     }
+    if (command.request.phase === "settle" && command.request.private_readback !== undefined) {
+      return reconcilePrivateReturn(command, state);
+    }
+    if (TERMINAL.has(String(state.status))) return returnResponse();
     return command.request.phase === "prepare" ? prepareReturn(command, state) : finishReturn(command, state);
   });
 }

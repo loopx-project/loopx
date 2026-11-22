@@ -126,7 +126,7 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
     from ..chat_agent import CodexChatAgentError
     from ..capabilities.native_chat.antigravity_adapter import (
         _local_url,
-        _observed_turn_steps,
+        _read_trajectory_steps,
         _rpc_post,
         discover_antigravity_language_server,
     )
@@ -156,21 +156,35 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
             or trajectory.get("cascadeId") != args.conversation_id
         ):
             return None
-        raw = _rpc_post(
-            url,
-            token,
-            "GetCascadeTrajectorySteps",
-            {**payload, "startIndex": 0, "endIndex": total},
-            timeout=2,
-        ).get("steps")
-        if not isinstance(raw, list) or len(raw) != total:
+        def fetch_steps(offset: int, end: int) -> Any:
+            return _rpc_post(
+                url,
+                token,
+                "GetCascadeTrajectorySteps",
+                {**payload, "stepOffset": offset, "startIndex": offset, "endIndex": end},
+                timeout=2,
+            ).get("steps")
+
+        start = max(0, total - 128)
+        loaded = _read_trajectory_steps(fetch_steps, start=start, total=total)
+        if loaded is None:
             return None
-        indexed, covered = _observed_turn_steps(raw, 0, total)
+        indexed, covered = loaded
         inputs = [
             (index, step)
             for index, step in indexed
             if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
         ]
+        if not inputs and start:
+            loaded_full = _read_trajectory_steps(fetch_steps, start=0, total=total)
+            if loaded_full is None:
+                return None
+            indexed, covered = loaded_full
+            inputs = [
+                (index, step)
+                for index, step in indexed
+                if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
+            ]
         after = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
     except (ValueError, CodexChatAgentError, OSError):
         return None

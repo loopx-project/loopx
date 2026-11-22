@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import shlex
 import sys
 
 import pytest
@@ -297,6 +298,19 @@ def _closeout_args(context, *, lease=None, execution_loss=True):
             *_proof(lease or context["current_lease"])]
 
 
+def _projected_preview_args(cli_channel, lease):
+    [command] = [
+        action for action in cli_channel["next_cli_actions"]
+        if "--execution-loss-closeout" in action and "--dry-run" in action
+    ]
+    tokens = shlex.split(command)
+    assert tokens[-1] == "--dry-run"
+    args = tokens[1:]
+    args[args.index("<current-key>")] = lease["idempotency_key"]
+    args[args.index("<current-version>")] = str(lease["version"])
+    return args
+
+
 def _lease(context):
     if context["source_profile"]:
         inspected = effect_runtime_result("task_lease.inspect.native", {
@@ -403,11 +417,13 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
     original = _readback(context)
     _assert_original_prepared_generation(context, original)
     assert not original.writeback.receipts and not original.spend.receipts
+    argv = _closeout_args(context)
     if not source_profile:
         # A fresh guard recognizes the generation change before attempting to
         # re-enter the original guard. It offers only the administrative route.
+        route = str(tmp_path / "fixture launcher" / "loopx")
         code, recovery = context["cli"](
-            "quota", "should-run", "--context-delivery", "off", "--codex-app",
+            "--cli-bin", route, "quota", "should-run", "--context-delivery", "off", "--codex-app",
             "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", "needs-recovery",
         )
         assert code == 0, recovery
@@ -419,9 +435,8 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
         assert recovery["execution_obligation"]["delivery_allowed"] is False
         cli_channel = recovery["interaction_contract"]["cli_channel"]
         assert cli_channel["spend_allowed_now"] is False
-        assert any("--execution-loss-closeout" in cmd and "--dry-run" in cmd
-                   for cmd in cli_channel["next_cli_actions"])
-    argv = _closeout_args(context)
+        argv = _projected_preview_args(cli_channel, context["current_lease"])[:-1]
+        assert argv[:2] == ["--cli-bin", route]
     before = _unchanged_state(context)
     code, preview = context["cli"](*argv, "--dry-run")
     assert code == 0 and preview["would_close_without_spend"] is True, preview
@@ -479,3 +494,83 @@ def test_rejects_another_owner_and_stale_proof(tmp_path, monkeypatch, capsys, pr
     args = _closeout_args(context)
     args[args.index("--agent-id") + 1] = PEER
     _reject_without_effect(context, args)
+
+
+def test_execution_loss_closeout_uses_canonical_write_timeout(tmp_path, monkeypatch, capsys):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.quota import execution_preparation
+
+    context = _fixture(tmp_path, monkeypatch, capsys, "file", source_profile=False)
+    seen_timeouts: list[object] = []
+    real_call = effect_runtime.effect_runtime_result
+
+    def recording_call(method, request, *, timeout=None):
+        if method == "quota.execution_loss_closeout.commit":
+            seen_timeouts.append(timeout)
+        return real_call(method, request, timeout=timeout) if timeout is not None else real_call(method, request)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", recording_call)
+    monkeypatch.setattr(execution_preparation, "effect_runtime_result", recording_call)
+    code, closed = context["cli"](*_closeout_args(context))
+    assert code == 0, closed
+    assert seen_timeouts == [effect_runtime.CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("owner", [OWNER, PEER])
+@pytest.mark.parametrize("runtime_root_alias", [
+    pytest.param(False, id="direct-path"),
+    pytest.param(True, id="runtime-root-alias", marks=pytest.mark.skipif(
+        sys.platform == "win32", reason="requires directory symlink privileges",
+    )),
+])
+def test_recovery_guides_self_claim_only_for_the_retained_assignee(
+    tmp_path, monkeypatch, capsys, provider, owner, runtime_root_alias,
+):
+    fixture_path = tmp_path
+    if runtime_root_alias:
+        fixture_path = tmp_path / "storage-alias"
+        fixture_path.symlink_to(tmp_path, target_is_directory=True)
+    context = _fixture(fixture_path, monkeypatch, capsys, provider, source_profile=False,
+                       replacement_owner=owner)
+    lease = context["current_lease"]
+    code, released = context["cli"](
+        "task-lease", "release", "--goal-id", context["goal_id"], "--todo-id", context["todo"],
+        "--owner", owner, "--idempotency-key", lease["idempotency_key"],
+        "--expected-version", str(lease["version"]),
+    )
+    assert code == 0, released
+    code, recovery = context["cli"](
+        "quota", "should-run", "--context-delivery", "off", "--codex-app",
+        "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", "needs-control-writer",
+    )
+    assert code == 0, recovery
+    debt = recovery["unsettled_host_turn_recovery"]
+    assert debt["repair"] == "execution_loss_closeout"
+    assert debt["reason_code"] == "execution_loss_control_writer_required"
+    assert "execution_preparation" not in recovery
+    assert recovery["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert recovery["execution_obligation"]["delivery_allowed"] is False
+    cli_channel = recovery["interaction_contract"]["cli_channel"]
+    assert cli_channel["spend_allowed_now"] is False
+    claim_commands = [command for command in cli_channel["next_cli_actions"] if "todo claim" in command]
+    if owner == PEER:
+        assert not claim_commands
+        _assert_no_completion_or_debit(context)
+        return
+
+    [claim_command] = claim_commands
+    tokens = shlex.split(claim_command)
+    code, claimed = context["cli"](*tokens[tokens.index("todo"):])
+    assert code == 0, claimed
+    current = _lease(context)
+    assert current["owner"] == OWNER and current["lease_epoch"] > lease["lease_epoch"]
+    argv = _projected_preview_args(cli_channel, current)
+    code, preview = context["cli"](*argv)
+    assert code == 0 and preview["would_close_without_spend"] is True, preview
+    code, closed = context["cli"](*argv[:-1])
+    assert code == 0 and closed["settlement_progress"]["no_spend"] is True, closed
+    assert closed["settlement_identity"] == _readback(context).identity.value.as_dict()
+    code, replay = context["cli"](*argv[:-1])
+    assert code == 0 and replay["idempotent_replay"] is True and replay["appended"] is False, replay
+    _assert_no_completion_or_debit(context)

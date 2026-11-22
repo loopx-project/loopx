@@ -692,7 +692,7 @@ def _return_transaction(host, path, phase, request):
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
     if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
-            or result.get("action") not in {"skip", "private", "verify", "send"}
+            or result.get("action") not in {"skip", "private", "verify", "send", "reconcile_private"}
             or type(result.get("processed")) is not int or result["processed"] not in {0, 1}):
         raise RuntimeError("return delivery transaction result shape mismatch")
     return result
@@ -752,6 +752,16 @@ def _deliver_return(host, path, sender, frozen_route):
         with _return_source(host, path, frozen_route, source["grant"]) as current:
             return _return_transaction(host, path, phase,
                 {"facts": current, **checkpoint, **payload})
+
+    if plan["action"] == "reconcile_private":
+        try:
+            original = store.read_history_message(source["route"]["session_id"], plan["message_id"])
+        except (OSError, ValueError, KeyError):
+            return 0
+        if cancelled():
+            return 0
+        recovered = transact("settle", private_readback=original)
+        return recovered["processed"]
 
     def record_attempt(attempt):
         saved = transact("attempt", attempt=dict(attempt))

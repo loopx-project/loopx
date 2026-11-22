@@ -108,7 +108,9 @@ export function refreshRecovery(
     ? normalizeDeliveryWorkspaceSnapshot(prior.delivery_workspace) : null;
   const missingWorkspace = request.workspace_requested && workspaceRequirement !== "not_required" &&
     workspace === null;
-    //  Once appended, the recovery digests restore strict replay.
+  // The receipt-bound first workspace supplement of a material poll may author
+  // next-action/vision through normal refresh validation. Once appended, the
+  // recovery digests restore strict replay.
   const firstMonitorCloseout = missingWorkspace && isMaterialMonitorPoll(prior) &&
     prior.refresh_recovery == null && checkpoint === null;
   if (firstMonitorCloseout) {
