@@ -69,6 +69,14 @@ the manager workspace without granting new execution, audience or state permissi
 - Compare candidates by the importance and dependencies of their current
   commitments, reusable context, switching cost and independent-review
   boundaries—neither being online nor having fewer Todos is sufficient by itself.
+- Keep foreground Steward reception responsive (fast/slow lane separation): when
+  a request requires a multi-minute repository implementation, verification or PR
+  delivery loop and `view=agent_route` or `resolve-peer-route` verifies a
+  qualified authorized Goal worker with an active usable host route, delegate
+  that execution via `context_handoff` with `original_conversation` return
+  instead of running long coding loops inline on a shared foreground reception
+  queue. Keep concise status checks, triage, routing and quick explanations
+  inline.
 
 ## Deliver the owed handoff before separate self-repair
 
