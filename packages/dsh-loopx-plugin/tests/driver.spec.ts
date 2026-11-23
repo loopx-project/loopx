@@ -551,6 +551,452 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
   })
 }
 
+function jobNotice(kind = 'tool-jobs', form = 'notice'): UserMessage {
+  return { ...userMessage('Background work completed.'), source: { kind, form } } as unknown as UserMessage
+}
+
+describe('host job continuation', () => {
+  it.each(['attach', 'session-start', 'session-replacement', 'idle', 'command-done'])(
+    'admits beside a pending settled-job notice at %s', async boundary => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      host.appendEvent(userSkillInvocationEvent())
+      host.setStatus('running')
+      driver.observeAgent(host.agent)
+      const completed = jobNotice()
+      host.nextStep.push(completed)
+      host.setStatus('idle')
+      try {
+        if (boundary === 'attach') driver.observeAgent(host.agent)
+        else if (boundary === 'session-start') driver.onSessionStart(host.agent)
+        else if (boundary === 'session-replacement') {
+          host.replaceSession()
+          driver.onAgentStatus(host.agent, 'idle')
+        } else if (boundary === 'command-done') {
+          publishEvent(driver, host, sessionEvent('command/run', { commandId: 'command' }))
+          publishEvent(driver, host, sessionEvent('command/done', { commandId: 'command' }))
+        } else driver.onAgentStatus(host.agent, 'idle')
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift() as UserMessage
+        host.nextStep.shift()
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, completed)
+        driver.onInboxClaimed(host.agent, queued)
+        expect(await driver.onPreStep(host.agent, [queued, completed], new AbortController().signal,
+          async () => ({ kind: 'enter', messages: [queued, completed, jobNotice()] })))
+          .toMatchObject({ kind: 'enter' })
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each([['other-plugin', 'notice'], ['tool-jobs', 'snapshot']])(
+    'keeps %s/%s input behind the competing-input fence', async (kind, form) => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      host.nextStep.push(jobNotice(kind, form))
+      const driver = makeDriver(fixture)
+      try {
+        observeActivated(driver, host)
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(fixture.quotaCalls).toHaveLength(0)
+        expect(host.nextTurn).toHaveLength(0)
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it('keeps an admission alive when a settled-job notice arrives during its quota await', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    let release!: () => void
+    let started = false
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: async (file, args, options) => {
+        if (args.includes('should-run')) { started = true; await gate }
+        return fixture.runner(file, args, options)
+      } })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => started)
+      const completed = jobNotice()
+      host.nextStep.push(completed)
+      driver.onInboxInserted(host.agent, completed)
+      release()
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(fixture.quotaCalls).toHaveLength(1)
+    } finally { release(); await driver.dispose() }
+  })
+
+  it.each(['reject', 'aborted reject', 'filtered enter'])(
+    'restores the original claimed batch once after downstream %s', async outcome => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      const send = vi.spyOn(host.agent, 'send')
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift() as UserMessage
+        const context = { ...userMessage('runtime'), source: { kind: 'runtime-context', form: 'snapshot' } } as unknown as UserMessage
+        const completed = jobNotice()
+        const original = [queued, context, completed]
+        let downstreamCalls = 0
+        const controller = new AbortController()
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        expect(await driver.onPreStep(host.agent, original, controller.signal, async () => {
+          downstreamCalls += 1
+          original.splice(0, original.length)
+          if (outcome === 'aborted reject') controller.abort()
+          return outcome === 'filtered enter'
+            ? { kind: 'enter', messages: [context] }
+            : { kind: 'reject' }
+        })).toEqual({ kind: 'reject' })
+        expect(downstreamCalls).toBe(1)
+        expect(host.nextStep).toEqual([context, completed])
+        expect(send).toHaveBeenCalledTimes(2)
+        expect(send).toHaveBeenCalledWith(context, 'next-step', outcome !== 'aborted reject')
+        expect(send).toHaveBeenCalledWith(completed, 'next-step', outcome !== 'aborted reject')
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each(['throw', 'abort then throw'])(
+    'restores a claimed job notice exactly once after downstream %s', async outcome => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      const send = vi.spyOn(host.agent, 'send')
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift()!
+        const notice = jobNotice()
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        driver.onInboxClaimed(host.agent, notice)
+        const controller = new AbortController()
+        const error = new Error('downstream failure')
+        const abort = outcome === 'abort then throw'
+        await expect(driver.onPreStep(host.agent, [queued, notice], controller.signal, async () => {
+          if (abort) controller.abort()
+          throw error
+        })).rejects.toBe(error)
+        expect(send).toHaveBeenCalledExactlyOnceWith(notice, 'next-step', !abort)
+        expect(host.nextStep).toEqual([notice])
+        expect(host.nextTurn).toEqual([])
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it.each(['running', 'stopping'])(
+    'waits ten minutes for %s host jobs and starts a fresh window on the next Turn', async status => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const clock = schedulerClock()
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+      const list = vi.fn(() => [{ owner: host.agent.id, status }])
+      const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, runner: fixture.runner,
+        clock, retryDelaysMs: [0, 0], getJobs: () => ({ list }) })
+      try {
+        host.appendEvent(turnEndEvent(1))
+        observeActivated(driver, host)
+        await waitFor(() => clock.timers.length === 1)
+        expect(clock.timers[0]?.delay).toBe(600_000)
+        expect(list).toHaveBeenCalledWith(host.agent.id)
+        expect(fixture.quotaCalls).toHaveLength(0)
+        now.mockReturnValue(601_000)
+        clock.timers[0]?.callback()
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift() as UserMessage
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        publishEvent(driver, host, sessionEvent('turn/start', { turn: 1 }))
+        publishEvent(driver, host, sessionEvent('user/message', queued))
+        publishEvent(driver, host, turnEndEvent(2))
+        host.setStatus('idle')
+        driver.onAgentStatus(host.agent, 'idle')
+        await waitFor(() => clock.timers.length === 2)
+        expect(clock.timers[1]?.delay).toBe(600_000)
+        expect(fixture.quotaCalls).toHaveLength(1)
+        await driver.cancelQueued({ agent: host.agent, session: host.agent.session })
+        now.mockReturnValue(1_201_000)
+        clock.timers[1]?.callback()
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(fixture.quotaCalls).toHaveLength(1)
+      } finally { now.mockRestore(); await driver.dispose() }
+    },
+  )
+
+  it.each(['command without a Turn', 'Driver replacement'])(
+    'keeps the original host-job deadline across %s', async interruption => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const clock = schedulerClock()
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+      const createDriver = () => new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true,
+        clock, getJobs: () => ({ list: () => [{ owner: host.agent.id, status: 'running' }] }) })
+      let driver = createDriver()
+      try {
+        host.appendEvent(turnEndEvent(1))
+        observeActivated(driver, host)
+        await waitFor(() => clock.timers.length === 1)
+        expect(clock.timers[0]?.delay).toBe(600_000)
+        now.mockReturnValue(541_000)
+        if (interruption === 'command without a Turn') {
+          publishEvent(driver, host, sessionEvent('command/run', { commandId: 'command' }))
+          publishEvent(driver, host, sessionEvent('command/done', { commandId: 'command' }))
+        } else {
+          await driver.dispose('replacement')
+          driver = createDriver()
+          driver.observeAgent(host.agent)
+        }
+        await waitFor(() => clock.timers.length === 2)
+        expect(fixture.quotaCalls).toHaveLength(0)
+        expect(clock.timers[1]?.delay).toBe(60_000)
+        now.mockReturnValue(601_000)
+        clock.timers[1]?.callback()
+        await waitFor(() => host.nextTurn.length === 1)
+        expect(fixture.quotaCalls).toHaveLength(1)
+      } finally { now.mockRestore(); await driver.dispose() }
+    },
+  )
+
+  it.each([false, true])('reuses the deferred Core Turn identity (maintenance busy: %s)', async maintenanceBusy => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const clock = schedulerClock()
+    const list = vi.fn<() => Array<{ owner: Agent['id']; status: string }>>(() => [])
+    let started = false
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const makeTurnInstanceId = vi.fn(() => randomUUID())
+    const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, clock, getJobs: () => ({ list }),
+      makeTurnInstanceId, retryDelaysMs: [0, 0],
+      runner: async (file, args, options) => {
+        if (args.includes('should-run')) { started = true; await gate }
+        return fixture.runner(file, args, options)
+      } })
+    const enter = async (queued: UserMessage) => {
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, queued)
+      return driver.onPreStep(host.agent, [queued], new AbortController().signal,
+        async () => ({ kind: 'enter', messages: [queued] }))
+    }
+    try {
+      host.appendEvent(turnEndEvent(1))
+      observeActivated(driver, host)
+      await waitFor(() => started)
+      list.mockReturnValue([{ owner: host.agent.id, status: 'running' }])
+      release()
+      await waitFor(() => clock.timers.length > 0 || host.nextTurn.length > 0)
+      const early = host.nextTurn.shift()
+      expect(early === undefined ? undefined : (await enter(early)).kind).toBeUndefined()
+      expect(clock.timers[0]?.delay).toBe(600_000)
+      expect(fixture.quotaCalls).toHaveLength(1)
+
+      list.mockReturnValue([])
+      const notice = jobNotice()
+      if (maintenanceBusy) host.setMaintenanceBusy(true)
+      host.nextStep.push(notice)
+      driver.onInboxInserted(host.agent, notice)
+      if (maintenanceBusy) {
+        await waitFor(() => host.maintenanceCalls === 2)
+        expect(host.nextTurn).toEqual([])
+        host.setMaintenanceBusy(false)
+      }
+      await waitFor(() => host.nextTurn.length === 1)
+      const queued = host.nextTurn.shift()!
+      const turn = makeTurnInstanceId.mock.results[0]?.value
+      expect(queued.source).toMatchObject({ turnInstanceId: turn })
+      expect(makeTurnInstanceId).toHaveBeenCalledTimes(1)
+      expect(fixture.quotaCalls).toHaveLength(2)
+      expect(fixture.heartbeatCalls).toBe(1)
+      expect(await enter(queued)).toMatchObject({ kind: 'enter' })
+      expect(fixture.quotaCalls).toHaveLength(4)
+      for (const args of fixture.quotaCalls) expect(args[args.indexOf('--turn-instance-id') + 1]).toBe(turn)
+    } finally { release(); await driver.dispose() }
+  })
+
+  it.each(['command without a Turn', 'Driver replacement'])(
+    'keeps the deferred Core Turn when quota revalidation is interrupted by %s', async interruption => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const clock = schedulerClock()
+      const admission = Promise.withResolvers<void>()
+      const revalidation = Promise.withResolvers<void>()
+      const quotaTurns: Array<string | undefined> = []
+      let jobRunning = false
+      let turn = 0
+      const createDriver = () => new LoopXContinuationDriver({
+        isLiveAgent: () => true, clock, retryDelaysMs: [0, 0],
+        getJobs: () => ({ list: () => jobRunning ? [{ owner: host.agent.id, status: 'running' }] : [] }),
+        makeTurnInstanceId: () => `turn-${++turn}`,
+        runner: async (file, args, options) => {
+          if (args.includes('should-run')) {
+            const request = quotaTurns.push(args[args.indexOf('--turn-instance-id') + 1])
+            if (request === 1) await admission.promise
+            if (request === 2) await revalidation.promise
+          }
+          return fixture.runner(file, args, options)
+        },
+      })
+      let driver = createDriver()
+      try {
+        host.appendEvent(turnEndEvent(1))
+        observeActivated(driver, host)
+        await waitFor(() => quotaTurns.length === 1)
+        jobRunning = true
+        admission.resolve()
+        await waitFor(() => clock.timers.length === 1)
+        expect(host.nextTurn).toEqual([])
+
+        jobRunning = false
+        const notice = jobNotice()
+        host.agent.send(notice, 'next-step', false)
+        driver.onInboxInserted(host.agent, notice)
+        await waitFor(() => quotaTurns.length === 2)
+        expect(quotaTurns).toEqual(['turn-1', 'turn-1'])
+        if (interruption === 'command without a Turn') {
+          publishEvent(driver, host, sessionEvent('command/run', { commandId: 'command' }))
+          publishEvent(driver, host, sessionEvent('command/done', { commandId: 'command' }))
+          revalidation.resolve()
+        } else {
+          const disposed = driver.dispose('replacement')
+          revalidation.resolve()
+          await disposed
+          driver = createDriver()
+          driver.observeAgent(host.agent)
+        }
+        await waitFor(() => host.nextTurn.length === 1)
+        expect(host.nextTurn[0]?.source).toMatchObject({ turnInstanceId: 'turn-1' })
+        expect(quotaTurns).toEqual(['turn-1', 'turn-1', 'turn-1'])
+        expect(fixture.heartbeatCalls).toBe(1)
+      } finally {
+        admission.resolve()
+        revalidation.resolve()
+        await driver.dispose()
+      }
+    },
+  )
+
+  it.each(['withdrawn human input across replacement', 'Core owner stop'])(
+    'never queues the deferred Core Turn after %s', async interruption => {
+      let runnable = true
+      const fixture = runnerFixture({ shouldRun: () => runnable, schedulerMode: 'stop' })
+      const host = fakeAgent()
+      const clock = schedulerClock()
+      const list = vi.fn<() => Array<{ owner: Agent['id']; status: string }>>(() => [])
+      let started = false
+      let release!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const makeTurnInstanceId = vi.fn(() => randomUUID())
+      const createDriver = () => new LoopXContinuationDriver({
+        isLiveAgent: () => true, clock, getJobs: () => ({ list }), makeTurnInstanceId,
+        runner: async (file, args, options) => {
+          if (args.includes('should-run')) { started = true; await gate }
+          return fixture.runner(file, args, options)
+        },
+      })
+      let driver = createDriver()
+      try {
+        host.appendEvent(turnEndEvent(1))
+        observeActivated(driver, host)
+        await waitFor(() => started)
+        list.mockReturnValue([{ owner: host.agent.id, status: 'running' }])
+        release()
+        await waitFor(() => clock.timers.length === 1)
+        const deferredTurn = makeTurnInstanceId.mock.results[0]?.value
+        expect(host.nextTurn).toEqual([])
+        if (interruption === 'withdrawn human input across replacement') {
+          const message = userMessage('A different task')
+          host.agent.send(message, 'next-step', false)
+          driver.onInboxInserted(host.agent, message)
+          expect(host.agent.inbox.remove(message.id)).toBe(true)
+          await driver.dispose('replacement')
+          driver = createDriver()
+          driver.observeAgent(host.agent)
+          await waitFor(() => clock.timers.length === 2)
+        } else {
+          runnable = false
+        }
+        list.mockReturnValue([])
+        if (runnable) {
+          driver.onAgentStatus(host.agent, 'idle')
+        } else {
+          const notice = jobNotice()
+          host.agent.send(notice, 'next-step', false)
+          driver.onInboxInserted(host.agent, notice)
+        }
+        await waitFor(() => host.nextTurn.length > 0 || fixture.quotaCalls.length > 1)
+        expect(host.nextTurn.map(message => message.source)).not.toContainEqual(
+          expect.objectContaining({ turnInstanceId: deferredTurn }),
+        )
+        if (runnable) {
+          await waitFor(() => host.nextTurn.length === 1)
+          expect(host.nextTurn[0]?.source).toMatchObject({ turnInstanceId: makeTurnInstanceId.mock.results[1]?.value })
+        } else {
+          expect(host.nextTurn).toEqual([])
+          expect(fixture.quotaCalls[1]).toContain(deferredTurn)
+        }
+      } finally { release(); await driver.dispose() }
+    },
+  )
+
+  it('rechecks immediately when the last owned job settles and retires the fallback timer', async () => {
+    const fixture = runnerFixture({ shouldRun: false, schedulerMode: 'stop' })
+    const host = fakeAgent()
+    const clock = schedulerClock()
+    const clearTimeout = vi.spyOn(clock, 'clearTimeout')
+    const list = vi.fn(() => [
+      { owner: host.agent.id, status: 'running' },
+      { owner: undefined, status: 'running' },
+    ])
+    const driver = new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true,
+      clock, getJobs: () => ({ list }) })
+    try {
+      host.appendEvent(turnEndEvent(1))
+      observeActivated(driver, host)
+      await waitFor(() => clock.timers.length === 1)
+      list.mockReturnValue([{ owner: undefined, status: 'running' }])
+      const completed = jobNotice()
+      host.nextStep.push(completed)
+      driver.onInboxInserted(host.agent, completed)
+      await waitFor(() => fixture.quotaCalls.length === 1)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(clearTimeout).toHaveBeenCalledWith(clock.timers[0])
+      clock.timers[0]?.callback()
+      expect(fixture.quotaCalls).toHaveLength(1)
+      expect(host.nextTurn).toEqual([])
+    } finally { await driver.dispose() }
+  })
+
+  it('honors Core recovery attention after an expired host-job wait', async () => {
+    const fixture = runnerFixture({ shouldRun: false, schedulerMode: 'stop',
+      recovery: () => ({ schema_version: 'unsettled_host_turn_recovery_v0', state: 'attention_required' }) })
+    const host = fakeAgent()
+    const clock = schedulerClock()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const driver = new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true,
+      clock, getJobs: () => ({ list: () => [{ owner: host.agent.id, status: 'running' }] }) })
+    try {
+      host.appendEvent(turnEndEvent(1))
+      observeActivated(driver, host)
+      expect(clock.timers[0]?.delay).toBe(600_000)
+      expect(fixture.quotaCalls).toHaveLength(0)
+      now.mockReturnValue(601_000)
+      clock.timers[0]?.callback()
+      const capture = { agent: host.agent, session: host.agent.session }
+      await waitFor(() => driver.hasRecoveryAttention(capture, { goalId, loopxAgentId: agentId }))
+      expect(fixture.quotaCalls).toHaveLength(1)
+      expect(fixture.heartbeatCalls).toBe(0)
+      expect(clock.timers).toHaveLength(1)
+      expect(host.nextTurn).toEqual([])
+    } finally { now.mockRestore(); await driver.dispose() }
+  })
+})
+
 describe('driver diagnostic records', () => {
   it.each(['before', 'downstream'])('preserves user input with a throwing Cordis exporter in the %s batch', async phase => {
     const fixture = runnerFixture()
