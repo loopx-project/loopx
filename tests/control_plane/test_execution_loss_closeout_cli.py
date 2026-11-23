@@ -503,13 +503,14 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
         selection = replay_args.index("--todo-id")
         del replay_args[selection:selection + 2]
 
-        code, fenced = context["cli"](*replay_args)
-        assert code == 1, fenced
-        assert fenced["error_code"] == "heartbeat_receipt_identity_conflict"
-        assert "original task lease generation" in fenced["reason"]
-        assert fenced["heartbeat_receipt"]["settlement_identity"] == original.identity.value.as_dict()
-        assert "wait for the next real host Turn" in fenced["recommended_action"]
-        assert "execution-loss closeout without quota spend" in fenced["recommended_action"]
+        code, replay = context["cli"](*replay_args)
+        assert code == 0 and replay["ok"], replay
+        assert replay["normal_delivery_allowed"] is False
+        assert replay["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+        debt = replay["unsettled_host_turn_recovery"]
+        assert debt["repair"] == "execution_loss_closeout"
+        assert debt["prior_event_id"] == original.heartbeat_receipt["event_id"]
+        assert debt["settlement_effect_id"] == original.identity.value.effect_id
         assert _unchanged_state(context) == before_replay
 
         # A fresh guard recognizes the generation change before attempting to
