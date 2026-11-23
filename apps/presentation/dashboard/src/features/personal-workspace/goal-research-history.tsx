@@ -13,7 +13,7 @@ import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent, type ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
-import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
+import {ExploreCandidateLeaders, ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
 
 type CollectionSelection = {nodes: string[]; day: string | null};
@@ -188,7 +188,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
   const findingElement = (finding: ExploreHistoryEvent) => {
     const sections = findingSections(finding);
-    const content = <>{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
+    const content = <>{questionExpanded ? candidateLeaders(finding.node_id) : null}{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
       {sections ? <dl className="research-finding-sections"><dt>{sectionCopy.applicability}</dt><dd>{sections.applicability}</dd><dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd></dl> : null}
       {finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
       <details><summary>{zh ? "完整原文" : "Full original text"}</summary><h4>{originals.get(finding.event_id)?.title ?? finding.title}</h4><p>{originals.get(finding.event_id)?.summary ?? finding.summary}</p></details></details> : null}</>;
@@ -257,6 +257,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   }, [read.events, displayProjection, originalGoalId]);
   const value = history.value;
   const measurementFeedback = value?.measurementFeedback ?? [];
+  const candidateLeaders = (nodeId: string) => <ExploreCandidateLeaders feedback={measurementFeedback.filter(row => row.node_id === nodeId)} complete={read.complete} zh={zh}/>;
   const measurementSummary = (nodeId: string) => {
     const feedback = measurementFeedback.filter(item => item.node_id === nodeId);
     return feedback.length ? <ExploreMeasurements title={zh ? "最近记录与历史最佳" : "Latest recorded and historical best"}
@@ -680,6 +681,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
             {citation.source_id} · {zh ? "行" : "lines"} {citation.first_line}–{citation.last_line}
           </button>)}</div></> : null}
         {selected.findings.length && selectedFinding?.title === selected.latest.title && selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
+        {!questionExpanded ? candidateLeaders(selected.id) : null}
         {measurementSummary(selected.id)}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
         {selectedEdges.length ? <><h4>{copy.links}</h4><ul>{selectedEdges.map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul></> : null}

@@ -1,4 +1,5 @@
 import type {ExploreMeasurement, ExploreMeasurementFeedback} from "../../../../../../loopx/control_plane/capabilities/explore_measurements.js";
+import {Fragment} from "react";
 import {ContextHelp} from "./context-help";
 import "./explore-measurements.css";
 
@@ -57,5 +58,39 @@ export function ExploreMeasurements({measurements, feedback = [], zh, title}: {
       </section>;
       })}
     </details>
+  </section>;
+}
+
+/** The question reader shows only leaders from comparable, loaded measurements. */
+export function ExploreCandidateLeaders({feedback, complete, zh}: {
+  feedback: ExploreMeasurementFeedback[]; complete: boolean; zh: boolean;
+}) {
+  if (!feedback.length) return null;
+  const label = complete ? (zh ? "各指标的最佳记录" : "Best recorded by metric")
+    : (zh ? "已读记录中的最佳表现" : "Best in loaded records");
+  const row = (item: ExploreMeasurementFeedback) => {
+    const leaders = item.candidate_leaders?.leaders ?? [];
+    const count = item.candidate_leaders?.measured_candidates ?? 0;
+    const lead = leaders[0];
+    const key = JSON.stringify([item.metric, item.unit, item.higher_is_better, item.comparison_scope, item.input_revision, item.evaluation_ref]);
+    return <details className="research-candidate-row" key={key}>
+      <summary>
+        <span>{item.metric} {item.higher_is_better ? "↑" : "↓"}</span>
+        <strong>{!lead ? (zh ? "未测量" : "Not measured") : leaders.length > 1
+          ? (zh ? `${leaders.length} 个候选并列` : `${leaders.length} candidates tied`) : lead.candidate_ref}</strong>
+        {lead ? <span>{formatExploreMeasurementValue(lead.value, zh)} {item.unit} · {zh ? `${count} 个实测候选` : `${count} measured candidate${count === 1 ? "" : "s"}`}</span> : null}
+      </summary>
+      <dl className="research-finding-sections">
+        <dt>{zh ? "比较范围" : "Comparison scope"}</dt><dd>{item.comparison_scope}</dd>
+        <dt>{zh ? "输入版本" : "Input revision"}</dt><dd>{item.input_revision}</dd>
+        <dt>{zh ? "评测" : "Evaluation"}</dt><dd>{item.evaluation_ref}</dd>
+        {leaders.map(point => <Fragment key={point.candidate_ref}><dt>{point.candidate_ref}</dt><dd><code>{point.evidence_ref}</code></dd></Fragment>)}
+      </dl>
+    </details>;
+  };
+  return <section className="research-candidate-leaders" aria-label={label}>
+    <h4>{label}</h4>{feedback.slice(0, 3).map(row)}
+    {feedback.length > 3 ? <details><summary>{zh ? `其余 ${feedback.length - 3} 项指标` : `Show ${feedback.length - 3} more metrics`}</summary>
+      {feedback.slice(3).map(row)}</details> : null}
   </section>;
 }
