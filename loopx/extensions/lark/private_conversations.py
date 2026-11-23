@@ -34,6 +34,7 @@ from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
+from . import private_mention_topics
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .event_collector_runtime import enrich_lark_event_reply_context
@@ -632,8 +633,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
                       session_id=admitted["session_id"], turn_id=admitted["turn_id"],
                       response=admitted.get("response"), response_code=admitted.get("response_code"))
-        if admitted.get("context_recovery"):
-            record["context_recovery"] = admitted["context_recovery"]
+        if recovery := admitted.get("context_recovery") or private_mention_topics.replay_presentation(admitted):
+            record["context_recovery"] = recovery
         if admitted.get("mention_delivery"):
             record["mention_delivery"] = admitted["mention_delivery"]
         _atomic_write_json(path, record)
@@ -967,6 +968,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                                 raise ValueError("native mention source changed")
 
                         preflight = verify_mention
+                        native_mention = private_mention_topics.steer_in_topic(self, path, record, binding)
                     admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                         request_ref=request, message=text, command=command, attachments=attachments,
                         defer_background_stop=defer_background_stop, source_preflight=preflight,
@@ -1613,7 +1615,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         paths.append(path)
                     else:
                         self._record_context_recovery_noop_backoff(path, row, stagger_first=True)
-        return [*paths, *self._web_projection_paths()]
+        return [*paths, *private_mention_topics.pending_replays(self, set(paths)), *self._web_projection_paths()]
 
     def is_recovery_path(self, path: Path) -> bool:
         """Schedule recovery of persisted attempts after fresh replies."""
@@ -1719,6 +1721,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         row = _read_json(path)
         if "triage" in row:
             return triage.reconcile(self, path)
+        if private_mention_topics.reconcile_rejection(self, path, row):
+            return 0
         historical_images = row.get("historical_answer_images")
         if (row.get("status") == "delivered" and (
                 (historical_images or {}).get("status") == "pending"
