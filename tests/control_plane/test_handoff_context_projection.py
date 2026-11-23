@@ -109,6 +109,17 @@ def test_real_canonical_cli_handoff_is_read_only_and_recovers_original_source(tm
     assert indexed["handoff_note"]["handoff_id"] == "handoff_" + original.removeprefix("todo_")
     again = cli("todo", "list", "--goal-id", "goal-a", "--todo-id", original)
     assert again["todo"] == record and again["authority_read"]["provider_revision"] == revision
+    update = ["todo", "update", "--goal-id", "goal-a", "--todo-id", original, "--agent-id", "agent-a",
+              "--note", "Recheck the updated requirement", "--update-operation-id", "handoff-revised",
+              "--update-expected-provider-revision"]
+    assert cli(*update, first["authority_read"]["provider_revision"], succeeds=False)["ok"] is False
+    cli(*update, revision)
+    cli(*update, revision)  # Lost reply to an accepted update.
+    revised = cli("todo", "list", "--goal-id", "goal-a", "--todo-id", original)
+    record, revision = revised["todo"], revised["authority_read"]["provider_revision"]
+    indexed = next(row for row in cli("status", "--goal-id", "goal-a")["todo_index"]["items"] if row["todo_id"] == original)
+    assert indexed["handoff_note"]["summary"] == record["note"] == "Recheck the updated requirement"
+    assert indexed["handoff_note"]["successor_todo_ids"] == [successor]
     display = state.read_bytes()
     backend = runtime / "authority" / f"{provider}-v0"
     offline = backend.with_name(backend.name + "-offline")
