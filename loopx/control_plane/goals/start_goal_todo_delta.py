@@ -191,6 +191,7 @@ def todo_authoring_steps(
         "Repeat goal_requirements.inspect_command from the planning checkpoint after linking."
     )
     if not existing_runnable_frontier:
+        batch_prefix = f"{prefix} --format json todo plan-batch"
         return [
             {
                 "id": "plan_ranked_todos",
@@ -208,11 +209,16 @@ def todo_authoring_steps(
                 "id": "write_ordered_todos",
                 "kind": "operator_or_agent_actions",
                 "command_template": add_template,
+                "batch_command_template": (
+                    f"{batch_prefix} {route} --project . "
+                    "--document '<proposal.json>' --execute"
+                ),
+                "batch_schema_command": f"{batch_prefix} --schema",
                 "purpose": (
                     "write only the current checkpoint Todo; the existing replan path "
                     "qualifies any successor after completion evidence"
                     if fine_grained
-                    else "write todos in planner order; capability successors preserve "
+                    else "write todos in planner order (or submit one initial outcome + Todo batch via batch_command_template when requirements and Todos are both empty); capability successors preserve "
                     "the admitted action_kind and target_key for later quota re-entry"
                 ),
             },

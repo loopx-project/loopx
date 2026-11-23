@@ -29,6 +29,12 @@ from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
 )
+from ..control_plane.goals.planning_batch import (
+    DirectPlanningBatchBackend,
+    apply_planning_batch,
+    planning_batch_schema,
+    render_planning_batch_markdown,
+)
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
@@ -58,6 +64,7 @@ from .todo_argument_validation import (
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_execution_recovery_options,
+    validate_todo_plan_batch_options,
     validate_todo_plan_options,
     validate_todo_project_markdown_options,
     validate_todo_receipt_options,
@@ -178,6 +185,8 @@ def handle_todo_command(
     renderer = render_todo_markdown
     if args.todo_command == "plan":
         renderer = render_task_planning_packet
+    elif args.todo_command == "plan-batch":
+        renderer = render_planning_batch_markdown
     elif args.todo_command == "receipt":
         renderer = _render_todo_receipt
     elif args.todo_command == "result-read":
@@ -218,6 +227,28 @@ def handle_todo_command(
                 text=args.text,
                 project=Path(args.project).expanduser() if args.project else None,
             )
+        elif args.todo_command == "plan-batch":
+            import json
+
+            validate_todo_plan_batch_options(args)
+            if getattr(args, "schema", False):
+                payload = {"ok": True, "dry_run": True, **planning_batch_schema()}
+            else:
+                proposal = json.loads(Path(args.document).expanduser().read_text(encoding="utf-8"))
+                payload = apply_planning_batch(
+                    proposal=proposal,
+                    backend=DirectPlanningBatchBackend(
+                        registry_path=registry_path,
+                        runtime_root_arg=runtime_root_arg,
+                        goal_id=args.goal_id,
+                        agent_id=args.agent_id,
+                        project=Path(args.project).expanduser() if args.project else None,
+                        text=args.text,
+                    ),
+                    execute=bool(args.execute) and not bool(args.dry_run),
+                    require_input_digest=bool(args.text),
+                    operation_id=args.operation_id,
+                )
         elif args.todo_command == "receipt":
             validate_todo_receipt_options(args)
             runtime_root = resolve_runtime_root(
