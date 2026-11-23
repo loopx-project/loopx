@@ -190,6 +190,24 @@ export const researchNativeReadingScenario = {
             await page.waitForFunction(() => document.activeElement?.getAttribute("data-native-submission") === "1");
             assert(await chart.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
           }
+          if (c.id === "series-25") {
+            const action = chart.locator(".research-native-series-evidence");
+            await picker.selectOption("result-0");
+            await action.press("Enter");
+            await citation.getByText(/行 1–1$/).waitFor();
+            await picker.selectOption("result-12");
+            assert.equal(await citation.getByText(/行 1–1$/).count(), 1, "The open excerpt remains bound to the original submission");
+            await citation.press("Escape");
+            await page.waitForFunction(() => document.activeElement?.matches(".research-native-series-picker select"), undefined, {timeout: 4000});
+            assert.equal(await picker.inputValue(), "result-12");
+            await page.keyboard.press("Tab");
+            assert.equal(await action.evaluate(e => document.activeElement === e && e.dataset.nativeSubmission === "13"), true);
+            await page.keyboard.press("Enter");
+            await citation.getByText(/行 13–13$/).waitFor();
+            assert.match(await citation.innerText(), /Synthetic observation 12: value 7/);
+            await citation.press("Escape");
+            await page.waitForFunction(() => document.activeElement?.getAttribute("data-native-submission") === "13");
+          }
         }
         if (c.id === "invalid-first") {
           const measureUnknownRetention = () => native.evaluate(section => {

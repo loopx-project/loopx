@@ -21,6 +21,8 @@ export type ResearchProgressPack = {pack_id: string; title: string; scope: Traje
   solver_usage?: {artifact: string; artifact_sha256: string; projection: TrajectorySolverUsage; applicability: "current" | "historical"; reason_code: string | null};
   native_outcomes?: {artifact: string; artifact_sha256: string; projection: TrajectoryNativeOutcomes; samples?: NativeOutcomeSample[];
     applicability: "current" | "historical"; reason_code: string | null}};
+export type ResearchEvidenceOrigin = HTMLElement | (() => HTMLElement | null);
+type ReadCitation = (citation: AssessmentCitation, origin?: ResearchEvidenceOrigin) => void;
 export const metricCopy: Record<TrajectoryMetric, [string, string, string, string]> = {
   goal_alignment: ["目标关联", "Goal alignment", "干预是否关联原目标的真实瓶颈", "Does the intervention address a bottleneck of the original objective?"],
   benefit_test: ["收益检验", "Benefit test", "是否真正检验原目标收益，而非只完成前置诊断", "Was original-objective utility tested, beyond diagnostic prerequisites?"],
@@ -151,10 +153,11 @@ const nativeSubmissionTargetSize = 24;
 
 function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
   samples: NativeOutcomeSample[]; outcomes: TrajectoryNativeOutcomes; zh: boolean;
-  onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void;
+  onCitation: ReadCitation;
 }) {
   const [selectedId, setSelectedId] = useState("");
   const plotRef = useRef<HTMLDivElement>(null);
+  const pickerRef = useRef<HTMLSelectElement>(null);
   const [size, setSize] = useState({width: 0, height: 0});
   useLayoutEffect(() => {
     const element = plotRef.current;
@@ -223,7 +226,7 @@ function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
         <span>{positionLabel(first.submission_index)}</span><span>{positionLabel(last.submission_index)}</span>
       </div>
       {!directPoints && <label className="research-native-series-picker">{zh ? "定位提交" : "Find submission"}
-        <select value={selected.sample.result_id} onChange={event => setSelectedId(event.target.value)}>
+        <select ref={pickerRef} value={selected.sample.result_id} onChange={event => setSelectedId(event.target.value)}>
           {samples.map(sample => <option key={sample.result_id} value={sample.result_id}>{label(sample)}</option>)}
         </select>
       </label>}
@@ -236,8 +239,10 @@ function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
           aria-label={directPoints ? label(sample) : `${zh ? "查看原始证据" : "Read original evidence"} · ${label(sample)}`}
           title={directPoints ? label(sample) : undefined}
           onClick={event => {
+            const origin = event.currentTarget;
             setSelectedId(sample.result_id);
-            onCitation(sample.citation, event.currentTarget);
+            // Changing the picker can replace this button while its excerpt is open.
+            onCitation(sample.citation, () => origin.isConnected ? origin : pickerRef.current);
           }}>
           {!directPoints && (zh ? "查看原始证据" : "Read original evidence")}
         </button>)}
@@ -245,7 +250,7 @@ function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
   </figure>;
 }
 
-function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["native_outcomes"]; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["native_outcomes"]; zh: boolean; onCitation: ReadCitation}) {
   const outcomes = native?.projection;
   if (!native || !outcomes) return <ContextHelp label={zh ? "原生测量未采集" : "Native measurements not captured"} icon={CircleHelp}><p className="research-native-empty">{zh ? "原生测量 · 未采集" : "Native measurements · not captured"}</p></ContextHelp>;
   const historical = native.applicability === "historical";
@@ -376,7 +381,7 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
   </div>;
 }
 
-export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, onUsageTurn, onUsageComparison, usageComparisonScope, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: (Pick<ResearchProgressPack, "pack_id" | "title"> & Partial<ResearchProgressPack>)[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onUsageComparison?: ReadUsageComparison; usageComparisonScope?: string; onUsageTurn?: (turnId: string, origin: HTMLButtonElement) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, onUsageTurn, onUsageComparison, usageComparisonScope, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: (Pick<ResearchProgressPack, "pack_id" | "title"> & Partial<ResearchProgressPack>)[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onUsageComparison?: ReadUsageComparison; usageComparisonScope?: string; onUsageTurn?: (turnId: string, origin: HTMLButtonElement) => void; onCitation: ReadCitation}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
   const historical = p?.applicability === "historical";
   const resultHelp = historical ? (result ? (zh ? "历史分析 · 当前判断未核验" : "Historical analysis · Current judgments unverified")
