@@ -359,8 +359,13 @@ def validate_todo_plan_batch_options(args: argparse.Namespace) -> None:
         "todo plan-batch only accepts --goal-id, --agent-id, --document, --text, --project, --operation-id, --dry-run, --execute, --schema and --format; unsupported: ",
     )
     if getattr(args, "schema", False):
-        if any(getattr(args, field, None) for field in ("document", "text", "operation_id", "execute", "dry_run")):
+        if any(getattr(args, field, None) for field in ("document", "operation_id", "execute", "dry_run")):
             raise ValueError("todo plan-batch --schema is read-only and cannot be combined with proposal execution flags")
+        if getattr(args, "text", None) is not None:
+            if not str(args.text).strip():
+                raise ValueError("todo plan-batch --schema requires non-empty --text when supplied")
+            if not getattr(args, "goal_id", None) or not getattr(args, "agent_id", None):
+                raise ValueError("todo plan-batch --schema with --text requires --goal-id and --agent-id")
         return
     if not getattr(args, "goal_id", None):
         raise ValueError("todo plan-batch requires --goal-id (or pass --schema)")

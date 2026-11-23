@@ -32,7 +32,7 @@ from ..control_plane.goals.first_party_host_admission import (
 from ..control_plane.goals.planning_batch import (
     DirectPlanningBatchBackend,
     apply_planning_batch,
-    planning_batch_schema,
+    product_planning_batch_schema,
     render_planning_batch_markdown,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
@@ -232,7 +232,16 @@ def handle_todo_command(
 
             validate_todo_plan_batch_options(args)
             if getattr(args, "schema", False):
-                payload = {"ok": True, "dry_run": True, **planning_batch_schema()}
+                payload = {
+                    "ok": True,
+                    "dry_run": True,
+                    **product_planning_batch_schema(
+                        registry_path=registry_path,
+                        goal_id=getattr(args, "goal_id", None),
+                        agent_id=getattr(args, "agent_id", None),
+                        text=getattr(args, "text", None),
+                    ),
+                }
             else:
                 proposal = json.loads(Path(args.document).expanduser().read_text(encoding="utf-8"))
                 payload = apply_planning_batch(

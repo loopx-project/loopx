@@ -248,7 +248,7 @@ def build_task_planning_packet(
         "planning_batch": {
             "schema_version": "loopx_planning_batch_proposal_v1",
             "applicable": batch_applicable,
-            "schema_command": f"{cli} todo plan-batch --schema",
+            "schema_command": f"{batch_route} --schema",
             "preview_command_template": f"{batch_route} --document '<proposal.json>' --dry-run",
             "apply_command_template": f"{batch_route} --document '<proposal.json>' --execute",
         },

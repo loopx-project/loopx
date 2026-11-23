@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 from typing import Protocol, TypedDict, cast
 
+from ...agent_registry import require_registered_agent_id
 from ..todos.contract import (
     TODO_ACTION_KIND_PATTERN,
     TODO_TASK_CLASS_ADVANCEMENT,
@@ -87,6 +88,7 @@ def planning_batch_schema(
     schema_version: str = PLANNING_BATCH_SCHEMA_VERSION,
     require_input_digest: bool = False,
     allow_product_identities: bool = True,
+    input_digest: str | None = None,
 ) -> dict[str, object]:
     """Return the complete self-contained JSON proposal schema and field rules."""
     required_fields = (
@@ -210,7 +212,7 @@ def planning_batch_schema(
             "description": "Optional stable batch operation prefix for idempotent retries.",
         }
     example: dict[str, object] = {
-        **({"input_digest": "<packet.input_digest>"} if require_input_digest else {}),
+        **({"input_digest": input_digest or "<packet.input_digest>"} if require_input_digest else {}),
         "expected_provider_revision": "<goal_acceptance.provider_revision>",
         "outcome": {
             "objective": "Concise task objective (<=1024 UTF-16 code units).",
@@ -238,6 +240,36 @@ def planning_batch_schema(
         "fields": fields,
         "example": example,
     }
+
+
+def product_planning_batch_schema(
+    *,
+    registry_path: Path,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    text: str | None = None,
+) -> dict[str, object]:
+    """Return the general batch schema, binding input_digest when checkpoint --text is given."""
+    if text is None:
+        return planning_batch_schema()
+    cleaned_text = str(text)
+    if not cleaned_text.strip() or not goal_id or not agent_id:
+        raise ValueError(
+            "todo plan-batch --schema with --text requires --goal-id, --agent-id, and non-empty --text"
+        )
+    canonical_goal_id = goal_id.strip()
+    canonical_agent_id = require_registered_agent_id(
+        registry_path=registry_path,
+        goal_id=canonical_goal_id,
+        agent_id=agent_id,
+        field="agent_id",
+    )
+    digest = compute_task_planning_input_digest(
+        goal_id=canonical_goal_id,
+        agent_id=canonical_agent_id,
+        text=cleaned_text,
+    )
+    return planning_batch_schema(require_input_digest=True, input_digest=digest)
 
 
 def render_planning_batch_guidance(
@@ -790,13 +822,16 @@ def apply_planning_batch(
         _declared_outcome(acceptance, declaration)
 
     todos = cast(list[dict[str, str]], validated["todos"])
-    if not execute:
+    if not execute or current_rev == revision:
         preview_acceptance = backend.refine_outcome(
             declaration, revision, declare_operation_id, execute=False
         )
         if current_rev == revision:
             for index, item in enumerate(todos):
-                backend.add_todo(item, f"{effective_operation}:todo:{index}", execute=False)
+                backend.add_todo(
+                    item, f"{effective_operation}:todo:{index}:preview", execute=False
+                )
+    if not execute:
         return {
             "ok": True,
             "command": "plan-batch",

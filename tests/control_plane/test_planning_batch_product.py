@@ -564,3 +564,213 @@ def test_product_cli_interrupted_retry_with_explicit_outcome_id_rejects_mutated_
     assert final_pkt["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == recovered["todo_ids"]
     by_id = {item["todo_id"]: item for item in final_pkt["existing_todos"]}
     assert by_id[recovered["todo_ids"][1]]["text"] == "[P1] Original second Todo"
+
+
+def test_product_cli_plan_batch_rejects_todo_priority_conflict_before_any_write(
+    product_goal: dict[str, object],
+):
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Validate full ordered Todo list before committing Outcome or first Todo."
+
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+    before = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    initial_rev = str(before["goal_acceptance"]["provider_revision"])
+    conflicting = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": initial_rev,
+        "outcome_id": "priority-precheck-outcome",
+        "operation_id": "priority-precheck-op",
+        "outcome": {
+            "objective": "Reject Todo priority conflict before writing Outcome.",
+            "requirements": [{"id": "req-priority", "description": "Atomic pre-write validation."}],
+            "source": {"ref": "checkpoint:priority", "summary": "Priority precheck boundary."},
+        },
+        "todos": [
+            {"text": "[P0] Valid first step", "action_kind": "implement"},
+            {"text": "[P2] Verify the requested result", "action_kind": "validate", "priority": "P0"},
+        ],
+    }
+    proposal_path = project / "conflicting-priority.json"
+    proposal_path.write_text(json.dumps(conflicting), encoding="utf-8")
+
+    # Direct --execute must fail before writing the Outcome or first Todo.
+    failed = _run_cli(
+        *prefix,
+        "todo",
+        "plan-batch",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        agent_id,
+        "--project",
+        str(project),
+        "--text",
+        task_text,
+        "--document",
+        str(proposal_path),
+        "--execute",
+        expected_rc=1,
+    )
+    assert failed["ok"] is False
+
+    mid = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    assert mid["goal_acceptance"]["provider_revision"] == initial_rev
+    assert mid["existing_todos"] == []
+    assert (
+        mid["goal_acceptance"]["goal_acceptance_contract"]
+        .get("outcome_requirements", {})
+        .get("outcomes", [])
+        == []
+    )
+
+    # Fixing only Todo 2's priority and retrying with the same batch identity commits cleanly.
+    fixed = {
+        **conflicting,
+        "todos": [
+            conflicting["todos"][0],
+            {"text": "[P2] Verify the requested result", "action_kind": "validate", "priority": "P2"},
+        ],
+    }
+    proposal_path.write_text(json.dumps(fixed), encoding="utf-8")
+    applied = _run_cli(
+        *prefix,
+        "todo",
+        "plan-batch",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        agent_id,
+        "--project",
+        str(project),
+        "--text",
+        task_text,
+        "--document",
+        str(proposal_path),
+        "--execute",
+    )
+    assert applied["status"] == "ready"
+    assert applied["changed"] is True
+    assert len(applied["todo_ids"]) == 2
+    after = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    verified = validate_task_plan_readback(
+        {"input_digest": applied["input_digest"], "status": applied["status"], "todo_ids": applied["todo_ids"]},
+        before,
+        after,
+    )
+    assert verified["state_readback_verified"] is True
+
+
+def test_product_cli_checkpoint_three_command_example_round_trip(
+    product_goal: dict[str, object],
+):
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Verify checkpoint schema_command, preview_command_template, and apply_command_template round-trip."
+
+    packet = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    batch_meta = packet["planning_batch"]
+
+    def run_cmd(tokens: list[str]) -> dict[str, object]:
+        assert tokens[0] == "loopx"
+        proc = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", *tokens[1:]],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return json.loads(proc.stdout)
+
+    # 1. Checkpoint schema_command requires input_digest and pre-fills packet.input_digest.
+    schema = run_cmd(shlex.split(str(batch_meta["schema_command"])))
+    assert schema["required_fields"][0] == "input_digest"
+    assert schema["fields"]["input_digest"]["optional"] is False
+    example = dict(schema["example"])
+    assert example["input_digest"] == packet["input_digest"]
+    example["expected_provider_revision"] = packet["goal_acceptance"]["provider_revision"]
+
+    proposal_path = project / "checkpoint-example.json"
+    proposal_path.write_text(json.dumps(example), encoding="utf-8")
+
+    # 2. Preview template validates cleanly without mutating state.
+    preview_tokens = shlex.split(
+        str(batch_meta["preview_command_template"]).replace("'<proposal.json>'", shlex.quote(str(proposal_path)))
+    )
+    preview = run_cmd(preview_tokens)
+    assert preview["status"] == "planned"
+    assert preview["dry_run"] is True
+    assert preview["input_digest"] == packet["input_digest"]
+
+    mid = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    assert mid["existing_todos"] == []
+    assert mid["goal_acceptance"]["provider_revision"] == packet["goal_acceptance"]["provider_revision"]
+
+    # 3. Apply template commits using that same example and passes readback.
+    apply_tokens = shlex.split(
+        str(batch_meta["apply_command_template"]).replace("'<proposal.json>'", shlex.quote(str(proposal_path)))
+    )
+    applied = run_cmd(apply_tokens)
+    assert applied["status"] == "ready"
+    assert applied["changed"] is True
+    assert applied["input_digest"] == packet["input_digest"]
+    after = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    verified = validate_task_plan_readback(
+        {"input_digest": applied["input_digest"], "status": applied["status"], "todo_ids": applied["todo_ids"]},
+        packet,
+        after,
+    )
+    assert verified["state_readback_verified"] is True
+
+    # Standalone plan-batch --schema retains optional input_digest without example placeholder.
+    standalone = run_cmd(["loopx", "--format", "json", "todo", "plan-batch", "--schema"])
+    assert standalone["required_fields"] == ["expected_provider_revision", "outcome", "todos"]
+    assert "input_digest" not in standalone["example"]

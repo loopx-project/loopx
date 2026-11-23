@@ -215,7 +215,11 @@ def todo_authoring_steps(
                     f"{batch_prefix} {route} --project .{text_arg} "
                     "--document '<proposal.json>' --execute"
                 ),
-                "batch_schema_command": f"{batch_prefix} --schema",
+                "batch_schema_command": (
+                    f"{batch_prefix} --schema {route}{text_arg}"
+                    if planning_text is not None
+                    else f"{batch_prefix} --schema"
+                ),
                 "purpose": (
                     "write only the current checkpoint Todo; the existing replan path "
                     "qualifies any successor after completion evidence"
