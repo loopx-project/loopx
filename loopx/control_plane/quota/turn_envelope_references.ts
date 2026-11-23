@@ -14,6 +14,7 @@ import {
 } from "./diagnostic_projection.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction } from "./effective_action.generated.ts";
 import { scopedReplanYardstickReversal } from "./progressive_context.ts";
+import { resolveSettlementWorkspaceRequirement } from "./settlement_workspace_causality.ts";
 import {
   COMPLETE_TURN_DECISION_VERSION, COMPLETE_TURN_HASH_CODEC, canonicalHash, canonicalValue,
   compactFields, completeSourceHash, decisionSourceHash, integer, isNonEmptyFilePath,
@@ -818,13 +819,19 @@ function projectReplanView(
     const settlementCommand = directWriter !== undefined
       ? directWriter + " --settle-turn --settlement-receipt"
       : typeof refresh?.command_template === "string" ? refresh.command_template + " --settle-turn" : undefined;
+    const needsDeliveryWorkspace = directWriter !== undefined && resolveSettlementWorkspaceRequirement(
+      jsonObject(receipt.delivery_workspace_causality), "autonomous_replan",
+    ).requirement !== "not_required";
     return retain({...common, ...sourceRead, writeback_contract: retain(boundContract, originalContract),
       required_outcome: packet.required_outcome, allowed_terminal: packet.allowed_terminal,
       ...(packet.stride_control ? {stride_control: stride} : {}),
       writeback,
       ...(settlementCommand === undefined ? {} : {
         settlement_command: settlementCommand,
-        settlement_usage: "After validation, fill this refresh command from the actual result. It follows only the verified owed quota step on this same binding. " +
+        settlement_usage: "After validation, fill this refresh command from the actual result. " +
+          (needsDeliveryWorkspace ? "Run from the workspace that produced the delivery or pass its path with --delivery-workspace-path. " +
+            "When peer isolation applies, use the independent Git worktree that produced the delivery. " : "") +
+          "It follows only the verified owed quota step on this same binding. " +
           "Do not also execute a quota step after settled readback; retain the original plan for completion, blocked/no-spend closeout and failure recovery.",
       })}, packet, ["required_outcome", "allowed_terminal"]);
   }
