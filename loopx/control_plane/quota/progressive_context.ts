@@ -7,7 +7,7 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
-import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
+import {GOAL_OUTCOMES_SCHEMA, isGoalOutcomeIdentifier, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
@@ -546,7 +546,8 @@ export function progressiveContextPlan(request: JsonObject,
     if (declaration?.schema_version !== GOAL_OUTCOMES_SCHEMA || !Array.isArray(declaration.outcomes)) continue;
     declaration.outcomes.forEach((value, i) => {
       const row = jsonObject(value);
-      if (!row || !known(row, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
+      if (!row || !known(row, ["id", "owner_agent_id", "declaration_owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
+          || (row.declaration_owner_agent_id !== undefined && !isGoalOutcomeIdentifier(row.declaration_owner_agent_id))
           || typeof row.id !== "string" || typeof row.objective !== "string" || !Array.isArray(row.requirements)
           || !Array.isArray(row.sources) || row.sources.some(value => {
             const source = jsonObject(value);
@@ -559,7 +560,8 @@ export function progressiveContextPlan(request: JsonObject,
             || typeof requirement.id !== "string" || typeof requirement.description !== "string") return;
         if (requirement.agent_review === undefined) continue;
         const review = jsonObject(requirement.agent_review);
-        if (!review || !known(review, ["id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+            || (review.recorded_for_agent_id !== undefined && !isGoalOutcomeIdentifier(review.recorded_for_agent_id))
             || typeof review.note !== "string" || !Array.isArray(review.evidence_refs)
             || review.evidence_refs.some(ref => typeof ref !== "string")
             || !["met", "unmet", "uncertain"].includes(String(review.conclusion))
@@ -893,8 +895,9 @@ function deferredOutcomesInstruction(context: JsonObject, deferredOutcomes: read
   if (!instruction) return undefined;
   const notice =
     "This opening omits full requirement bodies for large suggested outcomes, delivering only their id, objective and revision. "
-    + "Before dependent work, read each applicable complete outcome from recovery.command "
-    + `(--select <pointer>): ${deferredOutcomes.join(", ")}. `
+    + "Before dependent work, read each applicable complete outcome. Select its parent from recovery.command for requirements and current checks, "
+    + "or select the same parent once with context_details.command_template for the requirements, current checks and their original supporting material together. "
+    + `Outcome parents (--select <pointer>): ${deferredOutcomes.join(", ")}. `
     + "Supporting material below still comes from the original capture in context_details. ";
   return instruction.includes(COMPLETE_REQUIREMENTS_CLAUSE)
     ? instruction.replace(COMPLETE_REQUIREMENTS_CLAUSE, notice)
