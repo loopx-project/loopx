@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from ..effect_runtime import EffectRuntimeHostPermissionError
 
-
 if TYPE_CHECKING:
     from ..effect_program import SettlementIdentity
 
@@ -41,8 +40,11 @@ class QuotaRunIndexConflict(ValueError):
     """A quota spend was definitively rejected by the run-index CAS."""
 
     reason_code = "index_digest_conflict"
-    # Binding checked before commit. Current debt requires a fresh ledger read.
-    settlement_identity: SettlementIdentity | None = None
+
+    def __init__(self, message: str, *, settlement_identity: SettlementIdentity | None = None) -> None:
+        super().__init__(message)
+        # Binding checked before commit. Current debt requires a fresh ledger read.
+        self.settlement_identity = settlement_identity
 
 
 class QuotaIdentityPrecondition(StrEnum):

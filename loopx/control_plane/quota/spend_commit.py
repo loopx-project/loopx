@@ -10,6 +10,7 @@ from ..coordination.shadow_management import (
     runtime_artifact_lock_target,
     shadow_maintenance_lock_target,
 )
+from ..effect_program import SettlementIdentity
 from ..effect_runtime import (
     EffectRuntimeConflict,
     EffectRuntimeRejected,
@@ -92,6 +93,7 @@ def _quota_spend_commit_result(
     execute: bool,
     runtime_root: Path | None,
     expected_index_digest: str | None,
+    settlement_identity: SettlementIdentity | None = None,
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
@@ -113,7 +115,7 @@ def _quota_spend_commit_result(
         )
     except EffectRuntimeConflict as exc:
         if exc.diagnostic_code == QuotaRunIndexConflict.reason_code:
-            raise QuotaRunIndexConflict(str(exc)) from None
+            raise QuotaRunIndexConflict(str(exc), settlement_identity=settlement_identity) from None
         raise ValueError(str(exc)) from None
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -125,7 +127,7 @@ def _quota_spend_commit_result(
     if result.get("status") == "conflict":
         reason = str(result.get("reason") or "quota spend commit conflict")
         if result.get("reason_code") == QuotaRunIndexConflict.reason_code:
-            raise QuotaRunIndexConflict(reason)
+            raise QuotaRunIndexConflict(reason, settlement_identity=settlement_identity)
         raise ValueError(reason)
     return result
 
@@ -218,6 +220,7 @@ def record_quota_slot_spend_from_preview(
     execute: bool = False,
     source: str = DEFAULT_SLOT_SPEND_SOURCE,
     registry_path: Path | None = None,
+    settlement_identity: SettlementIdentity | None = None,
     goal_ref: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not preview.get("ok"):
@@ -260,6 +263,7 @@ def record_quota_slot_spend_from_preview(
                 execute=True,
                 runtime_root=runtime_root,
                 expected_index_digest=expected_index_digest,
+                settlement_identity=settlement_identity,
                 goal_ref=goal_ref,
                 source_admission=source_admission,
             )

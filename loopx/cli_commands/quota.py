@@ -13,7 +13,6 @@ from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
     QuotaCommandValidationError,
-    QuotaRunIndexConflict,
 )
 from ..usage_goal import observe_quota_result as observe_quota_result  # noqa: PLC0414
 from .quota_capture import handle_native_context_command, prepare_quota_capture
@@ -624,29 +623,10 @@ def _execute_quota_command(
             args,
             registry_path=registry_path,
             runtime_root_arg=runtime_root_arg,
+            resolved_runtime_root=context.runtime_root if context else None,
+            goal_ref=goal_ref,
             error=exc,
         )
-        if (
-            isinstance(exc, QuotaRunIndexConflict)
-            and exc.settlement_identity is not None
-            and context is not None
-        ):
-            from .refresh_recovery import original_turn_guard_command
-
-            identity = exc.settlement_identity
-            command = original_turn_guard_command(
-                identity, registry_path=registry_path, runtime_root=context.runtime_root,
-                goal_ref=goal_ref, available_capabilities=args.available_capabilities or (),
-            )
-            payload["settlement_recovery"] = {
-                "required": True,
-                "settlement_identity": identity.as_dict(),
-                "next_cli_actions": [command],
-                "instruction": (
-                    "Read the original Turn. Execute only its settlement_owed command if present. "
-                    "If none is returned, stop this spend retry."
-                ),
-            }
     if should_run_state is not None:
         action_selection = should_run_state.action_selection
         action_selection_preflight_failed = (
