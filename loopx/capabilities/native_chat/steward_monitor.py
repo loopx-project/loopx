@@ -34,10 +34,99 @@ from .steward_managed_mode import StewardManagedMode
 
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
+STEWARD_BACKGROUND_SESSION_PREFIX = "steward.background."
+STEWARD_BACKGROUND_CHANNEL_PREFIX = "manager.external.steward.background."
 ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS = 60
 ADVANCEMENT_ADMISSION_RETRY_SUFFIX = ".admission-retry"
 ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX = ".precommit-retry"
 _LOG = logging.getLogger(__name__)
+
+
+def steward_background_session_id(binding_id: str) -> str:
+    return f"{STEWARD_BACKGROUND_SESSION_PREFIX}{binding_id}"
+
+
+def steward_background_channel_id(binding_id: str) -> str:
+    return f"{STEWARD_BACKGROUND_CHANNEL_PREFIX}{binding_id}"
+
+
+def actor_steward_binding_id(actor: Mapping[str, Any]) -> str | None:
+    if actor.get("schema_version") != "loopx_steward_managed_actor_v0":
+        return None
+    goal_id = str(actor.get("goal_id") or "")
+    if not goal_id.startswith("steward-agent-"):
+        return None
+    return goal_id.removeprefix("steward-agent-") or None
+
+
+def lookup_steward_monitor_turn(
+    store: Any, binding_id: str | None, fallback_session_id: str, client_id: str,
+) -> dict[str, Any] | None:
+    if binding_id is not None:
+        bg_sid = steward_background_session_id(binding_id)
+        if store.load_session(bg_sid) is not None:
+            found = store.turn_for_client(bg_sid, client_id)
+            if found is not None:
+                return found
+    return store.turn_for_client(fallback_session_id, client_id)
+
+
+def load_steward_monitor_turn_by_id(
+    store: Any, actor: Mapping[str, Any], turn_id: str,
+) -> dict[str, Any] | None:
+    binding_id = actor_steward_binding_id(actor)
+    if binding_id is not None:
+        bg_sid = steward_background_session_id(binding_id)
+        if store.load_session(bg_sid) is not None:
+            found = store.load_turn(bg_sid, turn_id)
+            if found is not None:
+                return found
+    return store.load_turn(actor["session_id"], turn_id)
+
+
+def ensure_steward_background_session(
+    store: Any, binding_id: str, parent_session: Mapping[str, Any],
+) -> dict[str, Any]:
+    from ...chat_store import utc_now
+
+    saved = parent_session.get("steward_context")
+    if not isinstance(saved, Mapping):
+        raise ValueError("the original steward Session is unavailable")
+    bg_sid = steward_background_session_id(binding_id)
+    if store.load_session(bg_sid) is None:
+        try:
+            store.create_session(
+                session_id=bg_sid,
+                goal_id="loopx-manager",
+                agent_id=str(parent_session["agent_id"]),
+                adapter_kind=str(parent_session["adapter_kind"]),
+                upstream_thread_id=f"steward-watch-{binding_id}",
+                channel_id=steward_background_channel_id(binding_id),
+                executor_endpoint_id=parent_session.get("executor_endpoint_id"),
+                steward_context=None,
+            )
+        except FileExistsError:
+            pass
+    parent_scope_id = parent_session.get("manager_authorization_scope_id")
+    expected_bg_context = dict(saved)
+    with store._locked_session_path(bg_sid, "ensure_steward_background_session") as path:
+        carrier = store.load_session(bg_sid)
+        if carrier is None or carrier.get("status") == "closed":
+            raise ValueError("the steward background watch Session is unavailable")
+        dirty = False
+        if carrier.get("steward_background_context") != expected_bg_context:
+            carrier["steward_background_context"] = expected_bg_context
+            dirty = True
+        if isinstance(parent_scope_id, str) and parent_scope_id and carrier.get("manager_authorization_scope_id") != parent_scope_id:
+            carrier["manager_authorization_scope_id"] = parent_scope_id
+            dirty = True
+        elif parent_scope_id is None and "manager_authorization_scope_id" in carrier:
+            carrier.pop("manager_authorization_scope_id", None)
+            dirty = True
+        if dirty:
+            carrier["updated_at"] = utc_now()
+            _atomic_write_json(path, carrier, preserve_mode=True)
+        return carrier
 
 
 class StewardObservationAdapter:
@@ -649,6 +738,9 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
     cache = getattr(controller, "_steward_monitor_next_check", None)
     if cache is None:
         cache = controller._steward_monitor_next_check = {}
+    fg_checked = getattr(controller, "_steward_monitor_fg_idle_checked", None)
+    if fg_checked is None:
+        fg_checked = controller._steward_monitor_fg_idle_checked = {}
     for binding in bindings.read()["bindings"] if bindings is not None else []:
         if cancelled():
             break
@@ -656,65 +748,107 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
         if binding.get("enabled") is not True or not actor:
             continue
         try:
-            session = controller.store.load_session(actor["session_id"])
-            if not session or session.get("active_turn_id") or controller.store.queued_turns(actor["session_id"]):
+            parent_session = controller.store.load_session(actor["session_id"])
+            if not parent_session or parent_session.get("status") == "closed":
                 continue
-            if cache.get(binding["binding_id"], 0) > time.monotonic():
+            human_idle = (
+                not parent_session.get("active_turn_id")
+                and not controller.store.queued_turns(actor["session_id"])
+            )
+            binding_id = binding["binding_id"]
+            bg_session_id = StewardTurnHost.background_session_id(binding_id)
+            bg_session = controller.store.load_session(bg_session_id)
+            if (
+                bg_session is not None
+                and bg_session.get("active_turn_id")
+                and callable(getattr(controller, "recover_exited_turn", None))
+            ):
+                controller.recover_exited_turn(bg_session_id)
+                bg_session = controller.store.load_session(bg_session_id)
+            if bg_session is not None and bg_session.get("status") == "closed":
+                bg_idle = False
+            else:
+                bg_idle = (
+                    bg_session is None
+                    or (
+                        not bg_session.get("active_turn_id")
+                        and not controller.store.queued_turns(bg_session_id)
+                    )
+                )
+            if not human_idle and not bg_idle:
+                continue
+            now_mono = time.monotonic()
+            bypass_fg_throttle = (
+                human_idle
+                and binding_id in cache
+                and fg_checked.get(binding_id) is False
+            )
+            if not bypass_fg_throttle and cache.get(binding_id, 0) > now_mono:
                 continue
             # An ephemeral wake hint only, never authority. Configuration clears
             # it immediately; external edits are observed within a minute. Every
             # actual dispatch rechecks native state, original grant and provider.
-            cache[binding["binding_id"]] = time.monotonic() + 60
+            cache[binding_id] = now_mono + 60
+            fg_checked[binding_id] = human_idle
             # The existing pump also observes the optional report frontier.
             # No second consumer/timer is installed. Closed/not-due calendars
             # never invoke a model, and original user work wins the idle check.
-            goal = load_goal_from_registry(controller.registry_path, actor["goal_id"])
-            report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
-            if report_config.get("enabled") is True and report_config.get("profile_preset") == "portfolio-progress":
-                from .steward_reports import StewardReports
-                try:
-                    accepted, created = StewardReports(controller).frontier(binding)
-                    if created:
-                        changed.append(accepted)
-                        continue
-                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                    _LOG.warning("An original steward report is unavailable; its window and other work are retained")
-            due = service.due_monitors(actor)
-            if due:
-                dispatched = False
-                for todo in due:
+            if human_idle:
+                goal = load_goal_from_registry(controller.registry_path, actor["goal_id"])
+                report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
+                if report_config.get("enabled") is True and report_config.get("profile_preset") == "portfolio-progress":
+                    from .steward_reports import StewardReports
                     try:
-                        accepted, created = StewardTurnHost(controller).submit(
-                            binding["binding_id"],
-                            turn_instance_id=monitor_turn_id(todo),
-                            todo_id=todo["todo_id"],
-                            work_kind="monitor",
-                            monitor_deadline=todo["next_due_at"],
-                        )
+                        accepted, created = StewardReports(controller).frontier(binding)
+                        if created:
+                            changed.append(accepted)
+                            if bg_idle:
+                                cache.pop(binding_id, None)
+                            continue
                     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                        _LOG.warning(
-                            "A native steward monitor is unavailable; original work retained"
-                        )
+                        _LOG.warning("An original steward report is unavailable; its window and other work are retained")
+            if bg_idle:
+                due = service.due_monitors(actor)
+                if due:
+                    dispatched = False
+                    for todo in due:
+                        try:
+                            accepted, created = StewardTurnHost(controller).submit(
+                                binding_id,
+                                turn_instance_id=monitor_turn_id(todo),
+                                todo_id=todo["todo_id"],
+                                work_kind="monitor",
+                                monitor_deadline=todo["next_due_at"],
+                            )
+                        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                            _LOG.warning(
+                                "A native steward monitor is unavailable; original work retained"
+                            )
+                            continue
+                        if created:
+                            changed.append(accepted)
+                            dispatched = True
+                            break
+                        if isinstance(accepted, dict) and accepted.get("status") in {"queued", "running"}:
+                            dispatched = True
+                            break
+                    if dispatched:
+                        if human_idle:
+                            fg_checked[binding_id] = False
                         continue
+            advancement_dispatched = False
+            if human_idle:
+                for adv in service.runnable_advancement_todos(actor):
+                    turn_id_token = resolve_advancement_turn_id(controller.store, actor, adv)
+                    if turn_id_token is None:
+                        continue
+                    accepted, created = StewardTurnHost(controller).submit(binding_id,
+                        turn_instance_id=turn_id_token, todo_id=adv["todo_id"], work_kind="native_turn")
                     if created:
                         changed.append(accepted)
-                        dispatched = True
-                        break
-                    if isinstance(accepted, dict) and accepted.get("status") in {"queued", "running"}:
-                        dispatched = True
-                        break
-                if dispatched:
-                    continue
-            for adv in service.runnable_advancement_todos(actor):
-                turn_id_token = resolve_advancement_turn_id(controller.store, actor, adv)
-                if turn_id_token is None:
-                    continue
-                accepted, created = StewardTurnHost(controller).submit(binding["binding_id"],
-                    turn_instance_id=turn_id_token, todo_id=adv["todo_id"], work_kind="native_turn")
-                if created:
-                    changed.append(accepted)
-                break
-            else:
+                    advancement_dispatched = True
+                    break
+            if not advancement_dispatched:
                 all_monitors = [row for row in service.todos(actor)
                     if row.get("task_class") == "continuous_monitor" and row.get("status") == "open"
                     and isinstance(row.get("target_key"), str)
@@ -726,7 +860,7 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                     due_dt = datetime.fromisoformat(soonest["next_due_at"].replace("Z", "+00:00"))
                     remaining = (due_dt - datetime.now(timezone.utc)).total_seconds()
                     if remaining > 0:
-                        cache[binding["binding_id"]] = time.monotonic() + min(60, remaining)
+                        cache[binding_id] = time.monotonic() + min(60, remaining)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             # One unreadable conversation or unavailable provider must not starve
             # other native monitors; retain its original data and deadline.
