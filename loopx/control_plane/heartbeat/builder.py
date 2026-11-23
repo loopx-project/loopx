@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,8 @@ def _select_task_body_renderer(
     thin: bool,
     brief: bool,
     compact: bool,
+    resumed_codex_session: bool,
+    turn_instance_id: str | None,
 ) -> Any:
     if traex_visible_goal:
         return render_traex_visible_goal_task_body
@@ -103,6 +106,8 @@ def _select_task_body_renderer(
     if native_goal_host:
         return render_visible_goal_task_body
     if thin:
+        if resumed_codex_session and turn_instance_id:
+            return partial(render_thin_heartbeat_task_body, resumed_codex_session=True)
         return render_thin_heartbeat_task_body
     if brief:
         return render_brief_heartbeat_task_body
@@ -375,6 +380,7 @@ def build_heartbeat_prompt(
     turn_granularity: str | None = None,
     turn_instance_id: str | None = None,
     reward_memory_enabled: bool = True,
+    resumed_codex_session: bool = False,
     decision_output_root: str | Path | None = None,
     decision_handoff_socket: str | None = None,
     codex_context_dir: str | None = None,
@@ -557,6 +563,8 @@ def build_heartbeat_prompt(
         thin=thin,
         brief=brief,
         compact=compact,
+        resumed_codex_session=resumed_codex_session,
+        turn_instance_id=normalized_turn_instance_id,
     )
     reward_memory_rule_kwargs = _reward_memory_rule_kwargs(
         full=full,
