@@ -2,7 +2,7 @@ import { EXECUTION_PREPARATION_SCHEMA_VERSION } from "../work_items/execution_pr
 import { leaseEpoch } from "../work_items/task_lease_record.ts";
 import { capturedContextSelection } from "./context_selection.ts";
 import {
-  contextReadSectionDigests, initialContextReadPointers, normalWorkReadContext,
+  contextReadSectionDigests, inlineNormalWorkOpening, initialContextReadPointers, normalWorkReadContext,
   prepareProgressiveContext, prepareProgressiveContextDelivery, progressiveContextPlan,
   type PreparationScopeDetail, type ReusableExactBody,
 } from "./progressive_context.ts";
@@ -1312,6 +1312,14 @@ function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" |
   return paths;
 }
 
+function readyWorkOpening(context: JsonObject): JsonObject | undefined {
+  return inlineNormalWorkOpening(context, {
+    work_lane_contract: context.work_lane_contract, goal_boundary: context.goal_boundary,
+    goal_acceptance: context.goal_acceptance, task_scope: context.task_scope,
+    latest_run_recommended_action: context.latest_run_recommended_action,
+  });
+}
+
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const normalOnly = request.normal_work_initial_read === undefined ? false
@@ -1321,8 +1329,10 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
     ? {...request, include_initial_read_plan: false} : request;
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(scoped, initial ? initialContextReadPointers(
+  const selection = capturedContextSelection(scoped, initial ? initialContextReadPointers(
     context ?? requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
+  const opening = context && selection.initial_read_plan ? readyWorkOpening(context) : undefined;
+  return opening ? {...selection, inline_opening: opening} : selection;
 }
 
 /** Only the exact list can carry forward. Current boundary controls stay inline. */
@@ -1624,8 +1634,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       if (request.surface === "complete_turn") checkedContextPresentationSource(request);
       return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
     }
+    const context = requireJsonObject(request.context, "current projection");
     return prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
+      checkedContextPresentationPlan(request), readyWriteScope(context),
+      request.include_initial_read_plan === true ? readyWorkOpening(context) : undefined);
   }
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
