@@ -411,15 +411,17 @@ Paired diffs do not certify translation accuracy.
     Full runtime-profile qualification and generic handoff migration remain open.
 - [Steward Unified Entry — Extending the Steward Across Every Session and LoopX Goal v0](steward-unified-entry-v0.md)
   ([中文版](steward-unified-entry-v0.zh-CN.md))
-  - **Delivery on `main`:** Proposal.
+  - **Delivery on `main`:** Proposal (reuses shipped `#9320` `turn_context_cache.py`
+    and `steward.background.<binding_id>` Goal monitor foundations).
   - **Current boundary:** Extends the shipped App/Workbench and Lark Steward
-    (`context_handoff`, `continuous_monitor`, `completion_validation`) across non-Goal
-    Workbench threads and self-opened local sessions: a revision-cached open-work
-    ledger, `session_handoff` delegation, Steward Topic Lanes and `steward.background`
-    isolation to eliminate head-of-line blocking, deterministic session watch with
-    bounded recovery and 15s merged decision notices, and zero-ceremony promotion
-    into long-horizon LoopX Goals (`Vision/Replan` escalation, heartbeat, `quota/stride`).
-    S1–S4 and A1–A10 define delivery and acceptance.
+    across non-Goal Workbench threads and self-opened local sessions: an open-work
+    ledger with CJK/ASCII 2/3-gram + FTS session lookup, fenced `session_handoff`
+    with per-directory FIFO write serialization and caller-credential socket ACL,
+    explicit Lark `root_id` Topic Lanes (`lobby` deterministic default) and
+    effect-fenced preemption, anchor-reset `steward.background` supervision with
+    a hard `question`-only auto-answer boundary, exact-quote triage and `concern`
+    closure, and progressive promotion into LoopX Goals (`Vision/Replan` escalation,
+    heartbeat, `quota/stride`). S1–S4 and A1–A10 define delivery and acceptance.
 - [Manager Runtime Profile v0](manager-runtime-profile-v0.md)
   ([中文版](manager-runtime-profile-v0.zh-CN.md))
   - **Delivery on `main`:** Partial; the explicit persistent `restricted` /
