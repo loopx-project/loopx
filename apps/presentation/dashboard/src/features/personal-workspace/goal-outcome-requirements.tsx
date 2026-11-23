@@ -1,4 +1,4 @@
-import {useId, useState} from "react";
+import {useId, useRef, useState} from "react";
 import {ChevronDown} from "lucide-react";
 import {acceptanceRequest} from "../../data/goal-acceptance-actions";
 import type {OutcomeRequirements} from "../../data/goal-acceptance-observation";
@@ -6,6 +6,10 @@ import {useWorkspaceI18n} from "./i18n";
 import {ContextHelp} from "./context-help";
 
 type Requirement = OutcomeRequirements["outcomes"][number]["requirements"][number];
+function matchesRequirement(item: Requirement, query: string) {
+  return [item.id, item.description, item.agent_review?.note, ...(item.agent_review?.evidence_refs ?? [])]
+    .some(value => value?.toLocaleLowerCase().includes(query));
+}
 // Presentation of the existing native vocabulary, never a new acceptance decision.
 const stateOrder: Requirement["status"][] = ["failed", "held", "stale", "partial", "unverified", "accepted"];
 function displayState(item: Requirement): Requirement["status"] {
@@ -29,6 +33,9 @@ export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, 
 }) {
   const zh = useWorkspaceI18n().locale === "zh-CN";
   const [all, setAll] = useState(false);
+  const [search, setSearch] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
+  const query = search.trim().toLocaleLowerCase();
   const listId = useId();
   const current = fresh && declaration.current_lifetime;
   const rows = declaration.outcomes.flatMap(outcome => outcome.requirements.map(requirement => ({outcome, requirement})));
@@ -38,6 +45,9 @@ export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, 
     .sort((a, b) => stateOrder.indexOf(displayState(a.requirement)) - stateOrder.indexOf(displayState(b.requirement)));
   const preview = [...new Set([...attention.map(row => row.outcome.id), ...declaration.outcomes.map(outcome => outcome.id)])].slice(0, 3);
   const labels = stateLabels(zh);
+  const matching = rows.filter(({outcome, requirement}) => outcome.objective.toLocaleLowerCase().includes(query)
+    || matchesRequirement(requirement, query));
+  const matchingOutcomes = new Set(matching.map(row => row.outcome.id));
   if (!declaration.outcomes.length) return null;
   return <section className={`goal-outcomes${all ? " is-expanded" : ""}`} aria-label={zh ? "支撑成果" : "Supporting outcomes"}>
     <header className="goal-outcomes-heading"><h4>{zh ? "支撑成果" : "Supporting outcomes"} <span>{declaration.outcomes.length}</span></h4>
@@ -52,20 +62,28 @@ export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, 
       {!rows.length ? <span>{zh ? "尚无要求" : "No requirements yet"}</span> : null}
     </div>
     {rows.length ? <div className="goal-outcomes-distribution" aria-hidden="true">{counts.filter(item => item.count).map(item => <i key={item.state} className={`is-${current ? item.state : "recorded"}`} style={{flexGrow: item.count}}/>)}</div> : null}
+    {rows.length ? <div className="goal-outcomes-search">
+      <input ref={searchInput} type="search" aria-label={zh ? "查找要求与证据" : "Find requirements and evidence"}
+        placeholder={zh ? "查找要求与证据" : "Find requirements and evidence"} value={search}
+        onChange={event => setSearch(event.target.value)} onKeyDown={event => {if (event.key === "Escape") {setSearch(""); event.stopPropagation();}}}/>
+      {query ? <><button type="button" onClick={() => {setSearch(""); searchInput.current?.focus();}}>{zh ? "清除搜索" : "Clear search"}</button>
+        <span role="status">{zh ? `匹配 ${matching.length} / ${rows.length} 条要求` : `${matching.length} of ${rows.length} requirements match`}</span></> : null}
+    </div> : null}
     <div id={listId} className="goal-outcomes-list">
       {declaration.outcomes.map(outcome => <Outcome key={JSON.stringify([goalId, outcome.id])} goalId={goalId} outcome={outcome}
-        fresh={current} canManage={canManage && declaration.current_lifetime} shown={all || preview.includes(outcome.id)}
+        fresh={current} canManage={canManage && declaration.current_lifetime} query={query}
+        shown={query ? matchingOutcomes.has(outcome.id) : all || preview.includes(outcome.id)}
         revision={providerRevision} onRefresh={onRefresh} zh={zh}/>)}
     </div>
-    {declaration.outcomes.length > preview.length ? <button className="goal-outcomes-more" type="button" aria-expanded={all} aria-controls={listId} onClick={() => setAll(value => !value)}>
+    {!query && declaration.outcomes.length > preview.length ? <button className="goal-outcomes-more" type="button" aria-expanded={all} aria-controls={listId} onClick={() => setAll(value => !value)}>
       {all ? (zh ? "收起完整列表" : "Collapse full list") : (zh ? `查看全部 ${declaration.outcomes.length} 项成果` : `View all ${declaration.outcomes.length} outcomes`)}<ChevronDown aria-hidden size={15}/>
     </button> : null}
   </section>;
 }
-function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, shown}: {
+function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, shown, query}: {
   goalId: string; outcome: OutcomeRequirements["outcomes"][number]; fresh: boolean; canManage: boolean;
   revision: string | null; onRefresh: () => Promise<void>; zh: boolean;
-  shown: boolean;
+  shown: boolean; query: string;
 }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
@@ -92,7 +110,7 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, sh
   }
   const counts = stateOrder.map(state => ({state, count: outcome.requirements.filter(item => displayState(item) === state).length}));
   const gaps = outcome.requirements.filter(item => item.agent_review?.basis_current && item.agent_review.conclusion === "unmet").length;
-  return <article className="goal-outcome" hidden={!shown && !open && !text && !pending && !busy}>
+  return <article className="goal-outcome" hidden={!shown && (!!query || !open) && !text && !pending && !busy}>
     <details className="goal-outcome-disclosure" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary aria-expanded={open}><ChevronDown aria-hidden size={15}/><h5>{outcome.objective}</h5>
       <span className="goal-outcome-summary-states">
@@ -103,7 +121,8 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, sh
       </span>
     </summary>
     <div className="goal-outcome-body">
-    <ul className="goal-overview-criteria goal-outcome-criteria">{stateOrder.flatMap(state => outcome.requirements.filter(item => displayState(item) === state)).map(requirement => <li key={requirement.id}>
+    <ul className="goal-overview-criteria goal-outcome-criteria">{stateOrder.flatMap(state => outcome.requirements.filter(item => displayState(item) === state)).map(requirement => <li key={requirement.id}
+      hidden={!!query && !outcome.objective.toLocaleLowerCase().includes(query) && !matchesRequirement(requirement, query)}>
           <RequirementRow requirement={requirement} fresh={fresh} zh={zh}/>
         </li>)}</ul>
     <details><summary>{zh ? "关联工作与来源" : "Linked work and sources"}</summary>
