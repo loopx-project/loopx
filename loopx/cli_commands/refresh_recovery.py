@@ -20,7 +20,7 @@ from ..paths import resolve_runtime_root
 
 def original_turn_guard_command(
     identity: SettlementIdentity, *, registry_path: Path, runtime_root: Path,
-    goal_ref: Mapping[str, Any] | None, available_capabilities: Sequence[str],
+    goal_ref: Mapping[str, object] | None, available_capabilities: Sequence[str],
 ) -> str:
     """Re-enter the verified original binding so the guard reads its current phase."""
     return render_host_cli_command([
