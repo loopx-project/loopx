@@ -46,6 +46,10 @@ class NativePreparationTurnUnavailable(ValueError):
     """The original Turn cannot authorize a new host claim."""
 
 
+class NativeClaimRejected(ValueError):
+    """This provider declined the exact managed operation before commit."""
+
+
 def compact_execution_preparation_request(
     payload: Mapping[str, Any], *, claim_source_sha256: str | None = None,
 ) -> dict[str, Any] | None:
@@ -143,6 +147,7 @@ def _run_json(
     cwd: Path,
     timeout: float,
     runner: CommandRunner,
+    claim_identity: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     route = current_loopx_cli_argv()
     command = command_argv(
@@ -160,6 +165,34 @@ def _run_json(
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError("LoopX Host preparation returned non-JSON output") from exc
+    if completed.returncode == 1 and claim_identity is not None and isinstance(payload, dict):
+        from ..coordination.local_authority import LOCAL_AUTHORITY_SOURCES
+
+        decision = payload.get("claim_decision")
+        if (payload.get("ok") is False and payload.get("decision_read_from_provider") is True
+                and payload.get("source_authority") in LOCAL_AUTHORITY_SOURCES
+                and payload.get("legacy_fallback_used") is False and "original_receipt" not in payload
+                and isinstance(decision, dict)
+                and decision.get("schema_version") == "loopx_coordination_todo_claim_decision_v0"
+                and decision.get("status") == "rejected"
+                and all(decision.get(key) == value for key, value in claim_identity.items())
+                and isinstance(decision.get("reason_code"), str) and isinstance(decision.get("reason"), str)):
+            holder = decision.get("claim_owner")
+            ownership = f" Holder: {holder}." if holder else ""
+            condition = {
+                "claim_owner_mismatch": "after the Todo is available to you",
+                "todo_lease_conflict": "after the Todo lease becomes available",
+                "write_scope_conflict": "after the conflicting lease is released or expires",
+                "workspace_lease_conflict": (
+                    "after the conflicting workspace lease is released or expires, "
+                    "or in an independent authorized worktree if the work can be isolated"
+                ),
+            }.get(decision["reason_code"], "after the blocking condition changes")
+            raise NativeClaimRejected(
+                f"Claim for {claim_identity['todo_id']} declined ({decision['reason_code']}): "
+                f"{decision['reason'].rstrip('.')}.{ownership} Continue other eligible work. "
+                f"Retry this Todo with a fresh eligible guard {condition}."
+            )
     if (
         completed.returncode != 0
         or not isinstance(payload, dict)
@@ -757,6 +790,8 @@ def execute_codex_execution_preparation(
         claimed = _run_json(
             expected_claim, registry_path=registry_path, runtime_root=runtime_root,
             cwd=workspace, timeout=min(timeout / 2, remaining), runner=invoke,
+            claim_identity={"goal_id": goal_id, "todo_id": todo_id, "actor_agent_id": agent_id,
+                            "claim_operation_id": claim_operation_id},
         )
     claim_reference = claimed.get("claim_operation_id")
     if claim_reference != claim_operation_id:

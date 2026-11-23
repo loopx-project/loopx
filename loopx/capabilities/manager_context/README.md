@@ -44,6 +44,13 @@ and governed-delegation tool descriptions. Keep reader, language, corrections
 and result destination with the original work; do not maintain a second copy in
 a private manager configuration or an installed skill.
 The heartbeat hook's required Inbox read uses the same CLI entrypoint.
+It requests `read --attention-only`. An unfinished incoming request with a
+verified delivered partial answer for its current revision stays on the compact
+agenda, with its remaining work and the unfiltered read command. Requests
+without that proof, including queued or unreadable returns, still supply the
+full brief before work. Read a request's full current brief with `--request-id`
+before resuming it or returning an answer. Peer returns, native child results
+and operation handoffs use their usual readers.
 
 The rule calls for a useful outcome first, explained terms and comparisons with
 units and direction. Full evidence, negative results, unknown costs and remaining
@@ -750,9 +757,10 @@ and are not paginated by this cursor. `status --offset/--limit` remains separate
 Large Markdown Inbox responses open with a reference to a private capture.
 The generated native context configuration declares
 `LOOPX_CONTEXT_PAGE_OUTPUT_BYTES=64000` for tools that can retain that size.
-The Inbox uses that profile for both capture reader commands and keeps the
-opening within 12,000 bytes. Without that declaration the reader also stays
-within 12,000 bytes. Follow the capture's byte cursors and verify coverage before
+The Inbox uses that profile for both capture reader commands. The Markdown
+response and capture opening stay within 5,000 serialized bytes. Without the
+declaration, both reader commands use the same 5,000-byte limit. Follow the
+capture's byte cursors and verify coverage before
 using the Inbox cursor. If a reader output is truncated, reduce both page
 limits and recover the affected range of the same capture.
 

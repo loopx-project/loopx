@@ -1,21 +1,29 @@
 """Real receipt/store journeys: a Turn agenda does not complete or replay work."""
 import json
 import os
-from pathlib import Path
 import shlex
 import shutil
 import subprocess
 import sys
 import sysconfig
+from pathlib import Path
 
 import pytest
-
-from loopx.capabilities.manager_context import acknowledge, deliver, turn_start_hook, _root, _write
-from loopx.capabilities.manager_context.roundtrip import report, drain
-from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
-from loopx.control_plane.collaboration.peers import request, read_inbox, consume_return
-from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
 import test_manager_context_roundtrip as roundtrip_tests
+
+from loopx.capabilities.manager_context import (
+    _root,
+    _write,
+    acknowledge,
+    deliver,
+    turn_start_hook,
+)
+from loopx.capabilities.manager_context.roundtrip import drain, report
+from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
+from loopx.control_plane.collaboration.peers import consume_return, read_inbox, request
+from loopx.control_plane.collaboration.turn_context_observation import (
+    read_delegation_turn_context,
+)
 
 
 @pytest.fixture
@@ -133,6 +141,138 @@ def test_peer_return_deferral_survives_until_a_later_turn(flow):
     assert agenda(root, registry)["return_attention"]["count"] == 0
 
 
+@pytest.mark.skipif(os.name != "posix", reason="exercise the rendered POSIX host command")
+def test_before_work_reader_preserves_delivered_partial_work_without_repeating_the_brief(flow):
+    root, registry, store, create = flow
+    remainder = {"summary": "Run the remaining validation", "resume_when": "The isolated build is ready"}
+    delivered = {}
+    for index in range(4):
+        brief = {
+            "schema_version": "collaboration_brief_v0", "purpose": f"Verify artifact {index}",
+            "context": ("Detailed original acceptance evidence. " * 130).strip(),
+            "constraints": [], "inputs": [], "acceptance": ["Return the checked artifact."],
+            "return_requirement": "Report to the original conversation.",
+        }
+        _, _, receipt = create(brief=brief)
+        rid = receipt["request_id"]
+        acknowledge(root, "research", "worker", rid, "adopt", "Continue validation")
+        report(root, "research", "worker", rid, "conclusion", "The first check passed.",
+               remaining_work=remainder)
+        delivered[rid] = brief
+    drain(root, registry, store, lambda *_: pytest.fail("local return does not use an external sender"))
+    # Preserve the original brief when the delivery is unreadable or points to another request.
+    unreadable, mismatched, matching, *_ = delivered
+    delivery_file = _root(root) / "replies" / unreadable / "conclusion.delivery.json"
+    assert delivery_file.is_file()
+    delivery_file.write_text("{invalid")
+    wrong_delivery = _root(root) / "replies" / mismatched / "conclusion.delivery.json"
+    original_delivery = wrong_delivery.read_bytes()
+    other_delivery = _root(root) / "replies" / matching / "conclusion.delivery.json"
+    wrong_message = json.loads(other_delivery.read_bytes())["message_id"]
+    assert wrong_message != json.loads(original_delivery)["message_id"]
+    wrong_delivery.write_text(json.dumps({**json.loads(original_delivery), "message_id": wrong_message}))
+    _, _, queued = create()
+    queued_id = queued["request_id"]
+    acknowledge(root, "research", "worker", queued_id, "adopt", "Continue validation")
+    report(root, "research", "worker", queued_id, "conclusion", "The first check passed.",
+           remaining_work=remainder)
+    _, _, fresh = create()
+    expected = {fresh["request_id"], queued_id, unreadable, mismatched}
+
+    for _ in range(2):
+        dispatch = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
+        route, = dispatch["required_reads"]
+        command = shlex.split(route["command"])
+        assert "--attention-only" in command
+        native = subprocess.run(command, cwd=root, capture_output=True, timeout=60)
+        assert native.returncode == 0, native.stderr
+        view = json.loads(native.stdout)
+        assert {row["request_id"] for row in view["items"]} == expected
+        compact = {row["request_id"]: row for row in view["unfinished_delegations"]["items"]}
+        assert set(compact) == set(delivered) | expected
+        assert all(compact[rid]["remaining_work"] == remainder for rid in delivered)
+        # Current main prioritizes the adopted request step; the mismatched
+        # delivery remains visible through its original evidence state.
+        assert compact[mismatched]["step"] == "review_request_work"
+        mismatched_item = next(row for row in view["items"] if row["request_id"] == mismatched)
+        assert mismatched_item["brief"] == delivered[mismatched]
+        assert "--attention-only" not in view["unfinished_delegations"]["read_command"]
+
+    assert json.loads(wrong_delivery.read_bytes())["message_id"] == wrong_message
+    wrong_delivery.write_bytes(original_delivery)
+    restored = subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60)
+    restored_view = json.loads(restored.stdout)
+    assert {row["request_id"] for row in restored_view["items"]} == expected - {mismatched}
+    assert matching in {row["request_id"] for row in restored_view["open_request_summaries"]}
+    assert mismatched in {row["request_id"] for row in restored_view["open_request_summaries"]}
+
+    entire = subprocess.run([arg for arg in command if arg != "--attention-only"],
+                            cwd=root, capture_output=True, timeout=60)
+    assert entire.returncode == 0, entire.stderr
+    assert {row["request_id"] for row in json.loads(entire.stdout)["items"]} == set(delivered) | expected
+    assert len(native.stdout) < len(entire.stdout)
+    for rid, brief in delivered.items():
+        exact = read_inbox(root, registry, "research", "worker", request_id=rid)
+        assert exact["items"][0]["brief"] == brief
+
+
+@pytest.mark.skipif(os.name != "posix", reason="exercise the rendered POSIX host command")
+def test_before_work_reader_requires_exact_peer_delivery(flow):
+    root, registry, _store, _create = flow
+    configured = json.loads(registry.read_text())
+    configured["goals"][0]["coordination"]["registered_agents"].append("reviewer")
+    registry.write_text(json.dumps(configured))
+
+    def partial(name):
+        brief = {"schema_version": "collaboration_brief_v0", "purpose": name,
+                 "context": f"Original brief for {name}", "constraints": [], "inputs": [],
+                 "acceptance": ["Check the final package"], "return_requirement": "Return the result"}
+        rid = request(root, registry, "research", "worker", "reviewer", name, brief)["request_id"]
+        acknowledge(root, "research", "reviewer", rid, "adopt", "Review")
+        report(root, "research", "reviewer", rid, "conclusion", "The first check passed.",
+               remaining_work={"summary": "Check the final package", "resume_when": "The package is ready"})
+        return rid, brief, _root(root) / "replies" / rid / "conclusion.delivery.json"
+
+    first, _, first_delivery = partial("first-review")
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-first")
+    first_receipt = json.loads(first_delivery.read_bytes())
+    assert first_receipt["kind"] == "requester_cli_read"
+    second, second_brief, second_delivery = partial("second-review")
+    assert not second_delivery.exists()
+
+    hook = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "reviewer")])
+    command = shlex.split(hook["required_reads"][0]["command"])
+    assert "--attention-only" in command
+    legacy = {key: value for key, value in first_receipt.items()
+              if key not in {"request_id", "result_key"}}
+    wrong_result = {**first_receipt, "request_id": second, "result_key": "conclusion-00000001"}
+    for receipt in (legacy, first_receipt, wrong_result):
+        second_delivery.write_text(json.dumps(receipt))
+        before = second_delivery.read_bytes()
+        view = json.loads(subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60).stdout)
+        assert [row["brief"] for row in view["items"]] == [second_brief]
+        assert [row["request_id"] for row in view["open_request_summaries"]] == [first]
+        compact = {row["request_id"]: row for row in view["unfinished_delegations"]["items"]}
+        assert compact[second]["step"] == "recover_evidence"
+        assert second_delivery.read_bytes() == before
+
+    assert first_receipt["request_id"] == first
+    assert first_receipt["result_key"] == "conclusion"
+    with pytest.raises(ValueError, match="peer return delivery receipt scope mismatch"):
+        read_inbox(root, registry, "research", "worker", turn_instance_id="turn-recovery")
+    assert json.loads(second_delivery.read_bytes()) == wrong_result
+
+    second_delivery.write_text(json.dumps(legacy))
+    read_inbox(root, registry, "research", "worker", turn_instance_id="turn-recovery")
+    restored = json.loads(second_delivery.read_bytes())
+    assert restored["request_id"] == second
+    assert restored["result_key"] == "conclusion"
+    assert restored["model_turn"]["turn_instance_id"] == "turn-recovery"
+    view = json.loads(subprocess.run(command, cwd=root, capture_output=True, check=True, timeout=60).stdout)
+    assert view["items"] == []
+    assert {row["request_id"] for row in view["open_request_summaries"]} == {first, second}
+
+
 def test_invalid_receipt_and_invalid_entries_are_visible_as_unavailable(flow):
     root, registry, _store, create = flow
     _session, _turn, receipt = create()
@@ -158,17 +298,25 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 
 @pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("reader_output_bytes", [12_000, 64_000])
+@pytest.mark.parametrize("reader_output_bytes", [5_000, 64_000])
 def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
     tmp_path, monkeypatch, provider, reader_output_bytes,
 ):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference,
+    )
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_context_first_read import read_selection
     from tests.control_plane.test_quota_settlement_cli import (
-        AGENT_ID, GOAL_ID, TURN_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
-        _run_cli, _spend_run_count, _write_fixture,
+        AGENT_ID,
+        GOAL_ID,
+        TURN_ID,
+        _heartbeat_receipt_count,
+        _initialize_fixture_authority,
+        _run_cli,
+        _spend_run_count,
+        _write_fixture,
     )
-    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
@@ -220,6 +368,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
     read, = (row for row in first["/interaction_contract/agent_channel/required_reads"] if row.get("kind") == "operator_inbox")
     command = shlex.split(read["command"])
     assert command[0] == str(console)
+    assert "--attention-only" in command
     def invoke(argv, output_limit=12_000):
         result = subprocess.run(argv, cwd=project, capture_output=True, timeout=40)
         assert result.returncode == 0, result.stderr
@@ -271,7 +420,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
             if logical_pages == 1:
                 reference_path.unlink()
                 failed = subprocess.run(shlex.split(page["command"]), cwd=project, capture_output=True, timeout=40)
-                assert failed.returncode == 1 and len(failed.stdout) <= 12_000
+                assert failed.returncode == 1 and len(failed.stdout) <= 5_000
                 assert "content" not in json.loads(failed.stdout)
                 recovered = json.loads(invoke(direct, reader_output_bytes))
                 assert recovered["offset"] == 0 and recovered["sha256"] == pinned
@@ -287,7 +436,7 @@ def test_unbound_cli_first_read_leaves_inbox_rows_to_its_required_read(
         if cursor is None:
             break
     assert seen == request_ids and logical_pages == 2 and captured_pages > 1
-    assert (largest_reader_output > 12_000) is (reader_output_bytes > 12_000)
+    assert (largest_reader_output > 5_000) is (reader_output_bytes > 5_000)
     _, saved = read_selection(view["recovery"]["command"] + " --select " + shlex.quote(address))
     assert saved[address] == channel["work_context"]["sources"][index]["content"]["unfinished_delegations"]
     assert path.read_bytes() == original
@@ -309,7 +458,7 @@ def test_large_inbox_does_not_fall_back_to_unbounded_output(flow):
     invocation = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(root),
         "manager-inbox", "read", "--format", "markdown", "--goal-id", "research", "--agent-id", "worker"]
     result = subprocess.run(invocation, cwd=root, capture_output=True, timeout=40)
-    assert result.returncode == 1 and len(result.stdout) <= 12_000
+    assert result.returncode == 1 and len(result.stdout) <= 5_000
     output = result.stdout.decode()
     failure = json.loads(output.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
     assert not failure["ok"] and not failure["read_complete"]
@@ -346,7 +495,7 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
     opening = subprocess.run([*powershell, "-Command", required_read["command"]], cwd=root, env=environment,
         capture_output=True, timeout=60)
     assert opening.returncode == 0, opening.stderr
-    assert 0 < len(opening.stdout) <= 12_000
+    assert 0 < len(opening.stdout) <= 5_000
     markdown = opening.stdout.decode().replace("\r\n", "\n")
     view = json.loads(markdown.split("\n```json\n", 1)[1].removesuffix("\n```\n"))
     before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
@@ -357,7 +506,7 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
         output = subprocess.run([*powershell, "-Command", command], cwd=root, env=environment,
             capture_output=True, timeout=60)
         assert output.returncode == 0, output.stderr
-        assert 0 < len(output.stdout) <= 12_000
+        assert 0 < len(output.stdout) <= 5_000
         page = json.loads(output.stdout)
         assert page["ok"] and page["offset"] == len(original) and page["sha256"] == view["sha256"]
         original.extend(page["content"].encode())
@@ -377,11 +526,19 @@ def test_large_inbox_reader_commands_run_verbatim_in_powershell(flow, directory)
 def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     tmp_path, monkeypatch, provider, delivery, partial, parent_context,
 ):
-    from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from control_plane.canonical_authority_fixture import (
+        initialize_canonical_authority,
+        isolate_sqlite_runtime,
+    )
+
+    from loopx.control_plane.coordination.runtime_shadow import (
+        build_todo_runtime_shadow_projection,
+    )
     from loopx.control_plane.testing.canary_harness import write_fixture_registry
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
-    from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
+    from loopx.control_plane.todos.goal_todo_projection import (
+        retained_todo_summary_fields,
+    )
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     # A module launched from the checkout can mask a stale inherited package.
@@ -439,7 +596,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     })
     acknowledge(root, "research", "reviewer", peer["request_id"], "adopt", "Review the artifact", registry=registry)
     report(root, "research", "reviewer", peer["request_id"], "conclusion", "The artifact retains an explicit limit.", registry=registry)
-    code, inbox = run(*prefix, "manager-inbox", "read", "--goal-id", "research", "--agent-id", "worker")
+    code, inbox = run(*prefix, "manager-inbox", "read", "--goal-id", "research", "--agent-id", "worker",
+                      "--attention-only")
     assert code == 0 and inbox["ok"]
     assert inbox["peer_returns"]["items"][0]["request_id"] == peer["request_id"]
     code, tracking = run(*prefix, "manager-inbox", "status", "--goal-id", "research", "--agent-id", "worker",
@@ -447,7 +605,10 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
     assert code == 0 and tracking["rows"][0]["read"]["at"]
     before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
     if delivery == "native_files":
-        from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
+        from loopx.control_plane.turn_driver.codex_context import (
+            codex_context_directory,
+            codex_context_hook,
+        )
         (tmp_path / "captures").mkdir()
         (tmp_path / "context").mkdir(mode=0o700)
         monkeypatch.setenv("CODEX_THREAD_ID", "agenda-session")
@@ -489,7 +650,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 assert page["next_offset"] == len(content) > page["offset"]
                 command = page["next_command"]
             assert pages > 1, "Exercise complete selected-context pagination."
-            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+            from tests.control_plane.codex_checkpoint_fixture import (
+                selected_context_values,
+            )
 
             values = selected_context_values(content.decode("utf-8"))
             pointer = next(key for key in values if key.endswith("/content/unfinished_delegations"))
@@ -499,9 +662,10 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         else:
             assert packet["schema_version"] == "loopx_turn_envelope_v1"
             channel = packet["interaction_contract"]["agent_channel"]
-            source = next(row for row in channel["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
+            work_context = channel["work_context"]
+            source = next(row for row in work_context["sources"] if row.get("hook_id") == "manager.context_inbox")
             content, required_reads = source["content"], channel["required_reads"]
-            assert channel["work_context"]["complete"] is True
+            assert work_context["complete"] is True
         assert content["read_complete"] is False
         rows = {row["request_id"]: row for row in content["unfinished_delegations"]["items"]}
         assert set(rows) == {receipt["request_id"], queued["request_id"], peer["request_id"]}
@@ -515,7 +679,8 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         manager_argv = shlex.split(manager_read["command"])
         assert "manager-inbox" in manager_argv and "read" in manager_argv
         assert "--turn-instance-id" not in manager_argv
-        assert "markdown" in manager_argv
+        assert "--attention-only" in manager_argv
+        assert manager_argv[manager_argv.index("--format") + 1] == "markdown"
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":

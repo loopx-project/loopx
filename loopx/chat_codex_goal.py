@@ -7,6 +7,7 @@ activate this driver. Native usage is retained by Codex across explicit resumes.
 
 from __future__ import annotations
 
+import queue
 import re
 import threading
 import time
@@ -34,6 +35,10 @@ USAGE = (
     "requests can exceed this allowance."
 )
 UPSTREAM_MODE = "chat_native_goal"
+
+
+class _NativeGoalStopped(Exception):
+    """Signal an idle event wait to recheck confirmed Stop state."""
 
 
 class NativeGoalStatus(StrEnum):
@@ -261,6 +266,19 @@ class CodexGoalDriver:
         except Exception:
             self.session.close()
 
+    def _check_stopped(self) -> None:
+        if self.stopped.is_set():
+            raise _NativeGoalStopped()
+
+    def _adopt_pending_stopped_turn(self) -> None:
+        while True:
+            try:
+                queued = self.session._pending_events.get_nowait()
+            except queue.Empty:
+                break
+            if queued.get("method") == "turn/started" and _event_thread_id(queued) == self.session.thread_id:
+                self.session.current_turn_id = _event_turn_id(queued)
+
     def _observe(self, emit: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
         deadline = (None if self.session.hard_timeout_sec is None
                     else time.monotonic() + self.session.hard_timeout_sec)
@@ -275,7 +293,12 @@ class CodexGoalDriver:
             if self.stopped.is_set():
                 # Join a concurrent Stop before reporting its outcome. The
                 # cached pre-Stop status is not an authoritative pause receipt.
+                self._adopt_pending_stopped_turn()
                 self.pause()
+                prior_turn = self.session.current_turn_id
+                self._adopt_pending_stopped_turn()
+                if self.session.current_turn_id and self.session.current_turn_id != prior_turn:
+                    self.pause()
                 goal = self.read()
             if goal is None:
                 raise self.session._runtime_error("The active native Goal disappeared.")
@@ -301,9 +324,18 @@ class CodexGoalDriver:
                     "hard_timeout",
                     "Native Goal reached the Chat time limit; resume it in this conversation.",
                 )
-            event = self.session._next_event(
-                deadline=deadline if deadline is not None else time.monotonic() + self.session.idle_timeout_sec
+            idle_deadline = (
+                None
+                if self.session.idle_timeout_sec is None
+                else time.monotonic() + self.session.idle_timeout_sec
             )
+            try:
+                event = self.session._next_event(
+                    deadline=deadline if deadline is not None else idle_deadline,
+                    check=self._check_stopped,
+                )
+            except _NativeGoalStopped:
+                continue
             if self.stopped.is_set():
                 # A start already submitted by the host may arrive after Stop.
                 # Retain its exact id for interrupt, never for input delivery.

@@ -1,4 +1,5 @@
 import { AgentLoginRecovery, needsAgentLogin } from './components/AgentLoginRecovery';
+import { createPortal } from 'react-dom';
 import { GitPanel } from './components/GitPanel';
 import { SettingsPage, type SettingsGroup } from './components/SettingsPage';
 import { AssistantSettingsPage, assistantTitle } from './components/AssistantSettingsPage';
@@ -80,6 +81,8 @@ import { QuotaNavigation, quotaPushed } from './quota-reading';
 import { noteSource, SelectionMenu } from './components/SelectionMenu';
 import { AgentPanel } from './components/AgentPanel';
 import { memberProgress, ThreadOverview, type OverviewSection } from './components/ThreadOverview';
+import { goalDestination, goalOverviewHash, goalOverviewRequest, goalsBoardTarget, type GoalSection } from './loopx/goal-navigation';
+import { extensionStorage } from './extensions/host';
 import { prepareOverview } from './overview-reading';
 import { ChangeDiffDialog } from './components/ChangeDiffDialog';
 import { AgentsPage } from './components/AgentsPage';
@@ -95,13 +98,12 @@ import { needsExplore, exploreSummary } from './personal-explore';
 import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
-import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
-import { GoalsPage, type GoalsFilter } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
 import { PwaInstallPromotion, PwaInstallSettings } from './components/PwaInstall';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
-import { StewardActions, StewardPage } from './components/StewardPage';
-import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
+import { StewardPage } from './components/StewardPage';
+import { StewardOverview } from './components/StewardOverview';
+import { useLoopxStatus } from './loopx/use-status';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
 import { LoopxGoalGroup } from './components/LoopxGoalGroup';
@@ -197,23 +199,11 @@ const EXTENSIONS_HASH = '#/extensions';
 /** The hub's own pages. Any other `#/…` may be an extension's view; see extensions/routes.ts. */
 const CORE_ROUTES = ['#/settings', AGENTS_HASH, TEAMS_HASH, STEWARD_HASH, '#/goals', SKILLS_HASH, MCP_HASH, SCHEDULES_HASH, ACTIVITY_HASH, OBSERVABILITY_HASH, MACHINES_HASH, EXTENSIONS_HASH];
 
-type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'goal' | 'goals' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
+type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
 
 function quotaAccount(path: string): string | undefined {
   if (!path.startsWith('quota/')) return undefined;
   try { return decodeURIComponent(path.slice('quota/'.length)); } catch { return path.slice('quota/'.length); }
-}
-
-/** The Goal id a `#/goals/<id>` address names. */
-function goalIdForHash(hash: string): string | null {
-  const id = hash.startsWith('#/goals/') ? decodeURIComponent(hash.slice('#/goals/'.length).split('/')[0]) : '';
-  return id ? id : null;
-}
-
-/** The tab a `#/goals/<id>/<tab>` address names; the overview when it names none. */
-function goalTabForHash(hash: string): GoalTab {
-  const tab = hash.startsWith('#/goals/') ? hash.slice('#/goals/'.length).split('/')[1] : '';
-  return GOAL_TABS.find(known => known === tab) ?? 'overview';
 }
 
 /** The page an address opens; null for none (a thread). Skills and MCP are the hub's own machinery, which the demo has none of. */
@@ -222,9 +212,7 @@ function viewForHash(hash: string, connected: boolean): MainView | null {
   if (hash.startsWith('#/machines/')) return 'machines';
   if (hash === '#/settings' || hash.startsWith('#/settings/')) return 'settings';
   if (hash.startsWith('#/thread/')) return null;
-  // The whole list, before any one Goal's own page.
-  if (hash === '#/goals') return 'goals';
-  if (hash.startsWith('#/goals/')) return 'goal';
+  if (goalOverviewRequest(hash)) return 'steward';
   // The assistant desk and its matters list are gone; their addresses open the steward, their successor.
   if (hash === DESK_HASH || hash.startsWith(`${DESK_HASH}/`) || hash === TODOS_HASH) return 'steward';
   switch (hash) {
@@ -551,7 +539,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [token, authKindRead.error, onToken]);
   // A browser alert for each Goal that newly waits on the person. The first read is only the baseline.
   const alertSeen = useRef<Set<string> | null>(null);
-  const openGoalRef = useRef<(goalId: string, tab?: GoalTab) => void>(() => undefined);
+  const openGoalRef = useRef<(goalId: string | null, section?: GoalSection | null) => void>(() => undefined);
   useEffect(() => {
     if (!loopxStatus) return;
     const { now, fresh } = newlyWaiting(alertSeen.current, loopxStatus.attention);
@@ -580,9 +568,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // Those pages have addresses of their own, so a reload or a bookmark lands back on them.
   const [threadLink, setThreadLink] = useState(() => window.location.hash.startsWith('#/thread/') ? window.location.hash : null);
   const [schedulePath, setSchedulePath] = useState(() => window.location.hash.startsWith('#/schedules/') ? window.location.hash.slice('#/schedules/'.length) : '');
-  /** The goal the work page shows, from its address. */
-  const [goalPath, setGoalPath] = useState(() => goalIdForHash(window.location.hash) ?? '');
-  const [goalTab, setGoalTab] = useState<GoalTab>(() => goalTabForHash(window.location.hash));
+  const [boardEntry, setBoardEntry] = useState(0);
+  const [goalRequest, setGoalRequest] = useState(() => goalOverviewRequest(window.location.hash));
+  const [goalDetailFocus, setGoalDetailFocus] = useState<{ api: Api; threadId: string | null; goalId: string | null; section?: GoalSection | null } | null>(null);
   const [machinePath, setMachinePath] = useState(() => window.location.hash.startsWith('#/machines/') ? window.location.hash.slice('#/machines/'.length) : '');
   const [settingsPath, setSettingsPath] = useState(() => start === 'machines' ? 'machines' : window.location.hash.replace(/^#\/settings\/?/, ''));
   // `list`: the phone's thread list was open, so closing settings goes back to it.
@@ -594,7 +582,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useAppHistory(appBack, appHref);
   const [view, setView] = useState<MainView>(() => start === 'machines' ? 'settings' : (typeof start === 'object' ? 'thread' : viewForHash(window.location.hash, Boolean(token)) ?? 'thread'));
   /** The address of the extension view asked for. Which view that is waits for the list of extensions. */
-  const [extTarget, setExtTarget] = useState<string | null>(() => (viewForHash(window.location.hash, Boolean(token)) === 'ext' ? window.location.hash : null));
+  const [extTarget, setExtTarget] = useState<string | null>(() => viewForHash(window.location.hash, Boolean(token)) === 'ext' ? window.location.hash : null);
   /** The extension catalog and what is installed on the machine on screen; null until read. */
   const [extensions, setExtensions] = useState<ExtensionState[] | null>(null);
   /** How the list stream is doing, and when the thread list was last read: how extension views tell whether what they show may be stale. */
@@ -1099,8 +1087,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [api, selectedId, threads]);
   useEffect(() => { setAgentsOpen(false); setDraftCollaboration(false); setCollaborationDirectories([]); }, [selectedId, hostId]);
   const onSettings = view === 'settings';
-  const onGoal = view === 'goal' && !selectedId;
-  const onGoalsList = view === 'goals' && !selectedId;
   const onSteward = view === 'steward' && !selectedId;
   const onSchedules = view === 'schedules' && !selectedId;
   const onActivity = view === 'activity' && !selectedId;
@@ -1116,7 +1102,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extOpen = onExt && extensions && extTarget ? resolveExtensionRoute(extTarget, extensions) : null;
   const extName = extOpen ? extensions?.find((e) => e.manifest.id === extOpen.extensionId)?.manifest.name[locale()] ?? extOpen.extensionId : '';
   /** The name of the page the main area shows instead of a thread, for the top bar; null on a thread. */
-  const viewTitle = onSettings ? t('sidebar.settings') : onGoal ? t('loopx.goalsGroup') : onGoalsList ? t('goals.title') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
+  const viewTitle = onSettings ? t('sidebar.settings') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
       ? t('sidebar.schedules')
       : onActivity
         ? t('activity.title')
@@ -1139,10 +1125,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     at: observedAt ?? (keepThreads ? cachedThreads(hostId)?.at ?? null : null),
   }, ...(merging ? elsewhere : [])], [hostId, host?.label, threads, sidebarAgents, connectionShown, threadsKnown, observedAt, keepThreads, merging, elsewhere]);
   const extInputs = useMemo(
-    () => (onExt ? { workSources, threads: machineSummaries(machineSources, selectedId, merging),
+    () => (onExt ? { workSources, threads: machineSummaries(machineSources.map(source => ({ ...source, goals: source.hostId === hostId ? loopxStatus?.goals : undefined })), selectedId, merging),
       machines: machineSources.map((source): MachineState => ({ id: source.hostId, label: source.label, state: source.state, observedAt: source.at })),
       connection: connectionShown, observedAt: api.demo ? null : observedAt, agents, extension: extensions?.find(e => e.manifest.id === extOpen?.extensionId) ?? null } : null),
-    [workSources, onExt, machineSources, merging, selectedId, connectionShown, observedAt, agents, api.demo, extensions, extOpen?.extensionId],
+    [workSources, onExt, machineSources, hostId, loopxStatus, merging, selectedId, connectionShown, observedAt, agents, api.demo, extensions, extOpen?.extensionId],
   );
 
   // An extension view that is not there (never installed, removed, switched off, or an address
@@ -1181,15 +1167,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The address follows what the main area shows. Replaced, not pushed: going between the pages and
   // threads is not a trail for the back button to walk.
+  const stewardWant = goalRequest ? goalOverviewHash(goalRequest.goalId, goalRequest.section) : goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalOverviewHash(goalDetailFocus.goalId, goalDetailFocus.section) : STEWARD_HASH;
   const extWant = onExt ? (extOpen ? extensionHash(extOpen) : extTarget ?? '') : '';
   useEffect(() => {
     if (threadLink) return;
-    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}${goalTab === 'overview' ? '' : `/${goalTab}`}` : onGoalsList ? '#/goals' : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
+    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onSteward ? stewardWant : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
     if (window.location.hash !== want) {
       window.history.replaceState(window.history.state, '', want || window.location.pathname + window.location.search);
     }
     appHref.current = window.location.pathname + window.location.search + window.location.hash;
-  }, [schedulePath, machinePath, goalPath, goalTab, onSettings, settingsPath, onGoal, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
+  }, [stewardWant, goalRequest, goalDetailFocus, api, boardEntry, schedulePath, machinePath, onSettings, settingsPath, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
 
   // Whether the directory a new thread would start in is a git repository. Asked once per directory picked.
   useEffect(() => {
@@ -1236,8 +1223,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         setView(next);
         if (next === 'schedules') setSchedulePath(hash.startsWith('#/schedules/') ? hash.slice('#/schedules/'.length) : '');
       if (next === 'machines') setMachinePath(hash.startsWith('#/machines/') ? hash.slice('#/machines/'.length) : '');
-        if (next === 'goal') { setGoalPath(goalIdForHash(hash) ?? ''); setGoalTab(goalTabForHash(hash)); }
         if (next === 'settings') setSettingsPath(hash.replace(/^#\/settings\/?/, ''));
+        if (next !== 'steward') setGoalRequest(null);
+        if (next === 'steward') {
+          const request = goalOverviewRequest(hash);
+          setGoalRequest(request);
+          if (!request) setGoalDetailFocus(null);
+        }
         if (next === 'ext') setExtTarget(hash);
         setDrawer(false);
       };
@@ -1944,10 +1936,17 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The overview: a popover on narrow screens and the pages, a standing panel beside the
   // conversation on a wide one. Its switch is remembered here, and starts open.
-  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && !onPage;
+  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && (!onPage || onSteward);
   const [overviewOpen, setOverviewOpen] = useStoredFlag(OVERVIEW_OPEN_KEY, true);
   const [overviewDetail, setOverviewDetail] = useState<{ api: Api; threadId: string; section: OverviewSection; returnToPreview: boolean } | null>(null);
   const [overviewSignal, setOverviewSignal] = useState(0);
+  const [goalDetailsExpanded, setGoalDetailsExpanded] = useState<{ threadId: string; expanded: boolean } | null>(null);
+  const onGoalDetailsChange = useCallback((threadId: string, expanded: boolean) => {
+    setGoalDetailsExpanded(current => current?.threadId === threadId && current.expanded === expanded ? current : { threadId, expanded });
+  }, []);
+  useEffect(() => {
+    if (goalDetailFocus?.api === api && (goalDetailFocus.threadId === null ? onSteward : goalDetailFocus.threadId === selectedId && !onPage)) setOverviewSignal(signal => signal + 1);
+  }, [goalDetailFocus, api, selectedId, onPage, onSteward]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const activeOverviewDetail = overviewDetail?.api === api && overviewDetail?.threadId === selectedId && !onPage ? overviewDetail : null;
   useLayoutEffect(() => { setOverviewDetail(d => d && d.api === api && d.threadId === selectedId && !onPage ? d : null); setOverviewSignal(0); }, [api, selectedId, onPage]);
@@ -1977,8 +1976,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     wasSide.current = sideKeys; wasDock.current = dockOpen;
   }, [sideKeys, dockOpen]);
   const sideOpen = sideKeys || dockOpen;
-  const overviewRoom = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && Boolean(selected || threadPending) && hostUp;
-  const overviewShown = overviewRoom && Boolean(selected);
+  const overviewRoom = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && (onSteward || (Boolean(selected || threadPending) && hostUp));
+  const overviewShown = overviewRoom && Boolean(selected || onSteward);
   /** Only the person turns the standing panel off; the switch above remembers it. */
   const closeOverview = useCallback(() => { if (overviewDock) setOverviewOpen(false); }, [overviewDock, setOverviewOpen]);
   // A page the agent wrote, rendered in a sandboxed iframe.
@@ -2349,18 +2348,34 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     else onHost?.(machine, { thread: id });
   };
 
-  // The LoopX steward page and the goal work pages take the place of a thread, so no thread is open on them.
+  // The steward takes the place of a thread; Goal work stays in the shared overview.
   const openSteward = () => navigate(() => {
+    setGoalRequest(null); setGoalDetailFocus(null); setThreadLink(null);
     setSelectedId(null); setView('steward'); setDrawer(false);
   });
-  const [goalsFilter, setGoalsFilter] = useState<GoalsFilter>('all');
-  const openGoalsList = (filter: GoalsFilter = 'all') => navigate(() => {
-    setGoalsFilter(filter); setSelectedId(null); setView('goals'); setDrawer(false);
+  const openGoalsBoard = () => navigate(() => {
+    setExtTarget(goalsBoardTarget(extensionStorage('board')));
+    setBoardEntry(value => value + 1);
+    setThreadLink(null); setSelectedId(null); setView('ext'); setDrawer(false);
   });
-  const openGoal = (goalId: string, tab: GoalTab = 'overview') => navigate(() => {
-    setGoalPath(goalId); setGoalTab(tab); setSelectedId(null); setView('goal'); setDrawer(false);
-  });
+  const openGoal = (goalId: string | null, section: GoalSection | null = null) => {
+    const target = goalDestination(goalId, threads);
+    navigate(() => {
+      setThreadLink(null);
+      if (target.threadId) openThread(threads.find(thread => thread.id === target.threadId)!);
+      else { setSelectedId(null); setView('steward'); setDrawer(false); }
+      setGoalDetailFocus({ api, threadId: target.threadId, goalId, section });
+      setOverviewOpen(true);
+    });
+  };
   openGoalRef.current = openGoal;
+  // Keep the requested Goal identity while the host is reading its conversation bindings.
+  // Bookmarks only select a reader; they never create a conversation or start Goal work.
+  useEffect(() => {
+    if (!goalRequest || !onSteward || !observedAt && !api.demo) return;
+    setGoalRequest(null);
+    openGoalRef.current(goalRequest.goalId, goalRequest.section);
+  }, [goalRequest, onSteward, observedAt, api.demo, threads]);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
   const [setupNotice, setSetupNotice] = useState<{ text: string; at: number } | null>(null);
@@ -2861,6 +2876,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // person. The team it opens is the lead's own (a member's thread has none to show).
   const overviewTeam = teamShown && coordination?.rootId === selected?.id ? coordination : null;
   const teamNeeds = overviewTeam?.members.filter((member) => memberProgress(member) === 'need').length ?? 0;
+  const waitingOnUser = loopxStatus?.attention.filter(item => loopxNeedsYou.has(item.goalId)) ?? [];
+  const goalNeeds = selected?.loopxInfo && !selected.loopxInfo.missing && loopxNeedsYou.has(selected.loopxInfo.goalId) ? 1 : 0;
+  const overviewNeeds = onSteward ? waitingOnUser.length : teamNeeds + goalNeeds;
+  const overviewBusy = onSteward ? loopxRead.loading : overviewLoading;
+  const goalsChanged = () => { loopxRead.reload(); void refreshThreads(); };
   // The conversation's turns, for naming the section each change belongs to in the diff dialog.
   const turnOrder = useMemo(() => {
     const seen = new Set<string>();
@@ -2973,13 +2993,21 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       pick(id);
     } };
   })() : undefined;
-  const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => selected && api && (
+  const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => onSteward ? (
+    <StewardOverview focusedGoal={goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalDetailFocus : undefined} token={token} goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []}
+      failure={loopxRead.failure} loading={loopxRead.loading} onChanged={goalsChanged} onRetry={loopxRead.reload}
+      threads={threads} defaultAgent={goalCaps.find(cap => cap.agent === draftAgent && cap.available)?.agent ?? goalCaps.find(cap => cap.available)?.agent ?? ''} pickDirectory={pickGoalDir}
+      onOpenThread={id => { if (!persistent) close(); openThreadById(id); }}
+      onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
+      onOpenAll={showcase ? undefined : () => { if (!persistent) close(); openGoalsBoard(); }} />
+  ) : selected && api && (
     <ThreadOverview key={`${hostId ?? ''}:${selected.id}:${detail ?? 'preview'}`}
+      goalExpanded={Boolean(selected.loopxInfo && !selected.loopxInfo.missing && (goalDetailsExpanded?.threadId === selected.id ? goalDetailsExpanded.expanded : goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id))}
       chain={overviewChain} detail={detail} onLoadingChange={setOverviewLoading}
       onViewAll={(section, returnToPreview = true) => setOverviewDetail({ api, threadId: selected.id, section, returnToPreview })}
       api={api} threadId={selected.id} updatedAt={selected.updatedAt} active={selected.status === 'running'}
       team={overviewTeam} agents={agents} plan={topPlan} roots={threadRoots}
-      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} onOpenGoal={goalId => { close(); openGoal(goalId); }} /> : undefined}
+      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} goal={loopxStatus?.goals.find(goal => goal.goalId === selected.loopxInfo?.goalId)} attention={loopxStatus?.attention.find(item => item.goalId === selected.loopxInfo?.goalId)} onChanged={goalsChanged} onExpandedChange={onGoalDetailsChange} threads={threads} onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }} initiallyExpanded={goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id && goalDetailFocus.goalId === selected.loopxInfo.goalId} section={goalDetailFocus?.section ?? null} /> : undefined}
       loadFile={loadFile} persistent={persistent}
       onOpenMember={(member) => { setAgentsStart(member ?? null); setAgentsOpen(true); setFiles(null); }}
       onOpenDiff={(file) => setDiffFile({ threadId: selected.id, file })}
@@ -3043,7 +3071,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         />
       )}
       {/* The same picker, answering a Goal join instead of setting the draft's directory. */}
-      {goalDirAsk && (
+      {goalDirAsk && createPortal(
+        <div className="goal-directory-picker">
         <DirectoryPicker
           api={api}
           roots={workdirs}
@@ -3054,6 +3083,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onSelect={cwd => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(cwd); }}
           onClose={() => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(null); }}
         />
+        </div>, document.body
       )}
       {projectDialog === 'new' && (
         <NewProjectDialog
@@ -3117,12 +3147,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onNewSection={threadActions.newSection}
           onOpenSteward={showcase ? undefined : openSteward}
           stewardActive={onSteward}
-          goals={loopxStatus?.goals ?? []}
-          attentionGoals={loopxStatus?.attention ?? []}
-          activeGoalId={onGoal ? goalPath : null}
-          onOpenGoal={openGoal}
-          onOpenGoalTasks={goalId => openGoal(goalId, 'tasks')}
-          onOpenAllGoals={showcase ? undefined : () => openGoalsList()}
+          needsYouGoals={loopxNeedsYou}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
@@ -3201,37 +3226,38 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               </button>
             )}
           </div>
-          {selected && (
+          {(selected || onSteward) && (
             <div className="topbar-actions">
               {/* The thread at a glance: one panel for the team, the plan, the changes, the pictures
                   and the files. The badge is only ever what needs the person. */}
-              {api && hostUp && (overviewDock ? (
+              {(onSteward || api && hostUp) && (overviewDock ? (
                 <button
                   type="button"
-                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${teamNeeds ? ' attention' : ''}`}
+                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${overviewNeeds ? ' attention' : ''}`}
                   aria-label={t('overview.label')}
                   aria-pressed={overviewOpen}
-                  aria-busy={overviewLoading}
-                  title={teamNeeds ? t('overview.needsYou', teamNeeds) : t('overview.label')}
+                  aria-busy={overviewBusy}
+                  title={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
                   onClick={() => setOverviewOpen(!overviewOpen)}
                 >
                   <IconOverview />
-                  {teamNeeds > 0 && <span className="topbar-badge">{teamNeeds}</span>}
+                  {overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}
                 </button>
               ) : (
                 <Popover
-                  key={`${hostId ?? ''}:${selected.id}`}
+                  key={onSteward ? 'steward' : `${hostId ?? ''}:${selected!.id}`}
                   label={t('overview.label')}
-                  prepare={() => prepareOverview(api, selected.id, selected.updatedAt)}
+                  prepare={onSteward ? undefined : () => prepareOverview(api!, selected!.id, selected!.updatedAt)}
                   openSignal={overviewSignal}
-                  triggerBusy={overviewLoading}
-                  triggerClassName={`icon-btn topbar-overview${teamNeeds ? ' attention' : ''}`}
+                  triggerBusy={overviewBusy}
+                  triggerClassName={`icon-btn topbar-overview${overviewNeeds ? ' attention' : ''}`}
                   triggerLabel={t('overview.label')}
-                  triggerTitle={teamNeeds ? t('overview.needsYou', teamNeeds) : t('overview.label')}
+                  triggerTitle={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
                   align="end"
                   placement="below"
                   panelClassName="overview-panel"
-                  trigger={<><IconOverview />{teamNeeds > 0 && <span className="topbar-badge">{teamNeeds}</span>}</>}
+                  suspendDismissal={onSteward && Boolean(goalDirAsk)}
+                  trigger={<><IconOverview />{overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}</>}
                 >
                   {(close) => overviewBody(close, false)}
                 </Popover>
@@ -3239,12 +3265,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               {/* A phone keeps its plan button: it has no margin card, and the lead's list of what
                   leaves the bar was the desktop's. The overview has the plan too, one tap away. */}
               {compact && topPlan && !onPage && <PlanButton item={topPlan} />}
-              {compact && (
+              {compact && selected && (
                 <button className="icon-btn topbar-new" aria-label={t('sidebar.newThread')} onClick={() => newThread()}>
                   <IconEdit />
                 </button>
               )}
-              <button
+              {selected && <button
                 className="icon-btn topbar-more"
                 aria-label={t('app.threadMore')}
                 onClick={(e) => {
@@ -3253,13 +3279,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 }}
               >
                 <IconMore />
-              </button>
-            </div>
-          )}
-          {onSteward && !selected && (
-            <div className="topbar-actions">
-              <StewardActions goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []} failure={loopxRead.failure}
-                onOpenGoal={openGoal} onOpenAll={showcase ? undefined : openGoalsList} />
+              </button>}
             </div>
           )}
         </header>}
@@ -3333,7 +3353,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           </div>
         ) : onExt ? (
           // An extension's view, behind a boundary of its own. Until the list is read, it is on its way.
-          <div key={`ext:${extOpen ? `${extOpen.extensionId}/${extOpen.view.id}` : ''}`} className="extension-stage"><div className="scroller">
+          <div key={`ext:${extOpen ? `${extOpen.extensionId}/${extOpen.view.id}` : ''}:${boardEntry}`} className="extension-stage"><div className="scroller">
             {extOpen && extInputs ? (
               <ExtensionView api={api} extensionId={extOpen.extensionId} viewId={extOpen.view.id} name={extName} inputs={extInputs} onOpenThread={openBoardThread}
                 onSetThreadDone={(id, done) => patchBoardThread(id, { done }).catch(error => { handleError(error); throw error; })}
@@ -3424,42 +3444,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               onError={handleError}
             />
           </div>
-        ) : onGoal ? (
-          // A document, not a conversation: starts at the top, like the other pages.
-          <div key="goal" className="scroller">
-            <GoalWorkPage
-              token={token}
-              goalId={goalPath}
-              tab={goalTab}
-              onTab={setGoalTab}
-              goals={loopxStatus?.goals ?? []}
-              goalsLoaded={loopxStatus !== null && !loopxRead.loading}
-              attention={loopxStatus?.attention ?? []}
-              failure={loopxRead.failure}
-              onRetry={loopxRead.reload}
-              onChanged={() => loopxRead.reload()}
-              threads={threads}
-              onOpenThread={openThreadById}
-              onBrowseFiles={threadId => { setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
-              defaultAgent={draftAgent || agents[0]?.id || 'codex'}
-              pickDirectory={pickGoalDir}
-            />
-          </div>
-        ) : onGoalsList ? (
-          <div key={`goals-list-${goalsFilter}`} className="scroller">
-            <GoalsPage
-              token={token}
-              initialFilter={goalsFilter}
-              goals={loopxStatus?.goals ?? []}
-              attention={loopxStatus?.attention ?? []}
-              activeGoalId={null}
-              onOpenGoal={openGoal}
-              onChanged={() => loopxRead.reload()}
-            />
-          </div>
         ) : onSteward ? (
           <div key="steward" className="scroller">
-            <StewardPage token={token} failure={loopxRead.failure} />
+            <StewardPage token={token} failure={loopxRead.failure} deferSessionOpen={Boolean(goalRequest || goalDetailFocus?.api === api && goalDetailFocus.threadId === null)} />
           </div>
         ) : onActivity ? (
           // The same document shape: days from the top, each conversation's asks under its name.

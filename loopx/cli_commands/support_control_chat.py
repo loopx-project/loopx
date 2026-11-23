@@ -39,6 +39,9 @@ def chat_server_options(
         explicit_global_registry(args.runtime_root, registry_path=registry_path)
         if args.global_registry else registry_path
     )
+    idle_timeout = float(args.idle_timeout_seconds)
+    if not math.isfinite(idle_timeout) or idle_timeout < 0:
+        raise ValueError("idle timeout must be a nonnegative finite number (0 disables it)")
     hard_timeout = float(args.hard_timeout_seconds)
     if not math.isfinite(hard_timeout) or hard_timeout < 0:
         raise ValueError("hard timeout must be a nonnegative finite number (0 disables it)")
@@ -62,7 +65,7 @@ def chat_server_options(
             max(0.1, float(args.startup_timeout_seconds))
             if args.startup_timeout_seconds is not None else None
         ),
-        "idle_timeout_sec": max(0.1, float(args.idle_timeout_seconds)),
+        "idle_timeout_sec": idle_timeout if idle_timeout else None,
         "hard_timeout_sec": hard_timeout if hard_timeout else None,
         "assets_dir": Path(args.assets_dir).expanduser() if args.assets_dir else None,
         "open_browser": not bool(args.no_open),
@@ -98,14 +101,14 @@ def register_chat_and_dashboard_commands(
     chat_parser.add_argument(
         "--idle-timeout-seconds",
         type=float,
-        default=180.0,
-        help="Maximum seconds without an upstream event before interrupting the active turn.",
+        default=0.0,
+        help="Maximum seconds without an upstream event before interrupting the active turn; 0 (default) disables it.",
     )
     chat_parser.add_argument(
         "--hard-timeout-seconds",
         type=float,
         default=0.0,
-        help="Absolute maximum seconds for one interactive Agent turn; 0 (default) disables it. Idle and startup limits remain.",
+        help="Absolute maximum seconds for one interactive Agent turn; 0 (default) disables it. Explicit idle and startup limits remain.",
     )
     chat_parser.add_argument(
         "--assets-dir",

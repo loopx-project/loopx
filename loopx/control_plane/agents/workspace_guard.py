@@ -233,16 +233,27 @@ def delivery_workspace_repository(value: Any) -> str | None:
 
 
 def observe_goal_delivery_workspace_isolation(
-    goal: dict[str, Any], selected_todo: dict[str, Any],
+    goal: dict[str, Any],
+    selected_todo: dict[str, Any],
+    *,
+    project_asset: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Preview settlement's typed policy, without granting workspace admission.
 
     Observe the registered target so a foreign caller cwd cannot turn a local
     Goal into a Git task. Refresh still verifies the actual producing workspace.
     """
+    from ..quota.selected_todo_projection import resolve_selected_todo_write_contract
     from ..quota.settlement_workspace_causality import build_delivery_workspace_causality
 
-    causality = build_delivery_workspace_causality(selected_todo)
+    goal_project_asset = goal.get("project_asset") if isinstance(goal, Mapping) else None
+    causality_todo = resolve_selected_todo_write_contract(
+        selected_todo,
+        goal.get("agent_todos") if isinstance(goal, Mapping) else None,
+        project_asset.get("agent_todos") if isinstance(project_asset, Mapping) else None,
+        goal_project_asset.get("agent_todos") if isinstance(goal_project_asset, Mapping) else None,
+    )
+    causality = build_delivery_workspace_causality(causality_todo)
     if (causality or {}).get("requirement") == "not_required":
         return {}
     repo = goal.get("repo") or goal.get("project") or goal.get("root")
@@ -393,10 +404,12 @@ def _peer_work_requires_isolated_workspace(
     )
     if not isinstance(candidate, dict):
         return False
-    if candidate.get("required_write_scopes"):
-        return True
     if str(candidate.get("task_class") or "").strip().lower() == "continuous_monitor":
         return False
+    if isinstance(candidate.get("task_repository"), str) and candidate["task_repository"].strip():
+        return True
+    if candidate.get("required_write_scopes"):
+        return True
     action_kind = str(candidate.get("action_kind") or "").strip().lower()
     return action_kind in PEER_WRITE_ACTION_KINDS or action_kind.startswith(
         tuple(f"{prefix}_" for prefix in PEER_WRITE_ACTION_KINDS)
@@ -456,6 +469,8 @@ def build_agent_workspace_guard(
     selected_todo: dict[str, Any] | None = None,
     current_path: Path | None = None,
     local_workspace: dict[str, Any] | None = None,
+    project_asset: Mapping[str, Any] | None = None,
+    raw_agent_todo_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(agent_identity, dict):
         return None
@@ -472,6 +487,17 @@ def build_agent_workspace_guard(
         if isinstance(selected_todo, dict) and selected_todo
         else next(iter(_peer_candidate_items(agent_todo_summary)), {})
     )
+    if candidate:
+        from ..quota.selected_todo_projection import resolve_selected_todo_write_contract
+
+        goal_project_asset = goal.get("project_asset") if isinstance(goal, Mapping) else None
+        candidate = resolve_selected_todo_write_contract(
+            candidate,
+            goal.get("agent_todos") if isinstance(goal, Mapping) else None,
+            project_asset.get("agent_todos") if isinstance(project_asset, Mapping) else None,
+            goal_project_asset.get("agent_todos") if isinstance(goal_project_asset, Mapping) else None,
+            raw_agent_todo_summary,
+        ) or candidate
     local = (
         local_workspace
         if local_workspace is not None
@@ -483,7 +509,7 @@ def build_agent_workspace_guard(
     if not _peer_work_requires_isolated_workspace(
         workspace_guard_policy,
         agent_todo_summary,
-        selected_todo=selected_todo,
+        selected_todo=(candidate if candidate else selected_todo),
         local_goal_workspace=local_admitted,
     ):
         return None

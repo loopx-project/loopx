@@ -730,27 +730,16 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 # Preparation never starts a model request. Check the same
                 # optional transport owner before reserving a bounded retry.
                 if session.get("agent_id") == "antigravity":
-                    from .antigravity_adapter import _rpc_post, discover_antigravity_language_server
+                    from .antigravity_adapter import discover_antigravity_language_server, probe_cascade_idle
 
                     discovered = discover_antigravity_language_server(deadline=time.monotonic() + 3.0)
                     if discovered is None:
                         return False
                     cascade_id = str(session.get("upstream_thread_id") or "").strip()
-                    if cascade_id:
-                        from ...chat_agent import CodexChatAgentError
-
-                        try:
-                            trajectory = _rpc_post(
-                                str(discovered["url"]),
-                                str(discovered["csrf_token"]),
-                                "GetCascadeTrajectory",
-                                {"cascadeId": cascade_id},
-                                timeout=2.5,
-                            )
-                        except CodexChatAgentError:
-                            return False
-                        if not isinstance(trajectory, dict) or trajectory.get("status") != "CASCADE_RUN_STATUS_IDLE":
-                            return False
+                    if cascade_id and not probe_cascade_idle(
+                        str(discovered["url"]), str(discovered["csrf_token"]), cascade_id, timeout=2.5,
+                    ):
+                        return False
                 else:
                     from .codex_auth import native_api_transport
                     native_api_transport(self.controller.coordination_runtime_root,

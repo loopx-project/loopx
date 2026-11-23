@@ -243,7 +243,7 @@ test("summary display normalizes declarations and the last scoped outcome wins i
   const projected = projectTodoSummaryDisplay({items: [{record}]})[0]!;
   assert.equal(projected.task_domain, "engineering");
   assert.equal(projected.task_repository, "git:example.com/team/project");
-  assert.deepEqual(projected.required_write_scopes, ["docs/**"]);
+  assert.equal(projected.required_write_scopes, undefined);
   assert.deepEqual(projected.required_decision_scopes, [{schema_version: "decision_scope_v0", ...scope}]);
   assert.deepEqual(projected.decision_scope_outcomes, [{schema_version: "todo_decision_scope_outcome_v0", outcome: "reject",
     decision_scope: {schema_version: "decision_scope_v0", ...scope}, source_todo_id: "todo_second"}]);

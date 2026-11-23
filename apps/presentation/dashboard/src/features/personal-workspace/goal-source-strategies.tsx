@@ -1,5 +1,5 @@
 import {ArrowLeft, ArrowRight, RefreshCw} from "lucide-react";
-import {useEffect, useRef, useState} from "react";
+import {type ReactNode, useEffect, useRef, useState} from "react";
 import {z} from "zod";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
@@ -55,7 +55,9 @@ export function GoalSourceStrategies({goalId, originalGoalId, sourceUrl, zh, sel
   goalId: string; originalGoalId: string; sourceUrl?: string; zh: boolean; selection: string;
   onSelect: (id: string, replace?: boolean) => void; onClose?: () => void; embedded?: boolean;
 }) {
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [loaded, setSnapshot] = useState<{scope: string; value: Snapshot} | null>(null);
+  const scope = `${goalId}:${originalGoalId}:${sourceUrl ?? ""}`;
+  const snapshot = loaded?.scope === scope ? loaded.value : null;
   const [busy, setBusy] = useState(true), [failed, setFailed] = useState(false);
   const [revision, setRevision] = useState(0);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -73,10 +75,10 @@ export function GoalSourceStrategies({goalId, originalGoalId, sourceUrl, zh, sel
       if (result.goal_id !== originalGoalId || result.source.namespace !== namespace
           || result.total !== result.items.length || result.native_run_count < result.total
           || new Set(result.items.map(item => item.id)).size !== result.total) throw new Error("Inconsistent source history");
-      if (current) setSnapshot(result);
+      if (current) setSnapshot({scope, value: result});
     }).catch(() => {if (current) setFailed(true);}).finally(() => {if (current) setBusy(false);});
     return () => {current = false; controller.abort();};
-  }, [goalId, originalGoalId, sourceUrl, namespace, revision]);
+  }, [goalId, originalGoalId, sourceUrl, namespace, revision, scope]);
   useEffect(() => {
     const previous = previousSelection.current;
     previousSelection.current = selection;
@@ -85,6 +87,9 @@ export function GoalSourceStrategies({goalId, originalGoalId, sourceUrl, zh, sel
       entry?.focus({preventScroll: true}); entry?.scrollIntoView({block: "nearest"});
     } else if (!embedded || selection !== "all") heading.current?.focus({preventScroll: true});
   }, [selection, embedded]);
+  const time = (stamp: string) => Number.isFinite(Date.parse(stamp))
+    ? new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {dateStyle: "medium", timeStyle: "medium"}).format(new Date(stamp))
+    : (zh ? "时间未记录" : "Time not recorded");
   const items = snapshot?.items ?? [];
   // Only recorded time orders this view. It establishes neither execution time
   // nor causal relationships; records without a usable time remain readable.
@@ -96,19 +101,6 @@ export function GoalSourceStrategies({goalId, originalGoalId, sourceUrl, zh, sel
   const dated = chronology.filter(item => Number.isFinite(Date.parse(item.recorded_at)));
   const index = items.findIndex(item => item.id === selection);
   const selected = items[index];
-  const vision = record(selected?.agent_vision), patch = record(vision.vision_patch), path = record(vision.path_delta);
-  const stride = record(vision.stride_decision), probe = record(stride.next_probe), review = record(stride.previous_review);
-  const time = (stamp: string) => Number.isFinite(Date.parse(stamp))
-    ? new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {dateStyle: "medium", timeStyle: "medium"}).format(new Date(stamp))
-    : (zh ? "时间未记录" : "Time not recorded");
-  const prose = (label: string, value: unknown) => typeof value === "string" && value
-    ? <section key={label}><h3>{label}</h3><MarkdownText text={value} headingLevel={4}/></section> : null;
-  const list = (label: string, value: unknown) => Array.isArray(value) && value.length
-    ? <section key={label}><h3>{label}</h3><ul>{value.map((item, i) => <li key={i}>
-      {typeof item === "string" ? <MarkdownText text={item} headingLevel={4}/> : <pre>{JSON.stringify(item, null, 2)}</pre>}
-    </li>)}</ul></section> : null;
-  const nextLabels = zh ? {scope: "范围", prediction: "预期", adoption_criterion: "采用条件", cost_bound: "成本边界", minimum_evidence: "所需依据"}
-    : {scope: "Scope", prediction: "Prediction", adoption_criterion: "Adoption criterion", cost_bound: "Cost bound", minimum_evidence: "Required evidence"};
   return <section className="research-history source-strategies" aria-label={zh ? "策略历史" : "Strategy history"} aria-busy={busy}>
     {selection !== "all" || onClose ? <button type="button" className="research-reader-back" onClick={() => selection === "all" ? onClose?.() : onSelect("all")}><ArrowLeft size={16} aria-hidden/>{selection === "all" ? (zh ? "返回研究历程" : "Back to research history") : (zh ? "返回策略总览" : "Back to strategy overview")}</button> : null}
     <header className="source-strategies-heading"><div className="research-history-title">
@@ -147,29 +139,106 @@ export function GoalSourceStrategies({goalId, originalGoalId, sourceUrl, zh, sel
       </ol> : null}
       {!items.length ? <p role="status">{zh ? "原 Goal 没有保留策略记录。" : "The original Goal has no retained strategy records."}</p>
         : !selected && selection !== "all" ? <p role="status">{zh ? "原来源中找不到所选版本。可选择其他记录。" : "The selected version is absent from this source. Other records remain readable."}</p> : null}
-      {selected ? <article className="source-strategy-document" aria-label={zh ? "策略原文" : "Original strategy"}>
-        <p className="source-strategies-meta"><time dateTime={selected.recorded_at}>{time(selected.recorded_at)}</time> · {selected.agent_id}</p>
-        {prose(zh ? "当时的目标" : "Goal at the time", patch.vision_summary)}
-        {prose(zh ? "验收条件" : "Acceptance", patch.acceptance_summary)}
-        {prose(zh ? "原先的判断" : "Prior assumption", path.prior_assumption)}
-        {prose(zh ? "当时观察" : "Recorded observation", path.observed_reality)}
-        {list(zh ? "改变" : "Changed", path.changed)}
-        {list(zh ? "保留" : "Retained", path.retained)}
-        {list(zh ? "停止" : "Stopped", path.stopped)}
-        {list(zh ? "未解问题" : "Unresolved questions", path.unresolved_questions)}
-        {prose(zh ? "再次进入的条件" : "Reentry condition", path.reentry_condition)}
-        {Object.keys(probe).length ? <section><h3>{zh ? "当时的后续计划" : "Recorded next plan"}</h3><dl>{Object.entries(nextLabels).map(([key, label]) => typeof probe[key] === "string" && probe[key]
-          ? <FragmentField key={key} label={label} value={String(probe[key])}/> : null)}</dl></section> : null}
-        {prose(zh ? "对上轮的记录性回顾" : "Recorded review of the previous decision", review.lesson)}
-        {list(zh ? "依据引用" : "Evidence references", path.evidence_refs)}
-        <details className="research-node-provenance"><summary>{zh ? "完整原始记录与来源" : "Complete original record and source"}</summary>
-          <dl><FragmentField label="Goal" value={originalGoalId}/><FragmentField label={zh ? "来源" : "Source"} value={snapshot.source.namespace}/>
-            <FragmentField label={zh ? "版本" : "Version"} value={selected.id}/><FragmentField label={zh ? "记录时间" : "Recorded time"} value={selected.recorded_at}/></dl>
-          <pre tabIndex={0}>{JSON.stringify(selected, null, 2)}</pre>
-        </details>
-      </article> : null}
+      {selected ? <GoalStrategyDocument value={selected.agent_vision} recordedAt={selected.recorded_at}
+        agentId={selected.agent_id} originalRecord={selected} version={selected.id} originalGoalId={originalGoalId}
+        namespace={snapshot.source.namespace} zh={zh}/> : null}
     </> : null}
   </section>;
+}
+
+/** Read-only rendering shared by strategy history and native execution records. */
+export function GoalStrategyDocument({value, recordedAt, agentId, version, originalGoalId, namespace, zh, originalRecord, executionRecord = false}: {
+  originalRecord?: unknown; executionRecord?: boolean;
+  value: Record<string, unknown>; recordedAt: string; agentId?: string; version: string;
+  originalGoalId: string; namespace: string; zh: boolean;
+}) {
+  const additional = {...value};
+  const time = (stamp: string) => Number.isFinite(Date.parse(stamp))
+    ? new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {dateStyle: "medium", timeStyle: "medium"}).format(new Date(stamp))
+    : (zh ? "时间未记录" : "Time not recorded");
+  const prose = (label: string, fields: Record<string, unknown>, key: string) => {
+    const text = readDecisionText(fields, key);
+    return text ? <section><h3>{label}</h3><MarkdownText text={text} headingLevel={4}/></section> : null;
+  };
+  const list = (label: string, fields: Record<string, unknown>, key: string) => {
+    const items = fields[key];
+    if (!Array.isArray(items) || !items.length) return null;
+    delete fields[key];
+    return <section><h3>{label}</h3><ul>{items.map((item, i) => <li key={i}>
+      {typeof item === "string" ? <MarkdownText text={item} headingLevel={4}/> : <pre>{JSON.stringify(item, null, 2)}</pre>}
+    </li>)}</ul></section>;
+  };
+  const nextLabels = zh ? {scope: "范围", prediction: "预期", adoption_criterion: "采用条件", cost_bound: "成本边界", minimum_evidence: "所需依据"}
+    : {scope: "Scope", prediction: "Prediction", adoption_criterion: "Adoption criterion", cost_bound: "Cost bound", minimum_evidence: "Required evidence"};
+  const objectives = readDecisionSection(additional, "vision_patch", patch => <>
+    {prose(zh ? "当时的目标" : "Goal at the time", patch, "vision_summary")}
+    {prose(zh ? "验收条件" : "Acceptance", patch, "acceptance_summary")}
+  </>);
+  const path = readDecisionSection(additional, "path_delta", path => <>
+    {prose(zh ? "原先的判断" : "Prior assumption", path, "prior_assumption")}
+    {prose(zh ? "当时观察" : "Recorded observation", path, "observed_reality")}
+    {list(zh ? "改变" : "Changed", path, "changed")}
+    {list(zh ? "保留" : "Retained", path, "retained")}
+    {list(zh ? "停止" : "Stopped", path, "stopped")}
+    {list(zh ? "未解问题" : "Unresolved questions", path, "unresolved_questions")}
+    {prose(zh ? "再次进入的条件" : "Reentry condition", path, "reentry_condition")}
+    {list(zh ? "依据引用" : "Evidence references", path, "evidence_refs")}
+  </>);
+  const stride = readDecisionSection(additional, "stride_decision", stride => <>
+    {readDecisionSection(stride, "next_probe", probe => {
+      const rows = Object.entries(nextLabels).flatMap(([key, label]) => {
+        const text = readDecisionText(probe, key);
+        return text ? [<FragmentField key={key} label={label} value={text}/>] : [];
+      });
+      return rows.length ? <section><h3>{zh ? "当时的后续计划" : "Recorded next plan"}</h3><dl>{rows}</dl></section> : null;
+    })}
+    {readDecisionSection(stride, "previous_review", review =>
+      prose(zh ? "对上轮的记录性回顾" : "Recorded review of the previous decision", review, "lesson"))}
+  </>);
+  return <article className="source-strategy-document" aria-label={zh ? "策略原文" : "Original strategy"}>
+        <p className="source-strategies-meta"><time dateTime={recordedAt}>{time(recordedAt)}</time>{agentId ? ` · ${agentId}` : ""}</p>
+        {objectives}
+        {path}
+        {stride}
+        {Object.keys(additional).length ? <details><summary>{zh ? "其他决策字段" : "Additional decision fields"}</summary>
+          <NativeDecisionFields value={additional}/>
+        </details> : null}
+        <details className="research-node-provenance"><summary>{zh ? "完整原始记录与来源" : "Complete original record and source"}</summary>
+          <dl><FragmentField label="Goal" value={originalGoalId}/><FragmentField label={zh ? "来源" : "Source"} value={namespace}/>
+            <FragmentField label={executionRecord ? (zh ? "执行记录身份" : "Execution record identity") : (zh ? "版本" : "Version")} value={version}/><FragmentField label={zh ? "记录时间" : "Recorded time"} value={recordedAt}/></dl>
+          <pre tabIndex={0}>{JSON.stringify(originalRecord ?? value, null, 2)}</pre>
+        </details>
+      </article>;
+}
+
+function readDecisionText(fields: Record<string, unknown>, key: string) {
+  const text = fields[key];
+  if (typeof text !== "string" || !text) return null;
+  delete fields[key];
+  return text;
+}
+
+// The structured view consumes fields from a private copy. Keep unsupported
+// shapes and unrendered keys in the disclosure without changing the source record.
+function readDecisionSection(fields: Record<string, unknown>, key: string,
+    render: (section: Record<string, unknown>) => ReactNode) {
+  const section = {...record(fields[key])};
+  const hasFields = Object.keys(section).length > 0;
+  const content = render(section);
+  if (hasFields) {
+    if (Object.keys(section).length) fields[key] = section;
+    else delete fields[key];
+  }
+  return content;
+}
+
+// Unknown optional fields remain readable without treating them as executable markup.
+function NativeDecisionFields({value}: {value: unknown}) {
+  if (typeof value === "string") return <MarkdownText text={value} headingLevel={4}/>;
+  if (Array.isArray(value)) return <ul>{value.map((item, index) => <li key={index}><NativeDecisionFields value={item}/></li>)}</ul>;
+  if (value !== null && typeof value === "object") return <dl>{Object.entries(value).map(([key, item]) =>
+    <div key={key}><dt>{key}</dt><dd><NativeDecisionFields value={item}/></dd></div>)}</dl>;
+  return <span>{value === null ? "null" : String(value)}</span>;
 }
 
 function FragmentField({label, value}: {label: string; value: string}) {

@@ -165,12 +165,13 @@ if (database && installed) {
     assert.equal(wires[0]!.display_views, undefined, "the User caller did not request three displays");
     const views = wires[1]!.display_views as JsonObject;
     assert.equal((views.terminal as JsonObject[])[0]!.note, "Retained source note");
-    assert.deepEqual((views.summary as JsonObject[])[0]!.required_write_scopes, ["output.json"]);
+    assert.equal((views.summary as JsonObject[])[0]!.required_write_scopes, undefined);
     const forged = structuredClone(requests);
     ((forged[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = [{path: ["items", 0, "note"], value: "Forged source fact"}];
     await assert.rejects(readCanonicalQuotaProjection({requests: forged}, dependencies), /canonical Todo facts/);
     const agentField = fields.agent_todos as JsonObject;
     const sourceItem = (agentField.items as JsonObject[])[0]!;
+    assert.deepEqual(sourceItem.required_write_scopes, ["output.json"]);
     for (const changes of [
       [{path: ["items", 0, "required_write_scopes", 0], value: "different.json"}],
       [{path: ["open_count"], value: Number(agentField.open_count) + 1}],
@@ -319,7 +320,9 @@ if (database && installed) {
     assert.deepEqual(ids(views.summary), ["todo_01_open", "todo_02_blocker"]);
     assert.deepEqual(ids(views.planning), ["todo_01_open", "todo_02_blocker"]);
     assert.deepEqual(ids(views.terminal), ["todo_01_open", "todo_02_blocker", "todo_03_completed"]);
-    assert.deepEqual((views.planning as JsonObject[])[0].required_write_scopes, ["result.json"]);
+    assert.equal((views.planning as JsonObject[])[0].required_write_scopes, undefined);
+    const openTodo = (first.todos as JsonObject[]).find(row => row.todo_id === "todo_01_open");
+    assert.deepEqual(openTodo?.required_write_scopes, ["result.json"]);
     const terminal = (views.terminal as JsonObject[])[2];
     assert.equal(terminal.note, retainedNote);
     assert.equal(terminal.evidence, "artifact:verified-result");

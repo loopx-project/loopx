@@ -94,13 +94,18 @@ export function AutoTitleView({ host }: ExtensionViewProps) {
         <h2>{t(locale, 'agent')}</h2>
         <div className="autotitle-row">
           <Popover label={t(locale, 'agent')} placement="below" triggerClassName="autotitle-button" trigger={
-            picked ? <AgentMark agentId={picked.id} label /> : <span className="autotitle-muted">{t(locale, 'chooseAgent')}</span>
+            picked ? <AgentMark agentId={picked.id} label /> : <span>{t(locale, 'autoAgent')}</span>
           }>
-            {close => agents.map(a => (
-              <PopoverOption key={a.id} selected={a.id === settings.agent} onSelect={() => { void save({ agent: a.id }); close(); }}>
-                <AgentMark agentId={a.id} label />
-              </PopoverOption>
-            ))}
+            {close => [
+              <PopoverOption key="auto" selected={!picked} onSelect={() => { void save({ agent: null }); close(); }}>
+                {t(locale, 'autoAgent')}
+              </PopoverOption>,
+              ...agents.map(a => (
+                <PopoverOption key={a.id} selected={a.id === settings.agent} onSelect={() => { void save({ agent: a.id }); close(); }}>
+                  <AgentMark agentId={a.id} label />
+                </PopoverOption>
+              )),
+            ]}
           </Popover>
           {picked && (
             <Popover label={t(locale, 'model')} placement="below" triggerClassName="autotitle-button" trigger={<span>{modelLabel}</span>}>
@@ -112,7 +117,7 @@ export function AutoTitleView({ host }: ExtensionViewProps) {
             </Popover>
           )}
         </div>
-        {!picked && <p className="autotitle-note">{t(locale, 'noAgent')}</p>}
+        {!picked && <p className="autotitle-note">{t(locale, 'autoHint')}</p>}
         {picked?.permissionModes && !picked.permissionModes.includes('ask') && (
           <p className="autotitle-note">{t(locale, 'noAsk')}</p>
         )}

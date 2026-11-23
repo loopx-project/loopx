@@ -24,6 +24,7 @@ from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.native_chat.project_context import ChatProjectContexts
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
+from loopx.control_plane.goals.acceptance_oracle_io import ORACLE_HOST_PYTHON
 
 
 @pytest.fixture
@@ -159,8 +160,7 @@ def test_original_http_task_reuses_requested_checker_and_session(environment, ca
     assert len(checks) == 1, {"first": first, "proposals": proposals}
     check = checks[0]
     criterion = check["normalized_parameters"]["document"]["criteria"][0]
-    assert criterion["validation_argv"] == ["python3", "checks.py"]
-    assert Path(shutil.which("python3")).resolve() == Path(sys.executable).resolve()
+    assert criterion["validation_argv"] == [ORACLE_HOST_PYTHON, "checks.py"]
     assert criterion["validation_files"] == [{"path": "checks.py", "sha256": checker_hash}]
     assert check["status"] == "preview_ready" and not first.get("loopx_execution")
     calls_before = capture.read_bytes()

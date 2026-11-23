@@ -6,10 +6,7 @@ import { authorityUnicodeCompare } from "../coordination/authority_store_codec.t
 import { pythonJson } from "../todos/read_codec.ts";
 import { todoIsActionableOpen } from "../todos/summary_lanes.ts";
 import { missingRequiredCapabilities } from "../agents/capability_gate.ts";
-import {
-  evaluateQuotaSchedulingWriteScopesOverlap,
-  schedulingWriteScopeAllowed,
-} from "../work_items/task_lease_acquire_decision.ts";
+import { schedulingWriteScopeAllowed } from "../work_items/task_lease_acquire_decision.ts";
 import { QUOTA_GOAL_BOUNDARY_ARTIFACT } from "./turn_envelope.ts";
 
 interface Lane {
@@ -121,23 +118,11 @@ export function admitAdaptiveChildren(value: unknown): JsonObject | null {
   if (admitted.length < 2) return null;
   const primary = admitted[0];
   const selected: JsonObject[] = [];
-  const writeLanes = [primary];
   for (let index = 1; index < admitted.length; index += 1) {
     const lane = admitted[index];
     if (selected.length >= maxChildren) {
       blocked.push(...admitted.slice(index).map((row) => blockedLane(row, ["capacity_deferred"])));
       break;
-    }
-    const conflict = writeLanes.find(
-      (existing) =>
-        existing.scopes.length &&
-        lane.scopes.length &&
-        existing.effectiveRepository === lane.effectiveRepository &&
-        evaluateQuotaSchedulingWriteScopesOverlap({ left: existing.scopes, right: lane.scopes }).overlap,
-    );
-    if (conflict) {
-      blocked.push({ ...blockedLane(lane, ["write_scope_conflict"]), conflicts_with_todo_id: conflict.id });
-      continue;
     }
     const item = lane.item;
     const brief: JsonObject = {
@@ -166,7 +151,6 @@ export function admitAdaptiveChildren(value: unknown): JsonObject | null {
       execution_kind: "ephemeral_child",
       child_brief: brief,
     });
-    writeLanes.push(lane);
   }
   if (!selected.length) return null;
   return {

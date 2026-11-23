@@ -315,8 +315,23 @@ shell, and a shell update does not certify Goal acceptance or provider readiness
 The release workflow packages both layers from one Git revision.
 
 The installer and App-owned services use the same bounded tool search,
-including standard Homebrew locations on macOS, without loading interactive
-shell profiles. Finder launches therefore do not depend on terminal PATH setup.
+including standard Homebrew locations on macOS and nvm-managed Node
+directories on Unix, without loading interactive shell profiles. Finder
+launches therefore do not depend on terminal PATH setup. nvm resolution is
+read-only and never runs nvm or sources a startup file. An `NVM_BIN` the
+launching shell exported keeps the first position only while the inherited PATH
+resolves the same Node; a PATH that resolves no Node is not evidence the shell
+still selects that version, so a residual variable — left by a launchd plist or
+an earlier shell — drops to the last resort, behind Homebrew, the inherited
+PATH and every discovered nvm location. nvm
+locations this App discovers on disk — the recorded `default` alias, then the
+installed versions newest-first — are appended behind Homebrew and the
+inherited PATH, so an inferred stale default cannot displace a Node the host
+already provides, while a host whose only Node is nvm-managed still gets one.
+Within those inferred locations the recorded `default` leads only while it
+meets the supported Node floor; otherwise the newest installed version that
+does is promoted ahead of it, so an old default never hides a newer supported
+Node from Core's qualification. Each directory appears once in the search.
 When preparing the first App-owned snapshot, an already selected managed CLI's
 recorded Python is reused if the App has no interpreter record of its own.
 This leaves that CLI's launcher and installation owner unchanged.

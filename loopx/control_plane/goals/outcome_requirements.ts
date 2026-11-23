@@ -267,16 +267,21 @@ export function goalOutcomeCheckBasis(head: JsonObject, goalId: string, outcomeI
 
 /** Only the existing acceptance projection supplies check results. A matched
  * description alone is not evidence; work coverage and freshness also matter. */
-export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance: JsonObject): JsonObject | null {
+export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance: JsonObject, registeredAgents?: unknown): JsonObject | null {
   const state = readState(head, goalId); if (!state) return null;
   const lifecycle = readGoalAcceptanceLifecycle(head, goalId);
   const current = lifecycle === null ? state.goal_ref === null
     : lifecycle.state === "active" && state.goal_ref !== null && sameExactGoalRef(lifecycle.goal_ref, state.goal_ref);
+  // A receipt replay may lack a roster, and a later Goal lifetime has a different
+  // roster. Neither observation can establish that an outcome owner is missing.
+  const roster = current && Array.isArray(registeredAgents) && registeredAgents.every(agent => typeof agent === "string")
+    ? new Set(registeredAgents) : null;
   const work = indexCoordinationProjectionTodos(head, goalId).todos;
   return observeOutcomeRequirements({schema_version: GOAL_OUTCOMES_SCHEMA, revision: state.revision, current_lifetime: current,
     outcomes: state.outcomes.map(o => {
       const basis = reviewBasis(o, work);
       return {...o,
+      ...(roster && !roster.has(o.owner_agent_id) ? {owner_registration_missing: true} : {}),
       ...(o.review ? {review: {...o.review, items: o.review.items.map(item => ({...item,
         basis_current: (item.basis_digest ?? o.review!.basis_digest) === basis}))}} : {}),
       review_basis_current: !!o.review && o.review.basis_digest === basis,

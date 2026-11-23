@@ -1618,15 +1618,8 @@ def _attach_interaction_post_writeback_actions(
         cli_channel["post_writeback_actions"] = actions
 
 
-def _attach_interaction_vision_continuation_audit(
-    agent_channel: dict[str, object],
-    cli_channel: dict[str, object],
-    payload: Mapping[str, object],
-) -> None:
-    vision_continuation_audit = _as_mapping(payload.get("vision_continuation_audit"))
-    if not vision_continuation_audit.get("required"):
-        return
-    agent_channel["vision_continuation_audit"] = vision_continuation_audit
+def cli_vision_audit_view(vision_continuation_audit: Mapping[str, object]) -> dict[str, object]:
+    """Return the CLI-owned view of the complete Vision audit."""
     cli_audit: dict[str, object] = {
         "required": True,
         "required_before_closeout": vision_continuation_audit.get("required_before_closeout") or [],
@@ -1646,7 +1639,19 @@ def _attach_interaction_vision_continuation_audit(
             "continue_when": vision_gap_judge.get("continue_when") or [],
             "otherwise": vision_gap_judge.get("otherwise"),
         }
-    cli_channel["vision_continuation_audit"] = cli_audit
+    return cli_audit
+
+
+def _attach_interaction_vision_continuation_audit(
+    agent_channel: dict[str, object],
+    cli_channel: dict[str, object],
+    payload: Mapping[str, object],
+) -> None:
+    vision_continuation_audit = _as_mapping(payload.get("vision_continuation_audit"))
+    if not vision_continuation_audit.get("required"):
+        return
+    agent_channel["vision_continuation_audit"] = vision_continuation_audit
+    cli_channel["vision_continuation_audit"] = cli_vision_audit_view(vision_continuation_audit)
 
 
 def _attach_interaction_vision_wait_state(

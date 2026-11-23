@@ -121,6 +121,26 @@ def test_creation_queue_consumes_only_the_saved_request_and_returns_original_res
     assert status in (200, 202) and replay["proposal"]["receipt"]["original_task_request"] == saved
     assert capture.read_bytes() == after
 
+    # A fresh tab has only the original Session address. It must read the
+    # canonical completion Turn while retaining the failed creation Turn.
+    completion = finished
+    if mode == "failed":
+        (project / "execute-native").write_text("valid")
+        status, continued = request(f"/api/chat/sessions/{sid}/native-turn", {
+            "agent_id": "codex", "operation_id": "retry-cart-task", "todo_id": todo})
+        assert status == 202 and continued["created"]
+        completion = controller.wait_for_turn(session_id=sid, turn_id=continued["turn"]["turn_id"], timeout_sec=20)
+        assert completion["response"]["native_loopx"]["validation"]["status"] == "passed"
+        assert completion["turn_id"] != finished["turn_id"]
+    before_reopen = capture.read_bytes()
+    status, reopened = request(f"/api/chat/sessions/{sid}/native-turn?original_task=true&agent_id=codex")
+    assert status == 200 and reopened["turn"] is None, reopened
+    assert reopened["task"]["canonical_done"] is True
+    assert reopened["task"]["creation_turn"]["turn_id"] == finished["turn_id"]
+    assert reopened["task"]["completion_turn"]["turn_id"] == completion["turn_id"]
+    assert reopened["task"]["completion_turn"]["response"]["native_loopx"]["validation"]["status"] == "passed"
+    assert capture.read_bytes() == before_reopen
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_historical_creation_and_check_adoption_do_not_authorize_a_native_task(environment, cart_host, monkeypatch, provider):

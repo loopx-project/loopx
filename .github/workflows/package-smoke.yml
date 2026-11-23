@@ -91,7 +91,15 @@ jobs:
           import json, subprocess
           from pathlib import Path
           from jsonschema import validate
+          import tomllib
+          from importlib.metadata import version
+          from importlib.resources import files
+          import loopx_codex_provider_routing as provider
           root = Path("packages/loopx-codex-provider-routing")
+          release = version("loopx-codex-provider-routing")
+          assert provider.__version__ == release
+          for manifest in (root / "extension.toml", files(provider) / "native-extension.toml"):
+              assert tomllib.loads(manifest.read_text(encoding="utf-8"))["version"] == release, manifest
           request_schema = json.loads((root / "schemas/request.schema.json").read_text())
           response_schema = json.loads((root / "schemas/response.schema.json").read_text())
           for example in sorted((root / "examples").glob("*.json")):

@@ -63,6 +63,22 @@ maximum minimalism. Decorative density, raw protocol fields, duplicated status,
 and a button for every available capability do not earn attention by existing.
 Judge the whole viewport, including information repeated across components.
 
+**Simple, generous, present only when needed / 简单大方，按需出现。**
+Default surfaces stay calm and uncluttered: when a control, management panel,
+list, badge, or secondary capability is not needed in the current context, the
+user should not see it at all. When it is needed — because the current work has
+an active context, something genuinely waits on the owner, or the owner opens
+its standing entry (such as the shared top-right overview panel on both regular
+and steward conversations) — it appears naturally in place and recedes once
+handled. Never keep low-frequency management chrome, empty placeholders, or
+duplicated entry points permanently pinned on the first screen just to prove a
+feature exists.
+
+界面追求简单大方：正常情况下、不需要某个能力或管理面时，用户就应该完全看不到它；
+真正需要时（当前对话具备对应上下文、有待拍板事项、或用户打开统一入口，例如普通
+对话与管家对话共用的右上角结果面板），它才自然出现，处理完后重新退回安静。不为了
+证明功能存在而把低频列表、重复入口或重提示条常驻在首屏和聊天流里。
+
 Before implementation, inventory the visible elements and their value. Keep
 conversation, results, and decisions prominent; consolidate routine activity;
 offer one-step access to relevant controls and details without a chain of pages.
