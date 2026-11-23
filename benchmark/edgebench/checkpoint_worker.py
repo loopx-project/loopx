@@ -22,6 +22,12 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
 from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
+from benchmark.runtime.research_artifacts import (
+    archive_member_content,
+    is_excluded_tar_member,
+    is_runner_research_component,
+    research_component_exclusions,
+)
 
 from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
@@ -128,7 +134,14 @@ class _ArchiveReader:
         return block
 
 
-def _archive(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
+def _archive(
+    container,
+    remote: str,
+    destination: Path,
+    *,
+    deadline: float | None = None,
+    exclude_research: bool = False,
+) -> Path:
     """Read through the daemon, rejecting symlinks/devices and archive traversal.
 
     Docker's archive reader works while paused, unlike exec-based file readers.
@@ -169,36 +182,41 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
             with tarfile.open(fileobj=_ArchiveReader(raw, deadline) if deadline is not None else raw) as archive:
                 members = []
                 root = PurePosixPath(remote).name
-                names = {}
-                for member in archive:
+                all_members = {}
+                for member in archive.getmembers():
                     check()
                     path = PurePosixPath(member.name)
                     if (path.is_absolute() or ".." in path.parts or not path.parts or
-                            path.parts[0] != root or str(path) in names or
+                            path.parts[0] != root or str(path) in all_members or
                             not (member.isfile() or member.isdir() or member.islnk())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
-                    names[str(path)] = member
+                    all_members[str(path)] = member
                     members.append(member)
 
                 # The typed artifact owner observes regular files, not inode
                 # sharing. Docker encodes a second name for the same inode as a
                 # tar hardlink (common in build outputs). Materialize its bytes
-                # from an inventoried regular member; never resolve a link on
-                # the host filesystem or permit a link chain/symlink escape.
+                # from an inventoried regular member and evaluate exclusion on
+                # the link's own path so local probe and extracted worker
+                # witnesses agree; never resolve a link on the host filesystem.
+                kept_members = []
                 extracted = []
                 for member in members:
                     check()
+                    path = PurePosixPath(member.name)
+                    content_member = archive_member_content(member, all_members)
+                    regular = member
                     if member.islnk():
-                        target_path = PurePosixPath(member.linkname)
-                        target = names.get(str(target_path))
-                        if (target_path.is_absolute() or ".." in target_path.parts or
-                                target is None or not target.isfile()):
-                            raise ValueError("Worker archive contains undeclared, linked or special members")
-                        regular = copy(target)
+                        regular = copy(content_member)
                         regular.name, regular.mode = member.name, member.mode
-                        extracted.append(regular)
-                    else:
-                        extracted.append(member)
+                    if (
+                        exclude_research
+                        and len(path.parts) > 1
+                        and is_excluded_tar_member(archive, content_member, path.parts[1:])
+                    ):
+                        continue
+                    kept_members.append(member)
+                    extracted.append(regular)
 
                 def filtered(member, path):
                     check()
@@ -212,14 +230,21 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
                 # bits after safe extraction; never restore owners or special bits.
                 # Otherwise a private 0700 authority directory becomes 0755 and a
                 # matching frozen source is falsely rejected as having changed.
-                for member in sorted(members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
+                for member in sorted(kept_members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
                     check()
                     (destination / member.name).chmod(member.mode & 0o777)
     check()
     return _physical(destination / root)
 
 
-def _archive_component(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
+def _archive_component(
+    container,
+    remote: str,
+    destination: Path,
+    *,
+    deadline: float | None = None,
+    exclude_research: bool = False,
+) -> Path:
     """Transport a standalone SQLite participant's committed storage too.
 
     A paused process can still have committed data only in its WAL. Reading
@@ -230,7 +255,13 @@ def _archive_component(container, remote: str, destination: Path, *, deadline: f
     """
     from docker.errors import NotFound
 
-    copied = _archive(container, remote, destination, deadline=deadline)
+    copied = _archive(
+        container,
+        remote,
+        destination,
+        deadline=deadline,
+        exclude_research=exclude_research,
+    )
     if not copied.is_file():
         return copied
     with copied.open("rb") as source:
@@ -351,15 +382,22 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                         client.api.timeout = _remaining(deadline)
                         try:
                             copied = _archive_component(
-                                container, entry["source_path"], stage / "workers" / entry["id"], deadline=deadline)
+                                container,
+                                entry["source_path"],
+                                stage / "workers" / entry["id"],
+                                deadline=deadline,
+                                exclude_research=is_runner_research_component(entry),
+                            )
                         except docker.errors.NotFound as error:
                             # Keep the provider exception for direct capture callers.
                             error.checkpoint_component_id = entry["id"]
                             raise
                         components.append({"id": entry["id"], "source_path": str(copied)})
+                    exclusions = research_component_exclusions(request["components"])
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
                             "action": "probe", "components": components,
+                            **({"component_exclusions": exclusions} if exclusions else {}),
                         }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
                         if observed["source_sha256"] != prepared["source_sha256"]:
                             changed = []
@@ -417,12 +455,14 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                 if prepared is not None:
                     metadata["writer_barrier"] = "docker_pause"
                 probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components,
-                    "deadline_epoch_ms": sealing_epoch_ms},
+                    "deadline_epoch_ms": sealing_epoch_ms,
+                    **({"component_exclusions": exclusions} if exclusions else {})},
                                               timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
                 return effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "capture", "components": components, "destination": str(destination),
                     "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
                     "deadline_epoch_ms": sealing_epoch_ms,
+                    **({"component_exclusions": exclusions} if exclusions else {}),
                 }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
     finally:
         client.close()

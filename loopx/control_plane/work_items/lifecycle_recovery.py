@@ -44,7 +44,6 @@ def receipt_bound_lifecycle_candidate(
 def attach_receipt_replan_context(
     current: dict[str, Any] | None, lifecycle_candidate: dict[str, Any] | None, *,
     goal_id: str, agent_id: str | None, source_status: Mapping[str, Any] | None,
-    stride_strategy: str,
     explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
     goal_acceptance_contract: Mapping[str, Any] | None,
     todo_items: Iterable[Mapping[str, Any]] | None = None,
@@ -71,11 +70,11 @@ def attach_receipt_replan_context(
     if not obligations:
         return current
     todos = list(todo_items) if todo_items is not None else None
-    explore_context = explore_reader(goal_id, agent_id) if stride_strategy != "off" and explore_reader else None
+    explore_context = explore_reader(goal_id, agent_id) if explore_reader else None
     for obligation in obligations:
         obligation["replan_context"] = build_replan_context(
             obligation, goal_id=goal_id, agent_id=agent_id, newest_first_runs=(),
-            source_status=source_status, stride_strategy=stride_strategy,
+            source_status=source_status,
             explore_context=explore_context, goal_acceptance_contract=goal_acceptance_contract,
             todo_items=todos,
         )

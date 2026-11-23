@@ -19,6 +19,25 @@ type ConversationMessage = {
   text?: string;
 };
 
+export function workspaceImageAttachments(attachments?: ChatVisibleMessage["attachments"]): WorkspaceImageAttachment[] | undefined {
+  return attachments?.map((attachment) => ({
+    dataUrl: attachment.data_url,
+    id: attachment.id,
+    mimeType: attachment.mime_type,
+    name: attachment.name,
+    size: attachment.size,
+  }));
+}
+
+/** Fetch completed files from the stored assistant message, including on live readback. */
+export function managedReplyDocuments(source: ChatVisibleMessage) {
+  if (source.role !== "agent" || !source.turn_id || source.message_id !== `managed.${source.turn_id}.completed`
+      || !source.attachments?.length || !source.attachments.every(file =>
+        (file.mime_type === "text/plain" || file.mime_type === "text/markdown")
+        && file.data_url.startsWith(`data:${file.mime_type};base64,`))) return undefined;
+  return workspaceImageAttachments(source.attachments);
+}
+
 function refreshHistoryImageLinks(row: ConversationMessage, source: ChatVisibleMessage, sessionId: string) {
   if (row.pending || row.queued || row.queueInputCancelled || !row.sourceMessageId || row.sourceMessageId !== source.message_id
       || source.session_id !== sessionId || row.role !== (source.role === "user" ? "user" : "assistant")
@@ -97,7 +116,9 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     const collaborations = source.collaborations ?? row.collaborations;
     const sourceCreatedAt = source.created_at ?? row.sourceCreatedAt;
     const replyContext = source.reply_context ?? row.replyContext;
-    const attachments = refreshLinkedImages ? refreshHistoryImageLinks(row, source, sessionId) : row.attachments;
+    const replyDocuments = row.role === "assistant" && !row.pending && !row.attachments?.length
+      && source.session_id === sessionId ? managedReplyDocuments(source) : undefined;
+    const attachments = replyDocuments ?? (refreshLinkedImages ? refreshHistoryImageLinks(row, source, sessionId) : row.attachments);
     // Only the exact canonical user body can switch to its source-backed view.
     // A background read never replaces a live answer or a different draft.
     const inputChanged = row.role === "user" && source.role === "user"

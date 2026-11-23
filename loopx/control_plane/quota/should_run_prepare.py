@@ -200,7 +200,6 @@ def _preserve_receipt_bound_replan_obligation(
     agent_id: str | None = None,
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
-    stride_strategy: str = "off",
     receipt_review: Mapping[str, Any] | None = None,
     goal_id: str | None = None,
     guard_recorded_at: str | None = None,
@@ -219,7 +218,6 @@ def _preserve_receipt_bound_replan_obligation(
             "agent_id": agent_id,
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
-            "stride_strategy": stride_strategy,
             "receipt_review": receipt_review,
             "goal_id": goal_id,
             "guard_recorded_at": guard_recorded_at,
@@ -301,7 +299,6 @@ def _prepare_quota_replan_context(
             transition_candidates=(
                 goal_frontier_context.get("replan_transition_candidates") if reconstruct_review else None
             ),
-            stride_strategy=goal_frontier_context["stride_strategy"],
             receipt_review=receipt_bound_replan_review,
             goal_id=safe_goal_id,
             guard_recorded_at=receipt_bound_guard_recorded_at,
@@ -311,7 +308,7 @@ def _prepare_quota_replan_context(
     if replan_obligation and not replan_obligation.get("replan_context") and not replan_obligation.get("settlement_action_packet"):
         replan_obligation = attach_receipt_replan_context(
             replan_obligation, None, goal_id=safe_goal_id, agent_id=agent_frontier_id,
-            source_status=status_payload, stride_strategy=goal_frontier_context["stride_strategy"],
+            source_status=status_payload,
             explore_reader=replan_explore_reader,
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
             todo_items=agent_todo_terminal_source_items,

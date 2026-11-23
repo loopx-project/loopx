@@ -210,7 +210,7 @@ def commit_execution_loss_closeout(
                     "payload": load_project_registry(registry_path), "lifetime_sources": lifetime_sources}, "locks": witnesses,
                 "intent": {"delivery_outcome": delivery_outcome, "delivery_boundary": delivery_boundary,
                     "progress_observation": progress}, "control_writer_proof": dict(requested_proof) if requested_proof else None,
-                "requested_effects": dict(requested_effects), "observed_at": now_local_iso()}
+                "requested_effects": dict(requested_effects), "observed_at": now_local_iso(timespec="microseconds")}
             try:
                 result = effect_runtime_result(
                     "quota.execution_loss_closeout.commit",

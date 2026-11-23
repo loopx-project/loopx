@@ -1421,8 +1421,16 @@ const resolveViewWriteback = (
 ): JsonObject => object(actionProjection(payload, false, precision, verifiedSourceHash).writeback);
 
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
-  const request = requireJsonObject(value, "turn envelope request");
+  let request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (Object.hasOwn(request, "source_transport") && (operation === "compose_complete" ||
+      operation === "attach_complete_turn_context" || operation === "context_delivery")) {
+    const field = operation === "context_delivery" ? "context" : "payload";
+    const source = decodeTurnSource(request, field);
+    // Projection edits must still address the caller's original inline shape.
+    const {source_transport: _transport, ...options} = request;
+    request = {...options, [field]: source};
+  }
   if (operation === "session_plan") return turnSessionPlan(request);
   if (operation === "planning_facts") return completePlanningFacts(request);
   if (operation === "recorded_plan_lineage") {

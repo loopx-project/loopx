@@ -1102,16 +1102,41 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
     configured = [args for args in calls if option in args]
     assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True}
+    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True,
+                                       "stride_strategy": "evidence_conditioned_v1"}
     assert all("--execution-planning-horizon-goal" in args for args in configured)
+    assert all("--execution-stride-strategy" not in args
+               and "--clear-execution-stride-strategy" not in args for args in calls)
 
 
-def test_requested_stride_requires_configuration_readback_before_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "loopx-goal"])
+def test_loopx_modes_record_live_stride_without_selecting_it(tmp_path, mode):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRATEGY
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", execution_mode=mode,
+                           **({"validation_command": ["python", "validate.py"]} if mode == "turn" else {}))
+    assert agent.stride_strategy == LIVE_STRIDE_STRATEGY == "evidence_conditioned_v1"
+    assert agent._replan_receipt()["stride_strategy"] == LIVE_STRIDE_STRATEGY
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal"])
+def test_non_loopx_modes_record_no_stride_strategy(tmp_path, mode):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
-                           stride_strategy="evidence_conditioned_v1")
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", execution_mode=mode)
+    assert agent.stride_strategy is None
+    assert "stride_strategy" not in agent._replan_receipt()
+
+
+def test_phase_readback_does_not_reconfigure_or_check_stride(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture")
+    calls = []
 
     async def prepared(*args, **kwargs):
         return True
@@ -1119,28 +1144,31 @@ def test_requested_stride_requires_configuration_readback_before_execution(tmp_p
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
 
-    async def wrong_strategy(*args, **kwargs):
+    async def historical_profile(environment, args, **kwargs):
+        calls.append(args)
+        # A restored Goal may still carry a historical value; it is not a switch.
         return {"after": {"execution_profile": {
             "replan_after_effective_turns": 6, "stride_strategy": "off", "planning_horizon_goal": True,
         }}}
 
     monkeypatch.setattr(agent, "_registry_exists", prepared)
     monkeypatch.setattr(agent, "_write_task_document", prepared)
-    monkeypatch.setattr(agent, "_loopx", wrong_strategy)
-    with pytest.raises(RuntimeError, match="stride strategy readback mismatch"):
-        asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task", cwd=str(tmp_path)))
+    monkeypatch.setattr(agent, "_loopx", historical_profile)
+    asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task", cwd=str(tmp_path)))
+    assert calls and all("--execution-stride-strategy" not in args for args in calls)
 
 
 @pytest.mark.parametrize("settings", [
-    {"stride_strategy": "future_policy"},
-    {"stride_strategy": True},
+    {"stride_strategy": "evidence_conditioned_v1"},
+    {"stride_strategy": "off"},
+    {"stride_strategy": None},
     {"execution_mode": "plain", "stride_strategy": "off"},
 ])
-def test_stride_rejects_unknown_version_and_incompatible_mode(tmp_path, settings):
+def test_removed_stride_strategy_kwarg_is_rejected(tmp_path, settings):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
 
-    with pytest.raises(ValueError, match="stride_strategy"):
+    with pytest.raises(ValueError, match="stride_strategy has been removed"):
         BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
 
 
@@ -1761,3 +1789,85 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
 def test_context_benchmark_setting_rejects_broad_or_other_host_activation(value):
     with pytest.raises(ValueError, match="context_delivery"):
         Execution(context_delivery=value)
+
+
+def test_run_once_writes_receipt_when_heartbeat_host_failure_raises(tmp_path, monkeypatch):
+    env = _sqlite_heartbeat_env(tmp_path, monkeypatch)
+    Path(env["CODEX_BIN"]).write_text(
+        f"#!{sys.executable}\nimport json, sys\n"
+        "print(json.dumps({'type': 'thread.started', 'thread_id': 'session-a'}))\n"
+        "sys.stdin.read(); sys.exit(1)\n"
+    )
+    Path(env["CODEX_BIN"]).chmod(0o755)
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    monkeypatch.setattr(
+        worker, "heartbeat_host_failure",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("node effect runtime dead")),
+    )
+    receipt = run_once(env)
+    assert receipt["ok"] is False
+    assert "RuntimeError: node effect runtime dead" in receipt["host_failure_record_error"]
+    saved = json.loads((Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "receipt.json").read_text())
+    assert saved["host_failure_record_error"] == receipt["host_failure_record_error"]
+
+
+def test_opt_in_runtime_path_and_claim_ttl_env(tmp_path, monkeypatch):
+    from benchmark.runtime.codex import (
+        claim_ttl_seconds_from_env,
+        codex_settings,
+        process_environment,
+    )
+
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    baseline = codex_settings(
+        execution=Execution(mode="heartbeat"), workspace=tmp_path, model="fixture",
+        effort="high", base_url="http://localhost:8123/v1", wire_api="responses",
+    )
+    assert "LOOPX_BENCHMARK_CLAIM_TTL_SECONDS" not in baseline
+
+    with pytest.raises(ValueError, match="86400"):
+        claim_ttl_seconds_from_env({"LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": "99999"})
+    assert claim_ttl_seconds_from_env({"LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": "18000"}) == 18000
+
+    opted_in = tomllib.loads(
+        codex_settings(
+            execution=Execution(mode="heartbeat"), workspace=tmp_path, model="fixture",
+            effort="high", base_url="http://localhost:8123/v1", wire_api="responses",
+            claim_ttl_seconds=18000,
+        )
+    )
+    assert opted_in["shell_environment_policy"]["set"]["LOOPX_BENCHMARK_CLAIM_TTL_SECONDS"] == "18000"
+
+    node_dir = tmp_path / "node-root"
+    (node_dir / "bin").mkdir(parents=True)
+    cli_bin = tmp_path / "profile-bin" / "loopx"
+    cli_bin.parent.mkdir(parents=True)
+    cli_bin.write_text("#!/bin/sh\nexit 0\n")
+    env = process_environment(
+        tmp_path / "home",
+        base={"PATH": "/usr/bin:/bin", "LOOPX_NODE_DIR": str(node_dir), "LOOPX_CLI": str(cli_bin)},
+    )
+    assert env["PATH"].split(os.pathsep)[:3] == [str(node_dir / "bin"), str(cli_bin.parent), "/usr/bin"]
+
+    monkeypatch.setattr(
+        worker.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(
+            stdout=json.dumps({"ok": True, "turn_instance_id": "turn-1", "task_body": "base"})
+        ),
+    )
+    rendered = worker.heartbeat_body(
+        env | {"LOOPX_REGISTRY": str(tmp_path / "reg.json"), "LOOPX_RUNTIME_ROOT": str(tmp_path / "rt"),
+               "LOOPX_GOAL_ID": "g", "LOOPX_AGENT_ID": "a", "LOOPX_PROJECT": str(tmp_path),
+               "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CONTEXT_DELIVERY": "off",
+               "LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": "18000"},
+        "turn-1", native_goal=False,
+    )
+    assert "--ttl-seconds 18000" in rendered
+
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", claim_ttl_seconds=18000)
+    assert agent._worker_env(cwd="/task")["LOOPX_BENCHMARK_CLAIM_TTL_SECONDS"] == "18000"

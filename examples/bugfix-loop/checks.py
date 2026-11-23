@@ -1,8 +1,12 @@
 """Run with `python3 checks.py`; the tutorial starts with two failing checks."""
 
 import unittest
+from pathlib import Path
+from runpy import run_path
 
-from cart import total_with_shipping
+# Safe-path mode can omit the exercise directory from Python's import path.
+cart_path = Path(__file__).resolve().with_name("cart.py")
+total_with_shipping = run_path(str(cart_path))["total_with_shipping"]
 
 
 class CartChecks(unittest.TestCase):

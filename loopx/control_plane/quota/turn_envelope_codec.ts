@@ -172,7 +172,7 @@ export function coldPath(
   };
 }
 
-export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source"): JsonObject {
+export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source" | "context"): JsonObject {
   const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
   const { encoding, data } = transport;
   const maxSourceBytes = 1024 * 1024;

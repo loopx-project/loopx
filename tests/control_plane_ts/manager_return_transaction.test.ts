@@ -514,3 +514,37 @@ test("scan gates chained follow-ups on predecessor readiness without caching blo
     } finally { await f.close(); }
   }
 });
+
+test("a legacy external dispatch fences stale senders and survives a revoked grant", async () => {
+  const f = await fixture(false, true);
+  try {
+    const first = await f.run("prepare");
+    const stale = await f.run("prepare");
+    const revoked = { ...f.facts, grant: { targets: [] } };
+    await assert.rejects(f.run("dispatch", { ...first, facts: revoked }), /dispatch is unavailable/);
+    const saved = await f.run("dispatch", first);
+    assert.equal((await f.state()).status, "verification_required");
+    await assert.rejects(f.run("dispatch", stale), /state changed/);
+    await assert.rejects(f.run("attempt", { ...stale, attempt }), /state changed/);
+    assert.equal((await f.run("prepare")).action, "verify");
+    assert.equal((await f.run("prepare", { facts: revoked })).action, "skip");
+    assert.equal((await f.state()).status, "explicit_unverified");
+    assert.equal((await f.run("prepare")).action, "skip");
+    await f.run("settle", { ...saved, outcome: { kind: "error" } });
+    assert.equal((await f.state()).error, "provider_locator_unavailable");
+  } finally { await f.close(); }
+});
+
+test("a known refusal permits retry after dispatch but an unknown provider error cannot", async () => {
+  for (const refused of [false, true]) {
+    const f = await fixture(false, true);
+    try {
+      const saved = await f.run("dispatch", await f.run("prepare"));
+      await f.run("settle", { ...saved, outcome: refused
+        ? { kind: "sent", external_write_performed: false } : { kind: "error" } });
+      assert.equal((await f.state()).status, refused ? "retry_pending" : "explicit_unverified");
+      const after = await f.run("prepare", { now: "2026-01-03T03:04:05Z" });
+      assert.equal(after.action, refused ? "send" : "skip");
+    } finally { await f.close(); }
+  }
+});

@@ -319,6 +319,10 @@ def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypat
     def observed(method, params, **kwargs):
         if method == "quota.turn_envelope.evaluate":
             calls.append(params["operation"])
+            if params["operation"] == "session_plan":
+                # Session reuse consumes validated lineage, never the full Goal body.
+                assert {"payload", "context", "envelope", "complete_host_request",
+                        "source_transport"}.isdisjoint(params)
         return invoke(method, params, **kwargs)
 
     monkeypatch.setattr(transport, "effect_runtime_projection_result", observed)
@@ -335,8 +339,10 @@ def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypat
         result = plan()
         assert result["route"]["would_invoke_host"] is True
         assert result["transaction"]["turn_instance_id"] == "original-turn"
-    assert calls == (["consumer_version", "driver_lineage"] if case == "historical"
-                     else ["planning_facts"])
+    expected = ["consumer_version", "driver_lineage"] if case == "historical" else ["planning_facts"]
+    if not error:
+        expected.append("session_plan")
+    assert calls == expected
     assert (envelope, contract) == original
 
 

@@ -115,7 +115,7 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
   const recordedOrder = new Map([...unique.keys()].map((id, index) => [id, index]));
   const measurementFeedback = projectExploreMeasurementFeedback([...findings.values()].map(event => ({
     ...event, finding_id: event.result_id, recorded_order: recordedOrder.get(event.event_id),
-  })));
+  })), undefined, {includeCandidateLeaders: true});
   return {
     events: [...unique.values()], nodes: [...nodes.values()], edges: links, findings: [...findings.values()],
     ...(measurementFeedback.length ? {measurementFeedback} : {}),

@@ -740,11 +740,6 @@ class ChatActionService(
                 raise conflict
         elif current_fingerprint != proposal.get("expected_state_fingerprint"):
             return self._stale_proposal(proposal_id, current_fingerprint)
-        self._agent_eligibility(
-            str(parameters.get("agent_id") or "codex"),
-            project=project,
-            require_healthy=parameters.get("open_session") is not False,
-        )
         self.store.save_checkpoint(
             proposal_id,
             step="workspace_validated",
@@ -753,6 +748,13 @@ class ChatActionService(
                 "workspace_ref": str(parameters.get("workspace_ref") or "current"),
                 "workspace_digest": workspace_digest,
             },
+        )
+        # The workspace is already verified. Keep its identity if the Agent
+        # goes offline between preview and confirmation.
+        self._agent_eligibility(
+            str(parameters.get("agent_id") or "codex"),
+            project=project,
+            require_healthy=parameters.get("open_session") is not False,
         )
         runtime_root = resolve_runtime_root(
             self._registry(), self.runtime_root_override, registry_path=self.registry_path

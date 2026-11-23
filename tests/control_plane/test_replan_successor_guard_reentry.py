@@ -169,7 +169,6 @@ def test_projected_terminal_replan_fields_execute_without_guessed_flags(tmp_path
     from loopx.install_contract import render_host_cli_command
 
     call, _, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
-    call("configure-goal", "--goal-id", GOAL, "--execution-stride-strategy", "off", "--execute")
     # The complete delivery has no remaining Todo; retain its accepted mainline.
     rows = [json.loads(row) for row in index.read_text().splitlines()]
     vision = deepcopy(next(row["agent_vision"] for row in rows if "agent_vision" in row))
@@ -195,6 +194,9 @@ def test_projected_terminal_replan_fields_execute_without_guessed_flags(tmp_path
         "observed_reality": "Independent validation covers the complete source scope.",
         "stopped": ["Repeated source checks"], "evidence_refs": ["validation:complete-source"],
     }
+    vision["stride_decision"] = deepcopy(
+        original["replan_action_packet"]["stride_control"]["minimal_example"]
+    )
     path = tmp_path / "author's terminal.json"
     path.write_text(json.dumps(vision), encoding="utf-8")
     command = next(action for action in original["interaction_contract"]["cli_channel"]["next_cli_actions"]

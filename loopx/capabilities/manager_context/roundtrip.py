@@ -729,6 +729,10 @@ def _return_provider(plan, source, sender, record_attempt):
         sent = sender(route, session, turn, plan["text"])
     else:
         return {"kind": "sender_unavailable"}
+    if sent.get("provider_write_attempted") is True and sent.get("external_write_performed", False) is None:
+        # The provider may already have published this result. A later drain
+        # cannot recover a missing locator by starting a new outbound send.
+        return {"kind": "locator_unavailable"}
     if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
         # A provider outbox may already own publication. Its adapter records the
         # existing attempt before returning a readback, including unavailable
@@ -737,6 +741,27 @@ def _return_provider(plan, source, sender, record_attempt):
     return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
             "external_write_performed": sent.get("external_write_performed"),
             "idempotency_key": sent.get("idempotency_key")}
+
+
+class _ReturnAttemptRecorder:
+    """Keep dispatch and locator checkpoints fenced to the same return."""
+
+    def __init__(self, transact, checkpoint, exact):
+        self.transact = transact
+        self.checkpoint = checkpoint
+        self.exact = exact
+
+    def _save(self, phase, **payload):
+        result = self.transact(phase, **payload)
+        self.checkpoint.update({key: result[key] for key in ("revision", "token")})
+
+    def before_provider_send(self):
+        # Exact returns already persisted their sending admission at prepare.
+        if not self.exact:
+            self._save("dispatch")
+
+    def __call__(self, attempt):
+        self._save("attempt", attempt=dict(attempt))
 
 
 def _deliver_return(host, path, sender, frozen_route):
@@ -767,9 +792,7 @@ def _deliver_return(host, path, sender, frozen_route):
         recovered = transact("settle", private_readback=original)
         return recovered["processed"]
 
-    def record_attempt(attempt):
-        saved = transact("attempt", attempt=dict(attempt))
-        checkpoint.update({key: saved[key] for key in ("revision", "token")})
+    record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"])
 
     try:
         store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],

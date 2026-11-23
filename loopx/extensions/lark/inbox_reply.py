@@ -6,8 +6,9 @@ import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
+from time import monotonic, time
 from typing import Any
 
 from .event_inbox import (
@@ -67,9 +68,42 @@ def _default_runner(args: Sequence[str], *, cwd: Path | None = None) -> Mapping[
 def _call(runner: CommandRunner, args: Sequence[str]) -> Mapping[str, Any]:
     try:
         return runner(args)
+    except (FileNotFoundError, PermissionError):
+        return {"returncode": 1, "spawn_failed": True}
     except (OSError, subprocess.SubprocessError):
         return {"returncode": 1}
 
+
+class _WorkerSendFailure(Enum):
+    REJECTED = auto()
+    RESPONSE_LOST = auto()
+    UNVERIFIED = auto()
+
+
+def _worker_send_failure(result: Mapping[str, Any]) -> _WorkerSendFailure:
+    if result.get("spawn_failed") is True:
+        return _WorkerSendFailure.REJECTED
+    if result.get("timed_out") is True:
+        return _WorkerSendFailure.RESPONSE_LOST
+    for stream in ("stdout", "stderr"):
+        error = _json_object(result.get(stream)).get("error")
+        if not isinstance(error, Mapping):
+            continue
+        category, subtype = error.get("type"), error.get("subtype")
+        if category in ("validation", "authentication", "authorization", "config", "confirmation"):
+            return _WorkerSendFailure.REJECTED
+        if category == "api" and (
+            subtype in ("rate_limit", "invalid_parameters", "not_found", "quota_exceeded",
+                        "cross_tenant", "cross_brand", "ownership_mismatch", "feature_not_available")
+            or error.get("code") in (429, 230020, 99991400)
+        ):
+            return _WorkerSendFailure.REJECTED
+        if category == "network" or (category == "internal" and subtype == "invalid_response"):
+            return _WorkerSendFailure.RESPONSE_LOST
+        # A policy may suppress output after publication. Keep the original
+        # request unverified without replaying a policy or unclassified error.
+        return _WorkerSendFailure.UNVERIFIED
+    return _WorkerSendFailure.RESPONSE_LOST
 
 def _json_object(value: Any) -> Mapping[str, Any]:
     try:
@@ -265,7 +299,7 @@ def _result(
     receipt: str | None,
     identity_verified: bool = False,
     membership_verified: bool = False,
-    write_performed: bool = False,
+    write_performed: bool | None = False,
     readback_performed: bool = False,
     reply_verified: bool = False,
     reaction_cleanup_verified: bool = False,
@@ -325,6 +359,8 @@ def _deliver_lark_inbox_outbound(
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
     overlap_source_preflight: bool = False,
+    recover_ambiguous_send: bool = False,
+    before_provider_send: Callable[[], None] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -637,10 +673,22 @@ def _deliver_lark_inbox_outbound(
             provider_preview_verified=True,
         )
 
-    send = _call(
-        runner,
-        provider_args,
-    )
+    if before_provider_send is not None:
+        before_provider_send()
+    started = (time(), monotonic()) if recover_ambiguous_send else None
+    send = _call(runner, provider_args)
+    failure = _worker_send_failure(send) if started is not None and send.get("returncode") != 0 else None
+    if failure is _WorkerSendFailure.RESPONSE_LOST and started is not None and before_send is not None:
+        # Replay the frozen UUID once while this process still has its start
+        # time and can recheck the original source and grant. Leave a full
+        # CLI timeout before the provider's one-hour deduplication limit.
+        try:
+            authorized = all(verify_source()) and scoped_hook(intent_digest).get("continue_delivery") is True
+        except (OSError, ValueError, KeyError, RuntimeError):
+            authorized = False
+        elapsed = (time() - started[0], monotonic() - started[1])
+        if authorized and all(0 <= seconds < 3600 - 30 for seconds in elapsed):
+            send = _call(runner, provider_args)
     if send.get("returncode") != 0:
         return {**_result(
             status="gate_required",
@@ -650,6 +698,7 @@ def _deliver_lark_inbox_outbound(
             identity_verified=True,
             membership_verified=True,
             placement=placement,
+            write_performed=None if failure in (_WorkerSendFailure.RESPONSE_LOST, _WorkerSendFailure.UNVERIFIED) else False,
             blocker="lark_inbox_reply_provider_failed",
             format_preflight_passed=True,
             provider_preview_performed=True,
@@ -828,6 +877,8 @@ def reply_lark_event_inbox(
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
     overlap_source_preflight: bool = False,
+    recover_ambiguous_send: bool = False,
+    before_provider_send: Callable[[], None] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -837,6 +888,10 @@ def reply_lark_event_inbox(
     image_keys: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy.
+
+    Worker returns can replay one ambiguous send with the original provider key
+    and fresh source authorization. A second lost response exposes an unknown
+    write outcome to the durable return owner.
 
     An answer delivery passes ``short_message_limit=None`` to declare that it is
     bounded by the provider's request limit rather than by the compact
@@ -873,6 +928,8 @@ def reply_lark_event_inbox(
         source_membership_verifier=source_membership_verifier,
         source_authority_verifier=source_authority_verifier,
         overlap_source_preflight=overlap_source_preflight,
+        recover_ambiguous_send=recover_ambiguous_send,
+        before_provider_send=before_provider_send,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,

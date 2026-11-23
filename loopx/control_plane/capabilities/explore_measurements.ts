@@ -20,6 +20,8 @@ export interface ExploreMeasurementFeedback {
   latest: {finding_id: string; measurement: ExploreMeasurement};
   best: ExploreMeasurementPoint | null; previous_best: ExploreMeasurementPoint | null;
   improvement: number | null; measured_count: number; unknown_count: number;
+  /** Requested by the history reader for the loaded records only. */
+  candidate_leaders?: {measured_candidates: number; leaders: ExploreMeasurementPoint[]};
 }
 
 export function normalizeExploreMeasurements(value: unknown, context?: unknown, executionObservation?: unknown): ExploreMeasurement[] {
@@ -107,9 +109,11 @@ function comparisonKey(node: string, metric: ExploreMeasurement): string {
 export function projectExploreMeasurementFeedback(
   findings: readonly JsonObject[],
   includeMeasurement?: (finding: JsonObject, measurement: ExploreMeasurement) => boolean,
+  options: {includeCandidateLeaders?: boolean} = {},
 ): ExploreMeasurementFeedback[] {
   const groups = new Map<string, ExploreMeasurementFeedback>();
   const measuredEvidence = new Set<string>();
+  const candidatesByGroup = new Map<string, {measured: Set<string>; leaders: Map<string, ExploreMeasurementPoint>}>();
   const ordered = findings.filter(finding => finding.measurements !== undefined);
   // Canonical readers derive this ordinal from append order; it is not stored
   // or inferred from source timestamps, which can tie or arrive out of order.
@@ -144,6 +148,15 @@ export function projectExploreMeasurementFeedback(
         candidate_ref: measurement.candidate_ref, evidence_ref: measurement.evidence_ref, value: measurement.value};
       const difference = point && previous ? (measurement.higher_is_better
         ? point.value - previous.value : previous.value - point.value) : null;
+      if (options.includeCandidateLeaders && point) {
+        const candidates = candidatesByGroup.get(key) ?? {measured: new Set<string>(), leaders: new Map<string, ExploreMeasurementPoint>()};
+        candidates.measured.add(point.candidate_ref);
+        if (difference !== null && difference > 0) candidates.leaders.clear();
+        if ((difference === null || difference >= 0) && !candidates.leaders.has(point.candidate_ref)) {
+          candidates.leaders.set(point.candidate_ref, point);
+        }
+        candidatesByGroup.set(key, candidates);
+      }
       groups.set(key, {node_id: node, metric: measurement.metric, unit: measurement.unit,
         higher_is_better: measurement.higher_is_better, comparison_scope: measurement.comparison_scope,
         input_revision: measurement.input_revision, evaluation_ref: measurement.evaluation_ref,
@@ -153,6 +166,9 @@ export function projectExploreMeasurementFeedback(
         measured_count: (prior?.measured_count ?? 0) + (point ? 1 : 0),
         unknown_count: (prior?.unknown_count ?? 0) + (point ? 0 : 1)});
     }
+  }
+  for (const [key, candidates] of candidatesByGroup) {
+    groups.get(key)!.candidate_leaders = {measured_candidates: candidates.measured.size, leaders: [...candidates.leaders.values()]};
   }
   const recency = new Map(ordered.map((finding, index) => [String(finding.finding_id), index]));
   return [...groups.values()].sort((a, b) => recency.get(b.latest.finding_id)! - recency.get(a.latest.finding_id)!);
