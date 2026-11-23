@@ -23,6 +23,9 @@ import {
 
 export const WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN =
   /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.goal_acceptance_contract$/;
+export const WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN =
+  /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.goal_acceptance_contract\.outcome_requirements$/;
+const OUTCOME_REQUIREMENTS_SUFFIX = ".outcome_requirements";
 
 export type ReplanValueIdentity = (value: unknown, path: (string | number)[]) => string;
 export type ReplanReadPrecision = {
@@ -149,7 +152,7 @@ function acceptanceCarriers(payload: JsonObject) {
   return carriers;
 }
 
-function inlineAcceptance(payload: JsonObject, reference: unknown): JsonObject {
+function inlineAcceptanceContainer(payload: JsonObject, reference: unknown): JsonObject {
   // Older captures may name any loaded work-context carrier, not only the
   // preferred first source chosen for new sharing.
   const match = typeof reference === "string" ? WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN.exec(reference) : null;
@@ -168,6 +171,36 @@ function inlineAcceptance(payload: JsonObject, reference: unknown): JsonObject {
   const value = object(carrier?.parent[carrier.field]);
   if (!carrier || Object.hasOwn(carrier.parent, `${carrier.field}_ref`) || !Object.keys(value).length) {
     throw new EffectRuntimeRequestError("Goal acceptance reference must resolve to complete inline work context or planning facts");
+  }
+  return value;
+}
+
+export function inlineOutcomeRequirements(payload: JsonObject, reference: unknown): JsonObject {
+  if (typeof reference !== "string" || !reference.endsWith(OUTCOME_REQUIREMENTS_SUFFIX)) {
+    throw new EffectRuntimeRequestError("Outcome requirements reference must resolve to complete inline work context or planning facts");
+  }
+  const containerRef = reference.slice(0, -OUTCOME_REQUIREMENTS_SUFFIX.length);
+  const contract = inlineAcceptanceContainer(payload, containerRef);
+  if (Object.hasOwn(contract, "outcome_requirements_ref")) {
+    throw new EffectRuntimeRequestError("Outcome requirements reference must resolve to complete inline work context or planning facts");
+  }
+  const requirements = object(contract.outcome_requirements);
+  if (!Object.keys(requirements).length) {
+    throw new EffectRuntimeRequestError("Outcome requirements reference must resolve to complete inline work context or planning facts");
+  }
+  return requirements;
+}
+
+function inlineAcceptance(payload: JsonObject, reference: unknown): JsonObject {
+  const value = inlineAcceptanceContainer(payload, reference);
+  const hasInline = Object.hasOwn(value, "outcome_requirements");
+  const hasRef = Object.hasOwn(value, "outcome_requirements_ref");
+  if (hasInline && hasRef) {
+    throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+  }
+  if (hasRef) {
+    const {outcome_requirements_ref: ref, ...rest} = value;
+    return {...rest, outcome_requirements: inlineOutcomeRequirements(payload, ref)};
   }
   return value;
 }
@@ -205,12 +238,50 @@ export function referenceGoalAcceptance(payload: JsonObject,
       relocated.set(path, owner);
     }
   }
+  // When enclosing goal_objective summaries diverge across carriers, still share
+  // identical cumulative outcome_requirements subtrees across remaining inline owners.
+  const reqOwners = new Map<string, string>();
+  const reqRelocated = new Map<string, string>();
+  for (const {parent, field, path, parentPath} of acceptanceCarriers(result)) {
+    if (Object.hasOwn(parent, `${field}_ref`)) continue;
+    const contract = object(parent[field]);
+    if (!Object.keys(contract).length || Object.hasOwn(contract, "outcome_requirements_ref")) continue;
+    const requirements = object(contract.outcome_requirements);
+    if (!Object.keys(requirements).length) continue;
+    const reqPath = `${path}${OUTCOME_REQUIREMENTS_SUFFIX}`;
+    const encoded = identity(requirements, [...parentPath, field, "outcome_requirements"]);
+    const owner = reqOwners.get(encoded);
+    if (!owner) reqOwners.set(encoded, reqPath);
+    else if (Buffer.byteLength(JSON.stringify(canonicalValue(requirements)), "utf8")
+        > Buffer.byteLength(owner, "utf8") + 24) {
+      const target = writableParent([...parentPath, field]);
+      delete target.outcome_requirements;
+      target.outcome_requirements_ref = owner;
+      reqRelocated.set(reqPath, owner);
+    }
+  }
   // A historical source can already reference a carrier that was just shared.
   // Rebind that exact reference to the retained inline owner, never a chain.
-  for (const {parent, field, parentPath} of carriers) {
+  for (const {parent, field, parentPath} of acceptanceCarriers(result)) {
     const reference = parent[`${field}_ref`];
     if (typeof reference === "string" && relocated.has(reference)) {
       writableParent(parentPath)[`${field}_ref`] = relocated.get(reference);
+      continue;
+    }
+    if (Object.hasOwn(parent, `${field}_ref`)) continue;
+    const contract = object(parent[field]);
+    const reqRef = contract.outcome_requirements_ref;
+    if (typeof reqRef !== "string") continue;
+    let rebound: string | undefined = reqRelocated.get(reqRef);
+    if (!rebound && reqRef.endsWith(OUTCOME_REQUIREMENTS_SUFFIX)) {
+      const movedBase = relocated.get(reqRef.slice(0, -OUTCOME_REQUIREMENTS_SUFFIX.length));
+      if (movedBase) {
+        const candidate = `${movedBase}${OUTCOME_REQUIREMENTS_SUFFIX}`;
+        rebound = reqRelocated.get(candidate) ?? candidate;
+      }
+    }
+    if (rebound && rebound !== reqRef) {
+      writableParent([...parentPath, field]).outcome_requirements_ref = rebound;
     }
   }
   return result;
@@ -237,8 +308,15 @@ function indexCapturedAcceptanceOutcomes(payload: JsonObject, indexOutcome: (val
     const acceptance = Object.hasOwn(parent, `${field}_ref`)
       ? inlineAcceptance(payload, parent[`${field}_ref`]) : object(parent[field]);
     if (!Object.keys(acceptance).length) continue;
-    const requirements = object(acceptance.outcome_requirements);
-    if (!Object.hasOwn(acceptance, "outcome_requirements")) continue;
+    const hasInlineReqs = Object.hasOwn(acceptance, "outcome_requirements");
+    const hasRefReqs = Object.hasOwn(acceptance, "outcome_requirements_ref");
+    if (!hasInlineReqs && !hasRefReqs) continue;
+    if (hasInlineReqs && hasRefReqs) {
+      throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+    }
+    const requirements = hasRefReqs
+      ? inlineOutcomeRequirements(payload, acceptance.outcome_requirements_ref)
+      : object(acceptance.outcome_requirements);
     if (!Array.isArray(requirements.outcomes)) throw new EffectRuntimeRequestError("captured outcome source is unsupported");
     for (const value of requirements.outcomes) indexOutcome(value);
   }
@@ -519,6 +597,16 @@ export function replanGoalContext(payload: JsonObject, reads: JsonObject | null,
       const acceptance = inlineAcceptance(payload, core.acceptance_contract_ref);
       delete core.acceptance_contract_ref;
       core.acceptance_contract = acceptance;
+    } else if (Object.hasOwn(core, "acceptance_contract")) {
+      const rawAcceptance = jsonObject(core.acceptance_contract);
+      if (rawAcceptance && !Object.hasOwn(rawAcceptance, "outcome_requirements")
+          && Object.hasOwn(rawAcceptance, "outcome_requirements_ref")) {
+        const acceptance = retain({...rawAcceptance}, rawAcceptance);
+        const resolvedReqs = inlineOutcomeRequirements(payload, rawAcceptance.outcome_requirements_ref);
+        delete acceptance.outcome_requirements_ref;
+        acceptance.outcome_requirements = resolvedReqs;
+        core.acceptance_contract = acceptance;
+      }
     }
     return core;
   }
@@ -615,7 +703,16 @@ export function replanWorkContext(payload: JsonObject, context: JsonObject, read
   context = resolveExploreGuidance(payload, context);
   const corePath = ["autonomous_replan_obligation", "replan_context", "core_goal"];
   const core = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
-  const acceptance = object(core.acceptance_contract);
+  const acceptance = Object.hasOwn(core, "acceptance_contract_ref") && !Object.hasOwn(core, "acceptance_contract")
+    ? inlineAcceptance(payload, core.acceptance_contract_ref)
+    : (() => {
+      const raw = object(core.acceptance_contract);
+      if (Object.hasOwn(raw, "outcome_requirements_ref") && !Object.hasOwn(raw, "outcome_requirements")) {
+        const {outcome_requirements_ref: ref, ...rest} = raw;
+        return {...rest, outcome_requirements: inlineOutcomeRequirements(payload, ref)};
+      }
+      return raw;
+    })();
   if (!reads || !Array.isArray(context.sources)) return context;
   const plan = object(object(object(payload.interaction_contract).cli_channel).settlement_plan);
   const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
@@ -632,8 +729,16 @@ export function replanWorkContext(payload: JsonObject, context: JsonObject, read
         source.hook_id === "explore.turn_context" && source.capability_id === "explore") {
       return {...source, content: omitUnboundExploreResultWriteback(content)};
     }
+    const sourceContract = object(content.goal_acceptance_contract);
+    const resolvedSourceContract = Object.hasOwn(sourceContract, "outcome_requirements_ref")
+        && !Object.hasOwn(sourceContract, "outcome_requirements")
+      ? (() => {
+        const {outcome_requirements_ref: ref, ...rest} = sourceContract;
+        return {...rest, outcome_requirements: inlineOutcomeRequirements(payload, ref)};
+      })()
+      : sourceContract;
     if (!Object.keys(acceptance).length || source.source !== "goal_acceptance" || content.status != null && content.status !== "loaded" ||
-        identity(content.goal_acceptance_contract,
+        identity(resolvedSourceContract,
           ["interaction_contract", "agent_channel", "work_context", "sources", index, "content", "goal_acceptance_contract"])
         !== identity(acceptance, [...corePath, "acceptance_contract"])) return value;
     const {goal_acceptance_contract: _contract, ...metadata} = content;
@@ -679,6 +784,16 @@ export function requireCompleteDecisionSource(source: JsonObject): void {
   for (const {parent, field} of acceptanceCarriers(source)) {
     if (!Object.hasOwn(parent, field) && Object.hasOwn(parent, `${field}_ref`)) {
       inlineAcceptance(source, parent[`${field}_ref`]);
+    } else if (Object.hasOwn(parent, field)) {
+      const contract = object(parent[field]);
+      const hasInline = Object.hasOwn(contract, "outcome_requirements");
+      const hasRef = Object.hasOwn(contract, "outcome_requirements_ref");
+      if (hasInline && hasRef) {
+        throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+      }
+      if (hasRef) {
+        inlineOutcomeRequirements(source, contract.outcome_requirements_ref);
+      }
     }
   }
 }
@@ -986,16 +1101,52 @@ export function replanCliView(payload: JsonObject, identity: ReplanValueIdentity
   const goal = replanGoalContext(payload, reads, undefined, precision);
   const summary = object(payload.agent_todo_summary);
   const originalCore = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
-  // Reuse the same captured acceptance index for an exact summary copy.
-  // Otherwise this legacy carrier silently restores the full deferred detail.
-  // A different revision or an existing summary index remains untouched.
+  const workContextView = replanWorkContext(payload, object(agent.work_context), reads, identity);
+  const summaryContract = object(summary.goal_acceptance_contract);
+  const resolvedSummaryContract = Object.hasOwn(summaryContract, "outcome_requirements_ref")
+      && !Object.hasOwn(summaryContract, "outcome_requirements")
+    ? (() => {
+      const {outcome_requirements_ref: ref, ...rest} = summaryContract;
+      return {...rest, outcome_requirements: inlineOutcomeRequirements(payload, ref)};
+    })()
+    : summaryContract;
+  const originalCoreContract = Object.hasOwn(originalCore, "acceptance_contract_ref")
+      && !Object.hasOwn(originalCore, "acceptance_contract")
+    ? inlineAcceptance(payload, originalCore.acceptance_contract_ref)
+    : (() => {
+      const raw = object(originalCore.acceptance_contract);
+      if (Object.hasOwn(raw, "outcome_requirements_ref") && !Object.hasOwn(raw, "outcome_requirements")) {
+        const {outcome_requirements_ref: ref, ...rest} = raw;
+        return {...rest, outcome_requirements: inlineOutcomeRequirements(payload, ref)};
+      }
+      return raw;
+    })();
+  const summaryReqsRef = typeof summaryContract.outcome_requirements_ref === "string"
+    ? summaryContract.outcome_requirements_ref : null;
+  const wcMatch = summaryReqsRef ? WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN.exec(summaryReqsRef) : null;
+  const wcSources = Array.isArray(workContextView.sources) ? workContextView.sources : [];
+  const wcTarget = wcMatch ? object(wcSources[Number(wcMatch[1])]) : null;
+  const wcContent = wcTarget ? object(wcTarget.content) : null;
+  const wcDonorInline = Boolean(
+    wcTarget && wcTarget.source === "goal_acceptance" && wcContent
+    && (wcContent.status === undefined || wcContent.status === "loaded")
+    && Object.keys(object(object(wcContent.goal_acceptance_contract).outcome_requirements)).length > 0,
+  );
+  const fullContractMatch =
+    identity(resolvedSummaryContract, ["agent_todo_summary", "goal_acceptance_contract"])
+      === identity(originalCoreContract,
+        ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"]);
   const indexedSummary = goal.core.outcome_requirements_index &&
     !Object.hasOwn(summary, "outcome_requirements_index") &&
-    identity(summary.goal_acceptance_contract ?? null, ["agent_todo_summary", "goal_acceptance_contract"])
-      === identity(originalCore.acceptance_contract ?? null,
-        ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"])
+    Object.keys(resolvedSummaryContract).length > 0 &&
+    fullContractMatch
     ? {...summary, goal_acceptance_contract: goal.core.acceptance_contract,
-      outcome_requirements_index: goal.core.outcome_requirements_index} : summary;
+      outcome_requirements_index: goal.core.outcome_requirements_index}
+    : Object.hasOwn(summaryContract, "outcome_requirements_ref")
+        && !Object.hasOwn(summaryContract, "outcome_requirements")
+        && !wcDonorInline
+      ? {...summary, goal_acceptance_contract: resolvedSummaryContract}
+      : summary;
   // Review owns the captured planning facts. The entry retains admission,
   // current selection and stops; the mandatory reader supplies the complete
   // Goal and horizon before the Agent chooses its next work.
@@ -1003,7 +1154,7 @@ export function replanCliView(payload: JsonObject, identity: ReplanValueIdentity
   return {...entry,
     ...(indexedSummary !== summary ? {agent_todo_summary: indexedSummary} : {}),
     interaction_contract: {...interaction, cli_channel: deferredReplanWriteback(cli), agent_channel: {...agent,
-      work_context: replanWorkContext(payload, object(agent.work_context), reads, identity)}},
+      work_context: workContextView}},
     autonomous_replan_obligation: {...obligation, context_read: reads.review},
     replan_action_packet: replanActionPacket(payload, reads)};
 }

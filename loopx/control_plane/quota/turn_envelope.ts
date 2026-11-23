@@ -39,24 +39,24 @@ import {
 } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 import {
-  COMPLETE_TURN_DECISION_VERSION, COMPLETE_TURN_HASH_CODEC, canonicalHash, coldPath,
+  COMPLETE_TURN_DECISION_VERSION, COMPLETE_TURN_HASH_CODEC, canonicalHash, canonicalValue, coldPath,
   compactFields, completeSourceHash, decodeTurnSource, decisionSourceHash,
   executableCliArgs, isNonEmptyFilePath, object, pickNonNull, pickOwn, scalarString,
   shellQuote, text, textList,
 } from "./turn_envelope_codec.ts";
 import {
-  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, type ReplanReadPrecision, bindReplanSuccessorContract,
-  deferredReplanWriteback, nativeReplanPresentation, referenceCurrentTaskTitle,
-  referenceExploreGuidance, referenceGoalAcceptance, referenceReplanAuthoring,
-  referenceVisionContinuation, replanActionPacket, replanAuthoringContract, replanCliView,
-  replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
-  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision, resolveExploreGuidance,
-  responsePlan, selectedTodo, unboundExploreReplan, userChannel,
+  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN,
+  type ReplanReadPrecision, bindReplanSuccessorContract, deferredReplanWriteback, inlineOutcomeRequirements,
+  nativeReplanPresentation, referenceCurrentTaskTitle, referenceExploreGuidance, referenceGoalAcceptance,
+  referenceReplanAuthoring, referenceVisionContinuation, replanActionPacket, replanAuthoringContract,
+  replanCliView, replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
+  requiredReads, requireCompleteDecisionSource,
+  requireCompleteTurnDecision as requireCompleteTurnDecisionBase,
+  resolveExploreGuidance, responsePlan, selectedTodo, unboundExploreReplan, userChannel,
 } from "./turn_envelope_references.ts";
 
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 export { COMPLETE_TURN_DECISION_VERSION, decodeTurnSource } from "./turn_envelope_codec.ts";
-export { requireCompleteTurnDecision } from "./turn_envelope_references.ts";
 
 export const TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0";
 export const CONTRACT_CAPSULE_SCHEMA_VERSION = "loopx_contract_capsule_v0";
@@ -157,6 +157,55 @@ function interactionHeartbeatRecommendation(request: JsonObject, arbitration: Js
   projected.notify = requireStringLiteral(request.notify, USER_CHANNEL_NOTIFICATION_POLICIES, "heartbeat notify");
   projected.spend_policy = request.spend_policy ?? null;
   return {heartbeat_recommendation: projected};
+}
+
+const BLOCKED_PRIORITY_FALLBACK_REF = "$.blocked_priority_fallback";
+
+function requireFallbackGuidanceReferences(payload: JsonObject): void {
+  const recommendation = object(payload.heartbeat_recommendation);
+  const hasRef = Object.hasOwn(recommendation, "blocked_priority_fallback_ref");
+  const hasInline = Object.hasOwn(recommendation, "blocked_priority_fallback");
+  if (hasRef && hasInline) {
+    throw new EffectRuntimeRequestError("Fallback guidance reference conflicts with inline blocked_priority_fallback");
+  }
+  if (!hasRef) return;
+  const rootFallback = jsonObject(payload.blocked_priority_fallback);
+  if (recommendation.blocked_priority_fallback_ref !== BLOCKED_PRIORITY_FALLBACK_REF ||
+      !rootFallback || !Object.keys(rootFallback).length) {
+    throw new EffectRuntimeRequestError("Fallback guidance reference must resolve to inline root blocked_priority_fallback");
+  }
+}
+
+function referenceDuplicateFallbackGuidance(
+  payload: JsonObject,
+  identity = contextSourceIdentity(payload),
+): JsonObject {
+  requireFallbackGuidanceReferences(payload);
+  const rootFallback = jsonObject(payload.blocked_priority_fallback);
+  const recommendation = jsonObject(payload.heartbeat_recommendation);
+  if (!rootFallback || !recommendation || Object.hasOwn(recommendation, "blocked_priority_fallback_ref")) {
+    return payload;
+  }
+  const mirror = jsonObject(recommendation.blocked_priority_fallback);
+  if (!mirror) return payload;
+  if (identity(mirror, ["heartbeat_recommendation", "blocked_priority_fallback"])
+      !== identity(rootFallback, ["blocked_priority_fallback"])) {
+    return payload;
+  }
+  if (Buffer.byteLength(JSON.stringify(canonicalValue(mirror)), "utf8")
+      <= Buffer.byteLength(BLOCKED_PRIORITY_FALLBACK_REF, "utf8") + 24) {
+    return payload;
+  }
+  const nextRecommendation = {...recommendation};
+  delete nextRecommendation.blocked_priority_fallback;
+  nextRecommendation.blocked_priority_fallback_ref = BLOCKED_PRIORITY_FALLBACK_REF;
+  return {...payload, heartbeat_recommendation: nextRecommendation};
+}
+
+export function requireCompleteTurnDecision(value: unknown, numberTokens?: unknown): JsonObject {
+  const decision = requireCompleteTurnDecisionBase(value, numberTokens);
+  requireFallbackGuidanceReferences(decision);
+  return decision;
 }
 
 function checkpointedBoundaryAuthority(source: JsonObject): JsonObject | null {
@@ -583,19 +632,77 @@ function turnActionProjection(payload: JsonObject, precision?: ReplanReadPrecisi
     }};
     projection.action = action;
   }
-  if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
-    const index = sources.findIndex((value) => {
-      const source = object(value);
-      return source.source === "goal_acceptance"
-        && (object(source.content).status === undefined || object(source.content).status === "loaded")
-        && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
-    });
-    if (index >= 0) {
-      const compactCore = {...core};
-      delete compactCore.acceptance_contract;
-      compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
-      action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+  if (Object.keys(acceptance).length > 0) {
+    if ("outcome_requirements" in acceptance && "outcome_requirements_ref" in acceptance) {
+      throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+    }
+    if ("outcome_requirements_ref" in acceptance && !("outcome_requirements" in acceptance)) {
+      const match = typeof acceptance.outcome_requirements_ref === "string"
+        ? WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN.exec(acceptance.outcome_requirements_ref) : null;
+      const index = match ? Number(match[1]) : -1;
+      const source = object(Array.isArray(sources) ? sources[index] : null);
+      const content = object(source.content);
+      const sourceContract = object(content.goal_acceptance_contract);
+      if (match && source.source === "goal_acceptance"
+        && (content.status === undefined || content.status === "loaded")
+        && Object.keys(object(sourceContract.outcome_requirements)).length > 0
+        && !("outcome_requirements_ref" in sourceContract)) {
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: {...core, acceptance_contract: {
+          ...acceptance,
+          outcome_requirements_ref: `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`,
+        }}};
+        projection.action = action;
+        return projection;
+      }
+      const inlinedAcceptance = {...acceptance};
+      delete inlinedAcceptance.outcome_requirements_ref;
+      inlinedAcceptance.outcome_requirements = inlineOutcomeRequirements(payload, acceptance.outcome_requirements_ref);
+      action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+        ...core, acceptance_contract: inlinedAcceptance,
+      }};
       projection.action = action;
+      return projection;
+    }
+    if (Array.isArray(sources)) {
+      const index = sources.findIndex((value) => {
+        const source = object(value);
+        return source.source === "goal_acceptance"
+          && (object(source.content).status === undefined || object(source.content).status === "loaded")
+          && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
+      });
+      if (index >= 0) {
+        const compactCore = {...core};
+        delete compactCore.acceptance_contract;
+        compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+        projection.action = action;
+        return projection;
+      }
+      const requirements = object(acceptance.outcome_requirements);
+      if (Object.keys(requirements).length > 0 && !("outcome_requirements_ref" in acceptance)) {
+        const reqIndex = sources.findIndex((value) => {
+          const source = object(value);
+          const content = object(source.content);
+          const contract = object(content.goal_acceptance_contract);
+          const ref = `$.work_context.sources[0].content.goal_acceptance_contract.outcome_requirements`;
+          return source.source === "goal_acceptance"
+            && (content.status === undefined || content.status === "loaded")
+            && !("outcome_requirements_ref" in contract)
+            && Object.keys(object(contract.outcome_requirements)).length > 0
+            && canonicalHash(object(contract.outcome_requirements)) === canonicalHash(requirements)
+            && Buffer.byteLength(JSON.stringify(requirements), "utf8") > ref.length + 24;
+        });
+        if (reqIndex >= 0) {
+          const compactAcceptance = {...acceptance};
+          delete compactAcceptance.outcome_requirements;
+          compactAcceptance.outcome_requirements_ref =
+            `$.work_context.sources[${reqIndex}].content.goal_acceptance_contract.outcome_requirements`;
+          action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+            ...core, acceptance_contract: compactAcceptance,
+          }};
+          projection.action = action;
+        }
+      }
     }
   }
   // The context owner already bounds these contributions. Replacing them with
@@ -942,6 +1049,7 @@ function sealCompleteTurnDecision(
   identity: ReturnType<typeof contextSourceIdentity>,
 ): JsonObject {
   requireCompleteDecisionSource(source);
+  requireFallbackGuidanceReferences(source);
   const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
     contract_binding: {scheduler_execution_args: schedulerExecutionArgs,
       hash_codec: COMPLETE_TURN_HASH_CODEC,
@@ -969,6 +1077,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("complete Turn decision source contains reserved version/binding fields");
   }
   requireCompleteDecisionSource(payload);
+  requireFallbackGuidanceReferences(payload);
   const cliSource = object(object(payload.interaction_contract).cli_channel);
   const composedCli = composedSettlement ? completeCliSettlementChannel(payload) : cliSource;
   const prepared = composedCli === cliSource ? payload : {...payload,
@@ -1018,6 +1127,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   source = referenceCurrentTaskTitle(source);
   source = referenceVisionContinuation(source, sourceIdentity, true);
   source = referenceQuotaSummaryLanes(source, sourceIdentity);
+  source = referenceDuplicateFallbackGuidance(source, sourceIdentity);
   return sealCompleteTurnDecision(source, request.scheduler_execution_args, sourceIdentity);
 }
 
@@ -1479,7 +1589,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
         recorded_projection: {goal_id: decision.goal_id ?? null, ...turnActionProjection(decision)},
       } : {})};
   }
-  if (operation === "replan_view") return replanView(request, resolveViewWriteback);
+  if (operation === "replan_view") {
+    requireFallbackGuidanceReferences(requireJsonObject(request.payload, "captured replan decision"));
+    return replanView(request, resolveViewWriteback);
+  }
   if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
