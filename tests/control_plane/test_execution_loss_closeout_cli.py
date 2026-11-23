@@ -21,7 +21,7 @@ from loopx.control_plane.goals.source_session_registration import (
     configure_source_creation_goal,
     register_fresh_source_session_project,
 )
-from loopx.control_plane.quota import settlement
+from loopx.control_plane.quota import execution_preparation, settlement
 from loopx.control_plane.projects.registry_codec import load_project_registry
 from loopx.control_plane.quota.effect_program import SettlementIdentity
 from loopx.control_plane.quota.execution_preparation import prepared_lease_receipt_fields
@@ -503,17 +503,16 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
         selection = replay_args.index("--todo-id")
         del replay_args[selection:selection + 2]
 
-        code, fenced = context["cli"](*replay_args)
-        assert code == 1, fenced
-        assert fenced["error_code"] == "heartbeat_receipt_identity_conflict"
-        assert "original task lease generation" in fenced["reason"]
-        assert fenced["heartbeat_receipt"]["settlement_identity"] == original.identity.value.as_dict()
-        assert "wait for the next real host Turn" in fenced["recommended_action"]
-        assert "execution-loss closeout without quota spend" in fenced["recommended_action"]
+        code, same_turn = context["cli"](*replay_args)
+        assert code == 0, same_turn
+        assert same_turn["normal_delivery_allowed"] is False
+        assert same_turn["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+        debt = same_turn["unsettled_host_turn_recovery"]
+        assert debt["prior_turn_instance_id"] == TURN
+        assert debt["repair"] == "execution_loss_closeout"
         assert _unchanged_state(context) == before_replay
 
-        # A fresh guard recognizes the generation change before attempting to
-        # re-enter the original guard. It offers only the administrative route.
+        # A fresh host Turn can also discover the outstanding original debt.
         route = str(tmp_path / "fixture launcher" / "loopx")
         code, recovery = context["cli"](
             "--cli-bin", route, "quota", "should-run", "--context-delivery", "off", "--codex-app",
@@ -561,6 +560,28 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
         )
         assert code == 0 and debited["appended"] is False, debited
         _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_guard_cannot_requalify_a_replaced_pre_epoch_receipt(tmp_path, monkeypatch, capsys, provider):
+    # Older writers recorded the key digest and version but lacked an epoch.
+    # Produce that receipt at admission; replay with the current reader.
+    with monkeypatch.context() as writer:
+        writer.setattr(execution_preparation, "prepared_lease_receipt_fields",
+                       lambda proof, *, lease_epoch=None: prepared_lease_receipt_fields(proof))
+        context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False)
+    original = _readback(context)
+    first = context["original_lease"]
+    assert original.prepared_lease == {
+        "prepared_lease_key_sha256": sha256(first["idempotency_key"].encode()).hexdigest(),
+        "prepared_lease_version": first["version"],
+    }
+    fenced = _reject_without_effect(context, _guard_args(context),
+                                    expected_code="heartbeat_receipt_identity_conflict")
+    assert "original task lease generation" in fenced["reason"]
+    assert fenced["heartbeat_receipt"]["settlement_identity"] == original.identity.value.as_dict()
+    assert "wait for the next real host Turn" in fenced["recommended_action"]
+    assert "execution-loss closeout without quota spend" in fenced["recommended_action"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
