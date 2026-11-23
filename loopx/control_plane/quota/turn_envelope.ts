@@ -1718,7 +1718,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       checkedContextPresentationPlan(request), readyWriteScope(context),
       request.include_initial_read_plan === true ? readyWorkOpening(context) : undefined);
   }
-  if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
+  if (operation === "native_context_lifecycle") {
+    const journal = updateNativeContextLifecycle(request);
+    return request.source_edits === true
+      ? contextProjectionChanges(requireJsonObject(request.state, "native context journal"), journal)
+      : journal;
+  }
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(
