@@ -493,3 +493,88 @@ def test_referenced_native_plan_reviews_retained_requirements_before_owner_execu
         assert (project / "runs.txt").read_text() == "x"
         assert service.apply(proposal["proposal_id"]) == result
         assert (project / "runs.txt").read_text() == "x"
+
+
+def test_retired_outcome_handoff_is_scoped_atomic_and_replayable(acceptance_goal):
+    project, document_path, cli, _ = acceptance_goal
+    original_task = (project / "state.md").read_bytes()
+    requirements = [{"id": key, "description": key.title()} for key in ["opening", "order"]]
+    review = [{"id": row["id"], "conclusion": "uncertain", "evidence_refs": [], "note": "Needs review"}
+              for row in requirements]
+
+    def inspect():
+        code, result = cli("inspect")
+        assert code == 0, result
+        return result["provider_revision"], {
+            row["id"]: row for row in result["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+        }
+
+    for name in ["tour", "export", "untouched"]:
+        item = {**refinement(requirements, f"origin:{name}"), "outcome_id": name, "review": review}
+        assert record(project, cli, item, f"create-{name}")[0][0] == 0
+    revision, original = inspect()
+    selection = {"from_agent_id": "agent-a", "to_agent_id": "receiver",
+                 "outcomes": [{"id": key, "revision": original[key]["revision"]} for key in ["export", "tour"]]}
+    document_path.write_text(json.dumps(selection))
+    args = ("handoff", "--document", str(document_path), "--expected-provider-revision", revision,
+            "--operation-id", "handoff-selected")
+    assert cli(*args, "--execute")[0] != 0
+    registry_path = project.parent / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"] = ["receiver", "peer"]
+    registry_path.write_text(json.dumps(registry))
+    registry["goals"][0]["activation"] = {"schema_version": "loopx_goal_activation_v1", "state": "stopped"}
+    registry_path.write_text(json.dumps(registry))
+    assert cli(*args, "--execute")[0] != 0
+    del registry["goals"][0]["activation"]
+    registry_path.write_text(json.dumps(registry))
+    assert cli(*args, "--agent-id", "receiver", "--execute")[0] != 0
+    assert cli(*args, "--agent-id", "peer", "--execute")[0] != 0
+    for invalid in [
+        {**selection, "to_agent_id": "missing"},
+        {**selection, "outcomes": [*selection["outcomes"], {"id": "unknown", "revision": 1}]},
+        {**selection, "outcomes": [selection["outcomes"][0], {"id": "tour", "revision": 99}]},
+        {**selection, "outcomes": selection["outcomes"] * 2},
+    ]:
+        document_path.write_text(json.dumps(invalid))
+        assert cli(*args, "--execute")[0] != 0
+        assert inspect()[0] == revision
+    document_path.write_text(json.dumps(selection))
+    code, preview = cli(*args)
+    assert code == 0 and preview["status"] == "planned" and preview["handoff"] == selection, preview
+    assert inspect()[0] == revision
+    code, applied = cli(*args, "--execute")
+    assert code == 0 and applied["status"] == "applied" and applied["handoff"] == selection, applied
+    new_revision, current = inspect()
+    assert new_revision != revision
+    assert current["untouched"] == {**original["untouched"], "owner_registration_missing": True}
+    for name in ["export", "tour"]:
+        outcome = current[name]
+        assert outcome["owner_agent_id"] == "receiver" and outcome["declaration_owner_agent_id"] == "agent-a"
+        assert outcome["sources"] == original[name]["sources"] and outcome["work"] == original[name]["work"]
+        for old, new in zip(original[name]["requirements"], outcome["requirements"], strict=True):
+            assert new == {**old, "agent_review": {**old["agent_review"], "recorded_for_agent_id": "agent-a"}}
+    assert cli(*args, "--execute")[1]["status"] == "replayed"
+    document_path.write_text(json.dumps({**selection, "outcomes": [selection["outcomes"][0]]}))
+    assert cli(*args, "--execute")[0] != 0
+    document_path.write_text(json.dumps(selection))
+    assert inspect()[0] == new_revision
+    payload = {"outcome_id": "tour", "storage_format": "records", "review_patch": [
+        {"id": "order", "conclusion": "unmet", "note": "Missing output", "evidence_refs": []}]}
+    edit = project / "receiver.json"
+    edit.write_text(json.dumps(payload))
+    write = ("refine", "--document", str(edit), "--expected-provider-revision", new_revision,
+             "--operation-id", "follow-up", "--execute")
+    assert cli(*write, "--agent-id", "peer")[0] != 0
+    assert cli(*write, "--agent-id", "receiver")[0] == 0
+    newest_revision, outcomes = inspect()
+    by_requirement = {r["id"]: r["agent_review"] for r in outcomes["tour"]["requirements"]}
+    assert by_requirement["opening"]["recorded_for_agent_id"] == "agent-a"
+    assert by_requirement["order"]["recorded_for_agent_id"] == "receiver"
+    assert by_requirement["order"]["independently_verified"] is False
+    assert outcomes["tour"]["declaration_owner_agent_id"] == "agent-a"
+    registry["goals"][0]["coordination"]["registered_agents"] = ["peer"]
+    registry_path.write_text(json.dumps(registry))
+    assert cli(*args, "--execute")[1]["status"] == "replayed"
+    assert inspect()[0] == newest_revision
+    assert (project / "state.md").read_bytes() == original_task
