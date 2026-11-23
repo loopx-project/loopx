@@ -38,7 +38,7 @@ def test_policy_observer_reads_original_signed_capture_after_todo_references(tmp
     capture = tmp_path / 'signed-capture'
     code, view = _run_cli(registry, runtime, 'quota', 'should-run', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--begin-turn',
-        '--codex-app', '--complete-turn', '--context-delivery', 'auto', '--delta-delivery', 'off',
+        '--codex-app', '--context-delivery', 'auto', '--delta-delivery', 'off',
         '--decision-output-dir', str(capture))
     assert code == 0, view
     saved = capture / 'decision.json'
@@ -105,7 +105,7 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-context'
-    code, emitted = _run_cli(registry, runtime, *args, '--turn-envelope',
+    code, emitted = _run_cli(registry, runtime, *args,
                              '--decision-output-dir', str(capture))
     assert code == 0, emitted
     saved = capture / 'decision.json'

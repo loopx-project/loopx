@@ -33,11 +33,11 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
   --turn-instance-id <turn-id> --decision-output-dir ./complete-001
 ```
 
-`--turn-envelope` and `--complete-turn` remain mutually exclusive inputs
-for saved commands. Both use v1 in the current CLI. With no independent
-Delta request, `--context-delivery off` returns the complete inline v1
-document. Read existing captures with their original digest-bound
-`quota context-read` or `context-project` recovery.
+Remove `--turn-envelope` and `--complete-turn` from current guard commands.
+Use `--context-delivery off --delta-delivery off` for inline v1. Read saved
+captures with their original digest-bound `quota context-read` or
+`context-project` recovery. To run an earlier live contract, use a compatible
+runtime revision after verifying that it can read the current authority state.
 
 `quota context-project` checks a saved complete decision before presenting it
 as current context, including with Delta alone or with context delivery off.
@@ -544,14 +544,13 @@ caller-owned checkpoint. Explicit `--context-delivery off` retains the complete
 inline contract when no independent Delta delivery is requested.
 
 New bootstrap, guard, selection and settlement-recovery commands use the
-complete v1 source. Saved callers can still pass `--turn-envelope` or
-`--complete-turn` to the current CLI under their existing input restrictions.
-Saved captures and their original read commands retain the recorded version
-and digest. Follow the original capture for selection, replan or required
-detail. A persistent bootstrap binds each Turn on wake.
+complete v1 source. The saved bootstrap reader recognizes the retired
+options to upgrade existing generated prompts. Saved captures and their
+original read commands retain the recorded version and digest. Rebind a
+selection command from the saved capture to keep the same Turn.
 
-当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。原先
-保存的两个别名仍可按原输入限制使用，原捕获和读回命令保留其版本与摘要。
+当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。升级
+生成的旧提示时，历史 reader 可识别旧选项。原捕获和读回命令保留其版本与摘要。
 捕获与交付方式独立，显式关闭上下文交付后仍使用完整契约。
 
 Capability planning context stays inline under the existing context owner's
@@ -599,14 +598,11 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-历史 Short 使用曾交付 v0 的产品版本，并保留原请求与捕获。当前 C1 中
-`--turn-envelope` 是完整契约的兼容别名，已有实验按其记录版本解释。
+历史 Short 使用曾交付 v0 的产品与 runner 版本，并保留原请求与捕获。
 
-The benchmark heartbeat worker verifies a historical `turn_envelope` request
-against the pinned CLI's v0 response before launching a model. Its read-only
-preview and eligibility are recorded in the wake receipt. See the
-[runtime guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md)
-for supported configurations.
+For historical Short, use the original runner and product revisions and
+inspect the recorded v0 response and wake receipt. The current worker refuses
+historical treatment requests before model launch. See the [runtime guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md) for supported configurations.
 Model cost, decision quality and long-run adoption require a separately pinned
 experiment. A capture carries its original read and recovery scope.
 

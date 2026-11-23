@@ -97,26 +97,22 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
-@pytest.mark.parametrize(("flag", "option"), [
-    ("--turn-envelope", "turn_envelope"), ("--complete-turn", "complete_turn"),
-])
-def test_new_selection_omits_view_alias_and_saved_selection_retains_it(tmp_path, flag, option):
-    from loopx.cli_commands.quota_context_reader import bind_capture_selection_transport
+@pytest.mark.parametrize("flag", ["--turn-envelope", "--complete-turn"])
+def test_saved_selection_projects_current_command_without_changing_capture(tmp_path, flag):
+    from loopx.cli_commands.quota_context_reader import _capture_selection_transport_template
 
     original = {"schema_version": "loopx_turn_envelope_v1", "interaction_contract": {"cli_channel": {
         "selection_command": {"command_args_template": "quota should-run --todo-id <todo-id>"}}}}
-    current = deepcopy(original)
-    request = Namespace(decision_output_root=str(tmp_path), **{option: True})
-    bind_capture_selection_transport(current, request)
-    current_command = current["interaction_contract"]["cli_channel"]["selection_command"]
-    assert flag not in shlex.split(current_command["command_args_template"])
-
-    # Stored selectors keep their recorded command for same-capture recovery.
-    saved = deepcopy(original)
-    saved_command = saved["interaction_contract"]["cli_channel"]["selection_command"]
+    saved_command = original["interaction_contract"]["cli_channel"]["selection_command"]
     saved_command["command_args_template"] += " " + flag
-    bind_capture_selection_transport(saved, Namespace(decision_output_root=str(tmp_path)))
-    assert shlex.split(saved_command["command_args_template"]).count(flag) == 1
+    before = deepcopy(original)
+    displayed = _capture_selection_transport_template(
+        original, Namespace(decision_output_root=str(tmp_path)), capture_root=tmp_path,
+    )
+    assert shlex.split(displayed) == [
+        "quota", "should-run", "--todo-id", "<todo-id>", "--decision-output-root", str(tmp_path.resolve()),
+    ]
+    assert original == before
 
 
 def pinned_initial_view(payload, directory):

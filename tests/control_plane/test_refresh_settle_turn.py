@@ -29,7 +29,7 @@ def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, p
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
     host = ["--codex-app"]
     if complete:
-        host = ["--runtime-profile", "generic_cli", "--complete-turn"]
+        host = ["--runtime-profile", "generic_cli"]
         monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
         monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
         monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", "9876543210.125")
@@ -424,7 +424,7 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
     assert _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)[0] == 0
     command = ["quota", "should-run", *binding, "--turn-instance-id", TURN_ID,
-        "--runtime-profile", "generic_cli", "--complete-turn", "--context-delivery", "off"]
+        "--runtime-profile", "generic_cli", "--context-delivery", "off"]
     directory = tmp_path / "failed-capture"
     def unavailable(*args, **kwargs):
         raise EffectRuntimeStartupError("synthetic complete-context transport unavailable", diagnostic_code="fixture_unavailable")
@@ -460,16 +460,21 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("command", ["status", "context-read", "spend-slot"])
-def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, command):
+@pytest.mark.parametrize("flag", ["--turn-envelope", "--complete-turn"])
+def test_retired_display_aliases_rejected_before_admission(tmp_path, flag, capsys):
+    from loopx.cli import build_parser
+
     registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
-    rc, failed = _run_cli(registry, runtime, "quota", command, "--complete-turn")
-    assert rc == 1 and failed["reason"] == "--complete-turn requires JSON quota should-run"
+    with pytest.raises(SystemExit, match="2"):
+        build_parser().parse_args([
+            "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run", flag,
+        ])
+    assert f"unrecognized arguments: {flag}" in capsys.readouterr().err
     assert not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_compatibility_alias_soft_claim_reuses_the_original_default_receipt(tmp_path, provider):
+def test_complete_turn_soft_claim_reuses_the_original_default_receipt(tmp_path, provider):
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
     command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
@@ -478,7 +483,7 @@ def test_compatibility_alias_soft_claim_reuses_the_original_default_receipt(tmp_
     assert rc == 0 and original.get("schema_version") == "loopx_turn_envelope_v1"
     original_cli = original["interaction_contract"]["cli_channel"]
     assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
-    rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
+    rc, complete = _run_cli(registry, runtime, *command, cwd=project)
     assert rc == 0 and complete["schema_version"] == "loopx_turn_envelope_v1", complete
     cli = complete["interaction_contract"]["cli_channel"]
     assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.

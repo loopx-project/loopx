@@ -31,14 +31,12 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
 from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
-_ARTIFACT_CONTRACT_POLICY = json.loads(
+QUALIFIED_DEFAULT_CONTRACT_FIELD = "qualified_default_contract"
+_ARTIFACT_DEFAULT_CONTRACTS = json.loads(
     Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
 )
-_READABLE_DEFAULT_CONTRACTS = _ARTIFACT_CONTRACT_POLICY["readable_contracts"]
-PUBLIC_DEFAULT_CONTRACT, = (
-    contract for contract in _READABLE_DEFAULT_CONTRACTS
-    if contract["surface"] == _ARTIFACT_CONTRACT_POLICY["publication_surface"]
-)
+PUBLIC_DEFAULT_CONTRACT = _ARTIFACT_DEFAULT_CONTRACTS["current"]
+HISTORICAL_DEFAULT_CONTRACT = _ARTIFACT_DEFAULT_CONTRACTS["historical"]
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST = 256 * 1024
 MAX_ARCHIVE = 256 * 1024 * 1024
@@ -69,11 +67,11 @@ def standalone_source() -> str:
         source = source.replace(old, "\n" + binding + "\n", 1)
     # The public installer is one file, so embed the policy that the Python
     # publishers and the native updater read from the distribution contract.
-    binding_start = source.index("\n_ARTIFACT_CONTRACT_POLICY = ")
-    binding_end = source.index("\n_READABLE_DEFAULT_CONTRACTS = ", binding_start)
+    binding_start = source.index("\n_ARTIFACT_DEFAULT_CONTRACTS = ")
+    binding_end = source.index("\nPUBLIC_DEFAULT_CONTRACT = ", binding_start)
     return (
         source[:binding_start]
-        + f"\n_ARTIFACT_CONTRACT_POLICY = {_ARTIFACT_CONTRACT_POLICY!r}"
+        + f"\n_ARTIFACT_DEFAULT_CONTRACTS = {_ARTIFACT_DEFAULT_CONTRACTS!r}"
         + source[binding_end:]
     )
 
@@ -113,17 +111,11 @@ def read_json(url: str) -> dict[str, Any]:
 
 
 def validate_default_contract(value: object) -> dict[str, Any]:
-    """Keep public artifacts within the currently supported single-session default.
-
-    This is a distribution compatibility boundary, not a model-benefit verdict.
-    A new complete-contract default needs its original matched outcome/full-cost
-    qualification before this supported scope can be extended. Engineering
-    installation checks cannot authorize that extension.
-    """
+    """Require the current engineering default on newly published artifacts."""
     if not isinstance(value, dict) or value != PUBLIC_DEFAULT_CONTRACT:
         raise ValueError(
             "Runtime default contract is unqualified for public adoption; "
-            "the C1 single-session outcome/full-cost and supported-profile qualification is required"
+            "the observed default must match the complete Turn distribution contract"
         )
     return dict(value)
 
@@ -146,13 +138,58 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         raise ValueError("Runtime artifact has no bounded download sources")
     for url in urls:
         safe_url(url)
-    # Readers can cross a version boundary in either direction. Publication
-    # still checks the observed writer against the single declared default.
-    if "default_contract" in value:
-        contract = value["default_contract"]
-        if not isinstance(contract, dict) or contract not in _READABLE_DEFAULT_CONTRACTS:
-            raise ValueError("Unsupported runtime default contract in artifact metadata")
-    return dict(value)
+    manifest = dict(value)
+    if QUALIFIED_DEFAULT_CONTRACT_FIELD in manifest:
+        if "default_contract" in manifest:
+            raise ValueError("Runtime artifact declares two default contracts")
+        # The v1 manifest reserves default_contract for old readers' known
+        # profile. New readers normalize the publication attestation so the
+        # existing archive identity comparison still binds the exact contract.
+        manifest["default_contract"] = validate_default_contract(
+            manifest.pop(QUALIFIED_DEFAULT_CONTRACT_FIELD)
+        )
+    elif "default_contract" in manifest and manifest["default_contract"] != HISTORICAL_DEFAULT_CONTRACT:
+        validate_default_contract(manifest["default_contract"])
+    return manifest
+
+
+def validate_published_manifest(value: dict[str, Any]) -> dict[str, Any]:
+    """Require the compatible, qualified descriptor before publishing a new archive."""
+    if not isinstance(value, dict) or QUALIFIED_DEFAULT_CONTRACT_FIELD not in value:
+        raise ValueError("Runtime publication requires a qualified default contract attestation")
+    return validate_manifest(value)
+
+
+def public_channel_allows_default(observed: dict[str, Any]) -> bool:
+    """Check the reviewed release profile independently of archive qualification."""
+    approved = _ARTIFACT_DEFAULT_CONTRACTS["public_channel"]
+    if approved not in ("current", "historical"):
+        raise ValueError("Unknown public channel default contract")
+    return bool(observed == _ARTIFACT_DEFAULT_CONTRACTS[approved])
+
+
+def verify_runtime_installation_qualification(
+    manifest: dict[str, Any], qualification: dict[str, Any], archive: Path, *, channel: str,
+) -> None:
+    checks = (
+        "ok", "clean_install", "upgrade", "doctor", "skills", "frontend_bundle_contract",
+        "frontend_http", "no_frontend_build_tools", "license_notices", "activation_failure_restored",
+    )
+    if not isinstance(qualification, dict) or any(qualification.get(check) is not True for check in checks):
+        raise ValueError("Runtime installation qualification is missing or failed")
+    if manifest.get("default_contract") is None or qualification.get("default_contract") != manifest["default_contract"]:
+        raise ValueError("Runtime default-contract qualification is missing or mismatched")
+    if manifest.get("channel") != channel or any(
+        qualification.get(key) != manifest[key] for key in ("source_revision", "channel", "sha256")
+    ):
+        raise ValueError("Runtime qualification does not match the candidate")
+    if (
+        type(qualification.get("bytes")) is not int
+        or qualification["bytes"] != manifest["size"]
+        or archive.stat().st_size != manifest["size"]
+        or file_hash(archive) != manifest["sha256"]
+    ):
+        raise ValueError("Qualified runtime bytes differ from the candidate")
 
 
 def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:

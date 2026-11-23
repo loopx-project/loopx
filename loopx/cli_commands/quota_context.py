@@ -128,10 +128,6 @@ def validate_quota_command_context_request(
     """Validate the request before any provider read or local projection write."""
 
     command = args.quota_command
-    if bool(getattr(args, "turn_envelope", False)) and command != "should-run":
-        raise QuotaCommandValidationError(
-            "--turn-envelope is only valid with `quota should-run`"
-        )
     requested_details = set(getattr(args, "include_details", None) or ())
     if requested_details and command not in QUOTA_COMMAND_DETAIL_SECTIONS:
         raise QuotaCommandValidationError(

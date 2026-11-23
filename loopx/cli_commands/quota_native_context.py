@@ -139,7 +139,7 @@ def project_saved_context_capture(
                 or payload.get("goal_id") != args.goal_id or identity.get("agent_id") != args.agent_id
                 or receipt.get("turn_instance_id") != args.turn_instance_id):
             raise ValueError("context-project requires the captured quota decision's exact Goal, Agent and Turn")
-        if args.turn_envelope or args.decision_output_dir or args.decision_handoff_socket:
+        if args.decision_output_dir or args.decision_handoff_socket:
             raise ValueError("context-project presents the saved quota view; it does not change view or handoff")
     except QuotaCommandValidationError as exc:
         return {"ok": False, "reason": str(exc)}
@@ -530,9 +530,6 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     if getattr(args, "prepared_claim_operation_id", None) is not None and args.quota_command != "context-project":
         print_payload({"ok": False, "reason": "--prepared-claim-operation-id requires quota context-project"},
                       args.format, str)
-        return 1
-    if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):
-        print_payload({"ok": False, "reason": "--complete-turn requires JSON quota should-run"}, args.format, str)
         return 1
     if getattr(args, "scheduler_observation", False):
         from .quota_request import validate_scheduler_observation_request

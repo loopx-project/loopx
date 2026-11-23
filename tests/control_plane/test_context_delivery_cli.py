@@ -422,8 +422,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
                         "--turn-instance-id", "host-context-delivery",
                         "--context-delivery", setting,
                         "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint),
-                        *(["--codex-context-dir", str(native_directory)] if native_context else []),
-                        *(["--turn-envelope"] if surface == "turn_envelope" else []), cwd=project)
+                        *(["--codex-context-dir", str(native_directory)] if native_context else []), cwd=project)
                     path, raw = future.result(timeout=30)
         assert code == 0, wire
         assert path.read_bytes() == raw
@@ -525,7 +524,7 @@ def test_c1_work_opening_carries_current_inputs_or_preserves_the_reader(tmp_path
     delivery = ("--context-delivery", "auto") if case == "stateless_inline" else (
         "--context-delivery", "on", "--codex-context-dir", str(native))
     rc, view = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli", *binding,
-        "--turn-instance-id", turn, "--decision-output-root", str(captures), "--complete-turn", *delivery, *limit,
+        "--turn-instance-id", turn, "--decision-output-root", str(captures), *delivery, *limit,
         cwd=project)
     assert rc == 0 and view["ok"], view
     original, = captures.rglob("decision.json")

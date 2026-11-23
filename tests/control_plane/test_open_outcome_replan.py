@@ -87,7 +87,7 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
         assert "operating objective and cumulative requirements" in review
         assert "justified no-change" in review
         assert "goal-acceptance prepare-objective" in review
-        envelope = call("quota", "should-run", "--codex-app", "--turn-envelope", "--goal-id", GOAL,
+        envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN,
             )
         delivered = next(
