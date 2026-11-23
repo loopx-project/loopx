@@ -31,6 +31,31 @@ def _minimum_free_bytes(*paths: Path) -> int:
     return min(shutil.disk_usage(path).free for path in paths)
 
 
+def _require_research_headroom(paths: tuple[Path, Path], pending_bytes: int = 0) -> None:
+    free = _minimum_free_bytes(*paths)
+    available = free - _RESEARCH_DISK_HEADROOM_FLOOR_BYTES
+    if available <= 0 or pending_bytes > available:
+        raise InsufficientDiskHeadroomError(errno.ENOSPC, "insufficient host disk headroom for research collection")
+
+
+class _ResearchExtractionReader:
+    """Check uncompressed bytes before tarfile copies the next block to disk."""
+
+    def __init__(self, archive: tarfile.TarFile, paths: tuple[Path, Path]) -> None:
+        source = archive.fileobj
+        self._read = source.read
+        self._paths = paths
+        self.seek = source.seek
+        self.tell = source.tell
+        self.close = source.close
+        self.write = source.write
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._read(size)
+        _require_research_headroom(self._paths, len(data))
+        return data
+
+
 def _filter_research_members(
     archive: tarfile.TarFile,
     members: list[tarfile.TarInfo],
@@ -243,31 +268,20 @@ class RecordingDockerBackend(DockerBackend):
         research_cleanup: bool = False,
     ):
         """Collect one native archive without materializing it as Python bytes."""
-        free_before: int | None = None
+        paths = (Path(tempfile.gettempdir()), target.parent)
         if research_cleanup:
             target.parent.mkdir(parents=True, exist_ok=True)
-            free_before = _minimum_free_bytes(Path(tempfile.gettempdir()), target.parent)
-            if free_before <= _RESEARCH_DISK_HEADROOM_FLOOR_BYTES:
-                raise InsufficientDiskHeadroomError(
-                    errno.ENOSPC,
-                    "host temp/log disk headroom below 10 GiB floor before research collection",
-                )
+            _require_research_headroom(paths)
         chunks, _ = self._raw(handle).get_archive(str(remote))
         try:
             # A seekable spool preserves the existing tar extraction/filter
             # behavior. Its lifetime is independent of TarFile reference cycles.
-            written = 0
-            with tempfile.TemporaryFile() as archive_file:
+            # Unbuffered research writes make the previous chunk visible to the next free-space check.
+            spool = tempfile.TemporaryFile(buffering=0) if research_cleanup else tempfile.TemporaryFile()
+            with spool as archive_file:
                 for chunk in chunks:
-                    written += len(chunk)
-                    if (
-                        free_before is not None
-                        and free_before - written < _RESEARCH_DISK_HEADROOM_FLOOR_BYTES
-                    ):
-                        raise InsufficientDiskHeadroomError(
-                            errno.ENOSPC,
-                            "research archive spool aborted before breaching 10 GiB free-disk floor",
-                        )
+                    if research_cleanup:
+                        _require_research_headroom(paths, len(chunk))
                     archive_file.write(chunk)
                 archive_file.seek(0)
                 target.mkdir(exist_ok=True)
@@ -277,16 +291,14 @@ class RecordingDockerBackend(DockerBackend):
                     else:
                         members = _filter_research_members(archive, archive.getmembers())
                         extract_bytes = sum(m.size for m in members if m.isfile())
-                        if (
-                            free_before is not None
-                            and free_before - written - extract_bytes
-                            < _RESEARCH_DISK_HEADROOM_FLOOR_BYTES
-                        ):
-                            raise InsufficientDiskHeadroomError(
-                                errno.ENOSPC,
-                                "research archive extraction aborted before breaching 10 GiB free-disk floor",
-                            )
-                        archive.extractall(target, members=members, filter="data")
+                        _require_research_headroom(paths, extract_bytes)
+                        source = archive.fileobj
+                        archive.fileobj = _ResearchExtractionReader(archive, paths)
+                        try:
+                            archive.extractall(target, members=members, filter="data")
+                            _require_research_headroom(paths)
+                        finally:
+                            archive.fileobj = source
         finally:
             close = getattr(chunks, "close", None)
             if close is not None:
