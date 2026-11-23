@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -19,6 +19,7 @@ import {
 import type { FileRunner, JsonCommandOptions, LoopXCommand } from './cli.ts'
 import { resolvePluginLoopXCommand } from './managed-runtime.ts'
 import { goalBarCoordinator } from './goalbar/events.ts'
+import { readGoalBarActivation } from './goalbar/read-model.ts'
 import type {
   GoalBarDriverActionReceipt,
   GoalBarSessionCapture,
@@ -44,6 +45,7 @@ const DIAGNOSTIC_LOG_MAX_BYTES = 5 * 1024 * 1024
 const NOT_READY_LOG_INTERVAL_MS = 60_000
 const MAX_WAIT_MS = 24 * 60 * 60_000
 const SELECTION_RECOVERY_COMPLETION_LIMIT = 2
+const RESUME_SESSION_LIMIT = 32
 
 type TimerHandle = unknown
 type ReservationPhase = 'queued' | 'claimed' | 'admitted' | 'retired'
@@ -115,10 +117,10 @@ const retainedHost = globalThis as typeof globalThis & {
 }
 const sessionRetention = retainedHost[retentionKey] ??= new WeakMap()
 
-function retainedState(agent: Agent, session: Agent['session']): SessionDriverRetention {
+function retainedState(agent: Agent, session: Agent['session'], errorPauseHome?: string): SessionDriverRetention {
   let retained = sessionRetention.get(session)
   if (retained?.agent !== agent) {
-    retained = { agent, paused: sessionErrorPause(session) }
+    retained = { agent, paused: sessionErrorPause(session, errorPauseHome) }
     sessionRetention.set(session, retained)
   }
   return retained
@@ -128,6 +130,7 @@ interface ActivationProjection {
   readonly session: Agent['session']
   readonly pendingModelCalls: Set<string>
   activated: boolean
+  nativeGoalActive: boolean
   hostTurn?: { turn: number; entered: boolean; selection?: SelectionTurn } | undefined
   pendingSelection?: SelectionRecovery | undefined
 }
@@ -178,6 +181,19 @@ interface HostJobs {
   list(agentId: Agent['id']): readonly { readonly owner?: Agent['id'] | undefined; readonly status: string }[]
 }
 
+// Optional rc.3 services. Older supported hosts still drive their live Agents.
+interface HostSessionQuery {
+  listSessions(signal: AbortSignal): Promise<readonly {
+    readonly header: Agent['session']['header']
+    readonly persisted: boolean
+  }[]>
+  inspectSession<T>(id: Agent['id'], read: (session: Agent['session']) => T, signal: AbortSignal): Promise<T>
+}
+
+interface HostSessionController {
+  resolveAgent(id: Agent['id']): Promise<{ agent: Agent } | { error: unknown }>
+}
+
 interface PlanDiagnostics {
   bindingStatus?: unknown
   quota?: Record<string, unknown>
@@ -198,6 +214,7 @@ function preStepRejection(
 export interface LoopXDriverOptions {
   readonly isLiveAgent: (agent: Agent) => boolean
   readonly getJobs?: () => HostJobs | undefined
+  readonly errorPauseHome?: string
   readonly runner?: FileRunner | undefined
   readonly resolveCommand?: (
     signal: AbortSignal,
@@ -426,11 +443,13 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
     session,
     pendingModelCalls: new Set(),
     activated: false,
+    nativeGoalActive: false,
   }
   try {
     for (const event of session.snapshotEvents()) {
       foldActivationEvent(projection, event)
       foldSelectionEvent(projection, event)
+      projection.nativeGoalActive = nativeGoalChange(event) ?? projection.nativeGoalActive
     }
   } catch {
     projection.pendingModelCalls.clear()
@@ -439,6 +458,11 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
     projection.pendingSelection = undefined
   }
   return projection
+}
+
+function nativeGoalChange(event: SessionEvent): boolean | undefined {
+  if (String(event.type) !== 'goal/change') return undefined
+  return record(record(event.data)?.goal)?.phase === 'active'
 }
 
 // Match @deepseek-ai/dsh-home-paths without requiring it on older hosts.
@@ -450,22 +474,39 @@ function resolveDshHome(): string {
   return resolve(home)
 }
 
+function errorPauseFile(home: string | undefined, session: Agent['session']): string | undefined {
+  if (home === undefined) return undefined
+  const id = createHash('sha256').update(session.id).digest('hex')
+  return join(home, 'dsh-loopx-driver-pauses', id)
+}
+
 /** Reopening a Session must not erase its last typed failure boundary. */
-function sessionErrorPause(session: Agent['session']): boolean {
+function sessionErrorPause(session: Agent['session'], home?: string): boolean {
   let paused = false
+  let throughSeq: number | undefined
   let driverTurn = false
   try {
+    const file = errorPauseFile(home, session)
+    if (file !== undefined && statSync(file, { throwIfNoEntry: false }) !== undefined) {
+      const saved = record(JSON.parse(readFileSync(file, 'utf8')))
+      if (typeof saved?.throughSeq !== 'number' || typeof saved.paused !== 'boolean') return true
+      throughSeq = saved.throughSeq
+      paused = saved.paused
+    }
     for (const event of session.snapshotEvents()) {
       if (event.type === 'turn/start') driverTurn = false
       if (event.type === 'user/message') {
-        if (event.data.source.kind === 'user') paused = false
+        if ((throughSeq === undefined || event.seq > throughSeq) && event.data.source.kind === 'user') paused = false
         if (continuationSource(event.data) !== undefined) driverTurn = true
       }
       if (event.type !== 'turn/end') continue
       // A later admitted LoopX Turn records successful recovery. Completing
       // unrelated automatic input is not permission to resume LoopX.
-      if (event.data.reason.kind === 'completed' && driverTurn) paused = false
-      if (event.data.reason.kind === 'aborted' || event.data.reason.kind === 'max-tokens') paused = true
+      if (throughSeq === undefined || event.seq > throughSeq) {
+        if (event.data.reason.kind === 'completed' && driverTurn) paused = false
+        if (event.data.reason.kind === 'aborted' || event.data.reason.kind === 'max-tokens'
+          || event.data.reason.kind === 'error') paused = true
+      }
       driverTurn = false
     }
   } catch {
@@ -849,6 +890,7 @@ export class LoopXContinuationDriver {
   private readonly runDetached: <T>(operation: () => Promise<T>) => Promise<T>
   private readonly warn: (message: string, sessionId: string) => void
   private readonly getJobs: LoopXDriverOptions['getJobs']
+  private readonly errorPauseHome: string | undefined
   private readonly diagnosticLogs: string
   private readonly lastNotReady = new Map<string, { signature: string; time: number }>()
   private readonly onAdmissionChange: ((session: Agent['session']) => void) | undefined
@@ -873,7 +915,8 @@ export class LoopXContinuationDriver {
     }
     this.onAdmissionChange = options.onAdmissionChange
     this.getJobs = options.getJobs
-    this.diagnosticLogs = join(resolveDshHome(), 'logs')
+    this.errorPauseHome = options.errorPauseHome
+    this.diagnosticLogs = join(this.errorPauseHome ?? resolveDshHome(), 'logs')
     this.logDiagnostic('driver_start')
   }
 
@@ -912,6 +955,70 @@ export class LoopXContinuationDriver {
       status: agent.status, activated: state.activation.activated,
     })
     if (agent.status === 'idle') this.requestEvaluation(state)
+  }
+
+  async resumePersistedSessions(
+    query: HostSessionQuery,
+    controller: HostSessionController,
+    isLoaded: (id: Agent['id']) => boolean,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const active = () => !this.disposed && !signal.aborted
+    try {
+      const sessions = await query.listSessions(signal)
+      const candidates = sessions.filter(({ header, persisted }) => persisted
+        && header.origin !== 'subagent' && header.cwd && !isLoaded(header.id))
+        .slice(0, RESUME_SESSION_LIMIT)
+      for (const { header: { id } } of candidates) {
+        if (!active()) return
+        const skip = (reason: string) => this.logDiagnostic('resume_skipped', id, { reason })
+        try {
+          if (isLoaded(id)) { skip('already_live'); continue }
+          const observed = await query.inspectSession(id, session => {
+            const { cwd } = session.header
+            if (session.id !== id || session.header.id !== id || !cwd) return 'session_mismatch'
+            if (session.header.origin === 'subagent') return 'subagent'
+            const activation = foldSessionActivation(session)
+            if (!activation.activated) return 'not_activated'
+            if (activation.nativeGoalActive) return 'native_goal_active'
+            const retained = sessionRetention.get(session)
+            if (retained?.goalBarPaused) return 'goalbar_paused'
+            if (retained?.paused || sessionErrorPause(session, this.errorPauseHome)) return 'error_paused'
+            return { cwd }
+          }, signal)
+          if (!active()) return
+          if (typeof observed === 'string') { skip(observed); continue }
+          this.logDiagnostic('resume_candidate', id)
+          const { cwd } = observed
+          const command = await this.loopXCommand(signal)
+          const payload = await this.resolveBinding(command, id, cwd, signal)
+          const binding = exactBinding(payload, id)
+          if (!active()) return
+          if (binding === undefined) { skip('no_exact_binding'); continue }
+          const lifecycle = await readGoalBarActivation({
+            command, cwd, signal, runner: this.runner, retryDelaysMs: this.retryDelaysMs,
+          }, binding.goalId)
+          if (!active()) return
+          if (lifecycle.kind !== 'value') { skip('lifecycle_unavailable'); continue }
+          if (lifecycle.goalActivation !== 'active') { skip('core_stopped'); continue }
+          const current = exactBinding(await this.resolveBinding(command, id, cwd, signal), id)
+          if (!active()) return
+          if (current?.goalId !== binding.goalId || current.agentId !== binding.agentId) {
+            skip('binding_changed')
+            continue
+          }
+          if (isLoaded(id)) { skip('already_live'); continue }
+          const loaded = await controller.resolveAgent(id)
+          if ('agent' in loaded) this.logDiagnostic('resume_loaded', id)
+          else skip('host_resume_failed')
+        } catch {
+          if (!active()) return
+          skip('candidate_read_failed')
+        }
+      }
+    } catch {
+      if (active()) this.logDiagnostic('resume_skipped', null, { reason: 'session_list_failed' })
+    }
   }
 
   onAgentDisposed(agent: Agent): void {
@@ -1072,6 +1179,17 @@ export class LoopXContinuationDriver {
     const wasActivated = state.activation.activated
     foldActivationEvent(state.activation, event)
     foldSelectionEvent(state.activation, event)
+    const nativeGoalActive = nativeGoalChange(event)
+    if (nativeGoalActive !== undefined && nativeGoalActive !== state.activation.nativeGoalActive) {
+      state.activation.nativeGoalActive = nativeGoalActive
+      if (nativeGoalActive) {
+        const wait = retainedState(agent, state.activation.session).jobWait
+        if (wait !== undefined) wait.deferredPlan = undefined
+        this.cancelPending(state)
+      } else if (agent.status === 'idle') {
+        this.requestEvaluation(state)
+      }
+    }
     if (!wasActivated && state.activation.activated
       && agent.status === 'idle' && !state.pauseAfterTurnError) {
       this.requestEvaluation(state)
@@ -1235,6 +1353,7 @@ export class LoopXContinuationDriver {
   }
 
   private stateFor(agent: Agent): DriverState {
+    retainedState(agent, agent.session, this.errorPauseHome)
     const existing = this.states.get(agent)
     if (existing !== undefined) {
       if (existing.activation.session !== agent.session) {
@@ -1285,6 +1404,7 @@ export class LoopXContinuationDriver {
     if (state.stopping) yield 'stopping'
     if (state.activation.session !== agent.session) yield 'session_mismatch'
     if (!state.activation.activated) yield 'activation'
+    if (state.activation.nativeGoalActive) yield 'native_goal_active'
     if (retainedState(agent, state.activation.session).goalBarPaused) yield 'paused'
     if (state.pauseAfterTurnError) yield 'pauseAfterTurnError'
     if (state.competing) yield 'competing'
@@ -1493,7 +1613,7 @@ export class LoopXContinuationDriver {
     const command = await this.loopXCommand(signal)
     this.ensureReady(state, signal, session)
     setStage('resolve-binding')
-    const bindingPayload = await this.resolveBinding(command, state.agent, signal)
+    const bindingPayload = await this.resolveBinding(command, session.id, session.header.cwd, signal)
     diagnostics.bindingStatus = bindingPayload.status
     this.ensureReady(state, signal, session)
     if (bindingPayload.ok !== true) {
@@ -1607,7 +1727,7 @@ export class LoopXContinuationDriver {
     const startedAt = performance.now()
     try {
       const command = await this.loopXCommand(signal)
-      const bindingPayload = await this.resolveBinding(command, state.agent, signal)
+      const bindingPayload = await this.resolveBinding(command, reservation.session.id, reservation.session.header.cwd, signal)
       if (bindingPayload.ok !== true) {
         throw new LoopXCliError('typed_failure', 'LoopX binding authority rejected automatic continuation', false)
       }
@@ -1657,6 +1777,7 @@ export class LoopXContinuationDriver {
       && !state.pauseAfterTurnError
       && !state.competing
       && state.activation.activated
+      && !state.activation.nativeGoalActive
       && state.activation.session === state.agent.session
       && state.agent.session === reservation.session
       && state.reservation === reservation
@@ -1674,7 +1795,8 @@ export class LoopXContinuationDriver {
 
   private resolveBinding(
     command: LoopXCommand,
-    agent: Agent,
+    id: Agent['id'],
+    cwd: string | undefined,
     signal: AbortSignal,
   ): Promise<Record<string, unknown>> {
     return runJsonCommand(
@@ -1684,17 +1806,17 @@ export class LoopXContinuationDriver {
         '--format', 'json',
         'resolve-agent-thread',
         '--host-surface', HOST_SURFACE,
-        '--thread-id', String(agent.id),
+        '--thread-id', id,
       ],
       {
         runner: this.runner,
-        cwd: agent.session.header.cwd,
+        cwd,
         signal,
         attempts: 3,
         retryDelaysMs: this.retryDelaysMs,
         validate: payload => payload.schema_version === RESOLUTION_SCHEMA
           && payload.host_surface === HOST_SURFACE
-          && payload.thread_id === String(agent.id),
+          && payload.thread_id === id,
       },
     )
   }
@@ -1925,7 +2047,22 @@ export class LoopXContinuationDriver {
   }
 
   private setErrorPause(state: DriverState, paused: boolean): void {
-    retainedState(state.agent, state.activation.session).paused = paused
+    const { session, activated } = state.activation
+    const retained = retainedState(state.agent, session)
+    if (retained.paused === paused) return
+    retained.paused = paused
+    if (!activated) return
+    const file = errorPauseFile(this.errorPauseHome, session)
+    if (file === undefined) return
+    try {
+      const throughSeq = session.snapshotEvents().at(-1)?.seq ?? -1
+      mkdirSync(dirname(file), { recursive: true })
+      const pending = `${file}.${randomUUID()}.tmp`
+      writeFileSync(pending, JSON.stringify({ throughSeq, paused }), { mode: 0o600 })
+      renameSync(pending, file)
+    } catch {
+      this.logDiagnostic('resume_pause_write_failed', session.id)
+    }
   }
 
   private resumeAfterError(state: DriverState): void {
@@ -1999,6 +2136,7 @@ export function apply(ctx: Context): void {
   const driver = new LoopXContinuationDriver({
     isLiveAgent: agent => ctx.agents.get(agent.id) === agent,
     getJobs: () => ctx.get('jobs') as HostJobs | undefined,
+    errorPauseHome: resolveDshHome(),
     resolveCommand: signal => resolvePluginLoopXCommand({ signal }),
     runDetached: operation => ctx.agents.withoutInitiator(operation),
     warn: message => { ctx.logger.warn(message) },
@@ -2045,6 +2183,18 @@ export function apply(ctx: Context): void {
       if (agent?.session === session) driver.onSessionEvent(agent, event)
     })
     for (const agent of ctx.agents.list()) driver.observeAgent(agent)
+    ctx.inject(['sessionQuery', 'sessionController'], resumeCtx => {
+      const query = resumeCtx.get('sessionQuery') as HostSessionQuery
+      const controller = resumeCtx.get('sessionController') as HostSessionController
+      if (typeof query?.inspectSession !== 'function' || typeof controller?.resolveAgent !== 'function') return
+      resumeCtx.effect(() => {
+        const abort = new AbortController()
+        const pending = ctx.agents.withoutInitiator(() => driver.resumePersistedSessions(
+          query, controller, id => ctx.agents.get(id) !== undefined, abort.signal,
+        ))
+        return async () => { abort.abort(); await pending }
+      }, 'resume persisted LoopX sessions')
+    })
     yield async () => {
       unregisterDriverBridge()
       await driver.dispose(replacementUnload() ? 'replacement' : 'removal')

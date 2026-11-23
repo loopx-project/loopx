@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -171,7 +171,7 @@ function turnEndEvent(
 
 interface AppliedDriverRuntime {
   emitSessionEvent(session: Agent['session'], event: SessionEvent): void
-  announceAgent(event: 'agent/created' | 'agent/session-start'): void
+  announceAgent(event: 'agent/created' | 'agent/session-start' | 'agent/error'): void
   dispose(): Promise<void>
   /** Replay the cordis fiber-disposal sequence for one unload cause. */
   unloadFiber(mode: 'evict' | 'direct' | 'restart'): Promise<void>
@@ -201,6 +201,7 @@ function appliedDriverRuntime(
       withoutInitiator: (operation: () => Promise<unknown>) => operation(),
     },
     logger: { warn() {} },
+    inject() {},
     ...(fiber === undefined ? {} : {
       fiber,
       registry: { has: (_plugin: unknown) => runtimeRegistered },
@@ -1025,6 +1026,32 @@ describe('driver diagnostic records', () => {
     }
   }
 
+  it('persists error pauses and diagnostics under a tilde-expanded DSH home', async () => {
+    vi.stubEnv('HOME', testHome)
+    vi.stubEnv('USERPROFILE', testHome)
+    vi.stubEnv('DSH_HOME', '~\\.dsh')
+    const home = join(testHome, '.dsh')
+    const host = fakeAgent()
+    host.appendEvent(userSkillInvocationEvent())
+    const originalCwd = process.cwd()
+    process.chdir(testHome)
+    try {
+      const runtime = appliedDriverRuntime(host.agent, false)
+      try {
+        runtime.announceAgent('agent/error')
+        const pauseId = createHash('sha256').update(host.agent.session.id).digest('hex')
+        const pause = readFileSync(join(home, 'dsh-loopx-driver-pauses', pauseId), 'utf8')
+        expect(JSON.parse(pause)).toMatchObject({ paused: true })
+        const log = readFileSync(join(home, 'logs', 'dsh-loopx-driver.jsonl'), 'utf8')
+        expect(JSON.parse(log)).toMatchObject({ kind: 'driver_start' })
+      } finally {
+        await runtime.dispose()
+      }
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
   it('writes diagnostics to the default DSH home when DSH_HOME is unset', async () => {
     vi.stubEnv('HOME', testHome)
     vi.stubEnv('USERPROFILE', testHome)
@@ -1033,6 +1060,201 @@ describe('driver diagnostic records', () => {
     try {
       const log = readFileSync(join(testHome, '.dsh', 'logs', 'dsh-loopx-driver.jsonl'), 'utf8')
       expect(JSON.parse(log)).toMatchObject({ kind: 'driver_start' })
+    } finally { await driver.dispose() }
+  })
+
+  it.each(['unbound', 'ambiguous', 'different goal', 'different agent'] as const)(
+    'skips cold sessions whose binding becomes %s during the lifecycle read', async change => {
+      const diagnostics = diagnosticHome()
+      const host = fakeAgent()
+      const { agent } = host
+      host.appendEvent(userSkillInvocationEvent())
+      const fixture = runnerFixture()
+      let lifecycleRead = false
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: () => false,
+        runner: async (file, args, options) => {
+          if (args.includes('goal-lifecycle')) {
+            lifecycleRead = true
+            return { exitCode: 0, stderr: '', stdout: JSON.stringify({
+              ok: true, schema_version: 'loopx_goal_activation_transition_v1',
+              dry_run: true, execute: false, goal_id: goalId,
+              before_state: 'active', after_state: 'stopped',
+              changed: true, written: false, partial_write: false,
+              readback: { schema_version: 'loopx_goal_activation_readback_v1', status: 'not_executed', verified: false },
+            }) }
+          }
+          const result = await fixture.runner(file, args, options)
+          if (!lifecycleRead || !args.includes('resolve-agent-thread')) return result
+          const payload = JSON.parse(result.stdout)
+          if (change === 'unbound' || change === 'ambiguous') payload.status = change
+          if (change === 'different goal') payload.goal_id = 'other-goal'
+          if (change === 'different agent') payload.agent_id = 'other-agent'
+          const match = { goal_id: payload.goal_id, agent_id: payload.agent_id }
+          payload.matches = change === 'unbound' ? [] : change === 'ambiguous'
+            ? [match, { ...match, agent_id: 'other-agent' }] : [match]
+          return { ...result, stdout: JSON.stringify(payload) }
+        },
+      })
+      const resolveAgent = vi.fn(async () => ({ agent }))
+      try {
+        await driver.resumePersistedSessions({
+          listSessions: async () => [{ header: agent.session.header, persisted: true }],
+          inspectSession: async (_id, read) => read(agent.session),
+        }, { resolveAgent }, () => false, new AbortController().signal)
+        expect(resolveAgent).not.toHaveBeenCalled()
+        expect(diagnostics.read()).toContainEqual(expect.objectContaining({
+          sessionId, kind: 'resume_skipped', reason: 'binding_changed',
+        }))
+      } finally {
+        await driver.dispose()
+        diagnostics.cleanup()
+      }
+    },
+  )
+
+  it('loads only eligible cold sessions and leaves admission to agent/created', async () => {
+    const diagnostics = diagnosticHome()
+    const skipped = [
+      'not_activated', 'no_exact_binding', 'ambiguous_binding', 'goalbar_paused',
+      'error_paused', 'persisted_error_pause', 'core_stopped', 'native_goal_active',
+    ]
+    const hosts = new Map([...skipped, 'eligible'].map(id => [id, fakeAgent(id)]))
+    const previous = fakeAgent('persisted_error_pause')
+    const live = new Set<Agent>([previous.agent, hosts.get('goalbar_paused')!.agent])
+    const fixture = runnerFixture()
+    let thread = ''
+    const createDriver = () => new LoopXContinuationDriver({
+      isLiveAgent: agent => live.has(agent), errorPauseHome: diagnostics.home,
+      runner: async (file, args, options) => {
+        if (args.includes('resolve-agent-thread')) {
+          thread = args[args.indexOf('--thread-id') + 1]!
+          const result = await fixture.runner(file, args, options)
+          if (thread === 'no_exact_binding' || thread === 'ambiguous_binding') {
+            const payload = JSON.parse(result.stdout)
+            payload.status = thread === 'no_exact_binding' ? 'missing' : 'ambiguous'
+            payload.matches = thread === 'no_exact_binding' ? [] : [
+              ...payload.matches, { goal_id: goalId, agent_id: 'other-agent' },
+            ]
+            return { ...result, stdout: JSON.stringify(payload) }
+          }
+          return result
+        }
+        if (args.includes('goal-lifecycle')) {
+          expect(args).not.toContain('--execute')
+          const active = thread !== 'core_stopped'
+          return { exitCode: 0, stderr: '', stdout: JSON.stringify({
+            ok: true, schema_version: 'loopx_goal_activation_transition_v1',
+            dry_run: true, execute: false, goal_id: goalId,
+            before_state: active ? 'active' : 'stopped', after_state: 'stopped',
+            changed: active, written: false, partial_write: false,
+            readback: { schema_version: 'loopx_goal_activation_readback_v1',
+              status: active ? 'not_executed' : 'not_required', verified: !active },
+          }) }
+        }
+        return fixture.runner(file, args, options)
+      },
+    })
+    let driver = createDriver()
+    const resolveAgent = vi.fn(async (id: Agent['id']) => {
+      expect(fixture.quotaCalls).toHaveLength(0)
+      const { agent } = hosts.get(id)!
+      live.add(agent)
+      driver.onSessionStart(agent)
+      return { agent }
+    })
+    const listSessions = async () => [...hosts.values()].map(({ agent }) => ({
+      header: agent.session.header, persisted: true,
+    }))
+    const inspectSession = async <T>(id: Agent['id'], read: (session: Agent['session']) => T) =>
+      read(hosts.get(id)!.agent.session)
+    const runResume = () => driver.resumePersistedSessions(
+      { listSessions, inspectSession }, { resolveAgent },
+      id => [...live].some(agent => agent.id === id), new AbortController().signal,
+    )
+    try {
+      for (const [id, host] of hosts) {
+        if (id !== 'not_activated') host.appendEvent(userSkillInvocationEvent())
+      }
+      hosts.get('error_paused')!.appendEvent(turnEndEvent(1, 'max-tokens'))
+      hosts.get('native_goal_active')!.appendEvent(sessionEvent('goal/change', { goal: { phase: 'active' } }))
+      previous.appendEvent(userSkillInvocationEvent())
+      driver.onAgentError(previous.agent)
+      const paused = hosts.get('goalbar_paused')!.agent
+      await driver.cancelQueued({ agent: paused, session: paused.session })
+      live.clear()
+
+      await runResume()
+      expect(resolveAgent.mock.calls).toEqual([['eligible']])
+      await waitFor(() => hosts.get('eligible')!.nextTurn.length === 1)
+      expect(fixture.quotaCalls).toHaveLength(1)
+      expect(diagnostics.read()).toEqual(expect.arrayContaining([
+        ...skipped.map(id => expect.objectContaining({
+          sessionId: id, kind: 'resume_skipped',
+          reason: id === 'ambiguous_binding' ? 'no_exact_binding'
+            : id === 'persisted_error_pause' ? 'error_paused' : id,
+        })),
+        expect.objectContaining({ sessionId: 'eligible', kind: 'resume_candidate' }),
+        expect.objectContaining({ sessionId: 'eligible', kind: 'resume_loaded' }),
+      ]))
+      await driver.dispose('replacement')
+      driver = createDriver()
+      await runResume()
+      expect(resolveAgent.mock.calls).toEqual([['eligible']])
+    } finally {
+      await driver.dispose()
+      diagnostics.cleanup()
+    }
+  })
+
+  it('bounds cold log inspection when the Host services become available', async () => {
+    const diagnostics = diagnosticHome()
+    const hosts = Array.from({ length: 34 }, (_, index) => fakeAgent(`cold-${index}`))
+    const ctx = new Context()
+    ctx.reflect.provide('agents', {
+      get: () => undefined,
+      list: () => [],
+      withoutInitiator: (operation: () => Promise<unknown>) => operation(),
+    } as never)
+    ctx.reflect.provide('loopxBootstrap', { state: 'ready' })
+    const fiber = ctx.plugin(applyDriver)
+    const inspected: Agent['id'][] = []
+    const inspectSession = async <T>(id: Agent['id'], read: (session: Agent['session']) => T) => {
+      inspected.push(id)
+      return read(hosts.find(({ agent }) => agent.id === id)!.agent.session)
+    }
+    const resolveAgent = vi.fn()
+    try {
+      ctx.reflect.provide('sessionQuery', {
+        listSessions: async () => hosts.map(({ agent }) => ({ header: agent.session.header, persisted: true })),
+        inspectSession,
+      })
+      expect(inspected).toEqual([])
+      ctx.reflect.provide('sessionController', { resolveAgent })
+      await waitFor(() => inspected.length >= 32)
+      expect(inspected).toHaveLength(32)
+      expect(inspected.at(-1)).toBe('cold-31')
+      expect(resolveAgent).not.toHaveBeenCalled()
+    } finally {
+      await fiber.dispose()
+      diagnostics.cleanup()
+    }
+  })
+
+  it('leaves an Agent restored externally to its active native goal until the native goal pauses', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true })
+    try {
+      host.appendEvent(userSkillInvocationEvent())
+      host.appendEvent(sessionEvent('goal/change', { goal: { phase: 'active' } }))
+      driver.onSessionStart(host.agent)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fixture.quotaCalls).toEqual([])
+      expect(host.nextTurn).toEqual([])
+      publishEvent(driver, host, sessionEvent('goal/change', { goal: { phase: 'paused' } }))
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(fixture.quotaCalls).toHaveLength(1)
     } finally { await driver.dispose() }
   })
 
