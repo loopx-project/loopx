@@ -1226,9 +1226,6 @@ export async function commitQuotaAccountingArtifactTransaction(
     }
 
     const currentIndexBytes = await readOptionalBytes(indexPath);
-    const currentIndexContent = currentIndexBytes === null
-      ? null
-      : currentIndexBytes.toString("utf8");
     const currentDigest = currentIndexBytes === null
       ? null
       : sha256Bytes(currentIndexBytes);
@@ -1240,7 +1237,9 @@ export async function commitQuotaAccountingArtifactTransaction(
         indexDigest: currentDigest,
       };
     }
-    const currentRecords = parseQuotaAccountingIndex(currentIndexContent);
+    const currentRecords = parseQuotaAccountingIndex(
+      currentIndexBytes?.toString("utf8") ?? null,
+    );
     const duplicateResolution = resolveQuotaAccountingEffect(
       request.kind,
       currentRecords,
