@@ -3,6 +3,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthoritySha256, requireAuthorityStoreId} from "../coordination/authority_store_codec.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent, stripPythonWhitespace} from "../coordination/todo_agents.ts";
+import type {CoordinationProjectionMutation} from "../coordination/coordination_projection.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA} from "../coordination/coordination_state_contract.ts";
 import {planCoordinationTodoCreate} from "../coordination/todo_create.ts";
 import {projectTodoGateScopes} from "../todos/decision_scope.ts";
@@ -87,14 +88,23 @@ function planWriteback(input: MonitorBatchInput) {
   // their existing wire types so permanent Markdown projection is lossless.
   if (metadata.material_change_generation != null) metadata.material_change_generation = Number(metadata.material_change_generation);
   const updated: JsonObject = {...monitor, last_actor_agent_id: actor, updated_at: observation.generated_at};
+  const clearFields: string[] = [];
   for (const [key, value] of Object.entries(metadata)) {
-    if (value === null) delete updated[key]; else updated[key] = value;
+    if (value === null) {
+      // Complete-replacement projection validation requires explicit clear_fields when removing an existing key.
+      if (Object.hasOwn(updated, key)) clearFields.push(key);
+      delete updated[key];
+    } else updated[key] = value;
   }
   const reason = optionalNonEmptyString(observation.reason_summary, "reason_summary");
   if (reason) updated.reason = reason;
   const nextTodos: JsonObject[] = [];
   const plannedTodos = new Map(todos.map(todo => [String(todo.todo_id), todo]));
-  const mutations: {kind: "todo_upsert"; todo: JsonObject}[] = [{kind: "todo_upsert", todo: updated}];
+  const mutations: CoordinationProjectionMutation[] = [{
+    kind: "todo_upsert",
+    todo: updated,
+    ...(clearFields.length > 0 ? {clear_fields: clearFields} : {}),
+  }];
   for (const role of ["agent", "user"] as const) {
     const text = intent[role === "agent" ? "next_agent_todo" : "next_user_todo"];
     if (!text) continue;
