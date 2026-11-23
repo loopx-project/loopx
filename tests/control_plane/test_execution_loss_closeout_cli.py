@@ -8,6 +8,7 @@ import shlex
 import sys
 
 import pytest
+from loopx import rollout_event_log
 from loopx.agent_registry import registered_agent_ids_for_goal
 
 from canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
@@ -256,7 +257,6 @@ def _fixture(tmp_path, monkeypatch, capsys, provider, *, prepared=True,
 
         # Registered transport clock seams, never edits to persisted lease bytes.
         monkeypatch.setattr(runtime_time, "datetime", AfterExpiryDatetime)
-        monkeypatch.setattr(local_authority, "now_local", lambda: after_expiry.isoformat())
         monkeypatch.setattr(task_lease, "now_utc", lambda: after_expiry.astimezone(timezone.utc))
         assert runtime_time.now_utc() == after_expiry.astimezone(timezone.utc)
         replacement = _claim(context, replacement_owner, "execution-loss-replacement-claim")
@@ -561,6 +561,73 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
         )
         assert code == 0 and debited["appended"] is False, debited
         _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("whole_second_writer", [False, True], ids=["precise", "legacy-clock"])
+def test_replacement_and_closeout_in_receipt_second(tmp_path, monkeypatch, capsys, provider,
+                                                   whole_second_writer):
+    second = datetime.now(timezone.utc).replace(microsecond=0)
+    clock = second + timedelta(milliseconds=250)
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock.astimezone(tz) if tz else clock.astimezone().replace(tzinfo=None)
+
+    monkeypatch.setattr(runtime_time, "datetime", FixtureDatetime)
+    monkeypatch.setattr(rollout_event_log, "datetime", FixtureDatetime)
+    monkeypatch.setattr(task_lease, "now_utc", lambda: clock)
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, replace=False, source_profile=False)
+    original = _readback(context)
+    assert runtime_time.parse_timestamp(original.heartbeat_receipt["recorded_at"]) == clock
+
+    run = context["cli"]
+    binding = ["--goal-id", context["goal_id"], "--todo-id", context["todo"]]
+    first = context["original_lease"]
+    clock = second + timedelta(milliseconds=450)
+    code, released = run("task-lease", "release", *binding, "--owner", OWNER,
+                         "--idempotency-key", first["idempotency_key"],
+                         "--expected-version", str(first["version"]))
+    assert code == 0, released
+    assert runtime_time.parse_timestamp(_lease(context)["released_at"]) == clock
+
+    clock = second + timedelta(milliseconds=650)
+    if whole_second_writer:
+        # A legacy writer can only attest to the second it observed.
+        monkeypatch.setattr(local_authority, "now_local_iso", lambda *, timespec: second.isoformat())
+    code, claimed = run("todo", "claim", *binding, "--agent-id", OWNER, "--claimed-by", OWNER,
+                        "--claim-operation-id", "replacement-within-receipt-second")
+    assert code == 0, claimed
+    lease = _lease(context)
+    assert lease["lease_epoch"] > first["lease_epoch"]
+    if whole_second_writer:
+        assert runtime_time.parse_timestamp(lease["acquired_at"]) == second
+        rejected = _reject_without_effect(context, _closeout_args(context, lease=lease))
+        assert "clock is stale or ambiguous" in str(rejected)
+        return
+    assert runtime_time.parse_timestamp(lease["acquired_at"]) == clock
+
+    clock = second + timedelta(milliseconds=725)
+    code, renewed = run("task-lease", "renew", *binding, "--owner", OWNER,
+                        "--idempotency-key", lease["idempotency_key"],
+                        "--expected-version", str(lease["version"]), "--ttl-seconds", "2700")
+    assert code == 0, renewed
+    current = _lease(context)
+    assert runtime_time.parse_timestamp(current["updated_at"]) == clock
+    argv = _closeout_args(context, lease=current)
+
+    # A clock behind the renewal still cannot establish the required ordering.
+    clock = second + timedelta(milliseconds=700)
+    _reject_without_effect(context, argv)
+    clock = second + timedelta(milliseconds=850)
+    code, closed = run(*argv)
+    assert code == 0 and closed["settlement_progress"]["no_spend"] is True, closed
+    assert closed["settlement_identity"] == original.identity.value.as_dict()
+    code, replay = run(*argv)
+    assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert _receipt_lines(context) == context["receipt_lines"]
+    _assert_no_completion_or_debit(context)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

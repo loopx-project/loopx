@@ -263,7 +263,7 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     # Only the accepted operation's clock is synthetic. Git observation, the
     # managed claim, its receipt and both provider transactions remain real.
     with monkeypatch.context() as clock:
-        clock.setattr("loopx.control_plane.coordination.local_authority.now_local", lambda: "2001-01-01T00:00:00Z")
+        clock.setattr("loopx.control_plane.coordination.local_authority.now_local_iso", lambda *, timespec: "2001-01-01T00:00:00Z")
         assert claim("a", "expired-original")["execution_managed"]
     monkeypatch.chdir(b)
     assert claim("b", "peer-current")["execution_managed"]
