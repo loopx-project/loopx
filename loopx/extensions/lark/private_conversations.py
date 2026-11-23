@@ -1180,16 +1180,13 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             return {"continue_delivery": True}
 
         effective_placement = "source_thread" if reply_placement is None and record.get("auto_topic_lane") is True else reply_placement
+        placed_kwargs = {**kwargs, "reply_placement": effective_placement}
         if edit:
-            result = update_lark_inbox_reply(**{**kwargs, "reply_placement": effective_placement}, previous_text=edit["text"], attempt=edit["attempt"],
-                before_send=before_send, delivery_attempt_recorder=lambda value: save_phase(attempt=dict(value)),
-                require_previous_text_match=edit_only)
+            result = update_lark_inbox_reply(**placed_kwargs, previous_text=edit["text"], attempt=edit["attempt"],
+                before_send=before_send, delivery_attempt_recorder=lambda value: save_phase(attempt=dict(value)), require_previous_text_match=edit_only)
             if not edit_only and result.get("blocker") == "provider_update_edit_limit":
-                # A confirmed edit rejection plus fresh non-matching readback
-                # proves this final did not reach the draft. Preserve its proof
-                # and use the existing source-bound, idempotent final sender.
-                # Recovery of older, already-started final edits takes this
-                # same path; an ambiguous failure must never take it.
+                # Confirmed edit rejection plus fresh non-matching readback proves this final did not reach the draft;
+                # preserve its proof and use the idempotent final sender (never taken on ambiguous failures).
                 stream["edit_limit_reached"] = True
                 rejected = {"blocker": result["blocker"], "edit_from": edit, "attempt": phase_state.get("attempt")}
                 for key in ("edit_from", "attempt", "started"):
@@ -1197,16 +1194,14 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 save_phase(rejected_update=rejected)
                 return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
             if not edit_only and result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
-                # Do not truncate long/mention-bearing final answers to fit a
-                # draft. Close it, then use the established full final sender.
+                # Close the draft without truncating long/mention-bearing finals, then use the full final sender.
                 if not self._close_progress(path, record, inbox=inbox) and not stream.get("edit_limit_reached"):
                     return False
                 phase_state.pop("edit_from", None)
                 save_phase()
                 return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
         elif phase_state.get("attempt"):
-            result = verify_lark_inbox_reply(**{**kwargs, "reply_placement": effective_placement},
-                                            attempt=phase_state["attempt"], resume_parts=True, before_send=before_send)
+            result = verify_lark_inbox_reply(**placed_kwargs, attempt=phase_state["attempt"], resume_parts=True, before_send=before_send)
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly or churn disk.
