@@ -180,15 +180,11 @@ def project_replan_context(
     obligation: Mapping[str, Any] | None = None, evidence_ref: str | None = None,
     source_status: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
-    stride_strategy: str = "off",
     explore_context: Mapping[str, Any] | None = None,
     history_newest_first: bool | None = None,
     todo_items: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from .replan_history_codec import project_replan_request
-    from .stride_policy_codec import normalize_stride_strategy
-
-    strategy = normalize_stride_strategy(stride_strategy)
 
     prefix = ["loopx"]
     if source_status is not None:
@@ -205,7 +201,6 @@ def project_replan_context(
             "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id,
                 include_decisions=bool(agent_id),
                 history_newest_first=history_newest_first),
-            "stride_strategy": strategy,
             # Canonical caller-owned facts only. TypeScript joins the declared
             # work with the accepted decision and causally later observations.
             **({"todo_items": [{key: item[key] for key in (

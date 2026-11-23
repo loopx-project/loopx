@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
+from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRATEGY
 
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
@@ -142,7 +143,6 @@ class SForgeWorker(CodexAgent):
                  native_readiness_attempt_seconds: float | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
-                 stride_strategy: str | None = None,
                  planning_horizon_goal: bool | None = None,
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
@@ -211,11 +211,6 @@ class SForgeWorker(CodexAgent):
             replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = replan_after_todos
-        if stride_strategy is not None and not self.execution.uses_loopx:
-            raise ValueError("stride_strategy requires a heartbeat profile or turn-resume")
-        if stride_strategy is not None:
-            from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
-            stride_strategy = normalize_stride_strategy(stride_strategy)
         if planning_horizon_goal is not None:
             if not isinstance(planning_horizon_goal, bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
@@ -225,7 +220,9 @@ class SForgeWorker(CodexAgent):
             DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
             else planning_horizon_goal
         )
-        self.stride_strategy = stride_strategy
+        # Recorded, not selected: LoopX always runs the live stride policy and
+        # the same value reaches worker-profile.json and runtime-receipt.json.
+        self.stride_strategy = LIVE_STRIDE_STRATEGY if self.execution.uses_loopx else None
         self.checkpoint_request_path = None
         self.checkpoint_request = checkpoint_request
         if checkpoint_request is not None:
@@ -447,7 +444,6 @@ class SForgeWorker(CodexAgent):
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
-                stride_strategy=self.stride_strategy,
                 planning_horizon_goal=self.planning_horizon_goal,
                 checkpoint_request_path=self.checkpoint_request_path,
                 checkpoint_request=self.checkpoint_request,

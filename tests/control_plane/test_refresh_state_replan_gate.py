@@ -138,9 +138,65 @@ def _current_obligation_id(
     return str(obligation["obligation_id"])
 
 
+def _stride_decision_for_obligation(obligation: dict) -> dict:
+    from loopx.control_plane.work_items.progress_observation import (
+        build_replan_action_packet,
+    )
+
+    packet = build_replan_action_packet(obligation, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    return dict(packet["stride_control"]["minimal_example"])
+
+
+def _stride_vision_for(
+    runs: list[dict],
+    *,
+    state_text: str = STATE_TEXT,
+    outcome: str = "stop",
+    acceptance_summary: str = "Review the open obligation against current evidence.",
+    evidence_ref: str = "evidence:stride-review",
+    registry_goal: dict | None = None,
+) -> dict:
+    obligation, _ = qualify_replan_writeback(
+        newest_first_runs=runs,
+        state_text=state_text,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        registry_goal=registry_goal,
+    )
+    assert obligation is not None
+    path_delta: dict = {
+        "schema_version": "goal_path_delta_v0",
+        "outcome": outcome,
+        "prior_assumption": "Prior slices were still advancing.",
+        "observed_reality": "Review trigger fired under current evidence.",
+        "evidence_refs": [evidence_ref],
+    }
+    if outcome == "stop":
+        path_delta["stopped"] = ["Stop repeating the prior unchanged route."]
+    elif outcome == "continue":
+        path_delta["retained"] = ["Retain the current evidence-backed route."]
+    return {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "agent_id": AGENT_ID,
+        "state": "active",
+        "vision_patch": {"acceptance_summary": acceptance_summary},
+        "path_delta": path_delta,
+        "stride_decision": _stride_decision_for_obligation(obligation),
+    }
+
+
 def test_maintenance_writeback_rejected_when_replan_due() -> None:
+    runs = _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    with pytest.raises(ValueError, match="stride_decision"):
+        _call_gate(runs=runs)
     with pytest.raises(ValueError) as exc:
-        _call_gate(runs=_durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD))
+        enforce_open_replan_writeback(
+            newest_first_runs=runs,
+            state_text=STATE_TEXT,
+            agent_id=AGENT_ID,
+            goal_id=GOAL_ID,
+            agent_vision=_stride_vision_for(runs),
+        )
     message = str(exc.value)
     assert "autonomous replan obligation" in message
     assert "typed semantic delta" in message
@@ -148,13 +204,13 @@ def test_maintenance_writeback_rejected_when_replan_due() -> None:
 
 
 def test_typed_surface_delta_satisfies_periodic_obligation() -> None:
+    runs = _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
     semantic_delta = enforce_open_replan_writeback(
-        newest_first_runs=_durable_runs(
-            AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD
-        ),
+        newest_first_runs=runs,
         state_text=STATE_TEXT,
         agent_id=AGENT_ID,
         goal_id=GOAL_ID,
+        agent_vision=_stride_vision_for(runs),
         progress_observation={
             "schema_version": "typed_progress_observation_v0",
             "work_item_id": "todo-replan-slice",
@@ -246,17 +302,26 @@ def _typed_repeat_runs() -> list[dict]:
 
 def test_repair_delta_claim_alone_cannot_close_typed_repeat_obligation() -> None:
     runs = _typed_repeat_runs()
+    stop_vision = _stride_vision_for(runs)
     # Semantic-gate level: a writeback whose progress observation does not
     # carry a NEW typed semantic delta relative to the obligation baseline is
     # rejected. This pins enforce_open_replan_writeback; the full
     # repair-delta command path (blocker todo + --repair-delta-kind blocker)
     # is covered by the refresh_state_run regressions below.
+    with pytest.raises(ValueError, match="stride_decision"):
+        enforce_open_replan_writeback(
+            newest_first_runs=runs,
+            state_text=STATE_TEXT,
+            agent_id=AGENT_ID,
+            goal_id=GOAL_ID,
+        )
     with pytest.raises(ValueError) as exc:
         enforce_open_replan_writeback(
             newest_first_runs=runs,
             state_text=STATE_TEXT,
             agent_id=AGENT_ID,
             goal_id=GOAL_ID,
+            agent_vision=stop_vision,
         )
     message = str(exc.value)
     assert "autonomous replan obligation" in message
@@ -268,6 +333,7 @@ def test_repair_delta_claim_alone_cannot_close_typed_repeat_obligation() -> None
             state_text=STATE_TEXT,
             agent_id=AGENT_ID,
             goal_id=GOAL_ID,
+            agent_vision=stop_vision,
             progress_observation={
                 "schema_version": "typed_progress_observation_v0",
                 "result_class": "blocked",
@@ -287,6 +353,7 @@ def test_atomic_new_blocker_delta_closes_typed_repeat_obligation() -> None:
         state_text=STATE_TEXT,
         agent_id=AGENT_ID,
         goal_id=GOAL_ID,
+        agent_vision=_stride_vision_for(runs),
         progress_observation={
             "schema_version": "typed_progress_observation_v0",
             "result_class": "blocked",
@@ -323,6 +390,7 @@ def _call_refresh_state_run(
     runtime_root: Path,
     project: Path,
     progress_observation: dict | None = None,
+    agent_vision_packet: dict | None = None,
 ) -> dict:
     return refresh_state_run(
         registry_path=registry_path,
@@ -338,9 +406,40 @@ def _call_refresh_state_run(
         autonomous_replan_recorded=True,
         repair_delta_kinds=["blocker"],
         progress_observation=progress_observation,
+        agent_vision_packet=agent_vision_packet,
         dry_run=False,
         sync_global=False,
     )
+
+
+def _replan_gate_stop_vision(registry_path: Path, runtime_root: Path) -> dict:
+    from loopx.quota import build_quota_should_run
+    from loopx.status import collect_status
+
+    status_payload = collect_status(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id=GOAL_ID,
+        limit=20,
+    )
+    guard = build_quota_should_run(status_payload, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    return {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "agent_id": AGENT_ID,
+        "state": "active",
+        "vision_patch": {"acceptance_summary": "Review the blocked external gate."},
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0",
+            "outcome": "stop",
+            "prior_assumption": "Prior blocker remained active.",
+            "observed_reality": "Reviewing typed blocker delta against baseline.",
+            "stopped": ["Stop repeating the prior blocker claim."],
+            "evidence_refs": ["evidence-external-review"],
+        },
+        "stride_decision": dict(
+            guard["replan_action_packet"]["stride_control"]["minimal_example"]
+        ),
+    }
 
 
 def _replan_gate_tmp_fixture(
@@ -360,7 +459,6 @@ def _replan_gate_tmp_fixture(
                         "status": "active",
                         "repo": str(project),
                         "state_file": str(state.relative_to(project)),
-                        "execution_profile": {"stride_strategy": "off"},
                         "coordination": {
                             "agent_model": "peer_v1",
                             "registered_agents": [AGENT_ID],
@@ -395,6 +493,7 @@ def test_refresh_state_run_repair_delta_alone_rejected_without_new_typed_delta(
             registry_path=registry_path,
             runtime_root=runtime_root,
             project=project,
+            agent_vision_packet=_replan_gate_stop_vision(registry_path, runtime_root),
         )
     assert runs_index.read_text().splitlines() == before
 
@@ -409,6 +508,7 @@ def test_refresh_state_run_atomic_blocker_delta_persists_repair_and_semantic_evi
         registry_path=registry_path,
         runtime_root=runtime_root,
         project=project,
+        agent_vision_packet=_replan_gate_stop_vision(registry_path, runtime_root),
         progress_observation={
             "schema_version": "typed_progress_observation_v0",
             "result_class": "blocked",
@@ -425,7 +525,7 @@ def test_refresh_state_run_atomic_blocker_delta_persists_repair_and_semantic_evi
     persisted = json.loads(json_path.read_text(encoding="utf-8"))
     ack = persisted.get("autonomous_replan_ack") or {}
     assert ack.get("recorded") is True
-    assert (ack.get("delta_contract") or {}).get("delta_kinds") == ["blocker"]
+    assert "blocker" in (ack.get("delta_contract") or {}).get("delta_kinds", [])
     semantic_delta = ack.get("semantic_delta") or {}
     assert semantic_delta.get("accepted") is True
     assert semantic_delta.get("satisfying_outcomes") == ["new_concrete_blocker"]
@@ -494,7 +594,7 @@ def test_legacy_material_run_cadence_rejects_maintenance_writeback(tmp_path: Pat
             sync_global=False,
         )
     message = str(exc.value)
-    assert "typed semantic delta" in message
+    assert "stride_decision" in message
 
 
 def _prior_periodic_ack() -> dict:
@@ -715,6 +815,7 @@ def test_admitted_vision_checkpoint_survives_a_new_periodic_review() -> None:
         agent_vision={
             "vision_patch": {"acceptance_summary": "An independent check supports continuing."},
             "path_delta": {"outcome": "continue", "evidence_refs": ["evidence:checkpoint-review"]},
+            "stride_decision": _stride_decision_for_obligation(admitted),
         },
     )
     assert delta is not None
@@ -909,9 +1010,18 @@ def test_completed_or_wrong_obligation_successor_cannot_close_rotated_duty() -> 
 
 
 def test_rotated_vision_obligation_accepts_fresh_evidence_linked_path() -> None:
+    runs = _rotated_vision_runs()
+    state_text = _completed_advancement_chain_state()
+    obligation, _ = qualify_replan_writeback(
+        newest_first_runs=runs,
+        state_text=state_text,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+    )
+    assert obligation is not None
     semantic_delta = enforce_open_replan_writeback(
-        newest_first_runs=_rotated_vision_runs(),
-        state_text=_completed_advancement_chain_state(),
+        newest_first_runs=runs,
+        state_text=state_text,
         agent_id=AGENT_ID,
         goal_id=GOAL_ID,
         agent_vision={
@@ -922,6 +1032,7 @@ def test_rotated_vision_obligation_accepts_fresh_evidence_linked_path() -> None:
                 "outcome": "replan",
                 "evidence_refs": ["evidence:current-outcome"],
             },
+            "stride_decision": _stride_decision_for_obligation(obligation),
         },
     )
     assert semantic_delta is not None

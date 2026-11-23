@@ -8,7 +8,7 @@ import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semantics.ts";
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
-import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis, STRIDE_REVIEW_REFERENCE_LIMIT} from "./stride_policy.ts";
+import {LIVE_STRIDE_STRATEGY, normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis, STRIDE_REVIEW_REFERENCE_LIMIT} from "./stride_policy.ts";
 import {PROGRESS_RESULT_CLASSES} from "./replan_history.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "./delivery_outcome.ts";
 
@@ -687,12 +687,13 @@ export function projectReplanContext(value: unknown): JsonObject {
       ? (obligation.triggers as JsonObject[]).find(trigger => trigger.progress_baseline)?.progress_baseline
       : null
   ) ?? null;
-  const strideStrategy = normalizeStrideStrategy(request.stride_strategy);
-  // This context has not been attached yet. Project outcomes with its current
-  // effective strategy through the same owner used by requirements/writeback.
-  const frontier = {baseline, required_any_of: obligation ? requiredSemanticOutcomes({
-    ...obligation, replan_context: {stride_strategy: strideStrategy},
-  }) : []};
+  // There is one live strategy. A caller cannot select "off" for a new context;
+  // historically recorded contexts remain decodable through validation above.
+  if (request.stride_strategy !== undefined) normalizeStrideStrategy(request.stride_strategy);
+  const strideStrategy = LIVE_STRIDE_STRATEGY;
+  // This context has not been attached yet. Project outcomes with the live
+  // strategy through the same owner used by requirements/writeback.
+  const frontier = {baseline, required_any_of: obligation ? requiredSemanticOutcomes(obligation) : []};
   const prefix = request.read_prefix === undefined ? "loopx" : requireNonEmptyString(request.read_prefix, "read_prefix");
   const groups = new Map<string, {row: JsonObject; count: number; first: unknown}>();
   for (const row of evidence) {
@@ -748,12 +749,12 @@ export function projectReplanContext(value: unknown): JsonObject {
     : null;
   if (evidenceReadTemplate) for (const row of shown) delete row.read_action;
   const core = projectCoreGoal(request.goal_facts);
-  const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
+  const exploreBasis = projectStrideExploreBasis(request.explore_context, goal, agent);
   const followthrough = agent
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
-    ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
+    stride_strategy: strideStrategy,
     ...(followthrough ? {decision_followthrough: followthrough} : {}),
     ...(exploreBasis ? {explore_basis: exploreBasis} : {})});
   const context: JsonObject = {
@@ -767,7 +768,7 @@ export function projectReplanContext(value: unknown): JsonObject {
     coverage_ledger: ledger, coverage_count: coverage.size, coverage_truncated: coverage.size > ledger.length,
     uncovered_frontier: frontier,
   };
-  if (strideStrategy !== "off") context.stride_strategy = strideStrategy;
+  context.stride_strategy = strideStrategy;
   if (followthrough) context.decision_followthrough = followthrough;
   if (exploreBasis) context.explore_basis = exploreBasis;
   // Source-replayed supplemental pages qualify a proposal, not a new admission

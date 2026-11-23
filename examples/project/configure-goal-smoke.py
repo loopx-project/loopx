@@ -332,7 +332,6 @@ def main() -> int:
             "count_unit": "effective_turns",
             "count": 6,
             "planning_horizon_goal": True,
-            "stride_strategy": "evidence_conditioned_v1",
             "yardstick_enabled": False,
         }
         # Goal-scoped cadence is omitted when no explicit override is present;
@@ -346,6 +345,8 @@ def main() -> int:
         assert "--execute" in replan_commands["apply_enable"]
         assert "--clear-execution-replan-after-todos" in replan_commands["preview_disable"]
         assert "--clear-execution-replan-after-turns" in replan_commands["preview_disable"]
+        # Evidence-conditioned stride is always on; no reset flag exists for it.
+        assert "stride" not in replan_commands["preview_disable"]
         assert "--execute" not in replan_commands["preview_disable"]
         assert "--execute" in replan_commands["apply_disable"]
         assert features["local_authority_shadow"]["availability"] == "retired"

@@ -167,11 +167,17 @@ loopx configure-goal --goal-id example --clear-execution-replan-after-turns --ex
 The Dashboard exposes **Goal review and stride** in the Capability Center for
 both the device and selected Goal. The existing machine namespace
 `todo_replan_cadence_machine_defaults_v2` stores `count_unit` (`effective_turns`
-or `completed_todos`), `count` and optional strategy selection. Existing v0/v1
-configurations remain readable without migrating them on inspection. The
-strategy defaults off; `evidence_conditioned_v1` adds evidence-conditioned scope
-and route advice, with unchanged admission and semantic exits. See the
-[versioned strategy configuration and rollback](reference/protocols/goal-vision-replan-contract-v0.md#configure-and-roll-back-the-stride-strategy). It is built into the control plane and needs
+or `completed_todos`) and `count`. Existing v0/v1 configurations remain readable
+without migrating them on inspection. The stride strategy is not configurable:
+`evidence_conditioned_v1` is always on and adds evidence-conditioned scope and
+route advice, with unchanged admission and semantic exits. There is no
+`--execution-stride-strategy` flag, Dashboard selector or device field. A
+`stride_strategy` value saved by an earlier release (`off` or
+`evidence_conditioned_v1`) in a v2 device file or Goal profile still loads.
+Device v2 saves retain the serialized field for runtime rollback. The editor
+accepts cadence and planning settings. After upgrade, pending writebacks use
+the current policy. See the
+[review cadence contract](reference/protocols/goal-vision-replan-contract-v0.md#configure-review-cadence). It is built into the control plane and needs
 no provider installation. The CLI, settings readback, quota decision and
 writeback validation use the same effective configuration.
 

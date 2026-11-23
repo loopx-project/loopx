@@ -17,7 +17,7 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
-from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRATEGY
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
@@ -67,7 +67,6 @@ class BenchmarkCodex(CodexOffline):
         scheduler_timeout_sec=5080,
         replan_after_todos=None,
         replan_after_turns=None,
-        stride_strategy=None,
         planning_horizon_goal=None,
         checkpoint_request_path=None,
         checkpoint_request=None,
@@ -91,8 +90,13 @@ class BenchmarkCodex(CodexOffline):
         if "research_loop" in kwargs:
             raise ValueError(
                 "research_loop has been removed; remove it from the adapter kwargs. "
-                "Use ordinary Goal/Todo planning, choose stride_strategy independently, "
-                "and select execution_observation='local_probe' only when needed."
+                "Use ordinary Goal/Todo planning and select "
+                "execution_observation='local_probe' only when needed."
+            )
+        if "stride_strategy" in kwargs:
+            raise ValueError(
+                "stride_strategy has been removed; remove it from the adapter kwargs. "
+                f"LoopX execution modes always run {LIVE_STRIDE_STRATEGY}."
             )
         if isinstance(validation_command, str):
             raise ValueError("validation_command must be an argv list, not shell text")
@@ -139,10 +143,8 @@ class BenchmarkCodex(CodexOffline):
         self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
             raise ValueError("replan_after_todos must be between 1 and 5")
-        if stride_strategy is not None and not self.execution.uses_loopx:
-            raise ValueError("stride_strategy requires a LoopX execution mode")
-        self.stride_strategy = (normalize_stride_strategy(stride_strategy)
-                                if stride_strategy is not None else None)
+        # Recorded, not selected: LoopX always runs the live stride policy.
+        self.stride_strategy = LIVE_STRIDE_STRATEGY if self.execution.uses_loopx else None
         if planning_horizon_goal is not None:
             if not isinstance(planning_horizon_goal, bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
@@ -503,10 +505,9 @@ class BenchmarkCodex(CodexOffline):
         self, environment: BaseEnvironment, instruction: str, *, cwd: str
     ) -> None:
         key, option, expected = self._replan_configuration()
-        stride_args = (["--execution-stride-strategy", self.stride_strategy]
-                       if self.stride_strategy is not None else [])
+        horizon_args = []
         if self.planning_horizon_goal is not None:
-            stride_args.append("--execution-planning-horizon-goal" if self.planning_horizon_goal
+            horizon_args.append("--execution-planning-horizon-goal" if self.planning_horizon_goal
                                else "--no-execution-planning-horizon-goal")
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
@@ -566,7 +567,7 @@ class BenchmarkCodex(CodexOffline):
                     "trial-workspace",
                     option,
                     str(expected),
-                    *stride_args,
+                    *horizon_args,
                     "--agent-work-mode",
                     f"{self.agent_id}=active",
                     "--execute",
@@ -583,7 +584,7 @@ class BenchmarkCodex(CodexOffline):
                     self.goal_id,
                     option,
                     str(expected),
-                    *stride_args,
+                    *horizon_args,
                     "--execute",
                 ],
                 cwd=cwd,
@@ -610,11 +611,6 @@ class BenchmarkCodex(CodexOffline):
         actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal")
         if type(actual_horizon) is not bool or actual_horizon != self.planning_horizon_goal:
             raise RuntimeError("planning_horizon_goal readback mismatch")
-        strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
-        if strategy != (self.stride_strategy or "off"):
-            raise RuntimeError(
-                f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
-            )
 
     def _verify_native_child_configuration(self, configured_state: dict) -> None:
         if self.execution.native_child_limit is None:

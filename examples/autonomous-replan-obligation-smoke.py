@@ -180,8 +180,6 @@ def write_fixture(
                     {
                         "id": GOAL_ID,
                         "domain": "autonomous-replan-fixture",
-                        # Isolate progress/cadence semantics from optional structured work-shape review.
-                        "execution_profile": {"stride_strategy": "off"},
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file,
@@ -303,9 +301,49 @@ def assert_typed_repeat_requires_two_equivalent_observations() -> None:
         assert guard["replan_action_packet"]["required_outcome"] == "semantic_delta", guard
 
 
+def _write_stride_stop_vision(path: Path, guard: dict) -> Path:
+    decision = dict(guard["replan_action_packet"]["stride_control"]["minimal_example"])
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "goal_vision_replan_contract_v0",
+                "agent_id": AGENT_ID,
+                "state": "active",
+                "vision_patch": {
+                    "acceptance_summary": "Advance the next bounded hardening slice.",
+                },
+                "path_delta": {
+                    "schema_version": "goal_path_delta_v0",
+                    "outcome": "stop",
+                    "prior_assumption": "Repeating the prior surface could advance the slice.",
+                    "observed_reality": "Two equivalent observations produced no semantic progress.",
+                    "stopped": ["Stop repeating the prior unchanged surface."],
+                    "evidence_refs": ["evidence-current-route"],
+                },
+                "stride_decision": decision,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def assert_equivalent_observation_is_rejected_before_write() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-typed-replan-") as tmp:
         registry_path, runtime = write_fixture(Path(tmp), typed_repeat_count=2)
+        guard = run_cli(
+            "quota",
+            "should-run",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            registry_path=registry_path,
+            runtime=runtime,
+        )
+        vision_path = _write_stride_stop_vision(Path(tmp) / "stop-vision.json", guard)
         runs_index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
         before = runs_index.read_text(encoding="utf-8")
         error = run_cli_error(
@@ -316,6 +354,8 @@ def assert_equivalent_observation_is_rejected_before_write() -> None:
             AGENT_ID,
             "--classification",
             "source_audit_progress",
+            "--agent-vision-json",
+            str(vision_path),
             "--progress-result-class",
             "advanced",
             "--progress-surface-id",
@@ -347,6 +387,7 @@ def assert_new_typed_surface_closes_exact_obligation() -> None:
             runtime=runtime,
         )
         obligation_id = before["autonomous_replan_obligation"]["obligation_id"]
+        vision_path = _write_stride_stop_vision(Path(tmp) / "stop-vision.json", before)
         # Execute the host projection itself; a hand-authored command can hide
         # missing flags or an unusable printed transition.
         action = next(
@@ -355,15 +396,25 @@ def assert_new_typed_surface_closes_exact_obligation() -> None:
         )
         tokens = shlex.split(action)
         replacements = {
-            "<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
-            "<surface-id>": "surface-new-route",
-            "<hypothesis-id>": "hypothesis-current-boundary",
-            "<probe-kind>": "probe-current-route",
-            "<evidence-id>": "evidence-new-route",
+            "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>": str(vision_path),
         }
         # The fixture supplies the isolated registry/runtime; preserve every
         # projected refresh argument and replace only declared input slots.
-        args = [replacements.get(token, token) for token in tokens[tokens.index("refresh-state"):]]
+        args = [
+            replacements.get(token, token)
+            for token in tokens[tokens.index("refresh-state"):]
+        ] + [
+            "--progress-result-class",
+            "advanced",
+            "--progress-surface-id",
+            "surface-new-route",
+            "--progress-hypothesis-id",
+            "hypothesis-current-boundary",
+            "--progress-probe-kind",
+            "probe-current-route",
+            "--progress-evidence-id",
+            "evidence-new-route",
+        ]
         refresh = run_cli(*args, registry_path=registry_path, runtime=runtime)
         semantic_delta = refresh["autonomous_replan_ack"]["semantic_delta"]
         assert semantic_delta["accepted"] is True, refresh

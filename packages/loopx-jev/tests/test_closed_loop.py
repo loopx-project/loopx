@@ -92,13 +92,50 @@ def _find(payload, key: str):
             yield from _find(item, key)
 
 
+def _stride_vision(
+    registry: Path,
+    runtime: Path,
+    *,
+    outcome: str = "stop",
+    acceptance_summary: str = "deliver() retries one transient TimeoutError",
+    evidence_ref: str = "evidence:progress-review-vision",
+) -> dict:
+    from copy import deepcopy
+    from loopx.quota import build_quota_should_run
+    from loopx.status import collect_status
+
+    status_payload = collect_status(
+        registry_path=registry,
+        runtime_root_override=str(runtime),
+        goal_id=GOAL_ID,
+        limit=20,
+    )
+    guard = build_quota_should_run(status_payload, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    decision = deepcopy(guard["replan_action_packet"]["stride_control"]["minimal_example"])
+    path_delta: dict = {
+        "schema_version": "goal_path_delta_v0",
+        "outcome": outcome,
+        "prior_assumption": "Renaming the delay constant prepared the retry slice.",
+        "observed_reality": "The evaluated deltas changed no behaviour; the retry branch is still missing.",
+        "evidence_refs": [evidence_ref],
+    }
+    if outcome == "stop":
+        path_delta["stopped"] = ["Stop cosmetic renames while resolving the external-review obligation."]
+    elif outcome == "continue":
+        path_delta["retained"] = ["retry.py stays the surface; the next slice adds the retry branch."]
+    return {
+        "agent_id": AGENT_ID,
+        "state": "active",
+        "vision_patch": {"acceptance_summary": acceptance_summary},
+        "path_delta": path_delta,
+        "stride_decision": decision,
+    }
+
+
 @pytest.fixture
 def sequence(tmp_path):
     project, runtime, registry = _write_fixture(tmp_path / "fixture")
     _initialize_fixture_authority(project, runtime)
-    # This sequence isolates the external-review obligation from structured Stride decisions.
-    configure_goal(registry_path=registry, goal_id=GOAL_ID,
-                   execution_stride_strategy="off", execute=True)
     work = tmp_path / "delivery"
     work.mkdir()
     git(work, "init", "-q")
@@ -231,6 +268,7 @@ def test_same_sequence_off_sees_nothing_and_assist_raises_the_obligation(sequenc
     # Repeating the evaluated observation, or the same hypothesis with fresh
     # evidence ids, is not a discharge: the obligation binds that window's typed
     # baseline and the real writeback rejects both.
+    stop_vision = _stride_vision(registry, runtime, outcome="stop")
     for non_novel, message in (
         ({"schema_version": "typed_progress_observation_v0", "result_class": "advanced", "surface_id": "retry", "hypothesis_id": "hypothesis-2", "evidence_ids": ["evidence-2"]}, "already claimed in the obligation window"),
         ({"schema_version": "typed_progress_observation_v0", "result_class": "advanced", "surface_id": "retry", "hypothesis_id": "hypothesis-2", "evidence_ids": ["evidence-fresh"]}, "typed semantic delta"),
@@ -251,6 +289,7 @@ def test_same_sequence_off_sees_nothing_and_assist_raises_the_obligation(sequenc
                 autonomous_replan_recorded=True,
                 repair_delta_kinds=["blocker"],
                 progress_observation=non_novel,
+                agent_vision_packet=stop_vision,
                 dry_run=False,
                 sync_global=False,
             )
@@ -272,6 +311,7 @@ def test_same_sequence_off_sees_nothing_and_assist_raises_the_obligation(sequenc
             autonomous_replan_recorded=True,
             repair_delta_kinds=["blocker"],
             progress_observation={"schema_version": "typed_progress_observation_v0", "result_class": "advanced", "surface_id": "retry", "hypothesis_id": "hypothesis-renamed", "evidence_ids": ["evidence-2"]},
+            agent_vision_packet=stop_vision,
             dry_run=False,
             sync_global=False,
         )
@@ -294,6 +334,7 @@ def test_same_sequence_off_sees_nothing_and_assist_raises_the_obligation(sequenc
             autonomous_replan_recorded=True,
             repair_delta_kinds=["blocker"],
             progress_observation={"schema_version": "typed_progress_observation_v0", "result_class": "advanced", "surface_id": "retry", "hypothesis_id": "hypothesis-1", "evidence_ids": ["evidence-1"]},
+            agent_vision_packet=stop_vision,
             dry_run=False,
             sync_global=False,
         )
@@ -324,6 +365,7 @@ def test_same_sequence_off_sees_nothing_and_assist_raises_the_obligation(sequenc
             "blocker_id": "blocker-cosmetic-churn",
             "evidence_ids": ["evidence-progress-review-obligation"],
         },
+        agent_vision_packet=stop_vision,
         dry_run=False,
         sync_global=False,
     )
@@ -386,9 +428,6 @@ def test_retried_turn_claim_is_rejected_by_real_refresh_writeback(tmp_path):
 
     project, runtime, registry = _write_fixture(tmp_path / "retry-fixture")
     _initialize_fixture_authority(project, runtime)
-    # Exercise duplicate claims independently of the optional Stride decision.
-    configure_goal(registry_path=registry, goal_id=GOAL_ID,
-                   execution_stride_strategy="off", execute=True)
     first = run(1, turn="t1", agent=AGENT_ID)
     typed_retry = run(2, turn="t2", agent=AGENT_ID)
     untyped_retry = run(3, turn="t2", agent=AGENT_ID)
@@ -430,11 +469,13 @@ def test_retried_turn_claim_is_rejected_by_real_refresh_writeback(tmp_path):
     assert obligation is not None and obligation["required"] is True
     assert [claim["result_class"] for claim in obligation["progress_window"]] == ["advanced", "blocked"]
     before = len(_newest_first_runs(runtime))
+    stop_vision = _stride_vision(registry, runtime, outcome="stop")
     with pytest.raises(ValueError, match="already claimed in the obligation window"):
         _refresh(
             project, runtime, registry, autonomous_replan_recorded=True,
             repair_delta_kinds=["blocker"],
             progress_observation=typed_retry["progress_observation"],
+            agent_vision_packet=stop_vision,
         )
     assert len(_newest_first_runs(runtime)) == before
     # The older blocker is also in the same window. It is not a new blocker
@@ -444,6 +485,7 @@ def test_retried_turn_claim_is_rejected_by_real_refresh_writeback(tmp_path):
             project, runtime, registry, autonomous_replan_recorded=True,
             repair_delta_kinds=["blocker"],
             progress_observation=first["progress_observation"],
+            agent_vision_packet=stop_vision,
         )
     assert len(_newest_first_runs(runtime)) == before
     assert _refresh(
@@ -453,6 +495,7 @@ def test_retried_turn_claim_is_rejected_by_real_refresh_writeback(tmp_path):
             **typed_retry["progress_observation"], "hypothesis_id": "hypothesis-new",
             "evidence_ids": ["evidence-new"],
         },
+        agent_vision_packet=stop_vision,
     )["ok"] is True
     assert _newest_first_runs(runtime)[0]["autonomous_replan_ack"]["recorded"] is True
 
@@ -486,6 +529,7 @@ def test_outstanding_evaluations_keep_the_obligation_and_an_evidence_linked_visi
     assert open_obligation["progress_baseline"]["hypothesis_id"] == "hypothesis-3"
     # The writeback owner sees the same obligation: re-submitting the pending
     # claim, or renaming its hypothesis over its evidence ids, is refused.
+    stop_vision = _stride_vision(registry, runtime, outcome="stop")
     for observation, message in (
         ({"hypothesis_id": "hypothesis-3", "evidence_ids": ["evidence-3"]}, "already claimed in the obligation window"),
         ({"hypothesis_id": "hypothesis-4", "evidence_ids": ["evidence-3"]}, "evidence ids absent from the evaluated baseline"),
@@ -494,7 +538,7 @@ def test_outstanding_evaluations_keep_the_obligation_and_an_evidence_linked_visi
         with pytest.raises(ValueError, match=message):
             _refresh(project, runtime, registry, autonomous_replan_recorded=True, repair_delta_kinds=["blocker"], progress_observation={
                 "schema_version": "typed_progress_observation_v0", "result_class": "advanced", "surface_id": "retry", **observation,
-            })
+            }, agent_vision_packet=stop_vision)
     # The outstanding evaluation fails closed: still no verdict, still open.
     calls = {"n": 0}
 
@@ -515,21 +559,10 @@ def test_outstanding_evaluations_keep_the_obligation_and_an_evidence_linked_visi
     time.sleep(1.05)
     kept = _refresh(project, runtime, registry, autonomous_replan_recorded=True, repair_delta_kinds=["blocker"],
         recommended_action="Keep the retry slice; implement the TimeoutError retry next.",
-        agent_vision_packet={
-            "agent_id": AGENT_ID,
-            "state": "active",
-            # `continue` keeps the acceptance as seeded; changing it would be a
-            # durable replan and the vision prepare gate demands `outcome=replan`.
-            "vision_patch": {"acceptance_summary": "deliver() retries one transient TimeoutError"},
-            "path_delta": {
-                "schema_version": "goal_path_delta_v0",
-                "outcome": "continue",
-                "prior_assumption": "Renaming the delay constant prepared the retry slice.",
-                "observed_reality": "The evaluated deltas changed no behaviour; the retry branch is still missing.",
-                "retained": ["retry.py stays the surface; the next slice adds the retry branch."],
-                "evidence_refs": ["evidence:progress-review-vision-continue"],
-            },
-        })
+        agent_vision_packet=_stride_vision(
+            registry, runtime, outcome="continue",
+            evidence_ref="evidence:progress-review-vision-continue",
+        ))
     assert kept.get("ok") is True
     runs = _newest_first_runs(runtime)
     ack = runs[0].get("autonomous_replan_ack") or {}
