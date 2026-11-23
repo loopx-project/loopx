@@ -643,6 +643,13 @@ function exactQuota(
     && exactQuotaReceipt(payload, turnInstanceId)
 }
 
+/** Core's own typed failure to persist this exact Turn's receipt; the next evaluation may retry. */
+function receiptWriteFailed(payload: Record<string, unknown>, turnInstanceId: string): boolean {
+  const receipt = record(payload.heartbeat_receipt)
+  return payload.effective_action === 'heartbeat_receipt_write_failed'
+    && receipt?.status === 'write_failed' && receipt.turn_instance_id === turnInstanceId
+}
+
 function schedulerWait(
   payload: Record<string, unknown>,
   currentToken: string,
@@ -1386,7 +1393,7 @@ export class LoopXContinuationDriver {
       throw new LoopXCliError(
         'typed_failure',
         'LoopX quota authority rejected automatic continuation',
-        false,
+        receiptWriteFailed(quota, turnInstanceId),
       )
     }
     if (typeof quota.should_run !== 'boolean' || !exactQuotaContext(quota, binding)
@@ -1475,7 +1482,8 @@ export class LoopXContinuationDriver {
       if (!this.reservationIsCurrent(state, reservation, signal)) return false
       if (reservation.preserveAcrossPause) return true
       if (quota.ok !== true) {
-        throw new LoopXCliError('typed_failure', 'LoopX quota authority rejected automatic continuation', false)
+        throw new LoopXCliError('typed_failure', 'LoopX quota authority rejected automatic continuation',
+          receiptWriteFailed(quota, reservation.turnInstanceId))
       }
       return exactQuota(quota, reservation, reservation.turnInstanceId)
     } catch (error: unknown) {
@@ -1708,7 +1716,9 @@ export class LoopXContinuationDriver {
 
   private failAdmission(state: DriverState, error: unknown): void {
     const category = admissionFailureCategory(error)
-    if (category === 'admission_rejected') this.setErrorPause(state, true)
+    // A recoverable receipt write failure keeps the next-idle retry; genuine rejections wait for a human.
+    const recoverable = error instanceof LoopXCliError && error.retryable
+    if (category === 'admission_rejected' && !recoverable) this.setErrorPause(state, true)
     const retained = retainedState(state.agent, state.activation.session)
     if (retained.admissionFailure === category) return
     retained.admissionFailure = category

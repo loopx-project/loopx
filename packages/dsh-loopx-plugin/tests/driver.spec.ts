@@ -765,6 +765,67 @@ describe('pre-step authority diagnostics', () => {
     } finally { await driver.dispose() }
   })
 
+  it.each(['admission', 'pre-step'])(
+    'retries on the next idle after a recoverable receipt write failure at %s', async phase => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const capture = { agent: host.agent, session: host.agent.session }
+      let failing = phase === 'admission'
+      // Core's own projection when it cannot persist this Turn's heartbeat receipt.
+      const writeFailed = (args: readonly string[]) => ({ exitCode: 1, stderr: '', stdout: JSON.stringify({
+        ok: false, mode: 'should-run', goal_id: goalId, decision: 'skip', should_run: false,
+        effective_action: 'heartbeat_receipt_write_failed', state: 'blocked_health',
+        agent_identity: { agent_id: agentId, registered: true },
+        heartbeat_receipt: { schema_version: 'heartbeat_quota_receipt_v0', status: 'write_failed',
+          turn_instance_id: args[args.indexOf('--turn-instance-id') + 1], stall_observation: 'not_evaluated' },
+      }) })
+      const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, retryDelaysMs: [0, 0],
+        runner: async (file, args, options) => failing && args.includes('should-run')
+          ? writeFailed(args) : fixture.runner(file, args, options) })
+      try {
+        observeActivated(driver, host)
+        if (phase === 'pre-step') {
+          await waitFor(() => host.nextTurn.length === 1)
+          const queued = host.nextTurn.shift()!
+          host.setStatus('running')
+          driver.onInboxClaimed(host.agent, queued)
+          failing = true
+          const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [queued] }))
+          expect(await driver.onPreStep(host.agent, [queued], new AbortController().signal, next))
+            .toEqual({ kind: 'reject' })
+          expect(next).not.toHaveBeenCalled()
+        }
+        await waitFor(() => driver.readContinuationAdmission(capture).state === 'failed')
+        failing = false
+        host.setStatus('idle')
+        driver.onAgentStatus(host.agent, 'idle')
+        await waitFor(() => host.nextTurn.length === 1)
+        expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it('holds a genuine typed quota rejection at admission until explicit Start', async () => {
+    const fixture = runnerFixture()
+    const denied = runnerFixture({ typedQuotaFailure: true })
+    const host = fakeAgent()
+    const capture = { agent: host.agent, session: host.agent.session }
+    let reject = true
+    const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: (file, args, options) => (reject ? denied : fixture).runner(file, args, options) })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => driver.readContinuationAdmission(capture).state === 'failed')
+      reject = false
+      driver.onAgentStatus(host.agent, 'idle')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fixture.quotaCalls).toHaveLength(0)
+      expect(host.nextTurn).toEqual([])
+      await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+      expect(host.nextTurn).toHaveLength(1)
+    } finally { await driver.dispose() }
+  })
+
   it('records a failed recheck before rejecting its continuation', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
