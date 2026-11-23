@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from ..effect_runtime import EffectRuntimeHostPermissionError
+
+
+if TYPE_CHECKING:
+    from ..effect_program import SettlementIdentity
 
 
 class CloseoutQueryUnavailableError(RuntimeError):
@@ -36,6 +41,8 @@ class QuotaRunIndexConflict(ValueError):
     """A quota spend was definitively rejected by the run-index CAS."""
 
     reason_code = "index_digest_conflict"
+    # Binding checked before commit. Current debt requires a fresh ledger read.
+    settlement_identity: SettlementIdentity | None = None
 
 
 class QuotaIdentityPrecondition(StrEnum):

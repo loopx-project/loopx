@@ -19,6 +19,7 @@ from .control_plane.effect_program import (
 from .control_plane.goals.activation import goal_is_stopped
 from .control_plane.quota.blocked_retry import overlay_active_turn_retries
 from .control_plane.quota.decision_summary import goal_status_health_ok as _goal_status_health_ok
+from .control_plane.quota.error_codes import QuotaRunIndexConflict
 from .control_plane.quota.goal_boundary import registry_goal_by_id as _registry_goal_by_id
 from .control_plane.quota.heartbeat_recommendation import (
     HEARTBEAT_HANDOFF_READINESS_COMPACT_FIELDS as HANDOFF_READINESS_COMPACT_FIELDS,
@@ -1421,7 +1422,12 @@ def spend_quota_slot(
     )
     if not preview.get("ok"):
         return preview
-    return record_quota_slot_spend_from_preview(
-        preview, status_payload, goal_id=safe_goal_id, execute=execute,
-        source=source, registry_path=registry_path, goal_ref=goal_ref,
-    )
+    try:
+        return record_quota_slot_spend_from_preview(
+            preview, status_payload, goal_id=safe_goal_id, execute=execute,
+            source=source, registry_path=registry_path, goal_ref=goal_ref,
+        )
+    except QuotaRunIndexConflict as error:
+        if settlement_readback is not None:
+            error.settlement_identity = settlement_readback.identity.value
+        raise
