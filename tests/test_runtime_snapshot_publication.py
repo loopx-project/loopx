@@ -138,15 +138,13 @@ def publish(root, *, channel_qualified=True):
     # interpreter as pytest without requiring a particular host PATH alias.
     functions = f"gh() {{ {shlex.quote(sys.executable)} github.py \"$@\"; }}\n"
     interpreter = shlex.quote(sys.executable)
-    if channel_qualified:
-        qualify_channel = (
-            "import sys; from loopx.cli_commands import update_artifact; "
-            "update_artifact._ARTIFACT_DEFAULT_CONTRACTS['public_channel'] = 'current'; "
-            "exec(compile(sys.stdin.read(), '<publisher>', 'exec'))"
-        )
-        functions += f"python() {{ {interpreter} -c {shlex.quote(qualify_channel)}; }}\n"
-    else:
-        functions += f"python() {{ {interpreter} \"$@\"; }}\n"
+    channel = "current" if channel_qualified else "historical"
+    qualify_channel = (
+        "import sys; from loopx.cli_commands import update_artifact; "
+        f"update_artifact._ARTIFACT_DEFAULT_CONTRACTS['public_channel'] = {channel!r}; "
+        "exec(compile(sys.stdin.read(), '<publisher>', 'exec'))"
+    )
+    functions += f"python() {{ {interpreter} -c {shlex.quote(qualify_channel)}; }}\n"
     return subprocess.run(["bash", "-c", functions + PUBLISH], cwd=root,
         env={**os.environ, "PYTHONPATH": str(ROOT), "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
         capture_output=True, text=True, encoding="utf-8", timeout=30, check=False)
