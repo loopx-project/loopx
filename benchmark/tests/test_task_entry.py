@@ -1374,10 +1374,10 @@ def _run_plan_runtime_root_probe(
         observed["wake_rt"] = wake_env["LOOPX_RUNTIME_ROOT"]
         return SimpleNamespace(
             session_id="sess-" + context,
+            binding={"session_id": "sess-resume"} if context == "resume" else None,
             receipt={"action": "start_new" if context == "fresh" else "resume", "session_id": "sess-" + context},
             goal_ref=None,
             admission=None,
-            binding=None,
             observe=lambda *_: None,
             host_launch_decision=lambda *_: None,
         )

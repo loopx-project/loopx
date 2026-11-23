@@ -1789,3 +1789,85 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
 def test_context_benchmark_setting_rejects_broad_or_other_host_activation(value):
     with pytest.raises(ValueError, match="context_delivery"):
         Execution(context_delivery=value)
+
+
+def test_run_once_writes_receipt_when_heartbeat_host_failure_raises(tmp_path, monkeypatch):
+    env = _sqlite_heartbeat_env(tmp_path, monkeypatch)
+    Path(env["CODEX_BIN"]).write_text(
+        f"#!{sys.executable}\nimport json, sys\n"
+        "print(json.dumps({'type': 'thread.started', 'thread_id': 'session-a'}))\n"
+        "sys.stdin.read(); sys.exit(1)\n"
+    )
+    Path(env["CODEX_BIN"]).chmod(0o755)
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    monkeypatch.setattr(
+        worker, "heartbeat_host_failure",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("node effect runtime dead")),
+    )
+    receipt = run_once(env)
+    assert receipt["ok"] is False
+    assert "RuntimeError: node effect runtime dead" in receipt["host_failure_record_error"]
+    saved = json.loads((Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "receipt.json").read_text())
+    assert saved["host_failure_record_error"] == receipt["host_failure_record_error"]
+
+
+def test_opt_in_runtime_path_and_claim_ttl_env(tmp_path, monkeypatch):
+    from benchmark.runtime.codex import (
+        claim_ttl_seconds_from_env,
+        codex_settings,
+        process_environment,
+    )
+
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    baseline = codex_settings(
+        execution=Execution(mode="heartbeat"), workspace=tmp_path, model="fixture",
+        effort="high", base_url="http://localhost:8123/v1", wire_api="responses",
+    )
+    assert "LOOPX_BENCHMARK_CLAIM_TTL_SECONDS" not in baseline
+
+    with pytest.raises(ValueError, match="86400"):
+        claim_ttl_seconds_from_env({"LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": "99999"})
+    assert claim_ttl_seconds_from_env({"LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": "18000"}) == 18000
+
+    opted_in = tomllib.loads(
+        codex_settings(
+            execution=Execution(mode="heartbeat"), workspace=tmp_path, model="fixture",
+            effort="high", base_url="http://localhost:8123/v1", wire_api="responses",
+            claim_ttl_seconds=18000,
+        )
+    )
+    assert opted_in["shell_environment_policy"]["set"]["LOOPX_BENCHMARK_CLAIM_TTL_SECONDS"] == "18000"
+
+    node_dir = tmp_path / "node-root"
+    (node_dir / "bin").mkdir(parents=True)
+    cli_bin = tmp_path / "profile-bin" / "loopx"
+    cli_bin.parent.mkdir(parents=True)
+    cli_bin.write_text("#!/bin/sh\nexit 0\n")
+    env = process_environment(
+        tmp_path / "home",
+        base={"PATH": "/usr/bin:/bin", "LOOPX_NODE_DIR": str(node_dir), "LOOPX_CLI": str(cli_bin)},
+    )
+    assert env["PATH"].split(os.pathsep)[:3] == [str(node_dir / "bin"), str(cli_bin.parent), "/usr/bin"]
+
+    monkeypatch.setattr(
+        worker.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(
+            stdout=json.dumps({"ok": True, "turn_instance_id": "turn-1", "task_body": "base"})
+        ),
+    )
+    rendered = worker.heartbeat_body(
+        env | {"LOOPX_REGISTRY": str(tmp_path / "reg.json"), "LOOPX_RUNTIME_ROOT": str(tmp_path / "rt"),
+               "LOOPX_GOAL_ID": "g", "LOOPX_AGENT_ID": "a", "LOOPX_PROJECT": str(tmp_path),
+               "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CONTEXT_DELIVERY": "off",
+               "LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": "18000"},
+        "turn-1", native_goal=False,
+    )
+    assert "--ttl-seconds 18000" in rendered
+
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", claim_ttl_seconds=18000)
+    assert agent._worker_env(cwd="/task")["LOOPX_BENCHMARK_CLAIM_TTL_SECONDS"] == "18000"
