@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 // 2.4.0 adds the original-Turn receipt reader used by selection recovery.
@@ -99,6 +100,15 @@ export interface LoopXCommand {
   readonly prefix: readonly string[]
   readonly skillCommand: string
   readonly version: string
+  /**
+   * One executable Core accepts as `--cli-bin`, pinning its rendered
+   * continuation text (heartbeat task bodies, settlement command templates) to
+   * the same binary this adapter probed. Bare names are resolved against the
+   * probe PATH to an absolute path when possible. Undefined when the resolved
+   * invocation cannot be expressed as one executable (interpreter plus module
+   * or managed-launcher prefix), leaving Core's default bare `loopx` route.
+   */
+  readonly cliBin?: string | undefined
   readonly candidate?: LoopXCliDiagnostics['candidate']
 }
 
@@ -480,6 +490,64 @@ function shellWord(value: string): string {
     : `'${value.replaceAll("'", `'"'"'`)}'`
 }
 
+function probeExecutableFile(directory: string, name: string): string | undefined {
+  // Mirror the spawn adapter's bare-name discovery: CreateProcess appends
+  // `.exe` on Windows, while POSIX keeps one exact executable spelling.
+  const spellings = process.platform === 'win32' && !/\.(exe|com)$/iu.test(name)
+    ? [name, `${name}.exe`]
+    : [name]
+  for (const spelling of spellings) {
+    const candidate = join(directory, spelling)
+    try {
+      if (statSync(candidate, { throwIfNoEntry: false })?.isFile() !== true) continue
+      accessSync(candidate, constants.X_OK)
+    } catch {
+      continue
+    }
+    return candidate
+  }
+  return undefined
+}
+
+/**
+ * Derive the one-executable Core `--cli-bin` route for a probeable command
+ * name. Bare names resolve to the exact PATH file the spawn environment would
+ * execute, so continuation text Core renders cannot drift to another PATH
+ * installation. Names Core's validator rejects (empty, option-like, control
+ * characters) return undefined; a bare name the probe PATH cannot resolve is
+ * returned unchanged so Core still pins the probed name instead of an
+ * invented path.
+ */
+function coreCliBinRoute(
+  name: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  if (name === '' || name.startsWith('-') || /[\u0000-\u001f]/u.test(name)) {
+    return undefined
+  }
+  if (name.includes('/') || name.includes('\\')) return name
+  const searchPath = env.PATH ?? env.Path
+  for (const directory of searchPath?.split(delimiter) ?? []) {
+    const resolved = probeExecutableFile(directory, name)
+    if (resolved !== undefined) return resolved
+  }
+  return name
+}
+
+/** The one executable Core may embed as `--cli-bin` for this command, if any. */
+export function coreRouteBin(command: LoopXCommand): string | undefined {
+  if (command.cliBin !== undefined) return command.cliBin
+  // Host-injected commands may predate the resolved route field. Pass their
+  // plain executable file through without re-resolving it: the driver cannot
+  // know which PATH the injecting resolver probed, so it must not invent one.
+  const file = command.file
+  if (command.prefix.length > 0 || file === '' || file.startsWith('-')
+    || /[\u0000-\u001f]/u.test(file)) {
+    return undefined
+  }
+  return file
+}
+
 /** Resolve the console script first, then the stable Python module fallback. */
 export async function resolveLoopXCommand(
   options: ResolveLoopXCommandOptions = {},
@@ -494,6 +562,11 @@ export async function resolveLoopXCommand(
     ? ['python3', 'python']
     : [configuredPython]
   const managedLauncher = options.managedLauncher
+  const probeEnv = options.env ?? process.env
+  const configuredRoute = configured
+    ? coreCliBinRoute(configured, probeEnv)
+    : undefined
+  const pathLoopxRoute = configured ? undefined : coreCliBinRoute('loopx', probeEnv)
   const managedCandidates: Array<Omit<LoopXCommand, 'version'>> = configured
     || managedLauncher === undefined
     ? []
@@ -506,10 +579,20 @@ export async function resolveLoopXCommand(
         ].join(' '),
       }))
   const candidates: Array<Omit<LoopXCommand, 'version'>> = configured
-    ? [{ file: configured, prefix: [], skillCommand: '"$LOOPX_BIN"' }]
+    ? [{
+        file: configured,
+        prefix: [],
+        skillCommand: '"$LOOPX_BIN"',
+        ...(configuredRoute === undefined ? {} : { cliBin: configuredRoute }),
+      }]
     : [
         ...managedCandidates,
-        { file: 'loopx', prefix: [], skillCommand: 'loopx' },
+        {
+          file: 'loopx',
+          prefix: [],
+          skillCommand: 'loopx',
+          ...(pathLoopxRoute === undefined ? {} : { cliBin: pathLoopxRoute }),
+        },
         ...pythonNames.map(pythonName => ({
           file: pythonName,
           prefix: ['-m', 'loopx.cli'],

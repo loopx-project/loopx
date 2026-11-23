@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context, Logger, LoggerService } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
-import type { FileRunner } from '../src/cli.ts'
-import { LoopXCliError } from '../src/cli.ts'
+import type { FileRunner, LoopXCommand } from '../src/cli.ts'
+import { LoopXCliError, resolveLoopXCommand } from '../src/cli.ts'
 import {
   apply as applyDriver,
   LoopXContinuationDriver,
@@ -3300,3 +3303,127 @@ describe('plugin unload cause classification', () => {
     }
   })
 })
+
+describe('continuation Core command route parity', () => {
+  function pinnedRouteDriver(
+    fixture: ReturnType<typeof runnerFixture>,
+    resolved: LoopXCommand,
+    warnings: string[],
+  ): LoopXContinuationDriver {
+    return new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      resolveCommand: async () => resolved,
+      warn: message => { warnings.push(message) },
+    })
+  }
+
+  async function admittedQuotaAndHeartbeat(
+    driver: LoopXContinuationDriver,
+    host: FakeAgent,
+  ): Promise<void> {
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    await driver.dispose()
+  }
+
+  it('pins quota and heartbeat commands to the resolved single executable', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = pinnedRouteDriver(fixture, {
+      file: '/opt/pinned/loopx',
+      prefix: [],
+      skillCommand: '"$LOOPX_BIN"',
+      version: 'loopx 2.4.0',
+      candidate: 'configured-command',
+      cliBin: '/opt/pinned/loopx',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    expect(fixture.quotaCalls.length).toBeGreaterThan(0)
+    for (const argv of fixture.quotaCalls) {
+      const flag = argv.indexOf('--cli-bin')
+      expect(flag).toBeGreaterThanOrEqual(0)
+      expect(argv[flag + 1]).toBe('/opt/pinned/loopx')
+      // Core binds the global route only before the subcommand token.
+      expect(flag).toBeLessThan(argv.indexOf('quota'))
+    }
+    expect(fixture.heartbeatArgv.length).toBeGreaterThan(0)
+    for (const argv of fixture.heartbeatArgv) {
+      const flags = argv
+        .map((value, index) => (value === '--cli-bin' ? index : -1))
+        .filter(index => index >= 0)
+      // One global route binding plus the heartbeat-prompt option that feeds
+      // the rendered task-body command prefixes.
+      expect(flags).toHaveLength(2)
+      expect(argv[flags[0]! + 1]).toBe('/opt/pinned/loopx')
+      expect(flags[0]!).toBeLessThan(argv.indexOf('heartbeat-prompt'))
+      expect(argv[flags[1]! + 1]).toBe('/opt/pinned/loopx')
+      expect(flags[1]!).toBeGreaterThan(argv.indexOf('heartbeat-prompt'))
+    }
+    expect(warnings).toEqual([])
+  })
+
+  it('keeps bare loopx text and discloses once for a non-executable route', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = pinnedRouteDriver(fixture, {
+      file: '/opt/managed/python3',
+      prefix: ['/opt/managed/loopx_cli.py'],
+      skillCommand: "/opt/managed/python3 '/opt/managed/loopx_cli.py'",
+      version: 'loopx 2.4.0',
+      candidate: 'managed-launcher',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    for (const argv of [...fixture.quotaCalls, ...fixture.heartbeatArgv]) {
+      expect(argv).not.toContain('--cli-bin')
+    }
+    const unpinned = warnings.filter(value => value.includes('cli_route_unpinned'))
+    expect(unpinned).toHaveLength(1)
+    expect(unpinned[0]).toContain('candidate=managed-launcher')
+  })
+})
+
+describe.skipIf(process.platform === 'win32')(
+  'continuation Core command route parity through the real resolver',
+  () => {
+    it('pins the PATH-resolved executable the resolver probed', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'dsh-cli-parity-'))
+      const pinned = join(dir, 'loopx')
+      writeFileSync(pinned, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      try {
+        const fixture = runnerFixture()
+        const host = fakeAgent()
+        const driver = new LoopXContinuationDriver({
+          runner: fixture.runner,
+          isLiveAgent: () => true,
+          makeTurnInstanceId: () => 'turn-stable',
+          retryDelaysMs: [0, 0],
+          resolveCommand: signal => resolveLoopXCommand({
+            runner: fixture.runner,
+            signal,
+            env: { PATH: dir },
+          }),
+        })
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        await driver.dispose()
+
+        const quotaArgv = fixture.quotaCalls[0] as string[]
+        const quotaFlag = quotaArgv.indexOf('--cli-bin')
+        expect(quotaFlag).toBeGreaterThanOrEqual(0)
+        expect(quotaArgv[quotaFlag + 1]).toBe(pinned)
+        const heartbeatArgv = fixture.heartbeatArgv[0] as string[]
+        expect(heartbeatArgv.filter(value => value === '--cli-bin')).toHaveLength(2)
+        expect(heartbeatArgv[heartbeatArgv.indexOf('--cli-bin') + 1]).toBe(pinned)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }, 15_000)
+  },
+)

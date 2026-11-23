@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   LoopXCliError,
@@ -315,6 +315,119 @@ describe('reap-aware mutation execution', () => {
       args: ['mutate', '--execute'],
       signal: undefined,
     }])
+  })
+})
+
+describe('Core --cli-bin route derivation', () => {
+  it('keeps an absolute configured executable as the route', async () => {
+    const configured = '/opt/Loop X/loopx'
+    const resolved = await resolveLoopXCommand({
+      env: { LOOPX_BIN: configured },
+      runner: async () => ({ exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }),
+    })
+    expect(resolved.cliBin).toBe(configured)
+  })
+
+  it('falls back to the configured name when the probe PATH cannot resolve it', async () => {
+    const resolved = await resolveLoopXCommand({
+      env: { LOOPX_BIN: 'nowhere-loopx', PATH: '/nonexistent-loopx-route' },
+      runner: async () => ({ exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }),
+    })
+    expect(resolved.cliBin).toBe('nowhere-loopx')
+  })
+
+  it('leaves interpreter-prefixed routes unpinned', async () => {
+    const launcher = await resolveLoopXCommand({
+      managedLauncher: { path: '/opt/DSH/runtime/loopx_cli.py', pythonBins: ['/opt/bin/python3'] },
+      runner: async () => ({ exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }),
+    })
+    expect(launcher.candidate).toBe('managed-launcher')
+    expect(launcher.cliBin).toBeUndefined()
+
+    const module = await resolveLoopXCommand({
+      env: { LOOPX_BIN: '', PYTHON_BIN: 'fixture-python', PATH: '/nonexistent-loopx-route' },
+      runner: async file => ({
+        exitCode: file === 'fixture-python' ? 0 : 1,
+        stdout: file === 'fixture-python' ? 'loopx 2.4.0\n' : '',
+        stderr: '',
+      }),
+    })
+    expect(module.candidate).toBe('python-module')
+    expect(module.cliBin).toBeUndefined()
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('Core --cli-bin PATH resolution', () => {
+  it('resolves the probed path-loopx name to its PATH entry', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loopx-route-'))
+    try {
+      const pinned = join(dir, 'loopx')
+      writeFileSync(pinned, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      const resolved = await resolveLoopXCommand({
+        env: { PATH: dir },
+        runner: async file => ({
+          exitCode: file === 'loopx' ? 0 : 1,
+          stdout: file === 'loopx' ? 'loopx 2.4.0\n' : '',
+          stderr: '',
+        }),
+      })
+      expect(resolved.candidate).toBe('path-loopx')
+      expect(resolved.cliBin).toBe(pinned)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves a bare configured name against the probe PATH', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loopx-route-'))
+    try {
+      const pinned = join(dir, 'loopx-canary')
+      writeFileSync(pinned, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      const resolved = await resolveLoopXCommand({
+        env: { LOOPX_BIN: 'loopx-canary', PATH: dir },
+        runner: async () => ({ exitCode: 0, stdout: 'loopx 2.4.0\n', stderr: '' }),
+      })
+      expect(resolved.candidate).toBe('configured-command')
+      expect(resolved.cliBin).toBe(pinned)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers the first PATH entry and skips non-executable files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'loopx-route-'))
+    try {
+      const first = join(root, 'first')
+      const second = join(root, 'second')
+      mkdirSync(first)
+      mkdirSync(second)
+      const executable = join(first, 'loopx')
+      writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      const plain = join(second, 'loopx')
+      writeFileSync(plain, 'not executable\n', { mode: 0o644 })
+      const resolved = await resolveLoopXCommand({
+        env: { PATH: [first, second].join(delimiter) },
+        runner: async file => ({
+          exitCode: file === 'loopx' ? 0 : 1,
+          stdout: file === 'loopx' ? 'loopx 2.4.0\n' : '',
+          stderr: '',
+        }),
+      })
+      expect(resolved.cliBin).toBe(executable)
+
+      chmodSync(plain, 0o755)
+      const flipped = await resolveLoopXCommand({
+        env: { PATH: [second, first].join(delimiter) },
+        runner: async file => ({
+          exitCode: file === 'loopx' ? 0 : 1,
+          stdout: file === 'loopx' ? 'loopx 2.4.0\n' : '',
+          stderr: '',
+        }),
+      })
+      expect(flipped.cliBin).toBe(plain)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
