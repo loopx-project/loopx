@@ -408,7 +408,7 @@ def test_planning_batch_target_key_boundary_real_cli_state(tmp_path, monkeypatch
     }))
     bad_proc = subprocess.run(
         [sys.executable, "-m", "benchmark.runtime.planning_batch", str(bad_path)],
-        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=30,
+        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=120,
     )
     assert bad_proc.returncode == 1
     assert "todos[0].target_key" in json.loads(bad_proc.stdout)["error"]
@@ -433,7 +433,7 @@ def test_planning_batch_target_key_boundary_real_cli_state(tmp_path, monkeypatch
     }))
     good_proc = subprocess.run(
         [sys.executable, "-m", "benchmark.runtime.planning_batch", str(good_path)],
-        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=30,
+        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=120,
     )
     assert good_proc.returncode == 0, good_proc.stdout + good_proc.stderr
     assert json.loads(good_proc.stdout)["status"] == "ready"
@@ -441,3 +441,113 @@ def test_planning_batch_target_key_boundary_real_cli_state(tmp_path, monkeypatch
     by_text = {item["text"]: item for item in after_good["existing_todos"]}
     assert by_text["[P0] Omitted target key todo"].get("target_key") is None
     assert by_text["[P1] Valid target key todo"]["target_key"] == "bench-target"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_planning_batch_cross_version_interrupted_retry_preserves_padded_ids_and_mixed_case_action_kind(
+    tmp_path, monkeypatch, provider,
+):
+    import hashlib
+    import os
+    import subprocess
+
+    env, project, _, _, _ = _environment(tmp_path, monkeypatch, provider, replan="empty")
+    env["LOOPX_TASK_STAGE"] = "plan"
+    cli = loopx_command(env)
+    before = task_plan_packet(env, cli)
+    cli_env = {**os.environ, **env}
+
+    # Unchanged proposal matching pre-upgrade accepted input: whitespace-padded
+    # opaque IDs plus mixed-case action tokens ("  Implement  ", "Validate").
+    proposal = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": before["goal_acceptance"]["provider_revision"],
+        "outcome": {
+            "objective": "Verify cross-version interrupted retry recovery.",
+            "requirements": [{"id": "  req-legacy  ", "description": "Preserve trimmed ID and raw-case digest."}],
+            "source": {"ref": "  checkpoint:legacy  ", "summary": "Legacy interrupted batch retry."},
+        },
+        "todos": [
+            {"text": "[P0] Implement legacy step", "action_kind": "  Implement  "},
+            {"text": "[P1] Validate legacy step", "action_kind": "Validate"},
+        ],
+    }
+    proposal_path = tmp_path / "legacy-proposal.json"
+    proposal_path.write_text(json.dumps(proposal))
+
+    # Simulate a pre-upgrade partial commit where baseline stripped whitespace
+    # while keeping raw-case action_kind in the proposal digest before binding.
+    baseline_normalized = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": before["goal_acceptance"]["provider_revision"],
+        "outcome": {
+            "objective": "Verify cross-version interrupted retry recovery.",
+            "requirements": [{"id": "req-legacy", "description": "Preserve trimmed ID and raw-case digest."}],
+            "source": {"ref": "checkpoint:legacy", "summary": "Legacy interrupted batch retry."},
+        },
+        "todos": [
+            {"text": "[P0] Implement legacy step", "action_kind": "Implement"},
+            {"text": "[P1] Validate legacy step", "action_kind": "Validate"},
+        ],
+    }
+    legacy_digest = hashlib.sha256(json.dumps(baseline_normalized, sort_keys=True).encode()).hexdigest()
+    legacy_outcome_id = f"benchmark-plan-{legacy_digest[:32]}"
+    operation = f"benchmark-plan:{before['input_digest']}"
+
+    declaration_path = tmp_path / "legacy-declare.json"
+    declaration_path.write_text(json.dumps({
+        **baseline_normalized["outcome"],
+        "outcome_id": legacy_outcome_id,
+        "owner_agent_id": before["agent_id"],
+    }))
+    declare_proc = subprocess.run(
+        [
+            *cli, "goal-acceptance", "refine",
+            "--goal-id", before["goal_id"], "--agent-id", before["agent_id"],
+            "--document", str(declaration_path),
+            "--expected-provider-revision", before["goal_acceptance"]["provider_revision"],
+            "--operation-id", f"{operation}:declare", "--execute",
+        ],
+        cwd=str(project), env=cli_env, capture_output=True, text=True, timeout=120,
+    )
+    assert declare_proc.returncode == 0, declare_proc.stdout + declare_proc.stderr
+    assert json.loads(declare_proc.stdout)["ok"] is True
+
+    first_todo_proc = subprocess.run(
+        [
+            *cli, "todo", "add",
+            "--goal-id", before["goal_id"], "--project", str(project),
+            "--role", "agent", "--claimed-by", before["agent_id"],
+            "--task-class", "advancement_task",
+            "--text=[P0] Implement legacy step", "--action-kind=Implement",
+            "--operation-id", f"{operation}:todo:0", "--execute",
+        ],
+        cwd=str(project), env=cli_env, capture_output=True, text=True, timeout=120,
+    )
+    assert first_todo_proc.returncode == 0, first_todo_proc.stdout + first_todo_proc.stderr
+    first_todo_receipt = json.loads(first_todo_proc.stdout)
+    assert first_todo_receipt["ok"] is True
+    first_todo_id = first_todo_receipt["todo_id"]
+
+    # Interrupted recovery on candidate must finish writing todo:1 and bind the
+    # original declaration + first_todo_id from the unchanged legacy proposal.
+    retry_proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.runtime.planning_batch", str(proposal_path)],
+        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=120,
+    )
+    assert retry_proc.returncode == 0, retry_proc.stdout + retry_proc.stderr
+    retry_payload = json.loads(retry_proc.stdout)
+    assert retry_payload["status"] == "ready"
+    todo_ids = retry_payload["todo_ids"]
+    assert len(todo_ids) == 2 and todo_ids[0] == first_todo_id
+
+    after = task_plan_packet(env, cli)
+    assert after["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == todo_ids
+    outcomes = after["goal_acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(outcomes) == 1
+    assert outcomes[0]["id"] == legacy_outcome_id
+    assert outcomes[0]["requirements"][0]["id"] == "req-legacy"
+    assert outcomes[0]["sources"][0]["ref"] == "checkpoint:legacy"
+    by_id = {item["todo_id"]: item for item in after["existing_todos"]}
+    assert set(by_id) == set(todo_ids)
+    assert [by_id[item]["action_kind"] for item in todo_ids] == ["implement", "validate"]

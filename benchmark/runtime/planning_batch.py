@@ -194,14 +194,12 @@ def _record(
     return value
 
 
-def _text(value, *, path: str = "field", max_chars: int | None = None, strip: bool = True) -> str:
+def _text(value, *, path: str = "field", max_chars: int | None = None) -> str:
     if not isinstance(value, str) or "\0" in value:
         raise ValueError(f"Planning proposal requires non-empty text at {path} (expected string without NUL)")
-    normalized = value.strip() if strip else value
+    normalized = value.strip()
     if not normalized:
         raise ValueError(f"Planning proposal requires non-empty text at {path}")
-    if not strip and value != value.strip():
-        raise ValueError(f"Planning proposal forbids leading/trailing whitespace at {path}")
     if max_chars is not None:
         units = _utf16_code_unit_len(normalized)
         if units > max_chars:
@@ -212,7 +210,7 @@ def _text(value, *, path: str = "field", max_chars: int | None = None, strip: bo
 
 
 def _opaque_id(value, *, path: str) -> str:
-    text = _text(value, path=path, strip=False)
+    text = _text(value, path=path)
     units = _utf16_code_unit_len(text)
     too_long = units > _OPAQUE_ID_MAX_CHARS
     invalid_chars = not _OPAQUE_ID_PATTERN.match(text)
@@ -230,13 +228,12 @@ def _opaque_id(value, *, path: str) -> str:
 
 def _action_kind(value, *, path: str) -> str:
     raw = _text(value, path=path)
-    normalized = normalize_todo_action_kind(raw)
-    if not normalized:
+    if not normalize_todo_action_kind(raw):
         raise ValueError(
             f"Planning proposal field {path} must match {TODO_ACTION_KIND_PATTERN.pattern} "
             "(lowercase ASCII token, e.g. implement, validate, investigate, submit)"
         )
-    return normalized
+    return raw
 
 
 def _request(proposal: dict) -> dict:
