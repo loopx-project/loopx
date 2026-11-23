@@ -31,7 +31,7 @@ from .codex import (
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .codex_readiness import native_readiness_budget
 from .harbor import (
-    BenchmarkCodex, _BASH_ENV, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
+    BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .research_probe import resolve_execution_observation
 from .scheduler import worker_command
@@ -101,6 +101,16 @@ class SForgeEnvironment:
             )
             if result.return_code:
                 raise RuntimeError("SForge directory upload failed")
+
+
+_CARGO_TARGET_DIR = "/tmp/sforge-cargo-target"
+
+
+class _SForgeBenchmarkCodex(BenchmarkCodex):
+    """Stage the SForge shell default in the shared installer's single profile write."""
+
+    def _shell_path_restore(self) -> str:
+        return super()._shell_path_restore() + f'\nexport CARGO_TARGET_DIR="${{CARGO_TARGET_DIR:-{_CARGO_TARGET_DIR}}}"'
 
 
 class SForgeWorker(CodexAgent):
@@ -423,7 +433,7 @@ class SForgeWorker(CodexAgent):
             if self.profile == "official":
                 super().install_stop_hook(backend, handle, log_dir, logger)
         else:
-            self.runtime = BenchmarkCodex(
+            self.runtime = _SForgeBenchmarkCodex(
                 **common, execution_mode=self.execution.mode,
                 iteration_context=self.execution.context,
                 validation_command=self.execution.validation_command,
@@ -451,18 +461,6 @@ class SForgeWorker(CodexAgent):
                    if self.claim_ttl_seconds is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
-            if backend is not None:
-                cargo_result = backend.exec_run(
-                    handle,
-                    [
-                        "/bin/sh",
-                        "-c",
-                        f"printf '%s\\n' 'export CARGO_TARGET_DIR=\"${{CARGO_TARGET_DIR:-/tmp/sforge-cargo-target}}\"' >> {shlex.quote(_BASH_ENV)}",
-                    ],
-                    user="root",
-                )
-                if cargo_result.exit_code:
-                    raise RuntimeError("Could not persist SForge CARGO_TARGET_DIR in shell profile")
             if self.feedback == "native" and (self.execution_observation is not None
                                               or self.native_result_scope is not None):
                 asyncio.run(self.runtime._install_research_entrypoint(
@@ -643,7 +641,7 @@ class SForgeWorker(CodexAgent):
         env = self.runtime._worker_env(cwd=self.cwd)
         # Keep Rust build artifacts outside both the task workspace and
         # RESEARCH_DIRECTORY so checkpoint probes/archives stay bounded.
-        env.setdefault("CARGO_TARGET_DIR", "/tmp/sforge-cargo-target")
+        env.setdefault("CARGO_TARGET_DIR", _CARGO_TARGET_DIR)
         if self.warm_start is not None:
             env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,

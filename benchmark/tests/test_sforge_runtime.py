@@ -1284,10 +1284,8 @@ def test_install_preserves_mode_owned_submission_access(tmp_path, monkeypatch, p
     assert (["rm", "-f", "/usr/local/bin/sforge-submit"] in commands) is (feedback != "native")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback"] == feedback
     if profile not in {"official", "single"}:
-        assert any(
-            isinstance(cmd, list) and "CARGO_TARGET_DIR" in " ".join(cmd)
-            for cmd in commands
-        )
+        profile_text = worker.runtime._shell_path_restore()
+        assert 'export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/sforge-cargo-target}"' in profile_text
 
 
 def test_warm_context_receipt_is_separate_from_native_stderr(tmp_path):
