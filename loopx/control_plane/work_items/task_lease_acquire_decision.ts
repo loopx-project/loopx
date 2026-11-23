@@ -115,11 +115,14 @@ function foldCharacter(character: string): string {
 /**
  * Folding one code point at a time keeps the fold composable across a path, so a
  * comparison-only view can fold substrings without changing the retained
- * spelling or the immutable request identity.
+ * spelling or the immutable request identity. Canonical normalization runs on
+ * the full value first: NFC and NFD spellings of one host path must overlap even
+ * though the number of code points differs. Character class bodies stay as
+ * authored, so their membership semantics do not change.
  */
 function caseFold(value: string): string {
   let folded = "";
-  for (const character of value) folded += foldCharacter(character);
+  for (const character of value.normalize("NFC")) folded += foldCharacter(character);
   return folded;
 }
 

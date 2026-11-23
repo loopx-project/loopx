@@ -4,7 +4,7 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp, rm, mkdir, writeFile, symlink, realpath} from "node:fs/promises";
 import {platform, tmpdir} from "node:os";
 import {join} from "node:path";
-import {canonicalWriteScope, comparisonWriteScopes, decideTaskLeaseAcquire, evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+import {canonicalWriteScope, comparisonWriteScopes, decideTaskLeaseAcquire, evaluateQuotaSchedulingWriteScopesOverlap, evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
 import {normalizeWriteScopes} from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
 import {canonicalTaskLeaseAcquireFacts} from "../../loopx/control_plane/coordination/task_lease_state.ts";
 import {indexCoordinationProjection} from "../../loopx/control_plane/coordination/coordination_projection.ts";
@@ -356,6 +356,26 @@ test("scope comparison folds case aliases without rewriting retained or request 
   ]) {
     assert.equal(evaluateTaskLeaseWriteScopesOverlap({left: [left], right: [right]}).overlap, false, `${left} excludes ${right}`);
   }
+});
+test("scope comparison folds Unicode normalization aliases without rewriting retained spelling", () => {
+  const nfc = "src/caf\u00e9.ts";
+  const nfd = "src/cafe\u0301.ts";
+  for (const [left, right] of [
+    [nfc, nfd],
+    [nfd, nfc],
+    ["src/cafe\u0301/*.ts", "src/caf\u00e9/file.ts"],
+    ["src/?.ts", "src/e\u0301.ts"],
+    ["src/[\u00e9]x", "src/e\u0301x"],
+  ]) {
+    assert.equal(evaluateTaskLeaseWriteScopesOverlap({left: [left], right: [right]}).overlap, true, `${left} overlaps ${right}`);
+  }
+  assert.equal(evaluateTaskLeaseWriteScopesOverlap({
+    left: ["src/cafe.ts"],
+    right: [nfc],
+  }).overlap, false);
+  assert.deepEqual(normalizeWriteScopes([nfd, nfc]), [nfd, nfc]);
+  assert.deepEqual(comparisonWriteScopes([nfd]), [nfd]);
+  assert.equal(evaluateQuotaSchedulingWriteScopesOverlap({left: [nfd], right: [nfc]}).overlap, true);
 });
 test("glob matching consumes code points, not UTF-16 code units", () => {
   assert.equal(evaluateTaskLeaseWriteScopesOverlap({
