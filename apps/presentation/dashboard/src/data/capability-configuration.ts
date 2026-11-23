@@ -62,13 +62,19 @@ export function parseEditableCapabilityJson(
   return value as Record<string, unknown>;
 }
 
-/** Read the legacy cadence without reinterpreting its unit or writing it back. */
+/**
+ * Read the legacy cadence without reinterpreting its unit or writing it back.
+ * Evidence-conditioned stride is always on; a legacy saved `stride_strategy`
+ * is history only, so the editor never displays or resubmits it.
+ */
 export function replanCadenceEditorValue(value: unknown): unknown {
   const record = configurationObject(value);
   if (Object.hasOwn(record, "completed_todos") && !Object.hasOwn(record, "count_unit")) {
-    return { count_unit: "completed_todos", count: record.completed_todos, stride_strategy: "off" };
+    return { count_unit: "completed_todos", count: record.completed_todos };
   }
-  return { ...record, stride_strategy: record.stride_strategy ?? "off" };
+  const editable = { ...record };
+  delete editable.stride_strategy;
+  return editable;
 }
 
 /** Fill omitted review interval fields from the currently effective value. */
@@ -79,11 +85,10 @@ export function replanCadenceEditorDefaults(effective: unknown, fallback: unknow
   if (Object.hasOwn(live, "count")) defaults.count = live.count;
   if (Object.hasOwn(live, "planning_horizon_goal")) defaults.planning_horizon_goal = live.planning_horizon_goal;
   if (Object.hasOwn(live, "yardstick_enabled")) defaults.yardstick_enabled = live.yardstick_enabled;
-  // Strategy omission keeps the existing default-off meaning.
   return defaults;
 }
 
-/** Show the live interval when a Goal stores only its strategy choice. */
+/** Show the live interval when a Goal stores only horizon or Yardstick choices. */
 export function goalReplanCadenceEditorValue(current: unknown, effective: unknown): Record<string, unknown> {
   const inherited = configurationObject(replanCadenceEditorValue(effective));
   return current == null ? inherited : {

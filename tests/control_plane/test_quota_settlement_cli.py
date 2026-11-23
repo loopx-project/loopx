@@ -600,8 +600,6 @@ def _configure_autonomous_replan_fixture(
     project: Path,
     runtime: Path,
     registry_path: Path,
-    *,
-    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_path.write_text(
@@ -626,8 +624,6 @@ def _configure_autonomous_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
-    if stride_strategy is not None:
-        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -671,11 +667,41 @@ def _configure_autonomous_replan_fixture(
     )
 
 
+def _write_dead_monitor_replan_runs(runtime: Path) -> None:
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    monitor_runs = []
+    for offset in range(6):
+        row = {
+            "generated_at": f"2026-01-01T02:{offset:02d}:00+00:00",
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "classification": "quota_monitor_poll",
+            "delivery_outcome": "surface_only",
+            "todo_id": "todo_replan_monitor",
+            "target_key": "replan-settlement-fixture",
+            "monitor_target": {
+                "schema_version": "quota_monitor_target_v0",
+                "target_id": "replan-settlement-fixture",
+                "monitor_mode": "due_monitor_observed_without_material_transition",
+                "effective_action": "normal_run",
+                "agent_id": AGENT_ID,
+            },
+        }
+        jpath = runs_dir / f"monitor-{offset}.json"
+        mpath = runs_dir / f"monitor-{offset}.md"
+        jpath.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        mpath.write_text("# Monitor fixture\n", encoding="utf-8")
+        monitor_runs.append({**row, "json_path": str(jpath), "markdown_path": str(mpath)})
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in monitor_runs),
+        encoding="utf-8",
+    )
+
+
 def _configure_selected_todo_replan_fixture(
     project: Path,
     registry_path: Path,
-    *,
-    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todo_rows = "\n".join(
@@ -706,8 +732,6 @@ def _configure_selected_todo_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
-    if stride_strategy is not None:
-        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -810,7 +834,7 @@ def test_same_explicit_todo_retry_preserves_original_identity(
     """Retrying the retained planning choice reuses the admitted replan."""
 
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "turn-same-explicit-todo-replan-retry"
@@ -2641,12 +2665,6 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         _initialize_git_checkout(project)
         todo_id = SELECTED_REPLAN_TODO_ID
     _initialize_fixture_authority(project, runtime, provider=provider)
-    if writeback_kind == "replan":
-        # This replay fixture supplies the ordinary typed replan delta. Keep
-        # its strategy explicit; Stride decision followthrough is tested separately.
-        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                                  "--execution-stride-strategy", "off", "--execute")
-        assert rc == 0, configured
     turn_id = "turn-same-todo-writeback"
     host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
     guard_args = (
@@ -2669,7 +2687,7 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = ("--agent-id", AGENT_ID, "--todo-id", todo_id, "--turn-instance-id", turn_id)
     vision = project / "vision.json"
-    vision.write_text(json.dumps({
+    vision_payload: dict[str, Any] = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed",
         "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
@@ -2681,7 +2699,10 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
-    }), encoding="utf-8")
+    }
+    if writeback_kind == "replan":
+        vision_payload["stride_decision"] = guard["replan_action_packet"]["stride_control"]["minimal_example"]
+    vision.write_text(json.dumps(vision_payload), encoding="utf-8")
     refresh_args = (
         "refresh-state", "--goal-id", GOAL_ID, *identity,
         "--classification", "verified_fixture_work", "--delivery-batch-scale", "single_surface",
@@ -6964,11 +6985,10 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
-    # This case owns ordinary settlement/recovery, independently of Stride.
-    # Enabled decision adoption has separate real native coverage.
-    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                              "--execution-stride-strategy", "off", "--execute")
-    assert rc == 0, configured
+    if not write_vision:
+        # Use dead_monitor_repeat (non-stride trigger) so the missing-vision
+        # branch still verifies vision_checkpoint_missing after settlement.
+        _write_dead_monitor_replan_runs(runtime)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["control_plane"] = {
         "periodic_report": {
@@ -7059,8 +7079,22 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
                 "retained": ["The existing monitor and its due date."],
                 "evidence_refs": ["evidence-new"],
             },
+            "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"],
         }), encoding="utf-8")
-        refresh_command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
+        if "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>" in refresh_command:
+            refresh_command = refresh_command.replace(
+                "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>",
+                shlex.quote(str(vision_path)),
+            )
+            refresh_command += (
+                " --progress-result-class advanced"
+                " --progress-surface-id surface-new"
+                " --progress-hypothesis-id hypothesis-new"
+                " --progress-probe-kind probe-new"
+                " --progress-evidence-id evidence-new"
+            )
+        else:
+            refresh_command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
@@ -7210,11 +7244,6 @@ def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, m
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
-    # This case owns ordinary settlement/recovery, independently of Stride.
-    # Enabled decision adoption has separate real native coverage.
-    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                              "--execution-stride-strategy", "off", "--execute")
-    assert rc == 0, configured
     _initialize_fixture_authority(project, runtime, provider=provider)
     stamp = "2026-01-01T00:00:00+00:00"
     prior = {
@@ -7247,9 +7276,11 @@ def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, m
         "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
         "vision_patch": {"vision_summary": "Continue after the source is available.",
                          "acceptance_summary": "The source is still unavailable; the outcome remains open."},
-        "path_delta": {"outcome": "wait", "prior_assumption": "The source may be available.",
+        "path_delta": {"outcome": "stop", "prior_assumption": "The source may be available.",
                        "observed_reality": "An independent read confirmed the source is unavailable.",
-                       "retained": ["Keep the outcome open."], "evidence_refs": ["evidence:source-unavailable"]},
+                       "stopped": ["Stop probing until the source is available."],
+                       "evidence_refs": ["evidence:source-unavailable"]},
+        "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"],
     }))
     rc, closed = _run_cli(
         registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -7291,11 +7322,9 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
-    # This case owns ordinary settlement/recovery, independently of Stride.
-    # Enabled decision adoption has separate real native coverage.
-    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                              "--execution-stride-strategy", "off", "--execute")
-    assert rc == 0, configured
+    # Use a non-stride Todo-less obligation so this blocked writeback without
+    # agent_vision proceeds to the explicit spend-slot workspace-guard check.
+    _write_dead_monitor_replan_runs(runtime)
     _initialize_git_checkout(project)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(
@@ -7561,7 +7590,7 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry_path, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry_path)
     _initialize_git_checkout(project)
     turn_instance_id = "turn-autonomous-replan-semantic-1"
 
@@ -7956,10 +7985,9 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("stride", [False, True])
 @pytest.mark.parametrize("vision_gap", [False, True])
 def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool, vision_gap: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, vision_gap: bool,
 ) -> None:
     """Refreshing cumulative requirements must not rebind an admitted review."""
     if provider == "sqlite":
@@ -7988,9 +8016,6 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
             "--agent-id", AGENT_ID, "--document", str(path), "--operation-id", operation,
             "--expected-provider-revision", current["provider_revision"], "--execute")
 
-    if stride:
-        call("configure-goal", "--goal-id", GOAL_ID,
-            "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
     refine({"outcome_id": "delivery", "owner_agent_id": AGENT_ID,
         "objective": "Deliver the requested artifact",
         "requirements": [{"id": "original", "description": "Retain the original evidence"}],
@@ -9411,7 +9436,7 @@ def test_exact_later_ack_executes_original_todo_settlement_commands(
     tmp_path: Path, provider: str, legacy_turn_ref: bool,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-todo-settlement"
@@ -9489,7 +9514,7 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     tmp_path: Path, provider: str, order: str,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-same-second"
@@ -9513,6 +9538,7 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
+        "stride_decision": later_admitted["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     rc, refreshed = _run_cli(
         registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -9612,7 +9638,7 @@ def test_retired_instance_writeback_cannot_drop_same_second_historical_ack(
     acceptance depends on the alias owner's own refresh following admission.
     """
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider="file")
     original_turn = "turn-historical-same-second"
@@ -9636,6 +9662,7 @@ def test_retired_instance_writeback_cannot_drop_same_second_historical_ack(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
+        "stride_decision": later_admitted["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     rc, refreshed = _run_cli(
         registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -9719,7 +9746,7 @@ def test_only_retired_instance_ack_keeps_the_original_replan(
     instance's later confirmation.
     """
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-retired-ack-only"
@@ -9776,6 +9803,7 @@ def test_only_retired_instance_ack_keeps_the_original_replan(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
+        "stride_decision": admitted["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     refresh_rc, refreshed = _run_cli(
         registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -9922,7 +9950,7 @@ def test_same_turn_receipt_upgrade_keeps_historical_ack_admission(
     """
 
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-ack-after-upgrade"

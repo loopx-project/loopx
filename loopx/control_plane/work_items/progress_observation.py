@@ -236,14 +236,11 @@ def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
     return list(replan_writeback_requirements(obligation)["required_any_of"])
 
 
-def replan_successor_transition_allowed(
-    obligation: Mapping[str, Any], *, stride_strategy: str = "off",
-) -> bool:
+def replan_successor_transition_allowed(obligation: Mapping[str, Any]) -> bool:
     """Ask the typed owner whether a Todo transition can settle this review."""
     try:
         result = project_replan_semantics({
             "operation": "transition_eligibility", "obligation": dict(obligation),
-            "stride_strategy": stride_strategy,
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -254,7 +251,7 @@ def replan_successor_transition_allowed(
 
 def guarded_replan_transition_delta(
     *, guard_scoped: bool, selected_obligation_id: str | None,
-    transition_candidates: list[dict[str, Any]], stride_strategy: str = "off",
+    transition_candidates: list[dict[str, Any]],
     goal_id: str | None = None, agent_id: str | None = None,
     guard_recorded_at: str | None = None,
     guard_turn_instance_id: str | None = None,
@@ -265,7 +262,6 @@ def guarded_replan_transition_delta(
             "operation": "turn_transition", "guard_scoped": guard_scoped,
             "selected_obligation_id": selected_obligation_id,
             "transition_candidates": transition_candidates,
-            "stride_strategy": stride_strategy,
             "goal_id": goal_id,
             "agent_id": agent_id,
             "guard_recorded_at": guard_recorded_at,
@@ -387,7 +383,7 @@ def semantic_delta_from_writeback(
     source_review = None
     stride = vision.get("stride_decision")
     review = stride.get("previous_review") if isinstance(stride, Mapping) else None
-    if (runs is not None and context is not None and context.get("stride_strategy") != "off"
+    if (runs is not None and context is not None
             and context.get("decision_followthrough") and isinstance(review, Mapping)):
         from .replan_context_codec import replay_stride_review_evidence
 
@@ -412,7 +408,6 @@ def build_replan_context(
     obligation: Mapping[str, Any], *, goal_id: str, agent_id: str | None,
     newest_first_runs: Iterable[Mapping[str, Any]],
     source_status: Mapping[str, Any] | None = None,
-    stride_strategy: str = "off",
     explore_context: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
     todo_items: Iterable[Mapping[str, Any]] | None = None,
@@ -422,7 +417,7 @@ def build_replan_context(
     return project_replan_context(
         goal_id=goal_id, agent_id=agent_id or obligation.get("agent_id"),
         runs=newest_first_runs, obligation=obligation, source_status=source_status,
-        goal_acceptance_contract=goal_acceptance_contract, stride_strategy=stride_strategy,
+        goal_acceptance_contract=goal_acceptance_contract,
         history_newest_first=True, explore_context=explore_context,
         todo_items=todo_items,
     )

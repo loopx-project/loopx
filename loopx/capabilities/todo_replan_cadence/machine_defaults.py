@@ -12,6 +12,11 @@ from ...control_plane.goals.goal_vision_policy import (
     normalize_completed_todo_replan_threshold,
     normalize_effective_turn_replan_threshold,
 )
+from ...control_plane.work_items.stride_policy_codec import (
+    LIVE_STRIDE_STRATEGY,
+    normalize_stride_strategy,
+    stride_strategy_options,
+)
 from ..machine_configuration.contract import (
     MACHINE_CONFIGURATION_SCHEMA,
     MachineConfigurationNamespace,
@@ -30,6 +35,30 @@ class ReplanCadenceUnit(str, Enum):
 TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V1 = "todo_replan_cadence_machine_defaults_v1"
 TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2 = "todo_replan_cadence_machine_defaults_v2"
 
+# Older runtimes require this field in device v2 files. The live configuration
+# and public editor omit it.
+LEGACY_STRIDE_STRATEGY_KEY = "stride_strategy"
+
+
+def reject_removed_stride_strategy(update: Mapping[str, Any]) -> None:
+    """Writes no longer accept the removed switch; legacy reads still decode."""
+
+    if LEGACY_STRIDE_STRATEGY_KEY in update:
+        raise ValueError(
+            "stride_strategy was removed: evidence_conditioned_v1 stride is always on "
+            "and cannot be configured"
+        )
+
+
+def _apply_public_update(current: Any, update: Mapping[str, Any]) -> dict[str, Any]:
+    reject_removed_stride_strategy(update)
+    desired = dict(update)
+    if desired.get("schema_version") == TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2 and isinstance(current, Mapping):
+        stored = current.get(LEGACY_STRIDE_STRATEGY_KEY)
+        if stored in stride_strategy_options():
+            desired[LEGACY_STRIDE_STRATEGY_KEY] = stored
+    return desired
+
 
 def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, Any]:
     if set(raw) == {"completed_todos"}:
@@ -37,7 +66,7 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
             "count_unit": ReplanCadenceUnit.COMPLETED_TODOS.value,
             "count": normalize_completed_todo_replan_threshold(raw["completed_todos"]),
         }
-    if not {"count_unit", "count"} <= set(raw) or set(raw) - {"count_unit", "count", "stride_strategy", "planning_horizon_goal", "yardstick_enabled"}:
+    if not {"count_unit", "count"} <= set(raw) or set(raw) - {"count_unit", "count", LEGACY_STRIDE_STRATEGY_KEY, "planning_horizon_goal", "yardstick_enabled"}:
         raise ValueError("review cadence requires count_unit and count")
     try:
         unit = ReplanCadenceUnit(raw["count_unit"])
@@ -51,9 +80,8 @@ def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, 
     else:
         count = normalize_effective_turn_replan_threshold(count)
     result = {"count_unit": unit.value, "count": count}
-    if "stride_strategy" in raw:
-        from ...control_plane.work_items.stride_policy_codec import normalize_stride_strategy
-        result["stride_strategy"] = normalize_stride_strategy(raw["stride_strategy"])
+    if LEGACY_STRIDE_STRATEGY_KEY in raw:
+        normalize_stride_strategy(raw[LEGACY_STRIDE_STRATEGY_KEY])
     if "planning_horizon_goal" in raw:
         if not isinstance(raw["planning_horizon_goal"], bool):
             raise ValueError("planning_horizon_goal must be a boolean")
@@ -82,19 +110,23 @@ def normalize_todo_replan_cadence_machine_defaults(
         raise ValueError("todo_replan_cadence must use a supported v0, v1 or v2 schema")
     expected = {"schema_version", "count_unit", "count"}
     if version == TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2:
-        expected.add("stride_strategy")
+        if LEGACY_STRIDE_STRATEGY_KEY in raw:
+            expected.add(LEGACY_STRIDE_STRATEGY_KEY)
         if "planning_horizon_goal" in raw:
             expected.add("planning_horizon_goal")
         if "yardstick_enabled" in raw:
             expected.add("yardstick_enabled")
     if set(raw) != expected:
         raise ValueError("review configuration fields do not match its schema version")
-    return {
+    normalized = {
         "schema_version": version,
         **normalize_replan_cadence_configuration(
             {key: value for key, value in raw.items() if key != "schema_version"}
         ),
     }
+    if version == TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2:
+        normalized[LEGACY_STRIDE_STRATEGY_KEY] = raw.get(LEGACY_STRIDE_STRATEGY_KEY, LIVE_STRIDE_STRATEGY)
+    return normalized
 
 
 def cadence_configuration_value(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -110,7 +142,6 @@ def default_replan_cadence_configuration() -> dict[str, Any]:
         "count_unit": ReplanCadenceUnit.EFFECTIVE_TURNS.value,
         "count": DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
         "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
-        "stride_strategy": "evidence_conditioned_v1",
         "yardstick_enabled": False,
     }
 
@@ -128,13 +159,13 @@ def todo_replan_cadence_machine_configuration_namespace() -> (
             }
         ),
         normalize=normalize_todo_replan_cadence_machine_defaults,
-        project_public=lambda value: dict(value),
-        apply_public_update=lambda _current, update: dict(update),
+        project_public=lambda value: {key: item for key, item in value.items() if key != LEGACY_STRIDE_STRATEGY_KEY},
+        apply_public_update=_apply_public_update,
         title="Goal review and stride",
         description=(
             "Live review threshold for Goals without an explicit cadence override. "
             "Defaults to six settled work Turns; completed Todos remain an explicit option. "
-            "Evidence-conditioned stride is enabled by default; fresh Vision reviews require a bounded structured work-shape proposal. Explicit off and legacy saved configurations retain their meaning. "
+            "Evidence-conditioned stride is always on; fresh Vision reviews require a bounded structured work-shape proposal. "
             "It does not create "
             "turns, spend quota, or grant authority."
         ),
@@ -179,7 +210,8 @@ def apply_todo_replan_cadence_machine_default(
     if cadence is None:
         cadence = default_replan_cadence_configuration()
     profile = dict(raw_profile) if isinstance(raw_profile, Mapping) else {}
-    # Yardstick is independent of the legacy cadence/stride override. Keep
+    profile.pop(LEGACY_STRIDE_STRATEGY_KEY, None)
+    # Yardstick is independent of the cadence override. Keep
     # absence sparse and default-off; explicit false always wins inheritance.
     if "yardstick_enabled" not in profile and cadence.get("yardstick_enabled") is True:
         profile["yardstick_enabled"] = True
@@ -193,8 +225,6 @@ def apply_todo_replan_cadence_machine_default(
         else "replan_after_completed_todos"
     )
     profile[field] = cadence["count"]
-    if "stride_strategy" not in profile and cadence.get("stride_strategy", "off") != "off":
-        profile["stride_strategy"] = cadence["stride_strategy"]
     if "planning_horizon_goal" not in profile and "planning_horizon_goal" in cadence:
         profile["planning_horizon_goal"] = cadence["planning_horizon_goal"]
     projected["execution_profile"] = profile

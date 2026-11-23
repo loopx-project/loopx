@@ -4,8 +4,8 @@
 
 For heartbeat work that needs local execution measurements, set
 `execution_observation="local_probe"` on `BenchmarkCodex`. Keep the full task
-in the existing Goal/Todo planning input and choose `task_entry` and
-`stride_strategy` independently. Merge these settings into the experiment's
+in the existing Goal/Todo planning input and choose `task_entry`
+independently. Merge these settings into the experiment's
 existing agent configuration, retaining its model, task inputs and budgets:
 
 ```yaml
@@ -15,21 +15,22 @@ agents:
       execution_mode: heartbeat
       task_entry: loopx-planned
       execution_observation: local_probe
-      stride_strategy: "off"
 ```
 
-`evidence_conditioned_v1` remains an independent, explicit strategy choice.
+LoopX execution modes always run the `evidence_conditioned_v1` stride policy
+and record it in their receipts; the former `stride_strategy` kwarg has been
+removed and fails before runner setup with a migration error.
 With `loopx-planned`, the ordinary planner determines the work; with
 `seeded-todo`, the adapter seeds only the ordinary task and its full acceptance
 criteria. No research preset creates candidate/research stages, a successor
-Todo, a Vision patch or a forced stride strategy. Work after an initial
+Todo or a Vision patch. Work after an initial
 candidate follows the original Goal, accepted requirements, ordinary
 Todo/continuation/replan and remaining useful authorized work. Candidate
 completion does not settle other requested work. User Stop, original budgets
 and genuine blockers remain authoritative; no work is created just to fill time.
 
 This option supports heartbeat only. Omission or `None` leaves it off and
-preserves the ordinary task-entry, stride and probe-installation defaults.
+preserves the ordinary task-entry and probe-installation defaults.
 When selected, the adapter installs `loopx-research-probe` and passes
 `LOOPX_EXECUTION_OBSERVATION=local_probe` to the worker. Planning and heartbeat
 instructions request reuse of applicable observations from an execution that
@@ -72,8 +73,7 @@ native-model adoption, long-Turn supervision and outcome benefit remain unqualif
 `research_loop` and `LOOPX_RESEARCH_LOOP` have been removed. Any presence of
 the adapter kwarg (including `False`) or worker environment variable (including
 `0`) fails before runner setup or wake creation with a migration error. Remove
-both fields from new configurations; choose observation and stride separately
-as above. The fixed two-stage initializer and its additional research
+both fields from new configurations; choose observation separately as above. The fixed two-stage initializer and its additional research
 instructions are removed rather than retained as a compatibility mode.
 
 Use a new trial for a changed treatment. Historical configurations, scores,
@@ -99,7 +99,7 @@ historical versions.
 The [execution integration fixtures](../../tests/control_plane/test_research_execution_loop.py)
 exercise the adapter, real local process, File/SQLite authorities, Explore
 writeback, evidence-driven replan and subsequent changed execution. They also
-cover independent observation with stride off and preservation of waits and Stop.
+cover observation independent of stride review and preservation of waits and Stop.
 The [ordinary stage-continuity fixture](../../tests/control_plane/test_research_stage_continuity.py)
 uses accepted requirements, the real scheduler/subprocess Host and exactly-once
 settlement to verify that a completed stage cannot hide already requested work,
@@ -188,11 +188,11 @@ long-horizon benefit or complete-cost efficiency.
 ## 中文交付边界
 
 执行观测复用普通 Goal/Todo/Explore：heartbeat 可独立选择
-`execution_observation="local_probe"`，`task_entry` 和 `stride_strategy` 分别配置。
+`execution_observation="local_probe"`，`task_entry` 单独配置；LoopX 模式始终运行
+`evidence_conditioned_v1` stride 策略并写入收据，原 `stride_strategy` kwarg 已移除。
 `loopx-planned` 由普通 planner 决定任务；`seeded-todo` 只预置保留完整验收要求的
-普通任务。省略观测或设为 `None` 时，不安装探针、不追加观测指引，任务入口和
-stride 默认选择保持不变。观测不创建候选/研究两阶段、研究后继或 Vision 补丁，
-不强制 `evidence_conditioned_v1`。初始候选之后，按原目标、已接受要求、普通
+普通任务。省略观测或设为 `None` 时，不安装探针、不追加观测指引，任务入口
+默认选择保持不变。观测不创建候选/研究两阶段、研究后继或 Vision 补丁。初始候选之后，按原目标、已接受要求、普通
 Todo/replan/Explore 及剩余有价值工作接续；候选完成不能关闭其他已请求工作。
 Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 

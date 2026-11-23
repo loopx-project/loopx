@@ -1102,16 +1102,41 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
     configured = [args for args in calls if option in args]
     assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True}
+    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True,
+                                       "stride_strategy": "evidence_conditioned_v1"}
     assert all("--execution-planning-horizon-goal" in args for args in configured)
+    assert all("--execution-stride-strategy" not in args
+               and "--clear-execution-stride-strategy" not in args for args in calls)
 
 
-def test_requested_stride_requires_configuration_readback_before_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["heartbeat", "turn", "loopx-goal"])
+def test_loopx_modes_record_live_stride_without_selecting_it(tmp_path, mode):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRATEGY
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", execution_mode=mode,
+                           **({"validation_command": ["python", "validate.py"]} if mode == "turn" else {}))
+    assert agent.stride_strategy == LIVE_STRIDE_STRATEGY == "evidence_conditioned_v1"
+    assert agent._replan_receipt()["stride_strategy"] == LIVE_STRIDE_STRATEGY
+
+
+@pytest.mark.parametrize("mode", ["plain", "native-goal"])
+def test_non_loopx_modes_record_no_stride_strategy(tmp_path, mode):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
-                           stride_strategy="evidence_conditioned_v1")
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", execution_mode=mode)
+    assert agent.stride_strategy is None
+    assert "stride_strategy" not in agent._replan_receipt()
+
+
+def test_phase_readback_does_not_reconfigure_or_check_stride(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture")
+    calls = []
 
     async def prepared(*args, **kwargs):
         return True
@@ -1119,28 +1144,31 @@ def test_requested_stride_requires_configuration_readback_before_execution(tmp_p
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
 
-    async def wrong_strategy(*args, **kwargs):
+    async def historical_profile(environment, args, **kwargs):
+        calls.append(args)
+        # A restored Goal may still carry a historical value; it is not a switch.
         return {"after": {"execution_profile": {
             "replan_after_effective_turns": 6, "stride_strategy": "off", "planning_horizon_goal": True,
         }}}
 
     monkeypatch.setattr(agent, "_registry_exists", prepared)
     monkeypatch.setattr(agent, "_write_task_document", prepared)
-    monkeypatch.setattr(agent, "_loopx", wrong_strategy)
-    with pytest.raises(RuntimeError, match="stride strategy readback mismatch"):
-        asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task", cwd=str(tmp_path)))
+    monkeypatch.setattr(agent, "_loopx", historical_profile)
+    asyncio.run(agent._prepare_phase(SimpleNamespace(exec=no_pending), "Synthetic task", cwd=str(tmp_path)))
+    assert calls and all("--execution-stride-strategy" not in args for args in calls)
 
 
 @pytest.mark.parametrize("settings", [
-    {"stride_strategy": "future_policy"},
-    {"stride_strategy": True},
+    {"stride_strategy": "evidence_conditioned_v1"},
+    {"stride_strategy": "off"},
+    {"stride_strategy": None},
     {"execution_mode": "plain", "stride_strategy": "off"},
 ])
-def test_stride_rejects_unknown_version_and_incompatible_mode(tmp_path, settings):
+def test_removed_stride_strategy_kwarg_is_rejected(tmp_path, settings):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
 
-    with pytest.raises(ValueError, match="stride_strategy"):
+    with pytest.raises(ValueError, match="stride_strategy has been removed"):
         BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
 
 

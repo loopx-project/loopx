@@ -273,7 +273,6 @@ def parse_refresh_state_inputs(
             existing_agent_vision=None,
             merge_patch=False,
             require_path_delta_for_durable_change=False,
-            allow_terminal_stride_path=True,
         )
 
     progress_observation = inline_progress_observation(args)

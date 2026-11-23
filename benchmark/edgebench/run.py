@@ -32,7 +32,6 @@ from sforge.harness.task_spec import make_task_spec
 
 from benchmark.runtime.codex import TASK_ENTRIES
 from loopx.reasoning_effort import REASONING_EFFORTS
-from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker, profile_execution,
 )
@@ -160,8 +159,6 @@ def main(argv=None):
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--planning-horizon-goal", action=argparse.BooleanOptionalAction, default=None,
                         help="Heartbeat workers include the original Goal before selection by default; --no-planning-horizon-goal opts out")
-    parser.add_argument("--stride-strategy", choices=stride_strategy_options(),
-                        help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
     parser.add_argument("--checkpoint-controller-file", type=Path,
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-export-root", type=Path,
@@ -265,8 +262,6 @@ def main(argv=None):
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
             ) and not execution.uses_loopx:
         parser.error("Replan cadence requires a heartbeat worker or turn-resume")
-    if args.stride_strategy is not None and not execution.uses_loopx:
-        parser.error("--stride-strategy requires a heartbeat worker or turn-resume")
     if args.planning_horizon_goal is not None and not execution.uses_loopx:
         parser.error("--planning-horizon-goal requires a heartbeat worker or turn-resume")
     checkpoint_request = None
@@ -468,8 +463,6 @@ def main(argv=None):
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          planning_horizon_goal=args.planning_horizon_goal,
-                         **({"stride_strategy": args.stride_strategy}
-                            if args.stride_strategy is not None else {}),
                          **({"checkpoint_request": checkpoint_request}
                             if checkpoint_request is not None else {}))
     if args.api_proxy_url:
@@ -570,8 +563,8 @@ def main(argv=None):
            if agent.replan_after_todos is not None else {}),
         **({"planning_horizon_goal": agent.planning_horizon_goal}
            if agent.planning_horizon_goal is not None else {}),
-        **({"stride_strategy": args.stride_strategy}
-           if args.stride_strategy is not None else {}),
+        **({"stride_strategy": agent.stride_strategy}
+           if agent.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
         **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),

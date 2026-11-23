@@ -323,7 +323,6 @@ def test_machine_inheritable_goal_capabilities_can_clear_their_overrides() -> No
     assert _goal_capability_options("todo_replan_cadence", None) == {
         "clear_execution_replan_after_todos": True,
         "clear_execution_replan_after_turns": True,
-        "clear_execution_stride_strategy": True,
         "clear_execution_planning_horizon_goal": True,
         "clear_execution_yardstick_enabled": True,
     }

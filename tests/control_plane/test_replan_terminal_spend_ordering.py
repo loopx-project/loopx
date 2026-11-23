@@ -64,23 +64,36 @@ def _coverage_backed_no_followup_refresh_args(
 ) -> tuple[str, ...]:
     """Fill the projected refresh template with a coverage-backed no_followup."""
 
-    command = (
-        command.replace(
-            "<advanced|blocked|exploration_exhausted|no_followup>",
-            "no_followup",
+    if "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>" in command:
+        command = command.replace(
+            "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>",
+            shlex.quote(str(vision_path)),
         )
-        .replace("<surface-id>", "surface-terminal")
-        .replace("<hypothesis-id>", "hypothesis-terminal")
-        .replace("<probe-kind>", "probe-terminal")
-        .replace("<evidence-id>", "evidence-terminal")
-    )
+        command += (
+            " --progress-result-class no_followup"
+            " --progress-surface-id surface-terminal"
+            " --progress-hypothesis-id hypothesis-terminal"
+            " --progress-probe-kind probe-terminal"
+            " --progress-evidence-id evidence-terminal"
+        )
+    else:
+        command = (
+            command.replace(
+                "<advanced|blocked|exploration_exhausted|no_followup>",
+                "no_followup",
+            )
+            .replace("<surface-id>", "surface-terminal")
+            .replace("<hypothesis-id>", "hypothesis-terminal")
+            .replace("<probe-kind>", "probe-terminal")
+            .replace("<evidence-id>", "evidence-terminal")
+        )
+        command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
     command += " --progress-coverage-scope-id coverage-terminal"
     command += " --progress-coverage-complete"
-    command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
     return _projected_cli_args(command, turn_instance_id=TURN_INSTANCE_ID)
 
 
-def _write_no_followup_vision(root: Path) -> Path:
+def _write_no_followup_vision(root: Path, guard: dict[str, Any]) -> Path:
     vision = {
         "schema_version": "goal_vision_replan_contract_v0",
         "agent_id": AGENT_ID,
@@ -98,6 +111,7 @@ def _write_no_followup_vision(root: Path) -> Path:
             "stopped": ["repeat probe of the covered frontier"],
             "evidence_refs": ["evidence-terminal"],
         },
+        "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"],
     }
     vision_path = root / "coverage-backed-no-followup-vision.json"
     vision_path.write_text(json.dumps(vision), encoding="utf-8")
@@ -160,12 +174,12 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_autonomous_replan_fixture(project, runtime, registry_path, stride_strategy="off")
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
     _write_terminal_frontier_state(project)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
-    vision_path = _write_no_followup_vision(tmp_path)
 
     guard = _should_run(registry_path, runtime, project)
+    vision_path = _write_no_followup_vision(tmp_path, guard)
     assert guard["decision"] == "autonomous_replan_required", guard
     obligation_id = guard["replan_action_packet"]["obligation_id"]
     assert guard["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == (
@@ -241,12 +255,12 @@ def test_unbound_terminal_spend_stays_rejected(tmp_path: Path) -> None:
     """The terminal guard keeps rejecting a spend that owns no settlement."""
 
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_autonomous_replan_fixture(project, runtime, registry_path, stride_strategy="off")
+    _configure_autonomous_replan_fixture(project, runtime, registry_path)
     _write_terminal_frontier_state(project)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
-    vision_path = _write_no_followup_vision(tmp_path)
 
     guard = _should_run(registry_path, runtime, project)
+    vision_path = _write_no_followup_vision(tmp_path, guard)
     actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     refresh_command = next(action for action in actions if "refresh-state" in action)
     refresh_rc, refresh = _run_cli(
