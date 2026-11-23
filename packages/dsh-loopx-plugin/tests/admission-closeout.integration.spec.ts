@@ -434,6 +434,7 @@ describe('DSH admission-to-closeout integration', () => {
         prefix: [],
         skillCommand: 'loopx',
         version,
+        cliBin: 'loopx',
       }),
       makeTurnInstanceId: () => turnInstanceId,
       retryDelaysMs: [0, 0],
@@ -636,6 +637,7 @@ describe('DSH admission-to-closeout integration', () => {
       isLiveAgent: () => true, runner, retryDelaysMs: [0, 0],
       resolveCommand: async () => ({
         file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0',
+        cliBin: 'loopx',
       }),
       makeTurnInstanceId: () => turnInstanceId,
       warn: message => { warnings.push(message) },
@@ -726,6 +728,7 @@ describe('DSH admission-to-closeout integration', () => {
         isLiveAgent: () => true, runner, retryDelaysMs: [0, 0],
         resolveCommand: async () => ({
           file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0',
+          cliBin: 'loopx',
         }),
         makeTurnInstanceId: () => turnInstanceId,
         runDetached: async operation => {

@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context, Logger, LoggerService } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { FileRunner, LoopXCommand } from '../src/cli.ts'
-import { LoopXCliError, resolveLoopXCommand } from '../src/cli.ts'
+import { LoopXCliError, resolveLoopXCommand, runFile } from '../src/cli.ts'
 import {
   apply as applyDriver,
   LoopXContinuationDriver,
@@ -44,7 +44,7 @@ function userMessage(text: string): UserMessage {
   }
 }
 
-function fakeAgent(id = sessionId): FakeAgent {
+function fakeAgent(id = sessionId, sessionCwd = '/fixture/project'): FakeAgent {
   const nextTurn: UserMessage[] = []
   const nextStep: UserMessage[] = []
   let status: 'idle' | 'running' = 'idle'
@@ -90,7 +90,7 @@ function fakeAgent(id = sessionId): FakeAgent {
     version: 0,
     id,
     createdAt: 1,
-    cwd: '/fixture/project',
+    cwd: sessionCwd,
     seedLength: 0,
   })
   const agent = {
@@ -3427,3 +3427,122 @@ describe.skipIf(process.platform === 'win32')(
     }, 15_000)
   },
 )
+
+describe.skipIf(process.platform === 'win32')('route binding across working directories', () => {
+  // One LoopX-shaped script per working directory; each reports its own
+  // absolute path on stderr so every stage records the executable that ran.
+  function writeLoopxFixture(directory: string): string {
+    const binDirectory = join(directory, 'bin')
+    mkdirSync(binDirectory, { recursive: true })
+    const file = join(binDirectory, 'loopx')
+    writeFileSync(file, [
+      '#!/bin/sh',
+      'self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")',
+      'echo "SELF=$self" >&2',
+      'case "$*" in',
+      "  *'--version'*) echo 'loopx 2.4.0';;",
+      "  *'resolve-agent-thread'*) echo '{\"ok\":true,\"schema_version\":\"loopx_thread_agent_binding_resolution_v0\",\"host_surface\":\"deepseek-harness-native\",\"thread_id\":\"session-fixture\",\"status\":\"bound\",\"goal_id\":\"goal-fixture\",\"agent_id\":\"agent-fixture\",\"matches\":[{\"goal_id\":\"goal-fixture\",\"agent_id\":\"agent-fixture\"}]}';;",
+      "  *'should-run'*) echo '{\"ok\":true,\"mode\":\"should-run\",\"goal_id\":\"goal-fixture\",\"should_run\":true,\"agent_identity\":{\"agent_id\":\"agent-fixture\",\"registered\":true},\"heartbeat_receipt\":{\"schema_version\":\"heartbeat_quota_receipt_v0\",\"turn_instance_id\":\"turn-stable\",\"status\":\"committed\"},\"scheduler_hint\":{\"action\":\"run_now\"}}';;",
+      "  *'heartbeat-prompt'*) echo '{\"ok\":true,\"schema_version\":\"heartbeat_agent_input_v1\",\"goal_id\":\"goal-fixture\",\"agent_id\":\"agent-fixture\",\"turn_instance_id\":\"turn-stable\",\"task_body\":\"LOOPX_TURN=turn-stable Continue through the authoritative LoopX workflow.\"}';;",
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 })
+    return file
+  }
+
+  function selfPaths(stderr: string): string[] {
+    return stderr
+      .split('\n')
+      .filter(line => line.startsWith('SELF='))
+      .map(line => line.slice('SELF='.length))
+  }
+
+  async function runRouteMatrix(
+    pathEntries: string[],
+    expectedLoopx: string,
+    resolveCwd: string,
+  ): Promise<void> {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-route-matrix-'))
+    const projectDir = join(root, 'project')
+    const agentDir = join(root, 'agent')
+    for (const directory of [projectDir, agentDir]) {
+      // Decoy installs the PATH must never select once the route is bound.
+      writeLoopxFixture(directory)
+    }
+    const searchEnv = { PATH: pathEntries.join(delimiter) }
+    const originalCwd = process.cwd()
+    const spawned: string[] = []
+    const runner: FileRunner = (file, args, options) => runFile(file, args, {
+      ...options,
+      env: { ...options.env, ...searchEnv },
+    }).then(result => {
+      spawned.push(...selfPaths(result.stderr))
+      return result
+    })
+    try {
+      process.chdir(resolveCwd)
+      // Stage 1: the version probe runs from the host working directory.
+      const resolved = await resolveLoopXCommand({ runner, env: searchEnv })
+      expect(resolved.candidate).toBe('path-loopx')
+      expect(resolved.cliBin).toBeDefined()
+      expect(isAbsolute(resolved.cliBin as string)).toBe(true)
+      expect(resolved.cliBin).toBe(expectedLoopx)
+
+      // Stage 2: driver admission spawns from the Session working directory.
+      const host = fakeAgent(sessionId, projectDir)
+      const admissionWarnings: string[] = []
+      const driver = new LoopXContinuationDriver({
+        runner,
+        isLiveAgent: () => true,
+        makeTurnInstanceId: () => 'turn-stable',
+        retryDelaysMs: [0, 0],
+        resolveCommand: async () => resolved,
+        warn: message => { admissionWarnings.push(message) },
+      })
+      observeActivated(driver, host)
+      // Real subprocess admission needs a wall-clock budget, not microtask polls.
+      for (let attempt = 0; attempt < 400 && host.nextTurn.length === 0; attempt += 1) {
+        await new Promise<void>(resolve => setTimeout(resolve, 10))
+      }
+      expect([...admissionWarnings, `spawned=${spawned.length}`]).toEqual([`spawned=${spawned.length}`])
+      expect(host.nextTurn).toHaveLength(1)
+      await driver.dispose()
+      expect(spawned.length).toBeGreaterThan(3)
+      expect(new Set(spawned)).toEqual(new Set([expectedLoopx]))
+
+      // Stage 3: the Core-rendered route executes in the agent directory.
+      const route = resolved.cliBin as string
+      const rendered = `${route} --cli-bin ${route} --format json quota should-run --goal-id goal-fixture`
+      const executed = await runFile('/bin/sh', ['-c', rendered], {
+        cwd: agentDir,
+        env: searchEnv,
+      })
+      expect(selfPaths(executed.stderr)).toEqual([expectedLoopx])
+    } finally {
+      process.chdir(originalCwd)
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it('binds probe, admission, and rendered execution to one executable through relative PATH entries', async () => {
+    const hostDir = mkdtempSync(join(tmpdir(), 'dsh-route-host-'))
+    try {
+      const hostLoopx = realpathSync(writeLoopxFixture(hostDir))
+      await runRouteMatrix(['bin', '/usr/bin', '/bin'], hostLoopx, hostDir)
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it('keeps the same single executable when PATH entries are absolute', async () => {
+    // Control group: absolute PATH entries resist the per-cwd decoy installs,
+    // and an explicit absolute entry stays bound exactly as written.
+    const hostDir = mkdtempSync(join(tmpdir(), 'dsh-route-host-'))
+    try {
+      const hostLoopx = writeLoopxFixture(hostDir)
+      await runRouteMatrix([join(hostDir, 'bin'), '/usr/bin', '/bin'], hostLoopx, tmpdir())
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true })
+    }
+  }, 20_000)
+})

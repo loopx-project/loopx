@@ -74,12 +74,14 @@ When the guard returns a capture reference, the driver reads the
 admission fields from that same capture.
 Continuation Turns run Core-rendered commands (thin heartbeat bodies, quota
 settlement templates) against the same executable the plugin probed: the
-Driver passes its resolved route as Core's `--cli-bin`, resolving a bare name
-to that absolute `PATH` file first. Interpreter-prefixed routes (the managed
-launcher, `python -m loopx.cli`) cannot be expressed as one executable; their
-continuation text keeps Core's bare `loopx` route, and the Driver discloses
-that once in its warning log. Point `LOOPX_BIN` at one absolute loopx
-executable to pin those sessions.
+resolver binds one absolute file — normalizing relative `PATH` entries against
+its discovery directory — and the Driver passes that route as Core's
+`--cli-bin`, so the version probe, admission spawns, and rendered commands
+share one executable. Interpreter-prefixed routes (the managed launcher,
+`python -m loopx.cli`) and names the probe environment cannot locate cannot
+be bound to one executable; their continuation text keeps Core's bare
+`loopx` route, and the Driver discloses that once in its warning log. Point
+`LOOPX_BIN` at one absolute loopx executable to pin those sessions.
 Install the prebuilt `0.1.1-beta.7` release into the web profile:
 
 ```bash
