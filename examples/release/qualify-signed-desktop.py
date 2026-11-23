@@ -89,19 +89,20 @@ def ready(request_id, version, revision, allowed_runtime=None):
 def stop(value):
     pid = value["pid"]
     assert pid in owned_pids and worker_running(pid)
-    process_rows = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="], text=True, timeout=5)
-    children = {}
-    for row in process_rows.splitlines():
-        child_pid, parent_pid, invocation = row.strip().split(maxsplit=2)
-        if int(parent_pid) == pid and str(support / "runtime") in invocation:
-            children[int(child_pid)] = invocation
-    os.kill(pid, signal.SIGTERM)
+    command(
+        "/usr/bin/osascript",
+        "-e",
+        "on run argv\n"
+        "  if application (item 1 of argv) is running then\n"
+        "    tell application (item 1 of argv) to quit\n"
+        "  end if\n"
+        "end run",
+        bundle,
+    )
     wait_for(lambda: not worker_running(pid), 25)
-    for child, invocation in children.items():
-        probe = subprocess.run(["ps", "-p", str(child), "-o", "command="], capture_output=True, text=True, timeout=5)
-        if probe.stdout.strip() == invocation:
-            os.kill(child, signal.SIGTERM)
     wait_for(own_listeners_stopped, 25)
+    print("Closed the App through its native Quit event and released both service ports", flush=True)
+
 
 def unpack(archive, target):
     target.mkdir(parents=True, exist_ok=True)

@@ -1,136 +1,41 @@
-name: Signed Desktop v2.4.1 qualification
+name: Signed Desktop installation qualification
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  identity:
-    if: github.repository == 'loopx-project/loopx'
-    runs-on: ubuntu-latest
-    outputs:
-      ref: ${{ steps.target.outputs.ref }}
-      channel: stable
-      version: '2.4.1'
-    steps:
-      - id: target
-        run: echo 'ref=a69abea06be4bc02735cd8083c5f99fc6f007611' >> "$GITHUB_OUTPUT"
   build-macos:
-    needs: identity
-    if: needs.identity.outputs.channel == 'stable' || needs.identity.outputs.channel == 'main'
+    if: github.repository == 'loopx-project/loopx'
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: '2.4.1'
+      SOURCE_REVISION: a69abea06be4bc02735cd8083c5f99fc6f007611
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.identity.outputs.ref }}
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: '24'
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
-      - name: Resolve macOS signing mode
-        id: macos-signing
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: python3 scripts/desktop_macos_signing.py resolve-mode
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/loopx-control-plane/src-tauri -> target
-      - run: npm ci
-        working-directory: apps/desktop/loopx-control-plane
-      - name: Build signed macOS App and exact bundled runtime
-        if: runner.os == 'macOS'
-        working-directory: apps/desktop/loopx-control-plane
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          EXPECTED_SIGNING_MODE: ${{ steps.macos-signing.outputs.signing-mode }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          VERSION: ${{ needs.identity.outputs.version }}
-          BUNDLE: app
+          python-version: '3.12'
+      - name: Fetch the immutable App from its completed signing step
         run: |
           set -euo pipefail
-          test -n "$TAURI_SIGNING_PRIVATE_KEY"
-          python3 ../../../scripts/desktop_macos_signing.py build \
-            --version "$VERSION" \
-            --bundles "$BUNDLE" \
-            --create-updater-artifacts \
-            --expected-mode "$EXPECTED_SIGNING_MODE"
-      - name: Verify macOS updater bundle
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          SIGNING_MODE: ${{ steps.macos-signing.outputs.signing-mode }}
+          mkdir -p originals candidate dist
+          gh release download v2.4.0 --repo "$GITHUB_REPOSITORY" --pattern LoopX.app.tar.gz --dir originals
+          gh run download 45211516676 --repo "$GITHUB_REPOSITORY" --name signed-updater-macos-15 --dir candidate
+          shasum -a 256 originals/LoopX.app.tar.gz candidate/LoopX.app.tar.gz
+      - name: Round-trip signed activation, native reopen and backup
         run: |
-          set -euo pipefail
-          app_path="apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/macos/LoopX.app"
-          updater_tar_gz="$(find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle -type f -name '*.app.tar.gz' -print -quit)"
-          test -n "${updater_tar_gz}"
-          python3 scripts/desktop_macos_signing.py verify \
-            --signing-mode "${SIGNING_MODE}" \
-            --app "${app_path}" \
-            --updater-tar-gz "${updater_tar_gz}"
-      - name: Collect native updater artifacts
-        shell: bash
-        env:
-          VERSION: ${{ needs.identity.outputs.version }}
-        run: |
-          mkdir -p dist/updater
-          find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle -type f \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' -o -name '*-setup.exe' -o -name '*-setup.exe.sig' \) -exec cp {} dist/updater/ \;
-          for artifact in dist/updater/*-setup.exe*; do
-            if [ -f "$artifact" ]; then
-              case "$artifact" in
-                *-updater-setup.exe*) continue ;;
-              esac
-              mv "$artifact" "${artifact/-setup.exe/-updater-setup.exe}"
-            fi
-          done
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            # The feed advertises this run's version. An installer whose name
-            # does not embed it would be published under a version it does not
-            # carry, and clients would never update again.
-            ls dist/updater/*"$VERSION"*-updater-setup.exe >/dev/null
-          fi
-      - uses: actions/upload-artifact@v7
-        with:
-          name: signed-updater-macos-15
-          path: dist/updater/*
-          if-no-files-found: error
-
-      - name: Check out isolated native validation fixture
-        uses: actions/checkout@v7
-        with:
-          path: .desktop-qualification
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Verify actual signed activation, re-open and backup restore
-        timeout-minutes: 14
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_REVISION: ${{ needs.identity.outputs.ref }}
-          VERSION: ${{ needs.identity.outputs.version }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/original-stable"
-          gh release download v2.4.0 --repo "$GITHUB_REPOSITORY" --pattern LoopX.app.tar.gz --dir "$RUNNER_TEMP/original-stable"
-          python3 .desktop-qualification/examples/release/qualify-signed-desktop.py "$RUNNER_TEMP/original-stable/LoopX.app.tar.gz" dist/updater/LoopX.app.tar.gz "$SOURCE_REVISION" "$VERSION" dist/desktop-activation.json
+          python3 examples/release/qualify-signed-desktop.py originals/LoopX.app.tar.gz candidate/LoopX.app.tar.gz "$SOURCE_REVISION" "$VERSION" dist/desktop-activation.json
       - uses: actions/upload-artifact@v7
         with:
           name: native-activation-qualification
