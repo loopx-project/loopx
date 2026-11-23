@@ -388,6 +388,18 @@ Paired diffs do not certify translation accuracy.
     observations to verified outcomes without changing retrieval ranking.
     Reducer/read projection, provider readback, ranking influence, and pilot
     promotion remain open.
+- [Local File-First Project Memory, Four-Scenario Privacy Assembler, and Pre-Admission Inbox Triage v0](local-file-project-memory-v0.md)
+  ([中文版](local-file-project-memory-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal.
+  - **Current boundary:** Default-off, zero-server local file provider
+    (`local_file_memory_v0`: `memory.jsonl` + `points.json` + `summary.md` with
+    `agent_reported / accepted / owner` verification tiers, `owner > extension > pipeline`
+    locks, and `add/update/drop` diffs) under existing `reward_memory` and
+    `semantic_preference_provider_v0` seams, paired with a four-scenario
+    `MemoryAssembler` (`standing <= 1.5 KB / recall / handoff / external` +
+    `machine.trust = "work"`), a `stat`-verified 2/3-gram `.search/` exclusion
+    index, and a fail-open `action / fyi / noise` external inbox funnel. M1–M4
+    and A1–A6 define delivery and acceptance.
 - [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md)
   ([中文版](obelisk-session-evidence-provider-v0.zh-CN.md))
   - **Delivery on `main`:** Evaluation only.

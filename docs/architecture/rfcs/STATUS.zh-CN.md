@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (52)
+## 已接受 (53)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -51,6 +51,7 @@
 | [RFC：智能化审阅与动态展示面 v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX × LayerFS——复杂工程探索与效果评测（v0）](layerfs-engineering-exploration-evaluation-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：本地文件优先项目记忆、四场景隐私汇编器与准入前收件箱分流（v0）](local-file-project-memory-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：长程 Harness Benchmark 与研究计划 v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [4 条](ledger/loopx-overall-roadmap-v0/) |
