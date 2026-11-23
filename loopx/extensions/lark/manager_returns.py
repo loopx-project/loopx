@@ -27,10 +27,6 @@ from .outbound import present_lark_conversation_text
 from .post_delivery import attachment_reply
 from .return_files import uploaded_result_files, verify_result_files
 
-if TYPE_CHECKING:
-    from ...capabilities.manager_context.roundtrip import ReturnService
-    from ...chat_store import ChatSessionStore
-
 Payload = dict[str, object]
 PayloadView = Mapping[str, object]
 AttemptRecord = Mapping[str, str | None]
@@ -38,6 +34,9 @@ AttemptRecorder = Callable[[AttemptRecord], None]
 SnapshotProvider = Callable[[], PayloadView]
 
 if TYPE_CHECKING:
+    from ...capabilities.manager_context.roundtrip import ReturnService
+    from ...chat_store import ChatSessionStore
+
     class _ControllerProtocol(Protocol):
         store: ChatSessionStore
 
