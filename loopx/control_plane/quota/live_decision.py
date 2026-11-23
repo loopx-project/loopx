@@ -96,6 +96,24 @@ def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
             and packet.get("decision") == "historical_ack_recorded")
 
 
+def _prepared_execution_needs_readback(
+    payload: Mapping[str, Any],
+    readback: QuotaSettlementReadback | None,
+    receipt_todo_id: str | None,
+) -> bool:
+    """Ask the receipt owner to check a prepared generation missing from the current projection."""
+    if readback is None or readback.replay_phase is not ReceiptBoundReplayPhase.OPEN:
+        return False
+    prepared = readback.prepared_lease
+    if not prepared or prepared.get("prepared_lease_epoch") is None:
+        return False
+    current = payload.get("execution_preparation") or {}
+    return (
+        current.get("todo_id") != receipt_todo_id
+        or current.get("lease_epoch") != prepared["prepared_lease_epoch"]
+    )
+
+
 def _original_replan_settlement_required(
     payload: Mapping[str, Any], readback: QuotaSettlementReadback | None,
 ) -> bool:
@@ -1062,22 +1080,11 @@ def build_live_quota_should_run_decision(
     # identity.  Leave prior-Turn recovery to the next fresh Turn instead.
     original_replan_settlement = _original_replan_settlement_required(payload, settlement_readback)
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
-        prepared = settlement_readback.prepared_lease if settlement_readback else None
-        current_preparation = payload.get("execution_preparation") or {}
-        # A different or unavailable generation is a reason to consult the
-        # receipt owner. Only its canonical store can establish execution loss.
-        inspect_current_loss = (
-            receipt_bound_replay_phase is ReceiptBoundReplayPhase.OPEN
-            and prepared is not None
-            and prepared.get("prepared_lease_epoch") is not None
-            and (
-                current_preparation.get("todo_id") != receipt_bound_todo_id
-                or current_preparation.get("lease_epoch") != prepared["prepared_lease_epoch"]
-            )
-        )
         apply_unsettled_host_turn_recovery_if_required(
             payload,
-            inspect_current_execution_loss=inspect_current_loss,
+            inspect_current_execution_loss=_prepared_execution_needs_readback(
+                payload, settlement_readback, receipt_bound_todo_id
+            ),
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,
