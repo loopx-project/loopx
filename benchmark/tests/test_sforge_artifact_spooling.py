@@ -236,6 +236,54 @@ def test_research_collection_respects_disk_floor_and_filters_ephemeral_dumps(tmp
     assert not (root / ".cargo-target").exists()
 
 
+@pytest.mark.parametrize("pressure", ["spooling", "before-extraction", "during-extraction"])
+def test_research_collection_observes_disk_pressure_midstream(tmp_path, monkeypatch, pressure):
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
+
+    backend = collector(tmp_path)
+    backend.research_sidecar = True
+    buf = io.BytesIO()
+    data = bytes(3 * 1024**2)
+    with tarfile.open(fileobj=buf, mode="w") as archive:
+        entry = tarfile.TarInfo("research/evidence")
+        entry.size = len(data)
+        archive.addfile(entry, io.BytesIO(data))
+
+    low_disk = False
+    closed = []
+    target = backend.log_dir / "research/research/evidence"
+
+    def research_stream():
+        nonlocal low_disk
+        try:
+            yield buf.getvalue()[:4096]
+            low_disk = pressure == "spooling"
+            yield buf.getvalue()[4096:]
+            low_disk = pressure == "before-extraction"
+        finally:
+            closed.append(True)
+
+    def free_bytes(*paths):
+        in_file = pressure == "during-extraction" and target.exists() and target.stat().st_size > 0
+        return 0 if low_disk or in_file else 20 * 1024**3
+
+    def get_archive(remote):
+        return (research_stream() if remote == RESEARCH_DIRECTORY else iter([archive_bytes()])), {}
+
+    monkeypatch.setattr(backend, "_raw", lambda _: SimpleNamespace(get_archive=get_archive))
+    monkeypatch.setattr(transport, "_minimum_free_bytes", free_bytes)
+    monkeypatch.setattr(transport.DockerBackend, "cleanup_container", lambda *args: None)
+    backend.cleanup_container("owned-container")
+    rows = json.loads((backend.log_dir / "artifact-collection.json").read_text())
+    assert closed == [True]
+    assert [row for row in rows if row["artifact"] == "research"] == [{
+        "artifact": "research", "collected": False, "error_kind": "InsufficientDiskHeadroomError",
+        "reason": "insufficient_host_disk_headroom",
+    }]
+    assert all(row["collected"] for row in rows if row["artifact"] != "research")
+    assert not target.exists() or target.stat().st_size < len(data)
+
+
 @pytest.mark.parametrize("data_name", ["core", "evidence.bin"])
 def test_research_hardlinks_keep_the_same_evidence_in_terminal_receipt(tmp_path, monkeypatch, data_name):
     from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY

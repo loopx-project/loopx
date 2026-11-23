@@ -430,6 +430,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    monkeypatch.setattr("benchmark.runtime.sforge_backend._minimum_free_bytes", lambda *_: 20 * 1024**3)
     backend = object.__new__(RecordingDockerBackend)
     backend.research_sidecar = research_sidecar
     backend.checkpoint = None
