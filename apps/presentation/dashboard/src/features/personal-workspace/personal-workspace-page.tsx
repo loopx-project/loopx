@@ -2633,6 +2633,9 @@ export function PersonalWorkspacePage({
     }
     if (conversationTurnRunning) return;
     if (!messageOverride) {
+      if (!selectedGoalId && !managerChatOpen && model.onboarding?.kind === "no_goals" && workspaceGoals.length === 0) {
+        setSelectedGoalTab("chat");
+      }
       setComposer("");
       setImageAttachments([]);
     }
