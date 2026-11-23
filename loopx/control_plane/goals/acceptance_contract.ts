@@ -592,7 +592,7 @@ export class GoalAcceptanceRead {
 
   contract(registeredAgents?: unknown): JsonObject {
     const checks = structuredClone(this.checks());
-    const outcomes = projectGoalOutcomes(this.head, this.goalId, checks);
+    const outcomes = projectGoalOutcomes(this.head, this.goalId, checks, registeredAgents);
     const objective = projectGoalObjective(this.head, registeredAgents);
     return {...checks, ...(outcomes === null ? {} : {outcome_requirements: outcomes}),
       ...(objective === null ? {} : {goal_objective: objective})};

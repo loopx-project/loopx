@@ -146,7 +146,10 @@ def render_goal_acceptance(payload: dict[str, Any]) -> str:
             f"- configured artifact checks: {contract.get('status', 'unverified')}"
         )
     for outcome in (contract.get("outcome_requirements") or {}).get("outcomes", []):
-        lines.append(f"- outcome {outcome['id']}: {outcome['objective']} ({outcome['owner_agent_id']})")
+        owner = outcome["owner_agent_id"]
+        if outcome.get("owner_registration_missing"):
+            owner = f"{owner}, unregistered for this Goal at readback"
+        lines.append(f"- outcome {outcome['id']}: {outcome['objective']} ({owner})")
         for requirement in outcome["requirements"]:
             lines.append(f"  - {requirement['id']}: {requirement['description']} [{requirement['status']}]")
             review = requirement.get("agent_review")

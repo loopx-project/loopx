@@ -123,6 +123,13 @@ review/check results. The local owner can **Add a requirement** and read the
 canonical result. Refresh a stale view before rebasing; an unconfirmed write
 retains its operation for retry. No model starts and no check command runs.
 
+When handing work to another Agent, inspect the original Goal. In JSON, a
+current outcome with `owner_registration_missing: true` names an owner absent
+from the observed Goal roster. Its ID, requirements, work, sources and previous
+reviews remain available for the handoff inventory. In the App, expand the
+outcome and open **Linked work and sources** to see the recorded owner. An
+inspection without the current roster omits the marker.
+
 Outcome maintenance and evidence review are default, without a feature switch.
 Current storage/readback has no `enabled` switch. Every upgraded Goal uses the
 same feedback loop. An Agent review does
