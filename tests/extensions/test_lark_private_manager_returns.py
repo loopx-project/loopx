@@ -690,3 +690,118 @@ def test_web_result_identical_updates_keep_distinct_mirrors_and_final_scope(web_
         route["goal_id"], route["agent_id"])["unfinished_delegations"]["items"]
     assert not any(item["request_id"] == route["request_id"] for item in agenda)
     assert capture.read_bytes() == starts
+
+
+@pytest.mark.parametrize(("private_return", "return_root", "fault"), [
+    ("native", "shared", "lost_once"), ("legacy", "separate", "lost_twice"),
+    ("native", "separate", "late_readback"), ("native", "shared", "revoked"),
+    ("native", "shared", "expired"), ("native", "shared", "rate_limit"),
+    ("native", "shared", "output_withheld"),
+], indirect=["private_return", "return_root"])
+def test_worker_return_lost_response_does_not_republish_after_restart(private_return, fault, monkeypatch):
+    sender, session, turn, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    starts = capture.read_bytes()
+    provider.verify_replies = fault != "late_readback"
+    original_runner = transport.runner
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr("loopx.extensions.lark.inbox_reply.time", lambda: clock[0], raising=False)
+    wire_calls = []
+    accepted = {}
+
+    def send_with_fault(args, cwd=None, timeout=None):
+        if "--dry-run" in args or "--idempotency-key" not in args or "--content" not in args:
+            return original_runner(args, cwd, timeout)
+        key = args[args.index("--idempotency-key") + 1]
+        wire_calls.append(tuple(args))
+        if len(wire_calls) == 1 and fault == "rate_limit":
+            return {"returncode": 1, "stderr": json.dumps({"error": {"type": "api", "subtype": "rate_limit", "code": 429}})}
+        if key not in accepted:
+            accepted[key] = original_runner(args, cwd, timeout)
+        if fault == "output_withheld":
+            return {"returncode": 1, "stderr": json.dumps({"error": {"type": "policy", "subtype": "content_safety"}})}
+        if fault == "revoked":
+            _write(_root(sender.root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {}})
+        if fault == "expired":
+            clock[0] += 3600
+        if fault in {"lost_twice", "revoked", "expired"} or fault in {"lost_once", "late_readback"} and len(wire_calls) == 1:
+            raise TimeoutError("connection closed after provider acceptance")
+        return accepted[key]
+
+    transport.runner = send_with_fault
+    rid = route["request_id"]
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], rid, "adopt", "Inspect original request")
+    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion", "Verified late result")
+    drain(sender.root, controller.registry_path, store, sender)
+    state = reply_status(sender.root, route)[0]
+    if fault == "rate_limit":
+        assert state["status"] == "retry_pending" and len(replies) == 0 and len(wire_calls) == 1
+    elif fault in {"lost_once", "late_readback"}:
+        assert state["status"] == ("delivered" if fault == "lost_once" else "verification_required")
+        assert len(wire_calls) == 2
+        assert wire_calls[0] == wire_calls[1]
+    else:
+        assert (state["status"], state["error"]) == ("explicit_unverified", "provider_locator_unavailable")
+        assert len(wire_calls) == (1 if fault in {"revoked", "expired", "output_withheld"} else 2)
+    if fault != "rate_limit":
+        assert len(replies) == 1
+    accepted.clear()  # The provider no longer remembers the original UUID.
+    provider.verify_replies = True
+    recovered = ChatSessionStore(store.root.parent)
+    drain(sender.root, controller.registry_path, recovered, LarkManagerReturnTransport(sender.server, sender.root),
+          now=datetime.now(timezone.utc) + timedelta(hours=2))
+    after = reply_status(sender.root, route)[0]
+    assert after["status"] == ("delivered" if fault in {"lost_once", "late_readback", "rate_limit"} else "explicit_unverified")
+    assert len(replies) == 1 and len(wire_calls) == (1 if fault in {"revoked", "expired", "output_withheld"} else 2)
+    returned = [r for r in recovered.messages(session["session_id"]) if r.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert capture.read_bytes() == starts
+
+
+@pytest.mark.parametrize(("private_return", "return_root", "interrupted_at"), [
+    ("native", "shared", "accepted"),
+    ("legacy", "separate", "preview"),
+], indirect=["private_return", "return_root"])
+def test_worker_restart_between_preview_and_locator(private_return, interrupted_at, monkeypatch):
+    sender, session, turn, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    host_requests = store.root.parent.parent / "requests.jsonl"
+    original_requests = host_requests.read_bytes()
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Inspect result")
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Original result")
+    provider.verify_replies = True
+    original_runner = transport.runner
+
+    class WorkerStopped(BaseException):
+        """Interrupt without running the ordinary provider-error settlement."""
+
+    def interrupt(args, *runner_args, **kwargs):
+        result = original_runner(args, *runner_args, **kwargs)
+        if "--content" in args and ("--dry-run" in args) == (interrupted_at == "preview"):
+            raise WorkerStopped
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(transport, "runner", interrupt)
+        with pytest.raises(WorkerStopped):
+            drain(sender.root, controller.registry_path, store, sender)
+
+    accepted = interrupted_at == "accepted"
+    assert len(replies) == int(accepted)
+    assert reply_status(sender.root, route)[0]["status"] == ("verification_required" if accepted else "queued")
+    reopened = ChatSessionStore(store.root.parent)
+    recovered = LarkManagerReturnTransport(sender.server, sender.root)
+    for minutes in (120, 125):
+        drain(sender.root, controller.registry_path, reopened, recovered,
+              now=datetime.now(timezone.utc) + timedelta(minutes=minutes))
+    final = reply_status(sender.root, route)[0]
+    assert final["status"] == ("explicit_unverified" if accepted else "delivered")
+    if accepted:
+        assert final["error"] == "provider_locator_unavailable"
+    assert len(replies) == 1
+    returns = [message for message in reopened.messages(session["session_id"]) if message.get("origin") == "manager_followup"]
+    assert [message["turn_id"] for message in returns] == [turn["turn_id"]]
+    assert host_requests.read_bytes() == original_requests
