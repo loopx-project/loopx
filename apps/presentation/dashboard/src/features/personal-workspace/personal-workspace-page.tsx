@@ -1448,7 +1448,7 @@ export function PersonalWorkspacePage({
     adjust: focusTurnComposer,
     cancel: canCancelTimelineTurn ? () => callbacks.onCancelConversationPreparation?.(timelineActionTarget) : undefined,
     interrupt: canInterruptTimelineTurn ? (turnId: string) => callbacks.onInterruptConversationTurn?.(timelineActionTarget, turnId) : undefined,
-    openEvidence: (goalId: string) => { selectGoal(goalId, "chat"); },
+    openGoalChat: (goalId: string, target?: ManagedConversationTarget) => { selectGoal(goalId, "chat", target); },
   };
   useLayoutEffect(() => { currentTimelineActions.current = nextTimelineActions; });
   const timelineActions = useMemo(() => {
@@ -1465,7 +1465,7 @@ export function PersonalWorkspacePage({
       onAdjustTurn: (turnId: string) => current()?.adjust(turnId),
       onCancelPreparation: () => current()?.cancel?.(),
       onInterruptTurn: async (turnId: string) => { await current()?.interrupt?.(turnId); },
-      onOpenGoalEvidence: (goalId: string) => current()?.openEvidence(goalId),
+      onOpenGoalChat: (goalId: string, target?: ManagedConversationTarget) => current()?.openGoalChat(goalId, target),
     };
   }, [timelineKey, goalDraftTargetChanged]);
   const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
@@ -3140,6 +3140,7 @@ export function PersonalWorkspacePage({
                       onReviewGoalDraft={readOnly ? undefined : timelineActions.onReviewGoalDraft}
                       onApplyGoalDraft={readOnly ? undefined : timelineActions.onApplyGoalDraft}
                       onSuggestReply={readOnly ? undefined : timelineActions.onSuggestReply}
+                      onOpenGoalChat={timelineActions.onOpenGoalChat}
                       items={visibleTimelineItems} onSelect={timelineActions.onSelect} selectedGoal={selectedGoal}
                       onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
                       onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
@@ -3164,7 +3165,7 @@ export function PersonalWorkspacePage({
                 onAdjustTurn={steeringTurnId ? timelineActions.onAdjustTurn : undefined}
                 onCancelPreparation={canCancelTimelineTurn ? timelineActions.onCancelPreparation : undefined}
                 onInterruptTurn={canInterruptTimelineTurn ? timelineActions.onInterruptTurn : undefined}
-                onOpenGoalEvidence={timelineActions.onOpenGoalEvidence} />
+                onOpenGoalChat={timelineActions.onOpenGoalChat} />
             ))}
             </> : null}
           </div>
