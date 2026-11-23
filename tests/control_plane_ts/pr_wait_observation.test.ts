@@ -55,3 +55,26 @@ test("bound batch is ordered by due time, so repeated wakes cannot starve later 
   const next = planPrWaitObservations({...request, items, rollout_events: events});
   assert.equal((next.targets as JsonObject[]).length, 3);
 });
+
+test("blocked PR waits and transitive todo_done prerequisites are observed while preserving exclusions", () => {
+  const blockedOwn = {...waiting, todo_id: "todo_blocked_own", status: "blocked", resume_when: "pr_merged:owner/repo#77"};
+  const peerPrereq = {...waiting, todo_id: "todo_peer_prereq", status: "deferred", claimed_by: "agent-b",
+    resume_when: "pr_merged:owner/repo#88"};
+  const excludedPrereq = {...waiting, todo_id: "todo_excluded_prereq", status: "deferred", claimed_by: "agent-b",
+    excluded_agents: ["agent-a"], resume_when: "pr_merged:owner/repo#99"};
+  const ownBlockedOnPeer = {todo_id: "todo_own_downstream", role: "agent", status: "open",
+    task_class: "advancement_task", claimed_by: "agent-a", resume_when: "todo_done:todo_peer_prereq"};
+  const ownBlockedOnExcluded = {todo_id: "todo_own_excluded_downstream", role: "agent", status: "open",
+    task_class: "advancement_task", claimed_by: "agent-a", resume_when: "todo_done:todo_excluded_prereq"};
+  const unrelatedForeign = {...waiting, todo_id: "todo_unrelated_foreign", claimed_by: "agent-b",
+    resume_when: "pr_merged:owner/repo#105"};
+  const cycleA = {todo_id: "todo_cycle_a", role: "agent", status: "open",
+    task_class: "continuous_monitor", claimed_by: "agent-a", resume_when: "todo_done:todo_cycle_b"};
+  const cycleB = {todo_id: "todo_cycle_b", role: "agent", status: "deferred",
+    task_class: "advancement_task", claimed_by: "agent-b", resume_when: "todo_done:todo_cycle_a"};
+  const plan = planPrWaitObservations({...request, items: [
+    blockedOwn, peerPrereq, excludedPrereq, ownBlockedOnPeer, ownBlockedOnExcluded, unrelatedForeign, cycleA, cycleB,
+  ]});
+  const refs = (plan.targets as JsonObject[]).map(target => target.pr_ref);
+  assert.deepEqual(refs, ["owner/repo#77", "owner/repo#88"]);
+});
