@@ -854,3 +854,31 @@ def test_upgrade_of_uncheckpointed_worker_preserves_original_return(private_retu
     assert len(replies) == int(accepted)
     original = recovered.read_history_message(session["session_id"], before[0]["message_id"])
     assert original == before[0] and original["turn_id"] == turn["turn_id"]
+
+
+@pytest.mark.parametrize(("private_return", "return_root"), [("native", "shared")], indirect=True)
+def test_fresh_return_resumes_when_binding_observation_recovers(private_return, monkeypatch):
+    from loopx.capabilities.native_chat.transports import ChatConversationTransports
+
+    sender, session, _, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    composition = ChatConversationTransports(observe_default=transport.bindings.observe,
+        transports=[SimpleNamespace(transport_ref="another-transport")])
+    composition.bindings, composition.default_return = transport.bindings, sender
+    provider.verify_replies = True
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Inspect receipt")
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Original result")
+
+    def unavailable(*args, **kwargs):
+        raise OSError("provider observation unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(transport.bindings, "session_context", unavailable)
+        drain(sender.root, controller.registry_path, store, composition)
+    assert reply_status(sender.root, route)[0]["status"] == "retry_pending" and replies == []
+    for minutes in (120, 125):
+        drain(sender.root, controller.registry_path, store, composition,
+              now=datetime.now(timezone.utc) + timedelta(minutes=minutes))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered" and len(replies) == 1
+    assert len([m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]) == 1
