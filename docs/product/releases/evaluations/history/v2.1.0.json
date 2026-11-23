@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "superseded",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 2,
+    "minor": 1,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "2.1.0",
+    "version_tag": "v2.1.0",
+    "git_commit": "a65c71f789459c12b68d6feeec233fbb99f65c91",
+    "git_tree": "1595c6dd2c48879d0e9cab8844e9df09b64a7bbe",
+    "committed_at": "2026-10-22T21:46:16+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v2.1.0",
+      "last_tag": "v2.1.1",
+      "last_commit": "87e5b4f88d207adf062eea57002cda6fe04fd535",
+      "last_committed_at": "2026-10-23T06:39:44+08:00",
+      "tag_count": 2
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v2.1.0",
+      "v2.1.1"
+    ]
+  },
+  "a_scale": {
+    "score": 41.3,
+    "delta_from_prior": 3.8,
+    "domain_scores": {
+      "D1": 45.0,
+      "D2": 37.0,
+      "D3": 35.0,
+      "D4": 39.0,
+      "D5": 48.0,
+      "D6": 47.0,
+      "D7": 34.0,
+      "D8": 52.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 2,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Unknown-effect upgrade recovery gate retention, Turn inbox context preservation, and book checkpoint synchronization through v2.1.1 (#7107).",
+  "summary_zh": "强化升级未知副作用恢复门禁、保留 Turn 收件箱上下文并完成 v2.1.1 书目检查点同步（#7107）。"
+}

@@ -2067,6 +2067,13 @@ def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> No
         "inspect_connection",
         "select_goal",
     ]
+    assert compact["command_pack"]["host_loop_activation"] == {
+        "activation_state": "goal_selection_required",
+        "activation_allowed": False,
+        "activation_required_after_todo_write": False,
+        "host_surface": None,
+        "activation_method": None,
+    }
     assert _host_shadow_document(compact) == _host_shadow_document(detailed)
     for choice in compact["goal_selection_gate"]["choices"]:
         assert "--capability-route issue-fix" in choice["rerun_command"]

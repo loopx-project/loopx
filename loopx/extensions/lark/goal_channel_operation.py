@@ -78,9 +78,7 @@ _CARD_TEXT_ENTITIES = {
     "#": "&#35;",
     "_": "&#95;",
 }
-_CARD_TEXT_ESCAPE_PATTERN = re.compile(
-    "[" + re.escape("".join(_CARD_TEXT_ENTITIES)) + "]"
-)
+_CARD_TEXT_ESCAPE_PATTERN = re.compile(r"[&<>\"'*~\[\]()#_]")
 
 
 def _card_text(value: object) -> str:

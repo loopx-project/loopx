@@ -232,9 +232,7 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
     assert portfolio["suggested_actions"][1]["required_capabilities"] == [
         "fallback_runner"
     ]
-    assert portfolio["suggested_actions"][1]["required_write_scopes"] == [
-        "artifacts/fallback/**"
-    ]
+    assert "required_write_scopes" not in portfolio["suggested_actions"][1]
     assert packet["interaction_contract"]["agent_channel"][
         "action_portfolio_ref"
     ] == "$.action_portfolio"
@@ -267,9 +265,7 @@ def test_sticky_primary_exposes_bounded_agent_selection_on_every_hot_path() -> N
     assert compact["capability_gate"] == packet["capability_gate"]
     compact_candidates = compact["agent_todo_summary"]["first_executable_items"]
     assert compact_candidates[1]["required_capabilities"] == ["fallback_runner"]
-    assert compact_candidates[1]["required_write_scopes"] == [
-        "artifacts/fallback/**"
-    ]
+    assert "required_write_scopes" not in compact_candidates[1]
     effect_turn = interpret_quota_should_run_packet(packet)
     assert effect_turn.observation.action_portfolio == portfolio
 

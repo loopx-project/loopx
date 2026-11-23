@@ -50,10 +50,32 @@ def _web_sources(root: Path) -> list[Path]:
     sources = []
     for directory, directories, files in os.walk(web, onerror=fail_on_source_error):
         # Dependency installation can replace these directories during the
-        # census. Prune before traversing; first-party I/O errors still fail.
-        directories[:] = [name for name in directories if name != "node_modules"]
-        sources.extend(Path(directory) / name for name in files if name.endswith(".ts"))
+        # census. Prune dependencies and TypeScript test directories/files before
+        # traversing; first-party I/O errors still fail.
+        directories[:] = [
+            name for name in directories if name not in {"node_modules", "test", "tests"}
+        ]
+        sources.extend(
+            Path(directory) / name
+            for name in files
+            if name.endswith(".ts") and not name.endswith((".test.ts", ".spec.ts"))
+        )
     return sorted(sources)
+
+
+def test_web_census_excludes_typescript_test_files(tmp_path: Path) -> None:
+    runtime = tmp_path / "apps" / "client" / "src" / "route.ts"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("export const route = '/api/chat/capabilities';", encoding="utf-8")
+    for ignored in (
+        tmp_path / "apps" / "client" / "route.test.ts",
+        tmp_path / "apps" / "client" / "route.spec.ts",
+        tmp_path / "apps" / "client" / "test" / "route.ts",
+        tmp_path / "apps" / "client" / "tests" / "route.ts",
+    ):
+        ignored.parent.mkdir(parents=True, exist_ok=True)
+        ignored.write_text("export const route = '/api/chat/capabilities';", encoding="utf-8")
+    assert _web_sources(tmp_path) == [runtime]
 
 
 def test_web_census_never_enters_dependencies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

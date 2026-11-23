@@ -118,11 +118,8 @@ function suggestedActionProjection(candidate: ActionCandidate): JsonObject {
   for (const field of ["priority", "action_kind", "continuation_hint"] as const) {
     if (candidate[field] !== undefined) projected[field] = candidate[field];
   }
-  for (const field of [
-    "required_capabilities",
-    "required_write_scopes",
-  ] as const) {
-    if (candidate[field] !== undefined) projected[field] = candidate[field];
+  if (candidate.required_capabilities !== undefined) {
+    projected.required_capabilities = candidate.required_capabilities;
   }
   if (candidate.claim_required_before_work === true) {
     projected.claim_required_before_work = true;

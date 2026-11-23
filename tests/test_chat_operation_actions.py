@@ -14,6 +14,7 @@ from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService, ProtectedActionGate
 from loopx.control_plane.collaboration.operation_handoff import agent_operation_action
 from loopx.control_plane.collaboration.inbox import pending
+from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.capabilities.manager_context import turn_start_hook
 from examples.operation_action_fixtures import (
     GOAL_ID,
@@ -286,7 +287,11 @@ def test_managed_pending_reuses_registered_agent_and_goal_instance_scope(
     )
 
     registry = json.loads(service.registry_path.read_text())
-    registry["goals"][0]["activation_state"] = "stopped"
+    registry["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     service.registry_path.write_text(json.dumps(registry))
     # Stopping execution does not erase the original evidence-reconciliation locator.
     historical = handler("loopx_operation", args, native)
@@ -682,7 +687,11 @@ def test_agent_handoff_fails_closed_on_expiry_binding_activation_or_terms_drift(
         elif change == "archived":
             registry["goals"][0]["status"] = "archived"
         else:
-            registry["goals"][0]["activation_state"] = "stopped"
+            registry["goals"][0]["activation"] = build_goal_activation(
+                state="stopped",
+                updated_at="2026-01-01T00:00:00Z",
+                reason="fixture stop",
+            )
         service.registry_path.write_text(json.dumps(registry))
     else:
         data = json.loads(store.path.read_text())
@@ -849,7 +858,11 @@ def test_unknown_result_never_grants_resubmission_and_late_evidence_does_not_req
         **args,
     )
     registry = json.loads(service.registry_path.read_text())
-    registry["goals"][0]["activation_state"] = "stopped"
+    registry["goals"][0]["activation"] = build_goal_activation(
+        state="stopped",
+        updated_at="2026-01-01T00:00:00Z",
+        reason="fixture stop",
+    )
     registry["goals"][0]["coordination"]["thread_agent_bindings"][0]["thread_id"] = (
         "thread-replacement"
     )
@@ -1022,7 +1035,11 @@ def test_replacement_session_reconciles_under_its_current_binding_without_recons
     )
     if historical:
         registry = json.loads(service.registry_path.read_text())
-        registry["goals"][0]["activation_state"] = "stopped"
+        registry["goals"][0]["activation"] = build_goal_activation(
+            state="stopped",
+            updated_at="2026-01-01T00:00:00Z",
+            reason="fixture stop",
+        )
         service.registry_path.write_text(json.dumps(registry))
         after_expiry = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
         monkeypatch.setattr("loopx.chat_action_store._utc_now", lambda: after_expiry)
@@ -1194,8 +1211,9 @@ def test_recovery_binding_revocation_cannot_split_report_validation_from_commit(
 def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
     tmp_path: Path,
 ) -> None:
-    import subprocess
-    import sys
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.peers import request as request_peer
 
     service, store = _service(tmp_path)
     operation_ids = set()
@@ -1227,32 +1245,17 @@ def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
     cursor = inbox["operation_handoff_next_cursor"]
     assert cursor == inbox["operation_handoff_overflow"]["next_cursor"]
     before = store.path.read_bytes()
-    process = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "loopx.cli",
-            "--format",
-            "json",
-            "--registry",
-            str(service.registry_path),
-            "--runtime-root",
-            str(store.root.parent.parent),
-            "manager-inbox",
-            "read",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            EXECUTION_ACTOR["agent_id"],
-            "--operation-cursor",
-            cursor,
-        ],
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=30,
-    )
-    rest = json.loads(process.stdout)
+    def read_inbox(*options):
+        process = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json",
+             "--registry", str(service.registry_path), "--runtime-root", str(store.root.parent.parent),
+             "manager-inbox", "read", "--goal-id", GOAL_ID, "--agent-id", EXECUTION_ACTOR["agent_id"],
+             *options],
+            text=True, capture_output=True, check=True, timeout=30,
+        )
+        return json.loads(process.stdout)
+
+    rest = read_inbox("--operation-cursor", cursor)
     assert len(rest["operation_handoffs"]) == 2
     assert rest["operation_handoff_next_cursor"] is None
     assert rest["operation_handoff_pending_count"] == 22
@@ -1277,6 +1280,39 @@ def test_inbox_uses_shared_recovery_priority_and_explicit_overflow(
         pending(
             store.root.parent.parent, GOAL_ID, "other-agent", operation_cursor=cursor
         )
+
+    root = store.root.parent.parent
+    registry = json.loads(service.registry_path.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"].append("fixture-reviewer")
+    service.registry_path.write_text(json.dumps(registry))
+    peer = request_peer(root, service.registry_path, GOAL_ID, EXECUTION_ACTOR["agent_id"],
+        "fixture-reviewer", "review-fixture", {"schema_version": "collaboration_brief_v0",
+            "purpose": "Confirm the test boundary", "context": "Isolated review fixture",
+            "constraints": [], "inputs": [], "acceptance": ["Report the observations"],
+            "return_requirement": "Reply to the requester"})
+    peer_id = peer["request_id"]
+    acknowledge(root, GOAL_ID, "fixture-reviewer", peer_id, "adopt", "Fixture inspection")
+    report(root, GOAL_ID, "fixture-reviewer", peer_id, "conclusion", "The isolated check passed.")
+    first = read_inbox("--attention-only")
+    assert [row["request_id"] for row in first["peer_returns"]["items"]] == [peer_id]
+    request_cursor = first["next_cursor"]
+    operation_cursor = first["operation_handoff_next_cursor"]
+    assert request_cursor and operation_cursor
+    # The overflow instruction resumes operation paging without --attention-only.
+    assert operation_cursor == cursor
+    resumed = read_inbox("--operation-cursor", operation_cursor)
+    outgoing = read_inbox("--attention-only", "--cursor", request_cursor)
+    operation = read_inbox("--attention-only", "--operation-cursor", operation_cursor)
+    combined = read_inbox("--attention-only", "--cursor", request_cursor, "--operation-cursor", operation_cursor)
+    assert combined["open_request_summaries"] == outgoing["open_request_summaries"]
+    assert [row["request_id"] for row in combined["open_request_summaries"]] == [peer_id]
+    assert "operation_handoffs" not in outgoing
+    assert len(operation["operation_handoffs"]) == 2
+    assert resumed["operation_handoffs"] == operation["operation_handoffs"]
+    assert combined["operation_handoffs"] == operation["operation_handoffs"]
+    assert combined["operation_handoff_next_cursor"] is None and combined["operation_handoff_pending_count"] == 22
+    assert combined["items"] == [] and "peer_returns" not in combined
+    assert store.path.read_bytes() == before
 
 
 def test_operation_preview_arms_one_canonical_gate_and_local_apply_cannot_claim(

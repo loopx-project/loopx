@@ -6,28 +6,26 @@ import shlex
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from ...heartbeat_prompt import build_heartbeat_prompt
-from ..quota.turn_envelope import quota_action_signature_document
-from .doubao_model_behavior_actor import (
-    ARK_API_KEY_ENV,
-    DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_MODEL_ENV,
-    DoubaoActorTransport,
-    _direct_ark_transport,
-)
 from .model_tool_behavior import (
+    DoubaoExecToolBehaviorActorBase,
     QuotaToolContext,
-    is_context_read_command,
-    DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
+    append_exec_tool_exchange,
     argument_value,
+    build_qualification_receipt,
     digest_text,
+    execute_bounded_read_steps,
     execute_loopx_cli,
+    extract_quota_action_contract_base,
+    hermetic_clock_output,
+    is_context_read_command,
+    is_fixture_quota_guard,
     loopx_command_tokens,
+    qualification_turn_instance_id,
 )
 
 SELECTED_TODO_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
@@ -285,39 +283,18 @@ def _build_fixture(
 
 
 def _clock_output(command: str) -> str | None:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return None
-    if not tokens or Path(tokens[0]).name != "date" or len(tokens) > 4:
-        return None
-    if any(
-        token in {";", "&&", "||", "|"}
-        or (index > 0 and not token.startswith(("-", "+")))
-        for index, token in enumerate(tokens)
-    ):
-        return None
-    if "-u" in tokens or "--utc" in tokens:
-        return "2026-08-11T16:00:00Z\n"
-    return "2026-08-12T00:00:00+08:00\n"
+    return hermetic_clock_output(
+        command,
+        utc_output="2026-08-11T16:00:00Z\n",
+        local_output="2026-08-12T00:00:00+08:00\n",
+    )
 
 
 def _is_quota_guard(command: str) -> bool:
-    tokens = loopx_command_tokens(command)
-    if not tokens:
-        return False
-    try:
-        quota_index = tokens.index("quota")
-    except ValueError:
-        return False
-    return bool(
-        tokens[quota_index : quota_index + 2] == ["quota", "should-run"]
-        and argument_value(tokens, "--goal-id")
-        == SELECTED_TODO_TOOL_FIXTURE_GOAL_ID
-        and argument_value(tokens, "--agent-id")
-        == SELECTED_TODO_TOOL_FIXTURE_AGENT_ID
-        and "--codex-app" in tokens
-        and argument_value(tokens, "--turn-instance-id")
+    return is_fixture_quota_guard(
+        command,
+        goal_id=SELECTED_TODO_TOOL_FIXTURE_GOAL_ID,
+        agent_id=SELECTED_TODO_TOOL_FIXTURE_AGENT_ID,
     )
 
 
@@ -816,38 +793,17 @@ def _execute_read_plan(
     *,
     fixture: _SelectedTodoToolFixture,
 ) -> tuple[str, int]:
-    outputs: list[str] = []
-    status = 0
+    selected_target = fixture.selected_target.resolve()
     executed_content = 0
-    for step in plan:
-        should_run = bool(
-            step.operator == ";"
-            or (step.operator == "&&" and status == 0)
-            or (step.operator == "||" and status != 0)
-        )
-        if not should_run:
-            continue
-        completed = subprocess.run(
-            list(step.argv),
-            cwd=fixture.project_root,
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=10,
-        )
-        status = completed.returncode
-        step_output = completed.stdout
-        if step.line_limit is not None:
-            step_output = "".join(
-                step_output.splitlines(keepends=True)[: step.line_limit]
-            )
-        outputs.append(step_output)
-        if (
-            step.kind != "content"
-            or status != 0
-            or step.target != fixture.selected_target.resolve()
-        ):
-            continue
+
+    def _validate_step(
+        step: BoundedWorkspaceReadStep,
+        step_status: int,
+        step_output: str,
+    ) -> None:
+        nonlocal executed_content
+        if step.kind != "content" or step_status != 0 or step.target != selected_target:
+            return
         executed_content += 1
         observed = json.loads(step_output)
         if observed != {
@@ -856,9 +812,15 @@ def _execute_read_plan(
             "next_checkpoint": "qualify-one-bounded-slice",
         }:
             raise ValueError("selected todo readback does not match the fixture")
+
+    results, status = execute_bounded_read_steps(
+        plan,
+        cwd=fixture.project_root,
+        on_step=_validate_step,
+    )
     if status != 0:
         raise RuntimeError(f"bounded read plan failed with exit={status}")
-    return "".join(outputs), executed_content
+    return "".join(output for _, _, output in results), executed_content
 
 
 def _execute_workspace_read(
@@ -931,10 +893,7 @@ def _classify_tool_command(
 
 
 def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
-    signature = quota_action_signature_document(packet)
-    action = dict(signature.get("action") or {})
-    user = dict(signature.get("user") or {})
-    selected = dict(action.get("selected_todo") or {})
+    base, _, _, _ = extract_quota_action_contract_base(packet)
     action_portfolio_value = packet.get("action_portfolio")
     action_portfolio: Mapping[str, Any] = (
         action_portfolio_value
@@ -959,13 +918,7 @@ def _quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         else {}
     )
     contract: dict[str, Any] = {
-        "decision": "execute",
-        "selected_todo_id": selected.get("todo_id"),
-        "user_action_required": bool(user.get("action_required")),
-        "must_attempt_work": bool(action.get("must_attempt")),
-        "delivery_allowed": bool(action.get("delivery_allowed")),
-        "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
-        "external_write_requested": False,
+        **base,
         "selection_required": cli_channel.get("selection_required") is True,
         "suggested_action_ids": suggested_action_ids,
     }
@@ -992,68 +945,24 @@ def _receipt(
     passed: bool,
     failure_code: str | None,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": SELECTED_TODO_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
-        "qualification_id": qualification_id,
-        "actor_ref": actor_ref,
-        "qualification_passed": passed,
-        "failure_code": failure_code,
-        **dict(contract or {}),
-        "observed_tool_sequence": [step["kind"] for step in steps],
-        "tool_call_count": len(steps),
-        "selected_action_matched_todo": passed,
-        "tool_call_receipts": steps,
-        "boundary": {
-            "raw_prompt_persisted": False,
-            "raw_provider_response_persisted": False,
-            "raw_command_persisted": False,
+    return build_qualification_receipt(
+        schema_version=SELECTED_TODO_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
+        qualification_id=qualification_id,
+        actor_ref=actor_ref,
+        passed=passed,
+        failure_code=failure_code,
+        steps=steps,
+        contract=contract,
+        extra_fields={"selected_action_matched_todo": passed},
+        boundary={
             "filesystem_writes_executed": True,
-            "writes_limited_to_temporary_fixture": True,
-            "external_writes_executed": False,
-            "shell_commands_executed": False,
             "read_only_host_commands_executed": bool(steps),
         },
-    }
+    )
 
 
-class DoubaoSelectedTodoToolBehaviorActor:
+class DoubaoSelectedTodoToolBehaviorActor(DoubaoExecToolBehaviorActorBase):
     """Prove that the model acts on the Todo selected by real quota output."""
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str = DOUBAO_2_1_PRO_MODEL,
-        timeout_seconds: float = 90.0,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-    ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        environ: Mapping[str, str] | None = None,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-        timeout_seconds: float = 90.0,
-    ) -> DoubaoSelectedTodoToolBehaviorActor:
-        values = os.environ if environ is None else environ
-        api_key = values.get(ARK_API_KEY_ENV, "")
-        if not api_key.strip():
-            raise RuntimeError(
-                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
-            )
-        return cls(
-            api_key=api_key,
-            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
 
     def qualify(
         self,
@@ -1101,8 +1010,7 @@ class DoubaoSelectedTodoToolBehaviorActor:
         contract: dict[str, Any] | None = None
         seen_once: set[str] = set()
         actor_ref = self._client.actor_ref
-        qualification_digest = sha256(qualification_id.encode()).hexdigest()[:16]
-        turn_instance_id = f"qualification-{qualification_digest}"
+        turn_instance_id = qualification_turn_instance_id(qualification_id)
 
         def receipt(*, passed: bool, failure_code: str | None) -> dict[str, Any]:
             return _receipt(
@@ -1229,19 +1137,8 @@ class DoubaoSelectedTodoToolBehaviorActor:
                         passed=False,
                         failure_code="workspace_read_failed",
                     )
-            messages.extend(
-                [
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [tool_call.provider_value],
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.call_id,
-                        "content": tool_output or "",
-                    },
-                ]
+            append_exec_tool_exchange(
+                messages, tool_call, tool_output, include_assistant_content=False
             )
 
         return receipt(passed=False, failure_code="tool_call_budget_exhausted")

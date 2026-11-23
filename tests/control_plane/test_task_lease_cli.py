@@ -106,11 +106,11 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         assert replay["lease"] == current
 
         denied = acquire(task_b, "agent-b", "same-checkout", 0, first, exit_code=1)
-        assert denied["error_code"] == "write_scope_conflict"
+        assert denied["error_code"] == "workspace_lease_conflict"
         assert "recovery" not in denied
         assert denied["conflicts"][0]["todo_id"] == task_a
         own_denied = acquire(task_c, "agent-a", "own-same-checkout", 0, first, exit_code=1)
-        assert own_denied["error_code"] == "write_scope_conflict"
+        assert own_denied["error_code"] == "workspace_lease_conflict"
         assert [row["todo_id"] for row in own_denied["conflicts"]] == [task_a]
         assert own_denied["own_conflicting_lease"] == {
             "todo_id": task_a,
@@ -168,7 +168,7 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         from loopx.cli_commands.task_lease import render_task_lease_markdown
         rendered = render_task_lease_markdown(own_denied)
         assert "inspect_own_conflicting_lease" in rendered
-        assert task_a in rendered and "write_scope_conflict" in rendered
+        assert task_a in rendered and "workspace_lease_conflict" in rendered
         markdown = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "task-lease", "acquire", "--goal-id", goal, "--todo-id", task_c,
             "--owner", "agent-a", "--idempotency-key", "own-same-checkout", "--expected-version", "0",
@@ -178,12 +178,12 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         assert "Traceback" not in markdown.stderr
         assert cli("inspect", task_a)["lease"] == current
         independent = acquire(task_b, "agent-b", "separate-checkout", 0, second)
-        assert any(row["todo_id"] == task_a for row in independent["integration_overlap_advisories"])
+        assert "integration_overlap_advisories" not in independent
         assert independent["lease"]["write_workspace"]["worktree"] != admitted["lease"]["write_workspace"]["worktree"]
-        mixed = cli("acquire", task_c, "--owner", "agent-a", "--idempotency-key", "mixed-conflict",
-            "--expected-version", "0", "--write-scope", "src/**", exit_code=1)
-        assert {row["todo_id"] for row in mixed["conflicts"]} == {task_a, task_b}
-        assert mixed["foreign_conflict_count"] == 1
+        without_worktree = cli("acquire", task_c, "--owner", "agent-a", "--idempotency-key", "without-worktree",
+            "--expected-version", "0", "--write-scope", "src/**")
+        assert without_worktree["acquired"]
+        assert release(task_c, "agent-a", "without-worktree", without_worktree["lease"]["version"])["released"]
         denied = acquire(task_a, "agent-b", "wrong-owner", 0, first, exit_code=1)
         assert not denied["ok"]
         denied = cli("renew", task_a, "--owner", "agent-a", "--idempotency-key", "with-dependencies",

@@ -5,26 +5,21 @@ import os
 import shlex
 import subprocess
 from collections.abc import Mapping
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from ...heartbeat_prompt import build_heartbeat_prompt
-from ..quota.turn_envelope import quota_action_signature_document
-from .doubao_model_behavior_actor import (
-    ARK_API_KEY_ENV,
-    DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_MODEL_ENV,
-    DoubaoActorTransport,
-    _direct_ark_transport,
-)
 from .model_tool_behavior import (
+    DoubaoExecToolBehaviorActorBase,
     QuotaToolContext,
-    is_context_read_command,
-    DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
+    append_exec_tool_exchange,
+    build_qualification_receipt,
     digest_text,
     execute_loopx_cli,
+    extract_quota_action_contract_base,
+    is_context_read_command,
+    qualification_turn_instance_id,
 )
 from .selected_todo_tool_behavior import (
     SELECTED_TODO_TOOL_FIXTURE_AGENT_ID,
@@ -203,10 +198,7 @@ def _build_scoped_gate_fixture(root: Path) -> _SelectedTodoToolFixture:
 
 
 def _scoped_gate_quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
-    signature = quota_action_signature_document(packet)
-    action = dict(signature.get("action") or {})
-    user = dict(signature.get("user") or {})
-    selected = dict(action.get("selected_todo") or {})
+    contract, signature, _, _ = extract_quota_action_contract_base(packet)
     interaction = dict(packet.get("interaction_contract") or {})
     user_channel = dict(interaction.get("user_channel") or {})
     actions = [
@@ -214,15 +206,6 @@ def _scoped_gate_quota_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         for item in user_channel.get("actions") or []
         if str(item).strip()
     ]
-    contract = {
-        "decision": "execute",
-        "selected_todo_id": selected.get("todo_id"),
-        "user_action_required": bool(user.get("action_required")),
-        "must_attempt_work": bool(action.get("must_attempt")),
-        "delivery_allowed": bool(action.get("delivery_allowed")),
-        "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
-        "external_write_requested": False,
-    }
     if not (
         contract["selected_todo_id"] == SCOPED_GATE_SUCCESSOR_TODO_ID
         and contract["user_action_required"]
@@ -289,71 +272,29 @@ def _receipt(
     passed: bool,
     failure_code: str | None,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
-        "qualification_id": qualification_id,
-        "actor_ref": actor_ref,
-        "qualification_passed": passed,
-        "failure_code": failure_code,
-        **dict(contract or {}),
-        "observed_tool_sequence": [step["kind"] for step in steps],
-        "tool_call_count": len(steps),
-        "tool_call_limit": SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS,
-        "non_blocking_notice_surfaced": notice_surfaced,
-        "selected_action_matched_todo": selected_action_executed,
-        "tool_call_receipts": steps,
-        "boundary": {
-            "raw_prompt_persisted": False,
-            "raw_provider_response_persisted": False,
+    return build_qualification_receipt(
+        schema_version=SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
+        qualification_id=qualification_id,
+        actor_ref=actor_ref,
+        passed=passed,
+        failure_code=failure_code,
+        steps=steps,
+        contract=contract,
+        extra_fields={
+            "tool_call_limit": SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS,
+            "non_blocking_notice_surfaced": notice_surfaced,
+            "selected_action_matched_todo": selected_action_executed,
+        },
+        boundary={
             "raw_assistant_content_persisted": False,
-            "raw_command_persisted": False,
             "filesystem_writes_executed": True,
-            "writes_limited_to_temporary_fixture": True,
-            "external_writes_executed": False,
-            "shell_commands_executed": False,
             "read_only_host_commands_executed": bool(steps),
         },
-    }
+    )
 
 
-class DoubaoScopedGateSuccessorToolBehaviorActor:
+class DoubaoScopedGateSuccessorToolBehaviorActor(DoubaoExecToolBehaviorActorBase):
     """Prove a scoped user notice does not suppress its ready successor."""
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str = DOUBAO_2_1_PRO_MODEL,
-        timeout_seconds: float = 90.0,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-    ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        environ: Mapping[str, str] | None = None,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-        timeout_seconds: float = 90.0,
-    ) -> DoubaoScopedGateSuccessorToolBehaviorActor:
-        values = os.environ if environ is None else environ
-        api_key = values.get(ARK_API_KEY_ENV, "")
-        if not api_key.strip():
-            raise RuntimeError(
-                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
-            )
-        return cls(
-            api_key=api_key,
-            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
 
     def qualify(
         self,
@@ -392,8 +333,7 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
         seen_once: set[str] = set()
         rejected_read_count = 0
         actor_ref = self._client.actor_ref
-        qualification_digest = sha256(qualification_id.encode()).hexdigest()[:16]
-        turn_instance_id = f"qualification-{qualification_digest}"
+        turn_instance_id = qualification_turn_instance_id(qualification_id)
 
         def receipt(*, passed: bool, failure_code: str | None) -> dict[str, Any]:
             return _receipt(
@@ -509,20 +449,7 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
                         passed=False,
                         failure_code="workspace_read_failed",
                     )
-            messages.extend(
-                [
-                    {
-                        "role": "assistant",
-                        "content": tool_call.assistant_content,
-                        "tool_calls": [tool_call.provider_value],
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.call_id,
-                        "content": tool_output or "",
-                    },
-                ]
-            )
+            append_exec_tool_exchange(messages, tool_call, tool_output)
             if selected_action_executed:
                 # Finalization has no tools and is owed even when the selected
                 # read used the last permitted tool call.

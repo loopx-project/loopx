@@ -242,6 +242,32 @@ def test_goal_boundary_appends_only_active_checkpointed_write_scopes() -> None:
     assert authority["active_write_scope"] == ["tests/**", "loopx/**"]
 
 
+def test_cba_folds_internally_without_cross_folding_against_goal_write_scope() -> None:
+    active_broad = build_checkpointed_boundary_authority_entry(
+        write_scopes=["docs/**"],
+        source="operator_gate_resume_contract_v0:active",
+        recorded_at="2026-07-01T00:00:00+00:00",
+    )
+    active_nested = build_checkpointed_boundary_authority_entry(
+        write_scopes=["docs/guide/intro.md", "tests/unit/**"],
+        source="operator_gate_resume_contract_v0:active-nested",
+        recorded_at="2026-07-01T00:00:00+00:00",
+    )
+    boundary = goal_boundary(
+        {
+            "coordination": {
+                "write_scope": ["**"],
+                "checkpointed_boundary_authority": [active_broad, active_nested],
+            }
+        }
+    )
+
+    assert boundary is not None
+    assert boundary["write_scope"] == ["**"]
+    authority = boundary["checkpointed_boundary_authority"]
+    assert authority["active_write_scope"] == ["docs/**", "tests/unit/**"]
+
+
 @pytest.mark.parametrize("field", ["expires_at", "fresh_until"])
 @pytest.mark.parametrize("value", [
     "not-an-iso-timestamp", "2026-02-30T00:00:00Z", 0, 20990101, False, [], {},

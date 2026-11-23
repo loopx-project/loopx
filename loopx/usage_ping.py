@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .control_plane.runtime.node_probe import node_typescript_flags
 from .paths import select_default_runtime_root
 
 STATE_FILENAME = "usage-ping.json"
@@ -120,7 +121,14 @@ def _command() -> list[str]:
         raise UsageSettingsUnavailable(message="Usage settings require the supported Node.js runtime.")
     # Keep the Python sender's proxy behavior when moving I/O to Node. This
     # native flag is available in the repository's supported Node versions.
-    return [node, "--no-warnings", "--use-env-proxy", "--experimental-strip-types", str(_ENTRY)]
+    return [
+        node,
+        "--no-warnings",
+        "--use-env-proxy",
+        "--experimental-strip-types",
+        *node_typescript_flags(),
+        str(_ENTRY),
+    ]
 
 
 def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, Any]:

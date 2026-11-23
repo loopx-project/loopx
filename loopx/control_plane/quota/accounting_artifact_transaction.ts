@@ -110,6 +110,7 @@ export interface QuotaAccountingArtifactCommitRequest {
   goalRef?: JsonObject;
   indexLockHeld?: boolean;
   matchesRetainedRequest?: (record: JsonObject) => boolean;
+  digestAtRuntimeRoot?: (runtimeRoot: string) => string;
   prepare: (
     context: QuotaAccountingArtifactPrepareContext,
   ) =>
@@ -521,6 +522,162 @@ function spendIdentityMismatch(index: JsonObject, retained: JsonObject): boolean
   });
 }
 
+function copiedGoalRunFileName(
+  storedPath: string,
+  goalId: string,
+  extension: string,
+): string | null {
+  if (!isAbsolute(storedPath)) return null;
+  const normalized = resolve(storedPath);
+  const fileName = basename(normalized);
+  const runsParent = dirname(normalized);
+  const goalDir = dirname(runsParent);
+  const goalsDir = dirname(goalDir);
+  if (
+    !fileName || fileName === "." || fileName === ".." || extname(fileName) !== extension ||
+    basename(runsParent) !== "runs" || basename(goalDir) !== goalId || basename(goalsDir) !== "goals"
+  ) {
+    return null;
+  }
+  return fileName;
+}
+
+function runtimeRootForCopiedRun(storedPath: string, goalId: string): string | null {
+  const extension = extname(resolve(storedPath));
+  if (copiedGoalRunFileName(storedPath, goalId, extension) === null) return null;
+  const root = dirname(dirname(dirname(dirname(resolve(storedPath)))));
+  return isAbsolute(root) ? root : null;
+}
+
+function pathAlreadyInRunsDir(runsDir: string, storedPath: string, extension: string): boolean {
+  const resolvedRunsDir = resolve(runsDir);
+  const resolvedPath = resolve(storedPath);
+  if (extension === ".jsonl") return resolvedPath === resolve(resolvedRunsDir, "index.jsonl");
+  return dirname(resolvedPath) === resolvedRunsDir && extname(resolvedPath) === extension;
+}
+
+async function relocatedRunArtifactPath(
+  runsDir: string,
+  goalId: string,
+  storedPath: string,
+  extension: string,
+): Promise<string | null> {
+  const fileName = copiedGoalRunFileName(storedPath, goalId, extension);
+  if (fileName === null || pathAlreadyInRunsDir(runsDir, storedPath, extension)) return null;
+  let runsDirReal: string;
+  try {
+    runsDirReal = await realpath(runsDir);
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }
+  const candidate = join(runsDirReal, fileName);
+  try {
+    if (!(await lstat(candidate)).isFile()) return null;
+    const targetPath = await realpath(candidate);
+    if (relative(runsDirReal, targetPath) !== fileName) return null;
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }
+  const selected = join(resolve(runsDir), fileName);
+  if (extension === ".jsonl" && selected !== resolve(runsDir, "index.jsonl")) return null;
+  return selected;
+}
+
+const relocatedRuntimeRoots = new WeakMap<object, string>();
+const storedIndexRecords = new WeakMap<object, JsonObject>();
+const receiptsBeforeRelocation = new WeakMap<object, object>();
+
+export function relocatedReceiptRuntimeRoot(receipt: object): string | null {
+  return relocatedRuntimeRoots.get(receipt) ?? null;
+}
+
+export function indexRecordBeforeRelocation(receipt: object, current: JsonObject): JsonObject {
+  return storedIndexRecords.get(receipt) ?? current;
+}
+
+export function receiptBeforeRelocation<T extends object>(receipt: T): T {
+  return (receiptsBeforeRelocation.get(receipt) as T | undefined) ?? receipt;
+}
+
+export async function withRelocatedRunArtifactPaths(
+  runsDir: string,
+  record: JsonObject,
+): Promise<JsonObject> {
+  const goalId = basename(dirname(resolve(runsDir)));
+  const next: JsonObject = { ...record };
+  let changed = false;
+  for (const [key, extension] of [
+    ["json_path", ".json"],
+    ["markdown_path", ".md"],
+    ["index_path", ".jsonl"],
+  ] as const) {
+    const value = next[key];
+    if (typeof value !== "string") continue;
+    const relocated = await relocatedRunArtifactPath(runsDir, goalId, value, extension);
+    if (relocated !== null && relocated !== value) {
+      next[key] = relocated;
+      changed = true;
+    }
+  }
+  return changed ? next : record;
+}
+
+interface RelocatableTransactionReceipt {
+  json_path?: string;
+  markdown_path?: string;
+  index_path: string;
+  index_record?: JsonObject;
+  payload?: JsonObject;
+}
+
+export async function relocateTransactionReceipt<T extends RelocatableTransactionReceipt>(
+  runsDir: string,
+  receipt: T,
+): Promise<T> {
+  const goalId = basename(dirname(resolve(runsDir)));
+  const roots = new Set<string>();
+  const updates: Record<string, string> = {};
+  for (const [key, extension] of [
+    ["json_path", ".json"],
+    ["markdown_path", ".md"],
+    ["index_path", ".jsonl"],
+  ] as const) {
+    const value = receipt[key];
+    if (typeof value !== "string") continue;
+    const relocated = await relocatedRunArtifactPath(runsDir, goalId, value, extension);
+    if (relocated === null) continue;
+    updates[key] = relocated;
+    const root = runtimeRootForCopiedRun(value, goalId);
+    if (root !== null) roots.add(root);
+  }
+  const indexRecord = receipt.index_record === undefined
+    ? undefined
+    : await withRelocatedRunArtifactPaths(runsDir, receipt.index_record);
+  const payload = receipt.payload === undefined
+    ? undefined
+    : await withRelocatedRunArtifactPaths(runsDir, receipt.payload);
+  const indexChanged = indexRecord !== undefined && indexRecord !== receipt.index_record;
+  const payloadChanged = payload !== undefined && payload !== receipt.payload;
+  if (Object.keys(updates).length === 0 && !indexChanged && !payloadChanged) return receipt;
+  const located = {
+    ...receipt,
+    ...updates,
+    ...(indexChanged ? { index_record: indexRecord } : {}),
+    ...(payloadChanged ? { payload } : {}),
+  } as T;
+  if (roots.size === 1) {
+    const root = [...roots][0];
+    if (root !== undefined) relocatedRuntimeRoots.set(located, root);
+  }
+  if (indexChanged && receipt.index_record !== undefined) {
+    storedIndexRecords.set(located, receipt.index_record);
+  }
+  receiptsBeforeRelocation.set(located, receipt);
+  return located;
+}
+
 export async function readQuotaSpendEventFromRun(
   runsDir: string,
   run: JsonObject,
@@ -538,16 +695,28 @@ export async function readQuotaSpendEventFromRun(
     return inline;
   }
   if (typeof run.json_path !== "string" || !run.json_path.trim()) return null;
+  const runsDirReal = await realpath(runsDir);
+  const rawPath = run.json_path.trim();
+  const copiedName = copiedGoalRunFileName(rawPath, goalId, ".json");
+  const relocatedCandidate = copiedName === null ? null : join(runsDirReal, copiedName);
+  const initialRelative = relative(runsDirReal, resolve(rawPath));
+  const staysInsideInitial = Boolean(
+    initialRelative && initialRelative !== ".." &&
+    !initialRelative.startsWith(`..${sep}`) && !isAbsolute(initialRelative)
+  );
+  const candidatePath = staysInsideInitial || relocatedCandidate === null
+    ? resolve(rawPath)
+    : relocatedCandidate;
   let targetPath: string;
   try {
-    targetPath = await realpath(resolve(run.json_path.trim()));
+    targetPath = await realpath(candidatePath);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return null;
     }
     throw error;
   }
-  const relativePath = relative(await realpath(runsDir), targetPath);
+  const relativePath = relative(runsDirReal, targetPath);
   if (
     !relativePath ||
     relativePath === ".." ||
@@ -812,7 +981,7 @@ async function readReceipt(
       "malformed_transaction_receipt",
     );
   }
-  const receipt = receiptObject(contract, value);
+  const receipt = await relocateTransactionReceipt(runsDir, receiptObject(contract, value));
   validateReceiptPaths(contract, runsDir, receipt);
   await Promise.all([
     rejectSymlinkPath(receipt.json_path, `${contract.label} JSON artifact`),
@@ -885,7 +1054,7 @@ async function readReceiptIndex(
       ? null
       : repairedTruncatedTail(
         indexBytes,
-        receipt.index_record,
+        indexRecordBeforeRelocation(receipt, receipt.index_record),
         receipt.expected_index_digest,
         receipt.expected_index_bytes,
       );
@@ -925,6 +1094,7 @@ async function ensureReceiptArtifacts(
   kind: QuotaAccountingArtifactKind,
   contract: QuotaAccountingArtifactContract,
   receipt: QuotaAccountingArtifactReceipt,
+  runsDir: string,
 ): Promise<boolean> {
   const index = await readReceiptIndex(receipt);
   let repaired = index.repaired;
@@ -951,7 +1121,8 @@ async function ensureReceiptArtifacts(
         "effect_id_conflict",
       );
     }
-    if (canonicalJson(match) !== canonicalJson(receipt.index_record)) {
+    const alignedMatch = await withRelocatedRunArtifactPaths(runsDir, match);
+    if (canonicalJson(alignedMatch) !== canonicalJson(receipt.index_record)) {
       throw new EffectRuntimeRequestError(
         `${contract.label} index record conflicts with its transaction receipt`,
         "artifact_conflict",
@@ -1009,10 +1180,17 @@ export async function commitQuotaAccountingArtifactTransaction(
           indexDigest: await quotaAccountingIndexDigest(indexPath),
         };
       }
+      // The stored digest still names the runtime that wrote the receipt.
+      // A copied tree is the same effect only when every other digest field
+      // matches at that source root. The stored digest itself is not rewritten.
+      const sourceRoot = relocatedReceiptRuntimeRoot(existingReceipt);
+      const relocatedDigestMatches = sourceRoot !== null &&
+        request.digestAtRuntimeRoot?.(sourceRoot) === existingReceipt.request_digest;
       if (
         existingReceipt.effect_id !== request.effectId ||
         (existingReceipt.request_digest !== request.requestDigest &&
-          request.matchesRetainedRequest?.(existingReceipt.record) !== true)
+          request.matchesRetainedRequest?.(existingReceipt.record) !== true &&
+          !relocatedDigestMatches)
       ) {
         return {
           status: "conflict",
@@ -1025,17 +1203,24 @@ export async function commitQuotaAccountingArtifactTransaction(
         request.kind,
         contract,
         existingReceipt,
+        request.runsDir,
       );
-      const committedReceipt = {
+      // Repair may rewrite the receipt, but the stored paths remain the
+      // digest's source runtime. This read returns the selected runtime paths.
+      const persistedReceipt = {
+        ...receiptBeforeRelocation(existingReceipt),
+        status: "committed",
+      } satisfies QuotaAccountingArtifactReceipt;
+      const returnedReceipt = {
         ...existingReceipt,
         status: "committed",
       } satisfies QuotaAccountingArtifactReceipt;
       if (existingReceipt.status !== "committed" || repaired) {
-        await atomicWriteJson(receiptPath, committedReceipt);
+        await atomicWriteJson(receiptPath, persistedReceipt);
       }
       return {
         status: repaired ? "repaired" : "replayed",
-        receipt: committedReceipt,
+        receipt: returnedReceipt,
         indexDigest: await quotaAccountingIndexDigest(indexPath),
       };
     }
@@ -1118,7 +1303,7 @@ export async function commitQuotaAccountingArtifactTransaction(
     } satisfies QuotaAccountingArtifactReceipt;
     validateReceiptPaths(contract, request.runsDir, prepared);
     await atomicWriteJson(receiptPath, prepared);
-    await ensureReceiptArtifacts(request.kind, contract, prepared);
+    await ensureReceiptArtifacts(request.kind, contract, prepared, request.runsDir);
     const committedReceipt = {
       ...prepared,
       status: "committed",

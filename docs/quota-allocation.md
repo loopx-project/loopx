@@ -276,6 +276,26 @@ Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复
 重新判定。未绑定的等待 Turn 在恢复后取得资格时，在同一把锁内追加首次准入回执，
 后续重放复用该回执。
 
+If the canonical File or SQLite lease has replaced the original prepared
+generation and neither writeback nor debit has started, recovery reports
+`execution_loss_closeout` for the original Turn. Read the current Todo lease
+and use the projected `refresh-state --execution-loss-closeout --dry-run` with
+the original Goal, Agent, Todo and Turn plus the current control-writer proof.
+The preview checks the same fences as commit. Execute the same command without
+`--dry-run` after the preview qualifies, then read back
+`typed_blocked_writeback_no_spend`. The original work admission stays intact
+and the Todo remains open for a separately admitted Turn. An absent or
+foreign control-writer proof holds settlement. A replacement lease cannot
+authorize business delivery for the old Turn.
+
+原准入租约已被 File 或 SQLite 权威确认换代，且原 Turn 的写回与扣额都尚未开始时，
+恢复决策会指向该 Turn 的 `execution_loss_closeout`。先读当前 Todo 租约，用原
+Goal、Agent、Todo 与 Turn 身份及当前控制写入凭据运行投影的
+`refresh-state --execution-loss-closeout --dry-run`。预览通过后再去掉
+`--dry-run` 提交，读回 `typed_blocked_writeback_no_spend`。原准入回执保留，
+Todo 仍可由新 Turn 依法接续。当前控制写入凭据缺失或归属其他 Agent 时保持等待，
+新租约不授予旧 Turn 的业务交付权。
+
 An admitted advancement Todo can also become persistently `blocked` through
 its ordinary owner-authorized lifecycle. Its original Turn then offers the
 same blocked writeback command. The settlement owner freezes the current
@@ -386,9 +406,19 @@ When a quota spend remains owed after verified writeback,
 obligation, Turn, registry/runtime route and spend source. Execute it unchanged.
 The typed blocked no-spend closeout has no spend command. In
 `spend_receipt_required`, the same idempotent spend
-writer restores the receipt without another debit. Refresh and recovery never
-spend automatically. JSON and normal/recovery Markdown expose the same step.
-Rejected recovery reports observed progress without offering a spend command.
+writer restores the receipt without another debit. Ordinary refresh and recovery
+report the remaining step. An explicit `refresh-state --settle-turn` may execute
+that command after verified writeback. A definitive `index_digest_conflict` with
+`appended=false` allows one retry of the same command within the original timeout.
+The retry rereads the original Turn and can replay a concurrent settlement. For
+an ambiguous outcome, the adapter reads the receipts and returns any step still
+owed. JSON and normal/recovery Markdown expose the same step. Rejected recovery
+reports observed progress without offering a spend command.
+
+普通刷新与恢复返回原轮次剩余操作。显式指定 `refresh-state --settle-turn` 时，写回
+核验后可执行原结算命令。若确认 `index_digest_conflict` 且 `appended=false`，则在
+原超时窗口内用同一命令重试一次，重新读取原轮次，也可回读并发完成的结算。结果不明
+时读取回执并返回仍待执行的步骤。
 The raw Python refresh API returns `writeback_receipt_required` until its CLI
 caller appends the refresh receipt and rereads the chain; it must not offer a
 spend command before that point. Older guards without a persisted spend source
@@ -1205,7 +1235,10 @@ an external-evidence observation, or a due `continuous_monitor` todo selected
 by `work_lane_contract.obligation=attempt_due_monitor`. For due monitor todos,
 pass `--todo-id` or `--target-key` plus a public `--result-hash`; unchanged
 polls update `last_checked_at`, `next_due_at`, and
-`consecutive_no_change` without appending `quota_slot_spent`:
+`consecutive_no_change` without appending `quota_slot_spent`.
+For an `attempt_due_monitor` lane, a target key identifies the selected Todo.
+To observe another due Monitor claimed by the same Agent, supply its exact
+`--todo-id`. Existing User gates and Turn bindings still apply.
 
 ```bash
 loopx quota monitor-poll --goal-id <GOAL_ID> \
@@ -1811,7 +1844,7 @@ If that match still needs a reset-token/identity binding,
 `stateful_backoff.ack_needed=true` and the bound ack runs without a host update.
 When an apply is required but `automation_update` is unavailable in the
 session, `app_automation.fallback_hint` carries the bounded `loopx-apply-rrule`
-command for the resolved automation (backup `codex-dev.db`, sync TOML+SQLite,
+command for the resolved automation (back up the selected App database, sync TOML+SQLite,
 run the bound ACK). Direct SQLite edits bypass the app API, so the fallback is
 projected only for this gap and never as the routine path; an unresolved
 automation id projects `available=false` and requires the pasteable heartbeat

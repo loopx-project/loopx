@@ -25,6 +25,39 @@ import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummary
   from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
+import {referenceVisionContinuation, requireVisionAuditReferences}
+  from "../../loopx/control_plane/quota/turn_envelope_references.ts";
+
+test("normal-work initial navigation stays scoped while other reads keep discovery", () => {
+  const source = payload();
+  source.normal_delivery_allowed = true;
+  const request = {operation: "context_select", select: [""], list_fields: true, include_initial_read_plan: true};
+  for (const change of [null, "action", "delivery", "channel", "missing_channel"]) {
+    const context = structuredClone(source);
+    if (change === "action") context.effective_action = "wait";
+    if (change === "delivery") context.normal_delivery_allowed = false;
+    const interaction = context.interaction_contract as JsonObject;
+    if (change === "channel") (interaction.agent_channel as JsonObject).delivery_allowed = false;
+    if (change === "missing_channel") delete interaction.agent_channel;
+    const before = structuredClone(context);
+    const scoped = evaluateTurnEnvelope({...request, context, normal_work_initial_read: true});
+    if (change === null) assert.ok(scoped.initial_read_plan);
+    else {
+      assert.equal(scoped.initial_read_plan, undefined);
+      assert.equal((scoped.selections as JsonObject[])[0].pointer, "");
+      assert.ok(Array.isArray(scoped.initial_read_pointers));
+    }
+    assert.ok(evaluateTurnEnvelope({...request, context}).initial_read_plan);
+    assert.deepEqual(evaluateTurnEnvelope({...request, context, normal_work_initial_read: false}),
+      evaluateTurnEnvelope({...request, context}));
+    assert.deepEqual(context, before);
+  }
+  assert.throws(() => evaluateTurnEnvelope({...request, context: source, normal_work_initial_read: "true"}),
+    /normal_work_initial_read must be a boolean/);
+  for (const scope of [{}, {normal_work_initial_read: false}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context: null,
+      select: ["/goal_id"], recover_selection_errors: "true", ...scope}), /recover-selection-errors must be boolean/);
+});
 
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
@@ -477,6 +510,42 @@ test("both replan readers surface an opted-in reversal for the bound task only",
         Object.keys(explore.work_yardstick_reversal as JsonObject).map(field => prefix + field));
       const detail = evaluateTurnEnvelope({operation: "replan_view", payload: captured, source_hash, stage: "explore"});
       assert.deepEqual((detail.explore_basis as JsonObject).work_yardsticks, cues);
+      const nativeInput: JsonObject = {
+        operation: "context_delivery",
+        surface: "complete_turn",
+        scope: {goal_id: String(source.goal_id), agent_id: String(source.agent_id),
+          session_id: "session", context_epoch: "epoch"},
+        capture_id: "c".repeat(64),
+        context: {...captured, replan_read_path: "/capture/original.json"},
+        native_projection: {
+          path: "/capture/recovery.json",
+          sha256: "a".repeat(64),
+          source_path: "/capture/recovery.json",
+          command_template: "loopx --format json quota context-read --select '<pointer>'",
+          captured_decision: {path: "/capture/original.json", sha256: "c".repeat(64)},
+        },
+        consumed_pointers: {},
+        include_initial_read_plan: true,
+        observe_first_read: true,
+      };
+      const nativeResult = structuredClone(nativeInput);
+      const resolvePath = (root: unknown, path: (string | number)[]) => path.reduce<unknown>(
+        (row, key) => (row as Record<string | number, unknown>)[key], root);
+      for (const change of evaluateTurnEnvelope(nativeInput).changes as JsonObject[]) {
+        const path = change.path as (string | number)[], key = path.at(-1)!;
+        const parent = resolvePath(nativeResult, path.slice(0, -1)) as Record<string | number, unknown>;
+        if (change.remove) delete parent[key];
+        else parent[key] = structuredClone(
+          change.from ? resolvePath(nativeInput, change.from as (string | number)[]) : change.value);
+      }
+      const planSelections = (((nativeResult.initial_read_plan as JsonObject)
+        .plan as JsonObject).selections as {pointer: string}[]);
+      assert.ok(planSelections.some(row => row.pointer === `${prefix}proxy_order_reversed`));
+      assert.equal(
+        ((nativeResult.context as JsonObject).replan_action_packet as JsonObject).review,
+        undefined,
+      );
+      assert.equal(nativeResult.projected, false);
     } else {
       assert.ok(!Object.hasOwn(explore, "work_yardstick_reversal"));
       assert.equal(cuesInOpening.length, 0);
@@ -856,6 +925,31 @@ test("vision closeout obligations survive projection and signature mutation", ()
   }
   (projected.required_before_closeout as string[]).push("consumer edit");
   assert.deepEqual(source, before);
+});
+
+test("only an exact complete CLI Vision view shares its required audit", () => {
+  const clauses = ["Read and verify the registered original Vision source.".repeat(12)];
+  const view = {required: true, required_before_closeout: clauses, recommended_action: "Continue."};
+  const root = {schema_version: "vision_continuation_audit_v0", ...view, acceptance_gaps: ["open"]};
+  const source = (audit: JsonObject) => ({vision_continuation_audit: root, interaction_contract: {
+    agent_channel: {vision_continuation_audit: root}, cli_channel: {vision_continuation_audit: audit},
+  }});
+  const getCli = (result: JsonObject) =>
+    ((result.interaction_contract as JsonObject).cli_channel as JsonObject).vision_continuation_audit;
+  const exact = source(view);
+  const shared = referenceVisionContinuation(exact, undefined, true);
+  const reference = {projection_ref: "$.vision_continuation_audit", projection_view: "cli_channel", required: true};
+  assert.deepEqual(getCli(shared), reference);
+  assert.deepEqual(shared.vision_continuation_audit, root);
+  assert.deepEqual(referenceVisionContinuation(shared, undefined, true), shared);
+  assert.deepEqual(getCli(referenceVisionContinuation(exact)), view);
+  for (const changed of [{...view, required_before_closeout: ["Shorter."]},
+    {...view, new_channel_obligation: "Read the omitted evidence."}]) {
+    assert.deepEqual(getCli(referenceVisionContinuation(source(changed), undefined, true)), changed);
+  }
+  assert.throws(() => requireVisionAuditReferences(source({...reference, required: false})), /complete inline root owner/);
+  assert.throws(() => requireVisionAuditReferences({...shared, vision_continuation_audit: reference}),
+    /complete inline root owner/);
 });
 
 test("absent vision audit retains the existing envelope shape", () => {
@@ -1929,4 +2023,92 @@ test("complete execution keeps the adaptive primary and unbound selection distin
       ? {todo_id: "primary", source: "task_orchestration_contract.primary_todo_id"} : {});
     assert.equal(result.sha256, null);
   }
+});
+
+test("attachCompleteTurnContext preserves tokenless identity and avoids rounding additions on source_edits", () => {
+  const source = payload();
+  const complete = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: "",
+  });
+  const tokenlessAttached = evaluateTurnEnvelope({
+    operation: "attach_complete_turn_context",
+    payload: complete,
+    context_additions: {reward_memory_recall: {status: "empty", guidance: []}},
+  });
+  assert.deepEqual(
+    evaluateTurnEnvelope({operation: "complete_consumer", payload: tokenlessAttached}),
+    {ok: true},
+  );
+  const editResult = evaluateTurnEnvelope({
+    operation: "attach_complete_turn_context",
+    payload: complete,
+    context_additions: {post_attach_recall: {val: 1, big: 2 ** 80}},
+    context_addition_tokens: [
+      [["post_attach_recall", "val"], "1.0"],
+      [["post_attach_recall", "big"], "1208925819614629174706176"],
+    ],
+    source_edits: true,
+  });
+  const changes = editResult.changes as {path: (string | number)[]}[];
+  assert.ok(changes.length > 0);
+  assert.ok(changes.every(change => change.path[0] === "contract_binding"));
+  assert.throws(
+    () => evaluateTurnEnvelope({
+      operation: "attach_complete_turn_context",
+      payload: complete,
+      context_additions: {contract_binding: {}},
+    }),
+    EffectRuntimeRequestError,
+  );
+  assert.throws(
+    () => evaluateTurnEnvelope({
+      operation: "attach_complete_turn_context",
+      payload: complete,
+      context_additions: {goal_id: "overwrite"},
+    }),
+    EffectRuntimeRequestError,
+  );
+});
+
+test("selectedWorkLaunchBasis detects required_write_scopes changes from work_context.sources without selected_todo exposure", () => {
+  const withScopes = (scopes: string[]) => {
+    const source = payload();
+    const interaction = source.interaction_contract as JsonObject;
+    const agent = interaction.agent_channel as JsonObject;
+    agent.work_context = {
+      complete: true,
+      selected_todo_ref: "selected_todo",
+      instruction: "Read full task requirements.",
+      selected_todo_text_verified: true,
+      sources: [
+        {
+          source: "selected_todo",
+          content: {
+            todo: {
+              required_write_scopes: scopes,
+            },
+          },
+        },
+      ],
+    };
+    const contract = evaluateTurnEnvelope({
+      operation: "compose_complete",
+      payload: source,
+      scheduler_execution_args: "",
+    });
+    return evaluateTurnEnvelope({
+      operation: "planning_facts",
+      payload: contract,
+      include_selected_work_basis: true,
+    }).selected_work_basis;
+  };
+  const emptyBasis = withScopes([]);
+  const docsBasis = withScopes(["docs/evidence/**"]);
+  const srcBasis = withScopes(["src/**"]);
+  assert.equal(typeof emptyBasis, "string");
+  assert.notEqual(emptyBasis, docsBasis);
+  assert.notEqual(docsBasis, srcBasis);
+  assert.equal(withScopes(["docs/evidence/**"]), docsBasis);
 });

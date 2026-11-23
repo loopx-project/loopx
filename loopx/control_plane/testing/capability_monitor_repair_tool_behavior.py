@@ -5,27 +5,22 @@ import os
 import shlex
 import subprocess
 from collections.abc import Mapping
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from ...heartbeat_prompt import build_heartbeat_prompt
-from ..quota.turn_envelope import quota_action_signature_document
-from .doubao_model_behavior_actor import (
-    ARK_API_KEY_ENV,
-    DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_MODEL_ENV,
-    DoubaoActorTransport,
-    _direct_ark_transport,
-)
 from .model_tool_behavior import (
+    DoubaoExecToolBehaviorActorBase,
     QuotaToolContext,
-    is_context_read_command,
-    DoubaoExecToolClient,
+    append_exec_tool_exchange,
     argument_value,
+    build_qualification_receipt,
     digest_text,
     execute_loopx_cli,
+    extract_quota_action_contract_base,
+    is_context_read_command,
     loopx_command_tokens,
+    qualification_turn_instance_id,
 )
 from .selected_todo_tool_behavior import (
     SELECTED_TODO_TOOL_FIXTURE_AGENT_ID,
@@ -309,9 +304,7 @@ def _redacted_command_shape(
 
 
 def _capability_repair_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
-    signature = quota_action_signature_document(packet)
-    action = dict(signature.get("action") or {})
-    user = dict(signature.get("user") or {})
+    base, _, _, _ = extract_quota_action_contract_base(packet)
     interaction = dict(packet.get("interaction_contract") or {})
     capability_gate = dict(packet.get("capability_gate") or {})
     cli_channel = dict(interaction.get("cli_channel") or {})
@@ -331,13 +324,8 @@ def _capability_repair_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
         item for item in next_cli_actions if _is_capability_reentry_command(item)
     ]
     contract = {
-        "decision": "execute",
+        **base,
         "selected_todo_id": None,
-        "user_action_required": bool(user.get("action_required")),
-        "must_attempt_work": bool(action.get("must_attempt")),
-        "delivery_allowed": bool(action.get("delivery_allowed")),
-        "quiet_noop_allowed": bool(action.get("quiet_noop_allowed")),
-        "external_write_requested": False,
         "repair_missing": list(capability_gate.get("repair_missing") or []),
     }
     if not (
@@ -387,9 +375,7 @@ def _execute_capability_callsite(
 
 
 def _capability_reentry_contract(packet: Mapping[str, Any]) -> dict[str, Any]:
-    signature = quota_action_signature_document(packet)
-    action = dict(signature.get("action") or {})
-    selected = dict(action.get("selected_todo") or {})
+    _, _, action, selected = extract_quota_action_contract_base(packet)
     interaction = dict(packet.get("interaction_contract") or {})
     capability_gate = dict(packet.get("capability_gate") or {})
     if not (
@@ -419,71 +405,31 @@ def _receipt(
     passed: bool,
     failure_code: str | None,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": CAPABILITY_MONITOR_REPAIR_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
-        "qualification_id": qualification_id,
-        "actor_ref": actor_ref,
-        "qualification_passed": passed,
-        "failure_code": failure_code,
-        **dict(contract or {}),
-        "observed_tool_sequence": [step["kind"] for step in steps],
-        "tool_call_count": len(steps),
-        "capability_callsite_verified": callsite_verified,
-        "same_turn_quota_reentry_completed": reentry_completed,
-        "monitor_fallback_avoided": reentry_completed,
-        "tool_call_receipts": steps,
-        "boundary": {
-            "raw_prompt_persisted": False,
-            "raw_provider_response_persisted": False,
-            "raw_command_persisted": False,
-            "writes_limited_to_temporary_fixture": True,
-            "external_writes_executed": False,
-            "shell_commands_executed": False,
+    return build_qualification_receipt(
+        schema_version=CAPABILITY_MONITOR_REPAIR_TOOL_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
+        qualification_id=qualification_id,
+        actor_ref=actor_ref,
+        passed=passed,
+        failure_code=failure_code,
+        steps=steps,
+        contract=contract,
+        extra_fields={
+            "capability_callsite_verified": callsite_verified,
+            "same_turn_quota_reentry_completed": reentry_completed,
+            "monitor_fallback_avoided": reentry_completed,
+        },
+        boundary={
             "task_facing_reads_executed": callsite_verified,
             "control_plane_writes_executed": False,
             "advancement_checkpoints_written": False,
         },
-    }
+    )
 
 
-class DoubaoCapabilityMonitorRepairToolBehaviorActor:
+class DoubaoCapabilityMonitorRepairToolBehaviorActor(
+    DoubaoExecToolBehaviorActorBase
+):
     """Prove inline capability re-entry outranks a monitor fallback."""
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str = DOUBAO_2_1_PRO_MODEL,
-        timeout_seconds: float = 90.0,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-    ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        environ: Mapping[str, str] | None = None,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-        timeout_seconds: float = 90.0,
-    ) -> DoubaoCapabilityMonitorRepairToolBehaviorActor:
-        values = os.environ if environ is None else environ
-        api_key = values.get(ARK_API_KEY_ENV, "")
-        if not api_key.strip():
-            raise RuntimeError(
-                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
-            )
-        return cls(
-            api_key=api_key,
-            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
 
     def qualify(
         self,
@@ -525,8 +471,7 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
         contract: dict[str, Any] | None = None
         seen_once: set[str] = set()
         actor_ref = self._client.actor_ref
-        qualification_digest = sha256(qualification_id.encode()).hexdigest()[:16]
-        turn_instance_id = f"qualification-{qualification_digest}"
+        turn_instance_id = qualification_turn_instance_id(qualification_id)
 
         def receipt(*, passed: bool, failure_code: str | None) -> dict[str, Any]:
             return _receipt(
@@ -678,19 +623,6 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
                         passed=False,
                         failure_code="workspace_read_failed",
                     )
-            messages.extend(
-                [
-                    {
-                        "role": "assistant",
-                        "content": tool_call.assistant_content,
-                        "tool_calls": [tool_call.provider_value],
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.call_id,
-                        "content": tool_output or "",
-                    },
-                ]
-            )
+            append_exec_tool_exchange(messages, tool_call, tool_output)
 
         return receipt(passed=False, failure_code="tool_call_budget_exhausted")

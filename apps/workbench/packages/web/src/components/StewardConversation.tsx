@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -6,8 +6,9 @@ import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
 import { IconSend, IconStop } from './icons';
 import {
-  applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerHistory, sendManagerTurn, streamManagerEvents,
-  ManagerError, type ManagerEvent, type ManagerMessage, type ManagerTurn,
+  applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerCapabilities, readManagerHistory,
+  restoreTrustedOwnerProfile, sendManagerTurn, streamManagerEvents, switchManagerAgent,
+  ManagerError, TRUSTED_OWNER_ENDPOINTS, type ManagerCapabilities, type ManagerEvent, type ManagerMessage, type ManagerTurn,
 } from '../loopx/manager';
 import type { LoopxStatusFailure } from '../loopx/status';
 
@@ -24,13 +25,22 @@ const GREETING_ASKS = () => [
  * answers as assistant rows in the thread's markdown, the composer as the app's composer shell with
  * its send and stop buttons. An empty history opens on a centered question with one-tap asks.
  */
-export function StewardConversation({ token, failure }: { token: string | undefined; failure: LoopxStatusFailure | null }) {
+export function StewardConversation({ token, failure, deferSessionOpen = false }: { token: string | undefined; failure: LoopxStatusFailure | null; deferSessionOpen?: boolean }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ManagerMessage[] | null>(null);
+  const [messages, setMessages] = useState<ManagerMessage[] | null>(() => deferSessionOpen ? [] : null);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<ManagerCapabilities | null>(null);
+  const [switchingAgent, setSwitchingAgent] = useState<string | null>(null);
   const [turn, setTurn] = useState<ManagerTurn | null>(null);
   const [draft, setDraft] = useState('');
+  const [sessionOpening, setSessionOpening] = useState(false);
+  const openingSession = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setSessionOpening(false);
+    return () => { openingSession.current?.abort(); openingSession.current = null; };
+  }, [token]);
   const sessionRef = useRef<string | null>(null);
+  const selectedAgentRef = useRef<string | undefined>(undefined);
   const turnRef = useRef<ManagerTurn | null>(null);
   const attemptRef = useRef(0);
   const cursorRef = useRef<string>('');
@@ -41,26 +51,47 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   turnRef.current = turn;
   /** Sets the live turn and its ref together, so code that runs before the next render sees it. */
   const showTurn = (next: ManagerTurn | null) => { turnRef.current = next; setTurn(next); };
-  const busy = turn?.state === 'sending' || turn?.state === 'streaming' || turn?.state === 'stopping';
+  const busy = sessionOpening || turn?.state === 'sending' || turn?.state === 'streaming' || turn?.state === 'stopping';
   const stoppable = turn?.state === 'streaming' || turn?.state === 'stopping';
 
+  const recordOpenFailure = (cause: unknown, signal?: AbortSignal) => {
+    setError(managerErrorText(cause, null));
+    const failedAgent = (cause instanceof ManagerError && (cause.code === 'agent_endpoint_unavailable' || cause.code === 'manager_runtime_endpoint_unsupported'))
+      ? parseUnavailableEndpoint(cause)?.agentId ?? null
+      : null;
+    void readManagerCapabilities(token, failedAgent, signal).then(caps => {
+      if (signal?.aborted || !caps) return;
+      setCapabilities(caps);
+      setError(managerErrorText(cause, caps));
+    }).catch(() => undefined);
+  };
+
   const openedFor = useRef<string | undefined | null>(null);
+  const sessionOwner = useRef(token);
   const coreDown = failure !== null;
   useEffect(() => {
     // Opened once per token. A core that was down when the page opened is retried once it is back;
     // a later status refresh does not open another session over the one already open.
-    if (coreDown || (sessionRef.current && openedFor.current === token)) return;
-    if (openedFor.current !== null && openedFor.current !== token) {
+    if (sessionOwner.current !== token) {
+      sessionOwner.current = token;
       attemptRef.current++;
       sendAbort.current?.abort();
       streamAbort.current?.abort();
       sessionRef.current = null;
+      openedFor.current = null;
+      setSessionId(null);
+      selectedAgentRef.current = undefined;
+      setDraft(''); setError(null); setCapabilities(null);
+      setMessages(deferSessionOpen ? [] : null);
       showTurn(null);
     }
+    if (deferSessionOpen || openingSession.current || coreDown || (sessionRef.current && openedFor.current === token)) return;
     let alive = true;
     const controller = new AbortController();
     setError(null);
-    openManagerSession(token, controller.signal)
+    setCapabilities(null);
+    if (!sessionRef.current) setMessages(null);
+    openManagerSession(token, controller.signal, selectedAgentRef.current)
       .then(({ sessionId: id, messages: history }) => {
         if (!alive) return;
         sessionRef.current = id;
@@ -70,12 +101,12 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       })
       .catch(cause => {
         if (!alive || controller.signal.aborted) return;
-        setError(managerErrorText(cause));
+        recordOpenFailure(cause, controller.signal);
       });
     return () => { alive = false; controller.abort(); };
     // A core outage after the session opened surfaces in the send path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, coreDown]);
+  }, [token, coreDown, deferSessionOpen]);
 
   useEffect(() => {
     scrollAnchor.current?.scrollIntoView({ block: 'end' });
@@ -137,7 +168,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     }
   };
 
-  const send = async (text: string) => {
+  const sendInSession = async (text: string) => {
     const body = text.trim();
     const active = turnRef.current;
     const activeBusy = active !== null && active.state !== 'idle';
@@ -188,6 +219,31 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     }
   };
 
+  /** Goal-reader entry does not create a chat session until the person actually sends. */
+  const send = async (text: string) => {
+    const active = turnRef.current;
+    if (!text.trim() || failure || openingSession.current || (active && active.state !== 'idle')) return;
+    if (sessionRef.current ?? sessionId) { await sendInSession(text); return; }
+    if (!deferSessionOpen) return;
+    const controller = new AbortController();
+    openingSession.current = controller;
+    setSessionOpening(true);
+    setError(null);
+    try {
+      const opened = await openManagerSession(token, controller.signal, selectedAgentRef.current);
+      if (controller.signal.aborted) return;
+      sessionRef.current = opened.sessionId;
+      openedFor.current = token;
+      setSessionId(opened.sessionId);
+      setMessages(opened.messages);
+      await sendInSession(text);
+    } catch (cause) {
+      if (!controller.signal.aborted) recordOpenFailure(cause, controller.signal);
+    } finally {
+      if (openingSession.current === controller) { openingSession.current = null; setSessionOpening(false); }
+    }
+  };
+
   const stop = () => {
     const current = turnRef.current;
     if (!current || !sessionId || current.state !== 'streaming') return;
@@ -204,12 +260,54 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     </div>;
   }
   if (error && !sessionId) {
+    const alternatives = capabilities?.availableAlternatives ?? [];
+    const isRestricted = capabilities?.runtimeProfile === 'restricted';
     return <div className="steward-chat-failure">
       <p role="alert">{error}</p>
-      <button type="button" onClick={() => {
-        setError(null); setMessages(null);
-        openManagerSession(token).then(({ sessionId: id, messages: history }) => { sessionRef.current = id; setSessionId(id); setMessages(history); }).catch(cause => setError(managerErrorText(cause)));
-      }}>{t('common.retry')}</button>
+      {isRestricted && (
+        <p className="steward-chat-failure-notice">
+          {t('loopx.stewardCurrentProfile', 'restricted')}
+        </p>
+      )}
+      <div className="steward-chat-failure-actions">
+        <button type="button" disabled={switchingAgent !== null} onClick={() => {
+          setError(null); setMessages(null); setCapabilities(null);
+          openManagerSession(token, undefined, selectedAgentRef.current)
+            .then(({ sessionId: id, messages: history }) => { sessionRef.current = id; openedFor.current = token; setSessionId(id); setMessages(history); })
+            .catch(cause => recordOpenFailure(cause));
+        }}>{t('common.retry')}</button>
+        {isRestricted && (
+          <button type="button" disabled={switchingAgent !== null} onClick={() => {
+            setSwitchingAgent('restore-profile');
+            restoreTrustedOwnerProfile(token)
+              .then(() => readManagerCapabilities(token, null))
+              .then(caps => { if (caps) setCapabilities(caps); })
+              .catch(cause => recordOpenFailure(cause))
+              .finally(() => setSwitchingAgent(null));
+          }}>{t('loopx.stewardRestoreTrustedOwner')}</button>
+        )}
+        {alternatives.map(alt => {
+          const willRestrict = !TRUSTED_OWNER_ENDPOINTS.has(alt.agentId) && capabilities?.runtimeProfile === 'trusted_owner';
+          return (
+            <button key={alt.agentId} type="button" disabled={switchingAgent !== null} onClick={() => {
+              setSwitchingAgent(alt.agentId); setError(null); setMessages(null);
+              switchManagerAgent(token, alt.agentId, capabilities)
+                .then(({ sessionId: id, messages: history }) => {
+                  selectedAgentRef.current = alt.agentId;
+                  sessionRef.current = id;
+                  openedFor.current = token;
+                  setCapabilities(null);
+                  setSessionId(id);
+                  setMessages(history);
+                })
+                .catch(cause => recordOpenFailure(cause))
+                .finally(() => setSwitchingAgent(null));
+            }}>
+              {willRestrict ? t('loopx.stewardSwitchAgentRestricted', alt.displayName) : t('loopx.stewardSwitchAgent', alt.displayName)}
+            </button>
+          );
+        })}
+      </div>
     </div>;
   }
 
@@ -270,10 +368,31 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   </div>;
 }
 
-function managerErrorText(cause: unknown): string {
+function parseUnavailableEndpoint(cause: ManagerError): { agentId: string; reason: string } | null {
+  const match = /^The Agent endpoint '([^']+)' cannot serve this request:\s*([a-z0-9_]+)\.?$/i.exec(cause.message.trim());
+  return match ? { agentId: match[1], reason: match[2] } : null;
+}
+
+function defaultAgentLabel(agentId: string): string {
+  if (agentId === 'codex') return 'Codex';
+  if (agentId === 'claude-code') return 'Claude Code';
+  if (agentId === 'kiro-cli') return 'Kiro CLI';
+  return agentId;
+}
+
+function managerErrorText(cause: unknown, capabilities: ManagerCapabilities | null = null): string {
   if (cause instanceof ManagerError) {
     if (cause.status === 502 || cause.body.error === 'loopx_core_unavailable') return t('loopx.coreDown');
     if (cause.code === 'session_queue_full') return t('loopx.queueFull');
+    if (cause.code === 'agent_endpoint_unavailable') {
+      const parsed = parseUnavailableEndpoint(cause);
+      if (parsed && parsed.reason === 'executable_not_found') {
+        const adapter = capabilities?.adapters.find(a => a.agentId === parsed.agentId);
+        const label = adapter?.displayName ?? defaultAgentLabel(parsed.agentId);
+        const cmd = adapter?.executable ?? parsed.agentId;
+        return t('loopx.stewardExecutableNotFound', label, cmd);
+      }
+    }
     return cause.message;
   }
   return cause instanceof Error ? cause.message : String(cause);

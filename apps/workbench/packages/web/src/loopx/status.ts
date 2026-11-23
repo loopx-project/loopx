@@ -4,6 +4,7 @@
  * The full dashboard projection is much larger; grow this only when a shipped page needs more.
  */
 
+import { t } from '../i18n';
 import { parseObservation, type Observation } from './acceptance';
 
 /** One goal as the sidebar and the work page's overview show it. */
@@ -273,4 +274,13 @@ export class LoopxStatusError extends Error {
 export function loopxFailureOf(error: unknown): LoopxStatusFailure {
   if (error instanceof LoopxStatusError) return { kind: error.kind, detail: error.message };
   return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
+}
+
+/** Shared status-reader error copy; a failed read never establishes Goal absence. */
+export function failureLabel(failure: LoopxStatusFailure | null): string {
+  if (!failure) return '';
+  if (failure.kind === 'not-connected') return t('loopx.notConnected');
+  if (failure.kind === 'bad-data') return t('loopx.badData', failure.detail);
+  if (failure.detail === 'loopx_core_unavailable') return t('loopx.coreDown');
+  return t('loopx.unavailable', failure.detail);
 }

@@ -96,12 +96,12 @@ export function registerClaimContentionConformance(provider: string, factory: Au
         await barrier;
       }));
       const results = await Promise.all(requests.map((request, i) => claim(stores[i], request)));
-      assert.equal(results.filter(r => r.status === "applied").length, scenario === "independent" ? 2 : 1,
+      assert.equal(results.filter(r => r.status === "applied").length, scenario === "same-todo" ? 1 : 2,
         JSON.stringify(results));
-      if (scenario !== "independent") {
+      if (scenario === "same-todo") {
         const loser = results.findIndex(r => r.status !== "applied");
         assert.equal(results[loser].status, "failed", JSON.stringify(results[loser]));
-        assert.equal(results[loser].reason_code, scenario === "same-todo" ? "claim_owner_mismatch" : "write_scope_conflict");
+        assert.equal(results[loser].reason_code, "claim_owner_mismatch");
         assert.equal((await store.readReceipt(requests[loser].operation_id)).status, "missing");
       }
       for (let i = 0; i < results.length; i++) if (results[i].status === "applied") {
@@ -110,7 +110,7 @@ export function registerClaimContentionConformance(provider: string, factory: Au
         assert.equal((await claim(stores[i], requests[i])).status, "replayed");
         assert.deepEqual(await store.readReceipt(requests[i].operation_id), receipt);
       }
-      assert.equal(arrivals, scenario === "independent" ? 3 : 2);
+      assert.equal(arrivals, scenario === "same-todo" ? 2 : 3);
       const final = await store.loadAuthority();
       if (final.status !== "loaded") throw new Error("missing final authority");
       const winners = requests.filter((_, i) => results[i].status === "applied");

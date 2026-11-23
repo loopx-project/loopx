@@ -315,6 +315,24 @@ one finding and receipt, spends once, and checks effect-free replay plus rejecte
 new capture. This repairs the existing recovery contract without a new owner or
 activation; installed Hosts, other backends and benefit retain their own gates.
 
+Native failure allocation and the external worker's Host observation now share
+the existing [`typed failure owner`](../../../loopx/control_plane/turn_driver/host_failure.ts).
+The Python retry table and worker success/same-session/failure selection are
+retired. Native error construction, Mapping refusal order, exact integer IO,
+session-ID decoding, polling clocks and the pending-intent witness remain with
+their existing adapters. An observed Host success is transport confirmation,
+not Turn completion, an ACK or permission to spend. Automatic eligibility stays
+narrower than explicit repaired retry; the invocation-only query marker adds no
+setting or activation, and omission/false retains the existing explicit query.
+The [original worker](../../../tests/test_external_scheduler_worker.py),
+[boundary checks](../../../tests/control_plane/test_host_failure_policy_transport.py)
+and [File/SQLite managed CLI](../../../tests/test_loopx_turn_managed_step.py)
+preserve original-session retry, unknown/foreign/malformed outcomes, refusal
+precedence, lost-response recovery and once-only replay. A changed retry ceiling
+fails the independent SQLite CLI observation. This source checkpoint does not
+qualify installed worker adoption, the remaining C1/C4/C9 cutover, product
+composition or accepted outcomes and full cost.
+
 The replay and new-capture assertions execute inside the recovery fixture.
 An earlier test update put that block in the no-evidence test: the recovery
 cases skipped those assertions, while ordinary settlement failed on undefined
@@ -335,6 +353,65 @@ read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify
 adding another execution profile to this slice.
 
+Todo-bound planning closeout also reuses the existing typed receipt admission.
+A positively admitted non-delivery review does not require a business execution
+lease that its guard deliberately never prepares. Explicit or previously
+prepared execution still requires the original proof; Goal Stop, source locks,
+semantic review and settlement checks remain in force. Isolated
+[File/SQLite CLI controls](../../../tests/control_plane/test_replan_writeback_lease_scope.py)
+cover enabled/off reviews, foreign identity, explicit/prepared execution, Stop,
+unchanged Todo/lease state and once-only replay. This repairs the planning-to-
+writeback composition; installed cutover, actual model adoption and outcome/
+full-cost qualification remain open.
+
+The existing feedback qualification consumer reads a deferred Run path through the settled result's immutable `result_details` reader rather than assuming diagnostics remain inline. The public read selects only the original path and preserves the Vision, feedback, validation and once-only settlement assertions. Ordinary combined settlement verifies its runtime-owned debit; the planning checkpoint follows its returned agent-owned spend command. File/SQLite source and composed-path controls qualify the reader migration; scripted execution remains distinct from model adoption and benefit.
+
+**Source checkpoint: product execution-observation readback (2026-11-19).** Saved
+findings reuse Explore's execution-observation codec and retain the planned and
+actual methods, deviation reason, candidate revision, costs and result reference.
+The findings and history readers share one expandable view; the existing Lark
+finding Summary presents the same recorded facts, keeping missing measurements
+unknown. Findings without observations retain their existing display and
+projection. Wrong-candidate result references are rejected, failed reads withhold
+old contents, and valid sources recover in place. Isolated File/SQLite HTTP and
+packaged desktop/narrow-browser checks qualify these paths without source-state
+or execution-authority mutations. This delivers product transport and readback,
+with an [illustrated App reading guide](../../../loopx/capabilities/explore/README.md#read-execution-evidence-in-the-app)
+and separate default desktop/narrow and expanded-detail captures from populated
+synthetic records. The guide also identifies the older saved-reader omission;
+installed-client upgrade/readback remains unqualified. This source checkpoint is
+not model adoption or method benefit. Execution convergence, cross-task adoption,
+prediction calibration and matched-budget outcomes remain open. Formal evaluation
+does not block independent implementation or migration.
+
+**Source checkpoint: stateless read ownership (2026-11-20).** The stateless capture
+adapter delegates its normal-work initial navigation to the existing TypeScript
+Progressive owner through `context_select`; Python retains publication, byte
+budgets and fallback. The invocation-only option leaves generic selection and
+its validation order unchanged. Captured File/SQLite sources preserve their
+original preparation and settlement facts after a later claim; selected display,
+off and digest-refusal paths have immutable-base/current-candidate controls.
+Existing wide-scope and note-reuse test callers carry the original captured lease
+proof into their manual writeback, retaining pagination, recovery and once-only
+settlement assertions. This retires a duplicate read classifier; full C1/C4/C9
+cutover, installed/native adoption and method/outcome benefit remain open.
+
+**Source checkpoint: heartbeat binding ownership (2026-11-21).** Python receipt
+readers and locked binders now reuse the existing TypeScript heartbeat binding
+and effective-receipt rules. Their file/GoalRef filtering and append-only IO stay
+local. One pure batch projection returns an index and binding; Python returns
+the original record, retaining unknown details and exact numbers. Repeated
+binding-fact projections may be cached, while files, lease readiness, admission
+and settlement are read under their original owners. This retires Python's
+parallel binding-conflict and effective-receipt reductions. The prior reader
+accepted noncanonical Todo ids that the existing settlement owner rejected;
+the reader now reports that same identity conflict without changing the log.
+File/SQLite public CLI controls retain selection, obligations, state bytes,
+original identity and zero extra spend. These source controls do not qualify
+C1 default-channel adoption, installed behavior or model/outcome benefit.
+The visible-Goal hard-lease control carries the same guard's proof into manual
+writeback and retains rejection of unproven writeback without changing the log.
+
 Ordinary Turn planning and failed-Turn recovery now use one
 [`TypeScript conversation policy`](../../../loopx/control_plane/turn_driver/session_binding.ts)
 through the existing Turn RPC boundary. The Python start/resume/reject producer
@@ -350,6 +427,9 @@ and existing [File/SQLite CLI and retry checks](../../../tests/control_plane/tes
 cover readback, refusal without effects and once-only original-source recovery.
 This is a source migration checkpoint; installed Host adoption, the remaining
 C1/C4/C9 cutover, product composition and outcome/full-cost benefit stay open.
+If the session-policy transport response is unavailable, recovery remains a
+structured Host Session refusal with the original journal and identity intact;
+it does not become an unrelated execution ambiguity.
 
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 

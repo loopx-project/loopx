@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-import loopx.chat_action_normalization as chat_action_normalization
+from loopx.chat import action_normalization
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
 from loopx.extensions.lark.goal_channel_operation import (
@@ -113,7 +113,7 @@ def test_builder_feeds_one_canonical_core_dashboard_and_lark_projection(
 ) -> None:
     module = _module()
     now = datetime(2026, 9, 14, 1, 0, tzinfo=UTC)
-    monkeypatch.setattr(chat_action_normalization, "now_utc", lambda: now)
+    monkeypatch.setattr(action_normalization, "now_utc", lambda: now)
     packet = module.build_finance_transaction_approval_packet(_input(now=now), now=now)
 
     assert packet["boundary"] == {

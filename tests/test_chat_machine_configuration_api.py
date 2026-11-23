@@ -347,6 +347,86 @@ def test_real_chat_http_invalid_namespace_has_safe_repair_path(
         server.server_close()
 
 
+def test_goal_closeout_http_update_cannot_write_a_command(tmp_path: Path) -> None:
+    from loopx.capabilities.machine_configuration.builtins import (
+        build_builtin_machine_configuration_registry,
+    )
+
+    handler = _Handler(
+        tmp_path,
+        body={
+            "namespace": "goal_closeout",
+            "namespace_configuration": {
+                "schema_version": "loopx_goal_closeout_configuration_v0",
+                "command": ["/bin/sh", "-c", "id > /tmp/pwned"],
+            },
+        },
+    )
+    registry = build_builtin_machine_configuration_registry()
+
+    with pytest.raises(ValueError, match="local CLI: command"):
+        handler._machine_configuration_namespace_update(
+            handler.body, registry=registry
+        )
+    assert not (tmp_path / "machine" / "configuration.json").exists()
+
+    timeout_only = _Handler(
+        tmp_path,
+        body={
+            "namespace": "goal_closeout",
+            "namespace_configuration": {
+                "schema_version": "loopx_goal_closeout_configuration_v0",
+                "timeout_seconds": 12,
+            },
+        },
+    )
+    configuration = timeout_only._machine_configuration_namespace_update(
+        timeout_only.body, registry=registry
+    )
+    assert configuration["namespaces"]["goal_closeout"] == {
+        "schema_version": "loopx_goal_closeout_configuration_v0",
+        "command": [],
+        "timeout_seconds": 12,
+    }
+
+
+def test_goal_closeout_real_http_rejects_a_command_update(tmp_path: Path) -> None:
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.runtime_root = tmp_path
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+    try:
+        connection.request(
+            "POST",
+            CHAT_MACHINE_CONFIGURATION_PREVIEW_PATH,
+            body=json.dumps(
+                {
+                    "namespace": "goal_closeout",
+                    "namespace_configuration": {
+                        "schema_version": "loopx_goal_closeout_configuration_v0",
+                        "command": ["/bin/sh", "-c", "id > /tmp/pwned"],
+                    },
+                }
+            ),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        assert response.status == 400
+        body = json.loads(response.read())
+        assert body["ok"] is False
+        assert "local CLI: command" in body["error"]
+        assert not (tmp_path / "machine" / "configuration.json").exists()
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_inspection_lists_registered_namespaces_without_local_refs(
     tmp_path: Path,
 ) -> None:
@@ -361,6 +441,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "codex_chat",
         "context_delivery",
         "explore_harness",
+        "goal_closeout",
         "goal_storage",
         "manager_runtime",
         "periodic_report",
@@ -386,6 +467,14 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "planning_horizon_goal": True,
         "yardstick_enabled": False,
     }
+    assert namespace_catalog["goal_closeout"]["configuration_template"] == {
+        "schema_version": "loopx_goal_closeout_configuration_v0",
+        "configured": False,
+        "timeout_seconds": 30,
+    }
+    assert namespace_catalog["goal_closeout"]["configuration_template"].get(
+        "command"
+    ) is None
     assert namespace_catalog["change_quality_qualification"][
         "configuration_template"
     ] == {
@@ -466,7 +555,16 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     )
     # Machine-only capabilities are the ones a Goal cannot override: the
     # manager profile, native host defaults, steward executor and storage target.
-    assert set(machine) - {"manager_runtime", "steward_executor", "steward_memory", "goal_storage", "codex_chat", "context_delivery"} == {
+    machine_only = {
+        "manager_runtime",
+        "steward_executor",
+        "steward_memory",
+        "goal_storage",
+        "codex_chat",
+        "context_delivery",
+        "goal_closeout",
+    }
+    assert set(machine) - machine_only == {
         feature["feature_id"] for feature in goal["features"]
     }
     assert machine["pull_request_review"]["available_scopes"] == ["machine", "goal"]
@@ -482,7 +580,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
     for capability_id, item in machine.items():
         assert "current" not in item
         assert "commands" not in item
-        if capability_id in {"manager_runtime", "steward_executor", "steward_memory", "goal_storage", "codex_chat", "context_delivery"}:
+        if capability_id in machine_only:
             assert item["available_scopes"] == ["machine"]
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]
@@ -970,6 +1068,71 @@ def test_explore_machine_mode_uses_real_http_preview_apply_and_readback(tmp_path
         assert status == 200 and applied["ok"] is True
         _, inspection = request("GET", CHAT_MACHINE_CONFIGURATION_PATH)
         assert inspection["machine_configuration"]["namespaces"]["explore_harness"] == desired["namespace_configuration"]
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_steward_executor_endpoint_models_round_trip_through_machine_api(tmp_path: Path) -> None:
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.runtime_root = tmp_path
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
+
+    def request(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        connection.request(
+            method,
+            path,
+            body=json.dumps(body) if body is not None else None,
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+
+    try:
+        desired = {
+            "namespace": "steward_executor",
+            "namespace_configuration": {
+                "schema_version": "steward_executor_machine_defaults_v1",
+                "selection_policy": "flexible",
+                "executor_endpoint": "codex",
+                "eligible_endpoints": ["codex", "antigravity"],
+                "executor_model": "gpt-6.2-sol",
+                "executor_reasoning_effort": "xhigh",
+                "endpoint_models": {
+                    "antigravity": {"model": "carbon", "reasoning_effort": "medium"},
+                },
+            },
+        }
+        status, preview = request("POST", CHAT_MACHINE_CONFIGURATION_PREVIEW_PATH, desired)
+        assert status == 201, preview
+        status, applied = request(
+            "POST",
+            CHAT_MACHINE_CONFIGURATION_APPLY_PATH,
+            {**desired, "expected_plan_revision": preview["plan_revision"]},
+        )
+        assert status == 200 and applied["ok"] is True, applied
+        status, inspection = request("GET", CHAT_MACHINE_CONFIGURATION_PATH)
+        assert status == 200
+        saved = inspection["machine_configuration"]["namespaces"]["steward_executor"]
+        assert saved["endpoint_models"] == {
+            "antigravity": {"model": "carbon", "reasoning_effort": "medium"},
+        }
+        steward_cap = next(
+            item
+            for item in inspection["capability_catalog"]["capabilities"]
+            if item["capability_id"] == "steward_executor"
+        )
+        assert steward_cap["configuration_editor"]["editable"] is True
+        fields = {field["key"]: field for field in steward_cap["configuration_editor"]["fields"]}
+        assert "endpoint_models" in fields["executor_model"]["description"]
+        assert applied["machine_configuration"]["namespaces"]["steward_executor"]["endpoint_models"] == saved["endpoint_models"]
     finally:
         connection.close()
         server.shutdown()

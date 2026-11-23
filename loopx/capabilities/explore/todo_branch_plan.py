@@ -435,7 +435,6 @@ def build_explore_todo_branch_plan(
     while True:
         selected: list[dict[str, Any]] = []
         selection_rejections: list[dict[str, Any]] = []
-        selected_scopes: list[tuple[str, list[str]]] = []
         selected_by_resource_lane: dict[str, int] = {}
         for candidate in ordered_candidates:
             todo_id = str(candidate.get("todo_id") or "")
@@ -445,13 +444,7 @@ def build_explore_todo_branch_plan(
             scopes = _required_write_scopes(candidate)
             resource_lane = str(candidate.get("resource_lane") or "")
             conflict_with = ""
-            if scopes:
-                for selected_todo_id, existing_scopes in selected_scopes:
-                    if _scopes_overlap(scopes, existing_scopes):
-                        conflict_with = selected_todo_id
-                        hazards.append(f"write_scope_conflict:{selected_todo_id}")
-                        break
-            elif not allow_unscoped_parallel and selected:
+            if not scopes and not allow_unscoped_parallel and selected:
                 conflict_with = selected[0]["todo_id"]
                 hazards.append("unscoped_parallel_disabled")
 
@@ -522,7 +515,6 @@ def build_explore_todo_branch_plan(
             if assignment is not None:
                 selected_candidate["resource_assignment"] = assignment
             selected.append(selected_candidate)
-            selected_scopes.append((todo_id, scopes))
             if resource_lane:
                 selected_by_resource_lane[resource_lane] = selected_in_lane
 
@@ -586,7 +578,7 @@ def build_explore_todo_branch_plan(
         "rejected_candidates": rejected[: max(0, normalized_width * 3)],
         "resource_portfolio": resource_portfolio_with_selection(resource_portfolio, selected),
         "hazard_model": {
-            "write_scope_conflicts": "skip speculative branch when declared write scopes overlap",
+            "write_scope_conflicts": "retired from hard scheduling exclusion; leases isolate by Todo ownership and workspace checkout",
             "shared_dependencies": (
                 "shared_artifact:* and shared_implementation:* capabilities are read-only "
                 "dependency labels, not write mutexes; mutable shared builds must remain in "

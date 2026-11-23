@@ -46,6 +46,7 @@ async function serve(dir: string, catalog: ExtensionManifest[]) {
   return {
     api,
     base,
+    extensions,
     async close() {
       extensions.dispose();
       await new Promise<void>((r) => server.close(() => r()));
@@ -136,6 +137,47 @@ test('a grant made for fewer permissions does not switch on a version that asks 
     assert.deepEqual([probe.installed, probe.enabled], [true, false]);
     assert.equal((await hub.api('/api/extensions/probe', 'PATCH', { enabled: true })).status, 409);
     assert.equal((await hub.api('/api/extensions/probe/install', 'POST', { granted: ['events.summary', 'notify'] })).status, 200);
+    await hub.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('default built-ins are installed once per machine: an uninstall stays, an existing install keeps its state', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-'));
+  try {
+    let hub = await serve(dir, [manifest('board'), manifest('probe')]);
+    let seeded = hub.extensions.installDefaults(['board', 'missing'], []);
+    assert.deepEqual(seeded, ['board'], 'a default the catalog lacks is not marked done');
+    const state = () => hub.extensions.list().map(e => [e.manifest.id, e.installed, e.enabled]);
+    assert.deepEqual(state(), [['board', true, true], ['probe', false, false]]);
+    hub.extensions.uninstall('board');
+    seeded = hub.extensions.installDefaults(['board'], seeded);
+    assert.deepEqual(state()[0], ['board', false, false], 'uninstalled by the person: left alone');
+    await hub.close();
+
+    hub = await serve(dir, [manifest('board'), manifest('probe')]);
+    assert.equal((await hub.api('/api/extensions/probe/install', 'POST', { granted: ['events.summary'] })).status, 200);
+    assert.equal((await hub.api('/api/extensions/probe', 'PATCH', { enabled: false })).status, 200);
+    assert.deepEqual(hub.extensions.installDefaults(['probe'], []), ['probe']);
+    assert.deepEqual(state()[1], ['probe', true, false], 'already installed: its own state is kept');
+    await hub.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a default that acts on its own is installed only on a fresh machine; an older one may have uninstalled it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loochat-ext-'));
+  try {
+    const hub = await serve(dir, [manifest('board'), manifest('namer')]);
+    const state = () => hub.extensions.list().map(e => [e.manifest.id, e.installed]);
+    const upgraded = hub.extensions.installDefaults(['board', 'namer'], [], { fresh: false, freshOnly: ['namer'] });
+    assert.deepEqual(upgraded, ['board', 'namer'], 'both are done: the upgrade never installs namer later');
+    assert.deepEqual(state(), [['board', true], ['namer', false]]);
+    hub.extensions.uninstall('board');
+    assert.deepEqual(hub.extensions.installDefaults(['board', 'namer'], [], { fresh: true, freshOnly: ['namer'] }), ['board', 'namer']);
+    assert.deepEqual(state(), [['board', true], ['namer', true]], 'a fresh machine gets both');
     await hub.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

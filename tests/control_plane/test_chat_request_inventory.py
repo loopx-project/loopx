@@ -228,6 +228,122 @@ def test_read_and_adoption_still_owe_conclusion_and_queued_return_stays_visible(
     assert historical["rows"][0]["request_id"] == rid and not historical["rows"][0]["unfinished"]
 
 
+
+def test_terminal_return_reconciles_only_matching_original_message(api, capsys):
+    import json
+
+    from loopx.cli import main
+
+    _, _, route = _source(api)
+    _, fixture, server = api
+    request_id = route["request_id"]
+    root = _root(fixture["runtime"])
+    session_id = route["session_id"]
+    acknowledge(fixture["runtime"], route["goal_id"], route["agent_id"], request_id,
+                "adopt", "Check the requested artifact", registry=fixture["registry"], caller_goal_ref=fixture["ref"])
+    report(fixture["runtime"], route["goal_id"], route["agent_id"], request_id,
+           "conclusion", "The requested artifact passed.", registry=fixture["registry"], caller_goal_ref=fixture["ref"])
+    def drain_returns():
+        return drain(fixture["runtime"], fixture["registry"], server.chat_store,
+                     lambda *_: pytest.fail("a local return must not use an external sender"))
+
+    assert drain_returns() == 1
+
+    def cli_inbox(operation, *selectors):
+        capsys.readouterr()
+        code = main(["--registry", str(fixture["registry"]), "--runtime-root", str(fixture["runtime"]),
+                     "--format", "json", "manager-inbox", operation, "--goal-id", route["goal_id"],
+                     "--agent-id", route["agent_id"], *selectors])
+        assert code == 0
+        return json.loads(capsys.readouterr().out)
+
+    def cli_agenda():
+        return cli_inbox("read")["unfinished_delegations"]["items"]
+
+    def cli_return():
+        row, = cli_inbox("status", "--request-id", request_id)["rows"]
+        assert row["request_id"] == request_id
+        conclusion, = row["return_replies"]
+        return conclusion
+
+    receipt = root / "replies" / request_id / "conclusion.delivery.json"
+    original = receipt.read_bytes()
+    confirmed = _inventory(api, session_id, view="history")[1]
+    assert confirmed["pending_count"] == 0 and confirmed["rows"][0]["returns"][0]["status"] == "delivered"
+    assert cli_agenda() == []
+    assert cli_return()["delivered_at"] == confirmed["rows"][0]["returns"][0]["delivered_at"]
+
+    message_id = json.loads(original)["message_id"]
+    messages = server.chat_store.messages(session_id)
+    assert next(row for row in messages if row["message_id"] == message_id)["turn_id"] == route["turn_id"]
+    turn, _ = server.chat_store.create_turn(session_id, client_turn_id="other-return",
+                                             message="Another original conversation Turn", origin="web")
+    unrelated = server.chat_store.append_message(session_id, role="assistant", text="Another result",
+                                                  turn_id=turn["turn_id"], origin="manager_followup")
+    assert unrelated["message_id"] != message_id
+    journal = server.chat_store.root / "sessions" / session_id / "messages.jsonl"
+    original_journal = journal.read_bytes()
+
+    def assert_recovery():
+        http, pending = _inventory(api, session_id)
+        assert http == 200 and pending["pending_count"] == 1
+        row, = pending["rows"]
+        assert row["request_id"] == request_id
+        assert row["agenda"]["step"] == "recover_evidence"
+        assert row["returns"][0]["status"] == "explicit_unverified"
+        assert row["returns"][0]["error"] == "manager_return_payload_conflict"
+        agenda, = cli_agenda()
+        assert agenda["request_id"] == request_id and agenda["step"] == "recover_evidence"
+        assert agenda["returns"][0]["error"] == "manager_return_payload_conflict"
+        cli_return_state = cli_return()
+        for key in ("status", "delivered_at", "error"):
+            assert cli_return_state[key] == row["returns"][0][key] == agenda["returns"][0].get(key)
+
+    def change_message(**changes):
+        modified = []
+        for line in original_journal.splitlines(keepends=True):
+            row = json.loads(line)
+            if row["message_id"] == message_id:
+                line = (json.dumps({**row, **changes}) + "\n").encode()
+            modified.append(line)
+        return b"".join(modified)
+
+    for corrupted, mismatch in (({"message_id": unrelated["message_id"]}, {"turn_id": turn["turn_id"]}),
+                                ({}, {"text": "A different result in the correct Turn"})):
+        incorrect = {key: value for key, value in json.loads(original).items() if key != "message_id"}
+        incorrect["delivered_at"] = "2026-01-01T00:00:00Z"
+        receipt.write_text(json.dumps({**incorrect, **corrupted}))
+        unchanged = receipt.read_bytes()
+        assert_recovery()
+        changed_journal = change_message(**mismatch)
+        journal.write_bytes(changed_journal)
+        assert drain_returns() == 0
+        assert_recovery()
+        assert journal.read_bytes() == changed_journal
+        assert receipt.read_bytes() == unchanged
+
+        journal.write_bytes(original_journal)
+        assert drain_returns() == 1
+        assert drain_returns() == 0
+        assert cli_agenda() == []
+        recovered = _inventory(api, session_id, view="history")[1]
+        assert recovered["pending_count"] == 0
+        return_state, = recovered["rows"][0]["returns"]
+        assert return_state["status"] == "delivered"
+        expected_delivery_time = next(row["created_at"] for row in messages if row["message_id"] == message_id)
+        assert return_state["delivered_at"] == expected_delivery_time != incorrect["delivered_at"]
+        detail = cli_return()
+        for key in ("status", "delivered_at", "error"):
+            assert detail[key] == return_state[key]
+        assert receipt.read_bytes() == unchanged
+        assert journal.read_bytes() == original_journal
+    receipt.write_bytes(original)
+    assert cli_agenda() == []
+    restored = _inventory(api, session_id, view="history")[1]
+    assert restored["snapshot_digest"] == confirmed["snapshot_digest"]
+    assert restored["rows"] == confirmed["rows"]
+
+
 def test_revision_and_cancellation_reuse_current_control_and_preserve_history(api):
     control, _, route = _source(api)
     current = control()[1]["view"]

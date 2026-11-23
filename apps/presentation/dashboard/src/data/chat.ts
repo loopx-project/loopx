@@ -1,3 +1,4 @@
+import {normalizeExploreExecutionObservation} from "../../../../../loopx/control_plane/capabilities/explore_execution_observation.js";
 import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
@@ -1028,6 +1029,7 @@ const chatQueueSchema = z.object({
     preview: z.string(), character_count: z.number().int().nonnegative(),
     attachment_count: z.number().int().nonnegative(),
     input_revision: z.number().int().nonnegative().default(0),
+    input_mutation_allowed: z.boolean().optional(),
     mutation: z.object({action: z.enum(["edit", "cancel"]), operation_id: z.string().min(1),
       expected_revision: z.number().int().nonnegative(), input_revision: z.number().int().positive(),
       message: z.string().optional()}).nullable().optional().default(null),
@@ -1728,7 +1730,8 @@ const managedTaskTurnSchema = z.object({
   session_id: z.string().min(1), turn_id: z.string().min(1), client_turn_id: z.string().min(1), status: z.string().min(1),
   origin: z.literal("native_loopx"), loopx_execution: z.literal(true),
   loopx_request: z.object({operation: z.literal("native_turn"), todo_id: z.string().min(1),
-    actor: z.object({goal_id: z.string().min(1), agent_id: z.string().min(1), session_id: z.string().min(1)})}),
+    actor: z.object({goal_id: z.string().min(1), agent_id: z.string().min(1), session_id: z.string().min(1),
+      goal_instance_id: z.string().min(1).nullable().optional()})}),
 }).passthrough();
 const managedTaskCreationRequestSchema = z.object({
   creation_operation_id: z.string().min(1), operation_id: z.string().min(1),
@@ -1743,13 +1746,43 @@ const managedTaskEntrySchema = z.object({ok: z.literal(true), session_id: z.stri
   task: z.discriminatedUnion("state", [
     z.object({todo_id: z.string().min(1), state: z.literal("ready"), source: z.string().min(1), canonical_done: z.boolean(),
       observation: z.object({check_count: z.number().int().nonnegative(), pinned_file_count: z.number().int().nonnegative(),
-        basis_sha256: z.string().min(1)}), reason: z.string().optional(), ...taskCreationReadback}),
+        basis_sha256: z.string().min(1)}), reason: z.string().optional(),
+      completion_turn: managedTaskTurnSchema.optional(), ...taskCreationReadback}),
     z.object({todo_id: z.string().nullable(), state: z.literal("unbound"), source: z.null(), canonical_done: z.literal(false),
       reason: z.string().optional(), ...taskCreationReadback}),
   ]), turn: managedTaskTurnSchema.nullable(),
 });
 export type ManagedTaskEntry = z.infer<typeof managedTaskEntrySchema>;
 export type ManagedTaskTurn = z.infer<typeof managedTaskTurnSchema>;
+
+const managedTaskValidationSchema = z.object({
+  native_loopx: z.object({
+    schema_version: z.literal("loopx_turn_execution_v0"),
+    dry_run: z.literal(false),
+    validation_stage: z.literal("task_postcondition"),
+    receipt: z.object({ok: z.literal(true), lineage: z.object({
+      goal_id: z.string(), agent_id: z.string(), todo_id: z.string(),
+    })}),
+    validation: z.object({
+      schema_version: z.literal("loopx_turn_task_validation_v0"),
+      status: z.enum(["passed", "failed", "inconclusive", "unavailable"]),
+      ok: z.boolean(),
+      summary: z.string().trim().min(1).max(240),
+    }),
+  }),
+});
+
+/** Read independent checks from an already verified managed Task turn. */
+export function readManagedTaskValidation(turn: ManagedTaskTurn) {
+  if (turn.status !== "completed") return undefined;
+  const parsed = managedTaskValidationSchema.safeParse(turn.response);
+  if (!parsed.success) return undefined;
+  const {receipt: {lineage}, validation} = parsed.data.native_loopx;
+  const {actor, todo_id: todoId} = turn.loopx_request;
+  if (lineage.goal_id !== actor.goal_id || lineage.agent_id !== actor.agent_id || lineage.todo_id !== todoId
+    || validation.ok !== (validation.status === "passed")) return undefined;
+  return validation;
+}
 
 function verifyManagedTaskTurn(turn: ManagedTaskTurn, target: ManagedConversationTarget, operationId: string, todoId?: string) {
   const actor = turn.loopx_request.actor;
@@ -1781,6 +1814,15 @@ export async function fetchManagedTaskEntry(target: ManagedConversationTarget, o
       || result.task.creation_turn === undefined) throw new Error("The original creation request identity changed.");
     if (result.task.creation_turn) verifyManagedTaskTurn(result.task.creation_turn, target, creation.operation_id, creation.todo_id);
   } else if (result.task.creation_turn) throw new Error("The creation Turn has no original request.");
+  const completionTurn = result.task.state === "ready" ? result.task.completion_turn : undefined;
+  if (completionTurn) {
+    const operationId = /^managed\.([A-Za-z0-9._:-]{1,100})$/.exec(completionTurn.client_turn_id)?.[1];
+    if (!operationId || !result.task.canonical_done || !result.task.todo_id || completionTurn.status !== "completed"
+      || completionTurn.loopx_request.actor.goal_instance_id !== session.goal_instance_id) {
+      throw new Error("The completed Task Turn identity changed.");
+    }
+    verifyManagedTaskTurn(completionTurn, target, operationId, result.task.todo_id);
+  }
   return result;
 }
 
@@ -3354,6 +3396,7 @@ const exploreResultPageSchema = z.object({
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
     measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
     measurement_error: z.string().optional(),
+    execution_observation: z.unknown().transform(observation => normalizeExploreExecutionObservation({observation})).optional(),
     work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({

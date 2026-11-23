@@ -19,6 +19,7 @@ from threading import Lock, Thread
 from typing import Any
 
 from ..effect_runtime import _node_executable
+from ..runtime.node_probe import node_typescript_flags
 
 
 BRIDGE_CLOSE_TIMEOUT_SECONDS = 5.0
@@ -164,7 +165,13 @@ class DelegationPreviewTransport:
                         )
                     bridge = Path(__file__).with_name("delegation_preview_bridge.ts")
                     self._process = subprocess.Popen(
-                        [_node_executable(), "--no-warnings", "--experimental-strip-types", str(bridge)],
+                        [
+                            _node_executable(),
+                            "--no-warnings",
+                            "--experimental-strip-types",
+                            *node_typescript_flags(),
+                            str(bridge),
+                        ],
                         env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
                         start_new_session=True,

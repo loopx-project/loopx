@@ -13,12 +13,22 @@ const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'u
 const args = process.argv.slice(2)
 let tarball
 let registry = 'https://registry.npmjs.org/'
+let searchTimeoutMs = 45_000
+let searchPollMs = 3_000
 for (let index = 0; index < args.length; index += 2) {
   const [flag, value] = args.slice(index, index + 2)
-  assert(value && (flag === '--tarball' || flag === '--registry'),
-    'usage: verify-distribution.mjs --tarball PATH [--registry URL]')
+  assert(
+    value && (flag === '--tarball' || flag === '--registry' || flag === '--search-timeout-ms' || flag === '--search-poll-ms'),
+    'usage: verify-distribution.mjs --tarball PATH [--registry URL] [--search-timeout-ms MS] [--search-poll-ms MS]',
+  )
   if (flag === '--tarball') tarball = resolve(value)
-  else registry = `${value.replace(/\/+$/u, '')}/`
+  else if (flag === '--registry') registry = `${value.replace(/\/+$/u, '')}/`
+  else {
+    const parsed = Number(value)
+    assert(Number.isFinite(parsed) && parsed >= 0, `${flag} must be a non-negative number`)
+    if (flag === '--search-timeout-ms') searchTimeoutMs = parsed
+    else searchPollMs = parsed
+  }
 }
 assert(tarball, '--tarball is required: compare the exact package approved for publication')
 
@@ -26,6 +36,10 @@ async function json(path) {
   const response = await fetch(new URL(path, registry), { signal: AbortSignal.timeout(15_000) })
   assert(response.ok, `registry readback failed: HTTP ${response.status}`)
   return response.json()
+}
+
+function repoSlug(url) {
+  return String(url ?? '').replace(/^git\+/u, '').replace(/\.git$/u, '').toLowerCase()
 }
 
 const published = await json(encodeURIComponent(manifest.name))
@@ -46,16 +60,48 @@ assert.equal(`sha512-${createHash('sha512').update(Buffer.from(await remote.arra
   integrity, 'downloaded registry artifact differs from the approved tarball')
 
 const repo = new URL(manifest.repository.url.replace(/^git\+/u, '').replace(/\.git$/u, '')).pathname.slice(1)
-const search = await json(`-/v1/search?text=${encodeURIComponent(`repository:${repo}`)}&size=250`)
-// Match the market's repository-and-keyword discovery contract, independently
-// of the package name appearing in an unrelated search result.
-const candidates = (search.objects ?? []).filter(({ package: pkg }) =>
-  typeof pkg?.name === 'string'
-  && String(pkg.repository?.url ?? pkg.links?.repository ?? '').toLowerCase()
-    .includes(`github.com/${repo}`.toLowerCase()))
-const selected = candidates.find(({ package: pkg }) =>
-  pkg.keywords?.some(keyword => typeof keyword === 'string' && keyword.toLowerCase() === 'dsh-plugin'))
-  ?? candidates[0]
+const maintainers = [...new Set(
+  [...(published.maintainers ?? []), ...(version.maintainers ?? [])]
+    .map(entry => (typeof entry === 'string' ? entry : entry?.name ?? entry?.username))
+    .filter(name => typeof name === 'string' && name.length > 0),
+)].slice(0, 5)
+const searchQueries = [`repository:${repo}`, ...maintainers.map(name => `maintainer:${name}`)]
+
+async function searchRepositoryCandidates() {
+  const merged = []
+  const seen = new Set()
+  for (const query of searchQueries) {
+    const search = await json(`-/v1/search?text=${encodeURIComponent(query)}&size=250`)
+    for (const item of search.objects ?? []) {
+      const pkgName = item?.package?.name
+      if (typeof pkgName !== 'string' || seen.has(pkgName)) continue
+      seen.add(pkgName)
+      merged.push(item)
+    }
+  }
+  return merged.filter(({ package: pkg }) =>
+    repoSlug(pkg.repository?.url ?? pkg.links?.repository).includes(`github.com/${repo.toLowerCase()}`))
+}
+
+function selectPluginCandidate(candidates) {
+  return candidates.find(({ package: pkg }) =>
+    pkg.keywords?.some(keyword => typeof keyword === 'string' && keyword.toLowerCase() === 'dsh-plugin'))
+    ?? candidates[0]
+}
+
+// Match the market's repository-and-keyword discovery contract while retrying
+// brief npm OpenSearch indexing delays (including while other repository
+// packages are indexed first) and falling back to maintainer queries because
+// npm's public search API does not restrict repository: qualifiers.
+const deadline = Date.now() + searchTimeoutMs
+let candidates = await searchRepositoryCandidates()
+let selected = selectPluginCandidate(candidates)
+while (selected?.package.name !== manifest.name && Date.now() < deadline) {
+  const delayMs = Math.min(searchPollMs, Math.max(0, deadline - Date.now()))
+  if (delayMs > 0) await new Promise(resolveDelay => setTimeout(resolveDelay, delayMs))
+  candidates = await searchRepositoryCandidates()
+  selected = selectPluginCandidate(candidates)
+}
 assert.equal(selected?.package.name, manifest.name,
   'DSH Hub repository search does not yet select this plugin; publication is not marketplace-ready')
 process.stdout.write(`verified ${manifest.name}@${manifest.version}: latest, artifact integrity, repository discovery\n`)

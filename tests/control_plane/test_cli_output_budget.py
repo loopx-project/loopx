@@ -9,11 +9,13 @@ import shutil
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.control_plane.testing.cli_output_budget import (
@@ -547,6 +549,7 @@ def _mode_variant_commands(
     registry_path: Path,
     state_file: Path,
     output_format: str,
+    complete_quota: bool = True,
 ) -> dict[str, list[str]]:
     common = [
         "--registry",
@@ -574,6 +577,7 @@ def _mode_variant_commands(
     quota = _surface_commands(
         project=project, runtime=runtime, registry_path=registry_path,
         state_file=state_file, output_format=output_format,
+        complete_quota=complete_quota,
     )["quota_should_run"]
     return {
         "start_goal_guided_command_pack_detail": [
@@ -923,8 +927,8 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
-    work_context = payload["work_context"]
+    assert payload["selected_todo"]["text"]
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     assert work_context["selected_todo_ref"] == "selected_todo"
     source = next(row for row in work_context["sources"] if row["source"] == "selected_todo")
     authority = source["content"]["authority_read"]
@@ -983,11 +987,7 @@ def test_compact_selected_todo_markdown_preserves_work_context_instruction(
     assert json_exit_code == 0, json_text
     assert markdown_exit_code == 0, markdown_text
     payload = _json_payload(json_text)
-    work_context = (
-        payload["interaction_contract"]["agent_channel"]["work_context"]
-        if surface_id == "quota_should_run"
-        else payload["work_context"]
-    )
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     instruction = work_context["instruction"]
     assert instruction
     assert markdown_text.count(instruction) == 1
@@ -1042,7 +1042,7 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
     assert no_format_exit_code == 0, no_format_text
     assert _json_payload(no_format_text)["goal_id"] == GOAL_ID
     assert markdown_exit_code == 0, markdown_text
-    assert markdown_text.startswith("# LoopX Quota Should Run")
+    assert markdown_text.startswith("# LoopX Turn Envelope")
     assert not markdown_text.lstrip().startswith("{")
 
 
@@ -1089,6 +1089,7 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1096,6 +1097,7 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_todo_summary_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1177,6 +1179,72 @@ def test_unmigrated_malformed_todo_state_stays_bounded_and_refuses_ordinary_read
         assert state_file.read_bytes() == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_turn_shares_vision_audit_with_exact_native_and_stateless_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from loopx.control_plane.turn_driver.native_context_selection import verified_context_selection
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+    with _stable_budget_fixture_root(tmp_path / "complete-vision-audit") as stable_root:
+        isolate_sqlite_runtime(stable_root, monkeypatch)
+        project, runtime, registry, _ = _write_fixture(stable_root, SCENARIOS[1], include_agent_vision=True)
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        monkeypatch.chdir(project)
+        common = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
+        guard = common + ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]]
+        fixed_route = ["--cli-bin", "/fixture/bin/loopx"]
+        code, text = _invoke_cli(fixed_route + guard + ["--complete-turn", "--context-delivery", "off"])
+        assert code == 0, text
+        assert len(text) <= CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"].max_chars["json"]
+        payload = json.loads(text)
+        assert_complete_turn_decision(payload)
+        root_audit = payload["vision_continuation_audit"]
+        cli_audit = payload["interaction_contract"]["cli_channel"]["vision_continuation_audit"]
+        assert cli_audit == {"projection_ref": "$.vision_continuation_audit",
+            "projection_view": "cli_channel", "required": True}
+        assert root_audit["required_before_closeout"] and root_audit["vision_gap_judge"]["registry_read_instruction"]
+
+        captures = stable_root / "decisions"
+        captures.mkdir(mode=0o700)
+        code, text = _invoke_cli(guard + ["--codex-app", "--context-delivery", "on",
+            "--turn-instance-id", "fixture-vision-audit", "--decision-output-root", str(captures)])
+        assert code == 0, text
+        navigation = json.loads(text)
+        _, reference = read_context_read_reference(navigation["recovery"]["reference_file"])
+        capture = Path(reference["path"])
+        original = capture.read_bytes()
+        assert sha256(original).hexdigest() == reference["sha256"]
+        assert json.loads(original)["interaction_contract"]["cli_channel"]["vision_continuation_audit"] == cli_audit
+        section = "/interaction_contract/cli_channel/vision_continuation_audit"
+        child = section + "/required_before_closeout"
+        judge = section + "/vision_gap_judge/registry_read_instruction"
+        initial, _, _ = read_pinned_cli_body(navigation["first_read_command"])
+        first = selected_context_values(initial)
+        assert first[child] == root_audit["required_before_closeout"]
+        assert first[judge] == root_audit["vision_gap_judge"]["registry_read_instruction"]
+
+        select = common + ["quota", "context-read", "--capture-file", str(capture),
+            "--capture-sha256", reference["sha256"]]
+        code, text = _invoke_cli(select + ["--select", child, "--select", judge])
+        assert code == 0, text
+        page = json.loads(text)
+        values = selected_context_values(page["content"])
+        assert values[child] == first[child] and values[judge] == first[judge]
+        observation = verified_context_selection({"source_recovery": reference}, page)
+        assert observation is not None and observation["source_sha256"] == reference["sha256"]
+        assert set(observation["selected_pointers"]) == {child, judge}
+        code, text = _invoke_cli(select + ["--select", section, "--list", "--list-depth", "2"])
+        assert code == 0, text
+        fields = json.loads(json.loads(text)["content"])["selections"][0]["fields"]
+        assert {child, judge} <= {field["pointer"] for field in fields}
+        whole, _, _ = read_pinned_cli_body(navigation["recovery"]["command"] + " --select ''")
+        assert json.loads(whole)["selections"] == [{"pointer": "", "value": json.loads(original)}]
+        assert capture.read_bytes() == original
+
+
 def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
     tmp_path: Path,
 ) -> None:
@@ -1193,6 +1261,7 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1200,6 +1269,7 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_vision_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1474,6 +1544,7 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1481,6 +1552,7 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_user_todo_summary_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1530,6 +1602,7 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         detail_command = _mode_variant_commands(
             project=project,
@@ -1537,6 +1610,7 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run_goal_boundary_detail"]
 
         default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
@@ -1596,6 +1670,7 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         canonical_exit_code, canonical_text = _invoke_cli(
             default_command + ["--include-detail", "scheduler"],
@@ -1636,6 +1711,7 @@ def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
             registry_path=registry_path,
             state_file=state_file,
             output_format="json",
+            complete_quota=False,
         )["quota_should_run"]
         repeated_command = list(default_command)
         for section in ("scheduler", "agent-todos", "user-todos", "goal-boundary"):
@@ -2262,16 +2338,21 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    full_decision = shlex.split(payload["detail_ref"]["full_decision"])
-    # A cold read must preserve the complete originating source and host profile.
-    assert full_decision == [
-        "loopx", "--registry", str(registry_path), "--runtime-root", str(runtime),
-        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_IDS[0], "--codex-app",
-    ]
-    read_rc, read_text = _invoke_cli(full_decision[1:], read_context=True)
+    assert shlex.split(payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
+    assert payload["scheduler_hint"]["app_automation"]["host_surface"] == "codex_app"
+    # A fresh codex-app read without --turn-envelope preserves the same host profile.
+    read_rc, read_text = _invoke_cli(
+        [
+            "--registry", str(registry_path), "--runtime-root", str(runtime),
+            "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_IDS[0], "--codex-app",
+        ],
+        read_context=True,
+    )
     assert read_rc == 0, read_text
-    assert _json_payload(read_text)["goal_id"] == GOAL_ID
+    read_payload = _json_payload(read_text)
+    assert read_payload["goal_id"] == GOAL_ID
+    assert shlex.split(read_payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(

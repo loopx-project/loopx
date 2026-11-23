@@ -27,8 +27,55 @@ from benchmark.native_codex_goal import (
 from loopx.capabilities.benchmark_toolkit.native_codex_isolation import (
     NativeCodexIsolationEnvelope,
 )
+from loopx.capabilities.benchmark_toolkit.native_codex_goal import run_retained_decision_turn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_retained_decision_is_exact_tool_data_in_one_ephemeral_turn(tmp_path):
+    from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+
+    decision = tmp_path / "decision.json"
+    digest = write_decision_capture(decision, {"decision": "run", "text": "保留原文\n", "stop": ["publish"]})
+
+    class RetentionTransport(FakeTransport):
+        def request(self, method, params):
+            if method in {"thread/start", "thread/inject_items"}:
+                self.calls.append((method, params))
+                return {"thread": {"id": "thread-1", "ephemeral": True}} if method == "thread/start" else {}
+            return super().request(method, params)
+
+        def next_event(self, *, timeout_sec):
+            return {"method": "turn/completed", "params": {"threadId": "thread-1",
+                "turn": {"id": "response-turn", "status": "completed"}}}
+
+    host = RetentionTransport()
+    config = NativeGoalConfig(cwd=str(tmp_path), objective="Keep the decision.", task_instruction="Read the decision.")
+    turn = run_retained_decision_turn(host, config, capture=decision, digest=digest, timeout_sec=5)
+    calls = dict(host.calls)
+    assert tuple(calls) == ("initialize", "initialized", "thread/start", "thread/inject_items", "turn/start")
+    assert calls["thread/start"]["ephemeral"] is True
+    assert calls["thread/start"]["sandbox"] == "read-only"
+    pinned, = calls["thread/inject_items"]["items"]
+    assert pinned["retention"] == "always"
+    assert pinned["item"]["type"] == "function_call_output"
+    assert pinned["item"]["output"].encode("utf-8") == decision.read_bytes()
+    assert turn.turn_id == "response-turn" and turn.turn_status == "completed"
+
+
+@pytest.mark.parametrize("fault", ["changed", "oversize"])
+def test_retained_decision_refuses_invalid_original_before_native_input(tmp_path, fault):
+    from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+
+    decision = tmp_path / "decision.json"
+    digest = write_decision_capture(decision, {"decision": "run", "text": "a" * (48_000 if fault == "oversize" else 8)})
+    if fault == "changed":
+        decision.write_bytes(decision.read_bytes() + b" ")
+    host = FakeTransport()
+    config = NativeGoalConfig(cwd=str(tmp_path), objective="Keep the decision.", task_instruction="Read the decision.")
+    with pytest.raises(ValueError, match="digest mismatch|retained input budget"):
+        run_retained_decision_turn(host, config, capture=decision, digest=digest, timeout_sec=5)
+    assert not host.calls
 
 
 class FakeTransport:

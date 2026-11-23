@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -25,9 +25,10 @@ from ...chat import (
     CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG,
     VisibleResponseStreamFilter,
     _review_openings,
+    _turn_prompt,
     parse_agent_response,
 )
-from ...chat_agent import CodexChatAgentError, _turn_prompt
+from ...chat_agent import CodexChatAgentError
 from .antigravity_activity import AntigravityActivity
 from .manager_input import manager_input_matches
 
@@ -35,6 +36,11 @@ from .manager_input import manager_input_matches
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-argon-high"
 ANTIGRAVITY_DEFAULT_REASONING_EFFORT = "high"
 ANTIGRAVITY_IDLE_TIMEOUT_SEC = 300.0
+ANTIGRAVITY_LARGE_CASCADE_POLL_THRESHOLD = 200
+ANTIGRAVITY_MAX_CASCADE_STEPS = 500
+ANTIGRAVITY_ROLLOVER_MAX_MESSAGES = 24
+ANTIGRAVITY_ROLLOVER_MAX_ITEM_CHARS = 4_000
+ANTIGRAVITY_ROLLOVER_MAX_TOTAL_CHARS = 48_000
 
 ANTIGRAVITY_MODEL_PLACEHOLDERS: dict[str, str] = {
     "gemini-4-argon-high": "MODEL_PLACEHOLDER_M417",
@@ -53,6 +59,56 @@ _SETTLED_STEP_STATUSES = {
 }
 
 
+def _max_cascade_steps(env: Mapping[str, str] | None = None) -> int:
+    raw = (env if env is not None else os.environ).get("LOOPX_ANTIGRAVITY_MAX_CASCADE_STEPS")
+    if raw is None or not str(raw).strip():
+        return ANTIGRAVITY_MAX_CASCADE_STEPS
+    try:
+        parsed = int(str(raw).strip())
+    except ValueError:
+        return ANTIGRAVITY_MAX_CASCADE_STEPS
+    return parsed if parsed >= 0 else ANTIGRAVITY_MAX_CASCADE_STEPS
+
+
+def _rollover_history(messages: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
+    """Keep bounded recent visible messages when rolling over an overfull cascade."""
+    kept: list[dict[str, str]] = []
+    used = 0
+    for item in reversed(list(messages)[-ANTIGRAVITY_ROLLOVER_MAX_MESSAGES:]):
+        content = str(item.get("content") or "")
+        if len(content) > ANTIGRAVITY_ROLLOVER_MAX_ITEM_CHARS:
+            content = content[:ANTIGRAVITY_ROLLOVER_MAX_ITEM_CHARS - 3].rstrip() + "..."
+        if kept and used + len(content) > ANTIGRAVITY_ROLLOVER_MAX_TOTAL_CHARS:
+            break
+        if len(content) > ANTIGRAVITY_ROLLOVER_MAX_TOTAL_CHARS:
+            content = content[:ANTIGRAVITY_ROLLOVER_MAX_TOTAL_CHARS - 3].rstrip() + "..."
+        kept.append({"role": str(item.get("role") or "user"), "content": content})
+        used += len(content)
+    kept.reverse()
+    return kept
+
+
+def _start_cascade(ls_url: str, csrf_token: str, work_dir: Path) -> str:
+    started = _rpc_post(
+        ls_url,
+        csrf_token,
+        "StartCascade",
+        {
+            "source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT",
+            "workspaceUris": [work_dir.resolve().as_uri()],
+        },
+        timeout=10.0,
+    )
+    cascade_id = str(started.get("cascadeId") or "").strip()
+    if not cascade_id:
+        raise CodexChatAgentError(
+            f"StartCascade did not return a cascadeId: {started}",
+            gate=None,
+            error_code="antigravity_start_failed",
+        )
+    return cascade_id
+
+
 def _step_allows_completed_turn(step: dict[str, Any], *, final: dict[str, Any]) -> bool:
     """Only a settled intermediate step may precede a final planner answer."""
     error = step.get("errorMessage") or {}
@@ -64,6 +120,33 @@ def _step_allows_completed_turn(step: dict[str, Any], *, final: dict[str, Any]) 
             and (step is final or (isinstance(error, dict) and error.get("shouldShowUser") is True))
         )
     )
+
+
+def _turn_steps_allow_completion(
+    current_steps: Sequence[tuple[int, dict[str, Any]]],
+    *,
+    final: dict[str, Any],
+    require_execution_id: str | None = None,
+) -> bool:
+    """Verify settled steps, tolerating pre-error aborted PENDING placeholders."""
+    last_error_idx = max(
+        (idx for idx, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"),
+        default=None,
+    )
+    for idx, step in current_steps:
+        if (
+            step is not final
+            and last_error_idx is not None
+            and idx < last_error_idx
+            and step.get("status") == "CORTEX_STEP_STATUS_PENDING"
+            and step.get("type") != "CORTEX_STEP_TYPE_USER_INPUT"
+        ):
+            continue
+        if not _step_allows_completed_turn(step, final=final):
+            return False
+        if require_execution_id is not None and (step.get("metadata") or {}).get("executionId") != require_execution_id:
+            return False
+    return True
 
 
 ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
@@ -79,8 +162,13 @@ ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
 )
 
 
-def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list[tuple[int, dict[str, Any]]], int]:
-    """Read absolute native indices; some LS versions ignore range arguments."""
+_MISSING_STEPS = object()
+
+
+def _index_step_batch(steps: list[Any], requested_start: int, total: int) -> tuple[int, list[tuple[int, dict[str, Any]]], int]:
+    """Decode absolute step indices for one LS trajectory step page."""
+    if requested_start < 0 or total < requested_start:
+        raise ValueError("Antigravity trajectory coverage is incomplete")
     bases: set[int] = set()
     for offset, step in enumerate(steps):
         if not isinstance(step, dict):
@@ -96,18 +184,65 @@ def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list
             if type(index) is not int or index < 0:
                 raise ValueError("Antigravity returned an invalid trajectory index")
             bases.add(index - offset)
+    if not steps and requested_start < total:
+        raise ValueError("Antigravity trajectory coverage is incomplete")
     if len(bases) == 1:
         base = bases.pop()
-    elif not bases and len(steps) == total - start:
-        base = start  # Older servers honor the requested range without metadata.
+    elif not bases and len(steps) == total - requested_start:
+        base = requested_start  # Older servers honor the requested range without metadata.
     elif not bases and len(steps) == total:
         base = 0
     else:
         raise ValueError("Antigravity trajectory coverage is unknown")
-    current = [(base + offset, step) for offset, step in enumerate(steps) if start <= base + offset < total]
-    if base < 0 or [index for index, _ in current] != list(range(start, total)):
+    if base < 0:
         raise ValueError("Antigravity trajectory coverage is incomplete")
-    return current, base + len(steps)
+    indexed = [(base + offset, step) for offset, step in enumerate(steps)]
+    return base, indexed, base + len(steps)
+
+
+def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list[tuple[int, dict[str, Any]]], int]:
+    """Read absolute native indices; some LS versions ignore range arguments."""
+    _, indexed, covered = _index_step_batch(steps, start, total)
+    current = [(index, step) for index, step in indexed if start <= index < total]
+    if [index for index, _ in current] != list(range(start, total)):
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    return current, covered
+
+
+def _read_trajectory_steps(
+    fetch_page: Callable[[int, int], Any],
+    *,
+    start: int,
+    total: int,
+) -> tuple[list[tuple[int, dict[str, Any]]], int] | None:
+    """Fetch complete trajectory coverage across stepOffset-bounded LS pages."""
+    if start < 0 or total < start:
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    if start == total:
+        raw = fetch_page(start, total)
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError("Antigravity returned no trajectory coverage")
+        return _observed_turn_steps(raw, start, total)
+    cursor = start
+    collected: list[tuple[int, dict[str, Any]]] = []
+    max_covered = total
+    while cursor < total:
+        raw = fetch_page(cursor, total)
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError("Antigravity returned no trajectory coverage")
+        base, indexed, batch_end = _index_step_batch(raw, cursor, total)
+        if base > cursor or batch_end <= cursor:
+            raise ValueError("Antigravity trajectory coverage is incomplete")
+        collected.extend((index, step) for index, step in indexed if cursor <= index < total)
+        max_covered = max(max_covered, batch_end)
+        cursor = min(batch_end, total)
+    if [index for index, _ in collected] != list(range(start, total)):
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    return collected, max_covered
 
 
 _RUNNING_STEP_BODIES = {
@@ -149,9 +284,52 @@ def _running_snapshot_steps(snapshot: dict[str, Any], *, cascade_id: str, start:
     return indexed
 
 
-def _check_hard_timeout(value: float | None) -> None:
+def _check_positive_timeout(value: float | None, label: str = "hard") -> None:
     if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
-        raise ValueError("Antigravity hard timeout must be finite and positive")
+        raise ValueError(f"Antigravity {label} timeout must be finite and positive")
+
+
+def _check_hard_timeout(value: float | None) -> None:
+    _check_positive_timeout(value, "hard")
+
+
+_NON_TOOL_STEP_TYPES = frozenset({
+    "CORTEX_STEP_TYPE_USER_INPUT", "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+    "CORTEX_STEP_TYPE_ERROR_MESSAGE", "CORTEX_STEP_TYPE_CHECKPOINT",
+    "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+})
+
+
+def _turn_progress_snapshot(current_steps: Sequence[tuple[int, Mapping[str, object]]]) -> list[tuple[object, ...]]:
+    """Project turn progress while bounding repeated error -> thinking-only retry loops."""
+    progress: list[tuple[object, ...]] = []
+    error_fence_active, settled_thinking_only_retries = False, 0
+    for index, step in current_steps:
+        step_type, step_status = str(step.get("type") or ""), str(step.get("status") or "")
+        if step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+            if step_status != "CORTEX_STEP_STATUS_CLEARED":
+                error_fence_active = True
+            continue
+        planner = step.get("plannerResponse")
+        planner_dict = planner if isinstance(planner, dict) else {}
+        response_text = planner_dict.get("modifiedResponse") or planner_dict.get("response")
+        if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+            if (isinstance(response_text, str) and response_text.strip()) or planner_dict.get("toolCalls"):
+                error_fence_active, settled_thinking_only_retries = False, 0
+            elif error_fence_active:
+                if settled_thinking_only_retries >= 1:
+                    continue
+                if step_status not in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}:
+                    settled_thinking_only_retries += 1
+        elif step_type not in _NON_TOOL_STEP_TYPES:
+            error_fence_active, settled_thinking_only_retries = False, 0
+        elif error_fence_active and settled_thinking_only_retries >= 1 and step_type != "CORTEX_STEP_TYPE_USER_INPUT":
+            continue
+        run_cmd = step.get("runCommand")
+        cmd_dict = run_cmd if isinstance(run_cmd, dict) else {}
+        progress.append((index, step.get("status"), response_text, planner_dict.get("thinking"),
+                         cmd_dict.get("combinedOutput"), cmd_dict.get("exitCode")))
+    return progress
 
 
 def _native_completion_facts(cascade_id: str, current: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
@@ -254,6 +432,79 @@ def _rpc_post(
         ) from exc
 
 
+def _daemon_discovery_candidates(
+    daemon_pids: Mapping[int, str], source_env: Mapping[str, str],
+) -> list[tuple[int, int, str]]:
+    """Read verified standalone LS hub/daemon metadata files for live PIDs."""
+    raw_home = str(source_env.get("HOME") or "").strip()
+    home = Path(raw_home).expanduser() if raw_home else Path.home()
+    files: list[tuple[float, str, Path]] = []
+    for app_dir in dict.fromkeys(daemon_pids.values()):
+        if app_dir in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._-]+", app_dir):
+            continue
+        daemon_dir = home / ".gemini" / app_dir / "daemon"
+        if daemon_dir.is_symlink() or not daemon_dir.is_dir():
+            continue
+        for pat in ("hub_*.json", "ls_*.json"):
+            for path in daemon_dir.glob(pat):
+                try:
+                    if not path.is_symlink() and path.is_file():
+                        files.append((path.stat().st_mtime, app_dir, path))
+                except OSError:
+                    continue
+    seen: set[tuple[int, int]] = set()
+    resolved: list[tuple[int, int, str]] = []
+    for _, app_dir, path in sorted(files, key=lambda item: item[0], reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        pid, port, token = data.get("pid"), data.get("httpPort"), data.get("csrfToken")
+        if (type(pid) is not int or daemon_pids.get(pid) != app_dir
+                or type(port) is not int or not (1 <= port <= 65535)
+                or not isinstance(token, str) or not token.strip()
+                or (pid, port) in seen):
+            continue
+        seen.add((pid, port))
+        resolved.append((pid, port, token.strip()))
+    return resolved
+
+
+def _probe_model_config(
+    url: str, token: str, *, pid: int | None, source: str, timeout: float, include_model_config: bool,
+) -> dict[str, Any]:
+    model_data = _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=timeout)
+    return {
+        "url": url, "csrf_token": token, "pid": pid, "source": source,
+        **({"model_config_data": model_data} if include_model_config else {}),
+    }
+
+
+def _cascade_summary_entry(resp: Any, cascade_id: str) -> dict[str, Any] | None:
+    summaries = resp.get("trajectorySummaries") if isinstance(resp, dict) else None
+    entry = summaries.get(cascade_id) if isinstance(summaries, dict) else None
+    return entry if isinstance(entry, dict) else None
+
+
+def probe_cascade_idle(url: str, csrf_token: str, cascade_id: str, *, timeout: float = 2.5) -> bool:
+    """Return whether `cascade_id` is idle using summary polling with trajectory fallback."""
+    try:
+        resp = _rpc_post(url, csrf_token, "GetAllCascadeTrajectories", {}, timeout=timeout)
+        entry = _cascade_summary_entry(resp, cascade_id)
+        if entry is not None:
+            return entry.get("status") == "CASCADE_RUN_STATUS_IDLE"
+    except CodexChatAgentError as exc:
+        if exc.error_code != "antigravity_rpc_error":
+            return False
+    try:
+        traj = _rpc_post(url, csrf_token, "GetCascadeTrajectory", {"cascadeId": cascade_id}, timeout=max(timeout, 5.0))
+    except CodexChatAgentError:
+        return False
+    return isinstance(traj, dict) and traj.get("status") == "CASCADE_RUN_STATUS_IDLE"
+
+
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None,
     *, deadline: float | None = None, include_model_config: bool = False,
@@ -264,8 +515,13 @@ def discover_antigravity_language_server(
     execution caller without that deadline retains the existing phase limits.
     """
     source_env = os.environ if env is None else env
-    explicit_url = str(source_env.get("ANTIGRAVITY_LS_URL") or "").strip()
     explicit_token = str(source_env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
+    raw_url = str(
+        source_env.get("ANTIGRAVITY_LS_URL")
+        or (source_env.get("ANTIGRAVITY_LS_ADDRESS") if explicit_token else "")
+        or ""
+    ).strip()
+    explicit_url = f"http://{raw_url}" if raw_url and "://" not in raw_url else raw_url
     if explicit_url or explicit_token:
         if not explicit_url or not explicit_token:
             return None
@@ -274,20 +530,10 @@ def discover_antigravity_language_server(
             timeout = 2.5 if deadline is None else min(2.5, deadline - time.monotonic())
             if timeout <= 0:
                 return None
-            model_data = _rpc_post(
-                explicit_url,
-                explicit_token,
-                "GetCascadeModelConfigData",
-                {},
-                timeout=timeout,
+            return _probe_model_config(
+                explicit_url.rstrip("/"), explicit_token, pid=None, source="environment",
+                timeout=timeout, include_model_config=include_model_config,
             )
-            return {
-                "url": explicit_url.rstrip("/"),
-                "csrf_token": explicit_token,
-                "pid": None,
-                "source": "environment",
-                **({"model_config_data": model_data} if include_model_config else {}),
-            }
         except (CodexChatAgentError, ValueError):
             return None
 
@@ -297,28 +543,27 @@ def discover_antigravity_language_server(
     try:
         ps_out = subprocess.check_output(
             ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stderr=subprocess.DEVNULL,
-            timeout=process_timeout,
+            text=True, encoding="utf-8", errors="replace",
+            stderr=subprocess.DEVNULL, timeout=process_timeout,
         )
     except Exception:
         return None
 
     candidates: list[tuple[int, str]] = []
+    daemon_pids: dict[int, str] = {}
     for line in ps_out.splitlines():
-        if ("language_server" not in line or "antigravity" not in line.lower()
-                or "--csrf_token" not in line):
+        if "language_server" not in line or "antigravity" not in line.lower():
             continue
         match = re.match(r"^\s*(\d+)\s+(.*)$", line)
         if not match:
             continue
-        pid = int(match.group(1))
-        cmd = match.group(2)
+        pid, cmd = int(match.group(1)), match.group(2)
         token_match = re.search(r"--csrf_token(?:=|\s+)([A-Za-z0-9._-]+)", cmd)
         if token_match:
             candidates.append((pid, token_match.group(1)))
+            continue
+        dir_match = re.search(r"--app_data_dir(?:=|\s+)([A-Za-z0-9._-]+)", cmd)
+        daemon_pids[pid] = dir_match.group(1) if dir_match else "antigravity"
 
     discovery_deadline = time.monotonic() + 4.0
     deadline = min(discovery_deadline, deadline) if deadline is not None else discovery_deadline
@@ -328,33 +573,36 @@ def discover_antigravity_language_server(
         try:
             lsof_out = subprocess.check_output(
                 ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stderr=subprocess.DEVNULL,
-                timeout=max(0.1, deadline - time.monotonic()),
+                text=True, encoding="utf-8", errors="replace",
+                stderr=subprocess.DEVNULL, timeout=max(0.1, deadline - time.monotonic()),
             )
         except Exception:
             continue
-        ports: list[int] = []
         for line in lsof_out.splitlines():
             port_match = re.search(r":(\d+)\s+\(LISTEN\)", line)
-            if port_match:
-                ports.append(int(port_match.group(1)))
-        for port in ports:
+            if not port_match:
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                return _probe_model_config(
+                    f"http://127.0.0.1:{int(port_match.group(1))}", token, pid=pid,
+                    source="process_discovery", timeout=min(1.5, remaining),
+                    include_model_config=include_model_config,
+                )
+            except CodexChatAgentError:
+                continue
+    if daemon_pids:
+        for pid, port, token in _daemon_discovery_candidates(daemon_pids, source_env):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            url = f"http://127.0.0.1:{port}"
             try:
-                model_data = _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=min(1.5, remaining))
-                return {
-                    "url": url,
-                    "csrf_token": token,
-                    "pid": pid,
-                    "source": "process_discovery",
-                    **({"model_config_data": model_data} if include_model_config else {}),
-                }
+                return _probe_model_config(
+                    f"http://127.0.0.1:{port}", token, pid=pid, source="daemon_discovery",
+                    timeout=min(1.5, remaining), include_model_config=include_model_config,
+                )
             except CodexChatAgentError:
                 continue
     return None
@@ -474,6 +722,39 @@ def _matching_antigravity_model_config(rows: list[Any], model_id: str) -> list[d
     ]
 
 
+def _extract_user_model_quota(
+    user: Any,
+    model_id: str,
+    *,
+    fallback_rows: list[Any] | None = None,
+) -> tuple[str, float, str] | None:
+    """Validate and extract `(account_ref, remaining_fraction, reset_time)` for one canonical model."""
+    if not isinstance(user, Mapping):
+        return None
+    account = user.get("email")
+    if not isinstance(account, str) or not account.strip():
+        return None
+    rows = (user.get("cascadeModelConfigData") or {}).get("clientModelConfigs")
+    if not isinstance(rows, list):
+        if fallback_rows is None:
+            return None
+        rows = fallback_rows
+    matching = _matching_antigravity_model_config(rows, model_id)
+    if len(matching) != 1:
+        return None
+    quota = matching[0]["quotaInfo"]
+    fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
+    if (type(fraction) not in (int, float) or not math.isfinite(fraction)
+            or not 0 <= fraction <= 1 or not isinstance(reset, str)
+            or datetime.fromisoformat(reset).tzinfo is None):
+        return None
+    return (
+        hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+        fraction,
+        reset,
+    )
+
+
 def _native_user_input_text(step: dict[str, Any]) -> str | None:
     """Read the one native text item; any redundant response must agree."""
     content = step.get("userInput")
@@ -494,8 +775,8 @@ class AntigravityAdapter:
     Restricted Chat disables native tools. Trusted-owner uses Antigravity's
     existing approvals; LoopX never accepts those approvals on the user's behalf.
     Governed Tasks and workspace grants retain their existing executor owner.
-    By default, five minutes without native progress stops an invocation; an
-    explicit hard_timeout_sec also bounds wall time even while it progresses.
+    Interactive invocations have no default idle or wall-clock timeout; explicit
+    idle_timeout_sec and hard_timeout_sec bound idle and wall time when set.
     """
 
     adapter_kind = "antigravity_ls"
@@ -522,15 +803,20 @@ class AntigravityAdapter:
             if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total <= start + 2
                     or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
-            raw = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps")
-            if not isinstance(raw, list):
+            def fetch_steps(offset: int, end: int) -> Any:
+                return read("GetCascadeTrajectorySteps", stepOffset=offset, startIndex=offset, endIndex=end).get("steps")
+            first_read = _read_trajectory_steps(fetch_steps, start=start, total=total)
+            if first_read is None:
                 return None
-            indexed, covered = _observed_turn_steps(raw, start, total)
+            indexed, covered = first_read
             if covered != total or not indexed or indexed[0][0] != start:
                 return None
             end = next((i for i, s in indexed if i > start and s.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"), total)
             current = [s for i, s in indexed if start <= i < end]
-            if len(current) > 128 or raw != read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps") or before != read("GetCascadeTrajectory"):
+            if len(current) > 128:
+                return None
+            second_read = _read_trajectory_steps(fetch_steps, start=start, total=total)
+            if second_read is None or [s for _, s in second_read[0]] != [s for _, s in indexed] or before != read("GetCascadeTrajectory"):
                 return None
             user, terminal = current[0], current[-1]
             # A cleared historical segment can retain visible answer text while
@@ -616,9 +902,8 @@ class AntigravityAdapter:
                                   input_anchor: dict[str, Any]) -> dict[str, Any] | None:
         """Prove one native input ended at quota before any model/tool output.
 
-        Read
-        the exact original input twice from a stable idle cascade instead. Only
-        the latest two-step input/quota-error sequence qualifies; any output,
+        Read the exact original input twice from a stable idle cascade instead.
+        Only the latest two-step input/quota-error sequence qualifies; any output,
         tool, later input, cleared step or unknown native state fails closed.
         """
         try:
@@ -634,9 +919,9 @@ class AntigravityAdapter:
             if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total != start + 2
                     or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
-            raw = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total)["steps"]
+            raw = read("GetCascadeTrajectorySteps", stepOffset=start, startIndex=start, endIndex=total)["steps"]
             indexed, covered = _observed_turn_steps(raw, start, total)
-            again = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total)["steps"]
+            again = read("GetCascadeTrajectorySteps", stepOffset=start, startIndex=start, endIndex=total)["steps"]
             after = read("GetCascadeTrajectory")
             if covered != total or raw != again or before != after or len(indexed) != 2:
                 return None
@@ -683,6 +968,7 @@ class AntigravityAdapter:
         native failure alongside the exact model's quota epoch.
         """
         try:
+            canonical_model_id, _ = resolve_antigravity_model_placeholder(model_id)
             found = discover_antigravity_language_server()
             if found is None:
                 return None
@@ -694,48 +980,46 @@ class AntigravityAdapter:
                     or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
             start = max(0, total - 128)
-            steps, covered = _observed_turn_steps(read("GetCascadeTrajectorySteps",
-                {"cascadeId": cascade_id, "startIndex": start, "endIndex": total})["steps"], start, total)
+            def fetch_steps(offset: int, end: int) -> Any:
+                return read("GetCascadeTrajectorySteps",
+                    {"cascadeId": cascade_id, "stepOffset": offset, "startIndex": offset, "endIndex": end})["steps"]
+            loaded = _read_trajectory_steps(fetch_steps, start=start, total=total)
+            if loaded is None:
+                return None
+            steps, covered = loaded
             inputs = [i for i, step in steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
             if not inputs and start:
-                steps, covered = _observed_turn_steps(read("GetCascadeTrajectorySteps",
-                    {"cascadeId": cascade_id, "startIndex": 0, "endIndex": total})["steps"], 0, total)
+                loaded_full = _read_trajectory_steps(fetch_steps, start=0, total=total)
+                if loaded_full is None:
+                    return None
+                steps, covered = loaded_full
                 inputs = [i for i, step in steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
             if not inputs or covered != total:
                 return None
-            latest = [step for i, step in steps if i >= inputs[-1]]
+            latest_indexed = [(i, step) for i, step in steps if i >= inputs[-1]]
+            latest = [step for _, step in latest_indexed]
             exhausted = any(str(((step.get("errorMessage") or {}).get("error") or {}).get(
                 "userErrorMessage") or "").startswith("Individual quota reached.")
                 for step in latest)
             planner = latest[-1].get("plannerResponse") or {}
-            normal = (latest[-1].get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+            execution = (latest[0].get("metadata") or {}).get("executionId") if latest else None
+            normal = (bool(latest)
+                and latest[-1].get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                 and planner.get("stopReason") == "STOP_REASON_STOP_PATTERN" and not planner.get("toolCalls")
-                and all(_step_allows_completed_turn(step, final=latest[-1]) for step in latest)
-                and isinstance((latest[0].get("metadata") or {}).get("executionId"), str)
-                and bool((latest[0].get("metadata") or {}).get("executionId"))
-                and len({(step.get("metadata") or {}).get("executionId") for step in latest}) == 1)
+                and isinstance(execution, str) and bool(execution)
+                and _turn_steps_allow_completion(latest_indexed, final=latest[-1], require_execution_id=execution))
             if not normal and not exhausted:
                 return None  # An unknown native failure is not capacity evidence.
             status = read("GetUserStatus", {})
-            user = status["userStatus"]
-            account = user.get("email")
-            if not isinstance(account, str) or not account.strip():
+            extracted = _extract_user_model_quota(status.get("userStatus"), canonical_model_id)
+            if extracted is None:
                 return None
-            rows = user["cascadeModelConfigData"]["clientModelConfigs"]
-            matching = _matching_antigravity_model_config(rows, model_id)
-            if len(matching) != 1:
-                return None
-            quota = matching[0]["quotaInfo"]
-            fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
-            if (type(fraction) not in (int, float) or not math.isfinite(fraction)
-                    or not 0 <= fraction <= 1 or not isinstance(reset, str)
-                    or datetime.fromisoformat(reset).tzinfo is None):
-                return None
+            account_ref, fraction, reset = extracted
             after = read("GetCascadeTrajectory", {"cascadeId": cascade_id})
             if (after.get("status") != before["status"] or after.get("numTotalSteps") != total
                     or (after.get("trajectory") or {}).get("cascadeId") != cascade_id):
                 return None
-            return {"model_id": model_id, "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+            return {"model_id": canonical_model_id, "account_ref": account_ref,
                 "remaining_fraction": fraction, "reset_time": reset,
                 "execution_id": (latest[0].get("metadata") or {}).get("executionId"),
                 "observed_at": time.time(), "quota_exhausted": exhausted, "normal_completion": normal}
@@ -743,38 +1027,83 @@ class AntigravityAdapter:
             return None
 
     @staticmethod
+    def failed_report_observation(
+        *,
+        cascade_id: str,
+        turn_id: str,
+        native_timeout: bool,
+        model_id: str | None = None,
+        reasoning_effort: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Read an idle Antigravity cascade and capacity without starting or mutating work."""
+        found = discover_antigravity_language_server(
+            env=env,
+            include_model_config=True,
+            deadline=time.monotonic() + 3.0,
+        )
+        if found is None:
+            return None
+        try:
+            traj = _rpc_post(
+                str(found["url"]),
+                str(found["csrf_token"]),
+                "GetCascadeTrajectory",
+                {"cascadeId": cascade_id},
+                timeout=2.5,
+            )
+        except CodexChatAgentError:
+            return None
+        if traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
+            return None
+        cap = AntigravityAdapter.endpoint_model_capacity(
+            model_id=str(model_id or ANTIGRAVITY_DEFAULT_MODEL),
+            reasoning_effort=reasoning_effort,
+            env=env,
+            discovered=found,
+        )
+        return {
+            "adapter_kind": "antigravity_ls",
+            "turn_id": turn_id,
+            "thread_id": cascade_id,
+            "cascade_idle": True,
+            "no_final_response": True,
+            "native_timeout": native_timeout,
+            "quota_available": bool(cap and cap.get("normal_completion") is True),
+            "quota_observed_at": time.time(),
+        }
+
+    @staticmethod
     def endpoint_model_capacity(
         *,
         model_id: str,
+        reasoning_effort: str | None = None,
         env: Mapping[str, str] | None = None,
         discovered: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Observe the live LS account's quota for one offered model without opening a cascade."""
         try:
+            canonical_model_id, _ = resolve_antigravity_model_placeholder(
+                model_id,
+                reasoning_effort,
+            )
             found = discovered or discover_antigravity_language_server(env=env, include_model_config=True)
             if found is None:
                 return None
             status = _rpc_post(str(found["url"]), str(found["csrf_token"]), "GetUserStatus", {}, timeout=5.0)
-            user = status["userStatus"]
-            account = user.get("email")
-            if not isinstance(account, str) or not account.strip():
+            fallback_rows = (found.get("model_config_data") or {}).get("clientModelConfigs") or []
+            extracted = _extract_user_model_quota(
+                status.get("userStatus"),
+                canonical_model_id,
+                fallback_rows=fallback_rows if isinstance(fallback_rows, list) else [],
+            )
+            if extracted is None:
                 return None
-            rows = (user.get("cascadeModelConfigData") or {}).get("clientModelConfigs")
-            if not isinstance(rows, list):
-                rows = (found.get("model_config_data") or {}).get("clientModelConfigs") or []
-            matching = _matching_antigravity_model_config(rows, model_id)
-            if len(matching) != 1:
-                return None
-            quota = matching[0]["quotaInfo"]
-            fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
-            if (type(fraction) not in (int, float) or not math.isfinite(fraction)
-                    or not 0 <= fraction <= 1 or not isinstance(reset, str)
-                    or datetime.fromisoformat(reset).tzinfo is None):
-                return None
+            account_ref, fraction, reset = extracted
             exhausted = fraction <= 0
             return {
-                "model_id": model_id,
-                "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+                "model_id": canonical_model_id,
+                "account_ref": account_ref,
                 "remaining_fraction": fraction,
                 "reset_time": reset,
                 "execution_id": f"endpoint-probe:{uuid.uuid4().hex}",
@@ -824,10 +1153,22 @@ class AntigravityAdapter:
                 if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total < 2
                         or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
                     return None
-                raw = read("GetCascadeTrajectorySteps", startIndex=0, endIndex=total).get("steps")
-                if not isinstance(raw, list):
+                scan_start = 0
+                if input_anchor is not None:
+                    anchored = input_anchor.get("start_step_index")
+                    if type(anchored) is not int or anchored < 0 or anchored >= total:
+                        return None
+                    scan_start = anchored
+                loaded = _read_trajectory_steps(
+                    lambda offset, end: read(
+                        "GetCascadeTrajectorySteps", stepOffset=offset, startIndex=offset, endIndex=end
+                    ).get("steps"),
+                    start=scan_start,
+                    total=total,
+                )
+                if loaded is None:
                     return None
-                indexed, covered = _observed_turn_steps(raw, 0, total)
+                indexed, covered = loaded
                 after = read("GetCascadeTrajectory")
                 if (covered != total or after.get("status") != before["status"]
                         or after.get("numTotalSteps") != total
@@ -867,10 +1208,9 @@ class AntigravityAdapter:
             if not current:
                 return None
             final = current[-1][1]
-            if not isinstance(execution, str) or not execution or any(
-                    not _step_allows_completed_turn(step, final=final)
-                    or (step.get("metadata") or {}).get("executionId") != execution
-                    for _, step in current):
+            if not isinstance(execution, str) or not execution or not _turn_steps_allow_completion(
+                current, final=final, require_execution_id=execution
+            ):
                 return None
             planner = final.get("plannerResponse") or {}
             answer = planner.get("modifiedResponse") or planner.get("response")
@@ -908,9 +1248,12 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         initial_history: list[dict[str, str]] | None = None,
         resumed: bool = False,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
+        max_cascade_steps: int | None = None,
     ) -> None:
         self.work_dir = work_dir.resolve()
+        _check_positive_timeout(idle_timeout_sec, "idle")
         _check_hard_timeout(hard_timeout_sec)
         self.objective = objective
         self.cascade_id = cascade_id
@@ -926,12 +1269,18 @@ class AntigravityAdapter:
         self._pending_history: list[dict[str, str]] = (
             list(initial_history) if initial_history and not resumed else []
         )
+        self._recent_history: list[dict[str, str]] = (
+            _rollover_history(initial_history) if initial_history else []
+        )
+        self._max_cascade_steps = _max_cascade_steps() if max_cascade_steps is None else max_cascade_steps
         self._system_primed = False
         self._closed = False
+        self.idle_timeout_sec = idle_timeout_sec
         self.hard_timeout_sec = hard_timeout_sec
         self._interrupted = threading.Event()
         self._send_lock = threading.Lock()
         self._active_turn_id: str | None = None
+        self._active_cascade_id: str | None = None
         self._cancel_acknowledged = False
         self._launch_guard: Callable[[], AbstractContextManager[None]] | None = None
         self._steward_report_reader: Callable[[str, Any], dict[str, Any]] | None = None
@@ -959,102 +1308,86 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         executor_model: Mapping[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
     ) -> "AntigravityAdapter":
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Antigravity Chat runtime profile")
+        _check_positive_timeout(idle_timeout_sec, "idle")
         _check_hard_timeout(hard_timeout_sec)
         # Validate user intent before creating an upstream cascade.
         requested = dict(executor_model or {})
-        resolve_antigravity_model_placeholder(requested.get("model"), requested.get("reasoning_effort"))
+        req_model = str(requested.get("model") or "").strip() or None
+        req_effort = str(requested.get("reasoning_effort") or "").strip() or None
+        resolve_antigravity_model_placeholder(req_model, req_effort)
         discovered = discover_antigravity_language_server(env=env, include_model_config=True)
         if discovered is None:
             raise CodexChatAgentError(
                 "Antigravity local language_server is not running or reachable",
-                gate=None,
-                error_code="antigravity_unavailable",
+                gate=None, error_code="antigravity_unavailable",
             )
-        ls_url = str(discovered["url"])
-        csrf_token = str(discovered["csrf_token"])
-
-        dynamic_configs = _discovered_model_configs(discovered)
-
-        requested_model = (
-            str(executor_model.get("model") or "").strip()
-            if isinstance(executor_model, Mapping)
-            else None
-        )
-        requested_effort = (
-            str(executor_model.get("reasoning_effort") or "").strip()
-            if isinstance(executor_model, Mapping)
-            else None
-        )
+        ls_url, csrf_token = str(discovered["url"]), str(discovered["csrf_token"])
         model_id, model_placeholder = resolve_antigravity_model_placeholder(
-            requested_model,
-            requested_effort,
-            dynamic_configs=dynamic_configs,
+            req_model, req_effort, dynamic_configs=_discovered_model_configs(discovered),
         )
 
         cascade_id = str(resume_thread_id or "").strip()
         resumed = False
+        rotated = False
+        max_steps = _max_cascade_steps(env)
         if cascade_id:
+            rotate_now = False
             try:
-                traj = _rpc_post(
-                    ls_url,
-                    csrf_token,
-                    "GetCascadeTrajectory",
-                    {"cascadeId": cascade_id},
-                    timeout=3.0,
-                )
+                traj = _rpc_post(ls_url, csrf_token, "GetCascadeTrajectory", {"cascadeId": cascade_id}, timeout=10.0)
                 if isinstance(traj, dict) and traj.get("trajectory"):
                     resumed = True
-            except CodexChatAgentError:
+                    total_steps = int(traj.get("numTotalSteps") or len((traj.get("trajectory") or {}).get("steps") or ()))
+                    rotate_now = (
+                        max_steps > 0 and total_steps >= max_steps
+                        and traj.get("status") != "CASCADE_RUN_STATUS_RUNNING" and history is not None
+                    )
+            except CodexChatAgentError as exc:
                 resumed = False
+                if exc.error_code == "antigravity_transport_error" and max_steps > 0 and history is not None:
+                    try:
+                        entry = _cascade_summary_entry(
+                            _rpc_post(ls_url, csrf_token, "GetAllCascadeTrajectories", {}, timeout=5.0),
+                            cascade_id,
+                        )
+                    except CodexChatAgentError:
+                        entry = None
+                    if (entry is not None and int(entry.get("stepCount") or 0) >= max_steps
+                            and entry.get("status") != "CASCADE_RUN_STATUS_RUNNING"):
+                        rotate_now = True
+            if rotate_now:
+                cascade_id = _start_cascade(ls_url, csrf_token, work_dir)
+                resumed, rotated, history = False, True, _rollover_history(history)
 
-        if cascade_id and not resumed:
+        if cascade_id and not resumed and not rotated:
             raise CodexChatAgentError(
                 "The original Antigravity conversation is unavailable. Restore it in Antigravity or start a new Chat explicitly.",
                 gate=None, error_code="resume_failed",
             )
 
-        if not resumed:
-            started = _rpc_post(
-                ls_url,
-                csrf_token,
-                "StartCascade",
-                {
-                    "source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT",
-                    "workspaceUris": [work_dir.resolve().as_uri()],
-                },
-                timeout=10.0,
-            )
-            cascade_id = str(started.get("cascadeId") or "").strip()
-            if not cascade_id:
-                raise CodexChatAgentError(
-                    f"StartCascade did not return a cascadeId: {started}",
-                    gate=None,
-                    error_code="antigravity_start_failed",
-                )
+        if not resumed and not rotated:
+            cascade_id = _start_cascade(ls_url, csrf_token, work_dir)
 
         return cls(
-            work_dir=work_dir,
-            objective=objective,
-            cascade_id=cascade_id,
-            ls_url=ls_url,
-            csrf_token=csrf_token,
-            model_id=model_id,
-            model_placeholder=model_placeholder,
-            reasoning_effort=model_id.rsplit("-", 1)[-1],
-            runtime_profile=runtime_profile,
-            team_plan_context=team_plan_context,
-            initial_history=history,
-            resumed=resumed,
-            hard_timeout_sec=hard_timeout_sec,
+            work_dir=work_dir, objective=objective, cascade_id=cascade_id,
+            ls_url=ls_url, csrf_token=csrf_token, model_id=model_id,
+            model_placeholder=model_placeholder, reasoning_effort=model_id.rsplit("-", 1)[-1],
+            runtime_profile=runtime_profile, team_plan_context=team_plan_context,
+            initial_history=history, resumed=resumed,
+            idle_timeout_sec=idle_timeout_sec, hard_timeout_sec=hard_timeout_sec,
+            max_cascade_steps=max_steps,
         )
 
-    def _build_turn_prompt(self, message: str) -> str:
+    def _build_turn_prompt(self, message: str, *, isolated_cascade: bool = False) -> str:
         parts: list[str] = []
-        if not self._system_primed:
+        if isolated_cascade:
+            if self.objective.strip():
+                parts.append(self.objective.strip())
+        elif not self._system_primed:
             if self.objective.strip():
                 parts.append(self.objective.strip())
             if self._pending_history:
@@ -1102,7 +1435,7 @@ class AntigravityAdapter:
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        from ...chat_attachments import normalize_chat_image_attachments
+        from ...chat.attachments import normalize_chat_image_attachments
 
         normalized = normalize_chat_image_attachments(attachments or [])
         media = [
@@ -1118,12 +1451,16 @@ class AntigravityAdapter:
     def start_turn(self, message: str,
                    event_sink: Callable[[str, dict[str, Any]], None] | None = None,
                    *, read_only_review: bool = False,
-                   media: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   media: list[dict[str, Any]] | None = None,
+                   isolated_cascade: bool = False,
+                   idle_timeout_sec: float | None = None) -> dict[str, Any]:
+        _check_positive_timeout(idle_timeout_sec, "idle")
         self._read_only_review = read_only_review
         self._interrupted.clear()
         self._cancel_acknowledged = False
         try:
-            return self._run_turn(message, event_sink, media=media)
+            return self._run_turn(message, event_sink, media=media, isolated_cascade=isolated_cascade,
+                                  idle_timeout_sec=idle_timeout_sec)
         except BaseException as failure:
             # A timeout/transport or permission failure is not a successful turn.
             # Retain an unconfirmed cancellation as an error for the caller fence.
@@ -1137,41 +1474,50 @@ class AntigravityAdapter:
             raise
         finally:
             self._active_turn_id = None
+            self._active_cascade_id = None
             self._read_only_review = False
 
-    def _run_turn(
-        self,
-        message: str,
-        event_sink: Callable[[str, dict[str, Any]], None] | None = None,
-        *,
-        media: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
+    def _run_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None] | None = None, *,
+                  media: list[dict[str, Any]] | None = None, isolated_cascade: bool = False,
+                  idle_timeout_sec: float | None = None) -> dict[str, Any]:
         if self._closed:
-            raise CodexChatAgentError(
-                "Antigravity session is closed",
-                gate=None,
-                error_code="session_closed",
-            )
+            raise CodexChatAgentError("Antigravity session is closed", gate=None, error_code="session_closed")
 
         turn_id = f"agy_turn_{uuid.uuid4().hex[:12]}"
-        before_traj = _rpc_post(
-            self.ls_url,
-            self.csrf_token,
-            "GetCascadeTrajectory",
-            {"cascadeId": self.cascade_id},
-            timeout=10.0,
-        )
-        if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
-            raise CodexChatAgentError(
-                "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.",
-                gate=None, error_code="resume_failed",
+        if isolated_cascade:
+            target_cascade_id = _start_cascade(self.ls_url, self.csrf_token, self.work_dir)
+            start_step_index = 0
+        else:
+            target_cascade_id = self.cascade_id
+            before_traj = _rpc_post(
+                self.ls_url,
+                self.csrf_token,
+                "GetCascadeTrajectory",
+                {"cascadeId": target_cascade_id},
+                timeout=10.0,
             )
-        start_step_index = int(before_traj.get("numTotalSteps") or 0)
+            if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
+                raise CodexChatAgentError(
+                    "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.",
+                    gate=None, error_code="resume_failed",
+                )
+            start_step_index = int(before_traj.get("numTotalSteps") or 0)
+            if (
+                not self._read_only_review
+                and self._max_cascade_steps > 0
+                and start_step_index >= self._max_cascade_steps
+            ):
+                target_cascade_id = _start_cascade(self.ls_url, self.csrf_token, self.work_dir)
+                self.cascade_id = target_cascade_id
+                self.upstream_thread_id = target_cascade_id
+                start_step_index = 0
+                self._system_primed = False
+                self._pending_history = list(self._recent_history)
         user_config = self._build_cascade_config()
-        full_prompt = self._build_turn_prompt(message)
+        full_prompt = self._build_turn_prompt(message, isolated_cascade=isolated_cascade)
 
         send_payload: dict[str, Any] = {
-            "cascadeId": self.cascade_id,
+            "cascadeId": target_cascade_id,
             "items": [{"text": full_prompt}],
             "cascadeConfig": user_config,
             **({"media": media} if media else {}),
@@ -1180,27 +1526,40 @@ class AntigravityAdapter:
             with (self._launch_guard() if self._launch_guard is not None else nullcontext()):
                 self._check_interrupted()
                 self._active_turn_id = turn_id
+                self._active_cascade_id = target_cascade_id
                 if event_sink is not None:
-                    event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id,
-                        "native_input": {"thread_id": self.cascade_id, "start_step_index": start_step_index,
+                    event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": target_cascade_id,
+                        "native_input": {"thread_id": target_cascade_id, "start_step_index": start_step_index,
                                          "input_sha256": hashlib.sha256(full_prompt.encode()).hexdigest()}})
                 _rpc_post(self.ls_url, self.csrf_token, "SendUserCascadeMessage", send_payload, timeout=15.0)
-                self._system_primed = True
-                self._pending_history.clear()
+                if not isolated_cascade:
+                    self._system_primed = True
+                    self._pending_history.clear()
 
         stream_filter = VisibleResponseStreamFilter()
         emitted_visible_delta = False
         emitted_text_by_step: dict[int, str] = {}
         activity = AntigravityActivity(self.work_dir)
         latest_response_text = ""
+        effective_idle_timeout = self.idle_timeout_sec if idle_timeout_sec is None else idle_timeout_sec
         last_progress_at = time.monotonic()
+        idle_status_since: float | None = None
+        transport_error_since: float | None = None
+        idle_grace = effective_idle_timeout if effective_idle_timeout is not None else ANTIGRAVITY_IDLE_TIMEOUT_SEC
+        summary_probe_unsupported = False
+        last_summary_key: tuple[object, ...] | None = None
+        last_steps_poll_at = last_progress_at
+        poll_count = 0
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
-        previous_progress: Any = None
+        previous_progress: list[tuple[object, ...]] | None = None
         saw_running_or_new_step = False
         observed_native_errors: set[int] = set()
+        incomplete_running_polls = 0
 
         def timeout(kind: str) -> None:
-            limit = self.hard_timeout_sec if kind == "hard" else ANTIGRAVITY_IDLE_TIMEOUT_SEC
+            limit = self.hard_timeout_sec if kind == "hard" else (
+                effective_idle_timeout if effective_idle_timeout is not None else idle_grace
+            )
             detail = {"kind": kind, "limit_seconds": limit,
                       "native_error_count": len(observed_native_errors)}
             if event_sink is not None:
@@ -1214,8 +1573,14 @@ class AntigravityAdapter:
 
         observation_limit = 10.0
 
-        def observe(method: str, args: dict[str, Any],
-                    final_read_deadline: float | None) -> dict[str, Any] | None:
+        def observe(
+            method: str,
+            args: dict[str, Any],
+            final_read_deadline: float | None,
+            *,
+            include_cascade_id: bool = True,
+        ) -> dict[str, Any] | None:
+            nonlocal transport_error_since
             remaining = observation_limit
             if final_read_deadline is not None:
                 now = time.monotonic()
@@ -1224,18 +1589,27 @@ class AntigravityAdapter:
                 remaining = final_read_deadline - now
                 if remaining <= 0:
                     timeout("idle")
+            payload = {"cascadeId": target_cascade_id, **args} if include_cascade_id else dict(args)
             try:
-                return _rpc_post(self.ls_url, self.csrf_token, method,
-                                 {"cascadeId": self.cascade_id, **args}, timeout=remaining)
+                result = _rpc_post(self.ls_url, self.csrf_token, method, payload, timeout=remaining)
+                transport_error_since = None
+                return result
             except CodexChatAgentError as exc:
                 if exc.error_code != "antigravity_transport_error":
                     raise
-                                #  The last observation has no transport retry.
+                # The last observation has no transport retry.
                 if final_read_deadline is not None:
                     self._check_interrupted()
                     if deadline is not None and time.monotonic() >= deadline:
                         timeout("hard")
                     timeout("idle")
+                err_now = time.monotonic()
+                if transport_error_since is None:
+                    transport_error_since = err_now
+                elif err_now - transport_error_since >= (
+                    effective_idle_timeout if effective_idle_timeout is not None else 60.0
+                ):
+                    raise
                 self._interrupted.wait(1.0)
                 return None
 
@@ -1245,18 +1619,52 @@ class AntigravityAdapter:
                 timeout("hard")
             self._check_interrupted()
             final_read_deadline = None
-            if now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
+            idle_due = (
+                (effective_idle_timeout is not None and now - last_progress_at >= effective_idle_timeout)
+                or (idle_status_since is not None and now - idle_status_since >= idle_grace)
+            )
+            if idle_due:
                 # Native work can advance between the last poll and the idle
                 # deadline. Check the same invocation once before cancelling.
                 final_read_deadline = now + observation_limit
                 if deadline is not None:
                     final_read_deadline = min(final_read_deadline, deadline)
             else:
-                self._interrupted.wait(0.25)
+                poll_count += 1
+                wait_sec = 0.25 if poll_count <= 8 else (0.5 if poll_count <= 24 else 1.0)
+                self._interrupted.wait(wait_sec)
                 self._check_interrupted()
-            traj = observe("GetCascadeTrajectory", {}, final_read_deadline)
+            traj: dict[str, Any] | None = None
+            if (start_step_index >= ANTIGRAVITY_LARGE_CASCADE_POLL_THRESHOLD
+                    and final_read_deadline is None and not summary_probe_unsupported):
+                try:
+                    summaries_resp = observe("GetAllCascadeTrajectories", {}, None, include_cascade_id=False)
+                except CodexChatAgentError as exc:
+                    if exc.error_code != "antigravity_rpc_error":
+                        raise
+                    summary_probe_unsupported, summaries_resp = True, None
+                if summaries_resp is None and not summary_probe_unsupported:
+                    continue
+                summary = _cascade_summary_entry(summaries_resp, target_cascade_id)
+                if summary is not None:
+                    s_status = str(summary.get("status") or "")
+                    s_total = int(summary.get("stepCount") or summary.get("numTotalSteps") or 0)
+                    mod_key = (s_status, s_total, summary.get("lastModifiedTime"))
+                    now = time.monotonic()
+                    if s_status == "CASCADE_RUN_STATUS_RUNNING":
+                        idle_status_since = None
+                        if last_summary_key == mod_key and saw_running_or_new_step and now - last_steps_poll_at < 5.0:
+                            if deadline is not None and now >= deadline:
+                                timeout("hard")
+                            continue
+                        last_summary_key, last_steps_poll_at = mod_key, now
+                        traj = {"status": s_status, "numTotalSteps": s_total}
+                    else:
+                        last_summary_key = mod_key
             if traj is None:
-                continue
+                traj = observe("GetCascadeTrajectory", {}, final_read_deadline)
+                if traj is None:
+                    continue
             status = str(traj.get("status") or "")
             total_steps = int(traj.get("numTotalSteps") or 0)
             if status == "CASCADE_RUN_STATUS_RUNNING" or total_steps > start_step_index:
@@ -1269,7 +1677,7 @@ class AntigravityAdapter:
                 snapshot_steps = None
                 if final_read_deadline is None:
                     snapshot_steps = _running_snapshot_steps(
-                        traj, cascade_id=self.cascade_id, start=start_step_index,
+                        traj, cascade_id=target_cascade_id, start=start_step_index,
                         total=total_steps, sent_prompt=full_prompt,
                     )
                 if snapshot_steps is not None:
@@ -1277,18 +1685,32 @@ class AntigravityAdapter:
                 else:
                     # Older and incomplete snapshots use the detailed read.
                     # Keep that proof for the idle boundary and final answer.
-                    steps_resp = observe("GetCascadeTrajectorySteps", {
-                        "startIndex": start_step_index, "endIndex": total_steps,
-                    }, final_read_deadline)
-                    if steps_resp is None:
-                        continue
-                    steps = steps_resp.get("steps")
+                    def _observe_steps_page(offset: int, end: int) -> Any:
+                        steps_resp = observe("GetCascadeTrajectorySteps", {
+                            "stepOffset": offset, "startIndex": offset, "endIndex": end,
+                        }, final_read_deadline)
+                        return None if steps_resp is None else steps_resp.get("steps", _MISSING_STEPS)
+
                     try:
-                        if not isinstance(steps, list):
-                            raise ValueError("Antigravity returned no trajectory coverage")
-                        current_steps, observed_total = _observed_turn_steps(steps, start_step_index, total_steps)
+                        loaded = _read_trajectory_steps(
+                            _observe_steps_page,
+                            start=start_step_index,
+                            total=total_steps,
+                        )
                     except (AttributeError, TypeError, ValueError) as exc:
+                        if (
+                            str(exc) == "Antigravity trajectory coverage is incomplete"
+                            and status == "CASCADE_RUN_STATUS_RUNNING"
+                            and final_read_deadline is None
+                            and incomplete_running_polls < 3
+                        ):
+                            incomplete_running_polls += 1
+                            continue
                         raise CodexChatAgentError(str(exc), gate=None, error_code="antigravity_rpc_error") from exc
+                    if loaded is None:
+                        continue
+                    incomplete_running_polls = 0
+                    current_steps, observed_total = loaded
                 if current_steps:
                     if sum(step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT" for _, step in current_steps) > 1:
                         # Another native input is not this invocation's result or
@@ -1386,24 +1808,29 @@ class AntigravityAdapter:
 
             # A running status alone is not progress. Observe only this input's
             # steps, including streamed text and command output; old history or
-            # a stuck RUNNING flag cannot keep an invocation alive indefinitely.
-            progress = [(index, step.get("status"),
-                         (step.get("plannerResponse") or {}).get("modifiedResponse")
-                         or (step.get("plannerResponse") or {}).get("response"),
-                         (step.get("plannerResponse") or {}).get("thinking"),
-                         (step.get("runCommand") or {}).get("combinedOutput"),
-                         (step.get("runCommand") or {}).get("exitCode"))
-                        for index, step in current_steps
-                        if step.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"]
+            # a stuck RUNNING flag cannot keep an invocation alive when an
+            # explicit idle_timeout_sec is configured.
+            progress = _turn_progress_snapshot(current_steps)
             now = time.monotonic()
             if progress and progress != previous_progress:
                 previous_progress = progress
                 last_progress_at = now
+                idle_status_since = now if status == "CASCADE_RUN_STATUS_IDLE" else None
+            elif status == "CASCADE_RUN_STATUS_IDLE":
+                if idle_status_since is None:
+                    idle_status_since = now
+            else:
+                idle_status_since = None
             self._check_interrupted()
             if deadline is not None and now >= deadline:
                 timeout("hard")
-            idle_expired = (final_read_deadline is not None
-                            and now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC)
+            idle_expired = (
+                final_read_deadline is not None
+                and (
+                    (effective_idle_timeout is not None and now - last_progress_at >= effective_idle_timeout)
+                    or (idle_status_since is not None and now - idle_status_since >= idle_grace)
+                )
+            )
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 final_is_error = final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
@@ -1458,10 +1885,7 @@ class AntigravityAdapter:
                                                   gate=None, error_code="upstream_transport_failure")
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
-                        or any(
-                            not _step_allows_completed_turn(step, final=final)
-                            for _, step in current_steps
-                        )
+                        or not _turn_steps_allow_completion(current_steps, final=final)
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
                         or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"):
                     raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",
@@ -1475,7 +1899,7 @@ class AntigravityAdapter:
             # never native tool output or raw reasoning. Core consumes this
             # privately and durably before parsing can fail or lose text.
             self._check_interrupted()
-            event_sink("turn.native_result", {**_native_completion_facts(self.cascade_id, current_steps),
+            event_sink("turn.native_result", {**_native_completion_facts(target_cascade_id, current_steps),
                 "upstream_turn_id": turn_id})
             tail = stream_filter.finish()
             if tail:
@@ -1511,6 +1935,12 @@ class AntigravityAdapter:
             work_dir=self.work_dir,
             team_plan_context=self.team_plan_context,
         )
+        if not isolated_cascade and not self._read_only_review:
+            self._recent_history = _rollover_history([
+                *self._recent_history,
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": str(parsed.get("message") or "")},
+            ])
         if event_sink is not None:
             if not emitted_visible_delta and str(parsed.get("message") or "").strip():
                 event_sink("answer.delta", {"text": str(parsed["message"])})
@@ -1530,13 +1960,14 @@ class AntigravityAdapter:
         if active is None:
             return
         with self._send_lock:
+            target_cascade_id = self._active_cascade_id or self.cascade_id
             if not self._cancel_acknowledged:
                 _rpc_post(self.ls_url, self.csrf_token, "CancelCascadeInvocation",
-                          {"cascadeId": self.cascade_id}, timeout=5.0)
+                          {"cascadeId": target_cascade_id}, timeout=5.0)
                 deadline = time.monotonic() + 5.0
                 while True:
                     trajectory = _rpc_post(self.ls_url, self.csrf_token, "GetCascadeTrajectory",
-                                           {"cascadeId": self.cascade_id}, timeout=2.0)
+                                           {"cascadeId": target_cascade_id}, timeout=2.0)
                     if trajectory.get("status") == "CASCADE_RUN_STATUS_IDLE":
                         break
                     if time.monotonic() >= deadline:

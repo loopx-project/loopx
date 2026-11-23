@@ -107,7 +107,8 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, sh
           <RequirementRow requirement={requirement} fresh={fresh} zh={zh}/>
         </li>)}</ul>
     <details><summary>{zh ? "关联工作与来源" : "Linked work and sources"}</summary>
-      <p>{outcome.owner_agent_id} · {zh ? "版本" : "Revision"} {outcome.revision}</p>
+      <p>{outcome.owner_agent_id}{outcome.owner_registration_missing
+        ? (zh ? "（该身份在本次读回时未注册到此目标）" : " (unregistered for this Goal at readback)") : ""} · {zh ? "版本" : "Revision"} {outcome.revision}</p>
       <ul>{outcome.work.map(work => <li key={work.todo_id}><code>{work.todo_id}</code> · {work.status}</li>)}</ul>
       {!outcome.work.length ? <p>{zh ? "尚未关联执行任务" : "No execution task linked"}</p> : null}
       <ul>{outcome.sources.map(source => <li key={source.ref}>{source.summary}</li>)}</ul>

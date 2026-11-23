@@ -1,8 +1,8 @@
 export const zh = {
   lead: '新对话第一轮结束后，让你选的 agent 按下面的规则起一个简短标题。你自己改过的标题不会被动。',
   agent: '取名的 agent',
-  chooseAgent: '选择 agent',
-  noAgent: '还没选，选好后才会开始取名',
+  autoAgent: '自动',
+  autoHint: '用对话自己的 agent 里最便宜的模型取名，比如 Codex 用 Luna、Antigravity 用 Gemini 3.8 Flash Low、Claude 用 Haiku；agent 的模型都没有已知价格时不取名',
   noAsk: '这个 agent 没有「先问再做」模式，取名时可能自行调用工具',
   model: '模型',
   defaultModel: '默认模型',

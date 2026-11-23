@@ -48,6 +48,7 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"sync-global",
 		"uninstall-project",
 		"version",
+		"workbench",
 		"postgres",
 		"host-mode-plan",
 		"migrate-local-state",
@@ -75,6 +76,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"goal-lifecycle",
 	"host-mode-plan",
 	"capability",
+	"workbench",
 	"history",
 }
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
@@ -408,7 +410,11 @@ def _handle_registry_inspection_command(
 
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	parser, subparsers = build_cli_parser(parser_class=_SelectedArgumentParser)
-	if command == "start-goal":
+	if command == "workbench":
+		from .cli_commands.workbench import register_workbench_command
+
+		register_workbench_command(subparsers, add_subcommand_format)
+	elif command == "start-goal":
 		from .cli_commands.start_goal import register_start_goal_command
 
 		register_start_goal_command(subparsers)
@@ -655,6 +661,11 @@ def _dispatch_common_command(
 	if args.command in PROJECT_LIFECYCLE_COMMANDS:
 		from .cli_commands.project_lifecycle import handle_project_lifecycle_command
 		from .cli_rollout import append_cli_rollout_event
+		if args.command == "refresh-state" and getattr(args, "execution_loss_closeout", False):
+			return handle_project_lifecycle_command(
+				args, registry_path=registry_path, print_payload=print_payload,
+				output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
+			)
 		from .capabilities.periodic_report.post_writeback_hook import (
 			build_periodic_report_post_writeback_projection,
 			periodic_report_post_writeback_hooks_for_goal,
@@ -910,7 +921,11 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	if guard_result is not None:
 		return guard_result
 	registry_path, registry_was_configured = resolve_cli_registry(args, raw_argv)
-	if args.command in _REGISTRY_INSPECTION_COMMANDS:
+	if args.command == "workbench":
+		from .cli_commands.workbench import handle_workbench_command
+
+		result = handle_workbench_command(args, print_payload=print_payload, output_format=output_format)
+	elif args.command in _REGISTRY_INSPECTION_COMMANDS:
 		from .registry import (
 			inspect_registry, inspect_registry_boundary,
 			render_registry_markdown, render_registry_boundary_markdown,
@@ -965,9 +980,15 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 
 def _standalone_core() -> bool:
-	from importlib.util import find_spec
+	if sys.modules.get("loopx.cli") is not None:
+		return False
+	from importlib.machinery import PathFinder
 
-	if find_spec("loopx.cli") is not None:
+	package = sys.modules.get(__package__ or "loopx")
+	search_path = list(getattr(package, "__path__", ())) or [
+		str(Path(__file__).resolve().parent)
+	]
+	if PathFinder.find_spec("loopx.cli", search_path) is not None:
 		return False
 	from importlib.metadata import PackageNotFoundError, distribution
 	from .python_install_owner import installed_loopx_distribution

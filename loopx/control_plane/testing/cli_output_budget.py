@@ -783,6 +783,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
     ),
 
     CliOutputCommandClassification(
+        command_id="workbench",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="operator-invoked optional Workbench start, status, and stop commands",
+    ),
+    CliOutputCommandClassification(
         command_id="agent-capabilities",
         qualification="explicit_cold_path_exception",
         surface_id=None,

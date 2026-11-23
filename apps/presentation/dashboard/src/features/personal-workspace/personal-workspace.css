@@ -1444,6 +1444,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-report-detail li strong { font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-report-detail li p { margin: 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-report-detail > footer { display: grid; gap: 4px; margin-top: 10px; color: var(--pw-faint); font: var(--text-caption)/var(--leading-caption) var(--font-mono); overflow-wrap: anywhere; }
+.personal-source-run-history ol { list-style: none; margin: 10px 0 0; padding: 0; }
+.personal-source-run-history > ol > li { border-top: 1px solid var(--pw-line); padding: 8px 0; }
+.personal-source-run-history summary { cursor: pointer; overflow-wrap: anywhere; }
+.personal-source-run-history dd { min-width: 0; overflow-wrap: anywhere; }
 .personal-execution-history { margin-top: 18px; }
 .personal-execution-history h3 { margin: 0 0 10px; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--pw-faint); }
 .personal-execution-history > p { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
@@ -1562,7 +1566,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
      It must not consume the title and runtime diagnostics' reading width. */
   .personal-channel-header[data-goal-selected="false"] { grid-template-columns: 36px minmax(0, 1fr); }
   .personal-channel-header[data-goal-selected="false"] .personal-channel-title { grid-column: 2; }
-  .personal-channel-header[data-goal-selected="false"] .personal-channel-title h1 { white-space: nowrap; }
+  .personal-channel-header[data-goal-selected="false"] .personal-channel-title h1 { white-space: normal; overflow-wrap: anywhere; text-wrap: pretty; }
   .personal-channel-header[data-goal-selected="false"] > .personal-goal-tabs { grid-row: 3; grid-column: 2 / -1; }
   .personal-channel-header[data-goal-selected="false"] .personal-channel-actions { grid-row: 4; grid-column: 1 / -1; width: 100%; flex-wrap: wrap; }
   .personal-channel-header[data-goal-selected="false"] .personal-agent-select { flex: 1 1 130px; width: auto; max-width: 100%; }
@@ -2239,3 +2243,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-document-attachment > a { display: block; font-size: 12px; color: inherit; }
 .personal-document-attachment > pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 240px; margin: 8px 0 0; }
 .personal-composer-images figure:has(.personal-document-attachment) { flex: 0 1 360px; min-width: 0; height: auto; padding-right: 24px; }
+
+.personal-source-run-history .source-strategy-document .personal-md { font-size: var(--text-lead); line-height: var(--leading-prose); }
+.personal-source-run-history .source-strategy-document dl dl > div { display: block; }
+
+.personal-source-run-history .source-strategy-document .personal-md p,
+.personal-source-run-history .source-strategy-document .personal-md li { font-size: inherit; line-height: inherit; color: var(--pw-text); }

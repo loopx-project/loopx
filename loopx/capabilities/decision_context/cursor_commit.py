@@ -252,6 +252,19 @@ def _validate_review_packet_chain(
             raise ValueError(
                 "decision-context no_change settlement lacks semantic proof"
             )
+    elif disposition == "observed":
+        semantic_rebase = packet.get("semantic_rebase")
+        if (
+            not isinstance(semantic_rebase, Mapping)
+            or semantic_rebase.get("schema_version")
+            != DECISION_SEMANTIC_REBASE_RECEIPT_SCHEMA_VERSION
+            or semantic_rebase.get("status") != "material_change"
+            or semantic_rebase.get("quiet_noop_allowed") is not False
+            or proposal is not None
+        ):
+            raise ValueError(
+                "decision-context observed settlement lacks material review"
+            )
     else:
         if (
             proposal is None

@@ -49,12 +49,12 @@ from .capabilities.steward_executor import (
     load_effective_steward_executor_defaults,
     normalize_manager_executor_allocation,
 )
-from .chat_agent import (
+from .chat import (
     CONVERSATION_INTENT_RESOLUTION_INSTRUCTION,
     TRUSTED_OWNER_DIRECT_WORK_INSTRUCTION,
     WORK_RESULT_VERIFICATION_INSTRUCTION,
-    CodexChatAgentError,
 )
+from .chat_agent import CodexChatAgentError
 from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     CHAT_SESSION_MODE_MANAGED,
@@ -1008,10 +1008,13 @@ def manager_session_quota_route(controller: Any, session: Mapping[str, Any]) -> 
         else:
             route = accounts.steward_route(**route_inputs, primary_capacity=None, fallback_capacity=None)
             if route.get("endpoint") is None:
-                target_ag_model = manager_model_resolution(
+                target_ag_config = manager_model_config(
                     clean_environment, endpoint="antigravity", machine_defaults=defaults,
-                )[0]
-                capacity = AntigravityAdapter.endpoint_model_capacity(model_id=target_ag_model)
+                )
+                capacity = AntigravityAdapter.endpoint_model_capacity(
+                    model_id=target_ag_config["model"],
+                    reasoning_effort=target_ag_config["reasoning_effort"],
+                )
                 if capacity is not None:
                     route = accounts.steward_route(
                         **route_inputs, primary_capacity=None, fallback_capacity=capacity,
@@ -1164,12 +1167,89 @@ MANAGED_SKILL_MARKER_V3 = "<!-- loopx-managed-manager-skill:v3 -->"
 MANAGED_SKILL_MARKER_V4 = "<!-- loopx-managed-manager-skill:v4 -->"
 MANAGED_SKILL_MARKER_V5 = "<!-- loopx-managed-manager-skill:v5 -->"
 MANAGED_SKILL_MARKER_V6 = "<!-- loopx-managed-manager-skill:v6 -->"
-MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4, MANAGED_SKILL_MARKER_V5, MANAGED_SKILL_MARKER_V6)
-MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V6
+MANAGED_SKILL_MARKER_V7 = "<!-- loopx-managed-manager-skill:v7 -->"
+MANAGED_SKILL_MARKERS = (
+    MANAGED_SKILL_MARKER_V1,
+    MANAGED_SKILL_MARKER_V2,
+    MANAGED_SKILL_MARKER_V3,
+    MANAGED_SKILL_MARKER_V4,
+    MANAGED_SKILL_MARKER_V5,
+    MANAGED_SKILL_MARKER_V6,
+    MANAGED_SKILL_MARKER_V7,
+)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V7
+
+MANAGED_REPORTING_MARKER_V1 = "<!-- loopx-managed-reporting:v1 -->"
+MANAGED_REPORTING_MARKERS = (MANAGED_REPORTING_MARKER_V1,)
+MANAGED_REPORTING_CURRENT_MARKER = MANAGED_REPORTING_MARKER_V1
+
+MANAGED_SESSION_REPORTING_MARKER_V1 = "<!-- loopx-managed-session-reporting:v1 -->"
+MANAGED_SESSION_REPORTING_MARKERS = (MANAGED_SESSION_REPORTING_MARKER_V1,)
+MANAGED_SESSION_REPORTING_CURRENT_MARKER = MANAGED_SESSION_REPORTING_MARKER_V1
+
+MANAGED_FOLLOWTHROUGH_MARKER_V1 = "<!-- loopx-managed-followthrough:v1 -->"
+MANAGED_FOLLOWTHROUGH_MARKERS = (MANAGED_FOLLOWTHROUGH_MARKER_V1,)
+MANAGED_FOLLOWTHROUGH_CURRENT_MARKER = MANAGED_FOLLOWTHROUGH_MARKER_V1
+
+_MANAGER_WORKSPACE_COMPANION_INSTRUCTIONS = (
+    "\n## Workspace companion specifications\n\n"
+    "- When the user asks for a report (such as “汇报” or a date-, project-, or decision-scoped variant), "
+    "read and execute `REPORTING.md` in this workspace within existing source and action authority; "
+    "it defines a one-time report and installs no schedule.\n"
+    "- Read `FOLLOWTHROUGH.md` in this workspace when carrying corrections through to established deliveries, "
+    "shortlisting executable recipients, or ordering handoffs ahead of separate self-repair.\n"
+    "- Format verified public repository PRs, Issues, Releases and workflow runs as complete clickable Markdown "
+    "links (never bare `#123` identifiers), and split multi-PR lists across bounded `periodic-report` `details` "
+    "entries rather than stripping URLs.\n"
+)
 
 
 def manager_skill_text() -> str:
     return (Path(__file__).parent / "capabilities/manager_context/skills/loopx-manager/SKILL.md").read_text(encoding="utf-8")
+
+
+def manager_reporting_text() -> str:
+    return (Path(__file__).parent / "capabilities/manager_context/templates/REPORTING.md").read_text(encoding="utf-8")
+
+
+def session_reporting_text() -> str:
+    return (Path(__file__).parent / "capabilities/manager_context/templates/SESSION_REPORTING.md").read_text(encoding="utf-8")
+
+
+def manager_followthrough_text() -> str:
+    return (Path(__file__).parent / "capabilities/manager_context/templates/FOLLOWTHROUGH.md").read_text(encoding="utf-8")
+
+
+def _ensure_non_symlink_directory(directory: Path, *, mode: int | None = None) -> None:
+    if directory.is_symlink():
+        raise ValueError(f"manager workspace directory must not be a symlink: {directory.name}")
+    if mode is not None:
+        directory.mkdir(parents=True, exist_ok=True, mode=mode)
+    else:
+        directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError(f"manager workspace directory is unavailable: {directory.name}")
+
+
+def _refresh_managed_workspace_file(
+    target: Path,
+    content: str,
+    *,
+    markers: tuple[str, ...] = (),
+    header_prefix: str | None = None,
+) -> None:
+    if target.is_symlink():
+        raise ValueError(f"manager workspace file must not be a symlink: {target.name}")
+    if not target.exists():
+        target.write_text(content, encoding="utf-8")
+        return
+    existing = target.read_text(encoding="utf-8")
+    is_managed = (
+        (header_prefix is not None and existing.startswith(header_prefix))
+        or any(marker in existing for marker in markers)
+    )
+    if is_managed and existing != content:
+        target.write_text(content, encoding="utf-8")
 
 
 def manager_model_config(
@@ -1221,19 +1301,37 @@ def manager_workspace(
 ) -> Path:
     # The executor must not inherit one project's local instructions or cwd.
     key = hashlib.sha256(channel.encode()).hexdigest()[:24]
-    path = store_root / "manager-workspaces" / key
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent = store_root / "manager-workspaces"
+    _ensure_non_symlink_directory(parent)
+    path = parent / key
+    _ensure_non_symlink_directory(path, mode=0o700)
+    for rel in (".agents", ".agents/skills", ".agents/skills/loopx-manager"):
+        _ensure_non_symlink_directory(path / rel)
     skill_path = path / ".agents/skills/loopx-manager/SKILL.md"
-    skill_path.parent.mkdir(parents=True, exist_ok=True)
-    if not skill_path.exists() or any(marker in skill_path.read_text(encoding="utf-8") for marker in MANAGED_SKILL_MARKERS):
-        skill_path.write_text(manager_skill_text(), encoding="utf-8")
+    _refresh_managed_workspace_file(
+        skill_path,
+        manager_skill_text(),
+        markers=MANAGED_SKILL_MARKERS,
+    )
+    _refresh_managed_workspace_file(
+        path / "REPORTING.md",
+        manager_reporting_text(),
+        markers=MANAGED_REPORTING_MARKERS,
+    )
+    _refresh_managed_workspace_file(
+        path / "FOLLOWTHROUGH.md",
+        manager_followthrough_text(),
+        markers=MANAGED_FOLLOWTHROUGH_MARKERS,
+    )
     instructions = (
         "# LoopX managed manager instructions\n\n"
         + manager_agent_objective(runtime_profile)
         + "\n"
+        + _MANAGER_WORKSPACE_COMPANION_INSTRUCTIONS
     )
-    target = path / "AGENTS.md"
-    if not target.exists() or target.read_text(encoding="utf-8").startswith("# LoopX managed manager instructions\n"):
-        if not target.exists() or target.read_text(encoding="utf-8") != instructions:
-            target.write_text(instructions, encoding="utf-8")
+    _refresh_managed_workspace_file(
+        path / "AGENTS.md",
+        instructions,
+        header_prefix="# LoopX managed manager instructions\n",
+    )
     return path

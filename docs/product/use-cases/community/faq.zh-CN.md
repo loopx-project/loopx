@@ -76,9 +76,10 @@ Goal，LoopX 会为它创建一个 SQLite 权威数据库，保存 Todo、租约
 [当前源码的限定读取候选](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
 校验明确获准的 Todo 与访问者，并拒绝写入。
 
-[尚未合入的 PR #8747](https://github.com/loopx-project/loopx/pull/8747)提出了更广的跨人资源访问设计。
+[PR #8747](https://github.com/loopx-project/loopx/pull/8747) 已将跨人资源访问设计合入
+[共享权威状态 RFC](https://github.com/loopx-project/loopx/blob/1b18ece5906611eb6dd71941d1e2475443c19009/docs/architecture/rfcs/shared-goal-authority-state-provider-v0.zh-CN.md#cross-person-delivery-under-r6)。
 当前候选按租户、Goal、执行者和允许的操作授予粗粒度范围，同时绑定存储实例。
-提案要求同时满足主体授权、凭据范围、资源 ACL、适用的委派与来源许可。授权
+设计要求同时满足主体授权、凭据范围、资源 ACL、适用的委派与来源许可。授权
 缺失或无法核验时拒绝访问；资源权限、执行租约和预算仍分别核验。
 
 审批可以只卡一道动作，例如是否发布已经核过的说明。把发布 Todo 留在等待状态，

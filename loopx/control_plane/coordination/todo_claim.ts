@@ -33,7 +33,6 @@ import {
   normalizeIdempotencyKey,
   normalizeTtl,
 } from "../work_items/task_lease_acquire.ts";
-import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 
 export const COORDINATION_TODO_CLAIM_RESULT_SCHEMA =
   "loopx_coordination_todo_claim_result_v0";
@@ -65,6 +64,7 @@ export interface CoordinationTodoClaimInput {
   readonly replan_obligation_id?: string;
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
   readonly manage_execution?: boolean;
+  readonly ttl_seconds?: number;
   /** Admission constraint on every attempt and replay, not a new business intent. */
   readonly required_handoff_mode?: ExecutionHandoffMode;
   readonly dry_run: boolean;
@@ -376,6 +376,8 @@ async function executeClaimAttempt(
         ? null : normalizeTodoAgent(rawInput.actor_agent_id, "actor_agent_id"),
       registered_agents: normalizeRegisteredTodoAgents(rawInput.registered_agents),
       lease_request: normalizeLeaseRequest(rawInput.lease_request),
+      ttl_seconds: rawInput.ttl_seconds === undefined || rawInput.ttl_seconds === null
+        ? undefined : normalizeTtl(rawInput.ttl_seconds),
     };
     if (input.manage_execution !== undefined) requireAuthorityBoolean(input.manage_execution, "manage_execution");
     if (input.required_handoff_mode !== undefined && !EXECUTION_HANDOFF_MODES.includes(input.required_handoff_mode)) {
@@ -383,6 +385,9 @@ async function executeClaimAttempt(
     }
     if (input.manage_execution && (input.lease_request != null || input.actor_agent_id !== input.claimed_by)) {
       throw new AuthorityStoreProtocolError("Managed execution requires the claiming actor and no explicit lease request");
+    }
+    if (input.ttl_seconds !== undefined && !input.manage_execution) {
+      throw new AuthorityStoreProtocolError("Managed execution TTL requires manage_execution and no explicit lease request");
     }
     requireAuthorityBoolean(input.dry_run, "dry_run");
     requireAuthorityDate(input.now, "now");
@@ -413,6 +418,7 @@ async function executeClaimAttempt(
     dry_run: input.dry_run,
     ...(leaseRequest === null ? {} : {lease_request: leaseRequest}),
     ...(input.manage_execution ? {manage_execution: true} : {}),
+    ...(input.ttl_seconds === undefined ? {} : {ttl_seconds: input.ttl_seconds}),
     ...(input.replan_obligation_id === undefined ? {} : {replan_obligation_id: input.replan_obligation_id}),
   };
   const requestSha = canonicalAuthoritySha256(requestIdentity);
@@ -527,14 +533,19 @@ async function executeClaimAttempt(
       error instanceof Error ? error.message : "invalid coordination projection",
     );
   }
+  // Only pre-commit decisions can retire this attempt. A failed replay or
+  // provider read may concern a claim that was already committed.
+  const rejectClaim = (code: string, reason: string, detail: JsonObject = {}, decisionCode = code) => {
+    const claim = input.manage_execution && !input.dry_run ? {
+      claim_decision: decisionFailure(decisionCode, reason, {goal_id: input.goal_id,
+        todo_id: input.todo_id, actor_agent_id: input.actor_agent_id, claim_operation_id: input.operation_id,
+        ...(typeof detail.claim_owner === "string" ? {claim_owner: detail.claim_owner} : {})}),
+    } : {};
+    return failure(code, reason, {...detail, ...claim}, "decision_rejection");
+  };
   const todo = projection.todos.get(input.todo_id);
   if (todo === undefined) {
-    return failure(
-      "todo_not_found",
-      "Todo is missing from the canonical provider head",
-      { todo_id: input.todo_id },
-      "decision_rejection",
-    );
+    return rejectClaim("todo_not_found", "Todo is missing from the canonical provider head", {todo_id: input.todo_id});
   }
 
   if (input.replan_obligation_id !== undefined &&
@@ -565,13 +576,8 @@ async function executeClaimAttempt(
       error instanceof Error ? error.message : "invalid Todo claim",
     );
   }
-  if (authority.status !== "accepted" || typeof authority.owner !== "string") {
-    return failure(
-      typeof authority.reason_code === "string" ? authority.reason_code : "invalid_coordination_todo_claim",
-      typeof authority.reason === "string" ? authority.reason : "Todo claim was rejected",
-      authority,
-      "decision_rejection",
-    );
+  if (authority.status === "rejected") {
+    return rejectClaim(authority.reason_code, authority.reason, authority);
   }
 
   const handoffMode = typeof head.head.handoff_mode === "string"
@@ -581,8 +587,8 @@ async function executeClaimAttempt(
     return failure("invalid_handoff_mode", "canonical projection has an invalid handoff mode");
   }
   const retired = retiredHandoffModeRejection(handoffMode);
-  if (retired !== null) return failure(retired, HANDOFF_MODE_RETIRED_REASON,
-    {todo_id: input.todo_id, handoff_mode: handoffMode}, "decision_rejection");
+  if (retired !== null) return rejectClaim(retired, HANDOFF_MODE_RETIRED_REASON,
+    {todo_id: input.todo_id, handoff_mode: handoffMode});
   if (input.required_handoff_mode !== undefined && handoffMode !== input.required_handoff_mode) {
     return failure("claim_handoff_mode_mismatch", "Current handoff mode does not satisfy the claim's admission constraint",
       {todo_id: input.todo_id, handoff_mode: handoffMode, required_handoff_mode: input.required_handoff_mode}, "decision_rejection");
@@ -604,13 +610,15 @@ async function executeClaimAttempt(
     const currentLease = projection.leases.get(input.todo_id);
     if (handoffMode === "hard_lease" && input.manage_execution === true) {
       const prepared = await prepareClaimExecution(head.head, input, observeWorkspace);
+      if ("conflict" in prepared) return rejectClaim("invalid_coordination_task_lease",
+        `Task claim execution rejected: ${prepared.conflict}`,
+        {todo_id: input.todo_id, ...(prepared.holder ? {claim_owner: prepared.holder} : {})}, prepared.conflict);
       lease = prepared.lease;
       leaseChanged = prepared.changed;
       leaseIdempotent = !leaseChanged;
       overlapAdvisories = prepared.overlapAdvisories ?? [];
     } else if (handoffMode === "hard_lease" && leaseRequest !== null) {
-      // Validate required scopes before planning; a caller cannot omit a required conflict.
-      const writeScopes = coordinationTodoWriteScopes(todo);
+      const writeScopes: string[] = [];
       const facts = canonicalTaskLeaseAcquireFacts(projection, input.goal_id, input.todo_id, input.registered_agents, input.now);
       const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: handoffMode,
         registered_agents: [...input.registered_agents], ...facts,
@@ -681,17 +689,17 @@ async function executeClaimAttempt(
   }
 
   const objective = goalObjectiveWorkGuard(head.head, authority.owner);
-  if (objective !== null) return failure(String(objective.reason_code), String(objective.reason),
-    {goal_objective_guard: objective}, "decision_rejection");
+  if (objective !== null) return rejectClaim(String(objective.reason_code), String(objective.reason),
+    {goal_objective_guard: objective});
   const acceptance = acceptanceWorkGuard(head.head, input.goal_id, input.todo_id);
   if (acceptance !== null && !acceptance.allowed) {
-    return failure(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
-      {goal_acceptance_guard: acceptance}, "decision_rejection");
+    return rejectClaim(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
+      {goal_acceptance_guard: acceptance});
   }
   if (leaseRequest !== null || input.manage_execution) {
     const dependency = todoExecutionDependencyRejection(projection.todos, input.todo_id, input.now);
-    if (dependency !== null) return failure(dependency.code, dependency.reason,
-      {resume_condition: dependency.condition}, "decision_rejection");
+    if (dependency !== null) return rejectClaim(dependency.code, dependency.reason,
+      {resume_condition: dependency.condition});
   }
 
   const mutationAuthority = canonicalAuthorityObject(

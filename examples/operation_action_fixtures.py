@@ -41,6 +41,7 @@ def service(
     )
     registry = project / ".loopx" / "registry.json"
     registry.parent.mkdir()
+    from loopx.control_plane.goals.activation import build_goal_activation
     registry.write_text(
         json.dumps(
             {
@@ -49,6 +50,11 @@ def service(
                         "id": goal_id,
                         "repo": str(project),
                         "state_file": "ACTIVE_GOAL_STATE.md",
+                        "activation": build_goal_activation(
+                            state="active",
+                            updated_at="2026-01-01T00:00:00Z",
+                            reason="fixture active",
+                        ),
                         "coordination": {
                             "registered_agents": ["finance-fixture-agent"]
                         },

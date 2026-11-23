@@ -891,3 +891,107 @@ def test_codex_primary_flexible_quota_route_selects_carbon_and_restores_codex(co
         ],
     )
     assert store.load_session(session["session_id"])["agent_id"] == "codex"
+
+
+def test_codex_to_antigravity_failover_resolves_short_alias_endpoint_model(conversation, monkeypatch):
+    import sys
+    from datetime import datetime, timedelta, timezone
+    from types import ModuleType
+    from loopx.capabilities.native_chat import antigravity_adapter
+    from loopx.chat_manager import manager_session_quota_route
+
+    root, store, runtime, session, _starts = conversation
+    store.update_session(
+        session["session_id"],
+        upstream_thread_id="codex-thread-1",
+        agent_model_id="gpt-6.2-sol",
+        agent_reasoning_effort="xhigh",
+    )
+
+    parent = ModuleType("loopx_codex_provider_routing")
+    module = ModuleType("loopx_codex_provider_routing.native")
+
+    class Accounts:
+        def __init__(self, path):
+            assert path == runtime.coordination_runtime_root
+
+        def model_transport(self, **_parameters):
+            return None
+
+        def steward_route(self, *, codex_home, primary, pool, current, primary_capacity,
+                          fallback_capacity=None, blocked_primary=None, model=None):
+            if fallback_capacity is None:
+                return {"endpoint": None, "blocked_primary": blocked_primary}
+            return {"endpoint": "antigravity", "blocked_primary": blocked_primary}
+
+    module.NativeAccounts = Accounts
+    monkeypatch.setitem(sys.modules, parent.__name__, parent)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(runtime, "capabilities", lambda: [
+        {"agent_id": "codex", "available": True},
+        {"agent_id": "antigravity", "available": True},
+    ])
+    reset = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    monkeypatch.setattr(
+        antigravity_adapter,
+        "discover_antigravity_language_server",
+        lambda **_kw: {"url": "http://127.0.0.1:4321", "csrf_token": "tok"},
+    )
+    monkeypatch.setattr(
+        antigravity_adapter,
+        "_rpc_post",
+        lambda _url, _tok, method, _payload, **_kw: {
+            "userStatus": {
+                "email": "synthetic@invalid.example",
+                "cascadeModelConfigData": {
+                    "clientModelConfigs": [
+                        {
+                            "label": "Gemini 4 Carbon (High)",
+                            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                            "quotaInfo": {"remainingFraction": 0.91, "resetTime": reset},
+                        },
+                        {
+                            "label": "Gemini 4 Carbon (Medium)",
+                            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M437"},
+                            "quotaInfo": {"remainingFraction": 0.77, "resetTime": reset},
+                        },
+                    ]
+                },
+            }
+        } if method == "GetUserStatus" else {},
+    )
+
+    loaded = store.load_session(session["session_id"])
+
+    # Alias with explicit effort resolves to gemini-4-carbon-medium and passes quota route.
+    configure(
+        root,
+        model="gpt-6.2-sol",
+        effort="xhigh",
+        endpoint="codex",
+        policy="flexible",
+        endpoint_models={"antigravity": {"model": "carbon", "reasoning_effort": "medium"}},
+    )
+    routed_medium = manager_session_quota_route(runtime, loaded)
+    assert routed_medium is not None
+    alloc_medium = routed_medium["allocation"]
+    assert alloc_medium["executor_endpoint"] == "antigravity"
+    assert alloc_medium["allocation_reason"] == "flexible_availability_fallback"
+    assert alloc_medium["model"] == "carbon"
+    assert alloc_medium["reasoning_effort"] == "medium"
+
+    # Alias without explicit effort defaults to high (gemini-4-carbon-high).
+    configure(
+        root,
+        model="gpt-6.2-sol",
+        effort="xhigh",
+        endpoint="codex",
+        policy="flexible",
+        endpoint_models={"antigravity": {"model": "carbon"}},
+    )
+    routed_high = manager_session_quota_route(runtime, loaded)
+    assert routed_high is not None
+    alloc_high = routed_high["allocation"]
+    assert alloc_high["executor_endpoint"] == "antigravity"
+    assert alloc_high["model"] == "carbon"
+    assert alloc_high["reasoning_effort"] == "high"

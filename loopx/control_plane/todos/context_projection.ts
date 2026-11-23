@@ -206,7 +206,7 @@ const SUMMARY_FIELDS = [
   "goal_acceptance_guard", "schema_version", "todo_id", "content_revision", "role",
   "status", "priority", "title", "archive_state", "source_section",
   "task_class", "action_kind", "task_domain", "capability_binding_ref", "task_repository",
-  "continuation_policy", "removed_continuation_policy", "required_write_scopes", "required_capabilities", "target_capabilities",
+  "continuation_policy", "removed_continuation_policy", "required_capabilities", "target_capabilities",
   "decision_scope", "required_decision_scopes", "decision_outcome", "decision_scope_outcomes", "claimed_by",
   "bound_agent", "goal_bound", "blocks_agent", "excluded_agents", "global_gate",
   "unblocks_todo_id", "resume_when", "resume_monitor_generation", "resume_condition", "resume_ready",
@@ -249,7 +249,7 @@ function compactSummaryRecord(item: JsonObject, body: unknown): JsonObject {
   }
   const normalized: JsonObject = {
     task_domain: /^[a-z][a-z0-9_.-]{0,63}$/.test(token("task_domain").toLowerCase()) ? token("task_domain").toLowerCase() : null,
-    required_write_scopes: writeScopes(Array.isArray(row.required_write_scopes) ? row.required_write_scopes : token("required_write_scopes")), task_repository: repository,
+    task_repository: repository,
     decision_scope: readScope(row.decision_scope), required_decision_scopes: readScopes(row.required_decision_scopes),
     decision_outcome: outcome(token("decision_outcome")), decision_scope_outcomes: outcomes,
     excluded_agents: readExcludedAgents(row.excluded_agents),

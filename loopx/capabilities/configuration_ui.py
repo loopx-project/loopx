@@ -125,6 +125,14 @@ def capability_configuration_editor(
                 _field("max_trials", "Maximum proposed trials", "number", minimum=0, maximum=2, required=True),
             ],
         },
+        "goal_closeout": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [
+                _field("timeout_seconds", "Closeout timeout (seconds)", "number",
+                       minimum=1, maximum=600, required=True,
+                       description="Bounds one terminal hook invocation. The command itself is local-private: configure it with the machine-config CLI, never through the Dashboard."),
+            ],
+        },
         "goal_storage": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [_field("new_goal_provider", "New Goal storage provider", "select",
@@ -242,7 +250,10 @@ def capability_configuration_editor(
                     "string_list",
                     description=(
                         "One authorized executor id per line. Required only for "
-                        "flexible selection; include the primary executor."
+                        "flexible selection; include the primary executor. "
+                        "Optional per-endpoint model and reasoning effort overrides "
+                        "(endpoint_models) are authored in JSON mode and preserved "
+                        "by guided saves."
                     ),
                 ),
                 _field(
@@ -252,7 +263,9 @@ def capability_configuration_editor(
                     nullable=True,
                     description=(
                         "Optional model for the selected executor. Leave blank to keep "
-                        "the executor's own default."
+                        "the executor's own default. Configure per-endpoint overrides "
+                        "(endpoint_models: {\"<endpoint>\": {\"model\": ..., "
+                        "\"reasoning_effort\": ...}}) in JSON mode."
                     ),
                 ),
                 _field(

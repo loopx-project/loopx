@@ -17,7 +17,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from ..chat_dsh import STEWARD_SEGMENT_ENV
+from .dsh import STEWARD_SEGMENT_ENV
 from ..control_plane.operator_provider import operator_provider_environ
 from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,

@@ -208,13 +208,39 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
         source = json.loads(captured)
         assert source["replan_action_packet"]["decision"] == "replan_required"
         assert source["reward_memory_recall"]["status"] == "applied" and memory.calls == 1
+        from loopx.capabilities.turn_context import attach_turn_context
+        from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
         projected = project_turn_context(source)
         assert projected["reward_memory_recall"]["context"]["guidance"]
-        relocated = {**source, "replan_read_path": str(tmp_path / "other-location.json")}
-        assert project_turn_context(relocated) == projected
+        # Signed complete captures reject direct top-level edits, while Host plan
+        # carrier detail_ref relocation preserves exact capability binding.
+        assert project_turn_context({**source, "replan_read_path": str(tmp_path / "other-location.json")}) == {}
+        plan = build_loopx_turn_plan(source, host="codex-cli", execution_mode="isolated-headless")
+        attach_turn_context(
+            plan,
+            registry_path=registry,
+            goal_id=GOAL,
+            agent_id=AGENT,
+            decision=source,
+            turn_instance_id=TURN,
+        )
+        plan_projected = project_turn_context(plan)
+        assert plan_projected["reward_memory_recall"]["context"]["guidance"]
+        relocated = deepcopy(plan)
+        relocated["detail_ref"] = {
+            "captured_decision": {
+                "path": str(tmp_path / "other-location.json"),
+                "turn_key": plan["transaction"]["turn_key"],
+                "goal_id": GOAL,
+                "agent_id": AGENT,
+                "source_hash_ref": "$.source_decision_hash",
+            }
+        }
+        assert project_turn_context(relocated) == plan_projected
         changed = deepcopy(relocated)
-        plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
-        plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
+        settlement = changed["work_contract"]["interaction_contract"]["cli_channel"]["settlement_plan"]
+        settlement["ordered_steps"][1]["command_template"] += " --evidence substituted"
         assert project_turn_context(changed) == {}
     finally:
         restart_effect_runtime(wait_for_exit=True)

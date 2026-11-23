@@ -107,6 +107,12 @@ fn status_readiness_is_explicit_and_fails_closed() {
 #[test]
 #[cfg(target_os = "macos")]
 fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
+    // An nvm-activated test shell would prepend its own NVM_BIN to this
+    // fixture home's search path, so the fixed-position assertions below only
+    // hold for a process started without that activation.
+    if ambient_nvm_activation() {
+        return;
+    }
     let path = runtime_search_path(
         Some("/fixture/user".into()),
         Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
@@ -132,6 +138,545 @@ fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
     assert!(paths.contains(&PathBuf::from("/sbin")));
     let again = runtime_search_path(Some("/fixture/user".into()), Some(path.clone()));
     assert_eq!(again, path, "tool search must be idempotent");
+}
+
+#[cfg(unix)]
+fn nvm_fixture(root: &Path, default: &str) -> PathBuf {
+    let versions = root.join("versions/node");
+    for version in ["v24.22.1", "v22.14.0", "v20.18.0"] {
+        fs::create_dir_all(versions.join(version).join("bin")).expect("nvm version bin");
+    }
+    let alias = root.join("alias");
+    fs::create_dir_all(alias.join("lts")).expect("nvm alias directory");
+    fs::write(alias.join("default"), format!("{default}\n")).expect("default alias");
+    fs::write(alias.join("lts/*"), "lts/krypton\n").expect("lts alias");
+    fs::write(alias.join("lts/krypton"), "v24.22.1\n").expect("lts codename alias");
+    root.to_path_buf()
+}
+
+// A real Node stand-in so a resolution assertion doubles as a version
+// qualification: the search order decides which executable Core would probe.
+#[cfg(unix)]
+fn node_fixture(bin: &Path, version: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(bin).expect("node fixture bin");
+    let executable = bin.join("node");
+    fs::write(&executable, format!("#!/bin/sh\nprintf 'v{version}\\n'\n"))
+        .expect("node fixture executable");
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).expect("node fixture mode");
+    executable
+}
+
+// An nvm-activated test shell would resolve this fixture home against the
+// developer's own NVM_DIR/NVM_BIN, so the fixed-position assertions below only
+// hold for a process started without that activation.
+#[cfg(unix)]
+fn ambient_nvm_activation() -> bool {
+    env::var_os("NVM_DIR").is_some() || env::var_os("NVM_BIN").is_some()
+}
+
+#[test]
+#[cfg(unix)]
+fn finder_runtime_path_finds_nvm_managed_node() {
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v24.22.1");
+    let path = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        Some(&nvm_root),
+        None,
+    );
+    let paths: Vec<_> = env::split_paths(&path).collect();
+    let default_bin = nvm_root.join("versions/node/v24.22.1/bin");
+    let position = |candidate: &Path| {
+        paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    assert_eq!(paths[0], home.path().join(".local/bin"));
+    // A host whose only Node is nvm-managed must still be found from Finder.
+    assert!(paths.contains(&default_bin));
+    // Inferred nvm is the last resort: behind every candidate the host already
+    // provides, and behind the inherited PATH a terminal launch contributes.
+    // The Homebrew entries are only added on macOS, so they are asserted there.
+    let mut existing: Vec<&Path> = vec![Path::new("/usr/bin"), Path::new("/bin")];
+    #[cfg(target_os = "macos")]
+    existing.extend([
+        Path::new("/opt/homebrew/bin"),
+        Path::new("/usr/local/bin"),
+        Path::new("/opt/homebrew/opt/node@24/bin"),
+        Path::new("/usr/local/opt/node@24/bin"),
+        Path::new("/opt/homebrew/opt/node@22/bin"),
+        Path::new("/usr/local/opt/node@22/bin"),
+    ]);
+    for existing in existing {
+        assert!(
+            position(existing) < position(&default_bin),
+            "inferred nvm must stay behind the existing candidate {}",
+            existing.display()
+        );
+    }
+    assert!(
+        position(&nvm_root.join("versions/node/v22.14.0/bin")) > position(&default_bin),
+        "the recorded default alias leads the discovered versions"
+    );
+    assert!(
+        position(&nvm_root.join("versions/node/v20.18.0/bin"))
+            > position(&nvm_root.join("versions/node/v22.14.0/bin")),
+        "installed nvm versions are discovered newest-first"
+    );
+    let mut unique = paths.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        paths.len(),
+        "one tool search must not repeat a directory: {paths:?}"
+    );
+    assert_eq!(
+        paths.iter().filter(|p| *p == &default_bin).count(),
+        1,
+        "the recorded default alias is also an installed version and must appear once"
+    );
+    let again = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(path.clone()),
+        Some(&nvm_root),
+        None,
+    );
+    assert_eq!(again, path, "tool search must be idempotent");
+}
+
+// A recorded `default` alias that predates the supported floor must not hide a
+// newer installed version: with no other Node on the host, the qualified newer
+// version leads so Core's qualification succeeds instead of reporting the old
+// default as unsupported.
+#[test]
+#[cfg(unix)]
+fn old_default_alias_does_not_hide_a_newer_supported_version() {
+    let root = tempfile::tempdir().expect("nvm fixture");
+    let nvm_root = nvm_fixture(root.path(), "v20.18.0");
+    let v24 = nvm_root.join("versions/node/v24.22.1/bin");
+    let v22 = nvm_root.join("versions/node/v22.14.0/bin");
+    let v20 = nvm_root.join("versions/node/v20.18.0/bin");
+
+    let discovered = discovered_nvm_directories(&nvm_root, None);
+    assert_eq!(
+        discovered.first(),
+        Some(&v24),
+        "a supported newer version leads over an old recorded default"
+    );
+    let position = |directory: &Path| {
+        discovered
+            .iter()
+            .position(|candidate| candidate == directory)
+            .unwrap_or_else(|| panic!("{} missing", directory.display()))
+    };
+    assert!(position(&v24) < position(&v22));
+    assert!(
+        position(&v22) < position(&v20),
+        "the old default is not promoted"
+    );
+
+    // The full search path reflects the same lead: the qualified newer version
+    // precedes the old default, so resolving `node` cannot pick the old one.
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v20.18.0");
+    node_fixture(&nvm_root.join("versions/node/v24.22.1/bin"), "24.22.1");
+    node_fixture(&nvm_root.join("versions/node/v20.18.0/bin"), "20.18.0");
+    let path = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some("/usr/bin:/bin".into()),
+        Some(&nvm_root),
+        None,
+    );
+    let paths: Vec<_> = env::split_paths(&path).collect();
+    let nvm_lead = paths
+        .iter()
+        .find(|candidate| candidate.starts_with(&nvm_root))
+        .expect("the nvm tree appears in the search");
+    assert_eq!(
+        nvm_lead,
+        &nvm_root.join("versions/node/v24.22.1/bin"),
+        "the first nvm entry is the qualified newer version, not the old default"
+    );
+}
+
+// A terminal activation is authoritative only while it still matches the Node
+// the inherited PATH selects. A shell that put another Node first after `nvm
+// use` leaves a stale `NVM_BIN` behind, and preferring it would replace a
+// working Node with an unsupported one.
+#[test]
+#[cfg(unix)]
+fn stale_nvm_bin_yields_to_the_node_the_shell_selected() {
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v24.22.1");
+    let stale = nvm_root.join("versions/node/v20.18.0/bin");
+    node_fixture(&stale, "20.18.0");
+    let selected = node_fixture(&home.path().join("selected/node/bin"), "24.22.1");
+    let selected_bin = selected.parent().expect("selected bin").to_path_buf();
+
+    // Still the selected Node: the activation keeps terminal-launch precedence.
+    let agreed = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(selected_bin.to_string_lossy().into_owned().into()),
+        Some(&nvm_root),
+        Some(selected_bin.as_os_str()),
+    );
+    let agreed_paths: Vec<_> = env::split_paths(&agreed).collect();
+    let position = |candidate: &Path| {
+        agreed_paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    assert_eq!(
+        position(selected_bin.as_path()),
+        1,
+        "an activation that still matches the selected Node keeps its precedence"
+    );
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &selected, agreed.as_os_str());
+
+    // No longer the selected Node: the stale directory becomes a last resort.
+    let stale_nvm_bin = stale.as_os_str();
+    let demoted = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(selected_bin.to_string_lossy().into_owned().into()),
+        Some(&nvm_root),
+        Some(stale_nvm_bin),
+    );
+    let demoted_paths: Vec<_> = env::split_paths(&demoted).collect();
+    let demoted_position = |candidate: &Path| {
+        demoted_paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    assert!(
+        demoted_position(selected_bin.as_path()) < demoted_position(&stale),
+        "a stale NVM_BIN must not precede the Node the shell selected"
+    );
+    assert!(
+        demoted_position(&nvm_root.join("versions/node/v24.22.1/bin")) < demoted_position(&stale),
+        "a newer installed version outranks a demoted NVM_BIN"
+    );
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &selected, demoted.as_os_str());
+
+    // A PATH that resolves no Node at all: `NVM_BIN` is not evidence the shell
+    // still selects that version, so it is demoted — yet still discovered, so
+    // an nvm-only host keeps working.
+    let no_node_on_path = home.path().join("empty-bin");
+    fs::create_dir_all(&no_node_on_path).expect("empty bin fixture");
+    let only_nvm = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(no_node_on_path.to_string_lossy().into_owned().into()),
+        Some(&nvm_root),
+        Some(stale_nvm_bin),
+    );
+    let only_nvm_paths: Vec<_> = env::split_paths(&only_nvm).collect();
+    assert!(
+        only_nvm_paths.contains(&stale),
+        "an activation with no competing Node stays in the search"
+    );
+    assert_ne!(
+        only_nvm_paths.first(),
+        Some(&stale),
+        "a stale NVM_BIN must not take the promoted activation position"
+    );
+    assert!(
+        only_nvm_paths
+            .iter()
+            .position(|directory| directory == &stale)
+            > only_nvm_paths
+                .iter()
+                .position(|directory| directory == &nvm_root.join("versions/node/v24.22.1/bin")),
+        "a stale NVM_BIN ranks behind a discovered qualified version"
+    );
+    let mut unique = only_nvm_paths.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        only_nvm_paths.len(),
+        "no duplicate directories"
+    );
+}
+
+// The reviewer's regression: a launch with a minimal PATH that resolves no
+// Node and a residual `NVM_BIN` pointing at an unsupported version. Promoting
+// the residual variable would place it ahead of the standard Homebrew entries
+// and break a host whose Homebrew Node qualified before.
+#[test]
+#[cfg(unix)]
+fn residual_nvm_bin_does_not_outrank_the_standard_host_node() {
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v24.22.1");
+    let stale = nvm_root.join("versions/node/v20.18.0/bin");
+    node_fixture(&stale, "20.18.0");
+    let qualified_node = node_fixture(&nvm_root.join("versions/node/v24.22.1/bin"), "24.22.1");
+    let empty_bin = home.path().join("empty-bin");
+    fs::create_dir_all(&empty_bin).expect("empty bin fixture");
+    let inherited: std::ffi::OsString = empty_bin.clone().into_os_string();
+    assert!(
+        resolve_executable_path("node", Some(inherited.as_os_str())).is_none(),
+        "the inherited PATH must resolve no Node for this scenario"
+    );
+
+    let search = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(inherited),
+        Some(&nvm_root),
+        Some(stale.as_os_str()),
+    );
+    let paths: Vec<_> = env::split_paths(&search).collect();
+    let position = |candidate: &Path| {
+        paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    // The promoted activation position belongs to `~/.local/bin` only; the
+    // residual variable must rank behind every standard host entry.
+    assert_eq!(paths[0], home.path().join(".local/bin"));
+    #[cfg(target_os = "macos")]
+    {
+        assert!(
+            position(Path::new("/opt/homebrew/bin")) < position(&stale),
+            "a residual NVM_BIN must not precede the standard Homebrew Node"
+        );
+        assert!(
+            position(Path::new("/usr/local/bin")) < position(&stale),
+            "a residual NVM_BIN must not precede /usr/local/bin"
+        );
+    }
+    assert!(
+        position(&nvm_root.join("versions/node/v24.22.1/bin")) < position(&stale),
+        "a residual NVM_BIN must rank behind a discovered qualified version"
+    );
+    assert!(
+        paths
+            .iter()
+            .filter(|directory| *directory == &stale)
+            .count()
+            == 1,
+        "the demoted NVM_BIN appears once: {paths:?}"
+    );
+
+    // Core qualifies the Node the search resolves first: the residual directory
+    // must not win while the host provides a Node, and when it does not the
+    // discovered qualified version must win. The oracle checks the host so it
+    // holds on a machine with a real Homebrew Node too.
+    assert_demoted_nvm_bin_is_last_resort(&nvm_root, &qualified_node, search.as_os_str());
+
+    // An nvm-only host with nothing else still finds the residual directory, so
+    // the demotion never makes nvm invisible.
+    let isolated_root = tempfile::tempdir().expect("isolated nvm fixture");
+    let isolated_nvm = isolated_root.path().join(".nvm");
+    let isolated = isolated_nvm.join("versions/node/v20.18.0/bin");
+    fs::create_dir_all(&isolated).expect("isolated nvm version bin");
+    fs::create_dir_all(isolated_nvm.join("alias")).expect("isolated alias directory");
+    fs::write(isolated_nvm.join("alias/default"), "v20.18.0\n").expect("isolated default");
+    node_fixture(&isolated, "20.18.0");
+    let isolated_search = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(empty_bin.clone().into_os_string()),
+        Some(&isolated_nvm),
+        Some(isolated.as_os_str()),
+    );
+    assert!(
+        env::split_paths(&isolated_search).any(|directory| directory == isolated),
+        "a residual NVM_BIN is still discovered when nothing else provides Node"
+    );
+    let isolated_node = isolated.join("node");
+    match env::split_paths(&isolated_search)
+        .find(|directory| !directory.starts_with(&isolated_nvm) && directory.join("node").is_file())
+    {
+        Some(directory) => assert_eq!(
+            resolve_executable_path("node", Some(isolated_search.as_os_str())),
+            Some(directory.join("node")),
+            "a residual NVM_BIN must yield to a Node the host provides"
+        ),
+        None => assert_eq!(
+            resolve_executable_path("node", Some(isolated_search.as_os_str())),
+            Some(isolated_node),
+            "an nvm-only host resolves its only Node"
+        ),
+    }
+}
+
+// An inferred nvm candidate may only be selected when no other candidate
+// exists on the host. That rule must hold on any machine, with or without a
+// Homebrew Node, so the oracle checks the host instead of assuming one.
+#[cfg(unix)]
+fn assert_inferred_nvm_never_displaces_existing(
+    nvm_root: &Path,
+    stale_default_bin: &Path,
+    search: &std::ffi::OsStr,
+) {
+    let resolved =
+        resolve_executable_path("node", Some(search)).expect("the search must resolve a Node");
+    let host_has_other_node = env::split_paths(search)
+        .any(|directory| !directory.starts_with(nvm_root) && directory.join("node").is_file());
+    if host_has_other_node {
+        assert_ne!(
+            resolved,
+            stale_default_bin.join("node"),
+            "an inferred stale nvm default must not displace a candidate the host already provides"
+        );
+        assert!(
+            !resolved.starts_with(nvm_root),
+            "resolution must come from an existing candidate, not the inferred default: {}",
+            resolved.display()
+        );
+    } else {
+        assert_eq!(
+            resolved,
+            stale_default_bin.join("node"),
+            "nvm-managed Node stays discoverable when nothing else provides one"
+        );
+    }
+}
+
+// A demoted `NVM_BIN` may only be selected when nothing else can be: a Node
+// the host provides, or a newer nvm install, must win first. The oracle reads
+// the host instead of assuming which candidate that is, so it holds on a
+// machine with a real Homebrew Node as well as on a bare one. `fallback` is the
+// executable the search must resolve to when the host provides no Node.
+#[cfg(unix)]
+fn assert_demoted_nvm_bin_is_last_resort(
+    nvm_root: &Path,
+    fallback: &Path,
+    search: &std::ffi::OsStr,
+) {
+    let resolved =
+        resolve_executable_path("node", Some(search)).expect("the search must resolve a Node");
+    let host_candidate = env::split_paths(search)
+        .find(|directory| !directory.starts_with(nvm_root) && directory.join("node").is_file());
+    match host_candidate {
+        Some(directory) => assert_eq!(
+            resolved,
+            directory.join("node"),
+            "a demoted NVM_BIN must yield to the Node the host provides"
+        ),
+        None => assert_eq!(
+            resolved, fallback,
+            "a demoted NVM_BIN may only be selected when nothing else can be"
+        ),
+    }
+}
+
+// The reviewer's regression: a Finder launch with no NVM_BIN, an nvm `default`
+// that predates the supported minimum, and a Node the host already provides.
+// The inferred default must be discovered, never preferred.
+#[test]
+#[cfg(unix)]
+fn inferred_nvm_default_cannot_shadow_an_existing_qualified_node() {
+    let home = tempfile::tempdir().expect("home fixture");
+    let nvm_root = nvm_fixture(&home.path().join(".nvm"), "v20.18.0");
+    let stale_default = nvm_root.join("versions/node/v20.18.0/bin");
+    node_fixture(&stale_default, "20.18.0");
+    // A supported Node the host already provides, the way Homebrew or an
+    // inherited terminal PATH would.
+    let qualified = node_fixture(&home.path().join("qualified/node/bin"), "24.22.1");
+    let qualified_bin = qualified.parent().expect("qualified bin").to_path_buf();
+    let with_candidate = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some(qualified_bin.to_string_lossy().into_owned().into()),
+        Some(&nvm_root),
+        None,
+    );
+    assert_inferred_nvm_never_displaces_existing(
+        &nvm_root,
+        &stale_default,
+        with_candidate.as_os_str(),
+    );
+
+    // The ordering guarantee behind that resolution: every non-nvm candidate,
+    // including the Homebrew entries this App adds, precedes the inferred one.
+    let paths: Vec<_> = env::split_paths(&with_candidate).collect();
+    let position = |candidate: &Path| {
+        paths
+            .iter()
+            .position(|p| p == candidate)
+            .unwrap_or_else(|| panic!("{} missing from tool search", candidate.display()))
+    };
+    // The Homebrew entries only exist on macOS, so they are asserted there.
+    let local_bin = home.path().join(".local/bin");
+    let mut existing: Vec<&Path> = vec![local_bin.as_path(), qualified_bin.as_path()];
+    #[cfg(target_os = "macos")]
+    existing.extend([
+        Path::new("/opt/homebrew/bin"),
+        Path::new("/usr/local/bin"),
+        Path::new("/opt/homebrew/opt/node@24/bin"),
+        Path::new("/usr/local/opt/node@24/bin"),
+        Path::new("/opt/homebrew/opt/node@22/bin"),
+        Path::new("/usr/local/opt/node@22/bin"),
+    ]);
+    for existing in existing {
+        assert!(
+            position(existing) < position(&stale_default),
+            "inferred nvm must stay behind the existing candidate {}",
+            existing.display()
+        );
+    }
+
+    // Without any other Node on the host, the same stale default is still the
+    // only candidate, so nvm remains discoverable rather than invisible.
+    let isolated = runtime_search_path_from(
+        Some(home.path().to_path_buf().into()),
+        Some("/usr/bin:/bin".into()),
+        Some(&nvm_root),
+        None,
+    );
+    assert!(env::split_paths(&isolated).any(|directory| directory == stale_default));
+    assert_inferred_nvm_never_displaces_existing(&nvm_root, &stale_default, isolated.as_os_str());
+}
+
+#[test]
+#[cfg(unix)]
+fn nvm_alias_chain_resolves_versions_and_rejects_escapes() {
+    let root = tempfile::tempdir().expect("nvm fixture");
+    let nvm_root = nvm_fixture(root.path(), "lts/*");
+    assert_eq!(
+        resolve_nvm_alias(&nvm_root, "default", 0).as_deref(),
+        Some("v24.22.1"),
+        "the default alias chain resolves to the recorded version"
+    );
+    assert_eq!(
+        resolve_nvm_alias(&nvm_root, "22.14.0", 0).as_deref(),
+        Some("v22.14.0"),
+        "a version without the v prefix still names nvm's directory"
+    );
+    for alias in ["", "missing", "../outside", "/etc/passwd", "lts/../default"] {
+        assert_eq!(
+            resolve_nvm_alias(&nvm_root, alias, 0),
+            None,
+            "alias {alias:?} must not resolve"
+        );
+    }
+    fs::write(nvm_root.join("alias/cycle"), "cycle").expect("cyclic alias");
+    assert_eq!(resolve_nvm_alias(&nvm_root, "cycle", 0), None);
+    assert!(installed_nvm_versions(&nvm_root)
+        .iter()
+        .zip(["v24.22.1", "v22.14.0", "v20.18.0"])
+        .all(|(found, expected)| found == expected));
+    assert_eq!(nvm_version("v24.22.1"), Some((24, 22, 1)));
+    assert_eq!(nvm_version("not-a-version"), None);
+    assert_eq!(nvm_version("v24.22"), None);
+}
+
+#[test]
+#[cfg(unix)]
+fn nvm_root_follows_configured_directory_and_conventional_home() {
+    match env::var_os("NVM_DIR").filter(|value| !value.is_empty()) {
+        Some(configured) => assert_eq!(nvm_root(None), Some(PathBuf::from(configured))),
+        None => assert_eq!(
+            nvm_root(Some(std::ffi::OsStr::new("/fixture/user"))),
+            Some(PathBuf::from("/fixture/user/.nvm")),
+            "an unset NVM_DIR keeps the conventional location"
+        ),
+    }
 }
 
 #[cfg(not(windows))]

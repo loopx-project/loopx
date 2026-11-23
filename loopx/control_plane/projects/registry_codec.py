@@ -14,7 +14,6 @@ from typing import Any, TypeVar
 
 from ..content_digest import ENVELOPED_SHA256_PATTERN
 from ..goals.activation import require_current_registry_goal_activation
-from ..runtime.document_io import fsync_state_directory
 from ..runtime.private_permissions import protect_private_path, require_private_path
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ...paths import GLOBAL_REGISTRY_FILENAME
@@ -426,6 +425,8 @@ class ProjectRegistryTransaction:
         """Verify a private original-byte backup before a caller's migration."""
         if not self._existed or self._finished:
             raise RuntimeError("registry backup requires an open existing transaction")
+        from ..runtime.document_io import fsync_state_directory
+
         raw = self._document.raw_bytes
         if self._path.read_bytes() != raw:
             raise ProjectRegistryMutationError("Registry changed before preimage backup")
@@ -437,6 +438,8 @@ class ProjectRegistryTransaction:
         protect_private_path(directory, directory=True)
         target = directory / f"{self._path.name}.{hashlib.sha256(raw).hexdigest()}.bak"
         if not target.exists():
+            from ..runtime.document_io import fsync_state_directory
+
             with target.open("xb") as stream:
                 protect_private_path(target)
                 stream.write(raw)

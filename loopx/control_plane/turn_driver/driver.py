@@ -253,13 +253,23 @@ def reconcile_failed_turn_session_request(
     except (ValueError, RuntimeError) as exc:
         raise FailedTurnSessionRecoveryError("turn_lineage_missing", str(exc)) from exc
     planned_session = _mapping(request.get("session"))
-    session, session_error = _session_plan(
-        route=LoopXTurnRoute.READY_FOR_HOST,
-        lineage=lineage,
-        session_binding=session_binding,
-        iteration_context_policy="resume",
-        session_scope=str(_mapping(planned_session.get("context_policy")).get("binding_scope") or "todo"),
-    )
+    try:
+        session, session_error = _session_plan(
+            route=LoopXTurnRoute.READY_FOR_HOST,
+            lineage=lineage,
+            session_binding=session_binding,
+            iteration_context_policy="resume",
+            session_scope=str(_mapping(planned_session.get("context_policy")).get("binding_scope") or "todo"),
+        )
+    except (ValueError, RuntimeError) as exc:
+        # A lost or unavailable policy response is still a failed Host Session
+        # check. Keep it inside the journal's structured recovery decision so
+        # callers can preserve the original Turn instead of treating the retry
+        # as an unrelated execution ambiguity.
+        raise FailedTurnSessionRecoveryError(
+            "session_policy_unavailable",
+            "failed-Turn recovery session policy is unavailable",
+        ) from exc
     if session_error:
         status = str(session.get("binding_status") or "")
         reason = {

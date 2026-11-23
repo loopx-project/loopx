@@ -2,6 +2,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {EffectiveAction} from "./effective_action.generated.ts";
+import {boundVisionBaselineAdmission} from "./vision_baseline_admission.ts";
 
 interface RunFacts {
   normal_delivery_allowed: boolean;
@@ -43,6 +44,8 @@ interface RunDecision extends JsonObject {
   quota_patch: JsonObject;
   replan_decision_allowed: boolean;
   goal_route_hint_override: JsonObject | null;
+  agent_scope_frontier: JsonObject | null;
+  vision_baseline_initialization: boolean;
 }
 
 function text(value: unknown, label: string): string {
@@ -252,6 +255,8 @@ export function resolveQuotaRunDecision(params: JsonObject): JsonObject {
     should_run: false, effective_action: EffectiveAction.QUOTA_SKIP,
     reason: facts.reason, state: facts.state, quota_patch: {}, replan_decision_allowed: false,
     goal_route_hint_override: null,
+    agent_scope_frontier: null,
+    vision_baseline_initialization: false,
   };
   applyDeliveryGuards(facts, decision);
   decision.effective_action = quotaEffectiveAction(facts, decision);
@@ -261,4 +266,8 @@ export function resolveQuotaRunDecision(params: JsonObject): JsonObject {
   decision.goal_route_hint_override = taskOrchestrationRouteHint(
     facts.task_orchestration_contract, facts.task_orchestration_lane_count);
   return decision;
+}
+
+export async function admitQuotaRunDecision(params: JsonObject): Promise<JsonObject> {
+  return boundVisionBaselineAdmission(params, resolveQuotaRunDecision(params));
 }

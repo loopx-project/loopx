@@ -109,17 +109,23 @@ PROJECTION = {
 }
 
 
-def _assert_resource_fill(plan: dict[str, object], *, selected_key: str) -> None:
+def _assert_resource_fill(
+    plan: dict[str, object],
+    *,
+    selected_key: str,
+    allow_shared_scope: bool = False,
+) -> None:
     selected = plan[selected_key]
     selected_ids = {
         todo_id
         for branch in selected
         for todo_id in branch.get("todo_ids", [branch.get("todo_id")])
     }
+    expected_second = "todo_short_conflict" if allow_shared_scope else "todo_short_backfill"
     assert selected_ids == {
         "todo_long_backfill",
         "todo_short_primary",
-        "todo_short_backfill",
+        expected_second,
     }
     portfolio = plan["resource_portfolio"]
     assert portfolio["analysis_only"] is True
@@ -141,10 +147,11 @@ def _assert_resource_fill(plan: dict[str, object], *, selected_key: str) -> None
     }
     assert statuses["todo_monitor"] == "excluded_non_exploration_lane"
     assert statuses["todo_long_blocked_dependency"] == "invalidated_dependency"
-    assert statuses["todo_short_conflict"] == "rejected_hazard"
+    if not allow_shared_scope:
+        assert statuses["todo_short_conflict"] == "rejected_hazard"
 
 
-def test_todo_plan_backfills_each_resource_lane_after_dependency_and_scope_rejections() -> None:
+def test_todo_plan_backfills_each_resource_lane_without_write_scope_blocks() -> None:
     plan = build_explore_todo_branch_plan(
         goal_id="synthetic-resource-portfolio",
         todos=TODOS,
@@ -157,7 +164,7 @@ def test_todo_plan_backfills_each_resource_lane_after_dependency_and_scope_rejec
 
     assert plan["orchestration_gate"]["state"] == "analysis_only"
     assert plan["selection_budget"] == 5
-    _assert_resource_fill(plan, selected_key="selected_branches")
+    _assert_resource_fill(plan, selected_key="selected_branches", allow_shared_scope=True)
     long_branch = next(
         branch for branch in plan["selected_branches"] if branch["todo_id"] == "todo_long_backfill"
     )
