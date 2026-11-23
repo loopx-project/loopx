@@ -7426,7 +7426,6 @@ def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, mon
     "fresh", "admission-crash", "replay", "replay-crash", "edited", "unknown", "same-topic", "stale-scope",
 ])
 def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypatch, case):
-    from loopx.capabilities.native_chat import external_conversations
     from test_native_steward_private import finish, steward
 
     fixture = steward.__wrapped__(tmp_path)
@@ -7471,8 +7470,10 @@ def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypa
             assert queued["turn_id"] != old_turn and queued["session_id"] == sid
             assert store.load_turn(sid, queued["turn_id"])["status"] == "queued"
         else:
+            from loopx.extensions.lark import private_mention_topics
+
             with monkeypatch.context() as old_behavior:
-                old_behavior.setattr(transport, "_distinct_steward_reply_topic", lambda *args: False, raising=False)
+                old_behavior.setattr(private_mention_topics, "distinct_reply_topic", lambda *args: False)
                 old_behavior.setattr(runtime.adapters[sid], "healthcheck", lambda: False)
                 assert transport.admit(profile, different)["status"] == "command_recorded"
             transport.reconcile_request(path)
@@ -7504,7 +7505,9 @@ def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypa
                 runner=provider, cli_bin="lark-cli")
             assert path in restarted.pending_delivery_paths()
             if case == "replay-crash":
-                write = external_conversations._atomic_write_json
+                from loopx.capabilities.native_chat import external_mention_recovery
+
+                write = external_mention_recovery._atomic_write_json
 
                 def lose_core_projection(target, row):
                     if target.stem == path.stem and row["status"] == "accepted":
@@ -7512,7 +7515,7 @@ def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypa
                     write(target, row)
 
                 with monkeypatch.context() as crash:
-                    crash.setattr(external_conversations, "_atomic_write_json", lose_core_projection)
+                    crash.setattr(external_mention_recovery, "_atomic_write_json", lose_core_projection)
                     restarted.reconcile_request(path)
                 assert path.read_bytes() == old_bytes
                 committed = store.turn_for_client(sid, f"external-{path.stem}")
