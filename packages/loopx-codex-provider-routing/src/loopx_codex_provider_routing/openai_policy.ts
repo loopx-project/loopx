@@ -25,7 +25,7 @@ export function apiStreamOutcome(value: unknown): {status: number; code: string}
   return null;
 }
 export function apiKeys(input: { now: number; model: string; keys: KeyRuntime[] }) {
-  // Expiry permits a future attempt;
+  // Expiry permits a future attempt.
   // Try alternatives before a known rejection, even when requests are spaced
   // farther apart than the cooldown. Oldest failures are reconsidered first.
   const rejectionTime = (key: KeyRuntime) => ["quota_exhausted", "authentication_failed",

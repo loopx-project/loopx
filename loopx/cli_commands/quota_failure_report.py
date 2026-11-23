@@ -41,6 +41,7 @@ from ..control_plane.quota.error_codes import (
     QuotaCommandValidationError,
     QuotaDecisionTransportError,
     QuotaIdentityPreconditionError,
+    QuotaRunIndexConflict,
     quota_error_code,
 )
 from ..file_lock import lock_timeout_error_fields
@@ -168,6 +169,17 @@ def quota_failure_payload(
         diagnostic_code = getattr(error, "diagnostic_code", None)
         if isinstance(error, EffectRuntimeRemoteError) and isinstance(diagnostic_code, str):
             payload["diagnostic_code"] = diagnostic_code
+    if isinstance(error, QuotaRunIndexConflict):
+        payload.update(
+            status=error.reason_code,
+            reason="the quota run index changed before the spend could commit",
+            appended=False,
+            recommended_action=(
+                "for a bound spend, rerun quota should-run with the same Turn "
+                "identity and follow its returned settlement command. For an "
+                "unbound spend, obtain a fresh preview before retrying."
+            ),
+        )
     if isinstance(error, HeartbeatReceiptIdentityConflictError):
         payload.update({
             "status": "heartbeat_receipt_identity_conflict",

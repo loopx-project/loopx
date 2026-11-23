@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import inspect
 import json
 import logging
+import math
 from pathlib import Path
 import re
 import subprocess
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from ...agent_registry import load_goal_from_registry
 from ...chat_store import _atomic_write_json
@@ -202,9 +204,35 @@ def _github_repo_slug(task_repository: Any) -> str | None:
     return slug if _REPO_PATTERN.fullmatch(slug) else None
 
 
-def _observe_github_repository_prs(repo_slug: str) -> dict[str, Any]:
+def _observe_github_repository_prs(
+    repo_slug: str, *, backfill_comments: bool = False
+) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
-    return observe_github_repository_prs(repo_slug, runner=subprocess.run)
+    return observe_github_repository_prs(
+        repo_slug, runner=subprocess.run, backfill_comments=backfill_comments
+    )
+
+
+def _signal_scope_uses_stalled_age(signal_scope: Mapping[str, Any] | None) -> bool:
+    if not isinstance(signal_scope, Mapping):
+        return False
+    pr_filter = signal_scope.get("pr_filter")
+    if not isinstance(pr_filter, Mapping):
+        return False
+    min_stalled_hours = pr_filter.get("min_stalled_hours")
+    return (
+        isinstance(min_stalled_hours, (int, float))
+        and not isinstance(min_stalled_hours, bool)
+        and math.isfinite(float(min_stalled_hours))
+        and float(min_stalled_hours) > 0
+    )
+
+
+def _accepts_backfill_comments(fn: Callable[..., Any]) -> bool:
+    params = inspect.signature(fn).parameters
+    return "backfill_comments" in params or any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
 
 
 _MONITOR_TARGET_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
@@ -501,7 +529,13 @@ class StewardMonitor:
         else:
             inbox_items = []
         repo_slug = _github_repo_slug(todo.get("task_repository"))
-        repo_snapshot = _observe_github_repository_prs(repo_slug) if repo_slug else None
+        backfill_comments = _signal_scope_uses_stalled_age(signal_scope)
+        if not repo_slug:
+            repo_snapshot = None
+        elif backfill_comments and _accepts_backfill_comments(_observe_github_repository_prs):
+            repo_snapshot = _observe_github_repository_prs(repo_slug, backfill_comments=True)
+        else:
+            repo_snapshot = _observe_github_repository_prs(repo_slug)
         observed_at = now_utc().isoformat()
         signal_request: dict[str, Any] = {
             "portfolio_observation": portfolio,

@@ -1,3 +1,5 @@
+import { AgentLoginRecovery, needsAgentLogin } from './components/AgentLoginRecovery';
+import { createPortal } from 'react-dom';
 import { GitPanel } from './components/GitPanel';
 import { SettingsPage, type SettingsGroup } from './components/SettingsPage';
 import { AssistantSettingsPage, assistantTitle } from './components/AssistantSettingsPage';
@@ -66,6 +68,9 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { DesktopPanel } from './components/DesktopPanel';
 import { FilesPanel, type FilesTarget } from './components/FilesPanel';
 import { PreviewPanel } from './components/PreviewPanel';
+import { DockPanel } from './components/DockPanel';
+import { PictureDock } from './components/PictureDock';
+import { handoverGroups } from './sidebar';
 import { fileRef } from './files';
 import { AddAgentDialog } from './components/AddAgentDialog';
 import { OnboardingDialog } from './components/OnboardingDialog';
@@ -76,6 +81,8 @@ import { QuotaNavigation, quotaPushed } from './quota-reading';
 import { noteSource, SelectionMenu } from './components/SelectionMenu';
 import { AgentPanel } from './components/AgentPanel';
 import { memberProgress, ThreadOverview, type OverviewSection } from './components/ThreadOverview';
+import { goalDestination, goalOverviewHash, goalOverviewRequest, goalsBoardTarget, type GoalSection } from './loopx/goal-navigation';
+import { extensionStorage } from './extensions/host';
 import { prepareOverview } from './overview-reading';
 import { ChangeDiffDialog } from './components/ChangeDiffDialog';
 import { AgentsPage } from './components/AgentsPage';
@@ -91,12 +98,12 @@ import { needsExplore, exploreSummary } from './personal-explore';
 import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
-import { GoalWorkPage, GOAL_TABS, type GoalTab } from './components/GoalWorkPage';
-import { GoalsPage, type GoalsFilter } from './components/GoalsPage';
 import { AccessSettings } from './components/AccessSettings';
+import { PwaInstallPromotion, PwaInstallSettings } from './components/PwaInstall';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
-import { StewardActions, StewardPage } from './components/StewardPage';
-import { SidebarGoals, useLoopxStatus } from './components/SidebarGoals';
+import { StewardPage } from './components/StewardPage';
+import { StewardOverview } from './components/StewardOverview';
+import { useLoopxStatus } from './loopx/use-status';
 import { needsYouGoalIds, sortGoalTree } from './loopx/status';
 import { ActivityPage } from './components/ActivityPage';
 import { LoopxGoalGroup } from './components/LoopxGoalGroup';
@@ -119,13 +126,13 @@ import { cachedAgentMarks, cachedThreads, rememberAgentMarks, rememberThreads } 
 import { cachedAgents, cachedDraft, cachedModels, rememberAgents, rememberDraft, rememberModels } from './host-cache';
 import { clampSidebarWidth, defaultSidebarWidth, projectDir, savedSidebarWidth, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, type HostSource } from './sidebar';
 import { enabledViews, extensionHash, looksLikeExtensionRoute, resolveExtensionRoute } from './extensions/routes';
-import { AgentPicker, type DiscoveredAccount, type DiscoveredAgent, effortsForModel, imagesBlocked, imagesNote, modelName, speedsForModel, ModelPicker, PermissionPicker, UsageMeter, WorkspacePicker } from './components/Pickers';
+import { AgentPicker, type DiscoveredAccount, type DiscoveredAgent, effortsForModel, imagesBlocked, imagesNote, modelName, resolveModel, speedsForModel, ModelPicker, PermissionPicker, UsageMeter, WorkspacePicker } from './components/Pickers';
 import { Sidebar, SIDEBAR_SHORTCUT } from './components/Sidebar';
 import { MergedHistory } from './components/MergedHistory';
 import { currentPlan, PlanButton } from './components/PlanPanel';
 import { HandoverComposer } from './components/HandoverComposer';
 import { WritingBar } from './components/WritingBar';
-import { handoverHistoryKey, laterSegment, latestHandoverThread } from './handover';
+import { handoverHistoryKey, laterSegment, latestHandoverThread, overviewHistoryBoundary } from './handover';
 import { TurnRuler } from './components/TurnRuler';
 import { NewProjectDialog, ProjectPicker, RootsDialog } from './components/Projects';
 import { NoteMarks, type NoteMark } from './components/NoteMarks';
@@ -133,7 +140,7 @@ import { ConnectDialog, DemoBar } from './components/ConnectDialog';
 import { DemoApi, DemoError } from './demo/DemoApi';
 import { EMPTY_MODEL_PREFERENCE, type DraftModelPreference } from '../../daemon/src/model-preferences';
 import { QUICK_SWITCH_HIDDEN_KEY, clampQuickSwitchBottom, savedQuickSwitchBottom, saveQuickSwitchBottom } from './quick-switch';
-import { IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
+import { IconDownload, IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
 import { StatReadings } from './components/SessionStats';
 import { ThreadTracePanel } from './components/TracePanel';
 import { chooseLocale, locale, LOCALES, localeChoice, t } from './i18n';
@@ -192,23 +199,11 @@ const EXTENSIONS_HASH = '#/extensions';
 /** The hub's own pages. Any other `#/…` may be an extension's view; see extensions/routes.ts. */
 const CORE_ROUTES = ['#/settings', AGENTS_HASH, TEAMS_HASH, STEWARD_HASH, '#/goals', SKILLS_HASH, MCP_HASH, SCHEDULES_HASH, ACTIVITY_HASH, OBSERVABILITY_HASH, MACHINES_HASH, EXTENSIONS_HASH];
 
-type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'goal' | 'goals' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
+type MainView = 'settings' | 'agents' | 'teams' | 'thread' | 'steward' | 'schedules' | 'activity' | 'observability' | 'machines' | 'skills' | 'mcp' | 'extensions' | 'ext';
 
 function quotaAccount(path: string): string | undefined {
   if (!path.startsWith('quota/')) return undefined;
   try { return decodeURIComponent(path.slice('quota/'.length)); } catch { return path.slice('quota/'.length); }
-}
-
-/** The Goal id a `#/goals/<id>` address names. */
-function goalIdForHash(hash: string): string | null {
-  const id = hash.startsWith('#/goals/') ? decodeURIComponent(hash.slice('#/goals/'.length).split('/')[0]) : '';
-  return id ? id : null;
-}
-
-/** The tab a `#/goals/<id>/<tab>` address names; the overview when it names none. */
-function goalTabForHash(hash: string): GoalTab {
-  const tab = hash.startsWith('#/goals/') ? hash.slice('#/goals/'.length).split('/')[1] : '';
-  return GOAL_TABS.find(known => known === tab) ?? 'overview';
 }
 
 /** The page an address opens; null for none (a thread). Skills and MCP are the hub's own machinery, which the demo has none of. */
@@ -217,9 +212,7 @@ function viewForHash(hash: string, connected: boolean): MainView | null {
   if (hash.startsWith('#/machines/')) return 'machines';
   if (hash === '#/settings' || hash.startsWith('#/settings/')) return 'settings';
   if (hash.startsWith('#/thread/')) return null;
-  // The whole list, before any one Goal's own page.
-  if (hash === '#/goals') return 'goals';
-  if (hash.startsWith('#/goals/')) return 'goal';
+  if (goalOverviewRequest(hash)) return 'steward';
   // The assistant desk and its matters list are gone; their addresses open the steward, their successor.
   if (hash === DESK_HASH || hash.startsWith(`${DESK_HASH}/`) || hash === TODOS_HASH) return 'steward';
   switch (hash) {
@@ -404,26 +397,32 @@ function savedMemberDefaults(key: string): Record<string, MemberDefault> {
 }
 
 function fitDraftModelPreference(value: DraftModelPreference, models: ModelOption[], effortLevels: string[], canSpeed: boolean): DraftModelPreference {
-  const model = value.model && models.length > 0 && !models.some((option) => option.id === value.model) ? null : value.model;
+  const resolved = value.model && models.length > 0 ? resolveModel(models, value.model) : undefined;
+  const impliedEffort = value.model && resolved && resolved.id !== value.model ? value.model.slice(resolved.id.length + 1) : null;
+  const model = value.model && models.length > 0 ? (resolved?.id ?? null) : value.model;
   const levels = effortsForModel(models, model, effortLevels);
-  const effort = value.effort && (levels.includes(value.effort) || (models.length === 0 && effortLevels.length === 0)) ? value.effort : null;
+  const rawEffort = value.effort ?? impliedEffort;
+  const effort = rawEffort && (levels.includes(rawEffort) || (models.length === 0 && effortLevels.length === 0)) ? rawEffort : null;
   const speeds = speedsForModel(models, model);
   const speed = canSpeed && value.speed && (models.length === 0 || speeds.some((option) => option.id === value.speed)) ? value.speed : null;
   return { model, effort, speed };
 }
 
 /** The model and thinking effort for one instance's members: a quiet mark until something is chosen. */
-function MemberModel({ agent, models, value, permission, onNeed, onChange, onPermission }: {
+function MemberModel({ agent, models, value, permission, part, onNeed, onChange, onPermission }: {
   agent: AgentInfo; models: ModelOption[]; value: MemberDefault; onNeed: (agent: string, refresh?: boolean) => void; onChange: (value: MemberDefault) => void;
   /** The level in force, and how to change it; left out where the agent has no levels. */
   permission?: string; onPermission?: (mode: string) => void;
+  /** One half only, drawn as the composer's own control rather than a quiet line: a member's box sits like the lead's. */
+  part?: 'permission' | 'model';
 }) {
-  useEffect(() => { onNeed(agent.id); }, [agent.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (part !== 'permission') onNeed(agent.id); }, [agent.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const efforts = agent.capabilities.effortLevels ?? [];
+  const quiet = part ? undefined : agent.label;
   return (<>
-    {permission && onPermission && <PermissionPicker quietFor={agent.label} modes={agent.capabilities.permissionModes} value={permission} canAsk={agent.capabilities.approvals ?? true} onChange={onPermission} />}
-    <ModelPicker
-      quietFor={agent.label}
+    {part !== 'model' && permission && onPermission && <PermissionPicker quietFor={quiet} modes={agent.capabilities.permissionModes} value={permission} canAsk={agent.capabilities.approvals ?? true} onChange={onPermission} />}
+    {part !== 'permission' && <ModelPicker
+      quietFor={quiet}
       catalog={agent.capabilities.modelCatalog}
       models={models}
       model={value.model}
@@ -433,7 +432,7 @@ function MemberModel({ agent, models, value, permission, onNeed, onChange, onPer
       // An effort the newly picked model does not take goes back to the default with it.
       onModel={(model) => onChange({ ...value, model, effort: value.effort && effortsForModel(models, model, efforts).includes(value.effort) ? value.effort : null })}
       onEffort={(effort) => onChange({ ...value, effort })}
-    />
+    />}
   </>);
 }
 
@@ -540,7 +539,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [token, authKindRead.error, onToken]);
   // A browser alert for each Goal that newly waits on the person. The first read is only the baseline.
   const alertSeen = useRef<Set<string> | null>(null);
-  const openGoalRef = useRef<(goalId: string, tab?: GoalTab) => void>(() => undefined);
+  const openGoalRef = useRef<(goalId: string | null, section?: GoalSection | null) => void>(() => undefined);
   useEffect(() => {
     if (!loopxStatus) return;
     const { now, fresh } = newlyWaiting(alertSeen.current, loopxStatus.attention);
@@ -569,9 +568,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // Those pages have addresses of their own, so a reload or a bookmark lands back on them.
   const [threadLink, setThreadLink] = useState(() => window.location.hash.startsWith('#/thread/') ? window.location.hash : null);
   const [schedulePath, setSchedulePath] = useState(() => window.location.hash.startsWith('#/schedules/') ? window.location.hash.slice('#/schedules/'.length) : '');
-  /** The goal the work page shows, from its address. */
-  const [goalPath, setGoalPath] = useState(() => goalIdForHash(window.location.hash) ?? '');
-  const [goalTab, setGoalTab] = useState<GoalTab>(() => goalTabForHash(window.location.hash));
+  const [boardEntry, setBoardEntry] = useState(0);
+  const [goalRequest, setGoalRequest] = useState(() => goalOverviewRequest(window.location.hash));
+  const [goalDetailFocus, setGoalDetailFocus] = useState<{ api: Api; threadId: string | null; goalId: string | null; section?: GoalSection | null } | null>(null);
   const [machinePath, setMachinePath] = useState(() => window.location.hash.startsWith('#/machines/') ? window.location.hash.slice('#/machines/'.length) : '');
   const [settingsPath, setSettingsPath] = useState(() => start === 'machines' ? 'machines' : window.location.hash.replace(/^#\/settings\/?/, ''));
   // `list`: the phone's thread list was open, so closing settings goes back to it.
@@ -583,7 +582,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useAppHistory(appBack, appHref);
   const [view, setView] = useState<MainView>(() => start === 'machines' ? 'settings' : (typeof start === 'object' ? 'thread' : viewForHash(window.location.hash, Boolean(token)) ?? 'thread'));
   /** The address of the extension view asked for. Which view that is waits for the list of extensions. */
-  const [extTarget, setExtTarget] = useState<string | null>(() => (viewForHash(window.location.hash, Boolean(token)) === 'ext' ? window.location.hash : null));
+  const [extTarget, setExtTarget] = useState<string | null>(() => viewForHash(window.location.hash, Boolean(token)) === 'ext' ? window.location.hash : null);
   /** The extension catalog and what is installed on the machine on screen; null until read. */
   const [extensions, setExtensions] = useState<ExtensionState[] | null>(null);
   /** How the list stream is doing, and when the thread list was last read: how extension views tell whether what they show may be stale. */
@@ -777,6 +776,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return () => { live = false; };
   }, [api]);
   const [singleSegmentId, setSingleSegmentId] = useState<string | null>(null);
+  const [overviewSegment, setOverviewSegment] = useState<{ api: Api; threadId: string; before: number } | null>(null);
   const [coordination, setCoordination] = useState<Coordination | null>(null);
   const memberDefaultsKey = hostId ? `${MEMBER_DEFAULTS_KEY}:${hostId}` : MEMBER_DEFAULTS_KEY;
   const [memberDefaults, setMemberDefaults] = useState(() => savedMemberDefaults(memberDefaultsKey));
@@ -812,6 +812,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [writingBusy, setWritingBusy] = useState(false);
   const [draftPermission, setDraftPermission] = useState('auto_edit');
   const modelPreferences = useModelPreferences(api, error => setError(message(error)));
+  const [modelLogin, setModelLogin] = useState<{ agent: string; label: string; login?: AgentInfo['login']; empty?: boolean; key: string; client: Api; scope: Api } | null>(null);
   const [modelsByAgent, setModelsByAgent] = useState<Record<string, ModelOption[]>>(() => (keepThreads ? cachedModels(hostId) ?? {} : {}));
   const draftCaps = agents.find(agent => agent.id === draftAgent)?.capabilities;
   const goalCap = goalCaps.find(cap => cap.agent === draftAgent);
@@ -968,6 +969,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [api, demo]);
   /** The terminal a login started; null attaches to the newest live one. */
   const [terminalTarget, setTerminalTarget] = useState<string | null>(null);
+  const [terminalClient, setTerminalClient] = useState<Api | null>(null);
   const [observabilityTab, setObservabilityTab] = useState<'usage' | 'diagnostics'>('usage');
   const [observabilityFocus, setObservabilityFocus] = useState<string | undefined>(undefined);
   // Bumped on every visit so the page opens on the requested tab, even when it is already showing.
@@ -1054,6 +1056,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return null;
   }, [timeline.items]);
   const selected = threads.find((t) => t.id === selectedId) ?? null;
+  const threadPending = !selected && (Boolean(threadLink) || (Boolean(selectedId) && !threadsKnown));
   // Her own conversation is told apart by the hub's answer, never by its agent or title.
   const [routerThreadId, setRouterThreadId] = useState<string | null>(null);
   useEffect(() => {
@@ -1066,6 +1069,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const latestSegment = selected ? latestHandoverThread(selected, threads) : null;
   const viewingEarlier = Boolean(selected && latestSegment && latestSegment.id !== selected.id);
   const mergedHandover = !api.demo && singleSegmentId !== selectedId && Boolean(selected?.handover?.mode === 'continue' || viewingEarlier);
+  const historyCutoff = overviewSegment?.api === api && overviewSegment.threadId === selectedId && singleSegmentId !== selectedId ? overviewSegment.before : undefined;
+  useLayoutEffect(() => { setOverviewSegment(value => value?.api === api && value.threadId === selectedId ? value : null); }, [api, selectedId]);
   const selectDraftAgent = (id: string, list = agents) => {
     const caps = list.find(item => item.id === id)?.capabilities;
     setDraftAgent(id);
@@ -1082,8 +1087,6 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [api, selectedId, threads]);
   useEffect(() => { setAgentsOpen(false); setDraftCollaboration(false); setCollaborationDirectories([]); }, [selectedId, hostId]);
   const onSettings = view === 'settings';
-  const onGoal = view === 'goal' && !selectedId;
-  const onGoalsList = view === 'goals' && !selectedId;
   const onSteward = view === 'steward' && !selectedId;
   const onSchedules = view === 'schedules' && !selectedId;
   const onActivity = view === 'activity' && !selectedId;
@@ -1099,7 +1102,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const extOpen = onExt && extensions && extTarget ? resolveExtensionRoute(extTarget, extensions) : null;
   const extName = extOpen ? extensions?.find((e) => e.manifest.id === extOpen.extensionId)?.manifest.name[locale()] ?? extOpen.extensionId : '';
   /** The name of the page the main area shows instead of a thread, for the top bar; null on a thread. */
-  const viewTitle = onSettings ? t('sidebar.settings') : onGoal ? t('loopx.goalsGroup') : onGoalsList ? t('goals.title') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
+  const viewTitle = onSettings ? t('sidebar.settings') : onSteward ? t('loopx.steward') : onObservability ? t('obs.title') : onMachines ? t('hosts.machines') : onAgents ? t('agents.title') : onTeams ? t('teams.title') : onSchedules
       ? t('sidebar.schedules')
       : onActivity
         ? t('activity.title')
@@ -1122,10 +1125,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     at: observedAt ?? (keepThreads ? cachedThreads(hostId)?.at ?? null : null),
   }, ...(merging ? elsewhere : [])], [hostId, host?.label, threads, sidebarAgents, connectionShown, threadsKnown, observedAt, keepThreads, merging, elsewhere]);
   const extInputs = useMemo(
-    () => (onExt ? { workSources, threads: machineSummaries(machineSources, selectedId, merging),
+    () => (onExt ? { workSources, threads: machineSummaries(machineSources.map(source => ({ ...source, goals: source.hostId === hostId ? loopxStatus?.goals : undefined })), selectedId, merging),
       machines: machineSources.map((source): MachineState => ({ id: source.hostId, label: source.label, state: source.state, observedAt: source.at })),
       connection: connectionShown, observedAt: api.demo ? null : observedAt, agents, extension: extensions?.find(e => e.manifest.id === extOpen?.extensionId) ?? null } : null),
-    [workSources, onExt, machineSources, merging, selectedId, connectionShown, observedAt, agents, api.demo, extensions, extOpen?.extensionId],
+    [workSources, onExt, machineSources, hostId, loopxStatus, merging, selectedId, connectionShown, observedAt, agents, api.demo, extensions, extOpen?.extensionId],
   );
 
   // An extension view that is not there (never installed, removed, switched off, or an address
@@ -1164,15 +1167,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The address follows what the main area shows. Replaced, not pushed: going between the pages and
   // threads is not a trail for the back button to walk.
+  const stewardWant = goalRequest ? goalOverviewHash(goalRequest.goalId, goalRequest.section) : goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalOverviewHash(goalDetailFocus.goalId, goalDetailFocus.section) : STEWARD_HASH;
   const extWant = onExt ? (extOpen ? extensionHash(extOpen) : extTarget ?? '') : '';
   useEffect(() => {
     if (threadLink) return;
-    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onGoal ? `#/goals/${encodeURIComponent(goalPath)}${goalTab === 'overview' ? '' : `/${goalTab}`}` : onGoalsList ? '#/goals' : onSteward ? STEWARD_HASH : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
+    const want = onSettings ? `#/settings${settingsPath ? `/${settingsPath}` : ''}` : onSteward ? stewardWant : onObservability ? OBSERVABILITY_HASH : onMachines ? `${MACHINES_HASH}${machinePath ? `/${machinePath}` : ''}` : onAgents ? AGENTS_HASH : onTeams ? TEAMS_HASH : onSchedules ? `${SCHEDULES_HASH}${schedulePath ? `/${schedulePath}` : ''}` : onActivity ? ACTIVITY_HASH : onSkills ? SKILLS_HASH : onMcp ? MCP_HASH : onExtensions ? EXTENSIONS_HASH : extWant;
     if (window.location.hash !== want) {
       window.history.replaceState(window.history.state, '', want || window.location.pathname + window.location.search);
     }
     appHref.current = window.location.pathname + window.location.search + window.location.hash;
-  }, [schedulePath, machinePath, goalPath, goalTab, onSettings, settingsPath, onGoal, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
+  }, [stewardWant, goalRequest, goalDetailFocus, api, boardEntry, schedulePath, machinePath, onSettings, settingsPath, onSteward, onObservability, onMachines, onAgents, onTeams, onActivity, onSkills, onSchedules, onMcp, onExtensions, extWant, threadLink]);
 
   // Whether the directory a new thread would start in is a git repository. Asked once per directory picked.
   useEffect(() => {
@@ -1219,8 +1223,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         setView(next);
         if (next === 'schedules') setSchedulePath(hash.startsWith('#/schedules/') ? hash.slice('#/schedules/'.length) : '');
       if (next === 'machines') setMachinePath(hash.startsWith('#/machines/') ? hash.slice('#/machines/'.length) : '');
-        if (next === 'goal') { setGoalPath(goalIdForHash(hash) ?? ''); setGoalTab(goalTabForHash(hash)); }
         if (next === 'settings') setSettingsPath(hash.replace(/^#\/settings\/?/, ''));
+        if (next !== 'steward') setGoalRequest(null);
+        if (next === 'steward') {
+          const request = goalOverviewRequest(hash);
+          setGoalRequest(request);
+          if (!request) setGoalDetailFocus(null);
+        }
         if (next === 'ext') setExtTarget(hash);
         setDrawer(false);
       };
@@ -1492,6 +1501,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 const { agent, models } = ev.data as { agent: string; models: ModelOption[] };
                 modelVersions.current[agent] = (modelVersions.current[agent] ?? 0) + 1;
                 setModelsByAgent(previous => ({ ...previous, [agent]: models }));
+                setModelLogin(current => models.length && current?.scope === api && current.client === api && current.key === agent ? null : current);
               } else refresh();
             },
             ctrl.signal,
@@ -1542,8 +1552,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     if (!api || !selectedId) return;
     const ctrl = new AbortController();
     stickToBottom.current = true; setAtBottom(true);
-    void watchHistory(api, selectedId, ctrl.signal, {
-      chain: mergedHandover,
+    const callbacks: Parameters<typeof watchHistory>[3] = {
+      chain: mergedHandover, maximumSeq: historyCutoff,
       page: page => {
         setEvents(page.events); setHistoryTurnIds(page.turnIds ?? []); setEventsLoading(false); setHistoryReady(true);
         setHistoryRevision(page.snapshotSeq);
@@ -1561,10 +1571,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         setEvents(previous => mergeHistory(previous, batch));
       },
       error: error => { setEventsLoading(false); handleError(error); },
-    });
+    };
+    void watchHistory(api, selectedId, ctrl.signal, callbacks);
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, selectedId, mergedHandover, historyEpoch]);
+  }, [api, selectedId, mergedHandover, historyEpoch, historyCutoff]);
 
   /** Prepends the page of turns before the loaded ones, keeping the scroll position on the same content. */
   const loadOlder = async () => {
@@ -1758,6 +1769,25 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const activeAgent = selected?.agent ?? draftTeamDefinition?.entryAgent ?? draftAgent;
   const activeCwd = selected?.cwd ?? draftCwd;
   const commandsKey = `${activeAgent}\n${activeCwd}`;
+  const activeCatalog = useRef({ api, agent: activeAgent });
+  activeCatalog.current = { api, agent: activeAgent };
+  useEffect(() => { setModelLogin(null); }, [api, activeAgent]);
+  const acceptModelCatalog = (agent: string, list: ModelOption[], client = api, id = agent) => {
+    setModelsByAgent(previous => ({ ...previous, [agent]: list }));
+    const info = agents.find(item => item.id === agent) ?? remoteAgents.find(item => item.id === agent);
+    if (!list.length && info?.available && info.capabilities.modelCatalog !== false) {
+      setModelLogin({ agent: id, key: agent, client, scope: api, label: info.label, login: info.login, empty: true });
+      return;
+    }
+    setModelLogin(current => current?.scope === api && current.key === agent ? null : current);
+  };
+  const handleModelError = (error: unknown, agent: string, client = api, key = agent, report = true) => {
+    if (!needsAgentLogin(error)) { if (report) handleError(error); return; }
+    modelVersions.current[key] = (modelVersions.current[key] ?? 0) + 1;
+    setModelsByAgent(previous => { const next = { ...previous }; delete next[key]; return next; });
+    const info = agents.find(item => item.id === key) ?? remoteAgents.find(item => item.id === key);
+    setModelLogin({ agent, key, client, scope: api, label: info?.label ?? agent, login: info?.login });
+  };
   const lastFocusModelRefresh = useRef<{ agent: string; at: number } | null>(null);
   const refreshActiveModels = useCallback((force = false) => {
     if (!api || !activeAgent || document.hidden) return;
@@ -1769,9 +1799,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     void api
       .models(activeAgent, force)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [activeAgent]: list }));
+        if (activeCatalog.current.api === api && activeCatalog.current.agent === activeAgent && (modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(error => { if (force) handleError(error); });
+      .catch(error => { if (activeCatalog.current.api === api && activeCatalog.current.agent === activeAgent && (modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent, api, activeAgent, force); });
   }, [api, activeAgent]);
 
   // Models of an agent other than the thread's own, for choosing what its members start with.
@@ -1782,21 +1812,25 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const version = modelVersions.current[agent] ?? 0;
     // An instance of another machine is asked there, under the id it has on that machine.
     const remote = remoteAgents.find((a) => a.id === agent);
-    (remote && token ? new Api(token, '', remote.host).models(agent.slice(0, -(remote.host.length + 1)), refresh) : api.models(agent, refresh)).then((list) => {
-      if ((modelVersions.current[agent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [agent]: list }));
-    }).catch(error => { if (refresh) handleError(error); }).finally(() => { modelsAsked.current.delete(agent); });
+    const client = remote && token ? new Api(token, '', remote.host) : api;
+    const id = remote && token ? agent.slice(0, -(remote.host.length + 1)) : agent;
+    client.models(id, refresh).then((list) => {
+      if ((modelVersions.current[agent] ?? 0) === version) acceptModelCatalog(agent, list, client, id);
+    }).catch(error => { if ((modelVersions.current[agent] ?? 0) === version) handleModelError(error, id, client, agent, refresh); }).finally(() => { modelsAsked.current.delete(agent); });
   };
 
   // Models for that agent, loaded once per agent.
   useEffect(() => {
-    if (!api || !activeAgent || modelsByAgent[activeAgent]) return;
+    if (!api || !activeAgent || modelsByAgent[activeAgent]?.length) return;
+    let live = true;
     const version = modelVersions.current[activeAgent] ?? 0;
     api
       .models(activeAgent)
       .then((list) => {
-        if ((modelVersions.current[activeAgent] ?? 0) === version) setModelsByAgent(prev => ({ ...prev, [activeAgent]: list }));
+        if (live && (modelVersions.current[activeAgent] ?? 0) === version) acceptModelCatalog(activeAgent, list);
       })
-      .catch(handleError);
+      .catch(error => { if (live && (modelVersions.current[activeAgent] ?? 0) === version) handleModelError(error, activeAgent); });
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, activeAgent]);
 
@@ -1865,6 +1899,36 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   /** The thread's trace, beside the conversation on a desktop, a page of its own on a phone. */
   const [traceOpen, setTraceOpen] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
+  const [referenceId, setReferenceId] = useState<string | null>(null);
+  const referenceOrigin = useRef<{ focus: HTMLElement | null; top: number; offset: number } | null>(null);
+  const referenceOverlay = !useMinWidth(901);
+  const openReference = (id: string) => {
+    const focus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    referenceOrigin.current ??= { focus, top: scrollerRef.current?.scrollTop ?? 0, offset: focus?.getBoundingClientRect().top ?? 0 };
+    stickToBottom.current = false;
+    setFiles(null); setTraceOpen(false); setGitOpen(false); setAgentsOpen(false); setOverviewDetail(null);
+    setReferenceId(id);
+  };
+  useLayoutEffect(() => {
+    const origin = referenceOrigin.current;
+    if (!origin || !scrollerRef.current) return;
+    if (referenceId) {
+      if (origin.focus?.isConnected) scrollerRef.current.scrollTop += origin.focus.getBoundingClientRect().top - origin.offset;
+    } else {
+      stickToBottom.current = false;
+      scrollerRef.current.scrollTop = origin.top;
+      origin.focus?.focus({ preventScroll: true });
+      referenceOrigin.current = null;
+    }
+  }, [referenceId]);
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!referenceId || !referenceOverlay || !main) return;
+    main.inert = true;
+    return () => { main.inert = false; };
+  }, [referenceId, referenceOverlay]);
+  useLayoutEffect(() => { setReferenceId(null); referenceOrigin.current = null; }, [api, selectedId, onPage]);
+  useEffect(() => { if (files || traceOpen || agentsOpen || gitOpen) setReferenceId(null); }, [files, traceOpen, agentsOpen, gitOpen]);
   useLayoutEffect(() => { setGitOpen(false); }, [selectedId, api]);
   useEffect(() => { if (files || traceOpen || agentsOpen) setGitOpen(false); }, [files, traceOpen, agentsOpen]);
   const filesSeq = useRef(0);
@@ -1872,13 +1936,20 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The overview: a popover on narrow screens and the pages, a standing panel beside the
   // conversation on a wide one. Its switch is remembered here, and starts open.
-  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && !onPage;
+  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && (!onPage || onSteward);
   const [overviewOpen, setOverviewOpen] = useStoredFlag(OVERVIEW_OPEN_KEY, true);
   const [overviewDetail, setOverviewDetail] = useState<{ api: Api; threadId: string; section: OverviewSection; returnToPreview: boolean } | null>(null);
   const [overviewSignal, setOverviewSignal] = useState(0);
+  const [goalDetailsExpanded, setGoalDetailsExpanded] = useState<{ threadId: string; expanded: boolean } | null>(null);
+  const onGoalDetailsChange = useCallback((threadId: string, expanded: boolean) => {
+    setGoalDetailsExpanded(current => current?.threadId === threadId && current.expanded === expanded ? current : { threadId, expanded });
+  }, []);
+  useEffect(() => {
+    if (goalDetailFocus?.api === api && (goalDetailFocus.threadId === null ? onSteward : goalDetailFocus.threadId === selectedId && !onPage)) setOverviewSignal(signal => signal + 1);
+  }, [goalDetailFocus, api, selectedId, onPage, onSteward]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const activeOverviewDetail = overviewDetail?.api === api && overviewDetail?.threadId === selectedId && !onPage ? overviewDetail : null;
-  useLayoutEffect(() => { setOverviewDetail(null); setOverviewSignal(0); }, [api, selectedId, onPage]);
+  useLayoutEffect(() => { setOverviewDetail(d => d && d.api === api && d.threadId === selectedId && !onPage ? d : null); setOverviewSignal(0); }, [api, selectedId, onPage]);
   const closeOverviewDetail = () => {
     setOverviewDetail(null);
     if (overviewDock && !activeOverviewDetail?.returnToPreview) setOverviewOpen(false);
@@ -1886,12 +1957,30 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   };
   /** A side panel takes the same edge as the overview, so the panel steps aside while one is open —
    *  but the person's own switch is left alone: it comes back when the side panel closes. */
-  const sideOpen = Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
-  const overviewShown = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && Boolean(selected) && hostUp;
+  const [preview, setPreview] = useState<{ threadId: string; path: string } | null>(null);
+  const [diffFile, setDiffFile] = useState<{ threadId: string; file: ChangedFile } | null>(null);
+  const [picture, setPicture] = useState<{ threadId: string; path: string; name: string } | null>(null);
+  useLayoutEffect(() => {
+    setPreview(value => !onPage && value?.threadId === selectedId ? value : null);
+    setDiffFile(value => !onPage && value?.threadId === selectedId ? value : null);
+    setPicture(value => !onPage && value?.threadId === selectedId ? value : null);
+  }, [selectedId, onPage]);
+  useLayoutEffect(() => { setPreview(null); setDiffFile(null); setPicture(null); }, [api]);
+  const dockOpen = !compact && Boolean(activeOverviewDetail || preview || diffFile || picture);
+  const sideKeys = Boolean(referenceId) || Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
+  const wasSide = useRef(false);
+  const wasDock = useRef(false);
+  useEffect(() => {
+    if (sideKeys && !wasSide.current) { setPreview(null); setDiffFile(null); setPicture(null); setOverviewDetail(null); }
+    if (dockOpen && !wasDock.current) { setFiles(null); setTraceOpen(false); setAgentsOpen(false); setGitOpen(false); setReferenceId(null); }
+    wasSide.current = sideKeys; wasDock.current = dockOpen;
+  }, [sideKeys, dockOpen]);
+  const sideOpen = sideKeys || dockOpen;
+  const overviewRoom = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && (onSteward || (Boolean(selected || threadPending) && hostUp));
+  const overviewShown = overviewRoom && Boolean(selected || onSteward);
   /** Only the person turns the standing panel off; the switch above remembers it. */
   const closeOverview = useCallback(() => { if (overviewDock) setOverviewOpen(false); }, [overviewDock, setOverviewOpen]);
   // A page the agent wrote, rendered in a sandboxed iframe.
-  const [preview, setPreview] = useState<{ threadId: string; path: string } | null>(null);
   const openFileLink = useCallback(
     async (raw: string) => {
       if (!api || !selectedId) throw new Error('no thread');
@@ -2208,7 +2297,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // The hub's "back", for a back swipe or the browser's back button (see appHistory.ts): the same
   // steps as the top-left button, one at a time. Nothing left to undo hands the swipe to the browser.
   appBack.current = () => {
+    if (referenceId) { setReferenceId(null); return true; }
     if (listOpen) { setDrawer(false); return true; }
+    if (!compact && diffFile) { setDiffFile(null); return true; }
+    if (!compact && preview) { setPreview(null); return true; }
+    if (!compact && picture) { setPicture(null); return true; }
     if (activeOverviewDetail) { closeOverviewDetail(); return true; }
     if (onSettings) {
       if (settingsPath.includes('/')) openSettings(settingsPath.slice(0, settingsPath.lastIndexOf('/')));
@@ -2255,18 +2348,34 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     else onHost?.(machine, { thread: id });
   };
 
-  // The LoopX steward page and the goal work pages take the place of a thread, so no thread is open on them.
+  // The steward takes the place of a thread; Goal work stays in the shared overview.
   const openSteward = () => navigate(() => {
+    setGoalRequest(null); setGoalDetailFocus(null); setThreadLink(null);
     setSelectedId(null); setView('steward'); setDrawer(false);
   });
-  const [goalsFilter, setGoalsFilter] = useState<GoalsFilter>('all');
-  const openGoalsList = (filter: GoalsFilter = 'all') => navigate(() => {
-    setGoalsFilter(filter); setSelectedId(null); setView('goals'); setDrawer(false);
+  const openGoalsBoard = () => navigate(() => {
+    setExtTarget(goalsBoardTarget(extensionStorage('board')));
+    setBoardEntry(value => value + 1);
+    setThreadLink(null); setSelectedId(null); setView('ext'); setDrawer(false);
   });
-  const openGoal = (goalId: string, tab: GoalTab = 'overview') => navigate(() => {
-    setGoalPath(goalId); setGoalTab(tab); setSelectedId(null); setView('goal'); setDrawer(false);
-  });
+  const openGoal = (goalId: string | null, section: GoalSection | null = null) => {
+    const target = goalDestination(goalId, threads);
+    navigate(() => {
+      setThreadLink(null);
+      if (target.threadId) openThread(threads.find(thread => thread.id === target.threadId)!);
+      else { setSelectedId(null); setView('steward'); setDrawer(false); }
+      setGoalDetailFocus({ api, threadId: target.threadId, goalId, section });
+      setOverviewOpen(true);
+    });
+  };
   openGoalRef.current = openGoal;
+  // Keep the requested Goal identity while the host is reading its conversation bindings.
+  // Bookmarks only select a reader; they never create a conversation or start Goal work.
+  useEffect(() => {
+    if (!goalRequest || !onSteward || !observedAt && !api.demo) return;
+    setGoalRequest(null);
+    openGoalRef.current(goalRequest.goalId, goalRequest.section);
+  }, [goalRequest, onSteward, observedAt, api.demo, threads]);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
   const [setupNotice, setSetupNotice] = useState<{ text: string; at: number } | null>(null);
@@ -2323,12 +2432,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const openAgents = () => { openSettings('agents'); void reloadAgents().catch(handleError); };
 
-  const openTerminal = () => { setTerminalTarget(null); setTermOpen(true); };
+  const openTerminal = () => { setTerminalTarget(null); setTerminalClient(null); setTermOpen(true); };
 
   /** Starts an instance's CLI login in a fresh terminal and shows that terminal. */
-  const openAgentLogin = async (agent: AgentInfo) => {
-    const { terminalId } = await api.loginAgentTerminal(agent.id);
+  const openAgentLogin = async (agent: Pick<AgentInfo, 'id'>, client = api) => {
+    const { terminalId } = await client.loginAgentTerminal(agent.id);
     setTerminalTarget(terminalId);
+    setTerminalClient(client);
     setTermOpen(true);
   };
 
@@ -2429,6 +2539,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const agentLabel = (id: string) => agents.find((a) => a.id === id)?.label ?? id;
   const capsOf = (id: string) => agents.find((a) => a.id === id)?.capabilities;
   const activeCaps = capsOf(activeAgent);
+  const sideAgent = sideAsk?.source?.agent ?? activeAgent;
+  const sideAgentInfo = agents.find(agent => agent.id === sideAgent);
   const models = modelsByAgent[activeAgent] ?? [];
   const permissionModes = activeCaps?.permissionModes ?? [];
   const effortLevels = activeCaps?.effortLevels ?? [];
@@ -2508,7 +2620,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // Adds a discovered CLI as its own instance and selects it for the new thread.
   const addDiscoveredAgent = async (found: DiscoveredAgent) => {
     if (!api) return;
-    await api.addAgent({ id: found.id, adapter: found.adapter, command: [found.command] });
+    await api.addAgent({ id: found.id, adapter: found.adapter, ...(found.command ? { command: [found.command] } : {}) });
     const [list, more] = await Promise.all([api.agents(), api.discoverAgents()]);
     setAgents(list);
     setDiscovered(more);
@@ -2605,7 +2717,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   // The top bar names a thread's agent and directory, so the composer does not repeat them: its
   // strip is only for choosing them, before the thread exists.
-  const header = selected ? null : (
+  const header = selected || threadPending ? null : (
     <>
       <AgentPicker api={api} agents={agents} teams={teamDefinitions} value={draftTeam ? `team:${draftTeam}` : draftAgent} onChange={value => { const id = teamRecipient(value); setDraftTeam(id); if (id) { setDraftScratch(false); setDraftWorktree(false); setDraftCollaboration(false); } else pickAgent(value); }} accounts={accounts} onAddAccount={addAccount} />
       <ProjectPicker
@@ -2764,6 +2876,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // person. The team it opens is the lead's own (a member's thread has none to show).
   const overviewTeam = teamShown && coordination?.rootId === selected?.id ? coordination : null;
   const teamNeeds = overviewTeam?.members.filter((member) => memberProgress(member) === 'need').length ?? 0;
+  const waitingOnUser = loopxStatus?.attention.filter(item => loopxNeedsYou.has(item.goalId)) ?? [];
+  const goalNeeds = selected?.loopxInfo && !selected.loopxInfo.missing && loopxNeedsYou.has(selected.loopxInfo.goalId) ? 1 : 0;
+  const overviewNeeds = onSteward ? waitingOnUser.length : teamNeeds + goalNeeds;
+  const overviewBusy = onSteward ? loopxRead.loading : overviewLoading;
+  const goalsChanged = () => { loopxRead.reload(); void refreshThreads(); };
   // The conversation's turns, for naming the section each change belongs to in the diff dialog.
   const turnOrder = useMemo(() => {
     const seen = new Set<string>();
@@ -2776,9 +2893,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return order;
   }, [timeline.items]);
   // One file's whole change history, opened from the changes group; read only while it is open.
-  const [diffFile, setDiffFile] = useState<{ threadId: string; file: ChangedFile } | null>(null);
   // A member's own thread: it was sent from the lead's, which is where its way back goes.
-  const atMember = Boolean(teamShown && selected!.coordination!.rootId !== selected!.id);
+  const atMember = Boolean(teamShown && selected!.coordination!.rootId !== selected!.id && !selected!.coordination!.retired);
   // Where the thread runs, beside its title; a page or a team task names itself instead.
   const placeShown = Boolean(selected && !viewTitle && !(host && !hostUp) && !selected.coordination?.team && !atMember);
   const leadTitle = atMember ? threads.find((v) => v.id === selected!.coordination!.rootId)?.title ?? '' : '';
@@ -2829,6 +2945,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     { label: t('settings.preferences'), entries: [
       ...(!demo ? [{ id: 'general', label: t('general.title'), icon: IconSettings, render: () => <GeneralSettingsDialog api={api} onSave={value => { setStartupSettings(value); setExternalNonce(n => n + 1); }} onClose={closeSettings} /> }] : []),
       { id: 'appearance', label: t('appearance.title'), icon: IconPalette, render: () => <AppearancePanel appearance={appearance} theme={theme} onChange={setAppearance} onClose={closeSettings} /> },
+      ...(!showcase ? [{ id: 'install', label: t('pwa.title'), icon: IconDownload, render: () => <PwaInstallSettings /> }] : []),
       { id: 'language', label: t('locale.menu'), icon: IconLanguage, render: () => <SettingsSection title={t('locale.menu')} hint={t('settings.automatic')}><div className="settings-options">
         {[{ id: 'system' as const, name: t('locale.system') }, ...LOCALES].map(l => <button key={l.id} className="settings-link-row" role="radio" aria-checked={localeChoice() === l.id} onClick={() => navigate(() => chooseLocale(l.id))}><span>{l.name}</span>{localeChoice() === l.id && <IconCheck size={16} />}</button>)}
       </div></SettingsSection> },
@@ -2865,16 +2982,36 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   ];
   // The same body in both shapes: the standing panel beside the conversation, and the popover a
   // narrow window still gets. Only the standing one keeps itself open behind its own rows.
-  const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => selected && api && (
+  const overviewChain = selected && !demo ? (() => {
+    const group = handoverGroups(threads).find(group => group.members.some(item => item.id === selected.id));
+    if (!group || group.members.length < 2) return undefined;
+    return { rows: group.members, latestId: group.latest.id, viewingId: selected.id, onOpen: (id: string) => {
+      const before = overviewHistoryBoundary(id, group.members);
+      setOverviewSegment(before === undefined ? null : { api, threadId: id, before });
+      setSingleSegmentId(null);
+      setOverviewDetail(d => d && d.section === 'chain' && !compact ? { ...d, threadId: id } : d);
+      pick(id);
+    } };
+  })() : undefined;
+  const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => onSteward ? (
+    <StewardOverview focusedGoal={goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalDetailFocus : undefined} token={token} goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []}
+      failure={loopxRead.failure} loading={loopxRead.loading} onChanged={goalsChanged} onRetry={loopxRead.reload}
+      threads={threads} defaultAgent={goalCaps.find(cap => cap.agent === draftAgent && cap.available)?.agent ?? goalCaps.find(cap => cap.available)?.agent ?? ''} pickDirectory={pickGoalDir}
+      onOpenThread={id => { if (!persistent) close(); openThreadById(id); }}
+      onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
+      onOpenAll={showcase ? undefined : () => { if (!persistent) close(); openGoalsBoard(); }} />
+  ) : selected && api && (
     <ThreadOverview key={`${hostId ?? ''}:${selected.id}:${detail ?? 'preview'}`}
-      detail={detail} onLoadingChange={setOverviewLoading}
+      goalExpanded={Boolean(selected.loopxInfo && !selected.loopxInfo.missing && (goalDetailsExpanded?.threadId === selected.id ? goalDetailsExpanded.expanded : goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id))}
+      chain={overviewChain} detail={detail} onLoadingChange={setOverviewLoading}
       onViewAll={(section, returnToPreview = true) => setOverviewDetail({ api, threadId: selected.id, section, returnToPreview })}
       api={api} threadId={selected.id} updatedAt={selected.updatedAt} active={selected.status === 'running'}
       team={overviewTeam} agents={agents} plan={topPlan} roots={threadRoots}
-      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} onOpenGoal={goalId => { close(); openGoal(goalId); }} /> : undefined}
+      goal={selected.loopxInfo && !api.demo ? <LoopxGoalGroup token={token} thread={selected} goal={loopxStatus?.goals.find(goal => goal.goalId === selected.loopxInfo?.goalId)} attention={loopxStatus?.attention.find(item => item.goalId === selected.loopxInfo?.goalId)} onChanged={goalsChanged} onExpandedChange={onGoalDetailsChange} threads={threads} onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }} initiallyExpanded={goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id && goalDetailFocus.goalId === selected.loopxInfo.goalId} section={goalDetailFocus?.section ?? null} /> : undefined}
       loadFile={loadFile} persistent={persistent}
       onOpenMember={(member) => { setAgentsStart(member ?? null); setAgentsOpen(true); setFiles(null); }}
       onOpenDiff={(file) => setDiffFile({ threadId: selected.id, file })}
+      onOpenPicture={compact ? undefined : (path, name) => setPicture({ threadId: selected.id, path, name })}
       onOpenFile={async (path) => {
         if (/\.html?$/i.test(path)) setPreview({ threadId: selected.id, path });
         else await openFileLink(path);
@@ -2934,7 +3071,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         />
       )}
       {/* The same picker, answering a Goal join instead of setting the draft's directory. */}
-      {goalDirAsk && (
+      {goalDirAsk && createPortal(
+        <div className="goal-directory-picker">
         <DirectoryPicker
           api={api}
           roots={workdirs}
@@ -2945,6 +3083,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onSelect={cwd => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(cwd); }}
           onClose={() => { const ask = goalDirAsk; setGoalDirAsk(null); ask.resolve(null); }}
         />
+        </div>, document.body
       )}
       {projectDialog === 'new' && (
         <NewProjectDialog
@@ -3008,19 +3147,17 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onNewSection={threadActions.newSection}
           onOpenSteward={showcase ? undefined : openSteward}
           stewardActive={onSteward}
-          goals={loopxStatus?.goals ?? []}
-          attentionGoals={loopxStatus?.attention ?? []}
-          activeGoalId={onGoal ? goalPath : null}
-          onOpenGoal={openGoal}
-          onOpenGoalTasks={goalId => openGoal(goalId, 'tasks')}
-          onOpenAllGoals={showcase ? undefined : () => openGoalsList()}
+          needsYouGoals={loopxNeedsYou}
           onOpenSchedules={showcase ? undefined : openSchedules}
           onOpenDesktop={hasDesktop ? () => { setDrawer(false); setDesktop('open'); } : undefined}
           desktopRunning={desktop === 'minimized'}
           schedulesActive={onSchedules}
           extensionNav={extensionNav}
           notice={demo && compact ? showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact onConnect={askToConnect} /> : undefined}
-          footerNotice={authKind?.kind === 'link' && !showcase ? <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} /> : undefined}
+          footerNotice={!showcase ? <>
+            <PwaInstallPromotion onHelp={() => openSettings('install')} />
+            {authKind?.kind === 'link' && <LinkLoginNotice auth={authKind} onOpenAccess={() => openSettings('access')} />}
+          </> : undefined}
         />
       </aside>
       {!compact && !sidebarHidden && (
@@ -3044,7 +3181,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
       {/* A conversation under way leans toward the middle of the screen, as in Codex; a new
           thread, and the pages, stay centred where they are. */}
-      <main className={`main${selected && !onPage && hostUp && !compact ? ' lean' : ''}${overviewShown || (activeOverviewDetail && overviewDock && overviewOpen) ? ' overview-room' : ''}`} ref={mainRef}>
+      <main className={`main${(selected || threadPending) && !onPage && hostUp && !compact ? ' lean' : ''}${overviewRoom || (activeOverviewDetail && overviewDock && overviewOpen && !dockOpen) ? ' overview-room' : ''}`} ref={mainRef}>
         {compact && selected && !listOpen && !onPage && hostUp && (
           <ThreadQuickSwitch threads={topLevelThreads} selectedId={selected.id} agents={agents} onSelect={pick} />
         )}
@@ -3074,13 +3211,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             {/* Every page names itself here, the way a thread does: the bar is never left blank. */}
             {/* On a phone there is no room for the tag: the title itself opens where the thread runs. */}
             {placeShown && !compact && <ThreadPlace thread={selected!} agent={agentLabel(selected!.agent)} host={host?.label} />}
+            {threadPending && !viewTitle && !compact && <div className="pop" aria-hidden="true"><span className="icon-btn place-icon"><IconFolder size={16} /></span></div>}
             {compact && placeShown ? (
               <ThreadPlace thread={selected!} agent={agentLabel(selected!.agent)} host={host?.label} title={onRouterThread ? routerTitle : selected!.title} />
             ) : (
-              <div className="topbar-title">{host && !hostUp ? host.label : viewTitle ?? (selected ? (onRouterThread ? routerTitle : selected.title) : t('sidebar.newThread'))}</div>
+              <div className="topbar-title">{host && !hostUp ? host.label : viewTitle ?? (selected ? (onRouterThread ? routerTitle : selected.title) : threadPending ? '' : t('sidebar.newThread'))}</div>
             )}
             {selected?.coordination?.team && <div className={`team-task-status${['awaiting_confirm', 'needs_attention'].includes(selected.coordination.team.status) ? ' attention' : ''}`}><span className="team-task-name">{selected.coordination.team.name}</span><span> · {t(`teams.${selected.coordination.team.status}`)}</span></div>}
-            {!selected && host && hostUp && <div className="topbar-sub">{host.label}</div>}
+            {!selected && !threadPending && host && hostUp && <div className="topbar-sub">{host.label}</div>}
             {busyLine && busyLine.threadId === selected?.id && <div className="topbar-sub topbar-busy">{busyLine.message}</div>}
             {atMember && (
               <button className="topbar-sub topbar-lead-link" title={t('app.backToLead')} onClick={() => pick(selected!.coordination!.rootId)}>
@@ -3088,37 +3226,38 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               </button>
             )}
           </div>
-          {selected && (
+          {(selected || onSteward) && (
             <div className="topbar-actions">
               {/* The thread at a glance: one panel for the team, the plan, the changes, the pictures
                   and the files. The badge is only ever what needs the person. */}
-              {api && hostUp && (overviewDock ? (
+              {(onSteward || api && hostUp) && (overviewDock ? (
                 <button
                   type="button"
-                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${teamNeeds ? ' attention' : ''}`}
+                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${overviewNeeds ? ' attention' : ''}`}
                   aria-label={t('overview.label')}
                   aria-pressed={overviewOpen}
-                  aria-busy={overviewLoading}
-                  title={teamNeeds ? t('overview.needsYou', teamNeeds) : t('overview.label')}
+                  aria-busy={overviewBusy}
+                  title={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
                   onClick={() => setOverviewOpen(!overviewOpen)}
                 >
                   <IconOverview />
-                  {teamNeeds > 0 && <span className="topbar-badge">{teamNeeds}</span>}
+                  {overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}
                 </button>
               ) : (
                 <Popover
-                  key={`${hostId ?? ''}:${selected.id}`}
+                  key={onSteward ? 'steward' : `${hostId ?? ''}:${selected!.id}`}
                   label={t('overview.label')}
-                  prepare={() => prepareOverview(api, selected.id, selected.updatedAt)}
+                  prepare={onSteward ? undefined : () => prepareOverview(api!, selected!.id, selected!.updatedAt)}
                   openSignal={overviewSignal}
-                  triggerBusy={overviewLoading}
-                  triggerClassName={`icon-btn topbar-overview${teamNeeds ? ' attention' : ''}`}
+                  triggerBusy={overviewBusy}
+                  triggerClassName={`icon-btn topbar-overview${overviewNeeds ? ' attention' : ''}`}
                   triggerLabel={t('overview.label')}
-                  triggerTitle={teamNeeds ? t('overview.needsYou', teamNeeds) : t('overview.label')}
+                  triggerTitle={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
                   align="end"
                   placement="below"
                   panelClassName="overview-panel"
-                  trigger={<><IconOverview />{teamNeeds > 0 && <span className="topbar-badge">{teamNeeds}</span>}</>}
+                  suspendDismissal={onSteward && Boolean(goalDirAsk)}
+                  trigger={<><IconOverview />{overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}</>}
                 >
                   {(close) => overviewBody(close, false)}
                 </Popover>
@@ -3126,12 +3265,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               {/* A phone keeps its plan button: it has no margin card, and the lead's list of what
                   leaves the bar was the desktop's. The overview has the plan too, one tap away. */}
               {compact && topPlan && !onPage && <PlanButton item={topPlan} />}
-              {compact && (
+              {compact && selected && (
                 <button className="icon-btn topbar-new" aria-label={t('sidebar.newThread')} onClick={() => newThread()}>
                   <IconEdit />
                 </button>
               )}
-              <button
+              {selected && <button
                 className="icon-btn topbar-more"
                 aria-label={t('app.threadMore')}
                 onClick={(e) => {
@@ -3140,13 +3279,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 }}
               >
                 <IconMore />
-              </button>
-            </div>
-          )}
-          {onSteward && !selected && (
-            <div className="topbar-actions">
-              <StewardActions goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []} failure={loopxRead.failure}
-                onOpenGoal={openGoal} onOpenAll={showcase ? undefined : openGoalsList} />
+              </button>}
             </div>
           )}
         </header>}
@@ -3177,6 +3310,15 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         )}
 
         {demo && (showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact={compact} onConnect={askToConnect} />)}
+
+        {modelLogin?.scope === api && <AgentLoginRecovery key={`${modelLogin.key}:${hostId ?? 'local'}`}
+          api={modelLogin.client} agent={{ id: modelLogin.agent, label: modelLogin.label, login: modelLogin.login }} empty={modelLogin.empty}
+          onTerminalLogin={() => openAgentLogin({ id: modelLogin.agent }, modelLogin.client)} onRecovered={list => {
+            modelVersions.current[modelLogin.key] = (modelVersions.current[modelLogin.key] ?? 0) + 1;
+            setModelsByAgent(previous => ({ ...previous, [modelLogin.key]: list }));
+            setModelLogin(current => current === modelLogin ? null : current);
+            void reloadAgents().catch(handleError);
+          }} />}
 
         {error && (
           <div className="banner" role="alert">
@@ -3211,7 +3353,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           </div>
         ) : onExt ? (
           // An extension's view, behind a boundary of its own. Until the list is read, it is on its way.
-          <div key={`ext:${extOpen ? `${extOpen.extensionId}/${extOpen.view.id}` : ''}`} className="extension-stage"><div className="scroller">
+          <div key={`ext:${extOpen ? `${extOpen.extensionId}/${extOpen.view.id}` : ''}:${boardEntry}`} className="extension-stage"><div className="scroller">
             {extOpen && extInputs ? (
               <ExtensionView api={api} extensionId={extOpen.extensionId} viewId={extOpen.view.id} name={extName} inputs={extInputs} onOpenThread={openBoardThread}
                 onSetThreadDone={(id, done) => patchBoardThread(id, { done }).catch(error => { handleError(error); throw error; })}
@@ -3302,42 +3444,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               onError={handleError}
             />
           </div>
-        ) : onGoal ? (
-          // A document, not a conversation: starts at the top, like the other pages.
-          <div key="goal" className="scroller">
-            <GoalWorkPage
-              token={token}
-              goalId={goalPath}
-              tab={goalTab}
-              onTab={setGoalTab}
-              goals={loopxStatus?.goals ?? []}
-              goalsLoaded={loopxStatus !== null && !loopxRead.loading}
-              attention={loopxStatus?.attention ?? []}
-              failure={loopxRead.failure}
-              onRetry={loopxRead.reload}
-              onChanged={() => loopxRead.reload()}
-              threads={threads}
-              onOpenThread={openThreadById}
-              onBrowseFiles={threadId => { setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
-              defaultAgent={draftAgent || agents[0]?.id || 'codex'}
-              pickDirectory={pickGoalDir}
-            />
-          </div>
-        ) : onGoalsList ? (
-          <div key={`goals-list-${goalsFilter}`} className="scroller">
-            <GoalsPage
-              token={token}
-              initialFilter={goalsFilter}
-              goals={loopxStatus?.goals ?? []}
-              attention={loopxStatus?.attention ?? []}
-              activeGoalId={null}
-              onOpenGoal={openGoal}
-              onChanged={() => loopxRead.reload()}
-            />
-          </div>
         ) : onSteward ? (
           <div key="steward" className="scroller">
-            <StewardPage token={token} failure={loopxRead.failure} />
+            <StewardPage token={token} failure={loopxRead.failure} deferSessionOpen={Boolean(goalRequest || goalDetailFocus?.api === api && goalDetailFocus.threadId === null)} />
           </div>
         ) : onActivity ? (
           // The same document shape: days from the top, each conversation's asks under its name.
@@ -3353,6 +3462,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             <MergedHistory
               key={`${handoverHistoryKey(selected, threads)}:${mergedHandover}`}
               api={api} thread={selected} merged={mergedHandover} ready={historyReady} agentLabel={agentLabel}
+              beforeItems={historyCutoff !== undefined ? <div className="row chain-followups"><button className="text-btn" onClick={() => setSingleSegmentId(selected.id)}>{t('overview.followups')}</button></div> : undefined}
               laterOf={latestSegment ? thread => laterSegment(thread, latestSegment, threads) : undefined}
               onBrowseOlder={() => { stickToBottom.current = false; setAtBottom(false); }}
               canFork={thread => ({ enabled: Boolean(thread.agentSessionId && capsOf(thread.agent)?.fork), any: Boolean(capsOf(thread.agent)?.forkAt) })}
@@ -3407,9 +3517,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 if (known) { openThread(known); return; }
                 if (api) void api.thread(id).then(openThread).catch(handleError);
               }}
-              // A message names another thread in passing; the link opens it like a pick in the list.
+              // Read a referenced conversation beside this one, keeping the draft and reading position.
               threads={threads}
-              onOpenThread={openThreadById}
+              onOpenThread={openReference}
               hasOlder={hasOlder}
               loadingOlder={loadingOlder}
               onLoadOlder={loadOlder}
@@ -3565,6 +3675,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           note={noteSignal?.draftKey === composerDraftKey ? noteSignal.note : null}
           onNoteConsumed={consumeNote}
           onNotesChange={onNotesChange}
+          quoteSource={(threadId, turnId, sourceHost) => sourceHost === (hostId ?? null) && threadId !== selectedId && threads.some(thread => thread.id === threadId)
+            ? { threadId, turnId, elsewhere: true } : undefined}
           lastSent={selected ? lastSent : null}
         />}
         </>}
@@ -3595,7 +3707,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         )}
         </div>
         )}
-        {activeOverviewDetail && overviewBody(closeOverviewDetail, true, activeOverviewDetail.section)}
+        {activeOverviewDetail && compact && overviewBody(closeOverviewDetail, true, activeOverviewDetail.section)}
       </main>
 
       {/* The overview standing beside the conversation: a layer of its own, put away only by the
@@ -3606,11 +3718,32 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         </div>
       )}
 
-      {agentsOpen && coordination && <AgentPanel key={`${coordination.rootId}:${agentsStart ?? ''}`} start={agentsStart} api={api} memberApi={(id) => new Api(token ?? '', '', id)} team={coordination} agents={agents} memberModel={(thread) => {
+      {referenceId && <ThreadPeek key={`${hostId ?? 'local'}:${referenceId}`} side api={api} initial={referenceId}
+        draftKey={hostId ? `host:${hostId}:${referenceId}` : referenceId} returnFocus={null}
+        onClose={() => setReferenceId(null)} onOpen={() => { setReferenceId(null); openThreadById(referenceId); }}
+        onChange={() => { void refreshThreads(); }} />}
+      {agentsOpen && coordination && <AgentPanel key={`${coordination.rootId}:${agentsStart ?? ''}`} start={agentsStart} api={api} memberApi={(id) => new Api(token ?? '', '', id)} team={coordination} agents={agents} memberModel={(thread, part) => {
         const a = agents.find((v) => v.id === thread.agent);
-        return a ? <MemberModel agent={a} models={modelsByAgent[a.id] ?? []} value={{ model: thread.model ?? null, effort: thread.effort ?? null }} onNeed={needModels} onChange={({ model, effort }) => { void api.updateThread(thread.id, { model, effort }).then(() => refreshThreads()).catch(handleError); }}
+        return a ? <MemberModel part={part} agent={a} models={modelsByAgent[a.id] ?? []} value={{ model: thread.model ?? null, effort: thread.effort ?? null }} onNeed={needModels} onChange={({ model, effort }) => { void api.updateThread(thread.id, { model, effort }).then(() => refreshThreads()).catch(handleError); }}
           permission={a.capabilities.permissionModes.length ? thread.permissionMode : undefined} onPermission={(permissionMode) => { void api.updateThread(thread.id, { permissionMode }).then(() => refreshThreads()).catch(handleError); }} /> : null;
       }} leadAgent={threads.find((t) => t.id === coordination.rootId)?.agent} phone={compact} onClose={() => setAgentsOpen(false)} onOpen={thread => { openThread(thread); setAgentsOpen(false); }} onAdjust={(name, draft) => { setAgentsOpen(false); setSelectedId(coordination.rootId); setRestore({ text: t('app.adjustTask', name) + draft, nonce: Date.now() }); }} onRefresh={() => { void refreshThreads(); }} onError={handleError} />}
+      {activeOverviewDetail && !compact && <DockPanel hidden={Boolean(preview || picture || (diffFile && diffFile.threadId === selected?.id))} label={t(activeOverviewDetail.section === 'all' ? 'overview.label' : `overview.${activeOverviewDetail.section}`)} onDismiss={closeOverviewDetail}>{overviewBody(closeOverviewDetail, true, activeOverviewDetail.section)}</DockPanel>}
+      {picture && api && !compact && picture.threadId === selected?.id && <PictureDock key={`${hostId ?? ''}:${picture.threadId}:${picture.path}`} path={picture.path} name={picture.name} load={loadFile}
+        onClose={() => { setPicture(null); setOverviewDetail(null); }} onBack={activeOverviewDetail ? () => setPicture(null) : undefined} />}
+      {preview && api && <PreviewPanel key={`${hostId ?? ''}:${preview.threadId}:${preview.path}`} api={api} threadId={preview.threadId} path={preview.path}
+        onClose={() => { setPreview(null); if (!compact) setOverviewDetail(null); }} onBack={!compact && activeOverviewDetail ? () => setPreview(null) : undefined} docked={!compact} />}
+      {api && diffFile && diffFile.threadId === selected?.id && (
+        <ChangeDiffDialog
+          api={api}
+          threadId={diffFile.threadId}
+          file={diffFile.file}
+          turnOrder={turnOrder}
+          docked={!compact}
+          onBack={!compact && activeOverviewDetail ? () => setDiffFile(null) : undefined}
+          onClose={() => { setDiffFile(null); if (!compact) setOverviewDetail(null); }}
+          onJumpTurn={(turnId) => { setDiffFile(null); setJump({ threadId: diffFile.threadId, turnId }); }}
+        />
+      )}
       {files && filesThread && api && <FilesPanel api={api} threadId={filesThread.id} target={files} phone={compact} revision={filesThread.updatedAt} writingStage={filesThread.writing?.stage ?? null} writingHabits={filesThread.writing?.habits ?? null} noted={{ count: noteCount, nonce: filesNotePulse }} onClose={() => setFiles(null)} />}
       {gitOpen && selected && api && <GitPanel key={`${hostId ?? ''}:${selected.id}`} api={api} threadId={selected.id} phone={compact} running={selected.status === 'running'} onClose={() => setGitOpen(false)} />}
       {traceOpen && selected && (
@@ -3624,18 +3757,15 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         />
       )}
       </div>
-      {preview && api && (
-        <PreviewPanel key={`${hostId ?? ''}:${preview.threadId}:${preview.path}`} api={api} threadId={preview.threadId} path={preview.path} onClose={() => setPreview(null)} onError={handleError} />
-      )}
       {desktop !== 'closed' && (
         <DesktopPanel api={api} hidden={desktop === 'minimized'} onMinimize={() => setDesktop('minimized')} onClose={() => setDesktop('closed')} />
       )}
       {termOpen && (
         <TerminalPanel
-          api={api}
+          api={terminalClient ?? api}
           cwd={selected?.cwd || draftCwd || workdirs[0] || ''}
           terminalId={terminalTarget}
-          onClose={() => { setTermOpen(false); setTerminalTarget(null); }}
+          onClose={() => { setTermOpen(false); setTerminalTarget(null); setTerminalClient(null); }}
           onError={handleError}
         />
       )}
@@ -3734,8 +3864,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       {sideAsk && (
         <SideChat
           api={api}
-          agent={sideAsk.source?.agent ?? activeAgent}
-          agentLabel={agentLabel(sideAsk.source?.agent ?? activeAgent)}
+          agent={sideAgent}
+          agentInfo={sideAgentInfo}
+          models={modelsByAgent[sideAgent] ?? []}
+          savedPreference={modelPreferences.preferences[sideAgent]}
+          onModelsLoaded={(list) => acceptModelCatalog(sideAgent, list)}
+          onPreferenceChanged={() => void modelPreferences.refresh()}
+          agentLabel={agentLabel(sideAgent)}
           cwd={sideAsk.source?.cwd ?? activeCwd}
           permissionMode={sideAsk.source?.permissionMode ?? permission}
           model={sideAsk.source ? sideAsk.source.model : model}
@@ -3743,24 +3878,15 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           quoteText={sideAsk.text}
           sourceTitle={(sideAsk.source ?? selected)?.title ?? null}
           forkSourceId={sideAsk.source ? (capsOf(sideAsk.source.agent)?.fork && !forkBlocked(sideAsk.source) ? sideAsk.source.id : null) : selected && activeCaps?.fork && !forkBlocked(selected) ? selected.id : null}
-          attachBlocked={sideAsk.source ? (capsOf(sideAsk.source.agent)?.images ? null : t('app.noImages', agentLabel(sideAsk.source.agent))) : attachBlocked}
+          attachBlocked={sideAgentInfo?.capabilities.images === false ? t('app.noImages', agentLabel(sideAgent)) : null}
           onClose={() => setSideAsk(null)}
-          onError={handleError}
+          onError={error => handleModelError(error, sideAgent)}
           onThreadCreated={(t) => setThreads((prev) => [t, ...prev.filter((x) => x.id !== t.id)])}
           threads={threads}
           onOpenThread={(id) => { setSideAsk(null); openThreadById(id); }}
         />
       )}
-      {api && diffFile && diffFile.threadId === selected?.id && (
-        <ChangeDiffDialog
-          api={api}
-          threadId={diffFile.threadId}
-          file={diffFile.file}
-          turnOrder={turnOrder}
-          onClose={() => setDiffFile(null)}
-          onJumpTurn={(turnId) => { setDiffFile(null); setJump({ threadId: diffFile.threadId, turnId }); }}
-        />
-      )}
+
       {threadActions.layer}
       {remoteMenu && <RemoteThreadMenu key={remoteMenu.machine ?? 'local'} api={remoteMenu.api} target={remoteMenu} board={Boolean(boardExt?.enabled)}
         onChange={updated => updateMachineThread(remoteMenu.machine, updated)}

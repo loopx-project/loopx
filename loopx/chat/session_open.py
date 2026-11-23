@@ -48,7 +48,7 @@ from ..capabilities.native_chat.steward_managed_mode import (
     require_managed_agent_session,
 )
 from ..capabilities.steward_executor import allocation as alloc
-from ..chat_acp import ACPStdioAdapter
+from .acp import ACPStdioAdapter
 from ..chat_agent import CodexChatAgentError, agent_endpoint_error
 from ..chat_codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
 from ..chat_manager import (
@@ -60,7 +60,7 @@ from ..chat_manager import (
     open_manager_session,
     steward_machine_defaults,
 )
-from ..chat_providers import ClaudeCodeAdapter, direct_model_from_environment
+from .providers import ClaudeCodeAdapter, direct_model_from_environment
 from ..chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     TERMINAL_TURN_STATES,
@@ -310,7 +310,7 @@ class ChatSessionLifecycleMixin:
         claude_bin: str
         kiro_cli_bin: str
         acp_startup_timeout_sec: float | None
-        idle_timeout_sec: float
+        idle_timeout_sec: float | None
         hard_timeout_sec: float | None
         endpoint_registry: Any
         adapters: dict[str, ChatRuntimeAdapter]
@@ -422,7 +422,8 @@ class ChatSessionLifecycleMixin:
                     gate=None, error_code="unsupported_configuration")
             return AntigravityAdapter.start(
                 work_dir=work_dir, **native_context, resume_thread_id=resume_thread_id,
-                history=history, executor_model=model_config, hard_timeout_sec=self.hard_timeout_sec)
+                history=history, executor_model=model_config,
+                idle_timeout_sec=self.idle_timeout_sec, hard_timeout_sec=self.hard_timeout_sec)
         if agent_id == "codex":
             return start_runtime_adapter(
                 self, work_dir=work_dir, goal_id=goal_id, native_context=native_context,
@@ -1017,6 +1018,7 @@ class ChatSessionLifecycleMixin:
             native_history = (
                 None if answer_fallback or working_continuation else history
                 if legacy_provider_context or legacy_manager_context or legacy_project_context
+                or selected_agent == "antigravity"
                 or session.get("agent_id") in {"anthropic-api", "openai-api", MANAGED_TURN_HOST} else None)
             if (selected_agent == "codex" and accepted_turn_id is not None
                     and not (self.store.load_turn(session_id, accepted_turn_id) or {}).get("native_context_preparation")):
@@ -1115,7 +1117,7 @@ class ChatSessionLifecycleMixin:
                     if history_restore.parked_working is not None or session.get("parked_native_working") is not None:
                         changes.update(parked_native_working=history_restore.parked_working,
                                        expected_upstream_thread_id=session["upstream_thread_id"])
-                    if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
+                    if (legacy_manager_context or selected_agent == "antigravity") and adapter.upstream_thread_id != session.get("upstream_thread_id"):
                         # Preserve provenance for read-only checks of failed
                         # native requests after this history migration. Publish
                         # the native binding and representation version together;

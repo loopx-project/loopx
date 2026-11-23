@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Callable
 
+from ...paths import validate_goal_id_path_segment
 from .ledger_readback import net_quota_slot_spend, quota_slot_observation
 from .spend_sources import VISIBLE_GOAL_SLOT_SPEND_SOURCE
 from .usage_collector import UsageRowError, UsageSample, collect_usage_for_run
@@ -138,10 +140,21 @@ def _strip_unobserved_usage_metrics(
                 bucket.pop(key, None)
 
 
+def _usage_runs_dir(runtime_root: Path | None, goal_id: str) -> Path | None:
+    if runtime_root is None or not goal_id:
+        return None
+    try:
+        safe_goal_id = validate_goal_id_path_segment(goal_id)
+    except ValueError:
+        return None
+    return Path(runtime_root).expanduser() / "goals" / safe_goal_id / "runs"
+
+
 def build_usage_summary(
     history: dict[str, Any],
     *,
     parse_timestamp: ParseTimestamp,
+    runtime_root: Path | None = None,
 ) -> dict[str, Any]:
     now = now_utc()
     cutoff_24h = now - timedelta(hours=24)
@@ -182,7 +195,11 @@ def build_usage_summary(
             continue
         goal_id = str(run.get("goal_id") or "unknown-goal")
         goal = goals.setdefault(goal_id, blank_usage_goal(goal_id))
-        slot_contribution, unreadable_reason = quota_slot_observation(run)
+        slot_contribution, unreadable_reason = quota_slot_observation(
+            run,
+            runs_dir=_usage_runs_dir(runtime_root, str(run.get("goal_id") or "")),
+            goal_id=str(run.get("goal_id") or "") or None,
+        )
         automation_event = is_automation_run(run)
         progress_signal = is_progress_signal_run(run)
         # Present-but-illegal usage fails closed inside collect_usage_for_run.

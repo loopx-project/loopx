@@ -31,6 +31,11 @@ LoopX 将新增 **Goal 级 Capability Portfolio**，让 Agent 围绕 Goal 的结
 这些回执的效果。它不会把能力配置、provider 状态、证据、Todo、授权或
 memory 再复制成一份真相。
 
+**领域能力以它负责的结果和判断为单位。** 例如 Issue Fix 解释 PR 的评审、提交和 CI
+状态，判断该继续修复、等待复审还是结束跟进。换一个会话，新 Agent 仍能依据领域记录
+和当前 PR 作出判断。Kernel 负责接纳后继工作、等待与恢复。插件是交付这种能力或其
+provider 的一种方式，同一领域契约也可以由内置实现提供。[Issue Fix 的状态边界](../../../loopx/capabilities/issue_fix/docs/state-kernel-domain-state-case-study.zh-CN.md)
+
 Portfolio 组合现有 owner：
 
 1. capability catalog 描述可考虑的能力；
@@ -141,6 +146,12 @@ Periodic-report post-writeback hook 在组合入口解析 Goal subscription；re
 hook 保留 owner 定义的 surface/automation 设置。这些是复用边界，不证明所有能力已在
 所有 host 接通。通用自动参与、Portfolio 状态和跨入口读回仍是本 RFC 的提案。
 
+DSH 插件可以只提供一种观察。`dsh-session-events` 订阅会话
+事件，`reliability-diagnostics` 校验事件流的完整性，解释停滞、重复与恢复迹象，
+并输出只读诊断。该 provider 在目录中有声明，其运行可用性仍需单独核验。作者接入
+另一种宿主时，可以沿用诊断契约，只替换事件来源。若扩展本身提供完整的领域结果，
+则按该结果注册能力。两种接入方式都沿用现有目录和权限边界。[DSH 观察器](../../../packages/dsh-loopx-plugin/src/observer.ts) · [诊断能力](../../../loopx/capabilities/reliability_diagnostics/README.zh-CN.md) · [扩展注册](../../reference/extensions.md#registration-model)
+
 ## 5. 建议架构
 
 ### Owner 与权限
@@ -201,10 +212,47 @@ Host 必须真实 dispatch 已注册且适用的 hook，不能只打印“有这
 unsupported，不能宣称激活成功。自动执行 protected effect 仍要求既有 exact admission。
 可选排序建议不得把机器强制的能力义务改成 suggestion。
 
-组合依据是 typed input/output dependency、共享受限资源、备选 provider 选择，或需要
-联合结果的明确验收缺口。能力数量、关键词匹配本身不足以触发组合。优先读取已有
-生效配置，仅为未解决缺口扩大发现范围。两个独立能力保持直接路径；一个操作若需在
-高成本 provider 间取舍，也可能需要计划。规划失败时原生 hook 继续运行。
+发现从一次具体的错误或验收缺口开始。若 Agent 反复修改已经回应的评审意见，先查
+Issue Fix 是否已有相应判断、对本 Goal 是否启用，再查宿主是否实际调用了入口并取得
+当前评审证据。已有判断可直接复用，入口漏调由宿主修复，证据不全则补读来源。
+领域规则仍不能解释的案例再进入能力改进评估。普通唤醒沿用原路径。
+
+调用时机由工作决定。新会话恢复研究时，Explore 可在 Turn 开始时提供相关发现；
+工作结果写回后，已启用的 Periodic Report 可判断是否到了报告节点。用户主动提出
+研究问题时，Agent 也可以直接发起 Deep Research。插件作者复用与该结果相符的入口，
+在入口处声明所需观察和允许产生的效果。[Explore 轮次入口](../../../loopx/capabilities/explore/catalog_entry.py) · [报告触发](../../../loopx/capabilities/periodic_report/post_writeback_hook.py) · [Deep Research](../../../loopx/capabilities/deep_research/README.md)
+
+组合依据是输入输出依赖、共享受限资源、备选 provider 取舍，或需要联合结果的验收
+缺口。历史共现可用于推荐候选。规划时须指出本次工作依赖哪项事实、哪个版本仍适用。
+例如 Issue Fix 的同一进展可以派生 Explore 发现，也可以成为 Periodic Report 的素材。
+两个消费者可独立运行。报告交付失败时，只恢复报告侧的工作，已完成的修复仍有效。
+这类既有投影直接复用。只有出现真实依赖或取舍才规划，单个操作在高成本 provider
+之间选择也可能需要计划。规划失败时原生 hook 继续运行。[Explore 投影](../../../loopx/capabilities/issue_fix/explore_projection.py) · [报告来源](../../../loopx/capabilities/issue_fix/periodic_report.py)
+
+### DSH 插件接入与能力作者骨架
+
+作者先选希望复用的领域判断，再选交付方式。以会话诊断为例，DSH 的
+`session/event` 可以映射成 `reliability_observer_envelope_v0`，保留来源、
+会话、序号和时钟。由诊断能力据此检查缺失事件并解释结果。若宿主需要代表用户
+执行操作，则要走另一条入口。LoopX 在执行前核对操作、权限和当前绑定，随后以
+负责执行的一方提供的回执核对结果。
+现有 DSH 原生操作适配器在响应丢失后要求对账，直接重试可能重复已经生效的操作。
+[观察契约](../../../loopx/capabilities/reliability_diagnostics/envelope.py) · [DSH 操作适配器](../../../packages/dsh-loopx-plugin/src/native-operation.ts)
+
+| 作者要交付什么 | 可复用的声明与实现 | 骨架可以提供什么 |
+| --- | --- | --- |
+| 给已有能力增加 DSH 事件来源 | Cordis 订阅与清理入口、现有领域观察 schema 及其校验器。npm 插件由能力目录声明 provider | 薄适配器和合成事件样例，覆盖重复、丢失、解绑，保留宿主来源 |
+| 通过 LoopX 扩展实现已有能力 | `[[implements]]` 引用能力 ID 和协议，由原能力解析 provider、检查权限并消费结果 | 匹配该协议的请求与结果样例，以及一个从真实领域入口调用的测试。[现有实现声明](../../../packages/loopx-media/extension.toml) |
+| 提供可独立验收的新领域结果 | `[[provides]]` 声明能力。需要 Goal 绑定调用时，引用现有 `loopx_external_domain_capability_profile_v0`，其中列明 operation、effect class、permission、请求和结果 schema | 独立可运行的 provider、只读健康检查和版本化契约样例。验收判断、权限映射、执行回执的解释由领域作者实现。[Goal 绑定协议](../../reference/extensions.md#goal-bound-external-capability-providers) |
+
+现有 `loopx extension init` 生成独立 Python provider、manifest、请求和响应 JSON
+Schema 及健康检查。领域契约由原能力维护一个版本来源，DSH 适配器可以从中派生类型，
+或用与独立消费者相同的测试样例校验字段映射。当前生成的是 standalone 扩展，尚无面向 DSH 的 capability
+生成器。建议先用一个只读能力做参考实现，再决定值得生成哪些文件。让 DSH 适配器
+和另一条独立入口输入等价观察，查验同一领域判断，同时保留各自的来源与版本。
+再验证未知 schema 被拒绝、关闭插件后停止采集，以及宿主重载不会重复结算。
+若要支持有副作用的能力，另测撤权和响应丢失后的对账。两个作者入口能复用同一
+组契约测试，才有证据把共同部分提取成标准骨架。[现有脚手架边界](../../reference/extensions.md#starter-and-scaffold)
 
 ### 状态模型与 schema
 
@@ -384,6 +432,12 @@ delegation 或 governed Turn。既有 turn-start/post-writeback hook 和 pending
 生命周期或 connector 里程碑。资格、有效效果、迁移与开发／评估总成本须分别
 留证；确定性测试不是采用决定。
 
+提议演化时先确定改动归属。若变化只是“这个 Goal 今后优先选哪种方法”，由 Goal
+采用策略处理。若同一判断在多个任务上反复出错，保留受影响决策和来源版本，由原能力
+owner 提出可回退的规则或实现改动。若调用方需要一项可以独立验收的新结果，
+再提议注册新能力。M4 用留出案例检验变更，记录收益、退化和完整成本，由原 owner
+决定是否发布或回退。[现有试用建议实现](../../../loopx/control_plane/capabilities/goal_capability_organization.ts)
+
 ### 长程职责、渐进披露与记忆演化
 
 **决策：** 统一何时披露上下文、如何验证更新，而不是把所有存储统一成万能记忆库。
@@ -523,6 +577,8 @@ v0 不做破坏性 registry migration。
 | Provider binding 保持单一 owner | 现有 Goal binding preview/apply/readback 加 disable/upgrade/rollback fixture | Portfolio 引用 exact binding，drift 后变 stale，不写平行 binding | extension runtime 继续证明 provider readiness |
 | 自发现有用 | 新 finance 与非金融 Agent 只收到同一 Goal | 选出最小合理组合或解释空选择 | 两例不证明普遍 uplift |
 | 组合改善结果 | 冻结 baseline 对比 Portfolio-assisted trial | 在申明成本内改善首次有效行动、覆盖或决策质量，保留失败 | 不自动生产晋升 |
+| 跨会话的领域判断 | 在新会话中接手留出的开放 PR，固定模型与预算。两组均通过 CI，评审均为 `CHANGES_REQUESTED`。一组有晚于评审的修复提交且完整读回的线程均已解决，另一组仍有未解决意见 | 前者等待复审，后者提出后续修复。与原策略分别比较无谓返工和遗漏修改的次数，并报告两组分母与运行成本 | [现有分支测试](../../../tests/capabilities/test_issue_fix_pr_lifecycle_review_response.py)给出预期决策。跨任务收益须另测 |
+| 一个结果由多个能力消费 | 将同一修复进展投影给 Explore 与报告，令报告交付失败，换会话后重试 | 仅恢复失败的交付，Explore 发现保持幂等，已完成的修复保持关闭 | 分别读回来源和两个消费者的状态 |
 | 三个 hook 一致 | before-plan/delegate/result 契约测试 | 同一 composition identity 和 route/result lineage | 排除原始模型质量 |
 | Owner truth 不重复 | 分别纠正并退役一个 external-evidence receipt 与一个非证据 outcome receipt | Portfolio 跟随不可变 superseding refs，不残留复制的 admission/effect 事实 | 各 owner 继续验证自己的语义 |
 | 产品入口一致 | CLI、打包前端、Lark 的既有 Goal settings preview/apply/readback；新 session、stale、重连和重复操作 | 同 effective enablement、direct/composed mode、可选 adoption status 和 owner refs，无第二个激活控件 | 每个已开放入口发布时就有可用读回；owner fact 保留 provenance |
@@ -602,6 +658,10 @@ freshness 与 utility-attribution PR；复用其 owner，不复制 writer。本�
    只有 typed policy 才应用；不能只因调用少而退役。M4 前决定。
 4. **安装建议 UX。** Owner：产品和 extension 维护者。建议 M3 证明选择价值后
    才展示 governed repair/install proposal；它不属于 v0 执行权限。
+5. **DSH 接入应标准化到哪一层？** 由 DSH 适配器、能力和扩展维护者共同评审。
+   用第 5 节参考实现比较三种交付物：文档化示例、共享契约测试、生成器。记录第二个
+   作者必须手写什么、何处会产生两份 schema，以及谁能证明当前绑定可执行。先交付
+   能消除实测重复工作的最小方案；通用 schema 或 SDK 的采用留待该比较决定。
 
 ---
 

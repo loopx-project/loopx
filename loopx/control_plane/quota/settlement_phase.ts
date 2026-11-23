@@ -3,6 +3,7 @@ import { jsonObject } from "../runtime_decode.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { isCanonicalTodoId } from "../todos/identity.ts";
 import { blockedResumeInstant, isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
+import {isExecutionLossCloseout} from "./execution_loss_closeout_record.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
 
 function retryDelayIsBounded(seconds: number): boolean {
@@ -13,6 +14,7 @@ function retryDelayIsBounded(seconds: number): boolean {
  * retry/causal wait, blocked lifecycle or a Monitor unavailable attempt.
  * A lifecycle/Monitor closeout creates no retry clock or execution grant. */
 export function isBoundedBlockedRetry(value: unknown, todoId: string | null): boolean {
+  if (isExecutionLossCloseout(value, todoId)) return true;
   if (isCausalBlockedWait(value, todoId)) return true;
   if (isBlockedLifecycleWait(value, todoId)) return true;
   if (isMonitorUnavailableWait(value, todoId)) return true;

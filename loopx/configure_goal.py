@@ -266,11 +266,15 @@ def _settings_summary(goal: dict[str, Any]) -> dict[str, Any]:
         "explore_graph": compact_explore_graph_policy(goal.get("explore_graph"), orchestration.get("explore_harness")),
         "orchestration": orchestration,
         "waiting_on": goal.get("waiting_on"),
-        "write_scope": normalize_goal_write_scope(coordination.get("write_scope") or [])
+        "write_scope": normalize_goal_write_scope(
+            coordination.get("write_scope") or [],
+            goal_repo=goal.get("repo"),
+        )
         or [],
         **shadow.coordination_shadow_summaries(goal),
         "checkpointed_boundary_authority": checkpointed_boundary_authority_summary(
-            coordination
+            coordination,
+            goal_repo=goal.get("repo"),
         ),
         "registered_agents": registered_agents,
         "peer_task_coordination": deepcopy(
@@ -697,7 +701,7 @@ def configure_goal(
         clear_todo_lifecycle_authority
     )
     supervised_agents = _clean_registered_agents(supervised_agents)
-    write_scope = normalize_goal_write_scope(write_scope)
+    write_scope = normalize_goal_write_scope(write_scope, fold=False)
     issue_fix_reviewer_notification_config = _local_private_config_path(
         issue_fix_reviewer_notification_config,
         label="reviewer notification config",
@@ -1272,15 +1276,24 @@ def configure_goal(
         if clear_write_scope:
             coordination["write_scope"] = []
         elif write_scope is not None:
+            goal_repo = goal.get("repo")
             if replace_write_scope:
-                coordination["write_scope"] = write_scope
+                coordination["write_scope"] = (
+                    normalize_goal_write_scope(write_scope, goal_repo=goal_repo) or []
+                )
             else:
                 existing_write_scope = (
-                    normalize_goal_write_scope(coordination.get("write_scope") or [])
+                    normalize_goal_write_scope(
+                        coordination.get("write_scope") or [],
+                        goal_repo=goal_repo,
+                    )
                     or []
                 )
                 coordination["write_scope"] = (
-                    normalize_goal_write_scope([*existing_write_scope, *write_scope])
+                    normalize_goal_write_scope(
+                        [*existing_write_scope, *write_scope],
+                        goal_repo=goal_repo,
+                    )
                     or []
                 )
         if clear_boundary_authority:

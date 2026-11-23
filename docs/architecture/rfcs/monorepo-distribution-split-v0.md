@@ -483,6 +483,13 @@ holds further dependent effects for readback or intervention; “not observed”
 does not mean “not executed.” Device idempotency, physical interlocks and
 compensation remain provider responsibilities, not invented kernel guarantees.
 
+After a generic CLI result is durably recorded, the original Turn can resume
+validation or settlement without the adapter command or its request schema.
+The caller retains the approved workspace and supplies the independent checker
+if validation is pending. An already settled Turn reads back its saved result.
+If the recovery owner requires a Host attempt, the caller must supply the
+adapter before admission can advance.
+
 Model cancellation, process termination and confirmed device stop are separate
 facts. A stopped model must not produce a “device stopped” claim without device
 evidence. Providers needing persistent supervision cannot be unloaded while
@@ -4789,3 +4796,21 @@ view shows its independently checked result in the same conversation.
 - **Boundary:** this is a source wiring repair. Installed Core and composition
   qualification, interrupted original-Task recovery, complete context/closure,
   actual models, costs, full R1/M3 and C1 cutover remain separate acceptance.
+
+### 2026-11-22 — Checkpoint replay returns the selected runtime's artifacts
+
+- **Gap:** replaying a committed checkpoint from a copied runtime validated the
+  relocated artifacts through the existing typed owner, but the public
+  `refresh-state` response still returned paths from the original runtime.
+- **Delta:** the Python transport retains that validated replay result and uses
+  its JSON and Markdown paths in the idempotent response. Path selection,
+  artifact validation and refusal remain on the existing TypeScript checkpoint
+  owner; no new path authority or historical-record migration is introduced.
+- **Source evidence:** ten real CLI cases cover File and SQLite, dry-run and
+  repeated replay, and missing or symlinked JSON/Markdown artifacts. They verify
+  the relocated bytes, unchanged original/copied history and checkpoint proofs,
+  preserved settlement identity, no appended replay and zero spend. The fixed
+  main baseline reproduced the stale public path before this repair.
+- **Boundary:** this is a bounded V2/V4/R1 recovery repair. Full original-Goal
+  regression, installed composition, complete default closure and costs, real
+  model adoption, R1/M3 acceptance and C1 cutover remain separate gates.

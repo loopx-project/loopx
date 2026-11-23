@@ -26,6 +26,7 @@ import {
 } from "./effect_program.ts";
 
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
+import type { SqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
 import {
   optionalNonEmptyString as optionalString,
   requireBoolean,
@@ -38,7 +39,7 @@ import {
 
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
-type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
+export type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
 
 // Resolve only the selected module/handler, never cache its params or decision.
 // Node owns module caching; the existing runtime fingerprint owns invalidation.
@@ -57,6 +58,7 @@ export interface EffectRuntimeHandlerContext {
   fingerprint: string;
   /** Physical publication path observed by the managed server, not its caller. */
   readonly infoPath?: string;
+  readonly localRuntimeIdentity?: SqliteRuntimeIdentity;
   requestShutdown: () => void;
 }
 
@@ -254,7 +256,9 @@ export function createEffectRuntimeHandlers(
     [
       "runtime.ping",
       () => ({ ready: true, pid: process.pid, fingerprint: context.fingerprint,
-        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}) }),
+        ...(context.infoPath === undefined ? {} : {info_path: context.infoPath}),
+        ...(context.localRuntimeIdentity === undefined
+          ? {} : {runtime_identity: context.localRuntimeIdentity}) }),
     ],
     [
       "runtime.shutdown",
@@ -268,6 +272,8 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./turn_driver/turn_journal.ts"), ({interpretTurnJournal}) => (params) => interpretTurnJournal(turnJournalInspectionRequest(params))),
     ],
     ["host_failure.retry", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRetryRequest}) => hostFailureRetryRequest)],
+    ["host_failure.record", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureRecordRequest}) => hostFailureRecordRequest)],
+    ["host_failure.observe", lazyHandler(() => import("./turn_driver/host_failure.ts"), ({hostFailureObservationRequest}) => hostFailureObservationRequest)],
     ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
@@ -383,6 +389,8 @@ export function createEffectRuntimeHandlers(
     ["quota.spend.commit", lazyHandler(() => import("./quota/spend_commit.ts"), ({evaluateQuotaSpendCommit}) => evaluateQuotaSpendCommit)],
     ["quota.void.commit", lazyHandler(() => import("./quota/void_commit.ts"), ({evaluateQuotaVoidCommit}) => evaluateQuotaVoidCommit)],
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
+    ["quota.execution_loss_closeout.commit", lazyHandler(() => import("./quota/execution_loss_closeout.ts"), ({commitExecutionLossCloseout}) => commitExecutionLossCloseout)],
+    ["quota.heartbeat_receipt.select", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({projectHeartbeatReceiptSelection}) => projectHeartbeatReceiptSelection)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),
@@ -392,7 +400,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({reduceUnsettledHostTurnRecovery}) => reduceUnsettledHostTurnRecovery),
     ],
     ["quota.turn_envelope.evaluate", lazyHandler(() => import("./quota/turn_envelope.ts"), ({evaluateTurnEnvelope}) => evaluateTurnEnvelope)],
-    ["quota.run_decision", lazyHandler(() => import("./quota/run_decision.ts"), ({resolveQuotaRunDecision}) => resolveQuotaRunDecision)],
+    ["quota.run_decision", lazyHandler(() => import("./quota/run_decision.ts"), ({admitQuotaRunDecision}) => admitQuotaRunDecision)],
     ["quota.scoped_override.project", lazyHandler(() => import("./quota/scoped_override.ts"), ({projectScopedOverride}) => projectScopedOverride)],
     ["task_lease.acquire.native", lazyHandler(() => import("./work_items/task_lease_acquire.ts"), ({executeTaskLeaseAcquire}) => executeTaskLeaseAcquire)],
     ["task_lease.inspect.native", lazyHandler(() => import("./work_items/task_lease_inspection.ts"), ({inspectTaskLease}) => inspectTaskLease)],

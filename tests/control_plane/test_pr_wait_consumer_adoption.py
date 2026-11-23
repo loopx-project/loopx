@@ -17,6 +17,7 @@ from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.todos import add_goal_todo, list_goal_todos
 from tests.capabilities.test_pr_wait_observation import _invoke_turn, _observation
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.test_loopx_turn_driver import _write_live_fixture
 
 
@@ -80,11 +81,12 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
             assert observation["checks"]["pr_dependencies"]["external_read_count"] == (2 if number == 0 else 0)
 
     captured = []
-    project_decision = turn.compose_turn_decision
+    compose_decision = turn.compose_turn_decision
 
     def capture(decision, **kwargs):
-        captured.append(copy.deepcopy(decision))
-        return project_decision(decision, **kwargs)
+        result = compose_decision(decision, **kwargs)
+        captured.append(copy.deepcopy(result))
+        return result
 
     monkeypatch.setattr(turn, "compose_turn_decision", capture)
     runner = tmp_path / "consumer.py"
@@ -95,7 +97,9 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "    prompt = kwargs['prompt']\n"
         "    (root / 'consumer-input.txt').write_text(prompt)\n"
         "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])[0]\n"
-        "    authority = request.get('work_contract') or request['task_context']\n"
+        "    assert request['schema_version'] == 'loopx_turn_model_context_v0'\n"
+        "    assert 'work_contract' not in request\n"
+        "    authority = request['task_context']\n"
         "    selected = authority['selected_todo']\n"
         f"    assert selected['todo_id'] == {todo_id!r}\n"
         "    assert selected['resume_when'] == 'pr_merged:owner/repo#42'\n"
@@ -139,8 +143,8 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     assert expected["resume_condition"]["matched_event_at"] == "2026-10-01T00:00:00Z"
     assert envelope["action_signature"]["matches"] is True
     prompt = (project / "consumer-input.txt").read_text()
-    raw_request = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]
-    consumed = raw_request.get("work_contract") or raw_request["task_context"]
+    model_input = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]
+    consumed = assert_host_task_context(model_input, full)
     assert consumed["selected_todo"]["resume_condition"] == expected["resume_condition"]
     assert "Require the terminal independent artifact marker." in prompt
 

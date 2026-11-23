@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from loopx.chat_acp import ACP_INITIALIZE_TIMEOUT_DEFAULT_SEC, ACPStdioAdapter
-from loopx.chat_endpoints import AgentEndpointRegistry
+from loopx.chat.acp import ACP_INITIALIZE_TIMEOUT_DEFAULT_SEC, ACPStdioAdapter
+from loopx.chat.endpoints import AgentEndpointRegistry
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
 

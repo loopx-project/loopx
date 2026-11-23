@@ -582,14 +582,14 @@ def test_restored_native_capture_does_not_claim_after_manual_writeback(
     proof = ready["execution_preparation"]["lease_proof"]
     identity = ready["heartbeat_receipt"]["settlement_identity"]
     assert identity == first["heartbeat_receipt"]["settlement_identity"]
-    refresh = ["refresh-state", *scope,
-        "--task-lease-idempotency-key", proof["idempotency_key"],
-        "--task-lease-expected-version", str(proof["expected_version"]),
-        "--classification", "fixture_manual_result",
+    proof = ready["execution_preparation"]["lease_proof"]
+    refresh = ["refresh-state", *scope, "--classification", "fixture_manual_result",
         "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
         "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:manual-result",
-        "--no-global-sync", "--suppress-external-sinks"]
+        "--no-global-sync", "--suppress-external-sinks",
+        "--task-lease-idempotency-key", proof["idempotency_key"],
+        "--task-lease-expected-version", str(proof["expected_version"])]
     if spend_committed:
         refresh += ["--settle-turn", "--settlement-receipt"]
     assert invoke(*refresh, cwd=delivery_worktree)["settlement_identity"] == identity
@@ -1715,3 +1715,115 @@ def test_scoped_user_gate_fallback_execution_preparation_excludes_deferred_repla
     assert open_fallback_payload["execution_preparation"]["state"] == "claim_required"
     assert open_fallback_payload["should_run"] is True
     assert open_fallback_payload["execution_obligation"]["delivery_allowed"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_claim_refusal_is_reported_once_for_the_original_capture(tmp_path, monkeypatch, provider):
+    from test_quota_settlement_cli import _spend_run_count
+
+    tmp_path = tmp_path.resolve()
+    monkeypatch.chdir(tmp_path)
+    session, turn, scenario = "claim-race-session", "claim-race-turn", "codex_app_heartbeat"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    native, capture = tmp_path / "native", tmp_path / "before"
+    native.mkdir(mode=0o700)
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+
+    def hook(name):
+        event = {"session_id": session, "cwd": str(tmp_path), "hook_event_name": name}
+        if name == "SessionStart":
+            event["source"] = "startup"
+        result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+            "--runtime-root", str(runtime), "quota", "context-hook", "--context-delivery", "on",
+            "--runtime-profile", scenario, "--codex-context-dir", str(native)], input=json.dumps(event),
+            cwd=tmp_path, check=True, capture_output=True, text=True, timeout=30)
+        return json.loads(result.stdout).get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    assert not hook("SessionStart")
+    other_todo = "todo_independent"
+    before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
+        "--todo-id", TODO, "--turn-instance-id", turn, "--decision-output-dir", str(capture),
+        "--defer-context-presentation", "--codex-context-dir", str(native), context_delivery="on",
+        todos=[{**_todo(), "claimed_by": None}, {**_todo(), "todo_id": other_todo, "index": 2}])
+    assert before["execution_preparation"]["state"] == "claim_required"
+    _present_saved_guard(tmp_path, native, capture, scenario, turn)
+    operation = json.loads((native / "session.json").read_text())["recovery"]["execution_preparation"]["claim_args"][-1]
+    code, peer = run_json_cli_result("todo", "claim", "--goal-id", GOAL, "--agent-id", "agent-b",
+        "--claimed-by", "agent-b", "--todo-id", TODO, "--claim-operation-id", "peer-claim",
+        registry_path=registry, runtime_root=runtime)
+    assert code == 0 and peer["ok"], peer
+
+    def current_lease():
+        code, inspected = run_json_cli_result("task-lease", "inspect", "--goal-id", GOAL,
+            "--todo-id", TODO, registry_path=registry, runtime_root=runtime)
+        assert code == 0, inspected
+        return inspected["lease"]
+
+    original = current_lease()
+    assert original["owner"] == "agent-b"
+    message = hook("PostToolUse")
+    assert "claim_owner_mismatch" in message and "agent-b" in message, message
+    assert "fresh eligible" in message and "claim-readback" not in message
+    assert not hook("PostToolUse")
+    _present_saved_guard(tmp_path, native, capture, scenario, turn)
+    assert not hook("PostToolUse")
+    assert current_lease() == original
+    assert _spend_run_count(runtime, goal_id=GOAL) == 0
+
+    code, receipt = run_json_cli_result("todo", "receipt", "--goal-id", GOAL, "--operation-id", operation,
+        registry_path=registry, runtime_root=runtime)
+    assert receipt["status"] == "missing", receipt
+
+    # The refusal is local to the old attempt. Another eligible Todo in this
+    # same session can still go from a live guard through its own normal claim.
+    next_capture, next_turn = tmp_path / "independent", "independent-turn"
+    code, next_guard = run_json_cli_result("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--todo-id", other_todo, "--turn-instance-id", next_turn, "--runtime-profile", scenario,
+        "--context-delivery", "on", "--defer-context-presentation", "--codex-context-dir", str(native),
+        "--decision-output-dir", str(next_capture), registry_path=registry, runtime_root=runtime)
+    assert code == 0 and next_guard["execution_preparation"]["state"] == "claim_required", next_guard
+    _present_saved_guard(tmp_path, native, next_capture, scenario, next_turn)
+    prepared = json.loads(hook("PostToolUse").rsplit("Receipt: ", 1)[-1])
+    assert prepared["event"] == "host_execution_prepared" and prepared["todo_id"] == other_todo
+    assert current_lease() == original
+    assert _spend_run_count(runtime, goal_id=GOAL) == 0
+
+
+@pytest.mark.parametrize(("reason_code", "isolatable"), [
+    ("write_scope_conflict", False), ("workspace_lease_conflict", True),
+])
+def test_lease_refusal_explains_when_a_fresh_guard_can_retry(tmp_path, reason_code, isolatable):
+    from loopx.control_plane.turn_driver.codex_execution_preparation import NativeClaimRejected, _run_json
+
+    identity = {"goal_id": GOAL, "todo_id": TODO, "actor_agent_id": AGENT, "claim_operation_id": "original"}
+    decision = {**identity, "schema_version": "loopx_coordination_todo_claim_decision_v0",
+        "status": "rejected", "reason_code": reason_code, "reason": "Conflicting active lease"}
+    reply = subprocess.CompletedProcess([], 1, json.dumps({"ok": False, "source_authority": "file_v0",
+        "decision_read_from_provider": True, "legacy_fallback_used": False, "claim_decision": decision}), "")
+    with pytest.raises(NativeClaimRejected) as refusal:
+        _run_json(["todo", "claim"], registry_path=tmp_path / "registry.json", runtime_root=None,
+            cwd=tmp_path, timeout=1, runner=lambda *args, **kwargs: reply, claim_identity=identity)
+    message = str(refusal.value)
+    assert "lease is released or expires" in message and "fresh eligible guard" in message
+    assert ("independent authorized worktree if the work can be isolated" in message) == isolatable
+
+
+@pytest.mark.parametrize("case", ["wrong-operation", "unverified-provider", "prior-receipt"])
+def test_inconclusive_claim_reply_remains_recoverable(tmp_path, case):
+    from loopx.control_plane.turn_driver.codex_execution_preparation import _run_json
+
+    identity = {"goal_id": GOAL, "todo_id": TODO, "actor_agent_id": AGENT, "claim_operation_id": "original"}
+    decision = {**identity, "schema_version": "loopx_coordination_todo_claim_decision_v0",
+        "status": "rejected", "reason_code": "claim_owner_mismatch", "reason": "Todo is already claimed"}
+    payload = {"ok": False, "source_authority": "file_v0", "decision_read_from_provider": True,
+        "legacy_fallback_used": False, "claim_decision": decision}
+    if case == "wrong-operation":
+        decision["claim_operation_id"] = "another"
+    elif case == "unverified-provider":
+        payload["decision_read_from_provider"] = False
+    else:
+        payload["original_receipt"] = {"operation_id": "original"}
+    reply = subprocess.CompletedProcess([], 1, json.dumps(payload), "")
+    with pytest.raises(RuntimeError):
+        _run_json(["todo", "claim"], registry_path=tmp_path / "registry.json", runtime_root=None,
+            cwd=tmp_path, timeout=1, runner=lambda *args, **kwargs: reply, claim_identity=identity)

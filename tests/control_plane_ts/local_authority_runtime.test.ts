@@ -1497,7 +1497,7 @@ test("provider-first atomic claim replays current execution and rejects expired 
   assert.equal(lease.schema_version, "task_lease_v0");
   assert.equal(lease.owner, "agent-a");
   assert.equal(lease.idempotency_key, "turn:claim-with-lease");
-  assert.deepEqual(lease.write_scopes, ["loopx/control_plane/**"]);
+  assert.deepEqual(lease.write_scopes, []);
   assert.equal(lease.version, 1);
   assert.equal(lease.lease_epoch, 1);
 
@@ -1841,6 +1841,9 @@ test("managed execution fields cannot be ignored by older public transports", as
     const result = await runtime.claimLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_claim_request_v${v}`,
       manage_execution: true}, noStore);
     assert.match(String(result.reason), /requires claim request v2/);
+    const ttlResult = await runtime.claimLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_claim_request_v${v}`,
+      ttl_seconds: 7200}, noStore);
+    assert.match(String(ttlResult.reason), /Managed execution TTL requires claim request v2/);
   }
   for (const v of [0, 1, 2, 3, 4, 5]) {
     const result = await runtime.updateLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_update_request_v${v}`,

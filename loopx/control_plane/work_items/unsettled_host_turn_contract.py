@@ -65,6 +65,39 @@ def recovery_cli_actions(
              " --progress-evidence-id '<verified-evidence-ref>'"),
             "Read back the settled blocked closeout. Do not spend a slot or rebind this Turn; the next real host Turn selects independent work.",
         ]
+    if recovery.get("repair") == "execution_loss_closeout":
+        prior_turn = shlex.quote(str(recovery["prior_turn_instance_id"]))
+        scope = f"--goal-id {shlex.quote(goal_id)} --todo-id {shlex.quote(prior_todo_id)}"
+        goal_ref = payload.get("goal_ref")
+        instance = goal_ref.get("goal_instance_id") if isinstance(goal_ref, Mapping) else None
+        instance_arg = f" --goal-instance-id {shlex.quote(instance)}" if isinstance(instance, str) else ""
+        proof = recovery.get("execution_loss")
+        if not isinstance(proof, Mapping):
+            raise RuntimeError("execution-loss recovery is missing its fenced generation observation")
+        evidence = shlex.quote(f"lease-generation:{proof['original_prepared_epoch']}:{proof['current_lease_epoch']}")
+        closeout = (
+            f"{command_prefix} refresh-state --execution-loss-closeout {scope}{instance_arg}{lifecycle_actor_args}"
+            f" --turn-instance-id {prior_turn} --classification execution_loss_closeout"
+            " --delivery-batch-scale single_surface --delivery-outcome outcome_gap --delivery-boundary semantic_closeout"
+            " --progress-result-class blocked --progress-blocker-id original-execution-fenced"
+            f" --progress-evidence-id {evidence} --task-lease-idempotency-key '<current-key>'"
+            " --task-lease-expected-version '<current-version>' --no-global-sync --suppress-external-sinks"
+        )
+        inspect_lease = f"{command_prefix} task-lease inspect {scope}"
+        actions = [inspect_lease]
+        if proof.get("can_reclaim_control_writer") is True and lifecycle_actor_args:
+            writer = shlex.quote(str(proof["current_owner"]))
+            actions.extend([
+                "If the original Agent still owns this Todo and the lease is inactive, run the ordinary managed claim to obtain control-writer proof.",
+                f"{command_prefix} todo claim {scope}{lifecycle_actor_args} --claimed-by {writer} --thin",
+                inspect_lease,
+            ])
+        actions.extend([
+            "Use the active control-writer proof for the original Agent. Hold if authorized ownership cannot be verified.",
+            f"{closeout} --dry-run",
+            "After the preview establishes a no-spend closeout, execute the same command without --dry-run and verify the original settlement. Resume fresh work only through its own guard.",
+        ])
+        return actions
     if recovery.get("repair") == "resume_prior_turn":
         prior_turn_id = str(recovery["prior_turn_instance_id"])
         return [

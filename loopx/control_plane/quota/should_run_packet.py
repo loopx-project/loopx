@@ -807,6 +807,7 @@ class _QuotaDecisionRoute:
     next_action_warning: dict[str, Any] | None
     goal_route_hint: dict[str, Any] | None
     payload_work_lane_contract: dict[str, Any] | None
+    vision_baseline_initialization: bool = False
 
 
 def _planning_projections(
@@ -943,6 +944,7 @@ def _resolve_quota_should_run_route(
             if prepared.receipt_bound_todo_id is None
             else None
         ),
+        vision_initialization_context=prepared.vision_initialization_context,
     )
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         fields = settled_replay_fields()
@@ -1187,7 +1189,8 @@ def _resolve_quota_should_run_route(
             agent_lane_next_action=agent_lane_next_action,
         )
         agent_scope_frontier = (
-            _selected_deferred_replan_frontier(prepared)
+            run_decision.agent_scope_frontier
+            or _selected_deferred_replan_frontier(prepared)
             or _agent_scope_no_candidate_frontier(
                 agent_identity=prepared.agent_identity,
                 agent_todo_summary=prepared.agent_todo_summary,
@@ -1331,6 +1334,9 @@ def _resolve_quota_should_run_route(
         next_action_warning=next_action_warning,
         goal_route_hint=goal_route_hint,
         payload_work_lane_contract=payload_work_lane_contract,
+        vision_baseline_initialization=(
+            run_decision.vision_baseline_initialization and replan_decision_allowed and should_run
+        ),
     )
 
 
@@ -1437,6 +1443,7 @@ def _build_active_quota_payload(
     )
     payload = {
         **_quota_payload_context(prepared, route),
+        **({"vision_baseline_initialization": True} if route.vision_baseline_initialization else {}),
         "decision": AUTONOMOUS_REPLAN_REQUIRED_MODE
             if route.replan_decision_allowed
             else "run"
@@ -1711,7 +1718,7 @@ def _build_quota_should_run_payload(
         # Retain current facts across contract rebuilds for hooks and selection.
 
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
-            prepared.item, selected_todo,
+            prepared.item, selected_todo, project_asset=prepared.project_asset,
         )
     apply_selected_todo_execution_preparation(
         payload,

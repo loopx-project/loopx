@@ -1,3 +1,4 @@
+import { startAgyLogin } from '../src/adapters/agy-account.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -35,7 +36,7 @@ before(async () => {
   mkdirSync(join(source, 'projects')); writeFileSync(join(source, 'projects', 'old.jsonl'), 'old conversation');
   registry = new AgentRegistry([{ id: 'claude', adapter: 'claude', command: [process.execPath, acp], env: { CLAUDE_CONFIG_DIR: source, LOOCHAT_CLAUDE_BIN: fixture } }], join(root, 'agents.json'));
   store = new Store(root);
-  manager = new ThreadManager(store, registry.adapters, [root], new AttachmentStore(root), () => registry.list());
+  manager = new ThreadManager(store, registry.adapters, [root], new AttachmentStore(root), () => registry.list().map(item => ({ ...item, activeLogin: registry.activeLogin(item.id) })));
   server = createHttpServer({ manager, registry, token, webDir: null, version: 'test' });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -116,6 +117,7 @@ test('bad codes can restart; stale sessions and cancelled sessions cannot accept
   assert.equal((await api(`${path}/${second.id}`, 'DELETE')).status, 204);
   assert.equal((await api(`${path}/${second.id}`, 'POST', { code: 'test-code#test-state' })).status, 409);
   assert.equal((await (await api(`${path}/${second.id}`)).json() as any).status, 'cancelled');
+  assert.equal(registry.activeLogin('claude-3'), undefined);
 });
 
 test('native login times out, refuses unsuccessful status, and handles missing CLI', async () => {
@@ -146,4 +148,227 @@ test('persistence errors leave no new account directory or live registration', a
   assert.equal(failing.list().length, 1);
   assert.deepEqual(readdirSync(join(root, 'agent-accounts')), dirs);
   assert.equal(readdirSync(root).some(name => name.startsWith('unwritable-file.') && name.endsWith('.tmp')), false);
+});
+
+test('agy account API isolates native home, copies portable settings, and keeps credentials and trust behind', async () => {
+  const home = join(root, "agy's original home");
+  const config = join(home, '.gemini', 'antigravity-cli');
+  mkdirSync(join(config, 'skills', 'sample'), { recursive: true });
+  writeFileSync(join(config, 'skills', 'sample', 'SKILL.md'), 'Original agy skill');
+  symlinkSync(join(config, 'skills', 'sample'), join(config, 'skills', 'linked'));
+  mkdirSync(join(home, '.agents', 'skills', 'shared'), { recursive: true });
+  writeFileSync(join(home, '.agents', 'skills', 'shared', 'SKILL.md'), 'Shared skill');
+  writeFileSync(join(config, 'settings.json'), JSON.stringify({ colorScheme: 'dark', trustedWorkspaces: ['/private'], apiKey: 'original-key', auth: { token: 'original-token' } }));
+  mkdirSync(join(home, '.gemini', 'config'));
+  writeFileSync(join(home, '.gemini', 'config', 'mcp_config.json'), JSON.stringify({ mcpServers: { docs: { command: 'docs' } }, oauthTokens: { docs: 'old-mcp-token' } }));
+  writeFileSync(join(config, 'antigravity-oauth-token'), 'original agy credentials');
+  mkdirSync(join(config, 'conversations')); writeFileSync(join(config, 'conversations', 'original.db'), 'original session');
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-agy.mjs', import.meta.url))];
+  await registry.add({ id: 'agy', adapter: 'agy', command, env: { HOME: home, LOOCHAT_AGY_HOME: config,
+    GOOGLE_API_KEY: 'old-api-key', GEMINI_API_KEY: 'old-gemini-key', GOOGLE_APPLICATION_CREDENTIALS: '/old/credentials',
+    FAKE_AGY_ACCOUNT_CHECK: '1', FAKE_LIVE_USAGE: '1' } });
+  const supported = await (await api('/api/agents/supported')).json() as any[];
+  assert.equal(supported.find(item => item.adapter === 'agy').capabilities.createAccount, true);
+  const response = await api('/api/agents/accounts', 'POST', { adapter: 'agy', sourceId: 'agy', label: 'Independent agy' });
+  assert.equal(response.status, 201);
+  const instance = await response.json() as any;
+  assert.equal(instance.id, 'agy-2'); assert.equal(instance.account, null);
+  assert.deepEqual(instance.command, command);
+  const directory = instance.env.LOOCHAT_AGY_HOME;
+  assert.equal(directory, join(instance.env.HOME, '.gemini', 'antigravity-cli'));
+  assert.notEqual(instance.env.HOME, home);
+  assert.equal(statSync(instance.env.HOME).mode & 0o777, 0o700);
+  assert.equal(instance.env.XDG_CONFIG_HOME, join(instance.env.HOME, '.config'));
+  for (const key of ['GOOGLE_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS']) assert.equal(instance.env[key], '');
+  assert.equal(existsSync(join(directory, 'antigravity-oauth-token')), false);
+  assert.equal(existsSync(join(directory, 'conversations')), false);
+  assert.deepEqual(JSON.parse(readFileSync(join(directory, 'settings.json'), 'utf8')), { colorScheme: 'dark' });
+  assert.deepEqual(JSON.parse(readFileSync(join(instance.env.HOME, '.gemini', 'config', 'mcp_config.json'), 'utf8')), { mcpServers: { docs: { command: 'docs' } } });
+  writeFileSync(join(directory, 'skills', 'linked', 'SKILL.md'), 'Changed new agy skill');
+  assert.equal(readFileSync(join(config, 'skills', 'sample', 'SKILL.md'), 'utf8'), 'Original agy skill');
+  assert.equal(readFileSync(join(instance.env.HOME, '.agents', 'skills', 'shared', 'SKILL.md'), 'utf8'), 'Shared skill');
+  const agents = await (await api('/api/agents')).json() as any[];
+  assert.equal(agents.find(a => a.id === 'agy-2').login, 'wizard');
+  const before = readdirSync(join(root, 'agent-accounts'));
+  writeFileSync(join(config, 'settings.json'), '{broken');
+  try { await assert.rejects(registry.createAccount({ adapter: 'agy', sourceId: 'agy' })); }
+  finally { writeFileSync(join(config, 'settings.json'), '{}'); }
+  assert.deepEqual(readdirSync(join(root, 'agent-accounts')), before);
+  assert.equal(readFileSync(join(config, 'antigravity-oauth-token'), 'utf8'), 'original agy credentials');
+});
+
+test('agy native login accepts a callback URL, persists identity, and uses that account for quota, models and resumed turns', async () => {
+  const path = '/api/agents/agy-2/login';
+  const login = await (await api(path, 'POST')).json() as any;
+  assert.equal((await (await api(path, 'POST')).json() as any).id, login.id);
+  const sessionPath = `${path}/${login.id}`;
+  const waiting = await waitFor(async () => (await api(sessionPath)).json() as any, item => item.status === 'waiting');
+  assert.equal(new URL(waiting.url).hostname, 'accounts.google.com');
+  assert.equal(new URL(waiting.url).searchParams.get('redirect_uri'), 'https://antigravity.google/oauth-callback');
+  assert.equal(waiting.input, 'code-or-url');
+  const listed = await api('/api/agents');
+  assert.equal(listed.headers.get('Cache-Control'), 'no-store');
+  const resumed = (await listed.json() as any[]).find(item => item.id === 'agy-2').activeLogin;
+  assert.deepEqual(resumed, waiting, 'another client can recover the same pending login');
+  assert.equal(JSON.stringify(resumed).includes('fixture-agy-access'), false);
+  assert.equal((await api('/api/agents', 'GET', undefined, false)).status, 401);
+  assert.equal(JSON.stringify(JSON.parse(readFileSync(join(root, 'agents.json'), 'utf8'))).includes('activeLogin'), false);
+
+  assert.equal((await api(sessionPath, 'POST', { code: 'code\ncommand' })).status, 400);
+  assert.equal((await api(sessionPath, 'POST', { code: 'https://antigravity.google/oauth-callback?code=test-agy-code&state=fixture' })).status, 200);
+  const done = await waitFor(async () => (await api(sessionPath)).json() as any, item => item.status === 'success');
+  assert.equal(done.url, undefined); assert.doesNotMatch(JSON.stringify(done), /fixture-agy/);
+  assert.equal(registry.get('agy-2').account, 'agy-new@example.com');
+  assert.equal(registry.activeLogin('agy-2'), undefined);
+  assert.equal((await (await api('/api/agents')).json() as any[]).find(item => item.id === 'agy-2').activeLogin, undefined);
+  const saved = JSON.parse(readFileSync(join(root, 'agents.json'), 'utf8')).agents.find((a: any) => a.id === 'agy-2');
+  assert.equal(saved.account, 'agy-new@example.com');
+  assert.deepEqual(saved.env, registry.get('agy-2').env);
+  const adapter = registry.adapters.get('agy-2')!;
+  assert.ok((await adapter.models()).length > 0);
+  assert.ok((await adapter.fetchQuota!()).windows.length > 0);
+  const hooks = { emit: () => {}, requestApproval: async () => ({ cancelled: true as const }) };
+  let session = await adapter.start({ cwd: root });
+  try { assert.equal((await session.prompt({ text: 'live usage', images: [] }, hooks)).stopReason, 'end_turn'); }
+  finally { await session.close(); }
+  const id = session.agentSessionId!;
+  session = await adapter.start({ cwd: root, resumeId: id });
+  try { assert.equal((await session.prompt({ text: 'again', images: [] }, hooks)).stopReason, 'end_turn'); }
+  finally { await session.close(); }
+  const config = saved.env.LOOCHAT_AGY_HOME;
+  const location = await adapter.sessionLocation!(id, root);
+  assert.equal(location.configDir, config); assert.ok(location.sessionPath?.startsWith(config));
+  assert.match(adapter.resumeCommand!(id), /env HOME=/);
+  assert.doesNotMatch(adapter.resumeCommand!(id), /old-api-key|old-gemini-key/);
+  assert.match(adapter.resumeCommand!(id), /GOOGLE_API_KEY=''/);
+  assert.equal(readFileSync(join(registry.get('agy').env!.LOOCHAT_AGY_HOME, 'antigravity-oauth-token'), 'utf8'), 'original agy credentials');
+});
+
+test('agy login handles invalid codes, cancellation, timeout and native success without saved credentials', async () => {
+  const instance = await registry.createAccount({ adapter: 'agy', sourceId: 'agy' });
+  const command = instance.command!;
+  const make = (env = instance.env!, timeout?: number) => startAgyLogin(command, env, async () => { assert.fail('invalid login succeeded'); }, timeout);
+  const invalid = make();
+  await waitFor(() => invalid.state(), s => s.status === 'waiting'); invalid.submit('wrong');
+  await waitFor(() => invalid.state(), s => s.status === 'error'); assert.equal(invalid.state().error, 'failed');
+  const cancelled = make();
+  await waitFor(() => cancelled.state(), s => s.status === 'waiting'); cancelled.cancel();
+  assert.equal(cancelled.state().status, 'cancelled'); assert.throws(() => cancelled.submit('test-agy-code'));
+  const expired = make(instance.env!, 50);
+  await waitFor(() => expired.state(), s => s.status === 'error'); assert.equal(expired.state().error, 'expired');
+  const missing = startAgyLogin([join(root, 'missing-agy')], instance.env!, async () => {});
+  await waitFor(() => missing.state(), s => s.status === 'error'); assert.equal(missing.state().error, 'unavailable');
+  const unverified = make({ ...instance.env!, FAKE_AGY_AUTH_BAD_STATUS: '1' });
+  await waitFor(() => unverified.state(), s => s.status === 'waiting'); unverified.submit('test-agy-code');
+  await waitFor(() => unverified.state(), s => s.status === 'error'); assert.equal(unverified.state().error, 'verification');
+});
+
+test('agy account API treats empty optional configuration as absent without changing the source', async () => {
+  const source = registry.get('agy').env!;
+  const settings = join(source.LOOCHAT_AGY_HOME, 'settings.json');
+  const mcp = join(source.HOME, '.gemini', 'config', 'mcp_config.json');
+  const original = [readFileSync(settings, 'utf8'), readFileSync(mcp, 'utf8')];
+  try {
+    for (const [settingsText, mcpText] of [
+      ['{}', ''], ['', '{"mcpServers":{"docs":{"command":"docs"}}}'], [' \n\t', '\n '],
+    ]) {
+      writeFileSync(settings, settingsText); writeFileSync(mcp, mcpText);
+      const response = await api('/api/agents/accounts', 'POST', { adapter: 'agy', sourceId: 'agy' });
+      assert.equal(response.status, 201);
+      const instance = await response.json() as any;
+      assert.equal(instance.account, null);
+      assert.equal(existsSync(join(instance.env.LOOCHAT_AGY_HOME, 'antigravity-oauth-token')), false);
+      assert.equal(existsSync(join(instance.env.LOOCHAT_AGY_HOME, 'settings.json')), !!settingsText.trim());
+      const copiedMcp = join(instance.env.HOME, '.gemini', 'config', 'mcp_config.json');
+      assert.equal(existsSync(copiedMcp), !!mcpText.trim());
+      if (mcpText.trim()) assert.deepEqual(JSON.parse(readFileSync(copiedMcp, 'utf8')), JSON.parse(mcpText));
+      assert.equal(readFileSync(settings, 'utf8'), settingsText);
+      assert.equal(readFileSync(mcp, 'utf8'), mcpText);
+    }
+  } finally { writeFileSync(settings, original[0]); writeFileSync(mcp, original[1]); }
+});
+
+test('signed-out model catalog offers typed login recovery and publishes models for the same account', async () => {
+  const home = join(root, 'recovery-home');
+  const config = join(home, '.gemini', 'antigravity-cli');
+  mkdirSync(config, { recursive: true });
+  const id = 'agy-recovery';
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-agy.mjs', import.meta.url))];
+  await registry.add({ id, adapter: 'agy', command, env: { HOME: home, LOOCHAT_AGY_HOME: config, FAKE_AGY_LOGIN_REQUIRED: '1' } });
+  const denied = await api(`/api/agents/${id}/models`);
+  assert.equal(denied.status, 409, 'agent login must not invalidate the Workbench token');
+  assert.deepEqual(await denied.json(), { error: 'Antigravity is not signed in', code: 'agent_login_required' });
+  const events: any[] = [];
+  const off = manager.subscribe(event => { if (event.type === 'agent.modelsChanged') events.push(event); });
+  try {
+    const login = await (await api(`/api/agents/${id}/login`, 'POST')).json() as any;
+    const sessionPath = `/api/agents/${id}/login/${login.id}`;
+    await waitFor(async () => (await api(sessionPath)).json() as any, state => state.status === 'waiting');
+    await api(sessionPath, 'POST', { code: 'test-agy-code' });
+    await waitFor(() => events, list => list.some(event => event.data.agent === id && event.data.models.length > 0));
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 200);
+    assert.ok((await response.json() as any[]).some(model => model.id === 'fast'));
+    assert.equal(registry.get(id).account, 'agy-new@example.com');
+  } finally { off(); }
+});
+
+test('non-authentication model failures retain their error meaning', async () => {
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-agy.mjs', import.meta.url))];
+  await registry.add({ id: 'agy-network-error', adapter: 'agy', command, env: { FAKE_AGY_MODELS_ERROR: 'upstream timed out; please check your connection' } });
+  const response = await api('/api/agents/agy-network-error/models');
+  assert.equal(response.status, 500);
+  const body = await response.json() as any;
+  assert.equal(body.code, undefined);
+  assert.match(body.error, /upstream timed out/);
+});
+
+// Each native protocol must reach the shared recovery UI, including non-default account ids.
+for (const adapter of ['claude', 'codex', 'traex', 'zcode', 'pi', 'dsh'] as const) {
+  test(`${adapter}: missing authentication returns recovery and refresh uses that same account`, async () => {
+    const id = `${adapter}-signed-out`;
+    const marker = join(root, `${id}-authenticated`);
+    const script = adapter === 'codex' ? 'fake-codex.mjs' : adapter === 'zcode' ? 'fake-zcode.mjs' : adapter === 'pi' ? 'fake-pi.mjs' : 'fake-acp.mjs';
+    await registry.add({ id, adapter, label: `${adapter} secondary`, command: [process.execPath, fileURLToPath(new URL(`./fixtures/${script}`, import.meta.url))],
+      env: { FAKE_LOGIN_FILE: marker, ...(adapter === 'traex' || adapter === 'dsh' ? { FAKE_ACP_FLAVOR: adapter } : {}) } });
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 409, await response.clone().text());
+    assert.equal((await response.json() as any).code, 'agent_login_required');
+    assert.equal(existsSync(marker), false, 'a catalog read never signs in');
+    writeFileSync(marker, 'fixture-authenticated');
+    const restored = await api(`/api/agents/${id}/models?refresh=1`);
+    assert.equal(restored.status, 200, await restored.clone().text());
+    assert.ok((await restored.json() as any[]).length > 0);
+  });
+}
+
+test('Codex custom providers and older account protocols keep their model catalog', async () => {
+  const command = [process.execPath, fileURLToPath(new URL('./fixtures/fake-codex.mjs', import.meta.url))];
+  for (const [id, env] of [
+    ['custom-provider', { FAKE_LOGIN_FILE: join(root, 'no-account'), FAKE_CUSTOM_PROVIDER: '1' }],
+    ['older-account-protocol', { FAKE_ACCOUNT_READ_UNSUPPORTED: '1' }],
+  ] as const) {
+    await registry.add({ id, adapter: 'codex', command, env });
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.ok((await response.json() as any[]).length > 0);
+  }
+});
+
+
+test('non-login ACP failures and unsupported subscriptions retain their meaning', async () => {
+  const command = [process.execPath, acp];
+  for (const [index, message, reason, code] of [
+    [0, 'Upstream timed out', undefined, undefined],
+    [1, 'Usage limit reached', undefined, undefined],
+    [2, 'Authentication required: this integration does not support claude.ai subscriptions', 'claude_subscription_not_supported', undefined],
+    [3, 'Malformed RPC failure', undefined, 'invalid'],
+  ] as const) {
+    const id = `claude-non-login-${index}`;
+    await registry.add({ id, adapter: 'claude', command, env: { FAKE_ACP_START_ERROR: message, ...(code ? { FAKE_ACP_ERROR_CODE: code } : {}), ...(reason ? { FAKE_ACP_ERROR_CODE: '-32000', FAKE_ACP_ERROR_REASON: reason } : {}) } });
+    const response = await api(`/api/agents/${id}/models`);
+    assert.equal(response.status, 500);
+    const body = await response.json() as any;
+    assert.equal(body.code, undefined); assert.equal(body.error, message);
+  }
 });

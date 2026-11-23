@@ -12,7 +12,7 @@ import json
 
 from ..content_digest import BARE_SHA256_PATTERN
 from .goal_instance_scope import collaboration_goal_scope, inspect_original_request_batch
-from .inbox import _entry, _now, _read, _receipt, _request_lock, _root, read_inbox_transaction, reply_status
+from .inbox import _entry, _now, _read, _receipt, _request_lock, _root, read_inbox_transaction
 from .links import read_linked_work
 from .source_chat_observation import is_source_chat_host, original_delivery_facts, original_turn_reader
 from .source_grant_observation import source_context_target_authority
@@ -58,7 +58,7 @@ def _read_receipt_batch(root, rows):
         return []
     try:
         observed = read_inbox_transaction(root, {"operation": "receipt_states", "rows": rows, "include_agenda": True})
-        states = list(zip(observed["items"], observed["agenda_items"], strict=True))
+        states = list(zip(observed["items"], observed["agenda_items"], observed["return_items"], strict=True))
         if len(states) != len(rows):
             raise ValueError("Inbox receipt count does not match requests")
         return states
@@ -217,11 +217,10 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
                         failed += 1
                         continue
                     try:
-                        state, agenda = observed
+                        state, agenda, replies = observed
                         controlled = state.get("readback")
                         read, read_error = _receipt(root, "reads", row)
                         decision, decision_error = _receipt(root, "decisions", row)
-                        replies = reply_status(root, row)
                         work_reads.append((row, source_session_id, source_turn, state, agenda, controlled,
                                            read, read_error, decision, decision_error, replies))
                     except (OSError, ValueError, KeyError, TypeError):

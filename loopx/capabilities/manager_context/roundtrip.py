@@ -71,6 +71,10 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
         super().__init__(message)
 
 
+class ReturnTransportUnavailable(RuntimeError):
+    """The adapter lacks a compatible transport for this delivery."""
+
+
 def _verification_decision(outcome):
     return dict(
         effect_runtime_result(
@@ -692,7 +696,7 @@ def _return_transaction(host, path, phase, request):
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
     if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
-            or result.get("action") not in {"skip", "private", "verify", "send"}
+            or result.get("action") not in {"skip", "private", "verify", "send", "reconcile_private"}
             or type(result.get("processed")) is not int or result["processed"] not in {0, 1}):
         raise RuntimeError("return delivery transaction result shape mismatch")
     return result
@@ -753,6 +757,16 @@ def _deliver_return(host, path, sender, frozen_route):
             return _return_transaction(host, path, phase,
                 {"facts": current, **checkpoint, **payload})
 
+    if plan["action"] == "reconcile_private":
+        try:
+            original = store.read_history_message(source["route"]["session_id"], plan["message_id"])
+        except (OSError, ValueError, KeyError):
+            return 0
+        if cancelled():
+            return 0
+        recovered = transact("settle", private_readback=original)
+        return recovered["processed"]
+
     def record_attempt(attempt):
         saved = transact("attempt", attempt=dict(attempt))
         checkpoint.update({key: saved[key] for key in ("revision", "token")})
@@ -766,6 +780,8 @@ def _deliver_return(host, path, sender, frozen_route):
     except ChatMessagePayloadConflictError as exc:
         logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
         outcome = {"kind": "conflict"}
+    except ReturnTransportUnavailable:
+        outcome = {"kind": "verification_error" if plan["action"] == "verify" else "sender_unavailable"}
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}

@@ -12,6 +12,7 @@ import pytest
 from loopx.cli_commands import (
     project_lifecycle,
     project_lifecycle_refresh_state,
+    project_lifecycle_sinks,
 )
 from loopx.cli_runtime import add_subcommand_format, build_cli_parser
 from loopx.control_plane.capability_hooks import (
@@ -110,7 +111,7 @@ def test_refresh_state_applies_goal_channel_delivery_postcondition(
         },
     )
     monkeypatch.setattr(
-        project_lifecycle_refresh_state,
+        project_lifecycle_sinks,
         "sync_human_gate_after_refresh",
         lambda **kwargs: gate_sync,
     )
@@ -172,7 +173,7 @@ def test_refresh_state_forwards_external_sink_suppression(
         }
 
     monkeypatch.setattr(
-        project_lifecycle_refresh_state,
+        project_lifecycle_sinks,
         "sync_human_gate_after_refresh",
         sync_gate,
     )
@@ -294,7 +295,7 @@ def test_refresh_state_redacts_goal_channel_exception_details(
         )
 
     monkeypatch.setattr(
-        project_lifecycle_refresh_state,
+        project_lifecycle_sinks,
         "sync_human_gate_after_refresh",
         fail_with_private_details,
     )
@@ -320,6 +321,7 @@ def test_refresh_state_redacts_goal_channel_exception_details(
     assert f"lifecycle ({reason})" in captured["error"]
 
 
+@pytest.mark.parametrize("settlement_session", ["file", "sqlite"], indirect=True)
 def test_notification_failure_keeps_exact_primary_settlement_and_one_spend(
     settlement_session, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -331,7 +333,7 @@ def test_notification_failure_keeps_exact_primary_settlement_and_one_spend(
         "failure_summary": "Goal Channel notification failed at provider_send (timeout)",
         "delivery_postcondition": {"satisfied": False, "blocks_delivery": True},
     }
-    monkeypatch.setattr(project_lifecycle_refresh_state, "sync_human_gate_after_refresh",
+    monkeypatch.setattr(project_lifecycle_sinks, "sync_human_gate_after_refresh",
                         lambda **kwargs: dict(failure))
     first = run(args, expected=1)
     identity = first["settlement_identity"]
@@ -357,7 +359,7 @@ def test_notification_failure_keeps_exact_primary_settlement_and_one_spend(
     assert sum(row.get("classification") == "quota_slot_spent" for row in rows) == 1
     assert sum(row.get("classification") == "validated_change" for row in rows) == 1
     settled_index = index.read_bytes()
-    monkeypatch.setattr(project_lifecycle_refresh_state, "sync_human_gate_after_refresh",
+    monkeypatch.setattr(project_lifecycle_sinks, "sync_human_gate_after_refresh",
                         lambda **kwargs: {"enabled": False, "ok": True})
     recovered = run(args)
     assert recovered["settlement_identity"] == identity
@@ -454,7 +456,7 @@ def test_refresh_state_dispatches_and_replays_post_writeback_sidecar(
         lambda **kwargs: {"enabled": False},
     )
     monkeypatch.setattr(
-        project_lifecycle_refresh_state,
+        project_lifecycle_sinks,
         "sync_human_gate_after_refresh",
         lambda **kwargs: {"enabled": False},
     )
@@ -513,7 +515,7 @@ def test_refresh_state_disabled_post_writeback_hook_has_zero_projection_calls(
         lambda **kwargs: {"enabled": False},
     )
     monkeypatch.setattr(
-        project_lifecycle_refresh_state,
+        project_lifecycle_sinks,
         "sync_human_gate_after_refresh",
         lambda **kwargs: {"enabled": False},
     )

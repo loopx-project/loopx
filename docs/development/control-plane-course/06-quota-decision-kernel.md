@@ -688,6 +688,7 @@ cli_channel   -> 下一条 CLI 写回、何时允许 spend
 2. 为什么 projection repair 要覆盖正常 delivery？
 3. workspace repair 为什么比 capability repair 更晚覆盖？
 4. terminal closure 同时检查哪些 todo、monitor、successor、replan 与 acceptance 状态？
+5. `action_required=false` 为什么不代表 agent 可以 quiet no-op？
 
 ## 代码阅读方法
 

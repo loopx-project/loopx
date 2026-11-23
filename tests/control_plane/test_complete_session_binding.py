@@ -298,6 +298,55 @@ def test_complete_failed_retry_refuses_identity_drift_without_effects(
     assert calls == dict(host=1, writeback=0, spend=0, scheduler=0)
 
 
+def test_lost_session_policy_response_keeps_structured_recovery_and_settles_once(
+    complete_host_request, tmp_path, monkeypatch,
+):
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+    from loopx.control_plane.turn_driver import driver as turn_driver
+    from loopx.control_plane.turn_driver.executor import run_loopx_turn_once, inspect_loopx_turn_journal
+    from loopx.control_plane.turn_driver.recovery import TurnRecoveryBlockedError
+
+    plan, common, calls, sources, _actions, journal, artifact = _failed_session_retry(
+        complete_host_request, tmp_path,
+    )
+    run_loopx_turn_once(plan, **common)
+    original = journal.read_bytes()
+    invoke = turn_driver._turn_envelope_result
+
+    def lose_policy_response(operation, **kwargs):
+        if operation == "session_plan":
+            raise EffectRuntimeResponseAmbiguous("session_plan", timeout=5)
+        return invoke(operation, **kwargs)
+
+    monkeypatch.setattr(turn_driver, "_turn_envelope_result", lose_policy_response)
+    inspected = inspect_loopx_turn_journal(
+        common["runtime_root"], goal_id=common["goal_id"],
+        agent_id=complete_host_request[1]["agent_identity"]["agent_id"],
+        turn_key=plan["transaction"]["turn_key"], retry_failed=True,
+        session_binding_resolver=common["session_binding_resolver"],
+    )
+    recovery = inspected["recovery_decision"]
+    assert recovery["action"] == "blocked"
+    assert recovery["reason"] == "session_policy_unavailable"
+    assert recovery["checks"][-1] == {
+        "kind": "host_session_binding",
+        "outcome": "failed",
+        "reason": "session_policy_unavailable",
+    }
+    with pytest.raises(TurnRecoveryBlockedError) as blocked:
+        run_loopx_turn_once(plan, retry_failed=True, **common)
+    assert blocked.value.decision["reason"] == "session_policy_unavailable"
+    assert journal.read_bytes() == original and not artifact.exists()
+    assert calls == dict(host=1, writeback=0, spend=0, scheduler=0)
+
+    monkeypatch.setattr(turn_driver, "_turn_envelope_result", invoke)
+    recovered = run_loopx_turn_once(plan, retry_failed=True, **common)
+    assert recovered["status"] == "committed"
+    assert run_loopx_turn_once(plan, retry_failed=True, **common)["replayed"] is True
+    assert calls == dict(host=2, writeback=1, spend=1, scheduler=1)
+    assert len(sources) == 3
+
+
 @pytest.mark.parametrize("fault", ["missing", "null", "changed", "mixed", "future"])
 def test_failed_retry_never_resolves_an_invalid_current_source(complete_host_request, fault):
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan

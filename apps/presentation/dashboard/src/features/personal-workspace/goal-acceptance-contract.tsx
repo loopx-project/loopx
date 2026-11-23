@@ -14,12 +14,14 @@ import type {GoalAcceptanceContractCopy} from "./delivery-review-copy";
 
 /** The Agent prepares; the owner decides the described effect in context.
  * Proposal receipts are historical. Only native readback supplies check state. */
-export function GoalAcceptanceContractSection({goalId, contract: retained, copy, current, canManage = current, localSource = true, management = false, overview = false, children}: {
+export function GoalAcceptanceContractSection({goalId, contract: retained, copy, current, canManage = current, localSource = true, management = false, overview = false, originalTask, children}: {
   goalId: string; contract?: GoalAcceptanceContract; copy: GoalAcceptanceContractCopy; current: boolean; canManage?: boolean; management?: boolean;
   /** Source identity is independent of a temporarily unavailable write basis. */
   localSource?: boolean;
   /** Overview composes the same readback and effect owner into its brief. */
-  overview?: boolean; children?: ReactNode;
+  overview?: boolean;
+  originalTask?: {todo_id: string; goal_instance_id: string | null};
+  children?: ReactNode;
 }) {
   const zh = useWorkspaceI18n().locale === "zh-CN";
   const [detailsExpanded, setDetailsExpanded] = useState(!overview);
@@ -32,14 +34,15 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
     enabled: localSource, retry: false, staleTime: 15_000, refetchOnWindowFocus: true,
     refetchInterval: query => query.state.error ? 60_000 : 15_000, refetchIntervalInBackground: false});
   const actions = useTypedActionReadback(!localSource || !canManage, goalId);
-  const plan = !localSource || actions.isError ? null : preparedAcceptancePlan(actions.data ?? [], goalId);
+  const plan = !localSource || actions.isError ? null : preparedAcceptancePlan(actions.data ?? [], goalId, originalTask?.todo_id);
   // A failed or loading delivery read revokes writes, not a newer same-source
   // declaration. Remote snapshots never inherit the local reader's cache.
   const contract = localSource && read.data?.goal_id === goalId ? read.data.goal_acceptance_contract : retained;
   const fresh = localSource && !read.isError && read.data?.goal_id === goalId
-    && (!contract?.lifecycle_state || contract.lifecycle_state === "active");
+    && (!contract?.lifecycle_state || contract.lifecycle_state === "active")
+    && (!originalTask || (contract?.goal_ref?.goal_instance_id ?? null) === originalTask.goal_instance_id);
   const writeCurrent = canManage && fresh;
-  const sourceKey = JSON.stringify([localSource, goalId, contract?.goal_ref ?? null,
+  const sourceKey = JSON.stringify([localSource, goalId, originalTask?.todo_id, contract?.goal_ref ?? null,
     contract?.outcome_requirements?.current_lifetime ?? null]);
   const checksConfigured = hasConfiguredGoalChecks(contract);
   const criteria = checksConfigured ? projectGoalAcceptanceCriteria(contract) : [];
@@ -92,6 +95,26 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
     } finally {if (token === generation.current) {flight.current = false; setBusy(false);}}
   }
   const unavailable = localSource && (read.isError || actions.isError || !!error);
+  if (originalTask) {
+    if (unavailable) return <button className="goal-loopx-primary" type="button" disabled={busy}
+      onClick={() => {setError(""); void read.refetch(); void actions.refetch();}}>
+      {zh ? "重新读取检查" : "Reload check"}
+    </button>;
+    if (!writeCurrent || !plan) return null;
+    return <>
+      <ContextHelp label={zh ? "检查内容与命令" : "Checks and commands"}>
+        <p>{zh ? "确认后在本机运行以下检查。" : "Confirmation runs these checks locally."}</p>
+        {plan.document.criteria.map(item => <div key={item.id}>
+          <p>{item.description}</p>
+          <code>{item.validation_argv.map(arg => JSON.stringify(arg)).join(" ")}</code>
+        </div>)}
+      </ContextHelp>
+      <button className="goal-loopx-primary goal-loopx-adopt-check" type="button" disabled={busy}
+        onClick={() => void operate("adopt")}>
+        {busy ? (zh ? "正在检查…" : "Checking…") : (zh ? "采用并检查" : "Use plan and check")}
+      </button>
+    </>;
+  }
   const outcomes = contract?.outcome_requirements ? <GoalOutcomeRequirements key={sourceKey} goalId={goalId} declaration={contract.outcome_requirements}
     fresh={!!fresh} canManage={localSource && canManage} providerRevision={fresh ? read.data!.provider_revision : null}
     onRefresh={async () => {await read.refetch();}}/> : null;

@@ -6,6 +6,7 @@ or a second Goal/work authority. Each concrete part keeps its own exact receipt.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import hashlib
 import re
@@ -295,9 +296,18 @@ def attachment_reply(*, project, config_path, attempt, text):
     state = json.loads(
         _path(project, config_path, "sha256:" + match[1]).read_text(encoding="utf-8")
     )
+    if not isinstance(state, Mapping):
+        raise ValueError("rich reply attachment parts unavailable")
     if state.get("intent_digest") != attempt.get("intent_digest") or state.get(
         "provider_receipt"
     ) != attempt.get("provider_receipt"):
         raise ValueError("rich reply attachment intent changed")
-    index = len(state["delivery_parts"]) - 1
-    return state["delivery_parts"][index], state["delivery_part_attempts"][str(index)]
+    parts = state.get("delivery_parts")
+    attempts = state.get("delivery_part_attempts")
+    if not isinstance(parts, list) or not parts or not isinstance(attempts, Mapping):
+        raise ValueError("rich reply attachment parts unavailable")
+    index = len(parts) - 1
+    part_attempt = attempts.get(str(index))
+    if not isinstance(part_attempt, Mapping):
+        raise ValueError("rich reply attachment attempt unavailable")
+    return parts[index], part_attempt

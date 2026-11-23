@@ -56,7 +56,9 @@ def read_inbox_transaction(root: Path, request: dict, *, scope=None) -> dict:
         ) if key in item} for item in request["items"]]
     # Full source pages may exceed the ordinary wire even when every record is legal.
     snapshot = request["operation"] in {"pending", "turn_start", "receiver_read", "returns"}
-    snapshot = snapshot or len(request.get("rows", [])) > 1 or request.get("include_agenda") is True
+    snapshot = snapshot or len(request.get("rows", [])) > 1 or any(
+        request.get(option) is True for option in ("include_agenda", "return_statuses_only")
+    )
     try:
         result = effect_runtime_result("collaboration.inbox.read", facts, large_local_snapshot=snapshot)
     except EffectRuntimeRejected as exc:
@@ -223,7 +225,10 @@ def pending(
 
 def _pending_result(root, snapshot, scope, operation_cursor):
     result = snapshot["result"]
-    if "request_id" in result or snapshot.get("completed") or snapshot.get("native_child_continuation"):
+    # A completed request page has no read effects left, but an explicitly
+    # requested operation page still has its own independent cursor.
+    if ("request_id" in result or snapshot.get("native_child_continuation")
+            or (snapshot.get("completed") and operation_cursor is None)):
         return result
     from .operation_handoff import pending_operation_handoffs
 

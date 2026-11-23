@@ -1579,7 +1579,7 @@ export function registerAuthorityStoreConformance(
       assert.equal(claimedTodo.claimed_by, "agent-a");
       assert.equal(lease.owner, "agent-a");
       assert.equal(lease.idempotency_key, "turn:atomic-ownership");
-      assert.deepEqual(lease.write_scopes, ["loopx/control_plane/**"]);
+      assert.deepEqual(lease.write_scopes, []);
       assert.equal((await executeCoordinationTodoClaim(store, request)).status, "replayed");
 
       const idempotent = await executeCoordinationTodoClaim(store, {

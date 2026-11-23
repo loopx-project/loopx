@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./filters": "./src/columns.ts",
     "./manifest.json": "./manifest.json"
   },
   "scripts": {

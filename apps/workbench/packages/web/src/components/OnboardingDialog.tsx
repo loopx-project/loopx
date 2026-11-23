@@ -33,6 +33,7 @@ interface UninstalledItem {
   label: string;
   icon?: string;
   installGuide?: string;
+  installUrl?: string;
 }
 
 export function OnboardingDialog({
@@ -49,7 +50,7 @@ export function OnboardingDialog({
   const [error, setError] = useState<string | null>(null);
 
   const [discoveredClis, setDiscoveredClis] = useState<
-    Array<{ id: string; adapter: string; command: string; label?: string; icon?: string }>
+    Array<{ id: string; adapter: string; command?: string; label?: string; icon?: string }>
   >([]);
   const [discoveredAccounts, setDiscoveredAccounts] = useState<
     Array<{ adapter: string; email: string; env: Record<string, string>; id: string; label: string }>
@@ -116,7 +117,7 @@ export function OnboardingDialog({
         id: cli.id,
         adapter: cli.adapter,
         label: displayLabel,
-        hint: cli.command,
+        hint: cli.command ?? '',
         icon: cli.icon ?? sup?.icon,
         command: cli.command,
         streamBridge: sup?.capabilities?.streamBridge,
@@ -173,7 +174,7 @@ export function OnboardingDialog({
             id: item.id,
             adapter: item.adapter,
             label: item.label,
-            command: [item.command!],
+            ...(item.command ? { command: [item.command] } : {}),
             ...(item.streamBridge ? { streamBridge: streamBridges[item.key] ?? false } : {}),
           });
         } else {
@@ -301,7 +302,7 @@ export function OnboardingDialog({
               </div>
               <div className="onboard-list" role="group" aria-label={t('onboard.uninstalledGroup')}>
                 {uninstalledItems.map((item) => (
-                  <div key={item.adapter} className="onboard-row onboard-row-uninstalled" aria-disabled="true">
+                  <div key={item.adapter} className="onboard-row onboard-row-uninstalled">
                     <span className="onboard-item-icon">
                       {item.icon ? <AgentMark path={item.icon} size={18} /> : null}
                     </span>
@@ -310,6 +311,7 @@ export function OnboardingDialog({
                       {item.installGuide ? (
                         <span className="onboard-item-hint" title={item.installGuide}>
                           {item.installGuide}
+                          {item.installUrl && <> · <a href={item.installUrl} target="_blank" rel="noopener noreferrer">{t('onboard.installGuide')}</a></>}
                         </span>
                       ) : null}
                     </span>

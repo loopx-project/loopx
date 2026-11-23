@@ -16,6 +16,7 @@ export class RpcError extends Error {
   constructor(
     message: string,
     readonly code: number,
+    readonly data?: { reason?: string },
   ) {
     super(message);
   }
@@ -107,7 +108,7 @@ export class JsonRpcPeer {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
-      if (msg.error) p.reject(new RpcError(msg.error.message ?? 'RPC error', msg.error.code ?? -32000));
+      if (msg.error) p.reject(new RpcError(msg.error.message ?? 'RPC error', msg.error.code ?? -32603, msg.error.data));
       else p.resolve(msg.result);
       return;
     }

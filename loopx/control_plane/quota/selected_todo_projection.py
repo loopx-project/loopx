@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from ..todos.contract import normalize_todo_id
@@ -19,7 +20,6 @@ SELECTED_TODO_COMPACT_FIELDS = (
     "capability_binding_ref",
     "task_repository",
     "continuation_policy",
-    "required_write_scopes",
     "required_capabilities",
     "claimed_by",
     "bound_agent",
@@ -145,3 +145,84 @@ def _compact_selected_todo(
         if continuation_hint:
             selected["continuation_hint"] = continuation_hint
     return selected
+
+
+def lookup_raw_todo(raw_summary: object, todo_id: Any) -> dict[str, Any] | None:
+    """Return the matching uncompacted Todo dict from a raw agent_todos summary."""
+    normalized_target = normalize_todo_id(todo_id)
+    if not isinstance(raw_summary, Mapping) or not normalized_target:
+        return None
+    for value in raw_summary.values():
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if (
+                isinstance(item, dict)
+                and normalize_todo_id(item.get("todo_id")) == normalized_target
+            ):
+                return item
+    authority = raw_summary.get("task_orchestration_authority")
+    if isinstance(authority, Mapping):
+        candidates = authority.get("candidate_items")
+        if isinstance(candidates, list):
+            for item in candidates:
+                if (
+                    isinstance(item, dict)
+                    and normalize_todo_id(item.get("todo_id")) == normalized_target
+                ):
+                    return item
+    return None
+
+
+def raw_agent_todo_summaries_from_status(
+    status_payload: Mapping[str, Any] | None,
+    *,
+    goal_id: str | None = None,
+) -> tuple[object, ...]:
+    """Extract canonical and project-asset agent_todos mappings for a Goal."""
+    if not isinstance(status_payload, Mapping):
+        return ()
+    queue = status_payload.get("attention_queue")
+    items = queue.get("items") if isinstance(queue, Mapping) else None
+    if not isinstance(items, list):
+        return ()
+    target_goal = str(goal_id or "").strip()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        if target_goal and str(item.get("goal_id") or "").strip() != target_goal:
+            continue
+        project_asset = item.get("project_asset")
+        return (
+            item.get("agent_todos"),
+            project_asset.get("agent_todos") if isinstance(project_asset, Mapping) else None,
+        )
+    return ()
+
+
+def resolve_selected_todo_write_contract(
+    selected_todo: Mapping[str, Any] | None,
+    *raw_summaries: object,
+) -> dict[str, Any] | None:
+    """Return a selected Todo copy enriched with raw write-contract fields."""
+    if not isinstance(selected_todo, Mapping):
+        return None
+    resolved = dict(selected_todo)
+    if "required_write_scopes" in resolved:
+        return resolved
+    todo_id = resolved.get("todo_id")
+    for raw_summary in raw_summaries:
+        raw_match = lookup_raw_todo(raw_summary, todo_id)
+        if not raw_match:
+            continue
+        for field in (
+            "required_write_scopes",
+            "task_repository",
+            "required_capabilities",
+            "continuation_policy",
+        ):
+            if field not in resolved and field in raw_match:
+                resolved[field] = raw_match[field]
+        if "required_write_scopes" in resolved:
+            break
+    return resolved

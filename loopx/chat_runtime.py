@@ -26,7 +26,10 @@ from .chat_manager import (
 from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, apply_context_handoff
 from .chat.session_open import ChatSessionLifecycleMixin
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
-from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter, start_attachment_turn
+from .capabilities.native_chat.codex_adapter import (
+    CodexAppServerAdapter as CodexAppServerAdapter,
+    start_attachment_turn,
+)
 from .capabilities.native_chat.steward_managed_mode import require_managed_agent_session
 from .capabilities.native_chat.turn_release import TurnReleaseWakeup
 from .control_plane.collaboration import conversation_scope
@@ -37,16 +40,17 @@ from .capabilities.manager_context.team_plan import (
     team_plan_admission_context,
 )
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
-from .chat_agent import CodexChatAgentError, CodexChatTimeoutError
+from .chat_agent import CodexChatAgentError as CodexChatAgentError
+from .chat_agent import CodexChatTimeoutError
 from .chat_codex_goal import (
     CodexGoalDriver,
     UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE,
     parse_native_goal_command,
     validate_goal_chat,
 )
-from .chat_dsh import DshChatAdapter as DshChatAdapter
+from .chat.dsh import DshChatAdapter as DshChatAdapter
 from .chat.endpoint_catalog import builtin_chat_endpoints
-from .chat_endpoints import AgentEndpointRegistry
+from .chat.endpoints import AgentEndpointRegistry
 from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
@@ -252,7 +256,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         claude_bin: str = "claude",
         kiro_cli_bin: str = KIRO_CLI_BIN,
         startup_timeout_sec: float | None = None,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         endpoint_registry: AgentEndpointRegistry | None = None,
         registry_path: Path | None = None,
@@ -420,7 +424,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         session = self.store.load_session(session_id)
         if session is None:
             raise KeyError("chat session was not found")
-        from .chat_attachments import require_text_document_route
+        from .chat.attachments import require_text_document_route
         require_text_document_route(session, attachments)
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
@@ -508,11 +512,12 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
     def _require_steering_session(self, session_id: str) -> dict[str, Any]:
         session = self._load_open_session(session_id)
         require_managed_agent_session(self, session, Path(session.get("managed_workspace_path") or "."))
-        if session.get("steward_context") is not None:
-            raise ValueError("bound steward Chat requires its external source admission")
+        from .capabilities.native_chat.queued_admission import unbound_input_source_denial
+
+        denial = unbound_input_source_denial(session)
+        if denial:
+            raise ValueError(denial)
         if session.get("project_context") is not None:
-            if session["project_context"].get("audience") in {"bound_owner", "bound_group"}:
-                raise ValueError("bound project steering requires its external source admission")
             self.project_contexts.session_context(session)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             session = require_current_attached_session(store=self.store, registry_path=self.registry_path, session_id=session_id)
@@ -527,49 +532,11 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         Only a proven non-delivery restores FIFO eligibility. A lost native
         acknowledgement keeps the original input durably reserved.
         """
-        from .control_plane.chat_turn_acceptance import plan_queued_chat_steering
+        from .capabilities.native_chat.queued_admission import steer_queued_turn
+
         self._require_steering_session(session_id)
-        ingress_id = "queue-steer-" + hashlib.sha256(
-            json.dumps([session_id, queued_turn_id, client_ingress_id]).encode()
-        ).hexdigest()[:40]
-        with self.store.queue_steering_lock(session_id, queued_turn_id):
-            session = self.store.load_session(session_id)
-            turn = self.store.load_turn(session_id, queued_turn_id)
-            if session is None or turn is None:
-                raise KeyError("chat turn was not found")
-            active = self.store.load_turn(session_id, str(session.get("active_turn_id") or "")) if session.get("active_turn_id") else None
-
-            def plan(phase):
-                return plan_queued_chat_steering(session, turn, active,
-                    self.store.steering_receipt(session_id, ingress_id),
-                    ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase)
-
-            decision = plan("prepare")
-            if decision["action"] == "unresolved":
-                try:
-                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                        client_ingress_id=ingress_id, message=turn["message"],
-                        _queued_turn_id=queued_turn_id)
-                except Exception:
-                    pass  # Only the original receipt can complete the reservation.
-                decision = plan("settle")
-            if decision["action"] == "dispatch":
-                turn = self.store.write_queue_steering(session_id, turn, decision)
-                try:
-                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
-                        client_ingress_id=ingress_id, message=turn["message"],
-                        _queued_turn_id=queued_turn_id)
-                except Exception:
-                    # The durable ingress, including absence before any send,
-                    # owns the outcome. Exception wording cannot release work.
-                    pass
-                decision = plan("settle")
-            self.store.write_queue_steering(session_id, turn, decision)
-            if decision["action"] != "complete":
-                raise RuntimeError(decision["error_code"])
-            return {"session_id": session_id, "queued_turn_id": queued_turn_id,
-                "turn_id": expected_turn_id, "client_ingress_id": client_ingress_id,
-                "status": "delivered"}
+        return steer_queued_turn(self, session_id=session_id, queued_turn_id=queued_turn_id,
+            expected_turn_id=expected_turn_id, client_ingress_id=client_ingress_id)
 
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
@@ -625,8 +592,10 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             fail_ingress("live_steering_turn_mismatch")
         if not active_turn_id:
             fail_ingress("live_steering_requires_active_turn")
-        with self.lock:
-            adapter = self.adapters.get(session_id)
+        # Snapshot one adapter without taking the controller lock while a
+        # binding or queue fence is held. The native call still checks health
+        # and binds to the current upstream Turn.
+        adapter = self.adapters.get(session_id)
         if not isinstance(adapter, CodexAppServerAdapter) or not adapter.healthcheck():
             fail_ingress("live_steering_session_not_attached")
         upstream_turn_id = ""
@@ -1149,8 +1118,19 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             if completed_turn is None:
                 return
             completion_reserved = True
-            if adapter.upstream_thread_id != str((self.store.load_session(session_id) or {}).get("upstream_thread_id") or ""):
-                self.store.update_session(session_id, upstream_thread_id=adapter.upstream_thread_id)
+            current_session = self.store.load_session(session_id) or {}
+            previous_thread_id = str(current_session.get("upstream_thread_id") or "")
+            if adapter.upstream_thread_id != previous_thread_id:
+                changes: dict[str, object] = {"upstream_thread_id": adapter.upstream_thread_id}
+                if previous_thread_id and current_session.get("adapter_kind") == "antigravity_ls":
+                    changes["upstream_context_history"] = [
+                        *(current_session.get("upstream_context_history") or []),
+                        {
+                            "thread_id": previous_thread_id,
+                            "manager_context_version": current_session.get("manager_context_version"),
+                        },
+                    ]
+                self.store.update_session(session_id, **changes)
             if not native_loopx and scope.get("bound_steward") is True:
                 try:
                     from .capabilities.steward_memory.runtime import commit_steward_memory_after_turn

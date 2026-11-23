@@ -9,6 +9,7 @@ from ...heartbeat_prompt import build_heartbeat_prompt
 from ..quota.effective_action import EffectiveAction
 from ..quota.turn_envelope import compose_turn_decision
 from .action_portfolio_scenarios import external_wait_fallback_scenario_source
+from .doubao_model_behavior_actor import _strip_json_markdown_fence
 from .model_tool_behavior import DoubaoExecToolClient
 
 
@@ -58,8 +59,11 @@ def cases() -> list[dict]:
 def probe_messages(mode: str, packet: dict) -> list[dict]:
     if mode not in {"thin", "brief"}:
         raise ValueError("unsupported host prompt mode")
+    # Pass an explicit synthetic registry_path so host_prompt_behavior probes do
+    # not depend on resolving the machine's global ~/.loopx vs ~/.codex/loopx roots.
     prompt = build_heartbeat_prompt(
         goal_id="host-prompt-fixture", active_state=Path("ACTIVE_GOAL_STATE.md"),
+        registry_path=Path("registry.json"),
         agent_id="worker-a", registered_agents=["worker-a"],
         runtime_profile="codex_app_heartbeat", **{mode: True},
     )
@@ -95,7 +99,7 @@ def run_probe(client: DoubaoExecToolClient, *, repeats: int = 2) -> dict:
                 # repaired by feeding an answer or retried until one passes.
                 response = client.next_final_content(messages)
                 try:
-                    decision = json.loads(response or "")
+                    decision = json.loads(_strip_json_markdown_fence(response or ""))
                 except (ValueError, TypeError):
                     decision = None
                 valid = (isinstance(decision, dict)

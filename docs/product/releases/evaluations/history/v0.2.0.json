@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 0,
+    "minor": 2,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "0.2.0",
+    "version_tag": "v0.2.0",
+    "git_commit": "af005aeaa9d5c3b03e634e9d3211c75c3d5242a2",
+    "git_tree": "30cfcf99ba4631320ac4e6ea20cd772b3f8753e8",
+    "committed_at": "2026-07-11T13:03:16+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v0.2.0",
+      "last_tag": "v0.2.13",
+      "last_commit": "7232dca45ec2ca996edc43b2d3558edc802c844e",
+      "last_committed_at": "2026-07-24T12:07:47+08:00",
+      "tag_count": 14
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v0.2.0",
+      "v0.2.13"
+    ]
+  },
+  "a_scale": {
+    "score": 10.3,
+    "delta_from_prior": 1.9,
+    "domain_scores": {
+      "D1": 13.0,
+      "D2": 8.5,
+      "D3": 8.0,
+      "D4": 7.5,
+      "D5": 12.0,
+      "D6": 11.0,
+      "D7": 8.5,
+      "D8": 17.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 0,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Early v0.2 control-plane smokes, SkillsBench local Codex split control (#2489), and agent-lane projections through v0.2.13 (#2496).",
+  "summary_zh": "推进早期控制面烟测、SkillsBench 本地 Codex 分组控制（#2489）及 agent-lane 投影至 v0.2.13（#2496）。"
+}

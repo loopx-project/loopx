@@ -510,6 +510,16 @@ def execute_turn_run_once(
                 )
             return completion_payload
 
+        def require_isolated_codex_writeback() -> None:
+            if args.host != "codex-cli" or not getattr(args, "codex_operation_tools", False):
+                return
+            from ..control_plane.turn_driver.codex_worker_identity import worker_isolation_requested
+
+            if worker_isolation_requested():
+                if goal_admission is None:
+                    raise ValueError("isolated managed Codex writeback requires current Goal authority")
+                goal_admission.require_running(operation="isolated_codex_durable_writeback")
+
         def completion_writeback(
             result: dict[str, object],
             *,
@@ -517,6 +527,7 @@ def execute_turn_run_once(
         ) -> dict[str, object]:
             nonlocal rebound_lease_active
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            require_isolated_codex_writeback()
             prior = completion_readback()
             if prior is None:
                 if args.execute:
@@ -616,6 +627,7 @@ def execute_turn_run_once(
             # a predeclared terminal Todo. Other hosts keep their existing order.
             if result.get("result_kind") == "validated_completion":
                 return completion_writeback(result, effect_ref=effect_ref)
+            require_isolated_codex_writeback()
             return writeback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
@@ -871,7 +883,9 @@ def execute_turn_run_once(
             manual_reason=args.manual_interval_bypass_reason,
             on_admitted=on_managed_start_admitted,
             request_id=settlement_identity.effect_id if uses_effect_bound_start_identity(
-                args.host, getattr(args, "host_adapter_request_schema", None),
+                args.host,
+                getattr(args, "host_adapter_request_schema", None),
+                getattr(args, "validation_command_json", None),
             ) else None,
         )
 
@@ -890,6 +904,7 @@ def execute_turn_run_once(
             timeout_seconds=args.timeout_seconds,
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
+            resume_existing_turn=args.host == "generic-cli" and bool(getattr(args, "resume_turn_key", None)),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
             writeback=(codex_writeback if args.host == "codex-cli" else writeback)

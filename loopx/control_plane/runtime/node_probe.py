@@ -6,15 +6,23 @@ version probe as an unsupported version.
 """
 from __future__ import annotations
 
+import platform
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
 
 MINIMUM_NODE_VERSION = (22, 22, 3)
 MINIMUM_NODE_VERSION_TEXT = ".".join(str(part) for part in MINIMUM_NODE_VERSION)
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
+_LINUX_X86_MACHINES = frozenset({"x86_64", "amd64"})
+_LINUX_X86_TYPESCRIPT_V8_FLAGS = (
+    "--liftoff-only",
+    "--no-wasm-tier-up",
+    "--no-wasm-dynamic-tiering",
+)
 HOST_PERMISSION_RECOMMENDATION = (
     "retry the same registry, Goal, Agent and Turn through host-approved "
     "local runtime access; do not enable optional capabilities, replace "
@@ -135,3 +143,20 @@ def probe_node(*, timeout: float = STARTUP_READY_TIMEOUT_SECONDS) -> NodeProbe:
     if prerelease is not None:
         version_text += f"-{prerelease}"
     return NodeProbe(outcome, executable, version_text)
+
+
+def node_typescript_flags(
+    *,
+    system: str | None = None,
+    machine: str | None = None,
+) -> tuple[str, ...]:
+    """Return V8 Wasm baseline flags for Node TypeScript stripping on Linux x86_64.
+
+    Under QEMU/TCG or Linux PKU environments Node's Amaro Wasm TypeScript
+    stripper can trap in V8 ThreadIsolation during TurboFan Wasm tier-up.
+    """
+    resolved_system = (sys.platform if system is None else system).lower()
+    resolved_machine = (platform.machine() if machine is None else machine).lower()
+    if resolved_system.startswith("linux") and resolved_machine in _LINUX_X86_MACHINES:
+        return _LINUX_X86_TYPESCRIPT_V8_FLAGS
+    return ()
