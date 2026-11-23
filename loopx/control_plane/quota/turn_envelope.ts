@@ -7,6 +7,7 @@ import {
   type PreparationScopeDetail, type ReusableExactBody,
 } from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
+import {turnSessionPlan} from "../turn_driver/session_binding.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {
@@ -1412,6 +1413,7 @@ const resolveViewWriteback = (
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "session_plan") return turnSessionPlan(request);
   if (operation === "planning_facts") return completePlanningFacts(request);
   if (operation === "recorded_plan_lineage") {
     const {work, decision} = checkedTurnPlanSource(
