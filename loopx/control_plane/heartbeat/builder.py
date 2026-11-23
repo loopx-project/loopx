@@ -171,6 +171,7 @@ def _heartbeat_prompt_commands(
     registry_path: str | Path | None,
     normalized_agent_id: str | None,
     normalized_available_capabilities: tuple[str, ...],
+    effective_available_capabilities: tuple[str, ...],
     task_body_available_capabilities: tuple[str, ...],
     runtime_profile: str | None,
     scheduler_execution_context: Any,
@@ -257,7 +258,7 @@ def _heartbeat_prompt_commands(
         f"heartbeat-prequota -g {shlex.quote(goal_id)} "
         f"-a {shlex.quote(normalized_agent_id)}"
         if normalized_agent_id
-        and "external_evidence_poll" in normalized_available_capabilities
+        and "external_evidence_poll" in effective_available_capabilities
         else None
     )
     commands = {
@@ -374,6 +375,7 @@ def build_heartbeat_prompt(
     agent_profile: dict[str, Any] | None = None,
     registered_agents: list[str] | tuple[str, ...] | None = None,
     available_capabilities: list[str] | tuple[str, ...] | None = None,
+    effective_available_capabilities: list[str] | tuple[str, ...] | None = None,
     runtime_profile: str | None = None,
     scheduler_execution_context: dict[str, Any] | None = None,
     visible_goal_host: str | None = None,
@@ -506,6 +508,11 @@ def build_heartbeat_prompt(
     normalized_available_capabilities = normalize_required_capabilities(
         available_capabilities
     )
+    resolved_effective_capabilities = (
+        normalize_required_capabilities(effective_available_capabilities)
+        if effective_available_capabilities is not None
+        else normalized_available_capabilities
+    )
     initial_runtime_capability_projection = (
         build_visible_goal_initial_runtime_capability_projection(
             normalized_available_capabilities
@@ -538,8 +545,9 @@ def build_heartbeat_prompt(
         runtime_root=runtime_root,
         registry_path=registry_path,
         normalized_agent_id=normalized_agent_id,
-        normalized_available_capabilities=normalized_available_capabilities,
-        task_body_available_capabilities=task_body_available_capabilities,
+        normalized_available_capabilities=tuple(normalized_available_capabilities),
+        effective_available_capabilities=tuple(resolved_effective_capabilities),
+        task_body_available_capabilities=tuple(task_body_available_capabilities),
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
         native_goal_host=native_goal_host,

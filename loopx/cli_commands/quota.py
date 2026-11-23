@@ -517,6 +517,19 @@ def _execute_quota_command(
                     include_presentation_projections=False,
                 ),
             )
+            if bool(args.execute) and payload.get("ok") and args.available_capabilities:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                    preserve_unavailable=False,
+                )
         elif args.quota_command in {
             "scheduler-ack",
             "scheduler-ack-current",
@@ -554,6 +567,19 @@ def _execute_quota_command(
                 registry_path=registry_path,
                 goal_ref=goal_ref,
             )
+            if bool(args.execute) and payload.get("ok") and args.available_capabilities:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                    preserve_unavailable=False,
+                )
         elif args.quota_command == "void-slot":
             payload = _export("void_quota_slot")(
                 status_payload,

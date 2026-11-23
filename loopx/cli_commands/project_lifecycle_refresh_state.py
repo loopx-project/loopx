@@ -651,6 +651,23 @@ def handle_refresh_state_command(
         )
         and not payload.get("dry_run")
     )
+    if material_refresh_ready and args.available_capabilities and args.agent_id:
+        from ..control_plane.agents.capability_memory import (
+            record_verified_agent_capability_observation,
+        )
+
+        record_verified_agent_capability_observation(
+            registry_path=registry_path,
+            runtime_root=resolve_runtime_root(
+                load_registry(registry_path),
+                args.runtime_root,
+                registry_path=registry_path,
+            ),
+            goal_id=args.goal_id,
+            agent_id=str(args.agent_id),
+            available=args.available_capabilities,
+            preserve_unavailable=False,
+        )
     if material_refresh_ready and reward_memory_reflection_json:
         validation_workspace_text = str(
             getattr(args, "delivery_workspace_path", None)

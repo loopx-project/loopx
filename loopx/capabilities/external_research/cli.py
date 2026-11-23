@@ -10,6 +10,7 @@ from ...control_plane.effect_runtime import effect_runtime_result
 from ..connector_registry.core import load_connector_registry
 from ...extensions.public_github_research import execute_public_github, inspect_provider
 from .projection import readback, render_readback, validate_receipt
+from .provider_probe import probe_local_evidence_providers
 
 
 PrintPayload = Callable[
@@ -39,7 +40,7 @@ def _load_object(path_text: str, *, label: str) -> dict[str, Any]:
     return value
 
 
-def _load_receipt(path_text: str) -> dict:
+def _load_receipt(path_text: str) -> dict[str, Any]:
     value = _load_object(path_text, label="external evidence receipt")
     receipt = value.get("receipt", value)
     if not isinstance(receipt, dict):
@@ -148,6 +149,13 @@ def register_external_evidence_commands(
         help="Path to a JSON object with a providers array; not inline JSON.",
     )
     discover.add_argument("--connector-registry", nargs="?", const="")
+    discover.add_argument(
+        "--no-auto-detect",
+        dest="auto_detect",
+        action="store_false",
+        default=True,
+        help="Disable default host evidence method and connector auto-detection.",
+    )
     add_subcommand_format(discover)
 
     plan = actions.add_parser(
@@ -167,6 +175,13 @@ def register_external_evidence_commands(
     plan.add_argument("--search-term", action="append", default=[])
     plan.add_argument("--connector-registry", nargs="?", const="")
     plan.add_argument("--preferred-provider-id")
+    plan.add_argument(
+        "--no-auto-detect",
+        dest="auto_detect",
+        action="store_false",
+        default=True,
+        help="Disable default host evidence provider auto-detection when --provider-inventory-json is omitted.",
+    )
     add_subcommand_format(plan)
 
     execute = actions.add_parser("execute", help="Execute the exact public GitHub plan without admitting evidence.")
@@ -218,34 +233,75 @@ def handle_external_evidence_command(
         return None
     try:
         if args.external_evidence_action == "discover":
-            providers = _merge_providers(
-                _connector_inventory(args.connector_registry),
-                []
-                if args.provider_inventory_json is None
-                else _provider_inventory(
-                    _load_object(
-                        args.provider_inventory_json,
-                        label="external evidence provider inventory",
+            auto_detect = (
+                getattr(args, "auto_detect", True)
+                and args.provider_inventory_json is None
+                and args.connector_registry is None
+            )
+            connector_arg = "" if auto_detect else args.connector_registry
+            observed_providers = (
+                probe_local_evidence_providers(for_plan=False)
+                if auto_detect
+                else (
+                    []
+                    if args.provider_inventory_json is None
+                    else _provider_inventory(
+                        _load_object(
+                            args.provider_inventory_json,
+                            label="external evidence provider inventory",
+                        )
                     )
-                ),
+                )
+            )
+            providers = _merge_providers(
+                _connector_inventory(connector_arg),
+                observed_providers,
             )
             payload = effect_runtime_result(
                 "external_evidence.discover",
                 {"providers": providers},
             )
         elif args.external_evidence_action == "plan":
-            if not args.provider_inventory_json and not getattr(args, "public_github", False):
-                raise ValueError("plan requires provider inventory or explicit --public-github")
-            inventory = _load_object(args.provider_inventory_json,
-                label="external evidence provider inventory") if args.provider_inventory_json else {"providers": []}
-            if getattr(args, "public_github", False):
-                if len(getattr(args, "source", [])) > 8:
-                    raise ValueError("public GitHub plan allows at most eight sources")
-                inventory["providers"] = _merge_providers(_provider_inventory(inventory), [inspect_provider(getattr(args, "source", []))])
-            providers = _merge_providers(
-                _connector_inventory(args.connector_registry),
-                _provider_inventory(inventory),
+            sources = list(getattr(args, "source", []) or [])
+            explicit_public_github = bool(getattr(args, "public_github", False))
+            auto_detect = (
+                getattr(args, "auto_detect", True)
+                and not args.provider_inventory_json
+                and not explicit_public_github
             )
+            if not args.provider_inventory_json and not explicit_public_github and not auto_detect:
+                raise ValueError("plan requires provider inventory or explicit --public-github")
+            if explicit_public_github and len(sources) > 8:
+                raise ValueError("public GitHub plan allows at most eight sources")
+            if auto_detect:
+                if len(sources) > 8:
+                    raise ValueError("public GitHub plan allows at most eight sources")
+                connector_arg = "" if args.connector_registry is None else args.connector_registry
+                providers = _merge_providers(
+                    _connector_inventory(connector_arg),
+                    probe_local_evidence_providers(
+                        source_refs=sources,
+                        for_plan=True,
+                    ),
+                )
+            else:
+                inventory = (
+                    _load_object(
+                        args.provider_inventory_json,
+                        label="external evidence provider inventory",
+                    )
+                    if args.provider_inventory_json
+                    else {"providers": []}
+                )
+                if explicit_public_github:
+                    inventory["providers"] = _merge_providers(
+                        _provider_inventory(inventory),
+                        [inspect_provider(sources)],
+                    )
+                providers = _merge_providers(
+                    _connector_inventory(args.connector_registry),
+                    _provider_inventory(inventory),
+                )
             payload = effect_runtime_result(
                 "external_evidence.plan",
                 {
@@ -255,7 +311,7 @@ def handle_external_evidence_command(
                         "decision": args.decision,
                         "evidence_kinds": args.evidence_kind,
                         "constraints": args.constraint,
-                        **({"source_refs": getattr(args, "source", [])} if getattr(args, "source", []) else {}),
+                        **({"source_refs": sources} if sources else {}),
                         **({"search_terms": getattr(args, "search_term", [])} if getattr(args, "search_term", []) else {}),
                     },
                     "providers": providers,
