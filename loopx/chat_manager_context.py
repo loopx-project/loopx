@@ -15,6 +15,13 @@ from .capabilities.steward_executor import load_effective_steward_executor_defau
 from .chat.manager_details import read_manager_goal_details
 from .chat.manager_history import read_manager_delivery_history
 from .capabilities.manager_context.inspection import agent_work_summary
+from .capabilities.manager_context.turn_context_cache import (
+    clear_manager_turn_context_cache as clear_manager_turn_context_cache,
+    compute_manager_turn_context_fingerprint,
+    get_cached_manager_turn_context,
+    is_manager_turn_context_cache_enabled,
+    put_cached_manager_turn_context,
+)
 from .history import decode_registry_snapshot
 from .goal_portfolio import (
     build_goal_portfolio,
@@ -516,6 +523,29 @@ def manager_authorization_scope_is_current(
     )
 
 
+def _is_steward_background_carrier(session: Mapping[str, Any]) -> bool:
+    bg_ctx = session.get("steward_background_context")
+    if (
+        session.get("goal_id") == "loopx-manager"
+        and session.get("steward_context") is None
+        and session.get("project_context") is None
+        and isinstance(bg_ctx, Mapping)
+    ):
+        binding_id = str(bg_ctx.get("binding_id") or "")
+        return (
+            bool(binding_id)
+            and session.get("session_id") == f"steward.background.{binding_id}"
+            and session.get("channel_id") == f"manager.external.steward.background.{binding_id}"
+        )
+    return False
+
+
+def _is_bound_steward_session(
+    session: Mapping[str, Any], conversation: Mapping[str, Any],
+) -> bool:
+    return conversation.get("bound_steward") is True or _is_steward_background_carrier(session)
+
+
 def manager_turn_context(
     registry_path: Path | None,
     session: dict[str, Any],
@@ -563,7 +593,8 @@ def manager_turn_context(
     }
     owner_scope = conversation["private_conversation"]
     scope = conversation["goal_ids"] if owner_scope else authorized_goal_ids
-    if not owner_scope and not scope and not (conversation.get("bound_steward") is True and scope == []):
+    bound_steward_carrier = _is_bound_steward_session(session, conversation)
+    if not owner_scope and not scope and not (bound_steward_carrier and scope == []):
         return unavailable_manager_context(
             "external_authorization_unavailable",
             evidence_window=_evidence_window(
@@ -786,8 +817,43 @@ def collect_manager_turn_context(
     remote_evidence: bool = False,
     remote_runner=None,
 ) -> dict[str, Any]:
-    if conversation_scope(session)["private_conversation"]:
-        return manager_turn_context(
+    conv = conversation_scope(session)
+    if conv["private_conversation"]:
+        scope_kind = str(conv["kind"])
+        private_goals = list(conv["goal_ids"]) if isinstance(conv["goal_ids"], list) else None
+        cache_enabled = is_manager_turn_context_cache_enabled(
+            registry_path=registry_path,
+            session=session,
+            runtime_root=runtime_root,
+            scope_kind=scope_kind,
+            owner_scope=True,
+            include_details=include_details,
+            include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
+            remote_evidence=remote_evidence,
+            remote_runner=remote_runner,
+        )
+        before_fp = (
+            compute_manager_turn_context_fingerprint(
+                registry_path=registry_path,
+                session=session,
+                runtime_root=runtime_root,
+                scope_kind=scope_kind,
+                authorized_goal_ids=private_goals,
+                bound_steward=False,
+                include_details=include_details,
+                include_stopped=include_stopped,
+                read_goal_status=read_goal_status,
+                remote_evidence=remote_evidence,
+            )
+            if cache_enabled
+            else None
+        )
+        if before_fp is not None:
+            cached = get_cached_manager_turn_context(before_fp)
+            if cached is not None:
+                return cached
+        context = manager_turn_context(
             registry_path,
             session,
             runtime_root,
@@ -797,10 +863,42 @@ def collect_manager_turn_context(
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
         )
+        if cache_enabled and before_fp is not None:
+            after_fp = compute_manager_turn_context_fingerprint(
+                registry_path=registry_path,
+                session=session,
+                runtime_root=runtime_root,
+                scope_kind=scope_kind,
+                authorized_goal_ids=private_goals,
+                bound_steward=False,
+                include_details=include_details,
+                include_stopped=include_stopped,
+                read_goal_status=read_goal_status,
+                remote_evidence=remote_evidence,
+            )
+            if after_fp == before_fp:
+                put_cached_manager_turn_context(before_fp, context)
+        return context
 
     def resolve() -> list[str] | None:
         try:
             scope = scope_resolver(session) if scope_resolver else None
+            if (
+                scope is None
+                and scope_resolver is not None
+                and _is_steward_background_carrier(session)
+            ):
+                bg_ctx = session["steward_background_context"]
+                binding_id = str(bg_ctx.get("binding_id") or "")
+                source_ref = str(bg_ctx.get("source_ref") or "")
+                if binding_id and source_ref:
+                    scope = scope_resolver(
+                        {
+                            **session,
+                            "steward_context": bg_ctx,
+                            "channel_id": f"manager.external.native.{binding_id}.{source_ref}",
+                        }
+                    )
             if not isinstance(scope, list) or any(
                 not isinstance(g, str) for g in scope
             ):
@@ -845,9 +943,61 @@ def collect_manager_turn_context(
         remote_evidence
         and grants(runtime_root, str(session.get("channel_id") or ""))
     )
-    bound_steward = conversation_scope(session).get("bound_steward") is True
+    bound_steward = _is_bound_steward_session(session, conv)
+    scope_kind = str(conv["kind"])
+    cache_enabled = is_manager_turn_context_cache_enabled(
+        registry_path=registry_path,
+        session=session,
+        runtime_root=runtime_root,
+        scope_kind=scope_kind,
+        owner_scope=False,
+        include_details=include_details,
+        include_stopped=include_stopped,
+        read_goal_status=read_goal_status,
+        remote_evidence=remote_evidence,
+        remote_runner=remote_runner,
+    )
+    if (
+        cache_enabled
+        and before is not None
+        and (bool(before) or bound_steward)
+        and before_scope_id is not None
+    ):
+        before_fp = compute_manager_turn_context_fingerprint(
+            registry_path=registry_path,
+            session=session,
+            runtime_root=runtime_root,
+            scope_kind=scope_kind,
+            authorized_goal_ids=before,
+            bound_steward=bound_steward,
+            include_details=include_details,
+            include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
+            remote_evidence=remote_evidence,
+        )
+        if before_fp is not None:
+            cached = get_cached_manager_turn_context(before_fp)
+            if cached is not None and cached.get("authorization_scope_id") == before_scope_id:
+                return cached
 
+    attempt_fp: str | None = None
     for attempt in range(2):
+        attempt_fp = (
+            compute_manager_turn_context_fingerprint(
+                registry_path=registry_path,
+                session=session,
+                runtime_root=runtime_root,
+                scope_kind=scope_kind,
+                authorized_goal_ids=before,
+                bound_steward=bound_steward,
+                include_details=include_details,
+                include_stopped=include_stopped,
+                read_goal_status=read_goal_status,
+                remote_evidence=remote_evidence,
+            )
+            if cache_enabled and before is not None and (bool(before) or bound_steward)
+            else None
+        )
         kwargs: dict[str, Any] = {
             "authorized_goal_ids": before,
             "include_details": include_details,
@@ -905,4 +1055,19 @@ def collect_manager_turn_context(
                 and context.get("warnings") == ["external_authorization_changed"]):
             continue
         break
+    if cache_enabled and attempt_fp is not None:
+        post_fp = compute_manager_turn_context_fingerprint(
+            registry_path=registry_path,
+            session=session,
+            runtime_root=runtime_root,
+            scope_kind=scope_kind,
+            authorized_goal_ids=before,
+            bound_steward=bound_steward,
+            include_details=include_details,
+            include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
+            remote_evidence=remote_evidence,
+        )
+        if post_fp == attempt_fp:
+            put_cached_manager_turn_context(attempt_fp, context)
     return context
