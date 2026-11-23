@@ -1377,6 +1377,7 @@ def _run_plan_runtime_root_probe(
             receipt={"action": "start_new" if context == "fresh" else "resume", "session_id": "sess-" + context},
             goal_ref=None,
             admission=None,
+            binding=None,
             observe=lambda *_: None,
             host_launch_decision=lambda *_: None,
         )
