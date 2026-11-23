@@ -967,11 +967,13 @@ windows are not silently combined into a full-study bill. This does not complete
 threshold-cost, gain-area, matched-study or scientific qualification.
 
 The research page shows the recorded submission sequence for a verified native
-capture. Select a submission to read its bound source excerpt. The curve keeps
-invalid submissions unscored and breaks at missing indices. The summary remains
-readable as historical evidence when the captured artifact changes or becomes
-unavailable. Reading the series uses the existing pack and requires no analysis
-run or new pack registration.
+capture. A larger filled marker identifies the retained result. Crosses mark
+invalid submissions, and the curve breaks across invalid or missing indices.
+Open a point to read its bound source excerpt. When points are crowded, the
+submission picker selects an exact record and opens that record's evidence.
+The summary remains readable as historical evidence when the captured artifact
+changes or becomes unavailable. Reading the series uses the existing pack and
+requires no analysis run or new pack registration.
 
 Synthetic packaged native readback (not benchmark findings):
 

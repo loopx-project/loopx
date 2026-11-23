@@ -11,6 +11,7 @@ import {startHistoryOwner} from "./research-history.mjs";
 export const researchNativeReadingScenario = {
   id: "research-native-reading",
   async run({browser, collectCoverage}) {
+    const seriesValues = Array.from({length: 25}, (_, i) => i === 5 ? null : 7);
     const cases = [
       {id: "lower-negative", values: [-1, -3, -2], higher: false, retained: 0, expected: [-3, -1, -2, -1]},
       {id: "higher-zero", values: [-3, 0, -1], higher: true, retained: 0, expected: [0, -3, -1, -3]},
@@ -25,6 +26,9 @@ export const researchNativeReadingScenario = {
         expected: [0.0000001234567890123456, 0.0000001234567890123456, 0.0000001123456789012345, 0.0000001123456789012345], display: ["1.235E-7", "1.235E-7", "1.123E-7", "1.123E-7"], gain: "-1.111E-8"},
       {id: "large", values: [123456789.12345679], higher: true, retained: 0,
         expected: [123456789.12345679, 123456789.12345679, 123456789.12345679, 123456789.12345679], display: ["1.235E8", "1.235E8", "1.235E8", "1.235E8"], gain: "0"},
+      {id: "series-24", values: seriesValues.slice(0, 24), higher: true, retained: 10, expected: [7, 7, 7, 7], series: "desktop-points"},
+      {id: "series-25", values: seriesValues, higher: true, retained: 10, expected: [7, 7, 7, 7], series: "picker"},
+      {id: "series-gap", values: seriesValues.slice(0, 24), higher: true, retained: 10, expected: [7, null, 7, 7], partial: true, series: "compressed"},
       ...["command", "mixed", "damaged", "empty-output", "unsafe-exit", "tool-text", "tool-shell", "tool-pending",
         "tool-function", "tool-mixed", "tool-damaged", "tool-unsafe-exit", "tool-empty"].map(source => ({id: `${source}-source`, source,
         values: [2, 1], higher: false, retained: 0, expected: [1, 2, 1, 2]})),
@@ -42,14 +46,20 @@ export const researchNativeReadingScenario = {
         // of the current registration default for newly generated reports.
         a.config = {model: "fixture", effort: "max", service_tier: "fast", research_synthesis: false};
         a.input.scope.run_id = c.id;
+        if (c.series) {
+          native.end = "2026-01-01T00:30:00Z";
+          a.input.scope.window = `${native.start}/${native.end}`;
+        }
         native.scope = {...a.input.scope};
         native.complete = !c.partial;
         native.metric.higher_is_better = c.higher;
         if (c.unit) native.metric.unit = c.unit;
         native.retained_result_id = c.retained === null ? null : `result-${c.retained}`;
         native.samples = c.values.map((value, index) => ({
-          submission_index: index + (c.partial ? 7 : 1), result_id: `result-${index}`, candidate_ref: `candidate-${index}`,
-          submitted_at: null, observed_at: `2026-01-01T00:0${index + 1}:00Z`, valid: value !== null, value,
+          submission_index: c.series === "compressed" ? (index === 23 ? 500 : index + 1) : index + (c.partial ? 7 : 1),
+          result_id: `result-${index}`, candidate_ref: `candidate-${index}`, submitted_at: null,
+          observed_at: new Date(Date.UTC(2026, 0, 1, 0, index + 1)).toISOString().replace(".000Z", "Z"),
+          valid: value !== null, value,
           citation: {source_id: "facts", first_line: index + 1, last_line: index + 1},
         }));
         if (c.gain) native.comparison = {baseline_result_id: "result-0",
@@ -147,6 +157,39 @@ export const researchNativeReadingScenario = {
           await sources.locator("summary").click();
           assert.match(await sources.innerText(), /提交时间: 未知\s+观测时间: 2026-01-01T00:03:00Z/);
           await sources.locator("summary").click();
+        }
+        if (c.series) {
+          const chart = native.locator(".research-native-series");
+          const picker = chart.locator("select");
+          const point = chart.locator('[data-native-submission="1"]');
+          const citation = page.getByRole("region", {name: "引用原文", exact: true});
+          for (const width of [1280, 390]) {
+            await page.setViewportSize({width, height: 900});
+            const direct = c.series === "desktop-points" && width === 1280;
+            if (direct) await point.waitFor();
+            else await picker.waitFor();
+            assert.equal(await chart.locator(".research-native-series-retained").count(), 1);
+            assert.match(await chart.locator(".research-native-series-invalid").getAttribute("d"), /l6,6/, "The invalid marker survives dense rendering");
+            if (direct) {
+              await point.click();
+            } else {
+              assert.equal(await chart.locator(".research-native-series-point").count(), 0, "Overlapping marks cannot dispatch a different citation");
+              await picker.selectOption("result-0");
+              const action = chart.locator(".research-native-series-evidence");
+              assert.equal(await action.getAttribute("data-native-submission"), "1");
+              if (width === 390) await action.tap();
+              else await action.press("Enter");
+            }
+            await citation.getByText(/行 1–1$/).waitFor();
+            assert.match(await citation.innerText(), /Synthetic observation 0: value 7/);
+            if (direct) {
+              await page.setViewportSize({width: 390, height: 900});
+              await picker.waitFor();
+            }
+            await citation.press("Escape");
+            await page.waitForFunction(() => document.activeElement?.getAttribute("data-native-submission") === "1");
+            assert(await chart.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
+          }
         }
         if (c.id === "invalid-first") {
           const measureUnknownRetention = () => native.evaluate(section => {
