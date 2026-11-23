@@ -23,6 +23,7 @@ from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
 from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 from benchmark.runtime.research_artifacts import (
+    archive_member_content,
     is_excluded_tar_member,
     is_runner_research_component,
     research_component_exclusions,
@@ -203,18 +204,11 @@ def _archive(
                 for member in members:
                     check()
                     path = PurePosixPath(member.name)
+                    content_member = archive_member_content(member, all_members)
+                    regular = member
                     if member.islnk():
-                        target_path = PurePosixPath(member.linkname)
-                        target = all_members.get(str(target_path))
-                        if (target_path.is_absolute() or ".." in target_path.parts or
-                                target is None or not target.isfile()):
-                            raise ValueError("Worker archive contains undeclared, linked or special members")
-                        content_member = target
-                        regular = copy(target)
+                        regular = copy(content_member)
                         regular.name, regular.mode = member.name, member.mode
-                    else:
-                        content_member = member
-                        regular = member
                     if (
                         exclude_research
                         and len(path.parts) > 1

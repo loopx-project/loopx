@@ -95,6 +95,20 @@ def is_excluded_research_relpath(
     return False
 
 
+def archive_member_content(
+    member: tarfile.TarInfo, by_path: Mapping[str, tarfile.TarInfo],
+) -> tarfile.TarInfo:
+    """Resolve Docker's hardlink record to regular bytes inside the declared archive root."""
+    if not member.islnk():
+        return member
+    path, target = PurePosixPath(member.name), PurePosixPath(member.linkname)
+    content = by_path.get(str(target))
+    if (target.is_absolute() or ".." in target.parts or not target.parts
+            or target.parts[:1] != path.parts[:1] or content is None or not content.isfile()):
+        raise ValueError("Worker archive contains undeclared, linked or special members")
+    return content
+
+
 def is_excluded_tar_member(
     archive: tarfile.TarFile,
     member: tarfile.TarInfo,

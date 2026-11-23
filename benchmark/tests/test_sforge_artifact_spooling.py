@@ -3,6 +3,7 @@ import errno
 import io
 import json
 import tarfile
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -233,3 +234,40 @@ def test_research_collection_respects_disk_floor_and_filters_ephemeral_dumps(tmp
     assert not (root / "sub/core.99").exists()
     assert not (root / "target").exists()
     assert not (root / ".cargo-target").exists()
+
+
+@pytest.mark.parametrize("data_name", ["core", "evidence.bin"])
+def test_research_hardlinks_keep_the_same_evidence_in_terminal_receipt(tmp_path, monkeypatch, data_name):
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
+
+    root = PurePosixPath(RESEARCH_DIRECTORY).name
+    names = ["core", "core.5", "evidence.bin", "another-evidence.bin"]
+    content = b"\x7fELF\x02\x01" + bytes(10) + (4).to_bytes(2, "little") + bytes(46)
+    data = tmp_path / data_name
+    data.write_bytes(content)
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        archive.add(data, arcname=f"{root}/{data_name}")
+        for name in names:
+            if name != data_name:
+                alias = tmp_path / name
+                alias.hardlink_to(data)
+                archive.add(alias, arcname=f"{root}/{name}")
+
+    backend = collector(tmp_path)
+    backend.research_sidecar = True
+    monkeypatch.setattr(transport, "_minimum_free_bytes", lambda *_: 20 * 1024**3)
+    monkeypatch.setattr(transport.DockerBackend, "cleanup_container", lambda *args: None)
+
+    def get_archive(remote):
+        return iter([payload.getvalue() if remote == RESEARCH_DIRECTORY else archive_bytes()]), {}
+
+    monkeypatch.setattr(backend, "_raw", lambda _: SimpleNamespace(get_archive=get_archive))
+    backend.cleanup_container("owned-container")
+
+    receipt = json.loads((backend.log_dir / "artifact-collection.json").read_text())
+    assert {"artifact": "research", "collected": True} in receipt
+    collected = backend.log_dir / "research" / root
+    assert sorted(p.name for p in collected.iterdir()) == ["another-evidence.bin", "evidence.bin"]
+    assert (collected / "evidence.bin").read_bytes() == content
+    assert (collected / "another-evidence.bin").samefile(collected / "evidence.bin")

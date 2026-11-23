@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 import errno
 import inspect
 import ipaddress
@@ -17,7 +18,7 @@ from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
 from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 from .provider_failure import observe_terminal_provider_failure
-from .research_artifacts import is_excluded_tar_member
+from .research_artifacts import archive_member_content, is_excluded_tar_member
 
 _RESEARCH_DISK_HEADROOM_FLOOR_BYTES = 10 * 1024**3
 
@@ -36,16 +37,25 @@ def _filter_research_members(
 ) -> list[tarfile.TarInfo]:
     """Keep real research outputs while omitting confirmed dumps and ephemeral build dirs."""
     kept: list[tarfile.TarInfo] = []
-    excluded_paths: set[str] = set()
+    by_path = {str(PurePosixPath(member.name)): member for member in members}
+    retained_names: dict[str, str] = {}
     for member in members:
-        path = PurePosixPath(member.name)
-        parts = path.parts
-        if member.islnk() and str(PurePosixPath(member.linkname)) in excluded_paths:
-            excluded_paths.add(str(path))
+        parts = PurePosixPath(member.name).parts
+        content = archive_member_content(member, by_path)
+        if len(parts) > 1 and is_excluded_tar_member(archive, content, parts[1:]):
             continue
-        if len(parts) > 1 and is_excluded_tar_member(archive, member, parts[1:]):
-            excluded_paths.add(str(path))
-            continue
+
+        if content.isfile():
+            first_name = retained_names.setdefault(content.name, member.name)
+            if first_name == member.name and member.islnk():
+                # Its original data-bearing name was filtered or has not been seen.
+                regular = copy(content)
+                regular.name, regular.mode = member.name, member.mode
+                member = regular
+            elif first_name != member.name and member.linkname != first_name:
+                # Preserve hardlinks and charge the disk budget only once per retained group.
+                member = copy(member)
+                member.type, member.linkname, member.size = tarfile.LNKTYPE, first_name, 0
         kept.append(member)
     return kept
 
