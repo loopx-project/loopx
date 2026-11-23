@@ -182,7 +182,11 @@ def _run_json(
             condition = {
                 "claim_owner_mismatch": "after the Todo is available to you",
                 "todo_lease_conflict": "after the Todo lease becomes available",
-                "workspace_lease_conflict": "from an independent authorized workspace or after this workspace is free",
+                "write_scope_conflict": "after the conflicting lease is released or expires",
+                "workspace_lease_conflict": (
+                    "after the conflicting workspace lease is released or expires, "
+                    "or in an independent authorized worktree if the work can be isolated"
+                ),
             }.get(decision["reason_code"], "after the blocking condition changes")
             raise NativeClaimRejected(
                 f"Claim for {claim_identity['todo_id']} declined ({decision['reason_code']}): "

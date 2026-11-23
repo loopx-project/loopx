@@ -1789,6 +1789,25 @@ def test_native_claim_refusal_is_reported_once_for_the_original_capture(tmp_path
     assert _spend_run_count(runtime, goal_id=GOAL) == 0
 
 
+@pytest.mark.parametrize(("reason_code", "isolatable"), [
+    ("write_scope_conflict", False), ("workspace_lease_conflict", True),
+])
+def test_lease_refusal_explains_when_a_fresh_guard_can_retry(tmp_path, reason_code, isolatable):
+    from loopx.control_plane.turn_driver.codex_execution_preparation import NativeClaimRejected, _run_json
+
+    identity = {"goal_id": GOAL, "todo_id": TODO, "actor_agent_id": AGENT, "claim_operation_id": "original"}
+    decision = {**identity, "schema_version": "loopx_coordination_todo_claim_decision_v0",
+        "status": "rejected", "reason_code": reason_code, "reason": "Conflicting active lease"}
+    reply = subprocess.CompletedProcess([], 1, json.dumps({"ok": False, "source_authority": "file_v0",
+        "decision_read_from_provider": True, "legacy_fallback_used": False, "claim_decision": decision}), "")
+    with pytest.raises(NativeClaimRejected) as refusal:
+        _run_json(["todo", "claim"], registry_path=tmp_path / "registry.json", runtime_root=None,
+            cwd=tmp_path, timeout=1, runner=lambda *args, **kwargs: reply, claim_identity=identity)
+    message = str(refusal.value)
+    assert "lease is released or expires" in message and "fresh eligible guard" in message
+    assert ("independent authorized worktree if the work can be isolated" in message) == isolatable
+
+
 @pytest.mark.parametrize("case", ["wrong-operation", "unverified-provider", "prior-receipt"])
 def test_inconclusive_claim_reply_remains_recoverable(tmp_path, case):
     from loopx.control_plane.turn_driver.codex_execution_preparation import _run_json
