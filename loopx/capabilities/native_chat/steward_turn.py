@@ -1673,7 +1673,17 @@ class StewardTurnHost:
                         else event_sink
                     )
                     if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
-                        response = adapter.start_turn(prompt, invocation_sink, isolated_cascade=True)
+                        from .antigravity_adapter import ANTIGRAVITY_IDLE_TIMEOUT_SEC
+                        response = adapter.start_turn(
+                            prompt,
+                            invocation_sink,
+                            isolated_cascade=True,
+                            idle_timeout_sec=(
+                                adapter.idle_timeout_sec
+                                if adapter.idle_timeout_sec is not None
+                                else ANTIGRAVITY_IDLE_TIMEOUT_SEC
+                            ),
+                        )
                     else:
                         response = adapter.start_turn(prompt, invocation_sink)
             finally:

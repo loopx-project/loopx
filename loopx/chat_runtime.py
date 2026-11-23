@@ -252,7 +252,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
         claude_bin: str = "claude",
         kiro_cli_bin: str = KIRO_CLI_BIN,
         startup_timeout_sec: float | None = None,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         endpoint_registry: AgentEndpointRegistry | None = None,
         registry_path: Path | None = None,
@@ -1114,8 +1114,19 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
             if completed_turn is None:
                 return
             completion_reserved = True
-            if adapter.upstream_thread_id != str((self.store.load_session(session_id) or {}).get("upstream_thread_id") or ""):
-                self.store.update_session(session_id, upstream_thread_id=adapter.upstream_thread_id)
+            current_session = self.store.load_session(session_id) or {}
+            previous_thread_id = str(current_session.get("upstream_thread_id") or "")
+            if adapter.upstream_thread_id != previous_thread_id:
+                changes: dict[str, object] = {"upstream_thread_id": adapter.upstream_thread_id}
+                if previous_thread_id and current_session.get("adapter_kind") == "antigravity_ls":
+                    changes["upstream_context_history"] = [
+                        *(current_session.get("upstream_context_history") or []),
+                        {
+                            "thread_id": previous_thread_id,
+                            "manager_context_version": current_session.get("manager_context_version"),
+                        },
+                    ]
+                self.store.update_session(session_id, **changes)
             if not native_loopx and scope.get("bound_steward") is True:
                 try:
                     from .capabilities.steward_memory.runtime import commit_steward_memory_after_turn

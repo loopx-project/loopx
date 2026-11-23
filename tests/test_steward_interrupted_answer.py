@@ -209,6 +209,7 @@ def test_original_native_code_action_result_survives_later_timeout_without_repla
     store, runtime, provider, transport, binding, _, _ = steward
     binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
         executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.idle_timeout_sec = 300.0
     runtime.hard_timeout_sec = None
     user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
             "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
@@ -326,7 +327,7 @@ def test_native_timeout_reports_its_clock_without_extending_native_retry(
     _native_clock(monkeypatch, language_server, frames)
     events = []
     with pytest.raises(CodexChatAgentError) as raised:
-        adapter_for(tmp_path, hard_timeout_sec=hard_limit).start_turn(
+        adapter_for(tmp_path, idle_timeout_sec=300.0, hard_timeout_sec=hard_limit).start_turn(
             "Original task", lambda kind, data: events.append((kind, data)))
     assert raised.value.error_code == "response_timeout"
     diagnostic = next(data["timeout"] for kind, data in events
@@ -355,6 +356,7 @@ def test_original_steward_observes_native_work_at_idle_deadline_and_replies_once
     _, runtime, provider, transport, binding, _, _ = steward
     binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
         executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.idle_timeout_sec = 300.0
     runtime.hard_timeout_sec = None
 
     user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
@@ -418,6 +420,7 @@ def test_original_lark_timeout_keeps_typed_reason_and_never_replays(
         monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
         binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
             executor_endpoint_id="antigravity", context_kind="steward")
+        runtime.idle_timeout_sec = 300.0
         runtime.hard_timeout_sec = 150.0 if kind == "hard" else None
         frames = _native_frames(stagnant=True)
         for index, frame in enumerate(frames):
@@ -649,7 +652,7 @@ def test_cleared_native_error_does_not_extend_deadline(
         return rpc_post(url, token, method, args, **kwargs)
 
     monkeypatch.setattr(antigravity_adapter, "_rpc_post", bounded_read)
-    adapter = adapter_for(tmp_path, hard_timeout_sec=hard_limit)
+    adapter = adapter_for(tmp_path, idle_timeout_sec=300.0, hard_timeout_sec=hard_limit)
     events = []
     with pytest.raises(CodexChatAgentError) as raised:
         adapter.start_turn("Complete this original request", lambda kind, data: events.append((kind, data)))

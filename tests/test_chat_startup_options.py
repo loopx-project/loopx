@@ -225,7 +225,7 @@ def test_shared_startup_options_preserve_adapter_defaults_and_explicit_limits(tm
     args = build_parser().parse_args(["chat", "--no-open", *tail])
     options = chat_server_options(args, registry_path=tmp_path / "registry.json")
     assert options["startup_timeout_sec"] == expected
-    assert options["idle_timeout_sec"] == 180.0
+    assert options["idle_timeout_sec"] is None
     assert options["hard_timeout_sec"] is None
     inspect.signature(serve_chat).bind(**options)
 
@@ -240,9 +240,11 @@ def test_shared_options_keep_workspace_permissions_and_explicit_timeout_floors(t
     assert options["project_workspace_grant"] == "workspace_read"
     assert options["project_filesystem_scope"] == "workspace_only"
     assert options["private_reactions"] is False
-    assert options["idle_timeout_sec"] == 0.1
+    assert options["idle_timeout_sec"] is None
     assert options["hard_timeout_sec"] is None
     assert options["limit"] == 0
+    explicit_idle = build_parser().parse_args(["chat", "--idle-timeout-seconds", "12.5"])
+    assert chat_server_options(explicit_idle, registry_path=tmp_path / "registry.json")["idle_timeout_sec"] == 12.5
 
 
 def test_shared_options_resolve_global_registry_and_expand_selected_paths(tmp_path, monkeypatch):
