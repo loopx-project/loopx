@@ -122,6 +122,36 @@ LoopX 内部保持严格、唯一 owner 的类型化内核（`AuthorityStore`、
    一次性 worker 沙盒及 worktree（`--worker turn-resume`、隔离容器、归一化补丁交付）严格分离，
    确保沙盒重置或故障不会破坏控制权威或暴露宿主凭据。
 
+### 与 Harness 无关的内核与三层协同设计
+
+LoopX 的权威与决策基座（`AuthorityStore`、`CAS`、`claim/lease`、`Turn` 围栏、
+仅一次幂等 `receipt` 结算与 `Target/Yardstick/Stride` 记录）保持**与 Harness 无关**：
+内核绝不把单一厂商 CLI 的提示词语法、私有循环驱动或会话文件布局写死在核心规则里。
+同时，不同宿主向 LoopX 暴露的控制接缝差异很大，因此 LoopX 以**三层 Harness 协同设计**
+加上统一能力描述符承接宿主差异，而不是强行套用同一种重型包装器：
+
+| 协同层级 | 适用宿主表面 | 核心优化与边界机制 | 源码归属与收敛方向 |
+|---|---|---|---|
+| **Level 1 · `BoundaryCLI`** | 进程边界隔离的外部 CLI 宿主（`codex-cli`、`claude-code`、`opencode`、`pi`、`zcode`、`kiro-cli`、`kunluncode` 及 skill-facade CLI），LoopX 仅在 Turn 边界接入 | 保持无竞争日常轮次零仪式感（**`Quiet-Turn`**，零每 Turn 必填表单税），在阶段内保持原生 `KeepRaw` 前缀 KV-cache 稳定，并把前缀重定基与精简增量/快照重置推迟到显式静止的 **`EpochReset`** 边界 | [`loopx/host_loop_activation.py`](../../../loopx/host_loop_activation.py)、[`loopx/hosts/skill_facade.py`](../../../loopx/hosts/skill_facade.py)、`context_delivery.ts`（[历史工作集策略](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)） |
+| **Level 2 · `OrchestratedApp`** | 协调并发 lane 与交接的多单元 App、IDE、IM 及 `Controller–Worker` 编排器 | 强化 **`Subagent Scope`** 隔离（`collaboration_brief_v0`、有界 `remaining_work` 投影、按 worker 隔离的 workspace/lease 围栏与异步唤醒谓词），使长程 worker 执行不阻塞 controller 与用户交互，也不跨切片泄漏父上下文重力 | [`controller-executor-unified-contract-v0.zh-CN.md`](controller-executor-unified-contract-v0.zh-CN.md#router-controller-worker)、[`capable-manager-semantic-handoff-v0.zh-CN.md`](capable-manager-semantic-handoff-v0.zh-CN.md) |
+| **Level 3 · `InTree`** | 运行在 LoopX 进程内或直连进程传输的原生协同宿主（如 DeepSeek Harness 的 `loopx turn run-once --host dsh`） | 把受回执门控的 `FoldToReceipt` / `EpochReset` 队列压缩与回合启动时的确定性上下文/产物预取（**`FoldAndPrefetch`**）及类型化故障恢复（`loopx_turn_host_failure_v0`）融合在同一受控生命周期内 | [`loopx/dsh_goal_mode/turn_host_adapter.py`](../../../loopx/dsh_goal_mode/turn_host_adapter.py)、[`harness-selection-dsh-pi-v0.zh-CN.md`](harness-selection-dsh-pi-v0.zh-CN.md) |
+
+为避免各宿主适配器在顶层包中重复复制控制面逻辑：
+
+- **统一 `HostHarnessCapabilities` 描述符：** 每个宿主绑定通过单一类型化的
+  `HostHarnessCapabilities` 契约声明事实能力（循环驱动归属、原生 goal/automation/cron/subagent-scope
+  原语、支持 `EpochReset` 还是 `FoldAndPrefetch`、stdio/编码边界以及 stop/pause
+  围栏保真度），绝不伪造宿主无法执行的自治承诺或预算强约束。
+- **把 `loopx/*_goal_mode/` 收敛至 `loopx/hosts/`：** 按
+  [统一契约的退役门禁](controller-executor-unified-contract-v0.zh-CN.md#3-具名退役清单与棘轮规则)与
+  [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)，将现存
+  `9` 个顶层 `loopx/*_goal_mode/` 包（`agy_goal_mode`、`claude_goal_mode`、`dsh_goal_mode`、
+  `kiro_cli_goal_mode`、`kunluncode_goal_mode`、`opencode2_goal_mode`、`opencode_goal_mode`、
+  `pi_goal_mode`、`zcode_goal_mode`）迁入 `loopx/hosts/` 并收敛至共享 `HostHarnessCapabilities`
+  投影，仅在调用方切换完成前保留 CLI 兼容别名。
+- **漏斗验证门禁：** `BoundaryCLI`、`OrchestratedApp` 与 `InTree` 的协同优化（`Quiet-Turn`、
+  `EpochReset`、`Subagent Scope`、`FoldAndPrefetch`）在通过[四层漏斗验证协议](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#55-四层漏斗验证协议)前均为架构与设计目标，不直接等同已测收益或默认切换。
+
 ### 总纲与现有文档的关系
 
 - 本页是跨产品、工程、研究和采用的路线总纲；第 2 节定义 S1–S13 工作流，第 3 节定义 G0–G5 组合里程碑，第 4 节映射全部 RFC，第 5–6 节细化多 Agent 核心路径，第 8 节保存可复核审计。

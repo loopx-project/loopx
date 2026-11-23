@@ -721,6 +721,53 @@ Every experiment report keeps these layers separate:
 An internal control score may diagnose behavior. It must not be added to the
 native task score or used to turn a failed task into a success.
 
+### 5.5 Four-tier verification funnel
+
+Full-horizon replicated runs (for example, `18h–20h` on long-horizon scalar
+studies such as EdgeBench) are too slow and expensive to act as the first
+filter for runtime regressions, uncached KV-prefill overhead, or local
+proxy-to-native inversions. Every new control mechanism, runtime optimization,
+and benchmark study advances sequentially through the **applicable** stages of
+a fail-closed four-tier funnel, calibrated to each study's applicable matched
+budget. For an official benchmark or leaderboard cell, the benchmark-declared
+native horizon remains the mandatory comparability contract. It is not a
+ceiling on an internal promotion probe.
+
+A study may predeclare an **extended-budget promotion probe**—for example,
+running `LHTB 2.0` or `FrontierCS-2` for more than `10h`—to test whether a
+LoopX mechanism produces a long-horizon advantage. This is admissible only when
+every arm receives the same pinned task, benchmark environment and verifier,
+model, feedback opportunities, control-authority ceiling, stop rule, run
+profile, and extended budget, except for the registered treatment difference,
+and the runner can extend execution without changing the benchmark's task or
+outcome semantics. If the runner hard-caps the horizon, an explicit versioned
+run-profile extension and its qualification are required; a shorter run must
+not be relabeled as extended-budget evidence.
+
+Reports keep `native-budget` and `extended-budget` cells separate. Both require
+the matched `Raw-Artifact Reset Baseline` where applicable (§5.2), complete
+token, time, provider, control and evaluation cost (§6.2), integrity audits
+(§6.5), and uncertainty. An extended-budget result may support a C2 claim scoped
+to that budget. It is neither an official native-budget result nor a
+leaderboard-eligible result, does not establish equal-budget Pareto superiority
+at the native horizon, and must not be pooled with native-budget cells. `N >= 5`
+applies within the actual promotion-condition cell. Where a proven
+checkpoint-restore seam exists (§8.7),
+bounded Tier 2 checkpoint forks precede Tier 3; when **no proven
+checkpoint-restore seam exists** on a task family or branch, Tier 2 is
+inapplicable rather than simulated—the study retains Tier 0 and Tier 1 gating
+and routes through the **§8.7 matched from-start (`from-scratch matched-budget`)
+comparison** directly into Tier 3, reporting actual consumed budgets without
+labeling a fresh registration as a checkpoint fork or same-state
+counterfactual ($\tau_B(s; a, a_0, \pi)$):
+
+| Tier | Typical scope & horizon | Required evidence & gating metrics | Gate & non-substitution boundary |
+|---|---|---|---|
+| **Tier 0 · Offline invariants & calibration** | Zero live model spend: unit/regression suites, replay fixtures, `WarmStart` / evaluator `/context` preflight, container/auth/network boundary audits, and offline [`benchmark/proxy_order.py`](../../../benchmark/proxy_order.py) common-panel checks | Deterministic pass/fail contracts, exact artifact/source digest binding, zero judge leakage, and common-panel Kendall $\tau_b$ + tail-cliff characterization | Fails closed before any live token spend; passing static/replay checks proves only E0 foundation readiness (E1 and E2 still require live runner receipts and repeated campaign transitions per §11.2) |
+| **Tier 1 · Fast efficiency-parity gate** | Short matched controls shorter than the study's applicable budget (native or predeclared extended; for example `--timeout 18000` `5h` controls on `12h–20h` tracks, or shorter proportional windows on `3h–5h` and `10h+` tracks) contrasting `Raw-Artifact Reset Baseline`, quiet single-session execution, and `Controller–Worker` + `EpochReset` against an anchored baseline under §5.1–§5.3 | Native `score` parity, `time-to-threshold` parity, compression of inter-turn protocol latency gaps (such as training-to-next-submission gaps), `cached_prefix_tokens` vs. `uncached_input_tokens` stability, and bounded total token/time ratio | Prunes protocol overhead or execution regressions early; short-horizon parity never certifies full-budget net uplift or absence of late-horizon context drift |
+| **Tier 2 · Bounded counterfactual calibration (when a proven restore seam exists)** | Applicable only when the study proves the required checkpoint-restore seam (§8.7): short matched forks within the study's horizon (for example `~1h–3h` remaining cap) from one quiescent sealed `research-checkpoint` ($s_0$) with identical pinned source, evaluator conditions (`/context`), and submission cooldowns; **when no proven restore seam exists**, skip Tier 2 and follow the §8.7 matched from-start path into Tier 3 instead of fabricating a fork | Decision-neighborhood Kendall $\tau_b(s; a, a_0, \pi)$, false-improvement rate over the native incumbent, proxy-cliff (`Yardstick`) detection, and conditional $\Delta J(B \mid s_0)$ charging complete marginal control/evaluation cost (checkpoint studies must still satisfy checkpoint-restore verification before pair admission) | Isolates late-horizon decision and proxy fidelity before launching multi-arm full-horizon suites; conditioned on $s_0$ and does not replace cold-start to terminal full-horizon comparisons, nor may from-start runs be reported as same-state counterfactuals |
+| **Tier 3 · Full-horizon replicated promotion** | Replicated studies under either the benchmark's declared native horizon or a predeclared extended-budget promotion probe (for example `3h` on `LHTB 2.0`, `5h` on `FrontierCS-2`, or `10h+` on either as a separate internal probe; `18h–20h` on EdgeBench; `N >= 5` within the actual promotion-condition cell), entered either after Tier 2 or directly via §8.7's matched from-start route when no proven restore seam exists; includes the matched `Raw-Artifact Reset Baseline` on episodic RSI / scalar optimization tracks (§5.2), full cost accounting (§6.2), and independent integrity audits (§6.5) | Benchmark-native outcome uplift or cost-normalized Pareto superiority with uncertainty bounds on the pinned study under the selected native or extended budget and matched controls (plus cross-family replication where claiming C3) | Tier 3 single-study native or extended-budget replication supports C2 scoped to that budget; cross-family replication supports C3, and C4 remains separately gated per §4. The native-budget cell remains the official comparability path; extended-budget evidence must not be reported as a native-budget/leaderboard result or pooled with native cells. §8.7 matched from-start routing preserves these evidence bars without relaxation, while checkpoint-fork studies remain gated on restore integrity; regressions at Tier 0–2 trigger diagnosis rather than full-matrix padding |
+
 ## 6. Measurement Model
 
 ### 6.1 Native outcomes
@@ -1884,6 +1931,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 | 2026-08-25 | Add StartupBench, LoopsBench, and WideSearch to the benchmark primer and integration plan as a second, complementary trio; require native metrics per benchmark and keep benchmark material out of reusable LoopX state. |
 | 2026-10-16 | Archive [feedback-first observations](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
 | 2026-11-15 | Codify the Bitter-Lesson boundary and five governed control-plane failure regimes (§2.2), require a matched, fully costed Raw-Artifact Reset Baseline (newly run or qualified historical reuse) for C2/C3 claims on episodic RSI / scalar optimization tracks (§5.2), and adopt the 2026-11 benchmark portfolio ranking (§3.8): **P0** (`EdgeBench`, `FrontierCS-2`, `LHTB / LHTB 2.0`, `LoopsBench`), **P1** (`SWE-Marathon`, `PaperBenchX` over `PaperBench`, `ALE` distinct from `ALE-Bench`, `WideSearch`, `KernelBench` / `AlgoTune`), **P2** (`ALE-Bench`, `StartupBench`, `MLE-bench`, `tb-science` episodic transfer samples only—excluded from RSI due to CI-locked `28800s` budget and 100% binary `reward.txt`), and **Control-Only / Deprioritized** (`DeepSWE`, `SWE-bench Pro`, `CORE-Bench`, `ScienceAgentBench`, `BixBench`, `FrontierScience`, deprecated `RE-Bench`), gating multi-arm expansion on unified `benchmark/runtime/` + Stop-hook E0–E2 readiness and Linux x86\_64 / GPU hosts. |
+| 2026-11-22 | Codify the fail-closed **Four-Tier Verification Funnel** (§5.5: Tier 0 offline invariants/`benchmark/proxy_order.py` proving E0 only -> Tier 1 sub-horizon fast efficiency-parity gate -> Tier 2 quiescent checkpoint counterfactual calibration where a §8.7 restore seam is proven, keeping §8.7 matched from-start comparisons valid without fabricating checkpoint forks or relaxing restore verification -> Tier 3 replicated promotion under either the native benchmark horizon or a separate, predeclared extended-budget probe such as `3h` native LHTB 2.0, `5h` native FrontierCS-2, `10h+` extended LHTB 2.0/FrontierCS-2, or `18h–20h` EdgeBench, separating single-study `C2` from cross-family `C3`). Native budget remains the official comparability and leaderboard contract, not an internal research ceiling; extended probes must match every arm and report a C2 claim only for the selected budget without pooling or relabeling native cells. This keeps §4 C2–C4 claim thresholds and §11.2 readiness gates intact while letting runtime/protocol optimizations prune regressions cheaply and long-horizon advantages be tested honestly. |
 
 ## 18. References
 

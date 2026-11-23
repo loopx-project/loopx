@@ -379,7 +379,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from .codex_context_history import (
         checkpoint_native_read, checkpoint_native_selection, native_resume_sections, native_resume_verified,
-        observe_native_read,
+        observe_completed_native_reread, observe_native_read,
     )
 
     if directory is None:
@@ -419,8 +419,9 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     resume_verified=resume_verified,
                     resume_sections=native_resume_sections(state, event) if name == "SessionStart" and not resume_verified else None)
                 if name == "PostToolUse" and same:
-                    checkpoint_native_read(read_state, updated, event,
-                        [page for page in pages if "read_sections" not in page])
+                    full_pages = [page for page in pages if "read_sections" not in page]
+                    checkpoint_native_read(read_state, updated, event, full_pages)
+                    observe_completed_native_reread(read_state, updated, event, full_pages)
                     checkpoint_native_selection(state, updated, event, raw_pages, pages)
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
@@ -535,6 +536,8 @@ def native_execution_preparation_request(
                     and previous.get("claim_source_sha256") == claim_source_sha256
                 )
             ):
+                if previous.get("state") == "rejected":
+                    return None
                 if previous.get("state") in {"attempted", "ready"}:
                     return _preparation_readback(action, previous, event_name=event["hook_event_name"])
             if readback_for is not None:
@@ -566,6 +569,7 @@ def record_native_execution_preparation(
     *,
     source_sha256: str,
     receipt: Mapping[str, Any] | None,
+    claim_rejected: bool = False,
 ) -> None:
     """Publish readiness, or retire a refused claim, for the same saved source."""
 
@@ -583,6 +587,10 @@ def record_native_execution_preparation(
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
         if receipt is None:
+            previous = state.get("host_execution_preparation")
+            if (claim_rejected and isinstance(previous, dict) and previous.get("source_sha256") == source_sha256
+                    and previous.get("state") == "attempted"):
+                previous["state"] = "rejected"
             recovery.pop("execution_preparation", None)
             try:
                 _save(root, state)

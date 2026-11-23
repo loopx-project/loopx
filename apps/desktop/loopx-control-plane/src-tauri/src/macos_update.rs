@@ -48,7 +48,10 @@ pub(crate) fn qualify_candidate(
         let mut raw = Vec::new();
         entry.read_to_end(&mut raw).map_err(|_| invalid)?;
         let identity = crate::bundled_runtime::parse_identity(&raw)?;
-        let observed = &identity["default_contract"];
+        let observed = identity
+            .get("default_contract")
+            .filter(|contract| contract.is_object())
+            .ok_or(unavailable)?;
         if observed != current && observed != historical {
             return Err(unavailable.into());
         }

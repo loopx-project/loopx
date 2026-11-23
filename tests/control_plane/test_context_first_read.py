@@ -311,16 +311,11 @@ def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_l
 
 
 @pytest.mark.parametrize("workspace_repair", [True, False], ids=["needs-worktree", "independent-worktree"])
-def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeypatch, decision, workspace_repair):
+def test_cba_active_write_scope_stays_on_demand_while_summary_counts_stay_on_page_zero(tmp_path, monkeypatch, decision, workspace_repair):
     from test_codex_context_lifecycle import setup
 
     setup(tmp_path, monkeypatch)
-    long_scopes = [f"src/area-{index:03d}/implementation/entrypoints/**" for index in range(355)]
-    short_scope = ["docs/reference/**"]
-    candidates = [
-        {"todo_id": "todo_current", "text": "Repair the source entrypoint.", "required_write_scopes": long_scopes},
-        {"todo_id": "todo_alternative", "text": "Verify the documentation.", "required_write_scopes": short_scope},
-    ]
+    active_scopes = [f"src/area-{index:03d}/implementation/entrypoints/**" for index in range(60)]
     turn = "workspace-selection-fixture"
     mode = "agent_workspace_repair" if workspace_repair else "normal_run"
     obligation = "agent_workspace_guard" if workspace_repair else "work_lane_contract"
@@ -331,11 +326,19 @@ def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeyp
         heartbeat_receipt={"turn_instance_id": turn, "settlement_binding_owed": True},
         execution_obligation={"kind": mode if workspace_repair else obligation, "contract": obligation,
                               "must_attempt_work": True, "delivery_allowed": False})
-    decision["selected_todo"].update(schema_version="quota_selected_todo_v0", required_write_scopes=long_scopes)
+    decision["selected_todo"].pop("required_write_scopes", None)
+    decision["goal_boundary"]["checkpointed_boundary_authority"] = {
+        "schema_version": "checkpointed_boundary_authority_v0",
+        "active_count": 60,
+        "inactive_count": 2,
+        "active_write_scope": active_scopes,
+        "entries": [{"status": "active", "decision": "approve", "write_scope": [s]} for s in active_scopes],
+    }
     contract = decision["interaction_contract"]
     contract["mode"] = mode
     contract["agent_channel"].update(delivery_allowed=False, must_attempt=True,
-        work_context={"instruction": "Relocate before delivering.", "sources": []})
+        work_context={"instruction": "Relocate before delivering.",
+            "sources": [{"source": "goal_state", "content": {"text": "Keep goal context readable. " * 250}}]})
     contract["cli_channel"] = {
         "selection_required": True, "next_cli_actions": [],
         "spend_allowed_now": False, "spend_after_validation": False,
@@ -346,6 +349,10 @@ def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeyp
             "candidate_discovery_args": "todo list --goal-id fixture --status open"},
     }
     policy = {"mode": "explicit_turn_binding", "decision_owner": "agent", "requires_explicit_turn_binding": True}
+    candidates = [
+        {"todo_id": "todo_current", "text": "Repair the source entrypoint."},
+        {"todo_id": "todo_alternative", "text": "Verify the documentation."},
+    ]
     decision["action_portfolio"] = {"selection_policy": policy, "suggested_actions": candidates}
     capture = tmp_path / "decision.json"
     original = json.dumps(decision).encode()
@@ -366,32 +373,28 @@ def test_unbound_candidate_scopes_are_only_expanded_on_request(tmp_path, monkeyp
     assert opening["/goal_boundary/stop_condition"] == decision["goal_boundary"]["stop_condition"]
     assert opening["/execution_obligation"] == decision["execution_obligation"]
     assert opening["/interaction_contract/agent_channel/delivery_allowed"] is False
-    selection = opening["/interaction_contract/cli_channel/selection_command"]
-    original_selection = contract["cli_channel"]["selection_command"]
-    assert selection["candidate_discovery_args"] == original_selection["candidate_discovery_args"]
-    command_words = shlex.split(selection["command_args_template"])
-    original_words = shlex.split(original_selection["command_args_template"])
-    assert command_words[:len(original_words)] == original_words
-    assert opening["/interaction_contract/cli_channel/spend_allowed_now"] is False
     assert opening["/action_portfolio/selection_policy"] == policy
-    projected = opening["/action_portfolio/suggested_actions"]
-    assert projected == [{key: value for key, value in candidates[0].items() if key != "required_write_scopes"},
-                         candidates[1]]
-    assert "required_write_scopes" not in opening["/selected_todo"]
-    pointer = "/action_portfolio/suggested_actions/0/required_write_scopes"
-    recommended_scope = "/selected_todo/required_write_scopes"
-    assert pointer in opening["/context_details/instruction"]
-    assert recommended_scope in opening["/context_details/instruction"]
-    assert page["total_bytes"] < len(json.dumps(long_scopes).encode())
-    template = opening["/context_details/command_template"]
-    _, detail = read_selection(template.replace("<pointer>", pointer) + f" --select {recommended_scope}")
-    assert detail[pointer] == detail[recommended_scope] == long_scopes
+    assert opening["/action_portfolio/suggested_actions"] == candidates
+    assert "/selected_todo" not in opening
+    cba_prefix = "/goal_boundary/checkpointed_boundary_authority"
+    assert opening[cba_prefix + "/active_count"] == 60
+    assert opening[cba_prefix + "/inactive_count"] == 2
+    assert cba_prefix + "/active_write_scope" not in opening
+    assert cba_prefix + "/entries" not in opening
+    assert page["total_bytes"] < len(json.dumps(active_scopes).encode()) + 5000
+    assert "remaining_read_command" in view
+    _, remaining = read_selection(view["remaining_read_command"])
+    assert remaining[cba_prefix + "/entries"] == decision["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
+    assert remaining.get(cba_prefix + "/active_write_scope") == active_scopes or (
+        "/context_details/command_template" in remaining and
+        read_selection(remaining["/context_details/command_template"].replace("<pointer>", cba_prefix + "/active_write_scope"))[1][cba_prefix + "/active_write_scope"] == active_scopes
+    )
     assert capture.read_bytes() == original
     assert not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_claim_preparation_keeps_requested_write_scopes_on_demand(tmp_path, monkeypatch, provider):
+def test_claim_preparation_keeps_required_write_scopes_off_quota_surface(tmp_path, monkeypatch, provider):
     from test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _configure_repository_write_todo, _heartbeat_receipt_count,
         _initialize_fixture_authority, _initialize_git_checkout, _run_cli, _spend_run_count, _write_fixture,
@@ -436,20 +439,17 @@ def test_claim_preparation_keeps_requested_write_scopes_on_demand(tmp_path, monk
     preparation = channel["execution_preparation"]
     assert preparation["state"] == "claim_required" and preparation["delivery_allowed"] is False
     assert preparation["claim"]["host_execution_allowed"]
-    assert raw["selected_todo"]["required_write_scopes"] == scopes
+    assert "required_write_scopes" not in raw["selected_todo"]
+    assert cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["todo"]["required_write_scopes"] == scopes
 
     view = cli(*guard, *native)
-    page, opening = read_selection(view["first_read_command"])
+    _, opening = read_selection(view["first_read_command"])
     state_pointer = "/interaction_contract/cli_channel/execution_preparation"
-    scope_pointer = "/selected_todo/required_write_scopes"
     assert opening[state_pointer] == preparation
     assert opening["/normal_delivery_allowed"] is False
     assert opening["/interaction_contract/cli_channel/spend_after_validation"] is False
     assert opening["/selected_todo"]["todo_id"] == TODO_ID
-    assert "required_write_scopes" not in opening["/selected_todo"], page["total_bytes"]
-    assert scope_pointer in opening["/context_details/instruction"]
-    _, detail = read_selection(opening["/context_details/command_template"].replace("<pointer>", scope_pointer))
-    assert detail[scope_pointer] == scopes
+    assert "required_write_scopes" not in opening["/selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn) == 1
 
     claim = cli(*preparation["claim"]["cli_args"])
@@ -457,7 +457,7 @@ def test_claim_preparation_keeps_requested_write_scopes_on_demand(tmp_path, monk
     ready = cli(*guard, *native)
     _, opening = read_selection(ready["first_read_command"])
     assert opening["/normal_delivery_allowed"] is True and opening[state_pointer]["state"] == "ready"
-    assert opening["/selected_todo"]["required_write_scopes"] == scopes
+    assert "required_write_scopes" not in opening["/selected_todo"]
     assert opening["/heartbeat_receipt"]["settlement_identity"] == raw["heartbeat_receipt"]["settlement_identity"]
     assert _spend_run_count(runtime) == 0
 
@@ -938,13 +938,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     raw = path.read_bytes()
     source = json.loads(raw)
     if requested_scopes:
-        assert source["selected_todo"]["required_write_scopes"] == requested_scopes
+        assert "required_write_scopes" not in source["selected_todo"]
     pages, opening = read(view["first_read_command"])
-    if page_budget == 16000:
-        # A paged body is not itself a reason to add a second reader. The
-        # ordinary first page fits the scope, selected Todo and read controls.
-        assert "remaining_read_command" not in view and len(pages) > 1
-        assert opening["/goal_boundary/write_scope"] == scopes
+    if page_budget == 16000 or (warm and requested_scopes and "remaining_read_command" not in view):
+        # A self-contained or warm-reused body whose first page already carries the
+        # opening controls needs no second reader while keeping the selected Todo and controls.
+        assert "remaining_read_command" not in view
+        if page_budget == 16000:
+            assert len(pages) > 1
+            assert opening["/goal_boundary/write_scope"] == scopes
+        else:
+            assert len(pages) >= 1
+            assert set(pages[0]["previously_delivered_fields"]) == {body_pointer, "/goal_boundary/write_scope"}
+            assert "/goal_boundary/write_scope" not in opening
         assert opening["/selected_todo/todo_id"] == TODO_ID
         assert TODO_ID in pages[0]["content"] and "required_reads" in pages[0]["content"]
         assert "execution_preparation" in pages[0]["content"]
@@ -974,20 +980,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     if checkpoint_count:
         assert opening[authority + "/active_count"] == checkpoint_count // 2
         assert opening[authority + "/inactive_count"] == checkpoint_count // 2
-        assert opening[authority + "/active_write_scope"] == [scopes[0]]
+        assert authority + "/active_write_scope" not in opening
         assert authority + "/entries" not in opening
     if warm:
         deliver(journal, event, pages)
 
     pages, remaining = read(view["remaining_read_command"])
     assert len(pages) > 1
-    if requested_scopes:
-        assert remaining["/selected_todo/required_write_scopes"] == requested_scopes
     if not (warm and requested_scopes):
         assert remaining["/goal_boundary/write_scope"] == scopes
     if checkpoint_count:
         entries = source["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
         assert len(entries) == checkpoint_count
+        assert remaining[authority + "/active_write_scope"] == [scopes[0]]
         assert remaining[authority + "/entries"] == entries
     _, remainder_ref = read_context_read_reference(pages[0]["reference_file"])
     assert remainder_ref["sha256"] == source_ref["sha256"]

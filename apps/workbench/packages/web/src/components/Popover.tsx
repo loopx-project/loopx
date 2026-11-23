@@ -25,6 +25,8 @@ interface Props {
   onOpen?: () => void;
   /** Read a cold panel before showing it; progress stays in the existing trigger. */
   prepare?: () => Promise<void>;
+  /** An owning action is waiting on another modal; let that modal own dismissal and keys. */
+  suspendDismissal?: boolean;
   children: (close: () => void) => ReactNode;
 }
 
@@ -48,6 +50,7 @@ export function Popover({
   openSignal,
   onOpen,
   prepare,
+  suspendDismissal = false,
   children,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -132,6 +135,7 @@ export function Popover({
     if (!open && !preparing) return;
     // composedPath is captured at dispatch, so it still works if the clicked node is removed by the handler.
     const onDown = (e: MouseEvent | TouchEvent) => {
+      if (suspendDismissal) return;
       // Portaled child menus are still inside their owning menus.
       if (e.composedPath().some(node => node instanceof HTMLElement && node.dataset.popoverParents?.split(' ').includes(panelId))) return;
       const at = anchorRef?.current ?? rootRef.current;
@@ -139,6 +143,7 @@ export function Popover({
       if (at && !e.composedPath().includes(at) && (!panelRef.current || !e.composedPath().includes(panelRef.current))) close();
     };
     const onKey = (e: KeyboardEvent) => {
+      if (suspendDismissal) return;
       // An open inline disclosure consumes Escape before its containing menu.
       if (e.key === 'Escape' && e.target instanceof Element && e.target.closest('[data-menu-disclosure="open"]')) return;
       if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) && e.target instanceof HTMLElement && !e.target.matches('input, textarea')) {
@@ -155,7 +160,7 @@ export function Popover({
       document.removeEventListener('touchstart', onDown);
       document.removeEventListener('keydown', onKey, true);
     };
-  }, [open, preparing, anchorRef]);
+  }, [open, preparing, anchorRef, suspendDismissal]);
   const panel = <>
     <div id={panelId} ref={panelRef} data-popover-parents={parentPanels.join(' ')} style={position} className={`pop-panel anchored-pop align-${align} placement-${placement}${panelClassName ? ` ${panelClassName}` : ''}`} role="menu" aria-label={label}>
       <ParentPanels.Provider value={[...parentPanels, panelId]}>{open && children(close)}</ParentPanels.Provider>

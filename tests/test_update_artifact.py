@@ -35,6 +35,9 @@ except ValueError:pass
 else:raise AssertionError('ambiguous contract accepted by bootstrap')
 history = module['HISTORICAL_DEFAULT_CONTRACT']
 assert module['validate_manifest']({**value, 'default_contract':history})['default_contract']==history
+try:module['validate_default_contract'](history)
+except ValueError:pass
+else:raise AssertionError('reader compatibility promoted the historical contract as publication default')
 for invalid in [None, {}, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
     try:module['validate_manifest']({**value,'default_contract':invalid})
     except ValueError:pass
@@ -124,6 +127,8 @@ def test_qualified_scope_and_historical_metadata_remain_readable():
     assert update.validate_manifest(published) == published
     current = {**historical, "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
     assert update.validate_manifest(current) == current
+    with pytest.raises(ValueError, match="unqualified for public adoption"):
+        update.validate_default_contract(dict(update.HISTORICAL_DEFAULT_CONTRACT))
 
 
 @pytest.mark.parametrize("contract_field", ["default_contract", update.QUALIFIED_DEFAULT_CONTRACT_FIELD])

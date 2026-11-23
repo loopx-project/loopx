@@ -337,6 +337,9 @@ def _apply_selected_todo_guards(
             last_read_at=now_utc_iso(),
             item_count=1 if selected_todo else 0,
         )
+    item_todos = prepared.item.get("agent_todos") if isinstance(prepared.item, Mapping) else None
+    asset_todos = prepared.project_asset.get("agent_todos") if isinstance(prepared.project_asset, Mapping) else None
+    raw_todos = item_todos if isinstance(item_todos, dict) and item_todos else asset_todos
     if not prepared.inbox_priority_due:
         workspace_guard = build_agent_workspace_guard(
             prepared.item,
@@ -345,6 +348,8 @@ def _apply_selected_todo_guards(
             selected_todo=selected_todo,
             current_path=workspace_path,
             local_workspace=local_workspace,
+            project_asset=prepared.project_asset,
+            raw_agent_todo_summary=raw_todos if isinstance(raw_todos, dict) else None,
         )
     boundary_projection_repair = build_boundary_projection_repair_hint(
         {**goal_boundary, "write_scope": [
@@ -355,6 +360,8 @@ def _apply_selected_todo_guards(
         candidate_should_run=bool(route.should_run),
         capability_gate=prepared.capability_gate,
         selected_todo=selected_todo,
+        raw_agent_todo_summary=raw_todos if isinstance(raw_todos, dict) else None,
+        goal_repo=prepared.item.get("repo") if isinstance(prepared.item, dict) else None,
     )
     if not workspace_guard and not boundary_projection_repair:
         return route
@@ -675,6 +682,17 @@ def build_quota_should_run(
             receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
             receipt_bound_replan_review=receipt_bound_replan_review,
         )
+        if runtime_root is not None and turn_instance_id and prepared.agent_frontier_id:
+            prepared.vision_initialization_context = {
+                "runtime_root": str(runtime_root), "goal_id": safe_goal_id,
+                "agent_id": prepared.agent_frontier_id, "turn_instance_id": turn_instance_id,
+                "goal_ref": dict(goal_ref) if goal_ref is not None else None,
+                "receipt_bound": bool(receipt_bound_todo_id or receipt_bound_replan_obligation_id),
+                "todo_summary": prepared.agent_todo_summary,
+                "todo_items": prepared.agent_todo_planning_source_items,
+                "replan_obligation": prepared.replan_obligation,
+                "acceptance_gaps": prepared.goal_frontier_projection.get("acceptance_gaps"),
+            }
         route = _resolve_quota_should_run_route(prepared)
         route = _apply_selected_todo_guards(
             prepared,

@@ -819,13 +819,26 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize(("provider", "peer_goal"), [("file", False), ("sqlite", False), ("sqlite", True)])
+def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_path, monkeypatch, provider, peer_goal):
+    from loopx.control_plane.quota.settlement_workspace_causality import (
+        build_delivery_workspace_causality, delivery_workspace_causality_event_fields,
+    )
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    if peer_goal:
+        config = json.loads(registry.read_text())
+        config["goals"][0]["coordination"]["registered_agents"].append("settlement-peer")
+        registry.write_text(json.dumps(config))
+        _initialize_git_checkout(project)
+        subprocess.run(["git", "-c", "user.name=LoopX Test", "-c", "user.email=test@example.invalid",
+            "commit", "--quiet", "--allow-empty", "-m", "fixture"], cwd=project, check=True)
+        producing_worktree = tmp_path / "producing worktree"
+        subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(producing_worktree)],
+            cwd=project, check=True)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "turn-captured-composed-replan"
     retained = "todo_chain_000000000001"
@@ -837,18 +850,35 @@ def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_pat
     codex_context_hook(str(native), dict(session_id="captured-composed-replan", cwd=str(project),
         hook_event_name="SessionStart", source="startup"))
     cli = str(Path(sys.executable).with_name("loopx"))
-    rc, shown = _run_cli(registry, runtime, "--cli-bin", cli, "quota", "should-run", "--codex-app",
+    guard = ("--cli-bin", cli, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--todo-id", retained, "--context-delivery", "on", "--codex-context-dir", str(native),
-        "--decision-output-dir", str(capture), "--max-page-output-bytes", "64000", cwd=project)
+        "--max-page-output-bytes", "64000")
+    rc, shown = _run_cli(registry, runtime, *guard, "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0 and shown["ok"], shown
+    if peer_goal:
+        # Emulate a historical guard that carried a selected Todo's workspace
+        # causality on the autonomous replan receipt. The current admission
+        # path above defers the Todo without attaching that causality.
+        log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        [event] = [row for row in events if row["event_kind"] == "quota_should_run" and row["run_id"] == turn]
+        causality = build_delivery_workspace_causality({"todo_id": "todo_chain_000000000002"})
+        event["details"].update(delivery_workspace_causality_event_fields(causality))
+        log.write_text("".join(json.dumps(row) + "\n" for row in events))
+        capture = tmp_path / "captured-history"
+        rc, shown = _run_cli(registry, runtime, *guard, "--decision-output-dir", str(capture), cwd=project)
+        assert rc == 0 and shown["ok"], shown
     path = capture / "decision.json"
     raw = path.read_bytes()
     original = json.loads(raw)
     assert original["schema_version"] == "loopx_turn_envelope_v1"
     receipt = original["heartbeat_receipt"]
     identity = receipt["settlement_identity"]
-    assert receipt["status"] == "committed" and identity["binding_kind"] == "autonomous_replan"
+    assert receipt["status"] == ("replayed" if peer_goal else "committed")
+    assert identity["binding_kind"] == "autonomous_replan"
+    if peer_goal:
+        assert receipt["delivery_workspace_causality"]["requirement"] == "unknown"
     assert receipt["pending_action_selection"]["todo_id"] == retained
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
 
@@ -885,7 +915,19 @@ def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_pat
     withheld = [token if token != str(vision) else str(vision.with_name("missing decision.json")) for token in args]
     refusal = run(withheld, expected=1)
     assert not refusal["ok"] and _spend_run_count(runtime) == 0
+    if peer_goal:
+        wrong_workspace = run(args, expected=1)
+        assert "independent git worktree" in json.dumps(wrong_workspace).lower()
+        assert _spend_run_count(runtime) == 0
+        usage = writer["settlement_usage"]
+        assert "independent Git worktree" in usage and "produced" in usage
+        assert "--delivery-workspace-path" in usage
+        args += ["--delivery-workspace-path", str(producing_worktree)]
     settled = run(args)
+    if peer_goal:
+        assert settled["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
+    else:
+        assert "--delivery-workspace-path" not in writer["settlement_usage"]
     assert settled["settlement_progress"]["state"] == "settled"
     assert settled["settlement_identity"] == identity and settled["quota_spend"]["appended"]
     assert settled["autonomous_replan_ack"]["semantic_delta"]["accepted"]

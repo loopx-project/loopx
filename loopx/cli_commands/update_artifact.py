@@ -165,7 +165,7 @@ def public_channel_allows_default(observed: dict[str, Any]) -> bool:
     approved = _ARTIFACT_DEFAULT_CONTRACTS["public_channel"]
     if approved not in ("current", "historical"):
         raise ValueError("Unknown public channel default contract")
-    return observed == _ARTIFACT_DEFAULT_CONTRACTS[approved]
+    return bool(observed == _ARTIFACT_DEFAULT_CONTRACTS[approved])
 
 
 def verify_runtime_installation_qualification(

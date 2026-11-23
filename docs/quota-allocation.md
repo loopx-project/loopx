@@ -814,23 +814,35 @@ loopx --format json quota should-run \
   --available-capability benchmark_runner
 ```
 
-A live `quota should-run` or executing `turn run-once` automatically remembers,
-through the admitted turn-start capability hook, these five runtime observations
-for the registered Agent on this host:
+A live `quota should-run`, executing `turn run-once`, committed `refresh-state` /
+`quota spend-slot` / `quota monitor-poll` settlement, or verified live external
+capability execution (such as Goal-bound `pr-review` or `issue-fix pr-lifecycle --fetch-metadata`)
+automatically remembers these five runtime observations for the registered Agent
+on this host:
 `network`, `benchmark_runner`, `external_evidence_poll`, `worker_bridge`, and
-`cli_bridge`. Later decisions, including `quota spend-slot` and `monitor-poll`
-rechecks, read that Agent's observations without repeating flags. Goal/project
-`available_capabilities` declarations are inherited dynamically; Agent observations
-never write back into Goal configuration or propagate to peer Agents.
+`cli_bridge`. In addition, when the host is not in a network-disabled sandbox
+(`CODEX_SANDBOX_NETWORK_DISABLED=1` / `LOOPX_OFFLINE=1`) and local GitHub CLI
+polling readiness (`gh` + configured auth/token) is detected, LoopX probes
+`external_evidence_poll` automatically by default (`probed`) so fresh Goals and
+Agents observe upstream PR/evidence dependencies out of the box without manual
+`agent-capabilities --execute` or `--available-capability` ceremony. Later
+decisions, including `heartbeat-prompt` pre-quota projection, `quota spend-slot`,
+and `monitor-poll` rechecks, read that Agent's effective availability without
+repeating flags. Goal/project `available_capabilities` declarations are
+inherited dynamically; Agent observations never write back into Goal configuration
+or propagate to peer Agents.
 The hook declares only its Agent-private write scope, returns no private payload,
 and fails in isolation; quota selection itself performs no provider or memory write.
 
-The scope is the resolved runtime root, registry path, Goal id and registered
-Agent id. Separate hosts/runtimes or registries do not inherit these observations.
-A reused Agent id in the same scope refers to the same runtime declaration;
-use distinct Agent identities for environments with different tools. Observations
-are caller declarations, not independently verified probe receipts. They persist
-until corrected or forgotten; omission of a flag does not revoke them.
+The scope is the resolved runtime root, canonical project `source_registry` path
+(unifying synced `registry.global.json` mirrors with the project's `.loopx/registry.json`),
+Goal id and registered Agent id. Separate hosts/runtimes or unrelated registries do
+not inherit these observations. A reused Agent id in the same scope refers to the
+same runtime declaration; use distinct Agent identities for environments with
+different tools. Explicit negative observations (`--unavailable-capability`)
+override both Goal inheritance and automatic host probes (`probed`), and are
+preserved across passive task-facing executions until explicitly cleared or replaced.
+Explicit and verified observations persist until corrected or forgotten. A forget masks the old mirror value on subsequent reads. Local readiness probes apply to the current invocation. A network-disabled host suppresses PR polling even with an earlier positive observation.
 
 ```bash
 # Read current Agent observations and inherited/effective declarations.

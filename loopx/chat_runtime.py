@@ -26,7 +26,10 @@ from .chat_manager import (
 from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, apply_context_handoff
 from .chat.session_open import ChatSessionLifecycleMixin
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
-from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter, start_attachment_turn
+from .capabilities.native_chat.codex_adapter import (
+    CodexAppServerAdapter as CodexAppServerAdapter,
+    start_attachment_turn,
+)
 from .capabilities.native_chat.steward_managed_mode import require_managed_agent_session
 from .capabilities.native_chat.turn_release import TurnReleaseWakeup
 from .control_plane.collaboration import conversation_scope
@@ -37,7 +40,8 @@ from .capabilities.manager_context.team_plan import (
     team_plan_admission_context,
 )
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
-from .chat_agent import CodexChatAgentError, CodexChatTimeoutError
+from .chat_agent import CodexChatAgentError as CodexChatAgentError
+from .chat_agent import CodexChatTimeoutError
 from .chat_codex_goal import (
     CodexGoalDriver,
     UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE,

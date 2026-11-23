@@ -568,7 +568,7 @@ def collect_history(
         spawn_policy = _as_dict(raw_spawn_policy) if isinstance(raw_spawn_policy, dict) else None
         explore_harness = (spawn_policy or {}).get("explore_harness")
         raw_guards = meta.get("guards")
-        quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
+        quota = goal_quota_with_spend_ledger(meta, goal_runs, runs_dir=index_path.parent) if registry_member else None
         if quota is not None and index_snapshot.undecodable_count:
             # The undecodable rows may be the spend or void events the projection
             # just summed without them; report that instead of an exact count.

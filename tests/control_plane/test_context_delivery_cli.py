@@ -495,6 +495,63 @@ def test_optional_capture_projection_failure_falls_back_without_hiding_source(tm
     assert json.loads((tmp_path / "projection.json").read_bytes()) == payload
 
 
+@pytest.mark.parametrize("case", ["inline", "stateless_inline", "large_todo", "small_output"])
+def test_c1_work_opening_carries_current_inputs_or_preserves_the_reader(tmp_path, monkeypatch, case):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+    from test_quota_settlement_cli import _initialize_fixture_authority
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    if case == "large_todo":
+        source = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        original = source.read_text(encoding="utf-8")
+        source.write_text(original.replace("Validate and settle the selected delivery.",
+            "Validate the current decision, then preserve each obligation. " * 60), encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode="hard_lease")
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+    rc, claim = _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)
+    assert rc == 0 and claim["ok"]
+    native, captures = tmp_path / "native", tmp_path / "captured"
+    native.mkdir(mode=0o700)
+    captures.mkdir()
+    monkeypatch.setenv("CODEX_THREAD_ID", "inline-work-session")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on" if case != "stateless_inline" else "auto")
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+    codex_context_hook(str(native), {"session_id": "inline-work-session", "cwd": str(project),
+        "hook_event_name": "SessionStart", "source": "startup"})
+    turn = "inline-work"
+    limit = ("--max-page-output-bytes", "5000") if case == "small_output" else ()
+    delivery = ("--context-delivery", "auto") if case == "stateless_inline" else (
+        "--context-delivery", "on", "--codex-context-dir", str(native))
+    rc, view = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli", *binding,
+        "--turn-instance-id", turn, "--decision-output-root", str(captures), "--complete-turn", *delivery, *limit,
+        cwd=project)
+    assert rc == 0 and view["ok"], view
+    original, = captures.rglob("decision.json")
+    complete = json.loads(original.read_bytes())
+    assert complete["normal_delivery_allowed"] and complete["heartbeat_receipt"]["turn_instance_id"] == turn
+    recovery = read_context_read_reference(view["recovery"]["reference_file"])[1]
+    assert hashlib.sha256(Path(recovery["path"]).read_bytes()).hexdigest() == recovery["sha256"]
+    if case in {"inline", "stateless_inline"}:
+        opening = view["work_opening"]
+        interaction = complete["interaction_contract"]
+        plan = interaction["cli_channel"]["settlement_plan"]
+        writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+        assert opening["selected_todo"] == complete["selected_todo"]
+        assert opening["settlement_identity"] == plan["identity"]
+        assert opening["settlement_command"] == writeback["semantic_closeout_command_template"]
+        assert view["before_work"]["work_context"] == interaction["agent_channel"]["work_context"]
+        assert view["before_work"]["execution_preparation"] == interaction["cli_channel"]["execution_preparation"]
+        assert view["before_work"]["work_lane_contract"] == complete["work_lane_contract"]
+        assert len(json.dumps(opening, ensure_ascii=False, separators=(",", ":")).encode()) <= 2048
+    else:
+        assert "work_opening" not in view and "before_work" not in view
+        assert "context-read" in view["recovery"]["command"]
+        if case == "small_output":
+            assert len(json.dumps(view, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 5000
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("output_limit", [None, 7900])
 def test_native_context_cli_without_retention_exposes_files_and_preserves_receipt(tmp_path, monkeypatch, provider, output_limit):

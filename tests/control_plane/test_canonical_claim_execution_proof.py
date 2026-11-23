@@ -48,7 +48,7 @@ def test_claim_replay_uses_current_execution(tmp_path, monkeypatch, provider, re
         first = cli(["todo", "claim"], *request)
         assert first["status"] == "applied"
         assert first["lease"]["version"] == first["lease"]["lease_epoch"] == 1
-        assert first["lease"]["write_scopes"] == ["src/**"]
+        assert first["lease"]["write_scopes"] == []
         renewed = cli(["task-lease", "renew"], *lease_args, "--expected-version", "1", "--ttl-seconds", "600")
         replay = cli(["todo", "claim"], *request)
         assert replay["status"] == "replayed"

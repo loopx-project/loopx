@@ -54,10 +54,15 @@ def validate_handoff_context(value: Any, count: int) -> list[dict[str, Any]]:
 
 
 def project_handoff_context(sources: list[dict[str, Any]], *,
-                            followups: list[dict[str, Any] | None] | None = None) -> list[dict[str, Any]]:
+                            followups: list[dict[str, Any] | None] | None = None,
+                            index_labels: list[dict[str, Any] | None] | None = None) -> list[dict[str, Any]]:
     from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
 
-    if followups is not None and len(followups) != len(sources):
+    if index_labels is not None and followups is not None:
+        raise ValueError("handoff index labels and full followups are mutually exclusive")
+    field = "handoff_index_labels" if index_labels is not None else "handoff_followups"
+    second_stage = index_labels if index_labels is not None else followups
+    if second_stage is not None and len(second_stage) != len(sources):
         raise ValueError("handoff followup cardinality mismatch")
     results: list[dict[str, Any]] = []
     # This lens is row-independent: byte-bounded transport batches preserve
@@ -65,12 +70,12 @@ def project_handoff_context(sources: list[dict[str, Any]], *,
     start, size = 0, 0
     for index in range(len(sources) + 1):
         row_size = 0 if index == len(sources) else len(json.dumps(sources[index], separators=(",", ":")).encode()) + 2
-        if followups is not None and index < len(sources):
-            row_size += len(json.dumps(followups[index], separators=(",", ":")).encode()) + 2
+        if second_stage is not None and index < len(sources):
+            row_size += len(json.dumps(second_stage[index], separators=(",", ":")).encode()) + 2
         if index > start and (index == len(sources) or size + row_size > MAX_REQUEST_BYTES - 4096):
             try:
                 result = effect_runtime_result("todo.context.page", {"handoff_sources": sources[start:index],
-                    **({"handoff_followups": followups[start:index]} if followups is not None else {})})
+                    **({field: second_stage[start:index]} if second_stage is not None else {})})
             except EffectRuntimeRejected as error:
                 raise ValueError(str(error)) from error
             results.extend(validate_handoff_context(result.get("handoff_context") if isinstance(result, dict) else None, index - start))
@@ -81,7 +86,7 @@ def project_handoff_context(sources: list[dict[str, Any]], *,
             # typed credential exclusion or add a Python fallback decision.
             try:
                 result = effect_runtime_result("todo.context.page", {"handoff_sources": sources[index:index + 1],
-                    **({"handoff_followups": followups[index:index + 1]} if followups is not None else {})},
+                    **({field: second_stage[index:index + 1]} if second_stage is not None else {})},
                     large_local_snapshot=True)
             except EffectRuntimeRejected as error:
                 raise ValueError(str(error)) from error

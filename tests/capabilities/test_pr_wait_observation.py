@@ -613,3 +613,73 @@ def test_unsatisfied_and_failed_observations_survive_restart_with_bounded_retry(
     clock[0] = "2026-10-01T01:30:00Z"
     assert run_heartbeat_pre_quota(**args)["checks"]["pr_dependencies"]["external_read_count"] == 1
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_prequota_observes_blocked_and_transitive_peer_pr_dependencies(tmp_path, monkeypatch, provider):
+    from loopx.capabilities.issue_fix import pr_lifecycle
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(
+        tmp_path, provider=provider, registered_agents=["agent-a", "agent-b"],
+    )
+    config = json.loads(registry.read_text())
+    config["goals"][0]["available_capabilities"] = ["external_evidence_poll"]
+    registry.write_text(json.dumps(config))
+
+    blocked_id = add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Blocked task waiting on merged PR", claimed_by="agent-a",
+        status="blocked", note="Waiting on upstream PR merge",
+        resume_when="pr_merged:owner/repo#77",
+    )["todo_id"]
+    peer_prereq_id = add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Peer prerequisite waiting on merged PR", claimed_by="agent-b",
+        status="deferred", resume_when="pr_merged:owner/repo#88",
+    )["todo_id"]
+    add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Active lane task blocked on peer prerequisite completion", claimed_by="agent-a",
+        task_class="advancement_task", resume_when=f"todo_done:{peer_prereq_id}",
+    )
+    unrelated_peer_id = add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Unrelated foreign PR wait", claimed_by="agent-b",
+        status="deferred", resume_when="pr_merged:owner/repo#99",
+    )["todo_id"]
+    monitor_peer_id = add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Peer PR wait referenced only by a future continuous monitor", claimed_by="agent-b",
+        status="deferred", resume_when="pr_merged:owner/repo#106",
+    )["todo_id"]
+    add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Watch-only monitor not yet due", claimed_by="agent-a",
+        task_class="continuous_monitor",
+        monitor_metadata={"next_due_at": "2026-11-01T00:00:00Z", "cadence": "24h"},
+        resume_when=f"todo_done:{monitor_peer_id}",
+    )
+
+    seen: list[int] = []
+
+    def fetch(reference, **kwargs):
+        num = int(reference["number"])
+        seen.append(num)
+        return {
+            "state": "MERGED",
+            "mergedAt": "2026-10-01T00:00:00Z",
+            "url": f"https://github.com/owner/repo/pull/{num}",
+        }
+
+    monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
+    result = run_heartbeat_pre_quota(
+        registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="goal-a", agent_id="agent-a",
+    )["checks"]["pr_dependencies"]
+    assert result["merged_count"] == 2
+    assert sorted(seen) == [77, 88]
+    assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=blocked_id)["todo"]["resume_ready"] is True
+    assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=peer_prereq_id)["todo"]["resume_ready"] is True
+    assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=unrelated_peer_id)["todo"]["resume_ready"] is False
+    assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=monitor_peer_id)["todo"]["resume_ready"] is False

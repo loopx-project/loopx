@@ -52,6 +52,7 @@ def register_heartbeat_control_commands(
             "agent id and a receipt-producing runtime profile."
         ),
     )
+    heartbeat_prompt_parser.add_argument("--resume-codex-session-id", help=argparse.SUPPRESS)
     heartbeat_prompt_parser.add_argument(
         "--agent-scope",
         dest="agent_scopes",

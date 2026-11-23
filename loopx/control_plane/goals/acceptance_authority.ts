@@ -1,4 +1,4 @@
-import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
+import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome, handoffGoalOutcomes,
   outcomeContextNavigation, outcomePlanningReadback, serializeGoalOutcomes} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
@@ -59,7 +59,7 @@ function source(store: AuthorityStore, result: JsonObject): JsonObject {
 function failure(reason_code: string, reason: string): JsonObject & {schema_version: typeof RESULT_SCHEMA} {
   return {schema_version: RESULT_SCHEMA, status: "failed", changed: false, reason_code, reason};
 }
-function receiptFor(request: JsonObject, kind: "configure" | "verify" | "refine" | "revise-objective" | "adopt-objective") {
+function receiptFor(request: JsonObject, kind: "configure" | "verify" | "refine" | "handoff" | "revise-objective" | "adopt-objective") {
   // Transport location and dry-run are not operation content. Everything else,
   // including the exact supplied document/results and expected CAS, is bound.
   const content = Object.fromEntries(Object.entries(request).filter(([key]) => !LOCAL_FIELDS.includes(key)));
@@ -235,6 +235,32 @@ export async function refineGoalAcceptanceOutcome(store: AuthorityStore, value: 
     next_projection: next, events: [{schema_version: RECEIPT_SCHEMA, kind: "goal_outcome_refined", goal_id: goalId,
       operation_id: request.operation_id, revision: state.revision}], receipts: [{...command.identity,
         result: state.schema_version === "loopx_goal_outcomes_v0" ? result : {...result, goal_acceptance_contract: {}}}]});
+  return replayWithCurrentProjection(store, committed, goalId);
+}
+
+/** Owner-only transfer. Replay the original atomic selection even after a later
+ * registration or outcome changes. The roster is observed anew for a fresh write. */
+async function handoffGoalAcceptanceOutcomes(store: AuthorityStore, request: JsonObject): Promise<JsonObject> {
+  acceptanceKeys(request, [...REQUEST_FIELDS, "document", "registered_agents"], [...LOCAL_FIELDS, "goal_ref"]);
+  acceptanceRequire(request.actor_agent_id === null, "outcome handoff requires the local owner");
+  acceptanceRequire(request.dry_run === undefined || typeof request.dry_run === "boolean", "dry_run must be boolean");
+  for (const key of ["goal_id", "operation_id", "expected_provider_revision"]) requireAuthorityStoreId(request[key], key);
+  const {registered_agents, ...intent} = request;
+  const command = receiptFor(intent, "handoff");
+  const observed = await command.receipt.observe(store);
+  const goalId = String(request.goal_id);
+  if (observed.kind === "receipt") return replayWithCurrentProjection(store, observed.result, goalId);
+  const head = current(observed.authority, request);
+  if (!loaded(head)) return source(store, head);
+  const state = handoffGoalOutcomes(head.head, goalId, requestGoalRef(request), request.document, registered_agents);
+  const next = {...head.head, goal_outcomes: serializeGoalOutcomes(state)};
+  const result = {goal_id: goalId, operation_id: request.operation_id, handoff: request.document};
+  if (request.dry_run === true) return source(store, {...result, status: "planned", dry_run: true, changed: false,
+    provider_revision: head.provider_revision, goal_acceptance_contract: projectGoalAcceptance(next, goalId)});
+  const committed = await command.receipt.commit(store, {operation_id: String(request.operation_id),
+    expected_provider_revision: head.provider_revision, next_projection: next,
+    events: [{schema_version: RECEIPT_SCHEMA, kind: "goal_outcomes_handed_off", ...result, revision: state.revision}],
+    receipts: [{...command.identity, result: {...result, goal_acceptance_contract: {}}}]});
   return replayWithCurrentProjection(store, committed, goalId);
 }
 
@@ -616,7 +642,7 @@ export async function inspectGoalAcceptance(
     goal_acceptance_contract: contract});
 }
 
-async function local(value: unknown, kind: "inspect" | "configure" | "verify" | "lifecycle" | "refine" | "objective"): Promise<JsonObject> {
+async function local(value: unknown, kind: "inspect" | "configure" | "verify" | "lifecycle" | "refine" | "handoff" | "objective"): Promise<JsonObject> {
   let store: AuthorityStore | undefined;
   try {
     const request = canonicalAuthorityObject(value, "local acceptance request");
@@ -638,6 +664,7 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
       }
       if (kind === "configure") return configureGoalAcceptance(store, request);
       if (kind === "refine") return refineGoalAcceptanceOutcome(store, request);
+      if (kind === "handoff") return handoffGoalAcceptanceOutcomes(store, request);
       if (kind === "objective") return updateGoalObjective(store, request);
       return kind === "verify"
         ? commitGoalAcceptanceVerification(store, request)
@@ -683,4 +710,8 @@ export async function refineLocalGoalAcceptanceOutcome(value: unknown): Promise<
 }
 export async function updateLocalGoalObjective(value: unknown): Promise<JsonObject> {
   return local(value, "objective");
+}
+
+export async function handoffLocalGoalAcceptanceOutcomes(value: unknown): Promise<JsonObject> {
+  return local(value, "handoff");
 }

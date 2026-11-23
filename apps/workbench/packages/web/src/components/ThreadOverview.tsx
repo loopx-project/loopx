@@ -84,12 +84,14 @@ type OverviewProps = {
   detail?: OverviewSection;
   /** Drawn above the sections: what the conversation is on besides files and agents (its LoopX Goal). */
   goal?: ReactNode;
+  /** Expanded Goal readers use a bounded scroll region instead of the pinned preview height. */
+  goalExpanded?: boolean;
 };
 type Layout = { height: number; sections: Section[]; counts: Partial<Record<Section, number>> };
 
 /** Preview counts are chosen once per opening; refreshes keep the same slots and footer. */
 export function ThreadOverview(props: OverviewProps) {
-  const { chain, api, threadId, updatedAt, active, team, agents, plan, roots, loadFile, onOpenMember, onOpenDiff, onOpenFile, onPreview, onOpenPicture, onOpenTrace, onClose, onViewAll, onLoadingChange, persistent = false, detail, goal } = props;
+  const { chain, api, threadId, updatedAt, active, team, agents, plan, roots, loadFile, onOpenMember, onOpenDiff, onOpenFile, onPreview, onOpenPicture, onOpenTrace, onClose, onViewAll, onLoadingChange, persistent = false, detail, goal, goalExpanded = false } = props;
   const reading = useOverviewReading(api, threadId, updatedAt, active);
   const { outputs, stats, loading, failed } = reading;
   const ready = Boolean(outputs || failed);
@@ -139,7 +141,7 @@ export function ThreadOverview(props: OverviewProps) {
   }, [detail]);
 
   useLayoutEffect(() => {
-    if (detail || !ready || !root.current) return;
+    if (detail || goalExpanded || !ready || !root.current) return;
     // The sections are pinned per opening so refreshes keep their slots — but the panel must
     // still grow when what it holds grows: a section that lands late (the team usually arrives
     // after the outputs) or a group that gains a row (the team goes from one member to two).
@@ -238,7 +240,7 @@ export function ThreadOverview(props: OverviewProps) {
       {!outputs && <p className="overview-empty" role={failed ? 'alert' : 'status'}>{t(failed ? 'overview.failed' : 'common.loading')}</p>}{content}{!available.length && outputs && !failed && <p className="overview-empty">{t('overview.empty')}</p>}
     </div>
   </div>;
-  return <div ref={root} className="thread-overview" data-ready={ready && Boolean(layout)} data-limit={limit} aria-busy={loading} style={{ height: layout?.height }}>
+  return <div ref={root} className={`thread-overview${goalExpanded ? ' with-goal-details' : ''}`} data-ready={ready && (goalExpanded || Boolean(layout))} data-limit={limit} aria-busy={loading} style={{ height: goalExpanded ? undefined : layout?.height }}>
     <div className="overview-content">{goal}{content}{failed && !outputs && <p className="overview-empty" role="status">{t('overview.failed')}</p>}{!sections.length && !goal && ready && !failed && <p className="overview-empty">{t(available.length ? 'overview.newContent' : 'overview.empty')}</p>}</div>{footer}
   </div>;
 }

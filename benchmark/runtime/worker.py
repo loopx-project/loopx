@@ -82,7 +82,8 @@ def loopx_command(env: dict[str, str]) -> list[str]:
 
 
 def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
-                   decision_handoff_socket: str | None = None) -> str:
+                   decision_handoff_socket: str | None = None,
+                   resume_codex_session_id: str | None = None) -> str:
     command = loopx_command(env) + [
         "heartbeat-prompt",
         "--thin",
@@ -101,6 +102,8 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     ]
     if not native_goal:
         command += ["--turn-instance-id", turn_id]
+        if resume_codex_session_id:
+            command += ["--resume-codex-session-id", resume_codex_session_id]
     reject_retired_turn_display(env)
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "on" else None
     if decision_handoff_socket is not None or context_dir:
@@ -724,12 +727,11 @@ def run_once(env: dict[str, str]) -> dict:
             body = render_planning_prompt(planning_before, env)
             (wake / "planning-input.json").write_text(body, encoding="utf-8")
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
-        elif execution.mode in {"heartbeat", "loopx-goal"}:
-            body = heartbeat_body(env, turn_id, native_goal=execution.native_goal,
-                                  decision_handoff_socket=checkpoint_wake.socket_path)
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
         session_wake = None
+        fresh_context_prefix = ""
+        resumed_session_id = None
         if execution.mode in {"heartbeat", "turn"} and not (execution.mode == "turn" and stage == "execute"):
             from benchmark.runtime.sessions import BenchmarkSessionWake
 
@@ -740,13 +742,20 @@ def run_once(env: dict[str, str]) -> dict:
             session_wake = BenchmarkSessionWake(env, session_execution, receipt)
             if expected_session and session_wake.session_id != expected_session:
                 raise ValueError("Host retry requires its original Codex session")
+            if not expected_session and session_wake.binding is not None:
+                resumed_session_id = session_wake.session_id
             receipt["host_invoked"] = False
             if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_WARM_START"):
                 from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
 
-                body = prepare_session_refresh(env, session_wake, wake) + body
+                fresh_context_prefix = prepare_session_refresh(env, session_wake, wake)
                 if expected_session and session_wake.session_id != expected_session:
                     raise ValueError("Host retry cannot replace its original Codex session")
+                if fresh_context_prefix or session_wake.session_id != resumed_session_id:
+                    resumed_session_id = None
+        if stage != "plan" and execution.mode in {"heartbeat", "loopx-goal"}:
+            body = fresh_context_prefix + heartbeat_body(env, turn_id, native_goal=execution.native_goal,
+                decision_handoff_socket=checkpoint_wake.socket_path, resume_codex_session_id=resumed_session_id)
         if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_CHECKPOINT_REQUEST"):
             from benchmark.runtime.checkpoint import capture_before_replan
 

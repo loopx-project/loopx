@@ -531,7 +531,7 @@ const VALIDATION_FAILURE_CODES = new Set([
   "invalid_idempotency_key",
   ...PERMISSION_DENIED_CODES,
   "todo_lease_conflict",
-  "write_scope_conflict",
+  "workspace_lease_conflict",
   "lease_generation_exhausted",
   "authority_source_changed",
   "corrupt_lease",

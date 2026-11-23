@@ -1,6 +1,14 @@
 import type { zh } from './zh';
 
 export const ja: typeof zh = {
+  goalOnly: '長期目標のみ',
+  goalPaused: '一時停止',
+  goalReady: '紐付け済み',
+  goalWork: 'タスクあり',
+  goalUnknown: '状態不明',
+  goalRefreshed: '更新済み',
+  goalIncomplete: '状態に欠落',
+  goalMissingResult: '成果物なし',
   title: 'ボード',
   backlog: '後で',
   doing: '進行中',
