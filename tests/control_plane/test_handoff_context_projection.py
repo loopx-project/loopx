@@ -209,7 +209,8 @@ def test_python_sequence_and_scalar_facts_cross_the_retained_facade():
     result = compact_todo_summary_items([row], strip_text=True)[0]
     assert result["text"] == "('Check', True)"
     assert result["continuation_hint"] == "1.0"
-    assert result["required_write_scopes"] == ["True", "1.0", "docs/**"]
+    assert "required_write_scopes" not in result
+    assert row["required_write_scopes"] == (True, 1.0, "docs/**", "../bad")
     assert result["excluded_agents"] == ["agent-b"]
     assert result["decision_scope"]["scope_key"] == "1.0"
     assert result["handoff_note"]["successor_todo_ids"] == ["todo_next"]
