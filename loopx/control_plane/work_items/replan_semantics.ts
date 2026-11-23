@@ -280,7 +280,8 @@ function lifecycleObligation(request: JsonObject): JsonObject | null {
       triggers.length !== Math.min(3, items.length) ||
       triggers.some((trigger, index) => trigger.kind !== "completed_advancement_without_successor" ||
         trigger.agent_id !== request.agent_id || trigger.todo_id !== items[index].todo_id ||
-        trigger.completion_turn_key !== items[index].completion_turn_key)) return null;
+        // Admission records a Todo without a completion key as null; the Todo row omits the key.
+        (trigger.completion_turn_key ?? null) !== (items[index].completion_turn_key ?? null))) return null;
   // New independent work may change the frontier before the admitted lifecycle
   // is closed. Preserve its exact pending actions; recovery is not settlement.
   if (source.settled !== true) {
