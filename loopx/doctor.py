@@ -1024,6 +1024,15 @@ def collect_doctor(
         capture_host_diagnostics_detail,
         collect_capture_host_diagnostics,
     )
+    from .control_plane.agents.host_delivery_diagnosis import (
+        collect_host_delivery_diagnosis_route,
+        host_delivery_diagnosis_check,
+    )
+
+    host_delivery_diagnosis = collect_host_delivery_diagnosis_route(
+        registry_path=default_global_registry,
+        route_status=str(local_state_route["status"]),
+    )
 
     decision_context_capture = collect_capture_host_diagnostics(selected_runtime_root)
     typescript_control_plane = collect_effect_runtime_readiness(deep=deep)
@@ -1172,6 +1181,7 @@ def collect_doctor(
                 sort_keys=True,
             ),
         },
+        host_delivery_diagnosis_check(host_delivery_diagnosis),
         {
             "id": "decision_context_capture_hosts_healthy",
             "required": False,
@@ -1240,6 +1250,7 @@ def collect_doctor(
         "global_registry_writability": global_registry_writability,
         "runtime_projection_routes": runtime_projection_routes,
         "decision_context_capture": decision_context_capture,
+        "host_prompt_delivery": host_delivery_diagnosis,
         "typescript_control_plane": typescript_control_plane,
         "install_freshness": install_freshness,
         "upgrade_hint": install_freshness,
@@ -1401,6 +1412,28 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         if isinstance(typescript_control_plane.get("runtime_lifecycle"), dict)
         else {}
     )
+    # Installation-only scope never reads host state, so the section is absent
+    # there rather than rendered as an empty value a reader would misread.
+    host_prompt_delivery = (
+        payload.get("host_prompt_delivery")
+        if isinstance(payload.get("host_prompt_delivery"), dict)
+        else None
+    )
+    host_prompt_delivery_lines: list[str] = []
+    if host_prompt_delivery:
+        stale_ticks = [
+            str(lane.get("last_observed_at"))
+            for lane in host_prompt_delivery.get("lanes") or []
+            if isinstance(lane, dict) and lane.get("window_state") == "stale"
+        ]
+        host_prompt_delivery_lines = [
+            f"- host_prompt_delivery: `{host_prompt_delivery.get('status')}`"
+            f" (reason=`{host_prompt_delivery.get('reason')}`,"
+            f" lanes=`{host_prompt_delivery.get('lane_count')}`,"
+            f" stale=`{(host_prompt_delivery.get('counts') or {}).get('stale')}`)"
+            f" last_ticks=`{','.join(stale_ticks) or 'none'}`"
+            f" labels_withheld=`{bool(host_prompt_delivery.get('labels_withheld'))}`"
+        ]
     lines = [
         "# LoopX Doctor",
         "",
@@ -1426,6 +1459,7 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         f" (registry=`{(payload.get('runtime_projection_routes') or {}).get('registry')}`,"
         f" goals=`{(payload.get('runtime_projection_routes') or {}).get('goal_count')}`,"
         f" counts=`{json.dumps((payload.get('runtime_projection_routes') or {}).get('counts') or {}, sort_keys=True)}`)",
+        *host_prompt_delivery_lines,
         f"- decision_context_capture_hosts_healthy: `{(payload.get('decision_context_capture') or {}).get('healthy')}`"
         f" (hosts=`{(payload.get('decision_context_capture') or {}).get('host_count')}`,"
         f" unhealthy=`{(payload.get('decision_context_capture') or {}).get('unhealthy_count')}`)",

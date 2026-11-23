@@ -108,3 +108,67 @@ to another host, deliver a message or qualify live execution. Homes are searched
 in the order `CODEX_HOME`, `~/.codex`,
 then sibling `~/.codex-*` directories; set `LOOPX_CODEX_HOMES` (an
 `os.pathsep`-separated list) to search exactly those homes instead.
+
+## Missed Delivery Windows
+
+The status route adds `delivery_window` to each observed lane of
+`host_thread_activity`. For a `codex-app` lane the expected cadence comes from
+the `rrule` of the installed heartbeat automation whose prompt names that Goal
+and agent and whose `target_thread_id` is the lane's canonical binding; another
+lane's automation is never read as this one's, and two automations claiming one
+lane leave the window `unknown`. Other surfaces report `unknown` there.
+
+| `state` | Meaning |
+| --- | --- |
+| `fresh` | The lane produced activity inside `expected_interval_minutes × tolerance` (tolerance defaults to 2). |
+| `stale` | The lane's last recorded tick is older than that window. This names the symptom only; it does not name a cause. |
+| `missing` | No observation of this lane was available at all. |
+| `unknown` | The window could not be computed; `reason` is `no_expectation`, `no_observation` or `unparseable_observation`. |
+
+`loopx doctor` reads the same projection once per run and reports it as the
+optional `host_prompt_delivery_windows` check and the `host_prompt_delivery`
+payload: a `status` of `fresh`, `stale`, `unverified` or `not_applicable`, a
+per-state `counts` map, and one row per lane carrying `last_observed_at`,
+`age_hours`, `window_minutes` and the cadence `source`. A `stale` lane carries
+`diagnosis.code = host_prompt_delivery_missed` with the last tick the host did
+record; `missing`/`unknown` lanes carry
+`diagnosis.code = host_prompt_delivery_unverified` and their reason. Only a
+missed window turns the check red — an absent receipt is not proof that the host
+stopped delivering, so it is reported rather than counted as a fault. A run that
+could not measure every lane also leaves the optional check red, with the gap
+named in its detail, because a green check would claim coverage the run did not
+have. The check stays optional either way, so it never fails `loopx doctor` on
+its own.
+
+Stopped Goals are skipped: their automation is no longer a live promise.
+Observation is bounded to 64 lanes per run (`truncated` says whether the bound
+was hit). The shared observer also keeps at most 32 bindings per Goal; a Goal
+past that cap is counted in `incomplete_goals` and also sets `truncated`, since a
+silent lane can hide among the bindings that were not read.
+
+A run that did not measure every lane never reports `fresh`: the lanes it did
+read may all be inside their window while an unread lane is silent. Such a run
+reports `unverified` with `reason = scan_truncated` when the lane bound was hit,
+or `not_applicable` with the same reason when nothing was left to read. A
+binding on an observable surface that names no thread (`unmeasured_bindings`) or
+a Goal whose activation record cannot be read
+(`unreadable_activation_goals`) reports `unverified` with
+`reason = unmeasured_lane`.
+
+Doctor reads each lane's store read-only and never starts a Turn, writes the host
+store or spends quota. A registry this build cannot decode is reported as
+`not_applicable` with `reason = registry_requires_upgrade`, and a missing or
+unreadable one as `registry_unavailable`, so a broken workspace never turns this
+optional check into a doctor failure. `loopx doctor --installation-only` does
+not read host state at all and therefore omits this projection.
+
+A Goal, agent or host surface identifier is free-form registry text, so a lane
+can be named after a directory or a token-shaped string. Such a label is
+replaced before publication by `<redacted:<sha256-prefix>>` plus, when the last
+path segment is itself safe, `:<segment>`; the row carries
+`label_redacted = true`. The digest is stable across runs and differs per
+identifier, so two path-shaped Goals stay distinguishable and an operator can
+still match the lane to the silent Goal. If any unanticipated field still
+violates the public-output boundary, the projection keeps its `status`, counts
+and check verdict and sets `labels_withheld = true` instead of failing the
+whole doctor run.
