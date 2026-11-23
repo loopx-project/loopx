@@ -1,7 +1,7 @@
 import {useManagedConversation} from "../data/use-managed-conversation";
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
-import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory } from "../data/conversation-returns";
+import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, workspaceImageAttachments, managedReplyDocuments } from "../data/conversation-returns";
 import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
@@ -82,7 +82,6 @@ import {
   isTodoProposal,
   type ChatSessionSnapshot,
   type ChatSessionSummary,
-  type ChatImageAttachment,
   type ChatVisibleMessage,
   mergeChatSessionMessages,
   type ManagerChannelBinding,
@@ -566,15 +565,6 @@ type PersonalManagerMessage = {
   text: string;
 };
 
-function workspaceImageAttachments(attachments?: ChatImageAttachment[]): WorkspaceImageAttachment[] | undefined {
-  return attachments?.map((attachment) => ({
-    dataUrl: attachment.data_url,
-    id: attachment.id,
-    mimeType: attachment.mime_type,
-    name: attachment.name,
-    size: attachment.size,
-  }));
-}
 
 type PersonalAgentOption = {
   adapterKind?: string;
@@ -2611,10 +2601,12 @@ function PersonalGoalHome({
         if (sessionIds.current.get(key) === sessionId && !newSessionRequired.current.has(key)) {
           recordSessionAdmission(targetContextId, stored.session);
         }
-        const answer = stored.messages.find((item) =>
-          item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
+        const answer = stored.messages.find(item => item.message_id === `managed.${streamed.turnId}.completed`)
+          ?? stored.messages.find(item => item.turn_id === streamed.turnId && ["agent", "assistant"].includes(item.role));
+        const documents = answer && managedReplyDocuments(answer);
         if (answer) updateConversationMessage(targetContextId, completedMessageId, {
           sourceMessageId: answer.message_id, sourceSessionId: sessionId,
+          ...(documents ? {attachments: documents} : {}),
           sourceCreatedAt: answer.created_at,
           collaboration: answer.collaboration, collaborations: answer.collaborations, returnDelivery: answer.return_delivery,
         });
