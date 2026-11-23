@@ -46,11 +46,11 @@ export async function agentCapabilityMemory(request: JsonObject): Promise<JsonOb
     return join(root, "agent-runtime-capabilities", `${key}.json`);
   };
   const path = scopePath(scope);
-  const readScope = async (targetScope: typeof scope): Promise<{exists: boolean; observations: JsonObject}> => {
+  const readScope = async (targetScope: typeof scope): Promise<{observations: JsonObject; forgotten: string[]}> => {
     let bytes: string;
     try { bytes = await readFile(scopePath(targetScope), "utf8"); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {exists: false, observations: {}};
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {observations: {}, forgotten: []};
       throw error;
     }
     const state = requireJsonObject(JSON.parse(bytes), "agent runtime capability state");
@@ -63,34 +63,38 @@ export async function agentCapabilityMemory(request: JsonObject): Promise<JsonOb
         throw new TypeError("invalid agent runtime capability observation");
       }
     }
-    return {exists: true, observations};
-  };
-  const read = async (): Promise<{canonicalExists: boolean; canonical: JsonObject; merged: JsonObject}> => {
-    let merged: JsonObject = {};
-    for (const registry of legacyRegistries) {
-      const legacy = await readScope({...scope, registry});
-      merged = {...merged, ...legacy.observations};
+    const forgotten = unique(requireStringArray(state.forgotten ?? [], "forgotten"));
+    if (forgotten.some(c => !observable(c) || Object.hasOwn(observations, c))) {
+      throw new TypeError("invalid forgotten runtime capability");
     }
-    const canonical = await readScope(scope);
-    return {
-      canonicalExists: canonical.exists,
-      canonical: canonical.observations,
-      merged: {...merged, ...canonical.observations},
-    };
+    return {observations, forgotten};
   };
   const update = async (): Promise<JsonObject> => {
-    const {canonicalExists, canonical, merged: previous} = await read();
+    const canonical = await readScope(scope);
+    const previous: JsonObject = {};
+    for (const registry of legacyRegistries) {
+      Object.assign(previous, (await readScope({...scope, registry})).observations);
+    }
+    for (const c of canonical.forgotten) delete previous[c];
+    Object.assign(previous, canonical.observations);
     const next = {...previous};
+    const forgotten = new Set(canonical.forgotten);
     for (const c of available) {
       if (!preserveUnavailable || previous[c] !== "unavailable") next[c] = "available";
     }
     for (const c of unavailable) next[c] = "unavailable";
-    for (const c of forget) delete next[c];
+    for (const c of [...available, ...unavailable]) forgotten.delete(c);
+    for (const c of forget) {
+      delete next[c];
+      forgotten.add(c);
+    }
+    const markers = unique([...forgotten]);
     const changed = JSON.stringify(sortedEntries(previous)) !== JSON.stringify(sortedEntries(next));
-    const migrateCanonical = (!canonicalExists && Object.keys(next).length > 0)
-      || JSON.stringify(sortedEntries(canonical)) !== JSON.stringify(sortedEntries(next));
-    const shouldWrite = execute && (changed || (migrateCanonical && (available.length > 0 || unavailable.length > 0 || forget.length > 0)));
-    if (shouldWrite) await durableWriteJson(path, {schema_version: SCHEMA, ...scope, observations: next});
+    const updated = JSON.stringify(sortedEntries(canonical.observations)) !== JSON.stringify(sortedEntries(next))
+      || JSON.stringify(markers) !== JSON.stringify(canonical.forgotten);
+    const shouldWrite = execute && (available.length + unavailable.length + forget.length > 0) && updated;
+    if (shouldWrite) await durableWriteJson(path, {schema_version: SCHEMA, ...scope, observations: next,
+      ...(markers.length ? {forgotten: markers} : {})});
     const project = (observations: JsonObject) => ({
       available: Object.keys(observations).filter(c => observations[c] === "available").sort(lexical),
       unavailable: Object.keys(observations).filter(c => observations[c] === "unavailable").sort(lexical),

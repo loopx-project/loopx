@@ -63,7 +63,6 @@ def probe_local_evidence_providers(
     *,
     source_refs: Sequence[str] = (),
     for_plan: bool = False,
-    live_public_github_probe: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Auto-detect bundled and host-local external-evidence methods."""
@@ -73,9 +72,7 @@ def probe_local_evidence_providers(
 
     providers: list[dict[str, Any]] = []
 
-    if live_public_github_probe or (
-        for_plan and _all_pinned_public_github_sources(source_refs)
-    ):
+    if for_plan and _all_pinned_public_github_sources(source_refs):
         if sandbox_disabled:
             providers.append(
                 {
@@ -137,10 +134,7 @@ def probe_local_evidence_providers(
     )
 
     gh_installed = bool(shutil.which("gh", path=environment.get("PATH")))
-    gh_ready, gh_reason = probe_github_cli_evidence_ready(
-        allow_subprocess=False,
-        env=environment,
-    )
+    gh_ready, gh_reason = probe_github_cli_evidence_ready(env=environment)
     providers.append(
         {
             "provider_id": "method:gh-cli",

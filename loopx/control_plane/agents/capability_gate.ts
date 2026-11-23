@@ -191,10 +191,12 @@ export function projectCapabilityAvailability(request: JsonObject): JsonObject {
     .filter(c => OBSERVABLE_RUNTIME_CAPABILITIES.has(c));
   const unavailable = requireStringArray(state.unavailable ?? [], "agent.unavailable")
     .filter(c => OBSERVABLE_RUNTIME_CAPABILITIES.has(c) && !runtime.includes(c));
-  const runtimeAvailable = unique([...probed, ...remembered, ...runtime]).filter(c => !unavailable.includes(c));
+  const hostUnavailable = requireStringArray(request.host_unavailable ?? [], "host_unavailable");
+  const usable = (c: string) => !unavailable.includes(c) && !hostUnavailable.includes(c);
+  const runtimeAvailable = unique([...probed, ...remembered, ...runtime]).filter(usable);
   return {goal, probed, agent: remembered, unavailable, invocation: runtime,
     runtime_available: runtimeAvailable,
-    effective: unique([...goal, ...runtimeAvailable]).filter(c => !unavailable.includes(c))};
+    effective: unique([...goal, ...runtimeAvailable]).filter(usable)};
 }
 
 export function evaluateCapabilityGate(value: unknown): JsonObject {

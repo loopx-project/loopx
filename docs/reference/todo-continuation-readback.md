@@ -41,9 +41,7 @@ defeats both inherited permission and automatic host probes. No per-command flag
 required on equipped hosts. Shell/filesystem access alone and Todo requirements
 do not grant network access on offline/unconfigured sandboxes.
 Unavailable permission sources return a failure without contacting GitHub.
-Record the capability as unavailable (or set `LOOPX_AUTO_CAPABILITY_PROBE=0` /
-`LOOPX_OFFLINE=1`) to stop future automatic reads; previously verified merge
-facts remain usable.
+Set `LOOPX_AUTO_CAPABILITY_PROBE=0` to disable local discovery. A network-disabled host suppresses PR observation even with a remembered or explicit declaration. Previously verified merge facts remain usable.
 
 Fresh executing `quota should-run` and `turn run-once --execute` compose the
 same registered hook before collecting the governing decision. Compatibility
@@ -107,9 +105,7 @@ provider 失败不能解除等待。观察不修改 Todo 状态、要求、认�
 `gh` CLI 与认证凭据时自动开启）、已记住的宿主观察和本次参数解析
 `external_evidence_poll`；宿主记录的撤销（`--unavailable-capability`）同时优先于继承授权和自动探测。
 本机工具就绪时无需手工传参或预先写入记忆。离线沙箱中仅凭 filesystem/shell 或 Todo 要求不会授予网络
-权限。权限来源不可用时只返回失败，不联系 GitHub。记录能力不可用（或设置
-`LOOPX_AUTO_CAPABILITY_PROBE=0` / `LOOPX_OFFLINE=1`），
-即可停止后续自动读取；已验证合并事实保留。
+权限。权限来源不可用时只返回失败，不联系 GitHub。设置 `LOOPX_AUTO_CAPABILITY_PROBE=0` 可关闭本地探测。宿主禁网时，即使存在历史或显式能力声明也会停止 PR 观察；已验证的合并事实仍然可用。
 
 执行性的 `quota should-run` 与新的 `turn run-once --execute` 在 governing decision
 前组合相同注册 hook；兼容 `heartbeat-prequota` 也调用它。full/thin heartbeat 在宿主

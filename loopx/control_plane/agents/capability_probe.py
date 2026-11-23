@@ -8,11 +8,9 @@ never override explicit `unavailable` revocations recorded in capability memory.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from functools import lru_cache
 import os
 from pathlib import Path
 import shutil
-import subprocess
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _FALSY = frozenset({"0", "false", "no", "off"})
@@ -53,28 +51,8 @@ def _gh_hosts_config_paths(env: Mapping[str, str]) -> tuple[Path, ...]:
     return tuple(candidates)
 
 
-@lru_cache(maxsize=8)
-def _probe_gh_auth_subprocess(gh_executable: str, config_dir: str) -> bool:
-    env = dict(os.environ)
-    if config_dir:
-        env["GH_CONFIG_DIR"] = config_dir
-    try:
-        completed = subprocess.run(
-            [gh_executable, "auth", "status"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-            timeout=1.5,
-            check=False,
-        )
-        return completed.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
 def probe_github_cli_evidence_ready(
     *,
-    allow_subprocess: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> tuple[bool, str | None]:
     """Check whether `gh` CLI can poll external GitHub PR/evidence metadata."""
@@ -99,16 +77,11 @@ def probe_github_cli_evidence_ready(
                 return True, None
         except OSError:
             continue
-    if allow_subprocess:
-        config_dir = str(environment.get("GH_CONFIG_DIR") or "").strip()
-        if _probe_gh_auth_subprocess(gh_executable, config_dir):
-            return True, None
     return False, "gh_auth_not_configured"
 
 
 def probe_host_runtime_capabilities(
     *,
-    allow_subprocess: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Auto-detect default host runtime capabilities without mutating durable state."""
@@ -117,7 +90,6 @@ def probe_host_runtime_capabilities(
         return []
     probed: list[str] = []
     gh_ready, _ = probe_github_cli_evidence_ready(
-        allow_subprocess=allow_subprocess,
         env=environment,
     )
     if gh_ready:

@@ -164,9 +164,8 @@ def turn_start_hook(
     goal_id: str,
     agent_id: str,
     available: Any,
-    probed: Any = None,
 ) -> "TurnStartHookRegistration":
-    """Persist invocation and auto-probed observations through the admitted turn-start hook."""
+    """Persist invocation observations through the admitted turn-start hook."""
 
     from ..capability_hooks import (
         TURN_START_HOOK_RESULT_SCHEMA_VERSION,
@@ -174,36 +173,16 @@ def turn_start_hook(
     )
 
     normalized = normalize_required_capabilities(available)
-    normalized_probed = [
-        cap
-        for cap in normalize_required_capabilities(probed)
-        if cap not in normalized
-    ]
 
     def produce() -> dict[str, Any]:
-        mutated = False
-        if normalized:
-            state = agent_capability_memory(
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                goal_id=goal_id,
-                agent_id=agent_id,
-                available=normalized,
-                execute=True,
-                preserve_unavailable=False,
-            )
-            mutated = mutated or (state.get("written") is True)
-        if normalized_probed:
-            probed_state = agent_capability_memory(
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                goal_id=goal_id,
-                agent_id=agent_id,
-                available=normalized_probed,
-                execute=True,
-                preserve_unavailable=True,
-            )
-            mutated = mutated or (probed_state.get("written") is True)
+        state = agent_capability_memory(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            available=normalized,
+            execute=True,
+        )
         return {
             "schema_version": TURN_START_HOOK_RESULT_SCHEMA_VERSION,
             "hook_id": "agent.capability_memory",
@@ -214,7 +193,7 @@ def turn_start_hook(
             "agent_read_required": False,
             "external_reads_performed": False,
             "external_writes_performed": False,
-            "local_private_state_mutated": mutated,
+            "local_private_state_mutated": state.get("written") is True,
             "private_content_returned": False,
             "provider_payload_returned": False,
             "error_code": None,
@@ -237,19 +216,11 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
     available: Any,
-    probed: Any = None,
 ) -> dict[str, Any]:
     """Compose capability memory without putting provider writes in quota core."""
 
-    from .capability_probe import probe_host_runtime_capabilities
-
     normalized = normalize_required_capabilities(available)
-    resolved_probed = (
-        probe_host_runtime_capabilities(allow_subprocess=True)
-        if probed is None
-        else normalize_required_capabilities(probed)
-    )
-    if not agent_id or (not normalized and not resolved_probed):
+    if not agent_id or not normalized:
         return dispatch
     from ..capability_hooks import dispatch_turn_start_hooks
 
@@ -261,7 +232,6 @@ def extend_turn_start_dispatch(
                 goal_id=goal_id,
                 agent_id=agent_id,
                 available=normalized,
-                probed=resolved_probed,
             ),
         )
     )
@@ -276,11 +246,11 @@ def extend_turn_start_dispatch(
 def resolve_agent_capabilities(
     status_payload: dict[str, Any], *, goal_id: str, agent_identity: dict[str, Any] | None,
     item: dict[str, Any], project_asset: dict[str, Any], available: Any,
-    state: dict[str, Any] | None = None, probed: Any = None,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Read current scoped observations and auto-probed host readiness."""
     from .capability_gate import _evaluate
-    from .capability_probe import probe_host_runtime_capabilities
+    from .capability_probe import host_network_sandbox_disabled, probe_host_runtime_capabilities
     from ..quota.goal_boundary import declared_available_capabilities
 
     root, registry = status_payload.get("runtime_root"), status_payload.get("registry")
@@ -296,16 +266,12 @@ def resolve_agent_capabilities(
             # not drop the entire agent lane; the invocation capabilities and
             # typed goal declarations remain authoritative for this read.
             state = {}
-    resolved_probed = (
-        probe_host_runtime_capabilities(allow_subprocess=False)
-        if probed is None
-        else normalize_required_capabilities(probed)
-    )
     availability = _evaluate(
         "availability",
         goal=[*declared_available_capabilities(item), *declared_available_capabilities(project_asset)],
         runtime=normalize_required_capabilities(available),
-        probed=resolved_probed,
+        probed=probe_host_runtime_capabilities(),
+        host_unavailable=["external_evidence_poll"] if host_network_sandbox_disabled() else [],
         agent=state or {},
     )
     if agent_identity:

@@ -1,6 +1,8 @@
 """Separate CLI processes must share only the registered agent's local observations."""
 import json
 
+import pytest
+
 from loopx.cli import main
 
 from tests.control_plane.test_quota_settlement_cli import (
@@ -266,6 +268,36 @@ def test_global_registry_sync_shares_canonical_source_registry_capability_memory
     assert "heartbeat-prequota" not in revoked_prompt["task_body"]
 
 
+@pytest.mark.parametrize("original", ["available", "unavailable"])
+@pytest.mark.parametrize("via_mirror", [True, False])
+def test_forget_legacy_observation_survives_fresh_registry_reads(tmp_path, original, via_mirror):
+    _, runtime, project = _write_fixture(tmp_path, provider="sqlite")
+    mirror = runtime / "registry.global.json"
+    mirror.parent.mkdir(parents=True, exist_ok=True)
+    mirror.write_bytes(project.read_bytes())
+    args = ("agent-capabilities", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    capability = "external_evidence_poll"
+
+    def observe(registry, *flags):
+        rc, result = _run_cli(registry, runtime, *args, *flags)
+        assert rc == 0, result
+        return result["agent_capabilities"]
+
+    observe(mirror, f"--{original}-capability", capability, "--available-capability", "cli_bridge", "--execute")
+    synced = json.loads(mirror.read_text())
+    synced["goals"][0]["source_registry"] = str(project.resolve())
+    mirror.write_text(json.dumps(synced))
+    clear = ("--forget-capability", capability, "--execute")
+    assert observe(mirror if via_mirror else project, *clear)["written"]
+    assert not observe(mirror if via_mirror else project, *clear)["written"]
+    for registry in (project, mirror):
+        current = observe(registry)
+        assert capability not in current["available"] + current["unavailable"]
+    assert "cli_bridge" in observe(mirror)["available"]
+    observe(mirror, "--available-capability", capability, "--execute")
+    assert set(observe(project)["available"]) == {"cli_bridge", capability}
+
+
 def test_live_task_facing_capability_commands_auto_record_observations(
     tmp_path, monkeypatch, capsys
 ):
@@ -422,6 +454,28 @@ def test_live_task_facing_capability_commands_auto_record_observations(
     ]
 
 
+def test_failed_read_and_unrelated_local_success_do_not_record_availability(tmp_path, monkeypatch):
+    from loopx.capabilities.issue_fix import pr_gate_reconcile as reconcile
+
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="external_evidence_poll", provider="sqlite")
+    receipts = [{"binding": {"todo_id": key, "permalink": "https://github.com/owner/repo/pull/1"}}
+                for key in ("failed", "already-closed")]
+    monkeypatch.setattr(reconcile, "load_issue_fix_pr_review_ack_receipts", lambda **kwargs: receipts)
+
+    def reconcile_one(*, todo_id, **kwargs):
+        if todo_id == "failed":
+            raise ValueError("provider unavailable")
+        return {"ok": True, "external_read_performed": False, "skip_reason": "todo_not_open"}
+
+    monkeypatch.setattr(reconcile, "reconcile_issue_fix_pr_review", reconcile_one)
+    result = reconcile.reconcile_acknowledged_issue_fix_pr_reviews(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id=GOAL_ID,
+        agent_id=AGENT_ID, project=None, fetch_metadata=True,
+    )
+    assert (result["external_read_count"], result["failure_count"]) == (1, 1)
+    assert not (runtime / "agent-runtime-capabilities").exists()
+
+
 def test_fresh_agent_auto_probes_external_evidence_poll_by_default_and_honors_sandbox_or_revocation(
     tmp_path, monkeypatch
 ):
@@ -434,9 +488,6 @@ def test_fresh_agent_auto_probes_external_evidence_poll_by_default_and_honors_sa
     _, runtime, registry = _write_fixture(
         tmp_path, required_capability="external_evidence_poll", provider="sqlite"
     )
-    data = json.loads(registry.read_text())
-    data["goals"][0]["coordination"]["registered_agents"].append("sandbox-peer")
-    registry.write_text(json.dumps(data))
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -536,17 +587,37 @@ def test_fresh_agent_auto_probes_external_evidence_poll_by_default_and_honors_sa
         is True
     )
 
-    # 4. Network-disabled sandbox suppresses automatic probing for unrecorded peers.
-    monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
-    rc, sandbox_state = _run_inproc(
-        "agent-capabilities", "--goal-id", GOAL_ID, "--agent-id", "sandbox-peer"
-    )
-    assert rc == 0, sandbox_state
-    assert sandbox_state["availability"]["probed"] == []
-    assert sandbox_state["availability"]["effective"] == []
+    # A successful first-turn probe alone must not become a durable declaration.
+    assert not (runtime / "agent-runtime-capabilities").exists()
+    scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    monkeypatch.setenv("LOOPX_AUTO_CAPABILITY_PROBE", "0")
+    assert _run_inproc("agent-capabilities", *scope)[1]["availability"]["effective"] == []
+    monkeypatch.delenv("LOOPX_AUTO_CAPABILITY_PROBE")
+    _run_inproc("agent-capabilities", *scope, "--available-capability", "external_evidence_poll", "--execute")
+    pending = add_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id=GOAL_ID, role="agent",
+        claimed_by=AGENT_ID, text="Wait for a second review", resume_when="pr_merged:owner/repo#78",
+    )["todo_id"]
+    for flag in ("LOOPX_OFFLINE", "CODEX_SANDBOX_NETWORK_DISABLED"):
+        monkeypatch.setenv(flag, "1")
+        rc, status = _run_inproc("agent-capabilities", *scope)
+        assert rc == 0 and status["availability"]["effective"] == [], status
+        assert "external_evidence_poll" in status["agent_capabilities"]["available"]
+        assert "heartbeat-prequota" not in _run_inproc("heartbeat-prompt", "--thin", "--codex-app", *scope)[1]["task_body"]
+        rc, poll = _run_inproc("heartbeat-prequota", *scope)
+        assert rc == 0 and poll["checks"]["pr_dependencies"]["external_read_count"] == 0, poll
+        assert len(calls) == 1
+        assert not list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime),
+                                   goal_id=GOAL_ID, todo_id=pending)["todo"]["resume_ready"]
+        monkeypatch.delenv(flag)
 
-    # 5. Explicit revocation overrides automatic probing even when online.
-    monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+    rc, recovered = _run_inproc("heartbeat-prequota", *scope)
+    assert rc == 0 and recovered["checks"]["pr_dependencies"]["external_read_count"] == 1, recovered
+    assert len(calls) == 2
+    assert list_goal_todos(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id=GOAL_ID, todo_id=pending,
+    )["todo"]["resume_ready"]
+
     rc, revoked = _run_inproc(
         "agent-capabilities",
         "--goal-id",

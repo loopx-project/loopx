@@ -842,7 +842,7 @@ same runtime declaration; use distinct Agent identities for environments with
 different tools. Explicit negative observations (`--unavailable-capability`)
 override both Goal inheritance and automatic host probes (`probed`), and are
 preserved across passive task-facing executions until explicitly cleared or replaced.
-They persist until corrected or forgotten; omission of a flag does not revoke them.
+Explicit and verified observations persist until corrected or forgotten. A forget masks the old mirror value on subsequent reads. Local readiness probes apply to the current invocation. A network-disabled host suppresses PR polling even with an earlier positive observation.
 
 ```bash
 # Read current Agent observations and inherited/effective declarations.

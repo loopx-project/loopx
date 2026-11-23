@@ -436,7 +436,7 @@ def reconcile_acknowledged_issue_fix_pr_reviews(
     external_read_count = sum(
         result.get("external_read_performed") is True for result in results
     )
-    if external_read_count > 0 and failure_count < len(results):
+    if any(row.get("ok") is True and row.get("external_read_performed") is True for row in results):
         from ...control_plane.agents.capability_memory import (
             record_verified_agent_capability_observation,
         )

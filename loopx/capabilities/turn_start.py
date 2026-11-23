@@ -17,33 +17,15 @@ def extend_turn_start_dispatch(dispatch: dict[str, Any], *, registry_path: Path,
         return dispatch
     from .issue_fix.pr_wait_hook import turn_start_hook as dependencies
     from ..control_plane.agents.capability_memory import turn_start_hook as capability_memory
-    from ..control_plane.agents.capability_probe import probe_host_runtime_capabilities
 
-    probed = probe_host_runtime_capabilities(allow_subprocess=True)
-    registrations = []
-    if normalize_required_capabilities(available) or probed:
-        mem_opts = dict((provider_options or {}).get("agent-capability-memory", {}))
-        mem_hook = capability_memory(
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            available=available,
-            probed=probed,
-            **mem_opts,
-        )
-        if mem_hook is not None:
-            registrations.append(mem_hook)
-    dep_hook = dependencies(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        available=available,
-        **(provider_options or {}).get("issue-fix", {}),
-    )
-    if dep_hook is not None:
-        registrations.append(dep_hook)
+    factories = [("issue-fix", dependencies)]
+    if normalize_required_capabilities(available):
+        factories.append(("agent-capability-memory", capability_memory))
+    registrations = [hook for capability, factory in factories if (hook := factory(
+        registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
+        agent_id=agent_id, available=available,
+        **(provider_options or {}).get(capability, {}),
+    )) is not None]
     if not registrations:
         return dispatch
     extra = dispatch_turn_start_hooks(registrations)
