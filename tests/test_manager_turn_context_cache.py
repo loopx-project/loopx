@@ -541,3 +541,155 @@ def test_cache_ttl_lru_eviction_thread_safety_and_followthrough_fast_slow_lane_g
     assert "resolve-peer-route" in followthrough
     assert "original_conversation" in followthrough
     assert len(followthrough.encode("utf-8")) <= 24_000
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_cache_skips_transient_todo_subread_failure_and_retries_next_turn(
+    tmp_path: Path, monkeypatch, bound: bool,
+) -> None:
+    registry_path, runtime_root, _ = _setup_registry_and_goal(tmp_path)
+    calls = _stub_fast_portfolio(monkeypatch)
+    session = (
+        _bound_steward_session(tmp_path)
+        if bound
+        else {"session_id": "a" * 32, "goal_id": "loopx-manager", "channel_id": "manager"}
+    )
+    resolver = (lambda _s: ["alpha"]) if bound else None
+
+    subread_calls = 0
+
+    def flaky_goal_details(reg, rt, goal_id, *, owner_scope=False, completed_todo_ids=None):
+        nonlocal subread_calls
+        subread_calls += 1
+        if subread_calls == 1:
+            return {
+                "status": "unavailable",
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "todos": [],
+                "coverage": {"active": None, "included": 0, "omitted": None},
+            }
+        return {
+            "status": "read",
+            "source": "sqlite_v0",
+            "source_revision": "sha256:" + "1" * 64,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "authority_revision": "sqlite:test:1",
+            "coverage": {"active": 1, "included": 1, "omitted": 0},
+            "todos": [{"todo_id": "todo_1", "status": "open", "title": "Ship slice"}],
+            "completed_todos": [],
+            "completed_coverage": {"known": 0, "matched": 0, "included": 0, "omitted": 0, "archive_read": False},
+            "limitations": [],
+        }
+
+    monkeypatch.setattr(manager_ctx, "read_manager_goal_details", flaky_goal_details)
+
+    first = manager_ctx.collect_manager_turn_context(
+        registry_path, session, runtime_root, scope_resolver=resolver, include_details=True,
+    )
+    assert first["goals"][0]["current_todos"]["status"] == "unavailable"
+    assert len(calls) == 1
+    assert subread_calls == 1
+
+    # Immediate retry must NOT serve the failed subread from hot cache; it must re-read and cache the healthy result.
+    second = manager_ctx.collect_manager_turn_context(
+        registry_path, session, runtime_root, scope_resolver=resolver, include_details=True,
+    )
+    assert second["goals"][0]["current_todos"]["status"] == "read"
+    assert len(calls) == 2
+    assert subread_calls == 2
+
+    # Subsequent healthy read hits the hot cache.
+    third = manager_ctx.collect_manager_turn_context(
+        registry_path, session, runtime_root, scope_resolver=resolver, include_details=True,
+    )
+    assert third["goals"][0]["current_todos"]["status"] == "read"
+    assert len(calls) == 2
+    assert subread_calls == 2
+
+
+@pytest.mark.parametrize("with_sqlite", [False, True])
+def test_cache_invalidates_on_same_size_preserved_mtime_runs_index_rewrite(
+    tmp_path: Path, monkeypatch, with_sqlite: bool,
+) -> None:
+    import os
+
+    registry_path, runtime_root, _ = _setup_registry_and_goal(tmp_path)
+    calls = _stub_fast_portfolio(monkeypatch)
+    monkeypatch.setattr(
+        manager_ctx,
+        "read_manager_goal_details",
+        lambda *_a, **_kw: {
+            "status": "read",
+            "source": "sqlite_v0" if with_sqlite else "file_v0",
+            "source_revision": "sha256:" + "2" * 64,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "authority_revision": "rev:1",
+            "coverage": {"active": 0, "included": 0, "omitted": 0},
+            "todos": [],
+            "completed_todos": [],
+            "completed_coverage": {"known": 0, "matched": 0, "included": 0, "omitted": 0, "archive_read": False},
+            "limitations": [],
+        },
+    )
+    if with_sqlite:
+        goal_sha = __import__("hashlib").sha256(b"alpha").hexdigest()
+        sqlite_dir = runtime_root / "authority" / "sqlite-v0"
+        sqlite_dir.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(sqlite_dir / f"authority-{goal_sha}.sqlite")
+        conn.execute("CREATE TABLE t (id INT)")
+        conn.commit()
+        conn.close()
+
+    index_path = runtime_root / "goals" / "alpha" / "runs" / "index.jsonl"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    line_a = json.dumps({
+        "run_id": "run_aaaa",
+        "goal_id": "alpha",
+        "agent_id": "worker",
+        "todo_id": "todo_aaaa",
+        "generated_at": now_iso,
+        "classification": "advancement",
+        "delivery_outcome": "outcome_progress",
+    }) + "\n"
+    line_b = json.dumps({
+        "run_id": "run_bbbb",
+        "goal_id": "alpha",
+        "agent_id": "worker",
+        "todo_id": "todo_bbbb",
+        "generated_at": now_iso,
+        "classification": "advancement",
+        "delivery_outcome": "outcome_progress",
+    }) + "\n"
+    assert len(line_a.encode("utf-8")) == len(line_b.encode("utf-8"))
+    index_path.write_bytes(line_a.encode("utf-8"))
+    orig_stat = index_path.stat()
+
+    owner_session = {"session_id": "a" * 32, "goal_id": "loopx-manager", "channel_id": "manager"}
+    first = manager_ctx.collect_manager_turn_context(
+        registry_path, owner_session, runtime_root, include_details=True,
+    )
+    rev1 = first["goals"][0]["recent_delivery_history"]["source_revision"]
+    assert first["goals"][0]["recent_delivery_history"]["deliveries"][0]["todo_id"] == "todo_aaaa"
+    assert len(calls) == 1
+
+    # Rewrite runs/index.jsonl in-place keeping the exact same inode, byte size, and mtime_ns.
+    with index_path.open("r+b") as fh:
+        fh.seek(0)
+        fh.write(line_b.encode("utf-8"))
+        fh.truncate()
+    os.utime(index_path, ns=(orig_stat.st_atime_ns, orig_stat.st_mtime_ns))
+    after_stat = index_path.stat()
+    assert (after_stat.st_ino, after_stat.st_size, after_stat.st_mtime_ns) == (
+        orig_stat.st_ino,
+        orig_stat.st_size,
+        orig_stat.st_mtime_ns,
+    )
+
+    second = manager_ctx.collect_manager_turn_context(
+        registry_path, owner_session, runtime_root, include_details=True,
+    )
+    rev2 = second["goals"][0]["recent_delivery_history"]["source_revision"]
+    assert rev2 != rev1
+    assert second["snapshot_id"] != first["snapshot_id"]
+    assert second["goals"][0]["recent_delivery_history"]["deliveries"][0]["todo_id"] == "todo_bbbb"
+    assert len(calls) == 2

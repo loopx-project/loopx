@@ -95,6 +95,17 @@ def _stat_signature(path: Path) -> tuple[int, int, int, int] | None:
     return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
 
 
+def _file_content_signature(path: Path) -> tuple[int, int, int, int, str] | None:
+    """Capture stat metadata plus content SHA-256 so same-size/same-mtime rewrites invalidate."""
+    try:
+        st = path.stat()
+        with path.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    except (OSError, ValueError):
+        return None
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, digest)
+
+
 def _head_bytes_digest(path: Path, max_bytes: int) -> str | None:
     fd = None
     try:
@@ -273,10 +284,10 @@ def _goal_local_fingerprint(
                 "provider_marker": _stat_signature(
                     root / "authority" / f"provider-{goal_sha}.json"
                 ),
-                "file_authority": _stat_signature(
+                "file_authority": _file_content_signature(
                     root / "authority" / "file-v0" / f"authority-store-{goal_sha16}.json"
                 ),
-                "file_identity": _stat_signature(
+                "file_identity": _file_content_signature(
                     root / "authority" / "file-v0" / "store-identity"
                 ),
                 "sqlite_authority": _sqlite_bundle_signature(
@@ -284,11 +295,11 @@ def _goal_local_fingerprint(
                 ),
                 "goal_dir": goal_dir_stat,
                 "goal_sqlite": extra_dbs,
-                "todos_json": _stat_signature(goal_dir / "todos.json"),
-                "runs_index": _stat_signature(goal_dir / "runs" / "index.jsonl"),
+                "todos_json": _file_content_signature(goal_dir / "todos.json"),
+                "runs_index": _file_content_signature(goal_dir / "runs" / "index.jsonl"),
                 "rollout_events": _stat_signature(goal_dir / "rollout-event-log.jsonl"),
-                "state_json": _stat_signature(goal_dir / "state.json"),
-                "acceptance_json": _stat_signature(goal_dir / "acceptance.json"),
+                "state_json": _file_content_signature(goal_dir / "state.json"),
+                "acceptance_json": _file_content_signature(goal_dir / "acceptance.json"),
                 "deliveries": _deliveries_dir_signature(goal_dir / "deliveries"),
             }
         )
@@ -310,7 +321,8 @@ def _goal_local_fingerprint(
                     "path": str(storage_path),
                     "stat": st,
                     "sqlite_files": sub_dbs,
-                    "todos_json": _stat_signature(storage_path / "todos.json"),
+                    "todos_json": _file_content_signature(storage_path / "todos.json"),
+                    "runs_index": _file_content_signature(storage_path / "runs" / "index.jsonl"),
                     "deliveries": _deliveries_dir_signature(storage_path / "deliveries"),
                 }
             )
@@ -322,8 +334,8 @@ def _goal_local_fingerprint(
         repo_path = Path(raw_repo).expanduser()
         raw_state_file = str(goal.get("state_file") or "").strip()
         if raw_state_file:
-            declared_state_sig = _stat_signature(repo_path / raw_state_file)
-        repo_registry_sig = _stat_signature(repo_path / ".loopx" / "registry.json")
+            declared_state_sig = _file_content_signature(repo_path / raw_state_file)
+        repo_registry_sig = _file_content_signature(repo_path / ".loopx" / "registry.json")
 
     return {
         "goal_id": goal_id,
@@ -456,6 +468,19 @@ def get_cached_manager_turn_context(
 def _is_cacheable_coverage(context: Mapping[str, Any]) -> bool:
     if context.get("status") == "unavailable" or context.get("warnings"):
         return False
+    goals = context.get("goals")
+    if goals is not None:
+        if not isinstance(goals, list):
+            return False
+        for row in goals:
+            if not isinstance(row, Mapping):
+                return False
+            current_todos = row.get("current_todos")
+            if isinstance(current_todos, Mapping) and current_todos.get("status") in {"unavailable", "conflicting"}:
+                return False
+            delivery_history = row.get("recent_delivery_history")
+            if isinstance(delivery_history, Mapping) and delivery_history.get("status") == "conflicting":
+                return False
     coverage = context.get("coverage")
     if not isinstance(coverage, Mapping):
         return False
