@@ -743,10 +743,15 @@ def _return_provider(plan, source, sender, record_attempt):
             "idempotency_key": sent.get("idempotency_key")}
 
 
+class _PriorDispatchUnknown(Exception):
+    """The original worker could have sent before it saved a provider locator."""
+
+
 class _ReturnAttemptRecorder:
     """Keep dispatch and locator checkpoints fenced to the same return."""
 
-    def __init__(self, transact, checkpoint, exact):
+    def __init__(self, transact, checkpoint, exact, original_provider):
+        self.original_provider = original_provider
         self.transact = transact
         self.checkpoint = checkpoint
         self.exact = exact
@@ -754,11 +759,19 @@ class _ReturnAttemptRecorder:
     def _save(self, phase, **payload):
         result = self.transact(phase, **payload)
         self.checkpoint.update({key: result[key] for key in ("revision", "token")})
+        return result
 
     def before_provider_send(self):
         # Exact returns already persisted their sending admission at prepare.
         if not self.exact:
             self._save("dispatch")
+
+    def before_provider_dispatch(self, provider):
+        if not self.exact:
+            result = self._save("dispatch", dispatch_provider=provider,
+                                original_dispatch_provider=self.original_provider)
+            if result.get("dispatch_allowed") is not True:
+                raise _PriorDispatchUnknown
 
     def __call__(self, attempt):
         self._save("attempt", attempt=dict(attempt))
@@ -792,14 +805,27 @@ def _deliver_return(host, path, sender, frozen_route):
         recovered = transact("settle", private_readback=original)
         return recovered["processed"]
 
-    record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"])
-
+    provider = None
+    if plan.get("check_original_dispatch"):
+        identify = getattr(sender, "return_dispatch_provider", None)
+        if callable(identify):
+            try:
+                provider = identify(source["route"], source["session"])
+            except (OSError, ValueError, KeyError, RuntimeError):
+                # Route resolution still runs at delivery. An unavailable
+                # binding cannot attest to the original worker's protocol.
+                pass
     try:
-        store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
-            turn_id=source["turn"]["turn_id"], origin="manager_followup", message_id=plan["message_id"])
+        original = store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
+            turn_id=source["turn"]["turn_id"], origin="manager_followup", message_id=plan["message_id"],
+            **({"return_dispatch_provider": provider} if provider else {}))
+        record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"],
+            original_provider=original.get("return_dispatch_provider") if isinstance(original, dict) else None)
         if cancelled():
             return 0
         outcome = _return_provider(plan, source, sender, record_attempt)
+    except _PriorDispatchUnknown:
+        outcome = {"kind": "locator_unavailable"}
     except ChatMessagePayloadConflictError as exc:
         logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
         outcome = {"kind": "conflict"}

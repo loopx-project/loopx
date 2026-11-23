@@ -805,3 +805,52 @@ def test_worker_restart_between_preview_and_locator(private_return, interrupted_
     returns = [message for message in reopened.messages(session["session_id"]) if message.get("origin") == "manager_followup"]
     assert [message["turn_id"] for message in returns] == [turn["turn_id"]]
     assert host_requests.read_bytes() == original_requests
+
+
+@pytest.mark.parametrize(("private_return", "return_root", "accepted", "transport_outage"), [
+    ("native", "shared", True, False),
+    ("legacy", "separate", False, False),
+    ("native", "separate", True, True),
+], indirect=["private_return", "return_root"])
+def test_upgrade_of_uncheckpointed_worker_preserves_original_return(private_return, accepted, transport_outage):
+    sender, session, turn, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Inspect receipt")
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Original result")
+    provider.verify_replies = True
+
+    class WorkerStopped(BaseException):
+        pass
+
+    class PreviousTransport:
+        # The old worker stored the transcript first and could post before its
+        # first durable provider callback. Both interruptions left it queued.
+        def send_with_attempt(self, route, session, turn, text, record):
+            if accepted:
+                def stop_before_locator(attempt):
+                    raise WorkerStopped
+                sender.send_with_attempt(route, session, turn, text, stop_before_locator)
+            raise WorkerStopped
+
+    with pytest.raises(WorkerStopped):
+        drain(sender.root, controller.registry_path, store, PreviousTransport())
+    before = [m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]
+    assert len(before) == 1 and "return_dispatch_provider" not in before[0]
+    assert len(replies) == int(accepted)
+    assert reply_status(sender.root, route)[0]["status"] == "queued"
+
+    recovered = ChatSessionStore(store.root.parent)
+    if transport_outage:
+        def unavailable(*args):
+            raise OSError("transport unavailable")
+        drain(sender.root, controller.registry_path, recovered, unavailable)
+        assert reply_status(sender.root, route)[0]["status"] == "retry_pending"
+    for minutes in (120, 125):
+        drain(sender.root, controller.registry_path, recovered, sender,
+              now=datetime.now(timezone.utc) + timedelta(minutes=minutes))
+    state = reply_status(sender.root, route)[0]
+    assert (state["status"], state["error"]) == ("explicit_unverified", "provider_locator_unavailable")
+    assert len(replies) == int(accepted)
+    original = recovered.read_history_message(session["session_id"], before[0]["message_id"])
+    assert original == before[0] and original["turn_id"] == turn["turn_id"]

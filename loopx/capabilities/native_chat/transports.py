@@ -99,6 +99,13 @@ class ChatConversationTransports:
     # file delivery for another transport that has not qualified it.
     supports_result_files = True
 
+    def return_dispatch_provider(self, route: dict[str, Any], session: dict[str, Any]) -> str | None:
+        # With only the default installed, recording its protocol needs no
+        # provider observation. Sending still resolves the live binding.
+        transport = self._return_transport(route, session) if self.transports else self.default_return
+        provider = getattr(transport, "return_dispatch_provider", None)
+        return provider(route, session) if callable(provider) else None
+
     def send_with_attempt(self, route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
                           text: str, record_attempt: Callable[[Mapping[str, str | None]], None]) -> dict[str, Any]:
         transport = self._return_transport(route, session)
