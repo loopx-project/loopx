@@ -1,17 +1,18 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import type { WorkspaceActionPreview } from "./personal-workspace-model";
+import type { PersonalWorkspaceCallbacks, WorkspaceActionPreview } from "./personal-workspace-model";
 import {goalDraftReady} from "./goal-create-request";
 import {GoalCreationExecution} from "./goal-creation-execution";
 import { useWorkspaceI18n } from "./i18n";
 import "./goal-draft-card.css";
 
-export function GoalDraftCard({ draft, draftId, preparationContext = "", onReview, onApply, onSuggest }: {
+export function GoalDraftCard({ draft, draftId, preparationContext = "", onReview, onApply, onOpenGoalChat, onSuggest }: {
   draft: GoalDraft;
   draftId: string;
   preparationContext?: string;
   onReview?: (draft: GoalDraft, edit?: boolean, draftId?: string) => Promise<WorkspaceActionPreview | void>;
   onApply?: (proposal: WorkspaceActionPreview) => Promise<WorkspaceActionPreview>;
+  onOpenGoalChat?: PersonalWorkspaceCallbacks["onOpenGoal"];
   onSuggest?: (text: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
@@ -55,6 +56,7 @@ export function GoalDraftCard({ draft, draftId, preparationContext = "", onRevie
     return () => { current = false; };
   }, [draftKey, preparesCreation, preparationAttempt]);
   const created = proposal?.status === "applied" && proposal.reviewPlan?.interaction === "completed";
+  const firstSession = created ? proposal.createdManagedSession?.target : undefined;
   async function review(edit = false) {
     if (!onReview || pending.current) return;
     pending.current = true;
@@ -99,7 +101,9 @@ export function GoalDraftCard({ draft, draftId, preparationContext = "", onRevie
     <footer>
       {onReview ? <>
         {ready && !created ? <button type="button" disabled={busy} onClick={() => void review(true)}>{zh ? "修改" : "Edit"}</button> : null}
-        {preparesCreation ? <button type="button" disabled={busy || preparing || created} onClick={() => void create()}>
+        {firstSession && onOpenGoalChat ? <button type="button" onClick={() => void onOpenGoalChat(firstSession.goalId, firstSession)}>
+          {zh ? "打开首轮对话" : "Open first conversation"}
+        </button> : preparesCreation ? <button type="button" disabled={busy || preparing || created} onClick={() => void create()}>
           {created ? (zh ? "已创建" : "Created") : busy || preparing ? (zh ? "正在准备…" : "Preparing…")
             : !proposal ? (zh ? "重新准备" : "Retry preparation") : proposal.reviewPlan?.canApply ? proposal.status === "error" ? (zh ? "重试创建" : "Retry creation")
               : proposal.reviewPlan.creationExecution ? (zh ? "创建并开始" : "Create and start") : (zh ? "创建" : "Create")
