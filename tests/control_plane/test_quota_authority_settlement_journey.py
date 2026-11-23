@@ -814,9 +814,15 @@ def test_original_turn_refuses_readiness_from_a_replacement_lease(hard_lease_tod
     assert replacement_lease["lease_epoch"] > admitted["execution_preparation"]["lease_epoch"]
     before_retry = journal.read_bytes()
 
-    code, refused = _guard(project, runtime, registry)
-    assert code != 0 and refused["ok"] is False, refused
-    assert refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
+    code, recovery = _guard(project, runtime, registry)
+    assert code == 0 and recovery["normal_delivery_allowed"] is False, recovery
+    debt = recovery["unsettled_host_turn_recovery"]
+    assert debt["repair"] == "execution_loss_closeout"
+    assert debt["prior_turn_instance_id"] == cli.TURN_ID
+    assert debt["execution_loss"]["original_prepared_epoch"] == admitted["execution_preparation"]["lease_epoch"]
+    assert debt["execution_loss"]["current_lease_epoch"] == replacement_lease["lease_epoch"]
+    assert recovery["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+    assert "settlement_owed" not in recovery
     assert journal.read_bytes() == before_retry
     readback = read_heartbeat_settlement(
         runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID, todo_id=cli.TODO_ID,
