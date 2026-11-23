@@ -634,6 +634,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                       response=admitted.get("response"), response_code=admitted.get("response_code"))
         if admitted.get("context_recovery"):
             record["context_recovery"] = admitted["context_recovery"]
+        elif admitted["status"] == "accepted" and admitted.get("rejected_mention_replay"):
+            record["context_recovery"] = {"presentation_key": "rejected-mention.1"}
         if admitted.get("mention_delivery"):
             record["mention_delivery"] = admitted["mention_delivery"]
         _atomic_write_json(path, record)
@@ -760,6 +762,32 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         record.update(reply_context_message=message, reply_context_source_text=text)
         _atomic_write_json(path, record)
         return message
+
+    def _distinct_steward_reply_topic(self, record: dict[str, Any], binding: Mapping[str, Any]) -> bool:
+        if (binding.get("context_kind") != "steward" or binding.get("audience", "owner") != "owner"
+                or record["event"].get("chat_type") != "p2p"):
+            return False
+        root_id = record["event"].get("root_id")
+        capture = record.get("mention_capture") or {}
+        if (not root_id or record.get("reply_context_message") is None
+                or not capture.get("session_id") or not capture.get("target_turn_id")):
+            return False
+        turn = self.core.controller.store.load_turn(capture["session_id"], capture["target_turn_id"])
+        match = re.fullmatch(r"external-([a-f0-9]{24})", str((turn or {}).get("client_turn_id") or ""))
+        if match is None or (turn or {}).get("origin") != "lark":
+            return False
+        try:
+            original = _read_json(self.root / f"{match[1]}.json")
+        except (OSError, ValueError):
+            return False
+        previous = original["event"]
+        return (original.get("turn_id") == capture["target_turn_id"]
+            and original.get("session_id") == capture["session_id"]
+            and original.get("reply_context_message") is not None
+            and _same_fields(original, record, "binding_id", "profile", "source")
+            and previous.get("chat_id") == record["event"].get("chat_id")
+            and bool(previous.get("root_id"))
+            and previous["root_id"] != root_id)
 
     @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
@@ -967,6 +995,13 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                                 raise ValueError("native mention source changed")
 
                         preflight = verify_mention
+                        if (not (self.core.root / f"{request}.json").exists()
+                                and self._distinct_steward_reply_topic(record, binding)):
+                            # A verified reply to another topic belongs to the
+                            # ordinary queue, even when it addresses this Bot.
+                            record["mention_topic_queue"] = True
+                            _atomic_write_json(path, record)
+                        native_mention = not record.get("mention_topic_queue", False)
                     admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                         request_ref=request, message=text, command=command, attachments=attachments,
                         defer_background_stop=defer_background_stop, source_preflight=preflight,
@@ -1569,6 +1604,64 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         delay = float(60 + stagger if stagger_first else 60) if streak <= 1 else float(min(1800, 60 * (2 ** min(streak - 1, 5))) + stagger)
         self._context_recovery_probe_at[path] = time.monotonic() + delay
 
+    def _pending_rejected_mention_replays(self) -> Iterator[Path]:
+        folder = self.root / "rejected-mention-replays"
+        if folder.is_symlink():
+            return
+        for plan in sorted(folder.glob("*.json")):
+            path = self.root / plan.name
+            if not re.fullmatch(r"[a-f0-9]{24}", path.stem) or plan.is_symlink() or not plan.is_file():
+                continue
+            if time.monotonic() < self._context_recovery_probe_at.get(plan, 0):
+                continue
+            try:
+                row = _read_json(path)
+            except (OSError, ValueError):
+                continue
+            if (row.get("status") == "delivered" and not row.get("context_recovery")
+                    and row.get("mention_delivery", {}).get("action") == "reject"):
+                yield path
+
+    def _reconcile_rejected_mention(self, path: Path) -> None:
+        plan_path = self.root / "rejected-mention-replays" / path.name
+        if plan_path.parent.is_symlink() or plan_path.is_symlink() or not plan_path.is_file():
+            return
+        self._context_recovery_probe_at[plan_path] = time.monotonic() + 60
+        with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+            record = _read_json(path)
+            if record.get("status") != "delivered" or record.get("context_recovery"):
+                return
+            terminal = record["deliveries"].get("terminal") or {}
+            try:
+                with plan_path.open("rb") as handle:
+                    raw = handle.read(4097)
+                if len(raw) > 4096:
+                    return
+                plan = json.loads(raw)
+                event = record["event"]
+                if (terminal.get("verified") is not True or plan != {
+                        "message_id": event["message_id"],
+                        "rejection_message_id": (terminal.get("attempt") or {}).get("message_ref"),
+                        "target_turn_id": record["turn_id"],
+                } or not plan["rejection_message_id"] or record["request_ref"] != path.stem):
+                    return
+
+                def verify_source(selected: dict[str, Any]) -> None:
+                    source = self._recovery_source_observation(record, selected)
+                    if (source is None or source.get("_native_mention") is not True
+                            or any(str(source.get(key) or "") != str(event.get(key) or "") for key in ("root_id", "parent_id"))
+                            or (event.get("thread_id") and source.get("thread_id") != event["thread_id"])
+                            or not self._distinct_steward_reply_topic(record, selected["binding"])):
+                        raise ValueError("the original distinct topic could not be verified")
+
+                recovered = self.core.requeue_rejected_mention(record["request_ref"],
+                    original_turn_id=plan["target_turn_id"], source_preflight=verify_source)
+                self._record_admission(path, record, recovered)
+            except (KeyError, ValueError, OSError, RuntimeError):
+                # An unavailable plan or uncertain source stays beside the
+                # original failure for a later independent observation.
+                return
+
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
@@ -1613,7 +1706,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         paths.append(path)
                     else:
                         self._record_context_recovery_noop_backoff(path, row, stagger_first=True)
-        return [*paths, *self._web_projection_paths()]
+        return list(dict.fromkeys([*paths, *self._pending_rejected_mention_replays(), *self._web_projection_paths()]))
 
     def is_recovery_path(self, path: Path) -> bool:
         """Schedule recovery of persisted attempts after fresh replies."""
@@ -1719,6 +1812,11 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         row = _read_json(path)
         if "triage" in row:
             return triage.reconcile(self, path)
+        if (row.get("status") == "delivered" and not row.get("context_recovery")
+                and row.get("mention_delivery", {}).get("action") == "reject"
+                and (self.root / "rejected-mention-replays" / path.name).is_file()):
+            self._reconcile_rejected_mention(path)
+            return 0
         historical_images = row.get("historical_answer_images")
         if (row.get("status") == "delivered" and (
                 (historical_images or {}).get("status") == "pending"
