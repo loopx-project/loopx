@@ -406,6 +406,7 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
     )
     from ..control_plane.turn_driver.codex_execution_preparation import (
         LegacyNativePreparationCapture,
+        NativeClaimRejected,
         NativePreparationTurnUnavailable,
         codex_execution_preparation_context,
         codex_execution_preparation_readback_context,
@@ -487,11 +488,12 @@ def _handle_context_hook(args: argparse.Namespace, *, activation: dict[str, Any]
                         preparation_context = codex_execution_preparation_context(receipt)
             except LegacyNativePreparationCapture as error:
                 preparation_context = str(error)
-            except NativePreparationTurnUnavailable as error:
+            except (NativeClaimRejected, NativePreparationTurnUnavailable) as error:
                 preparation_context = str(error)
                 if request is not None:
                     record_native_execution_preparation(
                         directory, event, source_sha256=request["source_sha256"], receipt=None,
+                        claim_rejected=isinstance(error, NativeClaimRejected),
                     )
             except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
                 # Reconcile only the attempted source. A concurrent guard
