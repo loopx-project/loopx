@@ -29,6 +29,31 @@ def record(project, cli, document, operation, *, revision=None):
     return cli(*args), args
 
 
+def test_inspect_after_agent_retirement_preserves_original_outcome(acceptance_goal):
+    from loopx.cli_commands.goal_acceptance import render_goal_acceptance
+
+    project, _, cli, _ = acceptance_goal
+    declaration = refinement([{"id": "tour", "description": "Keep the original tour"}], "message:tour")
+    declaration["review"] = [{"id": "tour", "conclusion": "uncertain", "note": "Needs evidence", "evidence_refs": []}]
+    (code, result), _ = record(project, cli, declaration, "declare-tour")
+    assert code == 0, result
+    before = cli("inspect")[1]
+    original = before["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert "owner_registration_missing" not in original
+
+    registry_path = project.parent / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"] = ["receiver"]
+    registry_path.write_text(json.dumps(registry))
+
+    code, after = cli("inspect", "--agent-id", "receiver")
+    assert code == 0, after
+    assert after["provider_revision"] == before["provider_revision"]
+    [outcome] = after["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert outcome == {**original, "owner_registration_missing": True}
+    assert "agent-a, unregistered for this Goal at readback" in render_goal_acceptance(after)
+
+
 def test_cumulative_refinement_guides_artifact_and_independent_check(acceptance_goal):
     project, acceptance_file, cli, run = acceptance_goal
     state = (project / "state.md").read_bytes()
