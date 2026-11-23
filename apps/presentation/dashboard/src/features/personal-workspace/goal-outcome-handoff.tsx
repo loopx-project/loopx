@@ -17,13 +17,14 @@ export function GoalOutcomeHandoff({goalId, declaration, canManage, revision, on
   const [notice, setNotice] = useState("");
   const missing = declaration.outcomes.filter(row => row.owner_registration_missing);
   const sources = [...new Set(missing.map(row => row.owner_agent_id))];
-  const from = source || sources[0];
+  const from = sources.includes(source) ? source : sources[0];
   const candidates = missing.filter(row => row.owner_agent_id === from);
+  const selectedForSource = source === from ? selected : [];
+  const outcomes = candidates.filter(row => selectedForSource.includes(row.id)).map(({id, revision}) => ({id, revision}));
   const receivers = declaration.handoff_receivers ?? [];
   const ready = canManage && !!revision && !busy;
   async function submit() {
     if (!ready || !revision) return;
-    const outcomes = candidates.filter(row => selected.includes(row.id)).map(({id, revision}) => ({id, revision}));
     if (!prepared && (!outcomes.length || !receivers.includes(receiver))) return;
     const request = prepared ?? {document: {from_agent_id: from, to_agent_id: receiver, outcomes},
       expected_provider_revision: revision, operation_id: `handoff-ui:${crypto.randomUUID()}`};
@@ -54,14 +55,17 @@ export function GoalOutcomeHandoff({goalId, declaration, canManage, revision, on
         <label>{zh ? "接手身份" : "Receiving Agent"}<select value={receiver} onChange={event => setReceiver(event.target.value)}>
           <option value="">{zh ? "选择已注册身份" : "Choose a registered Agent"}</option>
           {receivers.map(id => <option key={id}>{id}</option>)}</select></label>
-        {candidates.map(row => <label key={row.id}><input type="checkbox" checked={selected.includes(row.id)}
-          onChange={event => setSelected(event.target.checked ? [...selected, row.id] : selected.filter(id => id !== row.id))}/>
+        {candidates.map(row => <label key={row.id}><input type="checkbox" checked={selectedForSource.includes(row.id)}
+          onChange={event => {
+            setSource(row.owner_agent_id);
+            setSelected(event.target.checked ? [...selectedForSource, row.id] : selectedForSource.filter(id => id !== row.id));
+          }}/>
           {row.objective} <small>{row.id}</small></label>)}
       </fieldset> : <div>
         <p>{prepared.document.from_agent_id} → {prepared.document.to_agent_id}</p>
         <ul>{prepared.document.outcomes.map(row => <li key={row.id}>{declaration.outcomes.find(item => item.id === row.id)?.objective ?? row.id} · {row.id} (v{row.revision})</li>)}</ul>
       </div>}
-      <div className="goal-outcome-handoff-actions"><button type="submit" disabled={!ready || (!prepared && (!receivers.includes(receiver) || !selected.length))}>
+      <div className="goal-outcome-handoff-actions"><button type="submit" disabled={!ready || (!prepared && (!receivers.includes(receiver) || !outcomes.length))}>
         {prepared ? (zh ? "应用交接" : "Apply handoff") : (zh ? "预览交接" : "Preview handoff")}</button>
       {prepared ? <button type="button" disabled={busy} onClick={() => {setPrepared(null); setSelected([]); setNotice("");}}>
         {zh ? "重新选择" : "Change selection"}</button> : null}
