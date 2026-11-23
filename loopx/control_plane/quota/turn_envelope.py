@@ -114,10 +114,16 @@ def _turn_envelope_result(
         addition_tokens = source_number_tokens(params["context_additions"])
         if addition_tokens:
             request["context_addition_tokens"] = addition_tokens
-    if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
-        transport = pack_turn_source(payload)
+    source_field = "context" if operation == "context_delivery" else "payload"
+    compact_source = (
+        operation in {"compose_complete", "attach_complete_turn_context", "context_delivery"}
+        or (operation == "capability_automation_source" and set(params) == {"payload"})
+    )
+    source = params.get(source_field)
+    if compact_source and isinstance(source, Mapping):
+        transport = pack_turn_source(source)
         if transport is not None:
-            del request["payload"]
+            del request[source_field]
             request["source_transport"] = transport
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
