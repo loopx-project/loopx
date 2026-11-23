@@ -185,11 +185,11 @@ def quota_failure_payload(
             "status": "heartbeat_receipt_identity_conflict",
             "effective_action": EffectiveAction.QUOTA_SKIP.value,
             "recommended_action": (
-                "Rerun quota should-run with the same --turn-instance-id and without "
-                "--todo-id or --replan-obligation-id to read the bound Turn's recovery "
-                "contract. Settle verified work or record its verified blocked closeout; "
-                "do not replace the committed binding, repair receipt storage, or invent "
-                "a new Turn id. Independent work belongs to the next real host Turn."
+                "If the conflict reports a replaced task lease generation, wait for the next real host Turn "
+                "to project execution-loss closeout without quota spend. A replacement lease cannot resume "
+                "the original Turn. For other binding conflicts, rerun quota should-run with the same "
+                "--turn-instance-id and without --todo-id or --replan-obligation-id to read the bound Turn's "
+                "recovery contract. Keep the committed binding and receipt storage intact."
             ),
         })
     if isinstance(error, CloseoutQueryUnavailableError):

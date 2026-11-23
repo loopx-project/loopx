@@ -498,6 +498,20 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
     assert not original.writeback.receipts and not original.spend.receipts
     argv = _closeout_args(context)
     if not source_profile:
+        before_replay = _unchanged_state(context)
+        replay_args = _guard_args(context)
+        selection = replay_args.index("--todo-id")
+        del replay_args[selection:selection + 2]
+
+        code, fenced = context["cli"](*replay_args)
+        assert code == 1, fenced
+        assert fenced["error_code"] == "heartbeat_receipt_identity_conflict"
+        assert "original task lease generation" in fenced["reason"]
+        assert fenced["heartbeat_receipt"]["settlement_identity"] == original.identity.value.as_dict()
+        assert "wait for the next real host Turn" in fenced["recommended_action"]
+        assert "execution-loss closeout without quota spend" in fenced["recommended_action"]
+        assert _unchanged_state(context) == before_replay
+
         # A fresh guard recognizes the generation change before attempting to
         # re-enter the original guard. It offers only the administrative route.
         route = str(tmp_path / "fixture launcher" / "loopx")
