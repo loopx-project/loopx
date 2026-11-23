@@ -349,11 +349,17 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
+    config_overrides = {
+        "tool_output_token_limit": NATIVE_CONTEXT_HISTORY_TOKENS,
+        "shell_environment_policy.set." + NATIVE_CONTEXT_OUTPUT_ENV: str(NATIVE_CONTEXT_LARGE_OUTPUT_BYTES),
+    }
+    # The App shell sandbox can deny even loopback TCP. Use the existing local
+    # pipe transport for POSIX App shell calls without opening sandbox networking.
+    if scenario == "codex_app_heartbeat" and os.name == "posix":
+        config_overrides["shell_environment_policy.set.LOOPX_EFFECT_RUNTIME_TRANSPORT"] = "stdio"
     # Native Interrupt handlers have a 3s ceiling. Declare the effective value
     # rather than letting discovery silently clamp a different configuration.
-    return {"config_overrides": {
-            "tool_output_token_limit": NATIVE_CONTEXT_HISTORY_TOKENS,
-            "shell_environment_policy.set." + NATIVE_CONTEXT_OUTPUT_ENV: str(NATIVE_CONTEXT_LARGE_OUTPUT_BYTES)},
+    return {"config_overrides": config_overrides,
         "hooks": {event: [{**({"matcher": "^Bash$"} if event == "PostToolUse" else {}),
                               "hooks": [{**handler, "timeout": 3} if event == "Interrupt" else handler]}]
                       for event in CONTEXT_LIFECYCLE_HOOKS},

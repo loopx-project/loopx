@@ -199,22 +199,57 @@ def publication_files(dist_dir: Path, identity: ReleaseIdentity) -> tuple[Path, 
     return tuple(files)
 
 
-def upload_immutable(dist_dir: Path, identity: ReleaseIdentity, repo: str,
-                     *, recover: bool = False, dry_run: bool = False) -> None:
-    files = publication_files(dist_dir, identity)
-    if recover:
-        commit = gh("api", f"repos/{repo}/commits/{identity.tag}", "--jq", ".sha").decode().strip()
-        sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text())
-        if sources["product_tag"] != identity.tag or sources["product_commit"] != commit:
-            raise ReleaseArtifactError("bundle product identity differs from the release tag")
-        for path in files:
-            gh("attestation", "verify", str(path), "--repo", repo,
-               "--signer-workflow", f"{repo}/.github/workflows/release-artifacts.yml",
-               "--source-digest", commit, "--source-ref", f"refs/tags/{identity.tag}",
-               "--deny-self-hosted-runners")
-    release = json.loads(gh("api", f"repos/{repo}/releases/tags/{identity.tag}"))
+def require_stable_runtime_publication(dist_dir: Path, identity: ReleaseIdentity) -> None:
+    # Resolve the policy from the reviewed publication tooling. The selected tag
+    # supplies data and attested bytes, while package identity stays a static read.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from loopx.cli_commands.update_artifact import (
+            HISTORICAL_DEFAULT_CONTRACT,
+            public_channel_allows_default,
+            validate_published_manifest,
+            validate_manifest,
+            verify_runtime_installation_qualification,
+        )
+    finally:
+        sys.path.pop(0)
+
+    runtime = dist_dir / "runtime"
+    try:
+        raw = json.loads((runtime / "loopx-runtime.json").read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("default_contract") == HISTORICAL_DEFAULT_CONTRACT:
+            manifest = validate_manifest(raw)
+        else:
+            manifest = validate_published_manifest(raw)
+        sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text(encoding="utf-8"))
+        revision = manifest["source_revision"]
+        if (
+            not isinstance(sources, dict)
+            or sources.get("product_tag") != identity.tag
+            or sources.get("product_commit") != revision
+            or manifest["package_version"] != identity.version
+        ):
+            raise ValueError("Bundle product identity differs from the stable runtime")
+        qualification = json.loads((runtime / "qualification.json").read_text(encoding="utf-8"))
+        archive = runtime / f"loopx-runtime-{revision}.tar.gz"
+        verify_runtime_installation_qualification(manifest, qualification, archive, channel="stable")
+        if not public_channel_allows_default(manifest["default_contract"]):
+            raise ValueError("Stable runtime is pending public channel qualification")
+    except (OSError, ValueError) as exc:
+        raise ReleaseArtifactError(str(exc)) from exc
+
+
+def require_release_commit(dist_dir: Path, identity: ReleaseIdentity, repo: str) -> str:
+    commit = gh("api", f"repos/{repo}/commits/{identity.tag}", "--jq", ".sha").decode().strip()
+    sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text(encoding="utf-8"))
+    if sources["product_tag"] != identity.tag or sources["product_commit"] != commit:
+        raise ReleaseArtifactError("bundle product identity differs from the release tag")
+    return commit
+
+
+def missing_release_assets(repo: str, release_id: int, files: tuple[Path, ...]) -> list[Path]:
     assets = json.loads(gh("api", "--paginate", "--slurp",
-                          f"repos/{repo}/releases/{release['id']}/assets?per_page=100"))
+                          f"repos/{repo}/releases/{release_id}/assets?per_page=100"))
     remote = {}
     for asset in (asset for page in assets for asset in page):
         key = asset["name"].casefold()
@@ -238,10 +273,54 @@ def upload_immutable(dist_dir: Path, identity: ReleaseIdentity, repo: str,
             actual = hashlib.file_digest(downloaded, "sha256").hexdigest()
         if asset["size"] != path.stat().st_size or actual != sha256(path):
             raise ReleaseArtifactError(f"immutable release asset differs: {path.name}")
+    return missing
+
+
+def upload_immutable(dist_dir: Path, identity: ReleaseIdentity, repo: str,
+                     *, recover: bool = False, dry_run: bool = False) -> None:
+    files = publication_files(dist_dir, identity)
+    require_stable_runtime_publication(dist_dir, identity)
+    if recover:
+        commit = require_release_commit(dist_dir, identity, repo)
+        for path in files:
+            gh("attestation", "verify", str(path), "--repo", repo,
+               "--signer-workflow", f"{repo}/.github/workflows/release-artifacts.yml",
+               "--source-digest", commit, "--source-ref", f"refs/tags/{identity.tag}",
+               "--deny-self-hosted-runners")
+    release = json.loads(gh("api", f"repos/{repo}/releases/tags/{identity.tag}"))
+    missing = missing_release_assets(repo, release["id"], files)
     if missing and not dry_run:
         gh("release", "upload", identity.tag, *(str(path) for path in missing), "--repo", repo)
     print(f"verified {len(files) - len(missing)} existing assets; "
           f"{'would upload' if dry_run else 'uploaded'} {len(missing)} missing assets")
+
+
+def create_named_release(identity: ReleaseIdentity, repo: str, notes_file: Path, title: str) -> None:
+    # release:published starts artifact production. Keep the old stable
+    # endpoint serving a complete release while the new bundle is being built.
+    gh("release", "create", identity.tag, "--repo", repo, "--verify-tag",
+       "--latest=false", "--notes-file", str(notes_file), "--title", title)
+
+
+def promote_latest(dist_dir: Path, identity: ReleaseIdentity, repo: str, *, execute: bool) -> None:
+    files = publication_files(dist_dir, identity)
+    require_stable_runtime_publication(dist_dir, identity)
+    require_release_commit(dist_dir, identity, repo)
+    release = json.loads(gh("api", f"repos/{repo}/releases/tags/{identity.tag}"))
+    if (release.get("tag_name") != identity.tag
+            or release.get("draft") is not False or release.get("prerelease") is not False):
+        raise ReleaseArtifactError("Latest requires the exact published named release")
+    if missing := missing_release_assets(repo, release["id"], files):
+        names = ", ".join(path.name for path in missing)
+        raise ReleaseArtifactError(f"cannot promote Latest with missing assets: {names}")
+    if not execute:
+        print(f"verified {len(files)} published assets for {identity.tag}; ready for Latest")
+        return
+    gh("api", "--method", "PATCH", f"repos/{repo}/releases/{release['id']}", "-f", "make_latest=true")
+    latest = json.loads(gh("api", f"repos/{repo}/releases/latest"))
+    if latest.get("id") != release["id"] or latest.get("tag_name") != identity.tag:
+        raise ReleaseArtifactError("Latest readback differs from the verified release")
+    print(f"verified GitHub Latest points to {identity.tag}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -269,11 +348,24 @@ def build_parser() -> argparse.ArgumentParser:
     recovery.add_argument("--repo", required=True)
     recovery.add_argument("--run-id", required=True)
     recovery.add_argument("--commit", required=True)
+    stable = subparsers.add_parser("check-stable-runtime", help="check the tagged bundle before making it the stable default")
+    stable.add_argument("--dist-dir", type=Path, required=True)
+
     upload = subparsers.add_parser("upload-immutable", help="resume publication without replacing existing bytes")
     upload.add_argument("--repo", required=True)
     upload.add_argument("--dist-dir", type=Path, required=True)
     upload.add_argument("--recover", action="store_true")
     upload.add_argument("--dry-run", action="store_true")
+
+    create = subparsers.add_parser("create-named-release", help="publish the existing tag without changing Latest")
+    create.add_argument("--repo", required=True)
+    create.add_argument("--notes-file", type=Path, required=True)
+    create.add_argument("--title", required=True)
+
+    promote = subparsers.add_parser("promote-latest", help="verify the published bundle before moving GitHub Latest")
+    promote.add_argument("--repo", required=True)
+    promote.add_argument("--dist-dir", type=Path, required=True)
+    promote.add_argument("--execute", action="store_true", help="move Latest after successful asset readback")
     return parser
 
 
@@ -298,9 +390,17 @@ def main(argv: list[str] | None = None) -> int:
             verify_manifest(args.dist_dir, args.checksum_file, identity)
         elif args.command == "verify-publication-run":
             verify_publication_run(args.repo, args.run_id, identity.tag, args.commit)
+        elif args.command == "check-stable-runtime":
+            publication_files(args.dist_dir, identity)
+            require_stable_runtime_publication(args.dist_dir, identity)
+            print(f"verified stable runtime publication policy for {identity.tag}")
         elif args.command == "upload-immutable":
             upload_immutable(args.dist_dir, identity, args.repo,
                              recover=args.recover, dry_run=args.dry_run)
+        elif args.command == "create-named-release":
+            create_named_release(identity, args.repo, args.notes_file, args.title)
+        elif args.command == "promote-latest":
+            promote_latest(args.dist_dir, identity, args.repo, execute=args.execute)
         else:
             parser.error(f"unsupported command: {args.command}")
     except ReleaseArtifactError as exc:

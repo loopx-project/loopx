@@ -113,8 +113,7 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, chan
 
 @pytest.mark.skipif(os.name != "posix", reason="benchmark uses the POSIX source launcher")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("complete", [False, True])
-def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, provider, complete):
+def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, provider):
     import shlex
     import subprocess
     import sys
@@ -133,8 +132,7 @@ def test_off_preflight_pages_the_complete_saved_view(tmp_path, monkeypatch, prov
     env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(cli_path),
         "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wake.parent),
-        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "off",
-        "LOOPX_COMPLETE_TURN": str(int(complete))}
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "off"}
 
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
     def start_read():

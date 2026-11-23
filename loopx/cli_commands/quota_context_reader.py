@@ -70,7 +70,9 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     template = selection.get("command_args_template")
     if not isinstance(template, str):
         return
-    words = shlex.split(template)
+    # A saved capture can still carry the old boolean selectors. Rebind only
+    # the presented command to the current CLI; the original bytes stay intact.
+    words = [word for word in shlex.split(template) if word not in {"--turn-envelope", "--complete-turn"}]
     options: dict[str, str] = {}
     # A saved guard already carries its capture root. Preserve it unless this
     # caller explicitly selects another; otherwise use the validated cache.

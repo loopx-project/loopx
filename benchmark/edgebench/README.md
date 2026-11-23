@@ -955,8 +955,8 @@ effective work Turns** by default. Use `--replan-after-turns N` to set a differe
 count (1–6); `--replan-after-turns 3` retains the previous benchmark default.
 Use `--replan-after-todos 3` for the previous completed-Todo cadence
 as an explicit ablation. The two options are mutually exclusive and require a
-heartbeat profile. This default is independent of `--task-entry`, feedback mode,
-and `--turn-envelope`. Official, single and native-goal profiles are unchanged.
+heartbeat profile. This default is independent of `--task-entry` and feedback mode.
+Official, single and native-goal profiles are unchanged.
 
 The shared control plane counts settled work Turns, not tool calls or idle wakes;
 other replan reasons may trigger sooner. Both runtime and worker-profile receipts
@@ -1005,26 +1005,16 @@ review, proposal adoption and task gains require trajectory evidence.
 
 ## Quota input and historical Short
 
-Current C1 sources give both heartbeat profiles the complete v1 input by
-default. `--complete-turn` explicitly requests the complete contract, including
-on supported historical product revisions. Context delivery remains a separate
-setting. The [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
-documents original captures, readback and settlement.
+Both heartbeat profiles use complete v1. Context delivery remains a separate
+setting. See the [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#complete-v1-host-entry--完整-v1-host-入口)
+for original captures, readback and settlement.
 
-For a historical Short benchmark arm, use its recorded product and runner
-revisions. With `--turn-envelope`, the current worker verifies the selected CLI's
-actual v0 response using a read-only preview before starting a model. C1 or an
-unavailable preview rejects the request. A `fresh_replan` checkpoint preloads a
-different view and is incompatible with Short. Inspect the wake's
-`quota_input_contract` eligibility and the actual saved decision before using
-a result in a comparison. Include startup and wake costs under the same study
-protocol.
+Reproduce historical Short and explicit Complete treatments on their recorded
+product and runner revisions. Review the original decision, wake receipt and
+complete startup and wake costs before using the result in a comparison.
 
-中文：当前 C1 的两种 heartbeat profile 默认交付完整 v1，`--complete-turn`
-也可在支持的历史产品版本中显式选择完整输入。旧 Short 组应按记录的产品和 runner
-版本复现。当前 worker 在启动模型前用只读预演核实 v0，回执
-`quota_input_contract` 记录预期、实测版本与资格。C1 或无法核实的来源会拒绝请求。
-`fresh_replan` 会预载另一种输入，因此不能与 Short 合用。
+中文：两种 heartbeat profile 默认使用完整 v1，交付传输单独配置。复现历史 Short
+或显式 Complete 组时按原产品和 runner 版本执行，并核对原决策、回执和完整成本。
 
 ## Close a managed native attempt
 

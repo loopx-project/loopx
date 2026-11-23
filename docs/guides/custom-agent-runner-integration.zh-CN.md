@@ -84,7 +84,7 @@ OpenCode 的目录布局。
 如果 host 没有 skill 系统，就注入等价的 `SKILL.md` 指令，并保留一段短
 re-entry instruction，要求 Agent：
 
-1. 为当前 goal 与 Agent 读取新鲜 JSON quota packet；
+1. 为当前 goal 与 Agent 读取本轮最新的 JSON Complete Turn；
 2. 遵守 `interaction_contract`、`goal_boundary` 和 selected todo；
 3. 只做一次有界动作，并验证真实 postcondition；
 4. 通过 LoopX 写回结果；
@@ -95,7 +95,7 @@ re-entry instruction，要求 Agent：
 
 ## 跑一个自驱动 Tick
 
-机器路径使用 JSON：
+当前机器入口默认返回 Complete Turn v1。已发布的 `v2.4.0` 标签仍交付原 quota packet。两者均从 `interaction_contract` 读取当前工作指令。
 
 ```bash
 loopx --format json \
@@ -148,8 +148,8 @@ cat ./guard-001/decision.json
 ```
 
 父目录必须已存在；LoopX 创建私有捕获目录。使用保存的决策前，检查命令是否成功、
-`ok` 和 Goal/Agent/Turn 身份。仍须读取所有必需的 hook、准入和结算指令；捕获不要求
-开启 `--turn-envelope`，也不改变展示的合同。选择 Todo 或重新校验 lease 时仍要运行
+`ok` 和 Goal/Agent/Turn 身份。当前 JSON guard 默认交付 `loopx_turn_envelope_v1`。
+读取其中所有必需的 hook、准入和结算指令。选择 Todo 或重新校验 lease 时仍要运行
 新 guard，并使用新目录。捕获在后段失败时，应先检查已有 Turn 回执，再判断重试。
 详见[捕获合同](../reference/protocols/turn-envelope-v0.md)。
 

@@ -195,7 +195,7 @@ def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypa
     prepared = run(project, runtime, path, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", turn, "--runtime-profile", "generic_cli",
         "--available-capability", "shell", "--available-capability", "filesystem_write",
-        "--decision-output-dir", str(opening), "--prepared-capture-reference", "--complete-turn",
+        "--decision-output-dir", str(opening), "--prepared-capture-reference",
         "--context-delivery", "on", "--codex-context-dir", str(native), "--defer-context-presentation")
     original = opening / "decision.json"
     original_bytes = original.read_bytes()

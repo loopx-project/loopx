@@ -24,7 +24,7 @@ from loopx.hosts.research_checkpoint import (
     research_participants, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
-from .codex import explicit_turn_display
+from .codex import reject_retired_turn_display
 from .research_artifacts import research_component_exclusions
 
 
@@ -223,7 +223,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-    # Use the CLI's original-decision capture, including with TurnEnvelope off.
+    # Use the CLI's original-decision capture even with inline delivery.
     # The checkpoint selector needs the full source; the model consumes the
     # ordinary CLI projection of those same bytes, never a second guard.
     capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
@@ -232,9 +232,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write"]
-    display = explicit_turn_display(env)
-    if display.complete_turn:
-        command.append("--complete-turn")
+    reject_retired_turn_display(env)
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the
