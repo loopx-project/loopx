@@ -45,13 +45,13 @@ import {
   shellQuote, text, textList,
 } from "./turn_envelope_codec.ts";
 import {
-  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, type ReplanReadPrecision, bindReplanSuccessorContract,
-  deferredReplanWriteback, nativeReplanPresentation, referenceCurrentTaskTitle,
-  referenceExploreGuidance, referenceGoalAcceptance, referenceReplanAuthoring,
-  referenceVisionContinuation, replanActionPacket, replanAuthoringContract, replanCliView,
-  replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
-  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision, resolveExploreGuidance,
-  responsePlan, selectedTodo, unboundExploreReplan, userChannel,
+  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN,
+  type ReplanReadPrecision, bindReplanSuccessorContract, deferredReplanWriteback, inlineOutcomeRequirements,
+  nativeReplanPresentation, referenceCurrentTaskTitle, referenceExploreGuidance, referenceGoalAcceptance,
+  referenceReplanAuthoring, referenceVisionContinuation, replanActionPacket, replanAuthoringContract,
+  replanCliView, replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
+  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision,
+  resolveExploreGuidance, responsePlan, selectedTodo, unboundExploreReplan, userChannel,
 } from "./turn_envelope_references.ts";
 
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
@@ -583,19 +583,90 @@ function turnActionProjection(payload: JsonObject, precision?: ReplanReadPrecisi
     }};
     projection.action = action;
   }
-  if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
-    const index = sources.findIndex((value) => {
-      const source = object(value);
-      return source.source === "goal_acceptance"
-        && (object(source.content).status === undefined || object(source.content).status === "loaded")
-        && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
-    });
-    if (index >= 0) {
-      const compactCore = {...core};
-      delete compactCore.acceptance_contract;
-      compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
-      action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+  if (Object.keys(acceptance).length > 0) {
+    if ("outcome_requirements" in acceptance && "outcome_requirements_ref" in acceptance) {
+      throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+    }
+    if ("outcome_requirements_ref" in acceptance && !("outcome_requirements" in acceptance)) {
+      const match = typeof acceptance.outcome_requirements_ref === "string"
+        ? WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN.exec(acceptance.outcome_requirements_ref) : null;
+      const index = match ? Number(match[1]) : -1;
+      const source = object(Array.isArray(sources) ? sources[index] : null);
+      const content = object(source.content);
+      const sourceContract = object(content.goal_acceptance_contract);
+      if (match && source.source === "goal_acceptance"
+        && (content.status === undefined || content.status === "loaded")
+        && Object.keys(object(sourceContract.outcome_requirements)).length > 0
+        && !("outcome_requirements_ref" in sourceContract)) {
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: {...core, acceptance_contract: {
+          ...acceptance,
+          outcome_requirements_ref: `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`,
+        }}};
+        projection.action = action;
+        return projection;
+      }
+      const inlinedAcceptance = {...acceptance};
+      delete inlinedAcceptance.outcome_requirements_ref;
+      inlinedAcceptance.outcome_requirements = inlineOutcomeRequirements(payload, acceptance.outcome_requirements_ref);
+      action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+        ...core, acceptance_contract: inlinedAcceptance,
+      }};
       projection.action = action;
+      return projection;
+    }
+    if (Array.isArray(sources)) {
+      // The parsed values can coincide after numeric rounding. Compare the
+      // original carrier identities before replacing either signed field.
+      const identity = precision?.identity ?? contextSourceIdentity(payload);
+      const horizonPath = ["planning_horizon", "core_goal", "acceptance_contract"];
+      const contractPath = (index: number) => [
+        "interaction_contract", "agent_channel", "work_context", "sources", index,
+        "content", "goal_acceptance_contract",
+      ];
+      const horizonIdentity = identity(acceptance, horizonPath);
+      const index = sources.findIndex((value, index) => {
+        const source = object(value);
+        const content = object(source.content);
+        return source.source === "goal_acceptance"
+          && (content.status === undefined || content.status === "loaded")
+          && identity(object(content.goal_acceptance_contract), contractPath(index)) === horizonIdentity;
+      });
+      if (index >= 0) {
+        const compactCore = {...core};
+        delete compactCore.acceptance_contract;
+        compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+        projection.action = action;
+        return projection;
+      }
+      const requirements = object(acceptance.outcome_requirements);
+      if (Object.keys(requirements).length > 0 && !("outcome_requirements_ref" in acceptance)) {
+        const requirementsIdentity = identity(requirements, [...horizonPath, "outcome_requirements"]);
+        const requirementsBytes = Buffer.byteLength(JSON.stringify(requirements), "utf8");
+        const reqIndex = sources.findIndex((value, index) => {
+          const source = object(value);
+          const content = object(source.content);
+          const contract = object(content.goal_acceptance_contract);
+          const ref = `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`;
+          return source.source === "goal_acceptance"
+            && (content.status === undefined || content.status === "loaded")
+            && !("outcome_requirements_ref" in contract)
+            && Object.keys(object(contract.outcome_requirements)).length > 0
+            && requirementsBytes > ref.length + 24
+            && identity(object(contract.outcome_requirements),
+              [...contractPath(index), "outcome_requirements"]) === requirementsIdentity;
+        });
+        if (reqIndex >= 0) {
+          const compactAcceptance = {...acceptance};
+          delete compactAcceptance.outcome_requirements;
+          compactAcceptance.outcome_requirements_ref =
+            `$.work_context.sources[${reqIndex}].content.goal_acceptance_contract.outcome_requirements`;
+          action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+            ...core, acceptance_contract: compactAcceptance,
+          }};
+          projection.action = action;
+        }
+      }
     }
   }
   // The context owner already bounds these contributions. Replacing them with
