@@ -585,8 +585,11 @@ def iter_rollout_events(
     log_path: Path,
     *,
     strict: bool = False,
+    committed_only: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    for line_number, line in _iter_rollout_event_lines(log_path, strict=strict):
+    for line_number, line in _iter_rollout_event_lines(
+        log_path, strict=strict, committed_only=committed_only,
+    ):
         event = _parse_rollout_event_line(line, line_number=line_number, strict=strict)
         if event is not None:
             yield event

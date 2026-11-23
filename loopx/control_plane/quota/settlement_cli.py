@@ -7,6 +7,7 @@ import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
+from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
 from ..todos.contract import (
     normalize_todo_id,
@@ -308,6 +309,15 @@ def quota_rollout_settlement_binding(
         # decision and must not become this receipt's settlement identity.
         # Keeping the recovery receipt identity-less lets a verified same-Turn
         # reentry bind the next independent action without rewriting history.
+        return None, None
+
+    if (
+        args.quota_command == "should-run"
+        and payload.get("effective_action") == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
+        and payload.get("should_run") is False
+    ):
+        # A scoped wait can retain a missing Vision obligation for diagnosis.
+        # Its receipt grants no replan or Todo settlement identity on replay.
         return None, None
 
     explicit_todo_id = normalize_todo_id(getattr(args, "todo_id", None))
