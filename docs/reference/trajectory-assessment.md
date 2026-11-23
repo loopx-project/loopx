@@ -972,7 +972,8 @@ invalid submissions, and the curve breaks across invalid or missing indices.
 Open a point to read its bound source excerpt. When points are crowded, the
 submission picker selects an exact record and opens that record's evidence.
 Changing the selection preserves an open excerpt. Closing that excerpt returns
-focus to the picker when the selection has replaced the original button.
+focus to the original button while it is present. If the button was replaced,
+focus returns to the picker or to the selected point in the expanded layout.
 The summary remains readable as historical evidence when the captured artifact
 changes or becomes unavailable. Reading the series uses the existing pack and
 requires no analysis run or new pack registration.

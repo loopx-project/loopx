@@ -158,6 +158,7 @@ function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
   const [selectedId, setSelectedId] = useState("");
   const plotRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<HTMLSelectElement>(null);
+  const selectedButtonRef = useRef<HTMLButtonElement>(null);
   const [size, setSize] = useState({width: 0, height: 0});
   useLayoutEffect(() => {
     const element = plotRef.current;
@@ -232,6 +233,7 @@ function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
       </label>}
       {plot.filter(point => directPoints || point === selected).map(({sample, x, y}) =>
         <button key={sample.result_id} type="button"
+          ref={sample.result_id === selected.sample.result_id ? selectedButtonRef : undefined}
           style={directPoints ? {left: x, top: y, width: nativeSubmissionTargetSize, height: nativeSubmissionTargetSize} : undefined}
           className={directPoints ? "research-native-series-point" : "research-native-series-evidence"}
           data-native-submission={sample.submission_index} data-invalid={sample.value === null || undefined}
@@ -241,8 +243,8 @@ function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
           onClick={event => {
             const origin = event.currentTarget;
             setSelectedId(sample.result_id);
-            // Changing the picker can replace this button while its excerpt is open.
-            onCitation(sample.citation, () => origin.isConnected ? origin : pickerRef.current);
+            // Selection and resizing can replace the trigger while its excerpt is open.
+            onCitation(sample.citation, () => origin.isConnected ? origin : (pickerRef.current ?? selectedButtonRef.current));
           }}>
           {!directPoints && (zh ? "查看原始证据" : "Read original evidence")}
         </button>)}

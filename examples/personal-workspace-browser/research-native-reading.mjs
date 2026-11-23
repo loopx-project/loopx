@@ -190,6 +190,28 @@ export const researchNativeReadingScenario = {
             await page.waitForFunction(() => document.activeElement?.getAttribute("data-native-submission") === "1");
             assert(await chart.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
           }
+          if (c.id === "series-24") {
+            await picker.selectOption("result-0");
+            await chart.locator(".research-native-series-evidence").press("Enter");
+            await citation.getByText(/行 1–1$/).waitFor();
+            await picker.selectOption("result-12");
+            assert.match(await citation.innerText(), /Synthetic observation 0: value 7/);
+            await page.screenshot({path: resolve(outputDir, "research-native-resize-source-390.png"), animations: "disabled"});
+
+            await page.setViewportSize({width: 1280, height: 900});
+            const selectedPoint = ".research-native-series-point[data-native-submission='13']";
+            await chart.locator(selectedPoint).waitFor();
+            assert.equal(await picker.count(), 0);
+            assert.equal(await citation.getByText(/行 1–1$/).count(), 1, "Resizing preserves the open excerpt");
+            await citation.press("Escape");
+            await page.waitForFunction(selector => document.activeElement?.matches(selector), selectedPoint, {timeout: 4000});
+            await page.screenshot({path: resolve(outputDir, "research-native-resize-focus-desktop.png"), animations: "disabled"});
+            await page.keyboard.press("Enter");
+            await citation.getByText(/行 13–13$/).waitFor();
+            assert.match(await citation.innerText(), /Synthetic observation 12: value 7/);
+            await citation.press("Escape");
+            await page.waitForFunction(selector => document.activeElement?.matches(selector), selectedPoint);
+          }
           if (c.id === "series-25") {
             const action = chart.locator(".research-native-series-evidence");
             await picker.selectOption("result-0");
@@ -243,7 +265,10 @@ export const researchNativeReadingScenario = {
         assert.match(await details.innerText(), /2026-01-01T00:00:00Z/);
         if (c.display) for (const value of c.expected) assert((await details.innerText()).includes(String(value)), "Expanded sources retain the full native precision");
         assert(await details.evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 14));
-        assert(await native.evaluate(e => e.scrollWidth <= e.clientWidth + 1));
+        await page.waitForFunction(() => {
+          const measurement = document.querySelector(".research-native-results");
+          return measurement && measurement.scrollWidth <= measurement.clientWidth + 1;
+        }, undefined, {timeout: 4000});
         if (c.id === "lower-negative") {
           await native.evaluate(e => e.scrollIntoView({block: "start"}));
           await page.screenshot({path: resolve(outputDir, "research-native-sources-phone.png"), animations: "disabled"});
