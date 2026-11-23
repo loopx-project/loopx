@@ -6,7 +6,7 @@ import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
 from time import monotonic, time
 from typing import Any
@@ -74,30 +74,36 @@ def _call(runner: CommandRunner, args: Sequence[str]) -> Mapping[str, Any]:
         return {"returncode": 1}
 
 
-def _send_outcome_unknown(result: Mapping[str, Any]) -> bool:
-    if result.get("returncode") == 0 or result.get("spawn_failed") is True:
-        return False
+class _WorkerSendFailure(Enum):
+    REJECTED = auto()
+    RESPONSE_LOST = auto()
+    UNVERIFIED = auto()
+
+
+def _worker_send_failure(result: Mapping[str, Any]) -> _WorkerSendFailure:
+    if result.get("spawn_failed") is True:
+        return _WorkerSendFailure.REJECTED
     if result.get("timed_out") is True:
-        return True
-    # Local validation and explicit API rejections prove the write failed.
-    # Transport diagnostics and malformed responses leave the outcome open.
+        return _WorkerSendFailure.RESPONSE_LOST
     for stream in ("stdout", "stderr"):
-        payload = _json_object(result.get(stream))
-        error = payload.get("error")
+        error = _json_object(result.get(stream)).get("error")
         if not isinstance(error, Mapping):
             continue
-        if error.get("type") in ("validation", "authentication", "authorization", "config", "policy", "confirmation"):
-            return False
-        if error.get("type") == "api":
-            if error.get("subtype") in (
-                "rate_limit", "invalid_parameters", "not_found", "quota_exceeded",
-                "cross_tenant", "cross_brand", "ownership_mismatch", "feature_not_available",
-            ):
-                return False
-            if error.get("code") in (429, 230020, 99991400):
-                return False
-    return True
-
+        category, subtype = error.get("type"), error.get("subtype")
+        if category in ("validation", "authentication", "authorization", "config", "confirmation"):
+            return _WorkerSendFailure.REJECTED
+        if category == "api" and (
+            subtype in ("rate_limit", "invalid_parameters", "not_found", "quota_exceeded",
+                        "cross_tenant", "cross_brand", "ownership_mismatch", "feature_not_available")
+            or error.get("code") in (429, 230020, 99991400)
+        ):
+            return _WorkerSendFailure.REJECTED
+        if category == "network" or (category == "internal" and subtype == "invalid_response"):
+            return _WorkerSendFailure.RESPONSE_LOST
+        # A policy may suppress output after publication. Keep the original
+        # request unverified without replaying a policy or unclassified error.
+        return _WorkerSendFailure.UNVERIFIED
+    return _WorkerSendFailure.RESPONSE_LOST
 
 def _json_object(value: Any) -> Mapping[str, Any]:
     try:
@@ -668,8 +674,8 @@ def _deliver_lark_inbox_outbound(
 
     started = (time(), monotonic()) if recover_ambiguous_send else None
     send = _call(runner, provider_args)
-    unknown = started is not None and _send_outcome_unknown(send)
-    if unknown and started is not None and before_send is not None:
+    failure = _worker_send_failure(send) if started is not None and send.get("returncode") != 0 else None
+    if failure is _WorkerSendFailure.RESPONSE_LOST and started is not None and before_send is not None:
         # Replay the frozen UUID once while this process still has its start
         # time and can recheck the original source and grant. Leave a full
         # CLI timeout before the provider's one-hour deduplication limit.
@@ -689,7 +695,7 @@ def _deliver_lark_inbox_outbound(
             identity_verified=True,
             membership_verified=True,
             placement=placement,
-            write_performed=None if unknown else False,
+            write_performed=None if failure in (_WorkerSendFailure.RESPONSE_LOST, _WorkerSendFailure.UNVERIFIED) else False,
             blocker="lark_inbox_reply_provider_failed",
             format_preflight_passed=True,
             provider_preview_performed=True,

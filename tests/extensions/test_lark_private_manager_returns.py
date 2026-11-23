@@ -696,6 +696,7 @@ def test_web_result_identical_updates_keep_distinct_mirrors_and_final_scope(web_
     ("native", "shared", "lost_once"), ("legacy", "separate", "lost_twice"),
     ("native", "separate", "late_readback"), ("native", "shared", "revoked"),
     ("native", "shared", "expired"), ("native", "shared", "rate_limit"),
+    ("native", "shared", "output_withheld"),
 ], indirect=["private_return", "return_root"])
 def test_worker_return_lost_response_does_not_republish_after_restart(private_return, fault, monkeypatch):
     sender, session, turn, route, _, provider, transport, replies = private_return
@@ -719,6 +720,8 @@ def test_worker_return_lost_response_does_not_republish_after_restart(private_re
             return {"returncode": 1, "stderr": json.dumps({"error": {"type": "api", "subtype": "rate_limit", "code": 429}})}
         if key not in accepted:
             accepted[key] = original_runner(args, cwd, timeout)
+        if fault == "output_withheld":
+            return {"returncode": 1, "stderr": json.dumps({"error": {"type": "policy", "subtype": "content_safety"}})}
         if fault == "revoked":
             _write(_root(sender.root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {}})
         if fault == "expired":
@@ -741,7 +744,7 @@ def test_worker_return_lost_response_does_not_republish_after_restart(private_re
         assert wire_calls[0] == wire_calls[1]
     else:
         assert (state["status"], state["error"]) == ("explicit_unverified", "provider_locator_unavailable")
-        assert len(wire_calls) == (1 if fault in {"revoked", "expired"} else 2)
+        assert len(wire_calls) == (1 if fault in {"revoked", "expired", "output_withheld"} else 2)
     if fault != "rate_limit":
         assert len(replies) == 1
     accepted.clear()  # The provider no longer remembers the original UUID.
@@ -751,7 +754,7 @@ def test_worker_return_lost_response_does_not_republish_after_restart(private_re
           now=datetime.now(timezone.utc) + timedelta(hours=2))
     after = reply_status(sender.root, route)[0]
     assert after["status"] == ("delivered" if fault in {"lost_once", "late_readback", "rate_limit"} else "explicit_unverified")
-    assert len(replies) == 1 and len(wire_calls) == (1 if fault in {"revoked", "expired"} else 2)
+    assert len(replies) == 1 and len(wire_calls) == (1 if fault in {"revoked", "expired", "output_withheld"} else 2)
     returned = [r for r in recovered.messages(session["session_id"]) if r.get("origin") == "manager_followup"]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
     assert capture.read_bytes() == starts
