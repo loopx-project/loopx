@@ -1099,3 +1099,29 @@ test("pending lifecycle survives a new frontier without granting settlement or s
   assert.throws(() => projectReplanSemantics({...request,
     transition_candidates: [{...candidate, lifecycle_settled: true}]}), /identity conflicts/);
 });
+
+test("an admitted lifecycle trigger with a null completion key matches a Todo row without one", () => {
+  const agent = "synthetic-agent", id = "replan-1111111111111111";
+  // A Todo completed without a completion turn key: the row has no such field,
+  // while the admitted trigger carries the key as null.
+  const row = {todo_id: "todo_unkeyed", status: "done", done: true,
+    task_class: "advancement_task", claimed_by: agent, last_actor_agent_id: agent,
+    completed_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+    completion_continuation: "active_goal"};
+  const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
+      completion_turn_key: null, agent_id: agent}]};
+  const candidate = {obligation: original, source_obligation: original, lifecycle_settled: false,
+    guard_recorded_at: "2026-08-01T00:00:01Z", items: [row]};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true, replay_phase: "open",
+    selected_obligation_id: id, agent_id: agent,
+    current_obligation: {obligation_id: "replan-2222222222222222"}, transition_candidates: [candidate]};
+  assert.deepEqual(projectReplanSemantics(request).obligation, {...original, selection_binding: "heartbeat_receipt"});
+  // A key that appears on either side after admission is still a different completion.
+  assert.throws(() => projectReplanSemantics({...request,
+    transition_candidates: [{...candidate, items: [{...row, completion_turn_key: "later-completion"}]}]}),
+  /identity conflicts/);
+  const keyed = {...original, triggers: [{...original.triggers[0], completion_turn_key: "original-completion"}]};
+  assert.throws(() => projectReplanSemantics({...request,
+    transition_candidates: [{...candidate, obligation: keyed, source_obligation: keyed}]}), /identity conflicts/);
+});
