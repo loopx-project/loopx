@@ -23,8 +23,8 @@ from loopx.file_lock import exclusive_file_lock
 from benchmark.runtime.checkpoint import _participant_id
 from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 from benchmark.runtime.research_artifacts import (
-    RESEARCH_COMPONENT,
     is_excluded_tar_member,
+    is_runner_research_component,
     research_component_exclusions,
 )
 
@@ -181,47 +181,48 @@ def _archive(
             with tarfile.open(fileobj=_ArchiveReader(raw, deadline) if deadline is not None else raw) as archive:
                 members = []
                 root = PurePosixPath(remote).name
-                names = {}
-                excluded_paths = set()
+                all_members = {}
                 for member in archive.getmembers():
                     check()
                     path = PurePosixPath(member.name)
                     if (path.is_absolute() or ".." in path.parts or not path.parts or
-                            path.parts[0] != root or str(path) in names or
+                            path.parts[0] != root or str(path) in all_members or
                             not (member.isfile() or member.isdir() or member.islnk())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
-                    if exclude_research and member.islnk() and str(PurePosixPath(member.linkname)) in excluded_paths:
-                        excluded_paths.add(str(path))
-                        continue
-                    if (
-                        exclude_research
-                        and len(path.parts) > 1
-                        and is_excluded_tar_member(archive, member, path.parts[1:])
-                    ):
-                        excluded_paths.add(str(path))
-                        continue
-                    names[str(path)] = member
+                    all_members[str(path)] = member
                     members.append(member)
 
                 # The typed artifact owner observes regular files, not inode
                 # sharing. Docker encodes a second name for the same inode as a
                 # tar hardlink (common in build outputs). Materialize its bytes
-                # from an inventoried regular member; never resolve a link on
-                # the host filesystem or permit a link chain/symlink escape.
+                # from an inventoried regular member and evaluate exclusion on
+                # the link's own path so local probe and extracted worker
+                # witnesses agree; never resolve a link on the host filesystem.
+                kept_members = []
                 extracted = []
                 for member in members:
                     check()
+                    path = PurePosixPath(member.name)
                     if member.islnk():
                         target_path = PurePosixPath(member.linkname)
-                        target = names.get(str(target_path))
+                        target = all_members.get(str(target_path))
                         if (target_path.is_absolute() or ".." in target_path.parts or
                                 target is None or not target.isfile()):
                             raise ValueError("Worker archive contains undeclared, linked or special members")
+                        content_member = target
                         regular = copy(target)
                         regular.name, regular.mode = member.name, member.mode
-                        extracted.append(regular)
                     else:
-                        extracted.append(member)
+                        content_member = member
+                        regular = member
+                    if (
+                        exclude_research
+                        and len(path.parts) > 1
+                        and is_excluded_tar_member(archive, content_member, path.parts[1:])
+                    ):
+                        continue
+                    kept_members.append(member)
+                    extracted.append(regular)
 
                 def filtered(member, path):
                     check()
@@ -235,7 +236,7 @@ def _archive(
                 # bits after safe extraction; never restore owners or special bits.
                 # Otherwise a private 0700 authority directory becomes 0755 and a
                 # matching frozen source is falsely rejected as having changed.
-                for member in sorted(members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
+                for member in sorted(kept_members, key=lambda entry: len(PurePosixPath(entry.name).parts), reverse=True):
                     check()
                     (destination / member.name).chmod(member.mode & 0o777)
     check()
@@ -391,14 +392,14 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                                 entry["source_path"],
                                 stage / "workers" / entry["id"],
                                 deadline=deadline,
-                                exclude_research=entry["id"] == RESEARCH_COMPONENT,
+                                exclude_research=is_runner_research_component(entry),
                             )
                         except docker.errors.NotFound as error:
                             # Keep the provider exception for direct capture callers.
                             error.checkpoint_component_id = entry["id"]
                             raise
                         components.append({"id": entry["id"], "source_path": str(copied)})
-                    exclusions = research_component_exclusions(components)
+                    exclusions = research_component_exclusions(request["components"])
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
                             "action": "probe", "components": components,

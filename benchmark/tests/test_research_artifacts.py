@@ -10,6 +10,7 @@ from benchmark.runtime.research_artifacts import (
     is_confirmed_core_dump_header,
     is_excluded_research_relpath,
     is_excluded_tar_member,
+    is_runner_research_component,
     research_component_exclusions,
     selected_research_components,
     validate_research_scope,
@@ -190,4 +191,187 @@ def test_core_dump_filter_preserves_normal_core_dirs_and_plain_files():
         "loopx-benchmark-research/core/analysis.md",
         "loopx-benchmark-research/topic/core",
         "loopx-benchmark-research/bin/core",
+    ]
+
+
+def test_caller_chosen_benchmark_research_id_preserves_declared_files_end_to_end(tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    caller_dir = tmp_path / "caller-research"
+    caller_dir.mkdir()
+    (caller_dir / "experiment.raw.gz").write_bytes(b"raw-gz-payload")
+    (caller_dir / "notes.md").write_text("# caller notes\n", encoding="utf-8")
+
+    components = [{"id": RESEARCH_COMPONENT, "source_path": str(caller_dir)}]
+    assert not is_runner_research_component(components[0])
+    exclusions = research_component_exclusions(components)
+    assert exclusions == {}
+
+    probe = effect_runtime_result(
+        "runtime.checkpoint_artifacts",
+        {"action": "probe", "components": components, **({"component_exclusions": exclusions} if exclusions else {})},
+    )
+    unit = tmp_path / "captured-unit"
+    capture = effect_runtime_result(
+        "runtime.checkpoint_artifacts",
+        {
+            "action": "capture",
+            "components": components,
+            "destination": str(unit),
+            "expected_source_sha256": probe["source_sha256"],
+            "point_metadata": {"caller": True},
+            **({"component_exclusions": exclusions} if exclusions else {}),
+        },
+    )
+    effect_runtime_result(
+        "runtime.checkpoint_artifacts",
+        {"action": "verify", "root": str(unit), "expected_sha256": capture["sha256"]},
+    )
+    restored = tmp_path / "materialized"
+    effect_runtime_result(
+        "runtime.checkpoint_artifacts",
+        {
+            "action": "materialize",
+            "root": str(unit),
+            "expected_sha256": capture["sha256"],
+            "destination": str(restored),
+        },
+    )
+    comp_root = restored / "components" / RESEARCH_COMPONENT
+    assert (comp_root / "experiment.raw.gz").read_bytes() == b"raw-gz-payload"
+    assert (comp_root / "notes.md").read_text(encoding="utf-8") == "# caller notes\n"
+
+
+def test_archive_exclude_research_skips_ephemeral_dumps(tmp_path):
+    import base64
+    import io
+    import json
+    import tarfile
+    from types import SimpleNamespace
+    from benchmark.edgebench import checkpoint_worker
+
+    elf_core = b"\x7fELF\x02\x01" + b"\x00" * 10 + (4).to_bytes(2, "little") + b"\x00" * 46
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        for d in ("loopx-benchmark-research", "loopx-benchmark-research/topic", "loopx-benchmark-research/sub"):
+            dinfo = tarfile.TarInfo(d)
+            dinfo.type = tarfile.DIRTYPE
+            dinfo.mode = 0o700
+            archive.addfile(dinfo)
+        for rel, body in (
+            ("loopx-benchmark-research/candidate.py", b"print('ok')\n"),
+            ("loopx-benchmark-research/topic/core", b"ordinary topic evidence\n"),
+            ("loopx-benchmark-research/dump.raw.gz", b"gz"),
+            ("loopx-benchmark-research/core", elf_core),
+            ("loopx-benchmark-research/target/release/bin", b"bin"),
+            ("loopx-benchmark-research/.cargo-target/x.rlib", b"rlib"),
+        ):
+            info = tarfile.TarInfo(rel)
+            info.size = len(body)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(body))
+        for link_rel in ("loopx-benchmark-research/alias_note", "loopx-benchmark-research/sub/core.2"):
+            linfo = tarfile.TarInfo(link_rel)
+            linfo.type = tarfile.LNKTYPE
+            linfo.linkname = "loopx-benchmark-research/core"
+            linfo.mode = 0o644
+            archive.addfile(linfo)
+
+    stat_hdr = base64.b64encode(json.dumps({"linkTarget": ""}).encode("utf-8")).decode("ascii")
+    response = SimpleNamespace(
+        headers={"x-docker-container-path-stat": stat_hdr},
+        iter_content=lambda chunk_size, decode_unicode=False: iter([payload.getvalue()]),
+        close=lambda: None,
+    )
+    container = SimpleNamespace(
+        id="c1",
+        client=SimpleNamespace(
+            api=SimpleNamespace(
+                _url=lambda tpl, cid: tpl.format(cid),
+                _get=lambda url, **kwargs: response,
+                _raise_for_status=lambda resp: None,
+            )
+        ),
+    )
+    extracted = checkpoint_worker._archive(
+        container, "/tmp/loopx-benchmark-research", tmp_path / "dest", exclude_research=True,
+    )
+    assert (extracted / "candidate.py").read_bytes() == b"print('ok')\n"
+    assert (extracted / "topic/core").read_bytes() == b"ordinary topic evidence\n"
+    assert (extracted / "alias_note").read_bytes() == elf_core
+    assert not (extracted / "dump.raw.gz").exists()
+    assert not (extracted / "core").exists()
+    assert not (extracted / "sub/core.2").exists()
+    assert not (extracted / "target").exists()
+    assert not (extracted / ".cargo-target").exists()
+
+
+def test_archive_exclude_research_hardlink_matches_local_probe_witness(tmp_path):
+    import base64
+    import io
+    import json
+    import os
+    import tarfile
+    from types import SimpleNamespace
+    from benchmark.edgebench import checkpoint_worker
+    from benchmark.runtime.research_artifacts import RESEARCH_EXCLUDE_PATTERNS
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    elf_core = b"\x7fELF\x02\x01" + b"\x00" * 10 + (4).to_bytes(2, "little") + b"\x00" * 46
+    local_root = tmp_path / "local" / "loopx-benchmark-research"
+    (local_root / "sub").mkdir(parents=True)
+    local_root.chmod(0o700)
+    (local_root / "sub").chmod(0o700)
+    (local_root / "candidate.py").write_text("score = 1\n", encoding="utf-8")
+    (local_root / "core").write_bytes(elf_core)
+    os.link(local_root / "core", local_root / "alias_note")
+    os.link(local_root / "core", local_root / "sub" / "core.2")
+
+    exclusions = {RESEARCH_COMPONENT: list(RESEARCH_EXCLUDE_PATTERNS)}
+    prepared = effect_runtime_result(
+        "runtime.checkpoint_artifacts",
+        {
+            "action": "probe",
+            "components": [{"id": RESEARCH_COMPONENT, "source_path": str(local_root)}],
+            "component_exclusions": exclusions,
+        },
+    )
+
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        archive.add(local_root, arcname="loopx-benchmark-research")
+    stat_hdr = base64.b64encode(json.dumps({"linkTarget": ""}).encode("utf-8")).decode("ascii")
+    response = SimpleNamespace(
+        headers={"x-docker-container-path-stat": stat_hdr},
+        iter_content=lambda chunk_size, decode_unicode=False: iter([payload.getvalue()]),
+        close=lambda: None,
+    )
+    container = SimpleNamespace(
+        id="c1",
+        client=SimpleNamespace(
+            api=SimpleNamespace(
+                _url=lambda tpl, cid: tpl.format(cid),
+                _get=lambda url, **kwargs: response,
+                _raise_for_status=lambda resp: None,
+            )
+        ),
+    )
+    extracted = checkpoint_worker._archive(
+        container, "/tmp/loopx-benchmark-research", tmp_path / "dest", exclude_research=True,
+    )
+    observed = effect_runtime_result(
+        "runtime.checkpoint_artifacts",
+        {
+            "action": "probe",
+            "components": [{"id": RESEARCH_COMPONENT, "source_path": str(extracted)}],
+            "component_exclusions": exclusions,
+        },
+    )
+    assert observed["source_sha256"] == prepared["source_sha256"]
+    assert observed["source_witness"] == prepared["source_witness"]
+    assert [row["path"] for row in observed["source_witness"][RESEARCH_COMPONENT]] == [
+        "",
+        "alias_note",
+        "candidate.py",
+        "sub",
     ]

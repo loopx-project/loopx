@@ -42,11 +42,19 @@ def is_confirmed_core_dump_header(header: bytes) -> bool:
     return False
 
 
+def is_runner_research_component(entry: Any) -> bool:
+    """Return True only for the runner's reserved research component directory."""
+    if not isinstance(entry, Mapping) or entry.get("id") != RESEARCH_COMPONENT:
+        return False
+    source_path = entry.get("source_path")
+    return isinstance(source_path, str) and PurePosixPath(source_path) == PurePosixPath(RESEARCH_DIRECTORY)
+
+
 def research_component_exclusions(
     components: Sequence[Mapping[str, Any]],
 ) -> dict[str, list[str]]:
-    """Return bounded source-exclusion patterns only when benchmark research is attached."""
-    if any(entry.get("id") == RESEARCH_COMPONENT for entry in components if isinstance(entry, dict)):
+    """Return bounded source-exclusion patterns only when runner-owned benchmark research is attached."""
+    if any(is_runner_research_component(entry) for entry in components):
         return {RESEARCH_COMPONENT: list(RESEARCH_EXCLUDE_PATTERNS)}
     return {}
 
