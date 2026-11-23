@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ...capabilities.manager_context import authority
-from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
+from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked, ReturnTransportUnavailable
 from ...chat_store import _atomic_write_json
 from ...file_lock import exclusive_file_lock
 from .conversation_identity import identity_ref
@@ -323,6 +323,9 @@ def _run_inbox_return(
 ) -> Payload:
     verify_only = attempt is not None
     text, steward_context = present_lark_conversation_text(text), session.get("steward_context")
+    if not verify_only and isinstance(steward_context, dict) and turn.get("origin") == "native_loopx":
+        _private_return_authority(root, registry, route, session, turn, cancelled, private_transport)
+        raise ReturnTransportUnavailable("scheduled Steward result has no private reply transport")
     if isinstance(steward_context, dict) and turn.get("origin") == "web":
         result = _web_return(
             root, registry, route, session, turn, text, cancelled, private_transport,
@@ -395,16 +398,13 @@ def _run_inbox_return(
             content_format="markdown", execute=True, runner=runner or _default_runner, before_send=before_send,
             delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
             source_membership_verifier=source_verifier,
-            # A returned manager answer keeps the provider bound, not the compact
-            # notification length.
+            # Use the provider's full length allowance for returned answers.
             short_message_limit=None, attachment_keys=keys, attachment_names=attachment_names,
             finalize_reactions=not attachments,
         )
     if attachments and result.get("reply_verified") is True:
         # The recorder persists the exact message locator before this read.
         # Failure retains that attempt; recovery only reads it, never resends.
-        from .post_delivery import attachment_reply
-
         file_text, file_attempt = cast(Callable[..., tuple[str, dict[str, str | None]]], attachment_reply)(
             project=project, config_path=config_path,
             attempt=attempt if attempt is not None else observed_attempt, text=text,

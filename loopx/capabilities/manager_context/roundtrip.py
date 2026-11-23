@@ -71,6 +71,10 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
         super().__init__(message)
 
 
+class ReturnTransportUnavailable(RuntimeError):
+    """The adapter lacks a compatible transport for this delivery."""
+
+
 def _verification_decision(outcome):
     return dict(
         effect_runtime_result(
@@ -776,6 +780,8 @@ def _deliver_return(host, path, sender, frozen_route):
     except ChatMessagePayloadConflictError as exc:
         logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
         outcome = {"kind": "conflict"}
+    except ReturnTransportUnavailable:
+        outcome = {"kind": "verification_error" if plan["action"] == "verify" else "sender_unavailable"}
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}

@@ -352,6 +352,7 @@ def test_builtin_catalog_lists_every_owner_in_namespace_order() -> None:
         "codex_chat",
         "context_delivery",
         "explore_harness",
+        "goal_closeout",
         "goal_storage",
         "manager_runtime",
         "periodic_report",

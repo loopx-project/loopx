@@ -1,4 +1,12 @@
 export const zh = {
+  goalOnly: '仅长程目标',
+  goalPaused: '暂停',
+  goalReady: '已关联',
+  goalWork: '有待办',
+  goalUnknown: '状态未知',
+  goalRefreshed: '已刷新',
+  goalIncomplete: '状态缺口',
+  goalMissingResult: '产物缺失',
   title: '看板',
   backlog: '以后再做',
   doing: '进行中',

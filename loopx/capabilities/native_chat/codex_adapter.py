@@ -407,9 +407,11 @@ def compact_native_history(
     while True:
         # This is model work, not a control RPC. Reuse the native Turn's
         # idle/hard budgets and the caller's live lifecycle checks.
-        deadline = last_activity_at + session.idle_timeout_sec
-        if session.hard_timeout_sec is not None:
-            deadline = min(deadline, started_at + session.hard_timeout_sec)
+        deadlines = [
+            *([last_activity_at + session.idle_timeout_sec] if session.idle_timeout_sec is not None else []),
+            *([started_at + session.hard_timeout_sec] if session.hard_timeout_sec is not None else []),
+        ]
+        deadline = min(deadlines) if deadlines else None
         event = session._next_event(deadline=deadline, **({"check": check} if check is not None else {}))
         if session._check_server_gate(event):
             continue
@@ -1094,7 +1096,7 @@ class CodexAppServerAdapter:
         history: list[dict[str, Any]] | None = None,
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         execution_mode: bool = False,
         runtime_profile: str = "restricted",

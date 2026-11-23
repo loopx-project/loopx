@@ -9,8 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .decision_capture import (read_context_capture_file, read_context_read_reference,
-    context_selection_view)
+from .decision_capture import (
+    context_selection_view, context_vision_audit_view, read_context_capture_file, read_context_read_reference,
+)
 
 
 def _terminal_range_seen(state: dict[str, Any], digest: str, total: int) -> bool:
@@ -112,7 +113,8 @@ def verified_context_selection(
             list_depth=selected.get("list_depth") if selected else None,
             expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
             present_goal_narrative=selected.get("present_goal_narrative") is True if selected else None,
-            selection_paths=selection_paths, text_append=text_append)
+            selection_paths=selection_paths, text_append=text_append,
+            opening_context_instruction=selected.get("opening_context_instruction") if selected else None)
         if selected_raw is None:
             return None
         raw = selected_raw
@@ -141,7 +143,8 @@ def verified_context_selection(
                 # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
                 if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
                     inherited = observation["fields"]
-            sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
+            sections = _turn_envelope_result("context_read_sections",
+                context=context_vision_audit_view(source), select=literal_pointers,
                 consumed_pointers=inherited,
                 **({"observed_text_append": text_append} if inherited and text_append is not None else {}))["sections"]
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,

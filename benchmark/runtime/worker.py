@@ -477,13 +477,32 @@ def run_native_goal(
                 receipt["native_goal"] = compact_native_goal_receipt(observed[-1])
 
 
+def _normalize_runtime_root(runtime_root: str, project: str) -> str:
+    """Resolve LOOPX_RUNTIME_ROOT in filesystem order relative to LOOPX_PROJECT."""
+    root = Path(runtime_root)
+    if root.is_absolute():
+        return os.path.realpath(root)
+    return os.path.realpath(os.path.join(os.path.realpath(project), root))
+
+
+def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) -> list[str]:
+    if stage != "plan" or execution.sandbox != "workspace-write":
+        return []
+    runtime_root = env.get("LOOPX_RUNTIME_ROOT")
+    if not runtime_root:
+        return []
+    normalized = _normalize_runtime_root(runtime_root, env["LOOPX_PROJECT"])
+    return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps([normalized])}"]
+
+
 def native_command(env, execution, stage, wake, session_wake, *, native_hook_args=()):
     if session_wake is None:
         # Preserve the baseline/Goal-planning entrypoint and its transport inputs.
         return [
             env["CODEX_BIN"], "exec", "--json", "--skip-git-repo-check",
             "--sandbox", execution.sandbox, "--cd", env["LOOPX_PROJECT"],
-            *(["-c", "features.goals=false", "--output-schema", str(wake / "planning-schema.json"),
+            *(["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage),
+               "--output-schema", str(wake / "planning-schema.json"),
                "--output-last-message", str(wake / "planning-result.json")] if stage == "plan" else []),
             *native_hook_args,
             "-",
@@ -507,7 +526,7 @@ def native_command(env, execution, stage, wake, session_wake, *, native_hook_arg
             # native shell whose frozen settings still record the requested on.
             command[-1:-1] = ["-c", 'shell_environment_policy.set.LOOPX_CONTEXT_DELIVERY="off"']
     if stage == "plan":
-        command[-1:-1] = ["-c", "features.goals=false"]
+        command[-1:-1] = ["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage)]
     return command
 
 
@@ -625,6 +644,10 @@ def run_once(env: dict[str, str]) -> dict:
     stdout_path, stderr_path = host_output_paths(wake)
     home = Path(env["LOOPX_CODEX_HOME"])
     env = process_environment(home, base=env)
+    if env.get("LOOPX_RUNTIME_ROOT"):
+        env["LOOPX_RUNTIME_ROOT"] = _normalize_runtime_root(
+            env["LOOPX_RUNTIME_ROOT"], env["LOOPX_PROJECT"]
+        )
     # Preserve this trial's resolved off/on choice in both preflight and solver
     # subprocesses; an explicit off must not inherit a machine-wide default.
     env["LOOPX_CONTEXT_DELIVERY"] = execution.context_delivery

@@ -3,6 +3,12 @@ import { access, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import {
+  indexRecordBeforeRelocation,
+  relocateTransactionReceipt,
+  relocatedReceiptRuntimeRoot,
+  withRelocatedRunArtifactPaths,
+} from "./accounting_artifact_transaction.ts";
 import type { JsonObject, SettlementIdentity } from "../effect_program.ts";
 import { appendJsonLine, atomicWriteJson, atomicWriteText, withFileMutationLock } from "../effect_runtime_io.ts";
 import { jsonObject, requireJsonObject as requiredObject } from "../runtime_decode.ts";
@@ -141,16 +147,23 @@ function pendingIndexHistoryIntact(pending: PendingMonitorReceipt, current: Buff
   return sha256((current ?? Buffer.alloc(0)).subarray(0, expectedBytes)) === pending.expected_index_digest;
 }
 
-async function readReceipt(path: string): Promise<MonitorReceipt | null> {
+async function readReceipt(path: string, runsDir: string): Promise<MonitorReceipt | null> {
   const content = await readOptionalText(path);
   if (content === null) return null;
-  try { return receiptObject(JSON.parse(content)); }
+  try { return await relocateTransactionReceipt(runsDir, receiptObject(JSON.parse(content))); }
   catch (error) {
     if (error instanceof SyntaxError) {
       throw new EffectRuntimeRequestError("quota monitor-poll transaction receipt is malformed", "malformed_transaction_receipt");
     }
     throw error;
   }
+}
+
+function monitorDigestMatches(existing: MonitorReceipt, fingerprint: string, request: MonitorRequest): boolean {
+  if (existing.request_digest === fingerprint) return true;
+  const sourceRoot = relocatedReceiptRuntimeRoot(existing);
+  if (sourceRoot === null) return false;
+  return requestDigest({ ...request, runtime_root: sourceRoot }) === existing.request_digest;
 }
 
 /** A stored observation may already have reached its provider even before the
@@ -165,7 +178,7 @@ export async function hasMonitorPollTransaction(
   const runsDir = join(runtimeRoot, "goals", identity.goal_id, "runs");
   const base = `quota-monitor-poll:${identity.goal_id}:${identity.agent_id}:${identity.turn_instance_id}`;
   for (const effectId of [base, `${base}:todo:${identity.todo_id}`]) {
-    const receipt = await readReceipt(transactionPath(runsDir, effectId));
+    const receipt = await readReceipt(transactionPath(runsDir, effectId), runsDir);
     if (!receipt) continue;
     validateReceiptScope(receipt, runsDir, join(runsDir, "index.jsonl"));
     const facts = receipt.status === "provider_pending" ? receipt.provider_plan : receipt.index_record;
@@ -264,7 +277,11 @@ async function ensureContentArtifacts(receipt: DurableMonitorReceipt): Promise<b
   return jsonRepaired || markdownRepaired;
 }
 
-async function ensureIndexArtifact(receipt: DurableMonitorReceipt, contentRepaired: boolean): Promise<boolean> {
+async function ensureIndexArtifact(
+  receipt: DurableMonitorReceipt,
+  contentRepaired: boolean,
+  runsDir: string,
+): Promise<boolean> {
   let repaired = contentRepaired;
   const bytes = await readOptionalBytes(receipt.index_path);
   let content = bytes?.toString("utf8") ?? null;
@@ -272,7 +289,12 @@ async function ensureIndexArtifact(receipt: DurableMonitorReceipt, contentRepair
   try {
     records = indexRecords(content);
   } catch (error) {
-    const recovered = bytes ? repairedTruncatedTail(bytes, receipt) : null;
+    const recovered = bytes
+      ? repairedTruncatedTail(bytes, {
+        ...receipt,
+        index_record: indexRecordBeforeRelocation(receipt, receipt.index_record),
+      })
+      : null;
     if (recovered === null) throw error;
     await atomicWriteText(receipt.index_path, recovered);
     content = recovered;
@@ -285,7 +307,8 @@ async function ensureIndexArtifact(receipt: DurableMonitorReceipt, contentRepair
     if (metadata.request_digest !== receipt.request_digest) {
       throw new EffectRuntimeRequestError("quota monitor-poll effect identity is already bound to a different request", "effect_id_conflict");
     }
-    if (pythonJson(match) !== pythonJson(receipt.index_record)) {
+    const aligned = await withRelocatedRunArtifactPaths(runsDir, match);
+    if (pythonJson(aligned) !== pythonJson(receipt.index_record)) {
       throw new EffectRuntimeRequestError("quota monitor-poll index record conflicts with its transaction receipt", "artifact_conflict");
     }
   } else {
@@ -305,8 +328,8 @@ async function ensureIndexArtifact(receipt: DurableMonitorReceipt, contentRepair
   return repaired;
 }
 
-async function ensureArtifacts(receipt: DurableMonitorReceipt): Promise<boolean> {
-  return await ensureIndexArtifact(receipt, await ensureContentArtifacts(receipt));
+async function ensureArtifacts(receipt: DurableMonitorReceipt, runsDir: string): Promise<boolean> {
+  return await ensureIndexArtifact(receipt, await ensureContentArtifacts(receipt), runsDir);
 }
 
 function effectConflict(
@@ -341,8 +364,9 @@ async function replayDurableReceipt(
   fingerprint: string,
   receiptPath: string,
   receipt: DurableMonitorReceipt,
+  runsDir: string,
 ): Promise<QuotaMonitorPollCommitResult> {
-  const repaired = await ensureArtifacts(receipt);
+  const repaired = await ensureArtifacts(receipt, runsDir);
   if (receipt.status === "prepared") await rm(committedReceiptStagePath(receiptPath), { force: true });
   const replayPayload: JsonObject = {
     ...receipt.payload,
@@ -424,17 +448,17 @@ async function evaluateQuotaMonitorPollRequest(
   const indexPath = join(runsDir, "index.jsonl");
   const commit = async (): Promise<QuotaMonitorPollCommitResult> => {
     const receiptPath = transactionPath(runsDir, request.effect_id);
-    const existing = await readReceipt(receiptPath);
+    const existing = await readReceipt(receiptPath, runsDir);
     if (existing) {
       validateReceiptScope(existing, runsDir, indexPath);
-      if (existing.effect_id !== request.effect_id || existing.request_digest !== fingerprint) {
+      if (existing.effect_id !== request.effect_id || !monitorDigestMatches(existing, fingerprint, request)) {
         return effectConflict(request, fingerprint, await quotaMonitorPollIndexDigest(indexPath), existing);
       }
       if (existing.status !== "provider_pending") {
         if (request.phase === "provider_rejected") {
           throw new EffectRuntimeRequestError("cannot abort a prepared or committed Monitor effect");
         }
-        return await replayDurableReceipt(request, fingerprint, receiptPath, existing);
+        return await replayDurableReceipt(request, fingerprint, receiptPath, existing, runsDir);
       }
     }
 
@@ -567,7 +591,7 @@ async function evaluateQuotaMonitorPollRequest(
     // authority; the public index remains the commit proof. Keeping the WAL in
     // that state avoids a second full-receipt fsync without ever publishing a
     // committed receipt before the index append succeeds.
-    await ensureIndexArtifact(prepared, contentRepaired);
+    await ensureIndexArtifact(prepared, contentRepaired, runsDir);
     return monitorResult(
       effectiveRequest, fingerprint, "written", record, payload,
       "quota monitor-poll transaction committed by TypeScript",

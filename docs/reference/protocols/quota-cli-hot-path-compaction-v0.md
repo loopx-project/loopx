@@ -29,6 +29,23 @@ TypeScript 上下文 owner 同时约束 `quota context-read --initial-read`。
 停止和结算不变；改变的只是起始视图，不是完整 capture 或显式读取。总成本比较须计入
 后续索引补读及额外调用；初读字节减少本身不证明保留、理解或收益。
 
+A prepared native turn with a matching settlement receipt can open a large
+batch of suggested outcomes with their IDs, objectives, revisions, and exact
+addresses. This applies when the complete suggested bodies exceed the native
+first-read window and every suggested outcome has a verified supporting
+address. Instead of claiming complete requirements inline, the opening
+identifies those omitted outcome parent paths (the parent of each `/id` pointer)
+and requires selecting every applicable complete outcome from the current
+recovery capture before dependent work. A small batch retains its complete
+opening bodies. Explicit initial reads and saved selection references retain
+their own read plans.
+
+原生 Turn 准备就绪后，若结算回执匹配、建议验收项的完整正文超过首读窗口，且各项
+都有核验过的支撑地址，首读先提供各项目标、ID、版本和精确地址。该首读不再声称
+已保留完整要求，而是标明省略的验收父路径（各 `/id` 指针的父路径），并要求在
+依赖工作前沿当前恢复 capture 读取适用验收项的完整正文。小批量仍在首读展开完整
+正文。显式初读和已保存的选择引用沿各自的读取计划运行。
+
 ## Ownership Boundary
 
 Successful JSON `refresh-state` output keeps the complete `explore_result` once.
@@ -109,6 +126,25 @@ projection. Candidate lists and peer action lists retain counts and point to
 `--include-detail agent-todos`. The complete vision audit is available through
 `--include-detail vision`; `--include-detail all` restores every supported
 detail section.
+
+Complete Turn output may also share the narrower
+`interaction_contract.cli_channel.vision_continuation_audit` when its entire
+value equals the CLI view of the root audit. The wire reference uses
+`projection_ref: "$.vision_continuation_audit"` and
+`projection_view: "cli_channel"`. A different channel obligation stays inline.
+The native first read and digest-pinned `quota context-read --select` and
+`--list` resolve the CLI view at its original address, including nested
+obligations such as `required_before_closeout`. An explicit empty pointer
+returns the signed source object. The capture and its digest bind subsequent
+reads and their native section observations.
+
+Complete Turn 也可以共享与根审核的 CLI 视图完全相同的
+`interaction_contract.cli_channel.vision_continuation_audit`。传输引用包含
+`projection_ref: "$.vision_continuation_audit"` 和
+`projection_view: "cli_channel"`。通道义务有差异时保留原文。
+原生首读和绑定捕获摘要的 `quota context-read --select`、`--list` 都在原地址
+还原 CLI 视图，支持读取 `required_before_closeout` 等子字段。显式选择空指针会返回
+带签名的源对象。后续读取及其原生区段观察均以原捕获及其摘要为准。
 
 When a bounded next-action label still carries the complete Task again in
 `agent_lane_next_action.title`, the default view may replace that exact duplicate

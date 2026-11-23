@@ -1614,7 +1614,7 @@ def serve_chat(
     kiro_cli_bin: str = KIRO_CLI_BIN,
     lark_cli_bin: str | None = None,
     startup_timeout_sec: float | None = None,
-    idle_timeout_sec: float = 180.0,
+    idle_timeout_sec: float | None = None,
     hard_timeout_sec: float | None = None,
     assets_dir: Path | None = None,
     open_browser: bool = False,

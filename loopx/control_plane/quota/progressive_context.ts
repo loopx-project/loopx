@@ -28,6 +28,7 @@ export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
+const COMPLETE_REQUIREMENTS_CLAUSE = "This view retains complete requirements and current review/check states. ";
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -650,7 +651,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         }) : [],
       },
       instruction: deferred.map(edit => typeof edit.read_instruction === "string" ? edit.read_instruction : "").join("")
-        + "This view retains complete requirements and current review/check states. "
+        + COMPLETE_REQUIREMENTS_CLAUSE
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "Use the outcome's supporting_material_pointer when shown, or remove /id from its selected JSON pointer. "
@@ -745,8 +746,11 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
+  const firstReadBytes = jsonObject(request.native_projection)?.initial_read_output_bytes;
+  const openingBudget = typeof firstReadBytes === "number" && Number.isSafeInteger(firstReadBytes) && firstReadBytes > 0
+    ? firstReadBytes : undefined;
   const groups = observe || request.include_initial_read_plan === true
-    ? initialContextReadGroups(required.context, decisionFields) : undefined;
+    ? initialContextReadGroups(required.context, decisionFields, openingBudget) : undefined;
   const openingSplit = request.include_initial_read_plan === true && groups
     ? prepareInitialOpening(required.context, groups, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
@@ -846,12 +850,27 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
   return {controls, details, linkedDetail};
 }
 
+function deferredOutcomesInstruction(context: JsonObject, deferredOutcomes: readonly string[]): string | undefined {
+  if (!deferredOutcomes.length) return undefined;
+  const details = jsonObject(context.context_details);
+  const instruction = typeof details?.instruction === "string" ? details.instruction : undefined;
+  if (!instruction) return undefined;
+  const notice =
+    "This opening omits full requirement bodies for large suggested outcomes, delivering only their id, objective and revision. "
+    + "Before dependent work, read each applicable complete outcome from recovery.command "
+    + `(--select <pointer>): ${deferredOutcomes.join(", ")}. `
+    + "Supporting material below still comes from the original capture in context_details. ";
+  return instruction.includes(COMPLETE_REQUIREMENTS_CLAUSE)
+    ? instruction.replace(COMPLETE_REQUIREMENTS_CLAUSE, notice)
+    : notice + instruction;
+}
+
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
     groups: ReturnType<typeof initialContextReadGroups>, openingSplit?: ReturnType<typeof prepareInitialOpening>): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
-      ordinary_opening_rows?: number;
+      ordinary_opening_rows?: number; deferred_suggested_outcomes?: string[]; opening_context_instruction?: string;
     } {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
@@ -866,10 +885,15 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   const ordinaryRows = openingSplit ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
       ? index + 1 : end, 0) : undefined;
+  const deferredOutcomes = groups.deferredSuggestedOutcomes ?? [];
+  const openingInstruction = deferredOutcomes.length && pointers.includes("/context_details/instruction")
+    ? deferredOutcomesInstruction(context, deferredOutcomes) : undefined;
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(openingSplit ? {linked_opening_detail: openingSplit.linkedDetail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(openingSplit ? {linked_opening_detail: openingSplit.linkedDetail, ordinary_opening_rows: ordinaryRows} : {}),
+    ...(deferredOutcomes.length ? {deferred_suggested_outcomes: deferredOutcomes} : {}),
+    ...(openingInstruction ? {opening_context_instruction: openingInstruction} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -967,8 +991,8 @@ function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonO
   return attention;
 }
 
-function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
-  opening: string[]; remaining: string[];
+function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[], openingBudget?: number): {
+  opening: string[]; remaining: string[]; deferredSuggestedOutcomes?: string[];
 } {
   const object = (value: unknown): JsonObject | undefined =>
     value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -1031,6 +1055,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include("interaction_contract", "agent_channel", field);
   const cli = object(interaction.cli_channel), planPath = SETTLEMENT_PLAN_PATH;
   const plan = object(cli?.settlement_plan);
+  const readyIdentity = readySettlementIdentity(context, interaction, plan);
   const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
   const turnBindingRequired = cli?.turn_binding_required === true;
   const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
@@ -1125,6 +1150,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // before selecting other sources' metadata: complete-parent coalescing keeps
   // the first selected child's position. Preserve stable order within each group.
   const hasText = (source: unknown): boolean => typeof object(object(source)?.content)?.text === "string";
+  const deferredSuggestedOutcomes: string[] = [];
   sourceRows.sort((left, right) => Number(hasText(right.source)) - Number(hasText(left.source)));
   sourceRows.forEach(({source: _source, index}) => {
     const source = [...work, "sources", index];
@@ -1173,11 +1199,31 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       && suggested.every(id => typeof id === "string"
         && outcomes.filter(value => object(value)?.id === id).length === 1);
     const expanded = new Set(expand ? suggested as string[] : []);
+    const outcomesPath = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes"];
+    const canDeferSuggested = openingBudget !== undefined && readyIdentity !== undefined && expanded.size > 0
+      && inlineSupportingDetails && details?.outcome_support_from_id === true
+      && details.path === supportingSource?.path && details.sha256 === supportingSource?.sha256
+      && typeof details.command_template === "string" && details.command_template.length > 0;
+    const referenced = canDeferSuggested && Array.isArray(outcomes) ? outcomes.filter((value, index) => {
+      const row = object(value);
+      return typeof row?.id === "string" && expanded.has(row.id)
+        && row.supporting_material_pointer === pointer([...outcomesPath, index]);
+    }) : [];
+    // The whole suggested set must have exact supporting addresses before
+    // exceeding the native opening window moves its bodies to selected reads.
+    const deferSuggested = canDeferSuggested && referenced.length === expanded.size
+      && Buffer.byteLength(JSON.stringify(referenced), "utf8") > openingBudget;
     if (Array.isArray(outcomes)) outcomes.forEach((_outcome, outcomeIndex) => {
-      const outcome = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes", outcomeIndex];
+      const outcome = [...outcomesPath, outcomeIndex];
       const row = object(_outcome), outcomeId = row?.id;
-      if (typeof outcomeId === "string" && expanded.has(outcomeId)) { include(...outcome); return; }
+      const suggested = typeof outcomeId === "string" && expanded.has(outcomeId);
+      if (suggested && !deferSuggested) { include(...outcome); return; }
       include(...outcome, "id");
+      if (suggested) {
+        include(...outcome, "objective");
+        include(...outcome, "revision");
+        deferredSuggestedOutcomes.push(pointer(outcome));
+      }
       // The id selection already carries the same absolute outcome address.
       // Keep aliases whose source, value or read guidance cannot be verified.
       if (!(inlineSupportingDetails && details?.outcome_support_from_id === true
@@ -1204,7 +1250,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
-  const repeatsSettlement = readySettlementIdentity(context, interaction, plan) !== undefined
+  const repeatsSettlement = readyIdentity !== undefined
     && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
     && templates?.every(command => typeof command === "string" && command.length > 0)
     && isDeepStrictEqual(cli?.next_cli_actions, templates);
@@ -1267,5 +1313,6 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   } else if (details && known(details, ["command_template", "path", "sha256"])) {
     include("context_details");
   } else include("context_details", "unread_context_index");
-  return {opening, remaining: pointers};
+  return {opening, remaining: pointers,
+    ...(deferredSuggestedOutcomes.length ? {deferredSuggestedOutcomes} : {})};
 }
