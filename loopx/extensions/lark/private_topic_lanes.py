@@ -35,6 +35,44 @@ def _has_open_session(store: Any, channel_id: str) -> bool:
     )
 
 
+def _steers_active_pre_lane_lobby_turn(
+    store: Any,
+    lobby_channel: str,
+    private_root: Any,
+    ancestry_root: str,
+) -> bool:
+    """Return True only when an active lobby Turn came from the same pre-lane thread."""
+    import json
+    import re
+    from pathlib import Path
+
+    if not isinstance(private_root, Path):
+        return False
+    for row in store.list_sessions(channel_id=lobby_channel):
+        if row.get("status") == "closed":
+            continue
+        session = store.load_session(str(row["session_id"]))
+        active_id = (session or {}).get("active_turn_id")
+        if not active_id:
+            continue
+        turn = store.load_turn(str(session["session_id"]), str(active_id))
+        match = re.fullmatch(r"external-([a-f0-9]{24})", str((turn or {}).get("client_turn_id") or ""))
+        if match is None:
+            continue
+        try:
+            orig = json.loads((private_root / f"{match[1]}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        orig_source = orig.get("source")
+        orig_event = orig.get("event")
+        if not isinstance(orig_source, Mapping) or "topic_ref" in orig_source or not isinstance(orig_event, Mapping):
+            continue
+        orig_root = str(orig_event.get("root_id") or orig_event.get("parent_id") or orig_event.get("message_id") or "").strip()
+        if orig_root == ancestry_root:
+            return True
+    return False
+
+
 def _lobby_session_busy(store: Any, channel_id: str) -> bool:
     for row in store.list_sessions(channel_id=channel_id):
         if row.get("status") == "closed":
@@ -78,22 +116,31 @@ def resolve_private_steward_lane(
     chat_id = str(event.get("chat_id") or "")
     message_id = str(event.get("message_id") or "")
     raw_content = str(event.get("content") or "").strip()
-    is_slash_command = is_control_or_mention or raw_content.startswith("/")
+    is_slash_command = raw_content.startswith("/")
     has_mentions = is_control_or_mention or bool(event.get("mentions"))
     ancestry_root = str(event.get("root_id") or event.get("parent_id") or "").strip()
 
     if ancestry_root and LARK_MESSAGE_ID_PATTERN.fullmatch(ancestry_root):
         topic_ref = identity_ref(provider_ref, chat_id, ancestry_root)
         topic_channel = f"manager.external.native.{binding_id}.{base_source['source_ref']}.topic.{topic_ref}"
-        if is_slash_command or has_mentions:
-            if _has_open_session(store, topic_channel):
-                return {**base_source, "topic_ref": topic_ref}, False
+        lobby_channel = f"manager.external.native.{binding_id}.{base_source['source_ref']}"
+        if (
+            not is_slash_command
+            and not _has_open_session(store, topic_channel)
+            and _steers_active_pre_lane_lobby_turn(
+                store,
+                lobby_channel,
+                controller.store.root / "lark-private-deliveries",
+                ancestry_root,
+            )
+        ):
             return base_source, False
         auto_thread = not bool(event.get("root_id") or event.get("thread_id"))
         return {**base_source, "topic_ref": topic_ref}, auto_thread
 
     if (
         not allow_auto_fork
+        or is_control_or_mention
         or is_slash_command
         or has_mentions
         or str(event.get("message_type") or "") not in {"text", "image", "post"}

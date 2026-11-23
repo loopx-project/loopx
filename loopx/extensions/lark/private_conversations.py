@@ -1181,7 +1181,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
 
         effective_placement = "source_thread" if reply_placement is None and record.get("auto_topic_lane") is True else reply_placement
         if edit:
-            result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
+            result = update_lark_inbox_reply(**{**kwargs, "reply_placement": effective_placement}, previous_text=edit["text"], attempt=edit["attempt"],
                 before_send=before_send, delivery_attempt_recorder=lambda value: save_phase(attempt=dict(value)),
                 require_previous_text_match=edit_only)
             if not edit_only and result.get("blocker") == "provider_update_edit_limit":
