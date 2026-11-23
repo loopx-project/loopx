@@ -1844,7 +1844,7 @@ If that match still needs a reset-token/identity binding,
 `stateful_backoff.ack_needed=true` and the bound ack runs without a host update.
 When an apply is required but `automation_update` is unavailable in the
 session, `app_automation.fallback_hint` carries the bounded `loopx-apply-rrule`
-command for the resolved automation (backup `codex-dev.db`, sync TOML+SQLite,
+command for the resolved automation (back up the selected App database, sync TOML+SQLite,
 run the bound ACK). Direct SQLite edits bypass the app API, so the fallback is
 projected only for this gap and never as the routine path; an unresolved
 automation id projects `available=false` and requires the pasteable heartbeat

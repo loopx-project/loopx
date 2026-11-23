@@ -70,7 +70,7 @@ export function schedulerFallbackHint(request: JsonObject): JsonObject {
     after: "automation_update_unavailable_or_failed", cli_args: ["loopx-apply-rrule", "--goal-id", goal, "--agent-id", agent,
       "--automation-id", automation, "--turn-instance-id", turn],
     args: {goal_id: goal, agent_id: agent, automation_id: automation, turn_instance_id: turn}, no_spend: true,
-    reason: "fallback only when automation_update is unavailable or failed and apply_needed=true; loopx-apply-rrule directly updates the Codex App SQLite automation store (codex-dev.db) and TOML, which bypasses the app API - use only as a bounded fallback, never as the routine path; run the bound ack_hint after it succeeds"
+    reason: "fallback only when automation_update is unavailable or failed and apply_needed=true; loopx-apply-rrule directly updates the Codex App SQLite automation store and TOML, which bypasses the app API - use only as a bounded fallback, never as the routine path; run the bound ack_hint after it succeeds"
       + (projected ? "; automation_id_projected: no installed heartbeat automation matched this goal/agent, so loopx-apply-rrule will create it before applying the rrule" : ""),
     ...(projected ? {automation_id_projected: true, action: "create_then_apply_rrule_via_fallback"} : {})};
 }

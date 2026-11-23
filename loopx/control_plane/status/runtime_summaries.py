@@ -144,6 +144,7 @@ def build_status_runtime_summaries(
         "usage_summary": build_usage_summary(
             history,
             parse_timestamp=context.parse_timestamp,
+            runtime_root=runtime_root,
         ),
         "todo_index": build_todo_index(
             queue=queue,

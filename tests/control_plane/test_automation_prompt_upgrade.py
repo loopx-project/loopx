@@ -168,6 +168,59 @@ def test_real_sqlite_upgrade_preserves_schedule_binding_model_and_history(tmp_pa
         assert connection.execute("SELECT * FROM automations").fetchone() == before
 
 
+@pytest.mark.parametrize("legacy_present", [True, False])
+def test_current_store_wins_and_upgrade_ignores_stale_legacy_prompt(tmp_path, legacy_present):
+    from loopx.control_plane.heartbeat import installed_prompt_update as lifecycle
+
+    home, path, legacy, registry, prompt = fixture(tmp_path)
+    current = legacy.with_name("codex.db")
+    legacy.rename(current)
+    if legacy_present:
+        with sqlite3.connect(current) as source, sqlite3.connect(legacy) as old:
+            source.backup(old)
+            old.execute("UPDATE automations SET prompt='stale legacy prompt'")
+    plan = lifecycle.snapshot(registry=registry, home=home)
+    entry, = plan["entries"]
+    assert plan["database_name"] == current.name
+    assert entry["current_prompt"] == prompt
+    upgrade.apply_offline(home=home, automation_id="watch",
+        expected_prompt_sha256=entry["prompt_sha256"], desired_prompt=entry["desired_prompt"],
+        expected_database=plan["database_name"])
+    with sqlite3.connect(current) as active:
+        assert active.execute("SELECT prompt FROM automations").fetchone()[0] == entry["desired_prompt"]
+    assert tomllib.loads(path.read_text())["prompt"] == entry["desired_prompt"]
+    upgrade.recover_offline(home=home, automation_id="watch", rollback=True)
+    with sqlite3.connect(current) as active:
+        assert active.execute("SELECT prompt FROM automations").fetchone()[0] == prompt
+    if legacy_present:
+        with sqlite3.connect(legacy) as old:
+            assert old.execute("SELECT prompt FROM automations").fetchone()[0] == "stale legacy prompt"
+    else:
+        assert not legacy.exists()
+
+
+def test_store_switch_invalidates_preview_and_legacy_recovery_journal(tmp_path):
+    home, path, legacy, registry, _ = fixture(tmp_path)
+    entry, = upgrade.build_plan(registry=registry, home=home)["entries"]
+    applied = upgrade.apply_offline(home=home, automation_id="watch",
+        expected_prompt_sha256=entry["prompt_sha256"], desired_prompt=entry["desired_prompt"])
+    journal = Path(applied["backup"])
+    saved = json.loads(journal.read_text())
+    del saved["database_name"]  # Journals from before the App store migration.
+    journal.write_text(json.dumps(saved))
+    with sqlite3.connect(legacy) as old, sqlite3.connect(legacy.with_name("codex.db")) as current:
+        old.backup(current)
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="database changed after preview"):
+        upgrade.apply_offline(home=home, automation_id="watch",
+            expected_prompt_sha256=entry["desired_sha256"], desired_prompt="unexpected",
+            expected_database=legacy.name)
+    with pytest.raises(ValueError, match="database changed since migration"):
+        upgrade.recover_offline(home=home, automation_id="watch", rollback=True)
+    assert path.read_bytes() == original
+    assert journal.exists()
+
+
 def test_bootstrap_reads_real_current_cli_thin_contract(tmp_path):
     home, _, _, registry, _ = fixture(tmp_path)
     item = upgrade.build_plan(registry=registry, home=home)["entries"][0]
@@ -550,7 +603,7 @@ def test_unsupported_schema_and_missing_database_fail_without_creating(tmp_path)
     home = tmp_path / "host"
     home.mkdir()
     with pytest.raises(sqlite3.Error):
-        upgrade._connect(home)
+        upgrade._connect(home / "sqlite/codex.db")
     assert list(home.iterdir()) == []
 
 

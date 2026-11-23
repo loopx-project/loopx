@@ -3,7 +3,7 @@ import type { LoopxBinding } from './binding.js';
 
 const PERMISSION_TEXT: Record<LoopxBinding['permission'], string> = {
   read_only: '只读：可以读取项目和 Goal 状态，不能写任何文件，也不要尝试执行会改动环境的命令。',
-  workspace_auto: '工作区内自动：只能写 Goal 的项目目录，写目录之外会被沙箱拒绝，不要尝试。',
+  workspace_auto: '工作区内自动：只改 Goal 的项目目录，不要写目录之外的任何东西。',
 };
 
 function todoLines(label: string, group: GoalState['agentTodos']): string[] {

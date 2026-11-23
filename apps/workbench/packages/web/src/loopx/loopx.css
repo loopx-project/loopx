@@ -92,33 +92,16 @@
 .goal-files-text { white-space: pre-wrap; word-break: break-word; padding: 12px; border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
 .goal-files-markdown { line-height: 1.7; overflow-wrap: anywhere; }
 
-/* Goal task board */
-.sidebar-goal-row { display: flex; align-items: center; }
-.sidebar-goal-row .sidebar-goal { flex: 1; min-width: 0; }
-.sidebar-goal-tasks { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-right: 2px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); opacity: 0; }
-.sidebar-goal-row:hover .sidebar-goal-tasks, .sidebar-goal-tasks:focus-visible { opacity: 1; }
-.sidebar-goal-tasks:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); color: var(--text); }
-@media (hover: none) { .sidebar-goal-tasks { opacity: 1; } }
-
-.goal-tasks-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.goal-tasks-switch { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--surface-2); }
-.goal-tasks-switch button { padding: 4px 14px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 13px; }
-.goal-tasks-switch button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+/* Goal tasks in the shared overview. */
 .goal-tasks-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 14px; }
 .goal-tasks-controls input[type='search'] { flex: 1 1 200px; min-width: 0; height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 14px; }
 .goal-tasks-filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .goal-tasks-filters button { padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font-size: 13px; }
 .goal-tasks-filters button[aria-pressed='true'] { background: var(--active); border-color: transparent; color: var(--text); }
-.goal-tasks-owner { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-.goal-tasks-owner select { height: 32px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
-.goal-tasks-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; align-items: start; }
-.goal-task-lane { padding: 10px; border-radius: 14px; background: var(--surface-2); }
-.goal-task-lane > header, .goal-task-group > summary { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 8px; font-size: 13px; }
-.goal-task-lane > header span, .goal-task-group > summary span { color: var(--muted); }
-.goal-task-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--muted); }
-.goal-task-dot.tone-attention { background: #c4480e; }
-.goal-task-dot.tone-progress { background: #3a7d44; }
-.goal-task-lane-body, .goal-task-rows { display: grid; gap: 8px; }
+.goal-tasks-owner { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--muted); font-size: 13px; cursor: pointer; }
+.goal-task-group > summary { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 8px; font-size: 13px; }
+.goal-task-group > summary span { color: var(--muted); }
+.goal-task-rows { display: grid; gap: 8px; }
 .goal-tasks-grouped { display: grid; gap: 14px; }
 .goal-task-group > summary { cursor: pointer; }
 .goal-task { position: relative; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
@@ -138,12 +121,3 @@
 .goal-task-details dt { flex: none; width: 52px; color: var(--muted); }
 .goal-task-details dd { margin: 0; overflow-wrap: anywhere; }
 .goal-task-empty, .goal-task-more { margin: 4px 4px; color: var(--muted); font-size: 13px; }
-
-/* Goal page header: let the title, status and tabs wrap instead of squeezing the title on a phone. */
-.goal-masthead { flex-wrap: wrap; }
-.goal-masthead h1 { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-@media (max-width: 640px) {
-  .goal-masthead h1 { font-size: 17px; }
-  .goal-tabs { flex-wrap: nowrap; overflow-x: auto; }
-  .goal-tabs button { white-space: nowrap; }
-}

@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
-from ...paths import resolve_runtime_root
+from ...paths import codex_automation_database, resolve_runtime_root
 from ...upgrade import codex_home
 from ..capability_hooks import (
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
@@ -90,7 +90,7 @@ def prompt_upgrade_hook(*, registry: Path, runtime_root: Path, goal_id: str,
     }
 
     def produce() -> dict[str, Any]:
-        with closing(_connect(home)) as connection:
+        with closing(_connect(codex_automation_database(home))) as connection:
             _, item, _ = _read(home, identifier, connection)
         applicable = (digest(item["prompt"]) == record.get("prompt_sha256")
             and item["target_thread_id"] == record.get("target_thread_id"))

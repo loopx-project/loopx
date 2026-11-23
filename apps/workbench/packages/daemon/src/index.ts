@@ -38,7 +38,7 @@ import { displayForDesktop, PersonalBrowser } from './personal-browser.js';
 import { WorkerReports } from './worker-reports.js';
 import { LarkEvents } from './channels/lark-events.js';
 import { LoopxService } from './adapters/loopx/service.js';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const VERSION = '0.1.0';
@@ -95,6 +95,8 @@ async function main(): Promise<void> {
   const coordinationPath = join(config.dataDir, 'coordination', 'calli.sock');
   if (await socketHeld(coordinationPath)) throw new Error('another daemon is already serving this data directory; not starting a second one');
 
+  // A data directory with no database yet is a fresh machine; anything else may hold the person's choices.
+  const freshData = !existsSync(join(config.dataDir, 'hub.db'));
   const store = new Store(config.dataDir);
   // The two subsystems that read what the agents on this machine have been doing: the sessions
   // they already have (listed for the thread list, imported on a click) and the tokens their
@@ -183,6 +185,12 @@ async function main(): Promise<void> {
   const autotitleManifest = extensions.builtin(AUTOTITLE_ID);
   const autotitle = autotitleManifest ? new AutoTitle(autotitleManifest, manager, store, extensions) : undefined;
   if (autotitle) extensions.register(autotitle);
+  // 看板 and 自动取名 come installed; an uninstall is kept, so each is installed once per machine.
+  // 自动取名 asks agents by itself, so only a fresh machine (a data directory without a database) gets it:
+  // an older database without its record may be the person's own uninstall, even an otherwise empty one.
+  const seeded = store.hubSetting<string[]>('extensions.defaults', []);
+  const nowSeeded = extensions.installDefaults(['board', AUTOTITLE_ID], seeded, { fresh: freshData, freshOnly: [AUTOTITLE_ID] });
+  if (nowSeeded.length !== seeded.length) store.saveHubSetting('extensions.defaults', nowSeeded);
   extensions.start();
   const voice = new VoiceService({ adapters, extensions, manager });
   voice.start();

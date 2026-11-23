@@ -23,8 +23,8 @@ export function LoopxToggle({ active, onToggle, disabledReason }: { active: bool
 export function GoalPermissionPicker({ capability, value, onChange }: { capability: GoalAgentCapability | undefined; value: GoalPermission; onChange: (p: GoalPermission) => void }) {
   const Icon = value === 'workspace_auto' ? IconShield : IconHand;
   return (
-    <Popover label={t('loopx.goal.permission')} triggerClassName="tool-btn icon-only composer-permission composer-goal-permission" triggerLabel={`${t('loopx.goal.permission')}：${permissionCopy(value).label}`} triggerTitle={permissionCopy(value).hint}
-      trigger={<><Icon size={16} /><span className="composer-goal-permission-name">{permissionCopy(value).label}</span></>}>
+    <Popover label={t('loopx.goal.permission')} triggerClassName="tool-btn icon-only composer-permission composer-goal-permission" triggerLabel={`${t('loopx.goal.permission')}：${permissionCopy(value, capability).label}`} triggerTitle={permissionCopy(value, capability).hint}
+      trigger={<><Icon size={16} /><span className="composer-goal-permission-name">{permissionCopy(value, capability).label}</span></>}>
       {(close) => <>
         <div className="pop-title">{t('loopx.goal.permissionTitle')}</div>
         {(capability?.permissions ?? []).map((p) => {
@@ -34,8 +34,8 @@ export function GoalPermissionPicker({ capability, value, onChange }: { capabili
               className="pop-item" title={p.reason} onClick={() => { onChange(p.id); close(); }}>
               <span className="pop-item-icon"><ItemIcon size={18} /></span>
               <span className="pop-item-text">
-                <span className="pop-item-label">{permissionCopy(p.id).label}</span>
-                <span className="pop-item-hint">{p.available ? permissionCopy(p.id).hint : p.reason}</span>
+                <span className="pop-item-label">{permissionCopy(p.id, capability).label}</span>
+                <span className="pop-item-hint">{p.available ? permissionCopy(p.id, capability).hint : p.reason}</span>
               </span>
               {p.id === value && <span className="pop-item-check"><IconCheck size={16} /></span>}
             </button>
@@ -131,7 +131,7 @@ export function GoalConfirm({ token, agent: draftAgent, agentLabel, cwd: draftCw
           <dt>{t('loopx.goal.permission')}</dt>
           <dd><select className="goal-confirm-select" value={permission} onChange={(e) => setPermission(e.target.value as GoalPermission)} aria-label={t('loopx.goal.permission')}>
             {(capability?.permissions.length ? capability.permissions : [{ id: permission, available: true }]).map((p) =>
-              <option key={p.id} value={p.id} disabled={!p.available}>{permissionCopy(p.id).label} · {p.available ? permissionCopy(p.id).hint : p.reason}</option>)}
+              <option key={p.id} value={p.id} disabled={!p.available}>{permissionCopy(p.id, capability).label} · {p.available ? permissionCopy(p.id, capability).hint : p.reason}</option>)}
           </select></dd>
           <dt>{t('loopx.goal.workspace')}</dt>
           <dd>{choices.length

@@ -1,6 +1,7 @@
 /** What extensions see of a thread. Pure, so it can be tested directly. */
 import type { ThreadSummary } from '@calli/extension-api';
 import type { Thread } from '../api';
+import type { LoopxGoal } from '../loopx/status';
 import { projectDir, threadAttention } from '../sidebar';
 
 /**
@@ -8,11 +9,14 @@ import { projectDir, threadAttention } from '../sidebar';
  * and `attention` worked out for this device: the thread on screen is never unread. Nothing that
  * may hold conversation content is copied: no `preview`, no queued messages.
  */
-export function threadSummary(t: Thread, selectedId: string | null): ThreadSummary {
+export function threadSummary(t: Thread, selectedId: string | null, goals: LoopxGoal[] = []): ThreadSummary {
+  const info = t.loopxInfo;
+  const goal = info && !info.missing ? goals.find(goal => goal.goalId === info.goalId) : undefined;
   return {
     id: t.id,
     title: t.title,
     agent: t.agent,
+    ...(info?.goalId && !info.missing ? { goal: { goalId: info.goalId, title: goal?.title ?? info.goalTitle, status: goal?.activationState === 'stopped' ? 'stopped' : goal?.status ?? null } } : {}),
     project: t.scratch ? '' : projectDir(t).real,
     projectGone: Boolean(t.projectGone),
     status: t.status,
@@ -34,16 +38,16 @@ export function threadSummary(t: Thread, selectedId: string | null): ThreadSumma
 }
 
 /** The threads a view gets: not archived, and team members only when their lead is not listed (as in the sidebar). */
-export function threadSummaries(threads: Thread[], selectedId: string | null): ThreadSummary[] {
+export function threadSummaries(threads: Thread[], selectedId: string | null, goals: LoopxGoal[] = []): ThreadSummary[] {
   const ids = new Set(threads.map((t) => t.id));
   return threads
     .filter((t) => !t.archivedAt && (!t.coordination || t.coordination.rootId === t.id || !ids.has(t.coordination.rootId)))
-    .map((t) => threadSummary(t, selectedId));
+    .map((t) => threadSummary(t, selectedId, goals));
 }
 
 /** Machine metadata appears only in the merged view. */
-export function machineSummaries(sources: Array<{ hostId: string | null; label: string; threads: Thread[] }>, selectedId: string | null, merged: boolean): ThreadSummary[] {
-  return sources.flatMap(source => threadSummaries(source.threads, selectedId).map(thread =>
+export function machineSummaries(sources: Array<{ hostId: string | null; label: string; threads: Thread[]; goals?: LoopxGoal[] }>, selectedId: string | null, merged: boolean): ThreadSummary[] {
+  return sources.flatMap(source => threadSummaries(source.threads, selectedId, source.goals).map(thread =>
     merged ? { ...thread, machine: { id: source.hostId, label: source.label } } : thread));
 }
 
