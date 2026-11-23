@@ -927,6 +927,18 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(
     rendered[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
         "LOOPX_TURN=turn-1\n" + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
     _verify_interrupted_guard(rendered, guard)
+    rendered_prequota = copy.deepcopy(turns)
+    prequota_argv = [guard["cli"], "--registry", guard["registry"], "--runtime-root", guard["runtime_root"],
+                     "heartbeat-prequota", "-g", "research", "-a", "worker"]
+    rendered_prequota[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
+        "LOOPX_TURN=turn-1\n" + shlex.join(prequota_argv) + "\n"
+        + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
+    _verify_interrupted_guard(rendered_prequota, guard)
+    mismatched_prequota = copy.deepcopy(turns)
+    mismatched_prequota[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
+        shlex.join([*prequota_argv[:-3], "other", "-a", "worker"]) + "\n" + shlex.join(argv)])
+    with pytest.raises(ValueError, match="prequota route|invalid"):
+        _verify_interrupted_guard(mismatched_prequota, guard)
     for setting in ("off", "on"):
         explicit = copy.deepcopy(turns)
         explicit[-1]["items"][-1]["command"] = shlex.join([

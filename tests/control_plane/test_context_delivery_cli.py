@@ -524,7 +524,7 @@ def test_c1_work_opening_carries_current_inputs_or_preserves_the_reader(tmp_path
     delivery = ("--context-delivery", "auto") if case == "stateless_inline" else (
         "--context-delivery", "on", "--codex-context-dir", str(native))
     rc, view = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli", *binding,
-        "--turn-instance-id", turn, "--decision-output-root", str(captures), "--complete-turn", *delivery, *limit,
+        "--turn-instance-id", turn, "--decision-output-root", str(captures), *delivery, *limit,
         cwd=project)
     assert rc == 0 and view["ok"], view
     original, = captures.rglob("decision.json")

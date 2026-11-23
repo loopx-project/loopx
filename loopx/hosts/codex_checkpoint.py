@@ -323,17 +323,25 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
 
 
 def _guard_cli_arguments(command: str, guard: dict) -> list[str]:
-    """Parse the provider shell wrapper plus the renderer's optional Turn assignment."""
+    """Parse the provider shell wrapper plus the renderer's optional Turn assignment and prequota."""
     outer = shlex.split(command)
     if len(outer) != 3 or Path(outer[0]).name not in {"bash", "zsh", "sh"} or outer[1] != "-lc":
         raise ValueError("native pending guard is not a supported single shell command")
     lines = outer[2].strip().splitlines()
-    if len(lines) == 2 and shlex.split(lines[0]) == ["LOOPX_TURN=" + guard["turn_instance_id"]]:
-        script = lines[1].replace('"${LOOPX_TURN:?}"', shlex.quote(guard["turn_instance_id"]))
-    elif len(lines) == 1:
-        script = lines[0]
+    has_turn_var = bool(lines) and shlex.split(lines[0]) == ["LOOPX_TURN=" + guard["turn_instance_id"]]
+    rest = lines[1:] if has_turn_var else lines
+    prequota_line = None
+    if len(rest) == 2:
+        prequota_line, raw_script = rest
+    elif len(rest) == 1:
+        raw_script = rest[0]
     else:
         raise ValueError("native pending guard contains an unsupported shell program")
+    script = (
+        raw_script.replace('"${LOOPX_TURN:?}"', shlex.quote(guard["turn_instance_id"]))
+        if has_turn_var
+        else raw_script
+    )
     # Conservative provider syntax profile, not Goal/state classification.
     # Only the exact renderer assignment above is expanded; never execute shell.
     if not re.fullmatch(r"[A-Za-z0-9_./:=+@ '\"-]+", script):
@@ -341,6 +349,28 @@ def _guard_cli_arguments(command: str, guard: dict) -> list[str]:
     argv = shlex.split(script)
     if not argv or argv[0] != guard["cli"]:
         raise ValueError("native pending guard executable differs")
+    if prequota_line is not None:
+        from loopx.cli import build_parser
+
+        if not re.fullmatch(r"[A-Za-z0-9_./:=+@ '\"-]+", prequota_line):
+            raise ValueError("native pending guard contains unsupported shell syntax")
+        pre_argv = shlex.split(prequota_line)
+        if not pre_argv or pre_argv[0] != guard["cli"]:
+            raise ValueError("native pending guard executable differs")
+        parser = build_parser()
+        retired = {"--turn-envelope", "--complete-turn"}
+        quota_clean = [word for word in argv[1:] if word not in retired]
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                pre_parsed = vars(parser.parse_args(pre_argv[1:]))
+                quota_parsed = vars(parser.parse_args(quota_clean))
+        except SystemExit as error:
+            raise ValueError("native pending guard contains an unsupported shell program") from error
+        if pre_parsed.get("command") != "heartbeat-prequota":
+            raise ValueError("native pending guard contains an unsupported shell program")
+        for route_key in ("registry", "runtime_root", "goal_id", "agent_id", "control_cli_bin"):
+            if pre_parsed.get(route_key) != quota_parsed.get(route_key):
+                raise ValueError("native pending guard prequota route differs from held guard")
     return argv[1:]
 
 
