@@ -498,6 +498,44 @@ def test_refresh_state_run_repair_delta_alone_rejected_without_new_typed_delta(
     assert runs_index.read_text().splitlines() == before
 
 
+def test_agent_refresh_uses_indexed_evidence_without_reading_historical_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.history import load_index
+
+    registry, project, runtime, index = _replan_gate_tmp_fixture(tmp_path)
+    existing = tmp_path / "previous.json"
+    missing = tmp_path / "previous.md"
+    existing.write_text("{}")
+    runs = [json.loads(line) for line in index.read_text().splitlines()]
+    for run in runs:
+        run.update(json_path=str(existing), markdown_path=str(missing))
+    before = "".join(json.dumps(run) + "\n" for run in runs)
+    index.write_text(before)
+    vision = _replan_gate_stop_vision(registry, runtime)
+
+    observed = []
+    exists = Path.exists
+
+    def observe_exists(path, *args, **kwargs):
+        if path in (existing, missing):
+            observed.append(path)
+        return exists(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", observe_exists)
+    with pytest.raises(ValueError, match="typed semantic delta"):
+        _call_refresh_state_run(
+            registry_path=registry, runtime_root=runtime, project=project,
+            agent_vision_packet=vision,
+        )
+    assert index.read_text() == before
+    assert not observed
+
+    records, _ = load_index(index)
+    assert all(row["json_exists"] and not row["markdown_exists"] for row in records)
+    assert set(observed) == {existing, missing}
+
+
 def test_refresh_state_run_atomic_blocker_delta_persists_repair_and_semantic_evidence(
     tmp_path: Path,
 ) -> None:
