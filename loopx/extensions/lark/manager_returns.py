@@ -398,7 +398,7 @@ def _run_inbox_return(
             content_format="markdown", execute=True, runner=runner or _default_runner, before_send=before_send,
             delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
             source_membership_verifier=source_verifier,
-            # Use the provider's full length allowance for returned answers.
+            recover_ambiguous_send=True,
             short_message_limit=None, attachment_keys=keys, attachment_names=attachment_names,
             finalize_reactions=not attachments,
         )

@@ -729,6 +729,10 @@ def _return_provider(plan, source, sender, record_attempt):
         sent = sender(route, session, turn, plan["text"])
     else:
         return {"kind": "sender_unavailable"}
+    if sent.get("provider_write_attempted") is True and sent.get("external_write_performed", False) is None:
+        # The provider may already have published this result. A later drain
+        # cannot recover a missing locator by starting a new outbound send.
+        return {"kind": "locator_unavailable"}
     if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
         # A provider outbox may already own publication. Its adapter records the
         # existing attempt before returning a readback, including unavailable
