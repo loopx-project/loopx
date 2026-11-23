@@ -157,6 +157,18 @@ When the qualification command itself runs from newer source code, pass a local
 snapshot from the older installed CLI with `--installed-doctor-json`; this
 option is read-only and accepted only by `update check`.
 
+Runtime artifact readers and the macOS preview updater recognize the exact
+`quota_packet` and Complete Turn v1 identities. The publisher still requires
+the observed writer to match the single `publication_surface` in the same
+contract declaration, currently `quota_packet`. Qualify and publish a
+compatible preview on that current writer first. A later C1 release needs its
+own writer qualification and supported-Host adoption evidence.
+
+runtime 制品读取器和 macOS 预览更新器识别 `quota_packet` 与 Complete Turn v1 的
+精确身份。发布器仍要求实际 writer 匹配同一声明中的唯一 `publication_surface`，
+当前为 `quota_packet`。先用当前 writer 验证并发布兼容预览。后续 C1 发布需具备自己
+的 writer 资格与受支持 Host 的采用证据。
+
 ## Named Version Contract
 
 LoopX releases are tagged and built from GitHub. The release workflow

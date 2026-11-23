@@ -28,6 +28,12 @@ value=json.load(sys.stdin)
 assert module['validate_manifest'](value)==value
 profile = module['PUBLIC_DEFAULT_CONTRACT']
 assert module['validate_manifest']({**value, 'default_contract':profile})['default_contract']==profile
+c1 = {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1',
+      'interaction_schema_version':'loopx_interaction_contract_v0'}
+assert module['validate_manifest']({**value, 'default_contract':c1})['default_contract']==c1
+try:module['validate_default_contract'](c1)
+except ValueError:pass
+else:raise AssertionError('reader compatibility promoted the publication default')
 for invalid in [None, {}, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
     try:module['validate_manifest']({**value,'default_contract':invalid})
     except ValueError:pass
@@ -98,14 +104,14 @@ def manifest(body: bytes, url: str):
 
 
 @pytest.mark.parametrize("profile", [None, {}, {"surface": "future"},
-    {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+    {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v0",
      "interaction_schema_version": "loopx_interaction_contract_v0"}])
 def test_unqualified_default_stops_before_download_or_activation(monkeypatch, profile):
     descriptor = {**manifest(b"runtime", "https://publisher.invalid/runtime"), "default_contract": profile}
     calls = []
     monkeypatch.setattr(update, "download_artifact", lambda *_a, **_kw: calls.append("download"))
     monkeypatch.setattr(update, "run_installer", lambda *_a, **_kw: calls.append("activate"))
-    with pytest.raises(ValueError, match="unqualified for public adoption"):
+    with pytest.raises(ValueError, match="Unsupported runtime default contract"):
         update.install_artifact(descriptor, env={}, timeout_seconds=10)
     assert calls == []
 
@@ -115,12 +121,19 @@ def test_qualified_scope_and_historical_metadata_remain_readable():
     assert update.validate_manifest(historical) == historical
     current = {**historical, "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
     assert update.validate_manifest(current) == current
+    c1 = {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+          "interaction_schema_version": "loopx_interaction_contract_v0"}
+    compatible = {**historical, "default_contract": c1}
+    assert update.validate_manifest(compatible) == compatible
+    with pytest.raises(ValueError, match="unqualified for public adoption"):
+        update.validate_default_contract(c1)
 
 
 def test_archive_contract_mismatch_stops_before_installer(tmp_path, monkeypatch):
     archive = tmp_path / "runtime.tar.gz"
     identity = json.dumps({"source_revision": "a" * 40, "package_version": "1.2.3",
-                           "default_contract": {"surface": "complete_turn"}}).encode()
+                           "default_contract": {"surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+                                                "interaction_schema_version": "loopx_interaction_contract_v0"}}).encode()
     with tarfile.open(archive, "w:gz") as target:
         for name, content in [("runtime-artifact.json", identity), ("scripts/install-local.sh", b"exit 99\n")]:
             member = tarfile.TarInfo(name)
