@@ -212,7 +212,7 @@ try {
         execution_authority_granted: false, goal_completion_assessed: false,
         outcomes: [
           {
-            id: "plan", owner_agent_id: "author", objective: "First colliding outcome", revision: 1,
+            id: "plan", owner_agent_id: "former-author", owner_registration_missing: true, objective: "First colliding outcome", revision: 1,
             requirements: [
               requirement("section:opening", "Colon in the requirement id", "failed"),
               requirement("detail", "Second unmet requirement", "failed"),
@@ -239,6 +239,9 @@ try {
       await first.locator(".goal-outcome-disclosure > summary").focus();
       await page.keyboard.press("Enter");
       assert.equal(await first.locator(".goal-outcome-criteria > li").count(), 3);
+      await first.getByText("Linked work and sources", {exact: true}).click();
+      await first.getByText(/former-author \(unregistered for this Goal at readback\)/).waitFor();
+      assert.equal(await second.getByText(/unregistered for this Goal/).count(), 0);
       assert.equal(await second.locator(".goal-outcome-disclosure").getAttribute("open"), null,
         "Colon-bearing identities do not open another outcome's requirements");
       await second.locator(".goal-outcome-disclosure > summary").click();

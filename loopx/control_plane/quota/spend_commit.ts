@@ -889,6 +889,7 @@ export async function evaluateQuotaSpendCommit(
       ...(goalRef === null ? {} : { goalRef }),
       indexLockHeld,
       matchesRetainedRequest: (retained) => matchesRetainedSettlementSpend(request, record, retained),
+      digestAtRuntimeRoot: (runtimeRoot) => requestDigest({ ...request, runtime_root: runtimeRoot }),
       prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
         const payload = payloadFor(
           request,

@@ -1,10 +1,15 @@
 """Reject runtime snapshots the App-side installer could never unpack."""
 import gzip
+import hashlib
 import io
 import importlib.util
+import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import tarfile
 
 spec = importlib.util.spec_from_file_location(
@@ -24,6 +29,217 @@ def tar_header(name: bytes, typeflag: bytes, size: int = 0) -> bytes:
     checksum = sum(header)
     header[148:156] = f"{checksum:06o}\0 ".encode()
     return bytes(header)
+
+
+class RuntimeBundleBuildTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        fixture_files = {
+            "loopx/presentation/chat_bundle.py": "# Synthetic frontend contract\n",
+            "scripts/chat_bundle.py": "# Synthetic frontend preparation\n",
+            "scripts/install-local.sh": "#!/bin/sh\n",
+            "skills/synthetic.txt": "skills\n",
+            "docs/synthetic.txt": "docs\n",
+            "man/synthetic.txt": "man\n",
+            "examples/synthetic.txt": "examples\n",
+            "apps/presentation/synthetic.txt": "presentation\n",
+            ".github/synthetic.txt": "workflows\n",
+            "README.md": "Synthetic runtime\n",
+            "LICENSE": "license\n",
+            "pyproject.toml": '[project]\nversion = "1.2.3"\n',
+            "setup.py": "# Synthetic setup\n",
+            "MANIFEST.in": "# Synthetic manifest\n",
+        }
+        for name, content in fixture_files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Fixture Author",
+            "GIT_COMMITTER_NAME": "Fixture Author",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        }
+        for args in (("init", "--quiet"), ("add", "--", *fixture_files),
+                     ("-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "Synthetic runtime")):
+            subprocess.run(["git", *args], cwd=self.root, env=env, check=True, capture_output=True)
+        self.revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.root, text=True
+        ).strip()
+        chat = self.root / "loopx/web/chat"
+        chat.mkdir(parents=True)
+        (chat / "bundle-manifest.json").write_text(
+            json.dumps({"source_revision": self.revision, "source_files": {}}),
+            encoding="utf-8",
+        )
+
+    def previous_outputs(self):
+        destination = self.root / "apps/desktop/loopx-control-plane/runtime"
+        destination.mkdir(parents=True)
+        archive = destination / "runtime-source.tar.gz"
+        identity = destination / "identity.json"
+        archive.write_bytes(b"previous archive")
+        identity.write_bytes(b"previous identity")
+        return archive, identity
+
+    def test_unqualified_default_keeps_previous_archive_and_identity(self):
+        archive, identity = self.previous_outputs()
+        with patch.object(bundle, "observe_default_contract", return_value={"surface": "unsupported"}):
+            with self.assertRaisesRegex(ValueError, "unqualified for public adoption"):
+                bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), b"previous identity")
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_supported_default_publishes_identity_for_exact_archive(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity_file = self.previous_outputs()
+        (self.root / "README.md").write_text("Uncommitted source\n", encoding="utf-8")
+
+        def observe(source: Path):
+            self.assertEqual((source / "README.md").read_text(), "Synthetic runtime\n")
+            return PUBLIC_DEFAULT_CONTRACT
+
+        with patch.object(bundle, "observe_default_contract", side_effect=observe):
+            bundle.build(self.root)
+
+        identity = json.loads(identity_file.read_text())
+        self.assertEqual(identity["source_revision"], self.revision)
+        self.assertEqual(identity["package_version"], "1.2.3")
+        self.assertEqual(identity["default_contract"], PUBLIC_DEFAULT_CONTRACT)
+        self.assertEqual(identity["sha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+
+    def test_identity_replacement_failure_restores_previous_archive(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        real_replace = Path.replace
+
+        def replace(path: Path, target: Path):
+            if target == identity:
+                raise OSError("synthetic identity replacement failure")
+            return real_replace(path, target)
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaisesRegex(OSError, "synthetic identity replacement failure"),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), b"previous identity")
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_interrupt_before_identity_commit_restores_the_previous_pair(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        real_replace = Path.replace
+
+        def replace(path: Path, target: Path):
+            if target == identity:
+                self.assertNotEqual(archive.read_bytes(), b"previous archive")
+                self.assertEqual(identity.read_bytes(), b"previous identity")
+                raise KeyboardInterrupt
+            return real_replace(path, target)
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), b"previous identity")
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_interrupt_after_identity_commit_preserves_the_new_pair(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        real_replace = Path.replace
+
+        def replace(path: Path, target: Path):
+            result = real_replace(path, target)
+            if target == identity:
+                raise KeyboardInterrupt
+            return result
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            bundle.build(self.root)
+
+        installed = json.loads(identity.read_text())
+        self.assertNotEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(installed["source_revision"], self.revision)
+        self.assertEqual(installed["sha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_failed_cancel_rollback_retains_archive_until_the_next_build(self):
+        from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT
+
+        archive, identity = self.previous_outputs()
+        identity.write_text(json.dumps({"sha256": hashlib.sha256(b"previous archive").hexdigest()}))
+        previous_identity = identity.read_bytes()
+        real_replace = Path.replace
+        recovery_attempts = []
+
+        def replace(path: Path, target: Path):
+            if target == identity:
+                raise KeyboardInterrupt
+            if target == archive and path.read_bytes() == b"previous archive":
+                recovery_attempts.append(path)
+                raise OSError("synthetic rollback failure")
+            return real_replace(path, target)
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value=PUBLIC_DEFAULT_CONTRACT),
+            patch.object(Path, "replace", replace),
+            self.assertRaises((OSError, KeyboardInterrupt)),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(len(recovery_attempts), 1)
+        backup = recovery_attempts[0]
+        self.assertEqual(backup.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), previous_identity)
+        self.assertNotEqual(archive.read_bytes(), b"previous archive")
+        with (
+            patch.object(bundle, "observe_default_contract", return_value={"surface": "unsupported"}),
+            self.assertRaisesRegex(ValueError, "unqualified for public adoption"),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), previous_identity)
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
+
+    def test_retry_keeps_the_committed_pair_when_an_old_backup_survives(self):
+        archive, identity = self.previous_outputs()
+        identity.write_text(json.dumps({"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}))
+        committed_identity = identity.read_bytes()
+        backup = archive.with_name(bundle._PREVIOUS_ARCHIVE_NAME)
+        backup.write_bytes(b"older archive")
+
+        with (
+            patch.object(bundle, "observe_default_contract", return_value={"surface": "unsupported"}),
+            self.assertRaisesRegex(ValueError, "unqualified for public adoption"),
+        ):
+            bundle.build(self.root)
+
+        self.assertEqual(archive.read_bytes(), b"previous archive")
+        self.assertEqual(identity.read_bytes(), committed_identity)
+        self.assertEqual(set(archive.parent.iterdir()), {archive, identity})
 
 
 class ArchiveQualificationTests(unittest.TestCase):

@@ -451,6 +451,7 @@ def _execute_quota_command(
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None
     goal_ref: dict[str, str] | None = None
+    status_payload: Mapping[str, object] | None = None
     reentry: tuple[argparse.Namespace, str | None] | None = None
     should_run_state: ShouldRunExecutionState | None = None
     try:
@@ -645,6 +646,7 @@ def _execute_quota_command(
             todo_id=rollout_todo_id,
             replan_obligation_id=rollout_replan_obligation_id,
             scheduler_execution_context=scheduler_context,
+            status_payload=status_payload,
         )
         if heartbeat_turn_id and args.quota_command == "should-run":
             from .quota_should_run import record_should_run_heartbeat_receipt

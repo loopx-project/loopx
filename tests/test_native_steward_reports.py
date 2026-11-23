@@ -2666,3 +2666,53 @@ def test_stopped_report_without_valid_saved_editorial_candidate_stays_closed(ste
     assert not (folder / "private-generation.json").exists()
     todo = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == first["loopx_request"]["todo_id"])
     assert todo["status"] == "open"
+
+
+@pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("custom_override", [False, True])
+def test_periodic_report_uses_shipped_reporting_templates_and_respects_workspace_overrides(
+    steward, tmp_path, monkeypatch, local_session, custom_override
+):
+    from datetime import timezone
+    from loopx.capabilities.periodic_report import cadence_runtime
+    import loopx.capabilities.native_chat.steward_reports as report_host
+    from loopx.chat_manager import manager_reporting_text, session_reporting_text
+
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    store, runtime, _, _, binding, _, _ = steward
+    if local_session:
+        session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, "sqlite")
+        sid = owner = session["session_id"]
+        actor = reports.selected(sid)["actor"]
+        workspace = Path(actor["workspace_path"])
+        expected_default = session_reporting_text()
+    else:
+        sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+        owner = binding["binding_id"]
+        workspace = reports.managed._workspace(store.load_session(sid))
+        expected_default = manager_reporting_text()
+
+    rules = workspace / "REPORTING.md"
+    if custom_override:
+        rules.write_text("# Custom project reporting override\nKeep custom link rules.", encoding="utf-8")
+    elif rules.exists():
+        rules.unlink()
+
+    install_model(steward, tmp_path, sid)
+    first = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first["response"]["native_loopx"]["status"] == "committed"
+    _, window = reports.current_window(owner)
+    frozen = json.loads((attempt_directory(reports.root, window) / "editorial-request.json").read_text(encoding="utf-8"))
+    if custom_override:
+        assert frozen["reporting"] == "# Custom project reporting override\nKeep custom link rules."
+    else:
+        assert frozen["reporting"] == expected_default
+        assert "360" in frozen["reporting"] and "https://github.com/example-org/example-repo/pull/123" in frozen["reporting"]

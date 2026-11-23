@@ -1213,3 +1213,136 @@ def test_backlog_health_defers_recovery_body_reads_and_reuses_request_fingerprin
     reads.clear()
     assert transport.health()["b" * 24]["pending_count"] == 2
     assert set(reads) == {target_path}
+
+
+def test_noop_recovery_backoff_ignores_volatile_session_timestamps_and_ready_to_busy_pulses_but_resets_on_busy_to_ready_or_semantic_change(
+    tmp_path, monkeypatch
+):
+    import zlib
+
+    transport, deliv_path, _ext_path, inputs, clock = _noop_recovery_transport(tmp_path, monkeypatch)
+    jitter = zlib.crc32(deliv_path.name.encode("utf-8")) % 60
+    session_id = f"sess_{deliv_path.stem}"
+
+    # 1st noop sets +60s; 2nd noop arms streak=2 -> +120+jitter.
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    clock[0] += 60.0
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    expected_due = clock[0] + 120.0 + jitter
+    assert transport._context_recovery_probe_at[deliv_path] == expected_due
+
+    # Volatile updated_at / last_activity_at changes must NOT reset backoff.
+    clock[0] += 10.0
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "ready", "updated_at": "2026-11-23T02:04:00Z", "last_activity_at": "2026-11-23T02:04:00Z"}),
+    )
+    assert transport.pending_delivery_paths() == []
+    assert transport._context_recovery_probe_at[deliv_path] == expected_due
+
+    # Transient ready -> busy pulse keeps the ready backoff intact, and streak increments without overwriting ready baseline.
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "busy", "active_turn_id": "turn_other", "updated_at": "2026-11-23T02:05:00Z"}),
+    )
+    assert transport.pending_delivery_paths() == []
+    clock[0] = expected_due
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 240.0 + jitter
+
+    # When a turn finishes (busy -> ready transition after a busy pulse OR directly), OR semantic field changes:
+    # Here we prove both busy -> ready from a busy baseline and upstream_thread_id change reset backoff immediately!
+    clock[0] += 5.0
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "ready", "upstream_thread_id": "new-thread-1"}),
+    )
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+    # Also verify busy -> ready directly resets backoff when a prior noop was recorded while busy.
+    transport.reconcile_request(deliv_path)
+    clock[0] += 60.0
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "busy", "active_turn_id": "turn_busy"}),
+    )
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    clock[0] += 5.0
+    assert transport.pending_delivery_paths() == []
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "ready"}),
+    )
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def test_ineligible_delivered_requests_back_off_exponentially_when_unchanged_and_reset_on_change(
+    tmp_path, monkeypatch
+):
+    import zlib
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    ext_dir = tmp_path / "external-requests"
+    deliv_dir.mkdir()
+    ext_dir.mkdir()
+    ref = _hex_ref(99)
+    session_id, turn_id = f"sess_{ref}", f"turn_{ref}"
+    deliv_path, ext_path = deliv_dir / f"{ref}.json", ext_dir / f"{ref}.json"
+    _atomic_write_json(deliv_path, {
+        "status": "delivered", "request_ref": ref, "session_id": session_id, "turn_id": turn_id,
+        "profile": "fixture", "event": {"message_id": f"om_{ref}"},
+    })
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+    store = _recovery_session_store(tmp_path)
+    inputs = _seed_recovery_inputs(store, session_id, turn_id)
+
+    clock = [2000.0]
+    observer_calls = 0
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(deliv_dir)
+    transport._web_projection_paths = lambda: []
+
+    def observe(_candidate_ref: str) -> bool:
+        nonlocal observer_calls
+        observer_calls += 1
+        return False
+
+    transport.core = SimpleNamespace(
+        root=ext_dir,
+        controller=SimpleNamespace(store=store),
+        context_recovery_observer=lambda: observe,
+    )
+    jitter = zlib.crc32(deliv_path.name.encode("utf-8")) % 60
+
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 1
+    assert transport._context_recovery_probe_at[deliv_path] == 2000.0 + 60.0 + jitter
+
+    # Volatile session timestamp change does not re-trigger observer before 60+jitter expires.
+    clock[0] += 30.0
+    _replace_recovery_input(inputs["session"], json.dumps({"session_id": session_id, "status": "ready", "updated_at": "2026-11-23T02:05:00Z"}))
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 1
+
+    # Second scan past 60+jitter backs off to 120+jitter.
+    clock[0] = 2000.0 + 60.0 + jitter
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 2
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 120.0 + jitter
+
+    # Mutating the external request resets backoff and immediately re-observes on next scan.
+    clock[0] += 5.0
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted", "mutated": True})
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 3

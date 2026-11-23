@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { PermissionMode } from '../types.js';
 
 /** What a Goal conversation may do. Fixed when the thread is created; changing it means a new thread. */
 export const LOOPX_PERMISSIONS = ['read_only', 'workspace_auto'] as const;
@@ -102,18 +103,37 @@ export function isBinding(value: unknown): value is LoopxBinding {
 }
 
 /**
- * The LoopX agent a loochat agent stands for, by adapter kind. Only agents the core can run a Goal on
- * are listed; anything else cannot start a Goal conversation.
+ * The LoopX agent a loochat agent stands for, by adapter kind: the endpoints in the core's chat
+ * catalog. The hub runs the conversation itself (open_session=false), so the core only needs the
+ * endpoint registered, not live. Anything else cannot start a Goal conversation.
  */
+const GOAL_AGENTS: Record<string, string> = { codex: 'codex', claude: 'claude-code', agy: 'antigravity', dsh: 'dsh' };
 export function goalAgentFor(adapterId: string): string | null {
-  if (adapterId === 'codex') return 'codex';
-  if (adapterId === 'claude') return 'claude-code';
-  return null;
+  return GOAL_AGENTS[adapterId] ?? null;
 }
 
-/** The core's own rule: only an agent that can keep to a directory boundary may write inside the workspace. */
-export function permissionAvailable(adapterId: string, permission: LoopxPermission): { ok: boolean; reason?: string } {
-  if (permission === 'read_only') return { ok: true };
-  if (adapterId === 'codex') return { ok: true };
-  return { ok: false, reason: '该 agent 守不住目录边界，只有 codex 能把写入限制在所选目录内' };
+/** What permissionAvailable needs to know of an adapter. */
+export interface GoalAdapter { id: string; capabilities: { permissionModes: readonly PermissionMode[] } }
+
+/**
+ * Which permissions an agent can hold a Goal under. Writing is open to every Goal agent, so the work
+ * gets done: Codex keeps it inside the workspace with its sandbox, the others are only told to. Read
+ * only needs an agent that asks before it acts (its asks are refused), so one that cannot ask is
+ * offered writing alone rather than a read-only it would not keep.
+ */
+export function permissionAvailable(adapter: GoalAdapter, permission: LoopxPermission): { ok: boolean; reason?: string } {
+  if (permission === 'workspace_auto') return { ok: true };
+  if (adapter.id === 'codex' || adapter.capabilities.permissionModes.includes('ask')) return { ok: true };
+  return { ok: false, reason: '该 agent 不会先问再做，只读拦不住它，只能选工作区写入' };
+}
+
+/** Whether this agent's writing is held to the workspace by a sandbox (Codex), or only by what it is told. */
+export const workspaceSandboxed = (adapterId: string): boolean => adapterId === 'codex';
+
+/** The permission a Goal conversation's thread is created with; Codex's own sandbox policy takes over in the session. */
+export function goalThreadMode(adapter: GoalAdapter, permission: LoopxPermission): PermissionMode | undefined {
+  const modes = adapter.capabilities.permissionModes;
+  if (adapter.id === 'codex' || permission === 'read_only') return 'ask';
+  // Its asks would be refused, so a writing Goal agent runs without asking.
+  return modes.includes('full_access') ? 'full_access' : modes.includes('auto_edit') ? 'auto_edit' : undefined;
 }

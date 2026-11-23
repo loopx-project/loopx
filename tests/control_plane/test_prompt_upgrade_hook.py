@@ -81,6 +81,17 @@ def test_pending_read_uses_fresh_real_cli_plan_and_stops_after_adoption(tmp_path
     assert not receipt.exists()
 
 
+def test_deferred_hint_follows_current_database_when_legacy_copy_is_stale(tmp_path, monkeypatch):
+    _, path, legacy_db, registry, root, _, desired, _ = _deferred(tmp_path, monkeypatch)
+    current_db = legacy_db.with_name("codex.db")
+    with sqlite3.connect(legacy_db) as legacy, sqlite3.connect(current_db) as current:
+        legacy.backup(current)
+        legacy.execute("UPDATE automations SET prompt='stale'")
+    assert _reads(registry, root)["required_reads"][0]["kind"] == "automation_prompt_upgrade"
+    _set_fixture_prompt(path, current_db, desired)
+    assert _reads(registry, root) is None
+
+
 @pytest.mark.parametrize("change", ["prompt", "thread", "divergent", "deleted", "missing", "ambiguous", "schema", "invalid_id"])
 def test_stale_ambiguous_or_unreadable_receipts_cannot_inject_a_repair(tmp_path, monkeypatch, change):
     home, path, database, registry, root, legacy, _, _ = _deferred(tmp_path, monkeypatch)

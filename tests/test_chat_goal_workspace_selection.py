@@ -437,6 +437,18 @@ def test_first_goal_preview_refuses_an_unavailable_agent_as_a_typed_gate(tmp_pat
         status, previewed = request("/api/actions/preview", create)
         assert status == 201, previewed
         assert previewed["proposal"]["action_kind"] == "goal.create"
+
+        # A host that runs the Goal's conversation itself (open_session=false) does not
+        # need this core's endpoint live; the Agent must still be registered.
+        hosted = {**create, "idempotency_key": "hosted",
+                  "normalized_parameters": {**create["normalized_parameters"], "goal_id": "goal-hosted", "open_session": False}}
+        catalog["rows"] = [{"agent_id": "codex", "available": False, "tool_calls": True, "trust_scope": "read_only",
+                            "unavailable_reason": "executable_not_found"}]
+        status, hosted_preview = request("/api/actions/preview", hosted)
+        assert status == 201, hosted_preview
+        catalog["rows"] = []
+        status, hosted_unregistered = request("/api/actions/preview", hosted)
+        assert status == 409 and hosted_unregistered["gate"]["registered"] is False
     finally:
         server.shutdown()
         thread.join(timeout=5)

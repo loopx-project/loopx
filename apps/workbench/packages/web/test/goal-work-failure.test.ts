@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { GoalWorkPage } from '../src/components/GoalWorkPage.js';
-import { useLoopxStatus } from '../src/components/SidebarGoals.js';
+import { failureLabel } from '../src/loopx/status.js';
+import { useLoopxStatus } from '../src/loopx/use-status.js';
 import { t } from '../src/i18n/index.js';
 
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -22,12 +22,9 @@ test('a failed Goal list stays an error until Retry reads a successful list', as
   };
   function Page() {
     const read = useLoopxStatus('test-token');
-    return createElement(GoalWorkPage, {
-      token: 'test-token', goalId: 'goal-fixture', tab: 'overview', onTab() {},
-      goals: read.status?.goals ?? [], goalsLoaded: !read.loading,
-      attention: read.status?.attention ?? [], failure: read.failure, onRetry: read.reload, onChanged: read.reload,
-      threads: [], onOpenThread() {}, onBrowseFiles() {}, defaultAgent: 'codex',
-    });
+    if (read.loading) return createElement('div', { className: 'loading-note' }, t('common.loading'));
+    if (read.failure) return createElement('div', {}, createElement('p', { role: 'alert' }, failureLabel(read.failure)), createElement('button', { onClick: read.reload }, t('common.retry')));
+    return createElement('p', {}, t('loopx.goalGone'));
   }
   let renderer: ReactTestRenderer | undefined;
   try {

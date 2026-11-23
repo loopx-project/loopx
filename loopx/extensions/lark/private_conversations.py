@@ -69,6 +69,7 @@ CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/
 ANSWER_IMAGE_RETRY_SECONDS = 300
 ANSWER_IMAGE_SOURCE_TIMEOUT = 5
 _UNSET = object()
+_SESSION_BACKOFF_VOLATILE_FIELDS = frozenset({"updated_at", "last_activity_at"})
 _STEWARD_PREFIX_COMMANDS = (("/delegate", "commission"), ("/委托", "commission"), ("/confirm", "confirm_commission"),
                             ("/cancel", "cancel_commission"), ("/stop-commission", "stop_commission"),
                             ("/resume-commission", "resume_commission"))
@@ -1487,46 +1488,85 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                  and not is_answer_image_followup(row) and not failure_notice_receipt_unknown(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
-    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[tuple[int, ...], ...], int]]:
+    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[Any, ...], int]]:
         cache = getattr(self, "_context_recovery_noop_backoff", None)
         if cache is None:
             cache = {}
             self._context_recovery_noop_backoff = cache
         return cache
 
+    def _session_recovery_backoff_token(self, session_path: Path) -> tuple[str, bool, str] | None:
+        raw_fp = optional_file_fingerprint(session_path)
+        if raw_fp is None:
+            return None
+        cache = getattr(self, "_session_backoff_token_cache", None)
+        if cache is None:
+            cache = {}
+            self._session_backoff_token_cache = cache
+        cached = cache.get(session_path)
+        if cached is not None and cached[0] == raw_fp:
+            return cached[1]
+        try:
+            data = json.loads(session_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            token: tuple[str, bool, str] = ("", False, "missing")
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None
+        else:
+            if not isinstance(data, dict):
+                return None
+            status = str(data.get("status") or "")
+            is_busy = status == "busy" or bool(data.get("active_turn_id"))
+            stable = {k: v for k, v in data.items() if k not in _SESSION_BACKOFF_VOLATILE_FIELDS and k not in {"status", "active_turn_id"}}
+            digest = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+            token = (digest, is_busy, "" if is_busy else status)
+        if len(cache) >= 256 and session_path not in cache:
+            del cache[next(iter(cache))]
+        cache[session_path] = (raw_fp, token)
+        return token
+
     def _context_recovery_fingerprints(
         self, path: Path, request_ref: str, session_id: str, turn_id: str,
-    ) -> tuple[tuple[int, ...], ...] | None:
+    ) -> tuple[Any, ...] | None:
         core_root = getattr(self.core, "root", None)
         store = getattr(getattr(self.core, "controller", None), "store", None)
         if not isinstance(core_root, Path) or store is None:
             return None
         try:
             tokens = tuple(optional_file_fingerprint(item) for item in (
-                path, core_root / f"{request_ref}.json", store._turn_path(session_id, turn_id),
-                store._session_path(session_id), store._event_path(session_id, turn_id)))
+                path, core_root / f"{request_ref}.json", store._turn_path(session_id, turn_id), store._event_path(session_id, turn_id)))
+            session_token = self._session_recovery_backoff_token(store._session_path(session_id))
         except (OSError, ValueError, TypeError, AttributeError):
             return None
-        return None if any(token is None for token in tokens) else tokens
+        return None if session_token is None or any(t is None for t in tokens) else (*tokens, session_token)
+
+    @staticmethod
+    def _context_recovery_backoff_valid(saved: tuple[Any, ...], current: tuple[Any, ...] | None) -> bool:
+        if current is None:
+            return False
+        if current == saved:
+            return True
+        return (len(saved) == 5 and len(current) == 5 and current[:-1] == saved[:-1]
+                and saved[-1][0] == current[-1][0] and saved[-1][1] is False and saved[-1][2] == "ready"
+                and current[-1][1] is True)
 
     def _clear_context_recovery_noop_backoff(self, path: Path) -> None:
         self._noop_backoff_cache().pop(path, None)
 
-    def _record_context_recovery_noop_backoff(self, path: Path, row: Mapping[str, Any]) -> None:
+    def _record_context_recovery_noop_backoff(self, path: Path, row: Mapping[str, Any], *, stagger_first: bool = False) -> None:
         cache = self._noop_backoff_cache()
         current = self._context_recovery_fingerprints(path, row["request_ref"], row["session_id"], row["turn_id"])
+        stagger = zlib.crc32(path.name.encode("utf-8")) % 60
         if current is None:
             # An untrusted token is not a stable backoff identity.
             cache.pop(path, None)
-            self._context_recovery_probe_at[path] = time.monotonic() + 60.0
+            self._context_recovery_probe_at[path] = time.monotonic() + (60.0 + stagger if stagger_first else 60.0)
             return
         prev = cache.get(path)
-        streak = prev[1] + 1 if prev is not None and prev[0] == current else 1
-        cache[path] = (current, streak)
-        if streak <= 1:
-            delay = 60.0
-        else:
-            delay = float(min(1800, 60 * (2 ** min(streak - 1, 5))) + zlib.crc32(path.name.encode("utf-8")) % 60)
+        valid_prev = prev is not None and self._context_recovery_backoff_valid(prev[0], current)
+        streak = prev[1] + 1 if valid_prev else 1
+        cache[path] = (prev[0] if valid_prev else current, streak)
+        delay = float(60 + stagger if stagger_first else 60) if streak <= 1 else float(min(1800, 60 * (2 ** min(streak - 1, 5))) + stagger)
         self._context_recovery_probe_at[path] = time.monotonic() + delay
 
     @effect_runtime_request_scope()
@@ -1549,8 +1589,9 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 paths.append(path)
             elif row.get("session_id") and row.get("turn_id"):
                 saved_backoff = noop_backoff.get(path)
-                if saved_backoff is not None and self._context_recovery_fingerprints(
-                        path, row["request_ref"], row["session_id"], row["turn_id"]) != saved_backoff[0]:
+                if saved_backoff is not None and not self._context_recovery_backoff_valid(
+                        saved_backoff[0], self._context_recovery_fingerprints(
+                            path, row["request_ref"], row["session_id"], row["turn_id"])):
                     noop_backoff.pop(path, None)
                     self._context_recovery_probe_at.pop(path, None)
                 if time.monotonic() >= self._context_recovery_probe_at.get(path, 0):
@@ -1570,6 +1611,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     if repairs or candidate:
                         self._context_recovery_probe_at[path] = now_mono + 60
                         paths.append(path)
+                    else:
+                        self._record_context_recovery_noop_backoff(path, row, stagger_first=True)
         return [*paths, *self._web_projection_paths()]
 
     def is_recovery_path(self, path: Path) -> bool:

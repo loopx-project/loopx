@@ -35,7 +35,7 @@ into a LoopX-governed visible goal loop.
   current owner; the model cannot substitute either authority. Mutation calls
   require a non-empty host-verified bound `agentId` and the host-issued
   `task_lease_v0` capability. Typed
-  conflict and CAS payloads (for example `write_scope_conflict` and
+  conflict and CAS payloads (for example `workspace_lease_conflict` and
   `lease_cas_mismatch`) are preserved as the tool result.
 - **Goal loop** — on every `agent_settled`, the extension probes
   `loopx quota should-run --runtime-profile generic_cli` for the bound goal.

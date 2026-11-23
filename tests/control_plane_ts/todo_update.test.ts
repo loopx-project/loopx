@@ -1320,13 +1320,15 @@ test("inactive history keeps unsupported lifecycle edits fenced without inventin
   }
 });
 
-for (const blocker of ["scope", "acceptance"]) test(`recovery respects ${blocker} acquisition admission`, async () => {
+for (const blocker of ["blocked", "acceptance"]) test(`recovery respects ${blocker} acquisition admission`, async () => {
   const {store, request} = await seeded({required_write_scopes: ["src/**"]});
   const head = await store.loadAuthority();
   if (head.status !== "loaded") assert.fail("missing fixture");
+  const baseTodo = (head.head.todos as Record<string, unknown>[])[0]!;
+  const updatedTodo = blocker === "blocked" ? {...baseTodo, status: "blocked"} : baseTodo;
   const other = todo({todo_id: "todo_other", claimed_by: "agent-b"});
-  const todos = [...head.head.todos as Record<string, unknown>[], other];
-  await store.commitAuthority({operation_id: "scope-conflict", expected_provider_revision: head.provider_revision,
+  const todos = [updatedTodo, other];
+  await store.commitAuthority({operation_id: "acquire-blocker", expected_provider_revision: head.provider_revision,
     events: [], receipts: [], next_projection: {...head.head, handoff_mode: "hard_lease", todos,
       todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 2,
         records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]},
@@ -1334,7 +1336,7 @@ for (const blocker of ["scope", "acceptance"]) test(`recovery respects ${blocker
         {todo_id: "todo_a", owner: "agent-a", idempotency_key: "released-key", version: 2,
           lease_epoch: 1, status: "released", expires_at: "2026-09-06T00:00:00Z", write_scopes: []},
         {todo_id: "todo_other", owner: "agent-b", idempotency_key: "foreign-active-key", version: 1,
-          lease_epoch: 1, status: "active", expires_at: "2026-09-06T00:00:00Z", write_scopes: blocker === "scope" ? ["src/file.ts"] : []},
+          lease_epoch: 1, status: "active", expires_at: "2026-09-06T00:00:00Z", write_scopes: ["src/file.ts"]},
       ]}});
   if (blocker === "acceptance") {
     const current = await store.loadAuthority();
@@ -1350,8 +1352,30 @@ for (const blocker of ["scope", "acceptance"]) test(`recovery respects ${blocker
   const result = await executeCoordinationTodoUpdate(store, {...request, planning_intent: {unblocks_todo_id: "todo_other"}});
   const recovery = result.recovery as Record<string, unknown>;
   assert.equal(recovery.action, "resolve_acquire_rejection");
-  assert.equal(recovery.reason_code, blocker === "scope" ? "write_scope_conflict" : "goal_acceptance_unbound");
+  assert.equal(recovery.reason_code, blocker === "blocked" ? "todo_not_open" : "goal_acceptance_unbound");
   assert.equal(recovery.acquire, undefined);
   assert.equal(JSON.stringify(result).includes("foreign-active-key"), false);
   assert.deepEqual(await store.loadAuthority(), before);
+});
+
+test("recovery no longer raises write_scope_conflict from overlapping other_leases scopes", async () => {
+  const {store, request} = await seeded({required_write_scopes: ["src/**"]});
+  const head = await store.loadAuthority();
+  if (head.status !== "loaded") assert.fail("missing fixture");
+  const other = todo({todo_id: "todo_other", claimed_by: "agent-b"});
+  const todos = [...head.head.todos as Record<string, unknown>[], other];
+  await store.commitAuthority({operation_id: "overlapping-other-lease", expected_provider_revision: head.provider_revision,
+    events: [], receipts: [], next_projection: {...head.head, handoff_mode: "hard_lease", todos,
+      todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 2,
+        records_sha256: canonicalAuthoritySha256(todos), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]},
+      leases: [
+        {todo_id: "todo_a", owner: "agent-a", idempotency_key: "released-key", version: 2,
+          lease_epoch: 1, status: "released", expires_at: "2026-09-06T00:00:00Z", write_scopes: []},
+        {todo_id: "todo_other", owner: "agent-b", idempotency_key: "foreign-active-key", version: 1,
+          lease_epoch: 1, status: "active", expires_at: "2026-09-06T00:00:00Z", write_scopes: ["src/file.ts"]},
+      ]}});
+  const result = await executeCoordinationTodoUpdate(store, {...request, planning_intent: {unblocks_todo_id: "todo_other"}});
+  const recovery = result.recovery as Record<string, unknown>;
+  assert.equal(recovery.action, "claim_task");
+  assert.equal(recovery.reason_code, undefined);
 });

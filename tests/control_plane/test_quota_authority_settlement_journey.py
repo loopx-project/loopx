@@ -366,7 +366,6 @@ def _workspace_repair_source(tmp_path, provider, goal_scopes=None, todo_scopes=N
 ])
 def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, monkeypatch, provider, native):
     goal_path = "/goal_boundary/write_scope"
-    todo_path = "/selected_todo/required_write_scopes"
     goal_scopes = ["src/**"] + [f"docs/area-{i:03d}/reference/specifications/**" for i in range(300)]
     todo_scopes = [f"src/area-{i:03d}/implementations/shared/**" for i in range(300)]
     project, runtime, registry = _workspace_repair_source(tmp_path, provider, goal_scopes, todo_scopes)
@@ -374,7 +373,7 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, mon
     code, plain = _guard(project, runtime, registry, turn_id=turn)
     assert code == 0 and plain["effective_action"] == "agent_workspace_repair"
     assert plain["goal_boundary"]["write_scope"] == goal_scopes
-    assert plain["selected_todo"]["required_write_scopes"] == todo_scopes
+    assert "required_write_scopes" not in plain["selected_todo"]
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
     identity = plain["heartbeat_receipt"]["settlement_identity"]
     repair_action = plain["interaction_contract"]["agent_channel"]["primary_action"]
@@ -428,7 +427,7 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, mon
     assert initial["/goal_boundary/stop_condition"] == plain["goal_boundary"]["stop_condition"]
     assert initial["/heartbeat_receipt/settlement_identity"] == identity
     assert initial["/interaction_contract/agent_channel/delivery_allowed"] is False
-    assert goal_path not in initial and todo_path not in initial
+    assert goal_path not in initial
     assert initial["/goal_boundary/write_scope_pointer"] == goal_path
     detail = initial["/context_details/unread_context_index/source"]
     template = shlex.split(initial["/context_details/command_template"])
@@ -440,8 +439,8 @@ def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, mon
     code, rejected = cli._run_cli(registry, runtime, *delivered_reader[delivered_reader.index("quota"):],
         "--select", goal_path, cwd=project)
     assert code != 0 and rejected["diagnostic_code"] == "context_selection_missing_pointer"
-    _, exact = selection(shlex.join([*template[:-1], goal_path, "--select", todo_path]))
-    assert exact[goal_path] == goal_scopes and exact[todo_path] == todo_scopes
+    _, exact = selection(shlex.join([*template[:-1], goal_path]))
+    assert exact[goal_path] == goal_scopes
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
 
     workspace = tmp_path / "repair-worktree"

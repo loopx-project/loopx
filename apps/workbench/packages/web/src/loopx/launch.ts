@@ -19,7 +19,8 @@ export interface GoalAgentCapability {
   agent: string;
   available: boolean;
   reason?: string;
-  permissions: { id: GoalPermission; available: boolean; reason?: string; isDefault?: boolean }[];
+  /** `sandboxed`: whether writing is held to the workspace by a sandbox, or only by instruction. */
+  permissions: { id: GoalPermission; available: boolean; reason?: string; isDefault?: boolean; sandboxed?: boolean }[];
 }
 
 export interface GoalTodoGroup { total: number; open: number; items: { id: string; text: string; status: string }[]; complete: boolean }
@@ -80,10 +81,17 @@ export function defaultGoalPermission(cap: GoalAgentCapability | undefined): Goa
   return cap?.permissions.find((p) => p.available && p.isDefault)?.id ?? cap?.permissions.find((p) => p.available)?.id ?? 'read_only';
 }
 
-/** Read when rendered, so a language switch applies at once. */
-export const permissionCopy = (p: GoalPermission): { label: string; hint: string } =>
-  p === 'read_only' ? { label: t('loopx.goal.perm.read_only'), hint: t('loopx.goal.perm.read_only.hint') }
-    : { label: t('loopx.goal.perm.workspace_auto'), hint: t('loopx.goal.perm.workspace_auto.hint') };
+/**
+ * Read when rendered, so a language switch applies at once. Writing without a sandbox is named as
+ * such: the agent is only told to stay in the directory. Unknown counts as unsandboxed.
+ */
+export const permissionCopy = (p: GoalPermission, cap?: GoalAgentCapability): { label: string; hint: string } => {
+  if (p === 'read_only') return { label: t('loopx.goal.perm.read_only'), hint: t('loopx.goal.perm.read_only.hint') };
+  const sandboxed = cap?.permissions.find((row) => row.id === 'workspace_auto')?.sandboxed === true;
+  return sandboxed
+    ? { label: t('loopx.goal.perm.workspace_auto'), hint: t('loopx.goal.perm.workspace_auto.hint') }
+    : { label: t('loopx.goal.perm.workspace_open'), hint: t('loopx.goal.perm.workspace_open.hint') };
+};
 
 /** The core's status words for the bar; a status the hub has no word for shows as the core said it, without the underscores. */
 export function statusWord(status: string): string {

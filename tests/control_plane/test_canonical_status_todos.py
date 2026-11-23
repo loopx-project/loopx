@@ -323,6 +323,10 @@ def test_contract_rejects_corrupt_canonical_read_model_despite_valid_display(tmp
     ({"role": "agent", "claimed_by": "agent-a", "excluded_agents": ["agent-a"]},
      ["agent-a"], "todo_claimed_by_excluded_agent"),
     ({"role": "agent", "excluded_agents": ["agent-other"]}, ["agent-a"], "todo_excludes_unregistered_agent"),
+    ({"role": "agent", "status": "done", "done": True, "archive_state": "archive",
+      "excluded_agents": ["agent-other"]}, ["agent-a"], None),
+    ({"role": "agent", "status": "deferred", "done": True, "archive_state": "archive",
+      "excluded_agents": ["agent-other"]}, ["agent-a"], "todo_excludes_unregistered_agent"),
     ({"role": "agent", "removed_continuation_policy": "review_handoff"},
      ["agent-a"], "agent_todo_removed_continuation_policy"),
     ({"role": "agent", "excluded_agents": ["!"]}, ["agent-a"], "todo_excluded_agents_invalid"),
@@ -376,6 +380,58 @@ def test_legacy_canonical_status_is_validated_without_display(tmp_path, provider
     test_canonical_todo_semantics_without_display(
         tmp_path, provider, "legacy", fields, ["agent-a"], "todo_status_invalid",
     )
+
+
+@pytest.mark.parametrize("archive_status", ["done", "deferred", "open"])
+def test_archived_executor_exclusion_through_check_status_and_guard(tmp_path, provider, archive_status):
+    from canonical_authority_fixture import read_fixture_todos
+    from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _write_fixture
+
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.todo_summary import structured_todo_item
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    with state.open("a", encoding="utf-8") as source:
+        source.write(
+            "\n## Completed Work Archive\n\n- [x] Historical work\n"
+            "  <!-- loopx:todo todo_id=todo_history role=agent status=done "
+            "task_class=advancement_task excluded_agents=retired-agent -->\n",
+        )
+    original_state = state.read_bytes()
+    _, (history,), _ = parse_todo_source(original_state.decode("utf-8"), state_path=state)
+    assert history["todo_id"] == "todo_history" and history["excluded_agents"] == ["retired-agent"]
+    history.update(status=archive_status, done=archive_status != "open")
+    todos = [*read_fixture_todos(state), structured_todo_item(
+        history, role=history["role"], source_section=history["source_section"],
+        archive_state=history["archive_state"], text_limit=None,
+    )]
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    original_authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+    assert original_authority is not None
+    public_file = project / "README.md"
+    public_file.write_text("# Fixture\n", encoding="utf-8")
+
+    healthy = archive_status == "done"
+    check_code, check = _run_cli(registry, runtime, "check", "--scan-path", str(public_file), cwd=project)
+    status_code, status = _run_cli(registry, runtime, "status", "--goal-id", GOAL_ID, cwd=project)
+    assert check_code == status_code == (0 if healthy else 1), check["error_diagnostics"]
+    expected = [] if healthy else ["todo_excludes_unregistered_agent"]
+    assert [row["code"] for row in check["error_diagnostics"]] == expected
+    assert status["contract"].get("error_diagnostics", []) == check["error_diagnostics"]
+
+    guard_code, guard = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+                                 "--agent-id", AGENT_ID, cwd=project)
+    assert guard_code == (0 if healthy else 1), guard
+    assert guard["status_health_ok"] is healthy
+    assert guard["normal_delivery_allowed"] is healthy
+    if healthy:
+        assert guard["should_run"]
+        assert guard["selected_todo"]["todo_id"] == TODO_ID
+    assert state.read_bytes() == original_state
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == original_authority
 
 
 def test_large_canonical_user_narratives_do_not_enter_diagnostics_rpc(tmp_path, provider, record_format):

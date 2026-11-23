@@ -74,12 +74,14 @@ def write_fixture(root: Path, provider: str) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     worker = project.parent / "worker"
+    worker_b = project.parent / "worker-b"
     for args in [
         ("init", "--initial-branch", "main"),
         ("remote", "add", "origin", "https://example.invalid/loopx/lease-fixture.git"),
         ("-c", "user.name=LoopX Fixture", "-c", "user.email=fixture@example.invalid",
          "commit", "--allow-empty", "-m", "fixture"),
         ("worktree", "add", "-b", "worker", str(worker)),
+        ("worktree", "add", "-b", "worker-b", str(worker_b)),
     ]:
         subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
     projection = build_todo_runtime_shadow_projection(
@@ -132,7 +134,7 @@ def command(
 def cli(
     registry_path: Path, *args: str, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    if args[0] == "acquire":
+    if args[0] == "acquire" and "--write-worktree" not in args:
         args = (*args, "--write-worktree", str(registry_path.parents[2] / "worker"))
     return command(registry_path, "task-lease", *args, check=check)
 
@@ -241,6 +243,8 @@ def exercise_provider(provider: str) -> None:
                 "120",
                 "--write-scope",
                 "docs/**",
+                "--write-worktree",
+                str(registry_path.parents[2] / "worker-b"),
             )
         )
         assert same_goal_different_scope["ok"] is True, same_goal_different_scope
@@ -264,7 +268,7 @@ def exercise_provider(provider: str) -> None:
         )
         assert conflict.returncode == 1, conflict.stdout
         conflict_payload = payload(conflict)
-        assert conflict_payload["error_code"] == "write_scope_conflict", (
+        assert conflict_payload["error_code"] == "workspace_lease_conflict", (
             conflict_payload
         )
         assert conflict_payload["conflicts"][0]["todo_id"] == TODO_A, conflict_payload

@@ -669,6 +669,14 @@ def main() -> int:
         assert float(unlimited["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"]) == 700
         assert native_state.read_text() == '{"session":"retained"}'
 
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"LOOPX_CHAT_IDLE_TIMEOUT_SECONDS": "0"})
+        run_script(fake_bin, home, ["restart"], schema_version=2)
+        disabled_idle_plist = plistlib.loads(chat_plist.read_bytes())
+        assert disabled_idle_plist["EnvironmentVariables"]["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"] == "0"
+        disabled_idle_cmd = shlex.split(disabled_idle_plist["ProgramArguments"][2])
+        assert disabled_idle_cmd[disabled_idle_cmd.index("--idle-timeout-seconds") + 1] == "0"
+
         # Legacy generated plists used only a shell export. Preserve quoted
         # paths across upgrades without ever executing their command contents.
         legacy = plistlib.loads(chat_plist.read_bytes())

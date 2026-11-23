@@ -25,14 +25,20 @@ const GREETING_ASKS = () => [
  * answers as assistant rows in the thread's markdown, the composer as the app's composer shell with
  * its send and stop buttons. An empty history opens on a centered question with one-tap asks.
  */
-export function StewardConversation({ token, failure }: { token: string | undefined; failure: LoopxStatusFailure | null }) {
+export function StewardConversation({ token, failure, deferSessionOpen = false }: { token: string | undefined; failure: LoopxStatusFailure | null; deferSessionOpen?: boolean }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ManagerMessage[] | null>(null);
+  const [messages, setMessages] = useState<ManagerMessage[] | null>(() => deferSessionOpen ? [] : null);
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ManagerCapabilities | null>(null);
   const [switchingAgent, setSwitchingAgent] = useState<string | null>(null);
   const [turn, setTurn] = useState<ManagerTurn | null>(null);
   const [draft, setDraft] = useState('');
+  const [sessionOpening, setSessionOpening] = useState(false);
+  const openingSession = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setSessionOpening(false);
+    return () => { openingSession.current?.abort(); openingSession.current = null; };
+  }, [token]);
   const sessionRef = useRef<string | null>(null);
   const selectedAgentRef = useRef<string | undefined>(undefined);
   const turnRef = useRef<ManagerTurn | null>(null);
@@ -45,7 +51,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   turnRef.current = turn;
   /** Sets the live turn and its ref together, so code that runs before the next render sees it. */
   const showTurn = (next: ManagerTurn | null) => { turnRef.current = next; setTurn(next); };
-  const busy = turn?.state === 'sending' || turn?.state === 'streaming' || turn?.state === 'stopping';
+  const busy = sessionOpening || turn?.state === 'sending' || turn?.state === 'streaming' || turn?.state === 'stopping';
   const stoppable = turn?.state === 'streaming' || turn?.state === 'stopping';
 
   const recordOpenFailure = (cause: unknown, signal?: AbortSignal) => {
@@ -61,23 +67,30 @@ export function StewardConversation({ token, failure }: { token: string | undefi
   };
 
   const openedFor = useRef<string | undefined | null>(null);
+  const sessionOwner = useRef(token);
   const coreDown = failure !== null;
   useEffect(() => {
     // Opened once per token. A core that was down when the page opened is retried once it is back;
     // a later status refresh does not open another session over the one already open.
-    if (coreDown || (sessionRef.current && openedFor.current === token)) return;
-    if (openedFor.current !== null && openedFor.current !== token) {
+    if (sessionOwner.current !== token) {
+      sessionOwner.current = token;
       attemptRef.current++;
       sendAbort.current?.abort();
       streamAbort.current?.abort();
       sessionRef.current = null;
+      openedFor.current = null;
+      setSessionId(null);
       selectedAgentRef.current = undefined;
+      setDraft(''); setError(null); setCapabilities(null);
+      setMessages(deferSessionOpen ? [] : null);
       showTurn(null);
     }
+    if (deferSessionOpen || openingSession.current || coreDown || (sessionRef.current && openedFor.current === token)) return;
     let alive = true;
     const controller = new AbortController();
     setError(null);
     setCapabilities(null);
+    if (!sessionRef.current) setMessages(null);
     openManagerSession(token, controller.signal, selectedAgentRef.current)
       .then(({ sessionId: id, messages: history }) => {
         if (!alive) return;
@@ -93,7 +106,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     return () => { alive = false; controller.abort(); };
     // A core outage after the session opened surfaces in the send path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, coreDown]);
+  }, [token, coreDown, deferSessionOpen]);
 
   useEffect(() => {
     scrollAnchor.current?.scrollIntoView({ block: 'end' });
@@ -155,7 +168,7 @@ export function StewardConversation({ token, failure }: { token: string | undefi
     }
   };
 
-  const send = async (text: string) => {
+  const sendInSession = async (text: string) => {
     const body = text.trim();
     const active = turnRef.current;
     const activeBusy = active !== null && active.state !== 'idle';
@@ -203,6 +216,31 @@ export function StewardConversation({ token, failure }: { token: string | undefi
       setDraft(body);
     } finally {
       if (sendAbort.current === postController) sendAbort.current = null;
+    }
+  };
+
+  /** Goal-reader entry does not create a chat session until the person actually sends. */
+  const send = async (text: string) => {
+    const active = turnRef.current;
+    if (!text.trim() || failure || openingSession.current || (active && active.state !== 'idle')) return;
+    if (sessionRef.current ?? sessionId) { await sendInSession(text); return; }
+    if (!deferSessionOpen) return;
+    const controller = new AbortController();
+    openingSession.current = controller;
+    setSessionOpening(true);
+    setError(null);
+    try {
+      const opened = await openManagerSession(token, controller.signal, selectedAgentRef.current);
+      if (controller.signal.aborted) return;
+      sessionRef.current = opened.sessionId;
+      openedFor.current = token;
+      setSessionId(opened.sessionId);
+      setMessages(opened.messages);
+      await sendInSession(text);
+    } catch (cause) {
+      if (!controller.signal.aborted) recordOpenFailure(cause, controller.signal);
+    } finally {
+      if (openingSession.current === controller) { openingSession.current = null; setSessionOpening(false); }
     }
   };
 

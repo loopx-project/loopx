@@ -134,6 +134,12 @@ def test_goal_repository_fallback_resolves_each_worktree_once(workspaces, monkey
         selected_todo={"required_write_scopes": ["src/**"]}, current_path=nested,
     ) is None
     assert sum(args == ("rev-parse", "--show-toplevel") for _, args in calls) == 2
+    guard = owner.build_agent_workspace_guard(
+        {"repo": str(canonical)}, {"agent_id": "peer", "registered_agents": ["lead", "peer"]},
+        selected_todo={"action_kind": "validate", "required_write_scopes": ["src/**"]},
+        current_path=canonical,
+    )
+    assert guard is not None and guard["current_workspace"] == "canonical_checkout"
 
 
 def test_foreign_worktree_explains_missing_cross_repository_binding(workspaces, tmp_path):

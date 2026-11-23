@@ -1,10 +1,12 @@
 import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {Pause, Play, Settings2, Users, X} from "lucide-react";
-import {fetchLoopXMode, updateLoopXMode, fetchManagedTaskEntry, startManagedTaskTurn,
+import {fetchLoopXMode, updateLoopXMode, fetchManagedTaskEntry, readManagedTaskValidation, startManagedTaskTurn,
   type ManagedConversationTarget, type ManagedTaskEntry, type ManagedTaskTurn, type LoopXModeSnapshot, type LoopXModeSettings} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import {GoalTeamWork} from "./goal-team-work";
+import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
+import {goalAcceptanceContractCopy} from "./delivery-review-copy";
 import "./goal-loopx-mode.css";
 
 type GoalLoopXModeProps = {
@@ -43,7 +45,8 @@ function observedTaskTurn(read: ManagedTaskEntry | null, attempt: TaskAttempt | 
 }
 
 function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["managed"]>) {
-  const zh = useWorkspaceI18n().locale === "zh-CN";
+  const {locale, t} = useWorkspaceI18n();
+  const zh = locale === "zh-CN";
   const storageKey = `loopx-managed-task:${JSON.stringify([target.goalId, target.agentId, target.sessionId])}`;
   const [retained, setRetained] = useState<{attempt: TaskAttempt | null; unreadable: boolean}>(() => {
     try {return {attempt: readTaskAttempt(storageKey), unreadable: false};} catch {return {attempt: null, unreadable: true};}
@@ -123,7 +126,16 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
   const creation = read?.task.creation_request;
   const originalCreation = creation && creation.operation_id === attempt?.operationId ? creation : undefined;
   const turn = observedTaskTurn(read, attempt);
+  const completedTask = read?.task.state === "ready" && read.task.canonical_done ? read.task : undefined;
+  const attemptedTurn = attempt && turn?.client_turn_id === `managed.${attempt.operationId}`
+    && turn.loopx_request.todo_id === read?.task.todo_id ? turn : undefined;
+  // A fresh view can bind to the creation request even after a later Turn
+  // completed the Task. Read the authoritative completion separately.
+  const checkTurn = completedTask ? completedTask.completion_turn : attemptedTurn;
+  const observedCheck = !busy && checkTurn ? readManagedTaskValidation(checkTurn) : undefined;
+  const validation = completedTask && observedCheck?.status !== "passed" ? undefined : observedCheck;
   const creationPending = Boolean(originalCreation && !turn);
+  const awaitingCheck = originalCreation && creationPending && read?.available && read.task.state === "unbound";
   const waiting = creationPending || Boolean(turn && !terminalTaskTurn(turn.status));
   const running = turn?.status === "running";
   async function start() {
@@ -175,18 +187,25 @@ function ManagedTaskMode({target, onObserve}: NonNullable<GoalLoopXModeProps["ma
           ? (zh ? "当前任务已完成" : "Current Task completed") : (zh ? "当前任务" : "Current Task")}
       </span>
       <div className="goal-loopx-mode-actions">
-        <ContextHelp label={zh ? "当前任务与检查" : "Current Task and checks"}>
-          <p>{zh ? "在原会话推进当前任务，使用已确认的检查和现有额度。" : "Advance the current Task in its original conversation using its confirmed checks and existing allowance."}</p>
-          {read?.task.state === "ready" ? <p>{zh ? `${read.task.observation.check_count} 项检查 · ${read.task.observation.pinned_file_count} 个固定来源文件` : `${read.task.observation.check_count} checks · ${read.task.observation.pinned_file_count} pinned source files`}</p> : null}
-        </ContextHelp>
-        <button type="button" className="goal-loopx-primary" disabled={busy || waiting || !ready && !error}
-          onClick={() => error ? setRefresh(value => value + 1) : void start()}>
-          <Play size={14}/>{error ? (zh ? "重新读取" : "Refresh") : busy ? (zh ? "正在提交…" : "Submitting…")
-            : running ? (zh ? "正在推进" : "Working") : waiting ? (zh ? "等待" : "Waiting")
-            : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
-        </button>
+        {awaitingCheck ? <GoalAcceptanceContractSection goalId={target.goalId} current
+          originalTask={originalCreation} copy={goalAcceptanceContractCopy[locale]}/> : <>
+          <ContextHelp label={zh ? "当前任务与检查" : "Current Task and checks"}>
+            <p>{zh ? "在原会话推进当前任务，使用已确认的检查和现有额度。" : "Advance the current Task in its original conversation using its confirmed checks and existing allowance."}</p>
+            {read?.task.state === "ready" ? <p>{zh ? `${read.task.observation.check_count} 项检查 · ${read.task.observation.pinned_file_count} 个固定来源文件` : `${read.task.observation.check_count} checks · ${read.task.observation.pinned_file_count} pinned source files`}</p> : null}
+            {validation && validation.status !== "passed" ? <p>{validation.summary}</p> : null}
+          </ContextHelp>
+          <button type="button" className="goal-loopx-primary" disabled={busy || waiting || !ready && !error}
+            onClick={() => error ? setRefresh(value => value + 1) : void start()}>
+            <Play size={14}/>{error ? (zh ? "重新读取" : "Refresh") : busy ? (zh ? "正在提交…" : "Submitting…")
+              : running ? (zh ? "正在推进" : "Working") : waiting ? (zh ? "等待" : "Waiting")
+              : attempt ? (zh ? "继续当前任务" : "Continue Task") : (zh ? "开始当前任务" : "Start Task")}
+          </button>
+          </>}
       </div>
     </div>
+    {validation ? <p role="status" className="goal-loopx-task-check" data-status={validation.status}>
+      {t(`task.latestCheck.${validation.status}`)}
+    </p> : null}
     {error ? <p className="personal-composer-error" role="alert">{error}</p> : null}
     {read && !ready && (!waiting || creationPending && read.task.state === "ready") && !read.task.canonical_done
       ? <p role="status">{read.task.reason || read.reason || (zh ? "当前任务暂不能执行，请读取检查或原会话状态。" : "The Task cannot run yet. Read its checks or original conversation state.")}</p> : null}

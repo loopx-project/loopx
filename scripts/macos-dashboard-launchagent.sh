@@ -393,9 +393,9 @@ for variable, flag in (
         try:
             seconds = float(value)
         except ValueError:
-            raise SystemExit(f"{variable} must be a positive finite number")
-        if not math.isfinite(seconds) or seconds < 0 or (seconds == 0 and flag != "--hard-timeout-seconds"):
-            raise SystemExit(f"{variable} must be finite and positive (hard timeout also accepts 0)")
+            raise SystemExit(f"{variable} must be a nonnegative finite number")
+        if not math.isfinite(seconds) or seconds < 0:
+            raise SystemExit(f"{variable} must be finite and nonnegative (0 disables it)")
     options[variable] = value
 variable = "LOOPX_CHAT_CODEX_MODEL_PROVIDER"
 # Explicit empty disables an installed override; absence preserves it.
