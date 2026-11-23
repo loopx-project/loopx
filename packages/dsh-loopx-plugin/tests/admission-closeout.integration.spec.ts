@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { LoopXCliError, runFile } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
@@ -14,6 +14,17 @@ import { LoopXContinuationDriver } from '../src/driver.ts'
 import { pluginPythonCandidates } from '../src/managed-runtime.ts'
 import { GoalBarCoordinator } from '../src/goalbar/events.ts'
 import { createGoalBarService } from '../src/goalbar/service.ts'
+
+// Driver disposal in onTestFinished runs after afterEach.
+let dshHome: string
+beforeAll(async () => {
+  dshHome = await mkdtemp(join(tmpdir(), 'dsh-loopx-closeout-home-'))
+  vi.stubEnv('DSH_HOME', dshHome)
+})
+afterAll(async () => {
+  vi.unstubAllEnvs()
+  await rm(dshHome, { recursive: true, force: true })
+})
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const sessionId = 'dsh-closeout-session'
