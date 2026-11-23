@@ -225,7 +225,7 @@ def test_real_cli_preserves_class_authority_and_expired_hints(tmp_path, monkeypa
     assert _spend_run_count(runtime) == 0
 
 
-def test_projection_repair_skips_when_goal_covers_repo_or_task_binds_repository(scope_transport) -> None:
+def test_projection_repair_skips_when_goal_covers_repo_or_task_targets_another_repository(scope_transport) -> None:
     assert projection_repair.build_boundary_projection_repair_hint(
         {"write_scope": ["**"]},
         {},
@@ -239,8 +239,9 @@ def test_projection_repair_skips_when_goal_covers_repo_or_task_binds_repository(
         selected_todo={"todo_id": "todo_a", "required_write_scopes": ["unlisted/**"]},
         goal_repo="/repos/example/loopx",
     ) is None
+    assert scope_transport == []
     assert projection_repair.build_boundary_projection_repair_hint(
-        {"write_scope": ["docs/**"]},
+        {"write_scope": ["docs/**"], "task_repository": "git:github.com/example/goal"},
         {},
         candidate_should_run=True,
         selected_todo={
@@ -249,7 +250,6 @@ def test_projection_repair_skips_when_goal_covers_repo_or_task_binds_repository(
             "required_write_scopes": ["src/**"],
         },
     ) is None
-    assert scope_transport == []
     raw_fallback = projection_repair.build_boundary_projection_repair_hint(
         {"write_scope": ["docs/**"]},
         {},
@@ -258,6 +258,20 @@ def test_projection_repair_skips_when_goal_covers_repo_or_task_binds_repository(
         raw_agent_todo_summary={"items": [{"todo_id": "todo_narrow", "required_write_scopes": ["src/**"]}]},
     )
     assert raw_fallback is not None and raw_fallback["missing_write_scopes"] == ["src/**"]
+
+
+@pytest.mark.parametrize("origin", [None, "https://github.com/example/repo.git"])
+def test_bound_todo_keeps_goal_scope_when_origin_matches_or_is_unknown(tmp_path, scope_transport, origin):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    if origin:
+        subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin", origin], check=True)
+    repair = projection_repair.build_boundary_projection_repair_hint(
+        {"write_scope": ["docs/**"]}, {}, candidate_should_run=True, goal_repo=tmp_path,
+        selected_todo={"todo_id": "todo_bound"},
+        raw_agent_todo_summary={"items": [{"todo_id": "todo_bound",
+            "task_repository": "git:github.com/example/repo", "required_write_scopes": ["src/**"]}]},
+    )
+    assert repair and repair["missing_write_scopes"] == ["src/**"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

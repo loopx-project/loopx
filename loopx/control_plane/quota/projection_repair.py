@@ -4,6 +4,7 @@ from .effective_action import EffectiveAction
 from pathlib import Path
 from typing import Any
 
+from ...repository_identity import resolve_project_identity
 from ...state_projection import actions_are_projection_aligned, is_user_wait_text
 from ..effect_runtime import (
     EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result,
@@ -11,6 +12,7 @@ from ..effect_runtime import (
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     normalize_required_write_scopes,
+    normalize_todo_task_repository,
 )
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open,
@@ -254,9 +256,6 @@ def build_boundary_projection_repair_hint(
                if not selected.get("task_repository") and raw_match.get("task_repository") else {}),
         }
 
-    task_repository = selected.get("task_repository")
-    if isinstance(task_repository, str) and task_repository.strip():
-        return None
     required_scopes = normalize_required_write_scopes(
         selected.get("required_write_scopes")
     )
@@ -275,6 +274,17 @@ def build_boundary_projection_repair_hint(
     missing_scopes = [scope for scope, covered in zip(required_scopes, active_coverage) if not covered]
     if not missing_scopes:
         return None
+    # Goal-relative grants apply unless the two repositories are known to differ.
+    task_repository = normalize_todo_task_repository(selected.get("task_repository"))
+    if task_repository:
+        goal_repository = normalize_todo_task_repository(boundary.get("task_repository"))
+        if not goal_repository and goal_repo:
+            try:
+                goal_repository = resolve_project_identity(goal_repo)
+            except ValueError:
+                pass
+        if goal_repository and goal_repository.casefold() != task_repository.casefold():
+            return None
     boundary_authority = (
         boundary.get("checkpointed_boundary_authority")
         if isinstance(boundary.get("checkpointed_boundary_authority"), dict)
