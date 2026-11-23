@@ -2,7 +2,7 @@ import {ArrowUpRight, ChevronDown, CircleHelp, FileText, TriangleAlert, X} from 
 import {useId, useLayoutEffect, useRef, useState} from "react";
 import {TRAJECTORY_METRICS} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, TrajectoryEpisode, TrajectoryInput, TrajectoryMetric, TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
-import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
+import type {NativeOutcomeSample, TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
 import {ResearchTurnCosts} from "./research-turn-costs";
@@ -19,7 +19,8 @@ export type ResearchProgressPack = {pack_id: string; title: string; scope: Traje
   job?: {status: string; attempt?: number; analysis_wall_seconds?: number | null;
     usage?: {input_tokens?: number; output_tokens?: number} | null; config?: {model: string; effort: string; service_tier: string}} | null;
   solver_usage?: {artifact: string; artifact_sha256: string; projection: TrajectorySolverUsage; applicability: "current" | "historical"; reason_code: string | null};
-  native_outcomes?: {artifact: string; artifact_sha256: string; projection: TrajectoryNativeOutcomes; applicability: "current" | "historical"; reason_code: string | null}};
+  native_outcomes?: {artifact: string; artifact_sha256: string; projection: TrajectoryNativeOutcomes; samples?: NativeOutcomeSample[];
+    applicability: "current" | "historical"; reason_code: string | null}};
 export const metricCopy: Record<TrajectoryMetric, [string, string, string, string]> = {
   goal_alignment: ["目标关联", "Goal alignment", "干预是否关联原目标的真实瓶颈", "Does the intervention address a bottleneck of the original objective?"],
   benefit_test: ["收益检验", "Benefit test", "是否真正检验原目标收益，而非只完成前置诊断", "Was original-objective utility tested, beyond diagnostic prerequisites?"],
@@ -146,6 +147,63 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
   </section>;
 }
 
+function NativeOutcomeSeries({samples, outcomes, zh, onCitation}: {
+  samples: NativeOutcomeSample[]; outcomes: TrajectoryNativeOutcomes; zh: boolean;
+  onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void;
+}) {
+  const [selectedId, setSelectedId] = useState("");
+  const first = samples[0]!, last = samples.at(-1)!;
+  const selected = samples.find(sample => sample.result_id === selectedId) ?? last;
+  const span = last.submission_index - first.submission_index;
+  const values = samples.flatMap(sample => sample.value === null ? [] : [sample.value]);
+  const scale = values.length ? Math.max(1, ...values.map(Math.abs)) : 1;
+  const low = values.length ? Math.min(...values) / scale : 0;
+  const high = values.length ? Math.max(...values) / scale : 0;
+  const plot = samples.map(sample => ({
+    sample,
+    x: 5 + (sample.submission_index - first.submission_index) / span * 90,
+    y: sample.value === null ? 92 : low === high ? 44 : 12 + (high - sample.value / scale) / (high - low) * 64,
+  }));
+  const directPoints = samples.length <= 24;
+  const line = plot.map(({sample, x, y}, index) => {
+    if (sample.value === null) return "";
+    const previous = plot[index - 1]?.sample;
+    const command = previous?.value != null && previous.submission_index + 1 === sample.submission_index ? "L" : "M";
+    return command + x.toFixed(2) + "," + y.toFixed(2);
+  }).join(" ");
+  const positionLabel = (index: number) => zh ? `第 ${index} 次提交` : `Submission ${index}`;
+  const label = (sample: NativeOutcomeSample) => [
+    positionLabel(sample.submission_index),
+    sample.value === null ? (zh ? "无有效测量" : "No valid measurement") : `${sample.value} ${outcomes.metric.unit}`,
+    ...(sample.result_id === outcomes.retained?.result_id ? [zh ? "已保留" : "Retained"] : []),
+  ].join(" · ");
+  const name = zh ? "原生结果曲线" : "Native result history";
+  return <figure className="research-native-series" aria-label={name}>
+    <figcaption>{name}<ContextHelp label={zh ? "曲线读法" : "Reading the series"}>
+      <p>{zh ? "按提交次序显示同一来源的测量。无有效测量和未采集的提交之间断开。点选提交可读其原始证据。" : "Measurements from the same source appear in submission order. Invalid and uncaptured submissions break the line. Select a submission to read its evidence."}</p>
+    </ContextHelp></figcaption>
+    <div className="research-native-series-plot">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <path className="research-native-series-line" d={line} />
+        {!directPoints ? <path className="research-native-series-dots" d={plot.map(({x, y}) => `M${x.toFixed(2)},${y.toFixed(2)}h0.01`).join(" ")} /> : null}
+      </svg>
+      {plot.filter(({sample}) => directPoints || sample.result_id === selected.result_id).map(({sample, x, y}) =>
+        <button key={sample.result_id} type="button" style={{left: `${x}%`, top: `${y}%`}}
+          className="research-native-series-point"
+          data-native-submission={sample.submission_index} data-invalid={sample.value === null || undefined}
+          data-retained={sample.result_id === outcomes.retained?.result_id || undefined}
+          aria-label={label(sample)} title={label(sample)}
+          onClick={event => onCitation(sample.citation, event.currentTarget)} />)}
+    </div>
+    <div className="research-native-series-axis"><span>{positionLabel(first.submission_index)}</span>
+      {!directPoints ? <label>{zh ? "定位提交" : "Find submission"}
+        <select value={selected.result_id} onChange={event => setSelectedId(event.target.value)}>
+          {samples.map(sample => <option key={sample.result_id} value={sample.result_id}>{label(sample)}</option>)}
+        </select>
+      </label> : null}<span>{positionLabel(last.submission_index)}</span></div>
+  </figure>;
+}
+
 function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["native_outcomes"]; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const outcomes = native?.projection;
   if (!native || !outcomes) return <ContextHelp label={zh ? "原生测量未采集" : "Native measurements not captured"} icon={CircleHelp}><p className="research-native-empty">{zh ? "原生测量 · 未采集" : "Native measurements · not captured"}</p></ContextHelp>;
@@ -173,10 +231,13 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
     <div className="research-progress-title research-native-heading"><div className="research-progress-title"><h4>{historical ? (zh ? "历史原生测量" : "Historical native measurements") : (zh ? "原生测量" : "Native measurements")}</h4><ContextHelp
       icon={historical ? TriangleAlert : undefined} label={historical ? (zh ? "当前来源未核验" : "Current source unverified") : (zh ? "测量说明" : "About native measurements")}>
       {historical ? <p>{zh ? "来源已变化或不可读；以下仅为历史捕获，当前结果未核验。" : "The source changed or is unavailable. These are historical captures; current results are unverified."}</p> : null}
+      {outcomes.sample_count > 1 && !native.samples ? <p>{zh ? "此来源的逐次测量当前无法读回。" : "Submission-by-submission measurements are unavailable for this source."}</p> : null}
       <p>{zh ? "最佳只限本次捕获窗口；原生保留与最后提交可能不同。未采集的值保留未知，不记零。" : "Best is limited to this capture; retained and final submissions can differ. Uncaptured values remain unknown, not zero."}</p>
       <p>{zh ? "检验过收益、采用了证据及原目标达成各需各自证据，不能由这些数值推断。" : "Utility testing, evidence adoption and original-objective success each need their own evidence; these values cannot establish them."}</p>
     </ContextHelp></div>
     <p className="research-native-metric">{outcomes.metric.name} · {outcomes.metric.higher_is_better ? (zh ? "越高越好" : "higher is better") : (zh ? "越低越好" : "lower is better")}</p></div>
+    {native.samples && native.samples.length > 1 ? <NativeOutcomeSeries key={native.artifact_sha256} samples={native.samples}
+      outcomes={outcomes} zh={zh} onCitation={onCitation}/> : null}
     <dl className="research-native-reading">{points.map(value)}</dl>
     <div className="research-native-footer"><div className="research-native-scope"><span>{outcomes.valid_count} / {outcomes.sample_count} {zh ? "项有效结果" : "valid results"}</span>
       <span>{period.formatRange(new Date(outcomes.start), new Date(outcomes.end))} UTC</span>
