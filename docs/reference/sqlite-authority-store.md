@@ -797,3 +797,23 @@ commit digest、provider revision、receipt、event 或 scan 页面字节。迁�
 标识与摘要无法证明新的状态日志可读。v1 能接受的 JSON key（包括空字符串和
 `__proto__`）在 v2 中保持同样的数据语义，迁移不会把原本可读的库变成读不出来的
 状态。
+
+## Observed long-lived growth and pure-engineering follow-ups
+
+Long-lived, multi-outcome local Goals accumulate three distinct storage-layer overheads
+that remain pure engineering optimizations (Track B in the overall roadmap, separate
+from per-Turn model context optimizations in Track A):
+
+1. **Monolithic projection snapshots (`head.projection` and periodic `checkpoints`):**
+   each checkpoint window stores a complete canonical projection JSON blob rather than
+   content-addressed subtrees or normalized entity rows, multiplying database footprint
+   as open/done Todos and Outcomes accumulate.
+2. **Positional array-index deltas in `commits.delta`:** `authority_state_log` encodes
+   list modifications by positional array index rather than stable entity IDs (`todo_id`,
+   `outcome_id`), so shifts or insertions near the head of long arrays amplify stored
+   commit deltas even when individual items change little.
+3. **Retained capture duplication and compaction:** historical receipts/events and paired
+   context-delivery captures grow linearly until explicit archiving or retention bounds
+   are added.
+
+中文：长期运行的多 Outcome 本地 Goal 在存储层主要存在三类纯工程增长瓶颈（对应总路线图 Track B，优先级低于直接服务模型推理/开销的 Track A）：（1）`head.projection` 与周期 `checkpoints` 整树大 JSON 持久化造成的库体积放大；（2）`commits.delta` 对 Todo/Outcome 列表使用数组下标而非实体 ID 做差分带来的位移放大；（3）历史回执与 `context-delivery` 重复快照尚缺自动去重与有界清理。这些改造不改变现有 `user_version=2` 逻辑语义与读回 proof。

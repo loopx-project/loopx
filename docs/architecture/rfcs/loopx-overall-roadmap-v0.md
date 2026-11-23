@@ -427,6 +427,19 @@ the best valid artifact and test continuation against a credible alternative.
 A flat interval alone is not a stop rule; this signal neither extends a budget
 nor establishes a causal advantage. The research RFC owns that comparison.
 
+#### Authority-to-context efficiency tracks: agent impact versus storage engineering
+
+Audits of long-lived, multi-outcome local Goals show two distinct bottlenecks in how durable authority state (`head.projection`, checkpoints, and per-commit deltas) maps into per-Turn context projections (`loopx_turn_envelope_v1`, `context_delivery`, and progressive readers). To focus delivery on net model effectiveness and efficiency without delaying core improvements behind schema rewrites, work separates into two prioritized tracks (these record bounded single-host observations and implementation ordering, not fleet qualification or changed defaults):
+
+- **Track A (Priority) — Agent efficiency and effectiveness optimizations:** changes that directly reduce per-Turn prompt bloat, startup read round-trips, duplicate-context cognitive noise, and prefix KV-cache invalidation:
+  1. *Intra-envelope duplicate elimination beyond whole-contract equality:* share identical `outcome_requirements` trees across acceptance carriers via `outcome_requirements_ref` even when enclosing `goal_objective` summaries differ (preventing 100s of KiB of duplicated requirements across `work_context`, `agent_todo_summary`, and `planning_horizon`), and apply `blocked_priority_fallback_ref` inside `loopx_turn_envelope_v1` whenever `heartbeat_recommendation.blocked_priority_fallback` equals the root diagnostic.
+  2. *Startup CLI round-trip compression:* deliver compact, verified `inline_opening` facts inside bounded normal-run responses when safety/budget checks pass so routine turns avoid multi-hop `should-run -> context-read --initial-read -> context-read --select` ceremony while preserving required reads and authority invariants.
+  3. *KV-cache-preserving monotonic framing (`KeepRaw` / `FoldToReceipt` / `EpochReset`):* keep intra-epoch prefixes append-only and compact dynamic tail noise instead of rewriting earlier spans mid-trajectory ([History working sets](history-working-set-context-policy-v0.md#51-one-projection-owner)).
+- **Track B (Deferred engineering track) — Pure storage and capture-transport engineering:** changes that lower local disk footprint, serialization CPU, and write amplification without altering model-facing prompts; sequence behind Track A or on capacity triggers:
+  1. *Subtree-hashed / entity-normalized authority snapshots:* evolve monolithic `head.projection` and periodic `checkpoints` JSON blobs (`sqlite_authority_store.ts`, `authority_state_log.ts`) toward entity-level/subtree hashes and bounded checkpoint retention.
+  2. *Entity-ID keyed deltas:* replace positional array-index splice diffs in `commits.delta` with entity-ID keyed patches so list shifts or insertions do not re-emit full historical Todo/outcome records.
+  3. *Capture-directory deduplication and retention GC:* avoid storing duplicate `decision.json` and identical `delivery.json` copies per Turn and bound retention of completed historical captures in local context-delivery storage.
+
 ### Important Areas Outside RFCs and Their Owning Sources
 
 These directly determine whether a long-running team is usable. A directory or README provides an implementation/contract entry, not installed readiness; read availability from `loopx capability list/show` and the selected release.

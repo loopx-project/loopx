@@ -149,6 +149,23 @@ CLI from becoming another reader of the legacy guidance field.
 事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
 capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
 
+#### Agent-efficiency vs. storage-engineering boundary
+
+Consistent with the overall roadmap's Track A/Track B prioritization, runtime work on
+`loopx_turn_envelope_v1` and `progressive_context` prioritizes direct **Agent-facing
+efficiency and effectiveness wins (Track A)** ahead of SQLite/capture storage refactors
+(Track B):
+
+- Deduping shared `outcome_requirements` trees (`outcome_requirements_ref`) across
+  acceptance carriers even when outer `goal_objective` fields differ, alongside
+  `blocked_priority_fallback_ref` sharing inside complete Turn decisions (`loopx_turn_envelope_v1`).
+- Compressing multi-hop startup CLI reads (`should-run` -> `context-read`) via bounded
+  inline work openings while keeping complete captures as verifiable cold-path sources.
+- Preserving intra-epoch prefix KV-cache stability (`KeepRaw` / `FoldToReceipt` / `EpochReset`)
+  over mid-trajectory prefix mutations.
+
+中文：遵循总路线图 Track A/Track B 分层原则，`loopx_turn_envelope_v1` 与 `progressive_context` 优先推进直接改善 **Agent 效率与效果（Track A）** 的优化，而非先重构 SQLite 或 capture 存储（Track B）：包含在 `goal_objective` 不同时仍共享同内容 `outcome_requirements_ref`、在完整 Turn 决策中共享 `blocked_priority_fallback_ref`、压缩启动期多跳 CLI 读取，以及保持 epoch 内前缀 KV-Cache 单调稳定。
+
 ### Captured replan reads / 捕获后的重规划读取
 
 For a successful replan with `--decision-output-dir` or `--decision-output-root`,
