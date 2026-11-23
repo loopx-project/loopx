@@ -96,6 +96,7 @@ interface PreflightRequest {
   goal_id: string;
   agent_id: string;
   exclude_turn_instance_id: string | null;
+  inspect_current_execution_loss: boolean;
   owner: QuotaAccountingOwner;
   owner_projection: JsonObject;
   owner_action_id: string | null;
@@ -123,8 +124,12 @@ function decodePreflightRequest(value: unknown): PreflightRequest {
   if (request.borrow_source_admission === true && owner.kind !== "exact_source") {
     throw new EffectRuntimeRequestError("borrow_source_admission requires exact source admission");
   }
+  if (request.inspect_current_execution_loss !== undefined && typeof request.inspect_current_execution_loss !== "boolean") {
+    throw new EffectRuntimeRequestError("inspect_current_execution_loss must be a boolean");
+  }
   return {
     runtime_root: runtimeRoot,
+    inspect_current_execution_loss: request.inspect_current_execution_loss === true,
     goal_id: goalId,
     agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
     exclude_turn_instance_id: optionalHeartbeatString(
@@ -237,12 +242,22 @@ async function preflightPriorHostTurnCloseoutForOwner(
   )?.filter((event) =>
     quotaOwnerOwnsProjection(request.owner, event.goal_ref)
   );
-  const { candidates, turnsValidated } = selectCloseoutCandidates(
+  const prior = selectCloseoutCandidates(
     receipts ?? [],
     request.goal_id,
     request.agent_id,
     request.exclude_turn_instance_id,
   );
+  // Ordinary prior-Turn selection excludes the replaying Turn and all its
+  // successors. Preserve prior debt precedence, then inspect the replaying
+  // Turn for a proven lost lease.
+  if (request.inspect_current_execution_loss && request.exclude_turn_instance_id) {
+    const boundReceipts = receipts?.filter(event => event.run_id === request.exclude_turn_instance_id) ?? [];
+    const bound = selectCloseoutCandidates(boundReceipts, request.goal_id, request.agent_id, null);
+    prior.candidates.push(...bound.candidates);
+    prior.turnsValidated += bound.turnsValidated;
+  }
+  const {candidates, turnsValidated} = prior;
   // Resolve one snapshot on the first candidate. The empty path needs only
   // the guard log, and unwritten replans may all drop out after validation.
   let settlementSnapshot: Awaited<ReturnType<typeof readQuotaSettlementSnapshot>> | undefined;
@@ -259,7 +274,9 @@ async function preflightPriorHostTurnCloseoutForOwner(
     );
     const missingReceipts = missingCloseoutReceipts(readback, requireWritebackForRecovery);
     if (missingReceipts === undefined) continue;
+    const currentTurn = selected.prior_turn_instance_id === request.exclude_turn_instance_id;
     if (missingReceipts === null) {
+      if (currentTurn) continue;
       // A newer settled Turn cannot hide an older missing closeout. Keep
       // scanning in persisted newest-first order until the first unsettled
       // candidate is found.
@@ -284,6 +301,7 @@ async function preflightPriorHostTurnCloseoutForOwner(
         turn_instance_id: selected.prior_turn_instance_id,
       }), original);
     }
+    if (currentTurn && !executionLoss) continue;
     const monitorPoll = selected.binding_kind === "todo"
       ? committedMonitorPollFromSnapshot(settlementSnapshot, {
         goal_id: request.goal_id, agent_id: request.agent_id,

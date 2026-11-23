@@ -278,7 +278,9 @@ Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复
 
 If the canonical File or SQLite lease has replaced the original prepared
 generation and neither writeback nor debit has started, recovery reports
-`execution_loss_closeout` for the original Turn. Read the current Todo lease
+`execution_loss_closeout` for the original Turn. A retry of `quota should-run`
+with the original Turn ID can discover this directly, including when the Todo
+is inferred from its receipt. Read the current Todo lease
 and use the projected `refresh-state --execution-loss-closeout --dry-run` with
 the original Goal, Agent, Todo and Turn plus the current control-writer proof.
 The preview checks the same fences as commit. Execute the same command without
@@ -289,7 +291,8 @@ foreign control-writer proof holds settlement. A replacement lease cannot
 authorize business delivery for the old Turn.
 
 原准入租约已被 File 或 SQLite 权威确认换代，且原 Turn 的写回与扣额都尚未开始时，
-恢复决策会指向该 Turn 的 `execution_loss_closeout`。先读当前 Todo 租约，用原
+用原 Turn ID 重试 `quota should-run` 即可发现该 Turn 的 `execution_loss_closeout`。
+省略 Todo ID 时，系统从原回执读取绑定的 Todo。先读当前 Todo 租约，用原
 Goal、Agent、Todo 与 Turn 身份及当前控制写入凭据运行投影的
 `refresh-state --execution-loss-closeout --dry-run`。预览通过后再去掉
 `--dry-run` 提交，读回 `typed_blocked_writeback_no_spend`。原准入回执保留，
