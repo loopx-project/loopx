@@ -1518,6 +1518,7 @@ class CodexChatAgentSession:
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
         check_running: Callable[[], None] | None = None,
         reply_image_turn_id: str | None = None,
+        reply_documents: bool = False,
         _native_task: bool = False,
         sandbox_policy: dict[str, object] | None = None,
     ) -> dict[str, Any]:
@@ -1544,6 +1545,7 @@ class CodexChatAgentSession:
                 project_work=self.project_context is not None and self.sandbox == "workspace-write",
                 public_source_read_context=self._public_source_read_context,
                 reply_image_directory=image_dir,
+                reply_documents=reply_documents,
             )
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
         from .chat.attachments import native_attachment_inputs
@@ -1745,7 +1747,7 @@ class CodexChatAgentSession:
         emit_visible(display_filter.finish())
         raw_response = completed_agent_response if completed_agent_response is not None else "".join(parts)
         response = native_turn_response(self, raw_response, output_schema=output_schema,
-                                        reply_image_turn_id=reply_image_turn_id)
+                                        reply_image_turn_id=reply_image_turn_id, reply_documents=reply_documents)
         if output_schema is None and on_event:
             if (
                 CHAT_REVIEW_OPEN_TAG not in raw_response
