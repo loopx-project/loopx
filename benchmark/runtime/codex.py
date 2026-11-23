@@ -6,12 +6,36 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 
 # New benchmark runs and the product both default to six settled work Turns.
 DEFAULT_REPLAN_AFTER_TURNS = 6
+LOOPX_BENCHMARK_CLAIM_TTL_ENV = "LOOPX_BENCHMARK_CLAIM_TTL_SECONDS"
+_MAX_CLAIM_TTL_SECONDS = 86400
+
+
+def normalize_claim_ttl_seconds(value: int | None) -> int | None:
+    """Validate optional benchmark Todo claim TTL in 1..86400 seconds."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_CLAIM_TTL_SECONDS:
+        raise ValueError("claim_ttl_seconds must be an integer between 1 and 86400")
+    return value
+
+
+def claim_ttl_seconds_from_env(env: Mapping[str, str] | None = None) -> int | None:
+    """Parse optional LOOPX_BENCHMARK_CLAIM_TTL_SECONDS when explicitly opted in."""
+    source = os.environ if env is None else env
+    raw = source.get(LOOPX_BENCHMARK_CLAIM_TTL_ENV)
+    if raw is None or not str(raw).strip():
+        return None
+    text = str(raw).strip()
+    if not text.isdigit():
+        raise ValueError(f"{LOOPX_BENCHMARK_CLAIM_TTL_ENV} must be an integer between 1 and 86400")
+    return normalize_claim_ttl_seconds(int(text))
 
 
 MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
@@ -168,11 +192,13 @@ def codex_settings(
     *, execution: Execution, workspace: Path, model: str, effort: str,
     base_url: str, wire_api: str, web_search: str = "disabled",
     model_catalog: Path | None = None, model_catalog_destination: Path | None = None,
+    claim_ttl_seconds: int | None = None,
 ) -> str:
     """Render fixed settings for the worker and its fresh checkpoint receiver.
 
     Rendering does not create a home, change a session or handle credentials.
     """
+    claim_ttl = normalize_claim_ttl_seconds(claim_ttl_seconds)
     if not model or not effort:
         raise ValueError("model and effort are required")
     if wire_api not in {"responses", "chat"}:
@@ -208,6 +234,7 @@ def codex_settings(
             'LOOPX_USAGE_PING = "0"',
             f"LOOPX_CONTEXT_DELIVERY = {json.dumps(execution.context_delivery)}",
             *(['LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
+            *([f"{LOOPX_BENCHMARK_CLAIM_TTL_ENV} = {json.dumps(str(claim_ttl))}"] if claim_ttl is not None else []),
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",
@@ -252,6 +279,7 @@ def prepare_codex_home(
     web_search: str = "disabled",
     model_catalog: Path | None = None,
     model_catalog_destination: Path | None = None,
+    claim_ttl_seconds: int | None = None,
 ) -> None:
     """Materialize fixed inputs once; never delete sessions between iterations.
 
@@ -282,6 +310,7 @@ def prepare_codex_home(
         execution=execution, workspace=workspace, model=model, effort=effort,
         base_url=base_url, wire_api=wire_api, web_search=web_search,
         model_catalog=model_catalog, model_catalog_destination=model_catalog_destination,
+        claim_ttl_seconds=claim_ttl_seconds,
     )
     home.mkdir(parents=True, exist_ok=True)
     config = home / "config.toml"
@@ -303,9 +332,40 @@ def prepare_codex_home(
     # The provider reads OPENAI_API_KEY. No credential file is copied to logs.
 
 
+def _prepend_existing_runtime_dirs(env: dict[str, str]) -> None:
+    """Keep explicit benchmark Node/LoopX runtime directories on worker PATH."""
+    candidates: list[str] = []
+    extra = env.get("LOOPX_BENCHMARK_PATH_PREPEND", "")
+    if extra:
+        for item in extra.split(os.pathsep):
+            if item and Path(item).is_dir():
+                candidates.append(item)
+    node_dir = env.get("LOOPX_NODE_DIR", "")
+    if node_dir:
+        node_bin = Path(node_dir) / "bin"
+        if node_bin.is_dir():
+            candidates.append(str(node_bin))
+    cli = env.get("LOOPX_CLI", "")
+    if cli:
+        cli_path = Path(cli)
+        if cli_path.is_absolute() and cli_path.parent.is_dir():
+            candidates.append(str(cli_path.parent))
+    if not candidates:
+        return
+    existing = [entry for entry in env.get("PATH", "").split(os.pathsep) if entry]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for entry in (*candidates, *existing):
+        if entry not in seen:
+            seen.add(entry)
+            merged.append(entry)
+    env["PATH"] = os.pathsep.join(merged)
+
+
 def process_environment(
-    home: Path, *, base: dict[str, str] | None = None
+    home: Path, *, base: Mapping[str, str] | None = None
 ) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env["CODEX_HOME"] = str(home)
+    _prepend_existing_runtime_dirs(env)
     return env

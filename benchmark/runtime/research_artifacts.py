@@ -5,12 +5,115 @@ submitted files nor changes the task's evaluator or feedback permissions.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import PurePosixPath
+import tarfile
+from typing import Any
 
 
 RESEARCH_DIRECTORY = "/tmp/loopx-benchmark-research"
 RESEARCH_COMPONENT = "benchmark_research"
+CORE_DUMP_EXCLUDE_PATTERN = "core-dump:elf-macho"
+RESEARCH_EXCLUDE_PATTERNS = ("*.raw.gz", CORE_DUMP_EXCLUDE_PATTERN, "target/", ".cargo-target/")
+_ELF_ET_CORE = 4
+_MACHO_MH_CORE = 4
+
+
+def is_core_dump_name(name: str) -> bool:
+    """Return True only for POSIX core dump basenames (`core` or `core.*`)."""
+    return name == "core" or name.startswith("core.")
+
+
+def is_confirmed_core_dump_header(header: bytes) -> bool:
+    """Return True only when leading file bytes prove an ELF ET_CORE or Mach-O MH_CORE dump."""
+    if len(header) >= 18 and header[:4] == b"\x7fELF" and header[4] in (1, 2):
+        if header[5] == 1:
+            return int.from_bytes(header[16:18], "little") == _ELF_ET_CORE
+        if header[5] == 2:
+            return int.from_bytes(header[16:18], "big") == _ELF_ET_CORE
+        return False
+    if len(header) >= 16:
+        magic = header[:4]
+        if magic in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf"):
+            return int.from_bytes(header[12:16], "big") == _MACHO_MH_CORE
+        if magic in (b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"):
+            return int.from_bytes(header[12:16], "little") == _MACHO_MH_CORE
+    return False
+
+
+def is_runner_research_component(entry: Any) -> bool:
+    """Return True only for the runner's reserved research component directory."""
+    if not isinstance(entry, Mapping) or entry.get("id") != RESEARCH_COMPONENT:
+        return False
+    source_path = entry.get("source_path")
+    return isinstance(source_path, str) and PurePosixPath(source_path) == PurePosixPath(RESEARCH_DIRECTORY)
+
+
+def research_component_exclusions(
+    components: Sequence[Mapping[str, Any]],
+) -> dict[str, list[str]]:
+    """Return bounded source-exclusion patterns only when runner-owned benchmark research is attached."""
+    if any(is_runner_research_component(entry) for entry in components):
+        return {RESEARCH_COMPONENT: list(RESEARCH_EXCLUDE_PATTERNS)}
+    return {}
+
+
+def is_excluded_research_relpath(
+    parts: tuple[str, ...],
+    *,
+    is_dir: bool,
+    read_header: Callable[[], bytes] | None = None,
+) -> bool:
+    """Match a component-relative path tuple against RESEARCH_EXCLUDE_PATTERNS."""
+    if not parts:
+        return False
+    for index, name in enumerate(parts):
+        entry_is_dir = is_dir or index < len(parts) - 1
+        for pattern in RESEARCH_EXCLUDE_PATTERNS:
+            if pattern.endswith("/"):
+                if entry_is_dir and name == pattern[:-1]:
+                    return True
+            elif pattern == CORE_DUMP_EXCLUDE_PATTERN:
+                if (
+                    not entry_is_dir
+                    and index == len(parts) - 1
+                    and is_core_dump_name(name)
+                    and read_header is not None
+                ):
+                    try:
+                        header = read_header()
+                    except OSError:
+                        header = b""
+                    if is_confirmed_core_dump_header(header):
+                        return True
+            elif pattern.startswith("*."):
+                if not entry_is_dir and name.endswith(pattern[1:]):
+                    return True
+            elif not entry_is_dir and name == pattern:
+                return True
+    return False
+
+
+def is_excluded_tar_member(
+    archive: tarfile.TarFile,
+    member: tarfile.TarInfo,
+    rel_parts: tuple[str, ...],
+) -> bool:
+    """Check tar member exclusion, confirming ELF/Mach-O core dump headers from archive bytes."""
+    def _read_header() -> bytes:
+        if not member.isfile():
+            return b""
+        try:
+            stream = archive.extractfile(member)
+        except (KeyError, OSError, tarfile.TarError):
+            return b""
+        if stream is None:
+            return b""
+        with stream:
+            return stream.read(20)
+
+    return is_excluded_research_relpath(rel_parts, is_dir=member.isdir(), read_header=_read_header)
 
 
 def validate_research_scope(workspace: str, submit_paths: list[str]) -> None:

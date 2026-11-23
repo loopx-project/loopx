@@ -163,3 +163,73 @@ def test_native_cleanup_error_keeps_original_capacity_release_rule(tmp_path, mon
     with pytest.raises(RuntimeError if remains else OSError):
         backend.cleanup_container(SimpleNamespace(name="owned-container"))
     assert calls == ["observer-close", "native-cleanup"] + ([] if remains else ["released"])
+
+
+def test_research_collection_respects_disk_floor_and_filters_ephemeral_dumps(tmp_path, monkeypatch):
+    elf_core = b"\x7fELF\x02\x01" + b"\x00" * 10 + (4).to_bytes(2, "little") + b"\x00" * 46
+    elf_exec = b"\x7fELF\x02\x01" + b"\x00" * 10 + (2).to_bytes(2, "little") + b"\x00" * 46
+    macho_core = b"\xcf\xfa\xed\xfe" + b"\x00" * 8 + (4).to_bytes(4, "little") + b"\x00" * 16
+    payload_buf = io.BytesIO()
+    with tarfile.open(fileobj=payload_buf, mode="w") as archive:
+        for rel, body in (
+            ("loopx-benchmark-research/candidate.py", b"print('ok')\n"),
+            ("loopx-benchmark-research/core/analysis.md", b"# real notes\n"),
+            ("loopx-benchmark-research/topic/core", b"plain topic evidence\n"),
+            ("loopx-benchmark-research/exec_dir/core", elf_exec),
+            ("loopx-benchmark-research/dump.raw.gz", b"gz" * 100),
+            ("loopx-benchmark-research/core", elf_core),
+            ("loopx-benchmark-research/sub/core.99", macho_core),
+            ("loopx-benchmark-research/target/release/bin", b"elf"),
+            ("loopx-benchmark-research/.cargo-target/x.rlib", b"rlib"),
+        ):
+            info = tarfile.TarInfo(rel)
+            info.size = len(body)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(body))
+    research_tar = payload_buf.getvalue()
+
+    def build_backend(name: str):
+        backend = object.__new__(transport.RecordingDockerBackend)
+        backend.checkpoint = backend.feedback = None
+        backend.research_sidecar = True
+        backend.log_dir = tmp_path / name
+        monkeypatch.setattr(transport.DockerBackend, "cleanup_container", lambda *a: None)
+
+        def get_archive(remote):
+            data = research_tar if "research" in str(remote) else archive_bytes()
+            return iter([data]), {}
+
+        monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(get_archive=get_archive))
+        return backend
+
+    # Below 10 GiB headroom floor: skip research archive before calling get_archive.
+    low_backend = build_backend("low-disk")
+    monkeypatch.setattr(
+        transport, "_minimum_free_bytes", lambda *_: transport._RESEARCH_DISK_HEADROOM_FLOOR_BYTES
+    )
+    low_backend.cleanup_container("owned-container")
+    low_obs = json.loads((low_backend.log_dir / "artifact-collection.json").read_text())
+    research_entry = [row for row in low_obs if row["artifact"] == "research"][0]
+    assert research_entry == {
+        "artifact": "research",
+        "collected": False,
+        "error_kind": "InsufficientDiskHeadroomError",
+        "reason": "insufficient_host_disk_headroom",
+    }
+
+    # Above 10 GiB floor: keep real notes/non-dump files named core while stripping confirmed dumps/build dirs.
+    ok_backend = build_backend("ok-disk")
+    monkeypatch.setattr(
+        transport, "_minimum_free_bytes", lambda *_: transport._RESEARCH_DISK_HEADROOM_FLOOR_BYTES + 100_000_000
+    )
+    ok_backend.cleanup_container("owned-container")
+    root = ok_backend.log_dir / "research" / "loopx-benchmark-research"
+    assert (root / "candidate.py").read_bytes() == b"print('ok')\n"
+    assert (root / "core/analysis.md").read_bytes() == b"# real notes\n"
+    assert (root / "topic/core").read_bytes() == b"plain topic evidence\n"
+    assert (root / "exec_dir/core").read_bytes() == elf_exec
+    assert not (root / "dump.raw.gz").exists()
+    assert not (root / "core").is_file()
+    assert not (root / "sub/core.99").exists()
+    assert not (root / "target").exists()
+    assert not (root / ".cargo-target").exists()
