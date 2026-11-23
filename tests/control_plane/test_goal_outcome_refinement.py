@@ -578,3 +578,43 @@ def test_retired_outcome_handoff_is_scoped_atomic_and_replayable(acceptance_goal
     assert cli(*args, "--execute")[1]["status"] == "replayed"
     assert inspect()[0] == newest_revision
     assert (project / "state.md").read_bytes() == original_task
+
+
+def test_registry_writer_cannot_change_handoff_parties_during_commit(acceptance_goal, monkeypatch):
+    import subprocess
+
+    from loopx.control_plane.goals import acceptance
+
+    project, _, cli, _ = acceptance_goal
+    assert record(project, cli, refinement([{"id": "tour", "description": "Tour"}], "source:tour"),
+                  "declare-for-transfer")[0][0] == 0
+    registry_path = project.parent / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"] = ["receiver"]
+    registry_path.write_text(json.dumps(registry))
+    inspected = cli("inspect")[1]
+    original_effect = acceptance._result
+
+    def attempt_registry_write():
+        return subprocess.run([sys.executable, "-c", """
+from pathlib import Path
+import sys
+from loopx.file_lock import exclusive_cross_runtime_file_lock, LockAcquireTimeoutError
+try:
+    with exclusive_cross_runtime_file_lock(Path(sys.argv[1]), timeout_seconds=0.1):
+        pass
+except LockAcquireTimeoutError:
+    sys.exit(7)
+""", str(registry_path)], timeout=10, check=False).returncode
+
+    def competing_writer(method, request, *, timeout):
+        assert attempt_registry_write() == 7
+        return original_effect(method, request, timeout=timeout)
+
+    monkeypatch.setattr(acceptance, "_result", competing_writer)
+    result = acceptance.handoff_goal_outcomes(registry_path=registry_path, goal_id="goal-acceptance",
+        runtime_root=str(project.parent / "runtime"), operation_id="transfer-with-roster-fence",
+        expected_provider_revision=inspected["provider_revision"], execute=True,
+        document={"from_agent_id": "agent-a", "to_agent_id": "receiver", "outcomes": [{"id": "tour", "revision": 1}]})
+    assert result["status"] == "applied"
+    assert attempt_registry_write() == 0

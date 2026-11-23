@@ -186,13 +186,23 @@ def handoff_goal_outcomes(
     """Delegate only explicitly selected orphaned outcomes through the local owner route."""
     if agent_id is not None:
         raise ValueError("Outcome handoff requires the local Goal owner")
-    _, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    require_active_goal_for_objective_update(goal)
-    return _result("goal.acceptance.handoff", {
-        **route, "actor_agent_id": agent_id, "operation_id": operation_id, "document": document,
-        "expected_provider_revision": expected_provider_revision, "dry_run": not execute,
-        "registered_agents": registered_agent_ids_for_goal(goal),
-    }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+    from ..collaboration.goal_instance_scope import collaboration_goal_scope
+
+    source = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id, runtime_root_override=runtime_root)
+    source_registry = Path(source["source_registry"]).resolve()
+    # Roster changes do not advance the outcome store's CAS. Hold the same
+    # Goal -> registry -> work-store order as other scoped handoffs through commit.
+    with collaboration_goal_scope(source_registry, goal_id=goal_id, agents=(), lock_registry=True) as scope:
+        resolved_registry, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+        if resolved_registry.resolve() != scope.registry_path:
+            raise ValueError("Goal source changed while preparing the outcome handoff")
+        require_active_goal_for_objective_update(goal)
+        return _result("goal.acceptance.handoff", {
+            **route, "actor_agent_id": agent_id, "operation_id": operation_id, "document": document,
+            "expected_provider_revision": expected_provider_revision, "dry_run": not execute,
+            "registered_agents": registered_agent_ids_for_goal(goal),
+        }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
 def update_goal_objective(
