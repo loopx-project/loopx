@@ -35,6 +35,7 @@ const decisionValueReview = {
 
 export const STRIDE_DECISION_SCHEMA = decisionSchema.schema_version;
 export const STRIDE_PROBE_LIMITS = decisionSchema.probe_field_limits;
+export const STRIDE_META_GOAL_LIMITS = decisionSchema.meta_goal_field_limits;
 export const STRIDE_AXIS_NAMES = decisionSchema.axis_names;
 export const STRIDE_PLAN_LIMIT = decisionSchema.axis_plan_limit;
 export const STRIDE_REASON_LIMIT = decisionSchema.axis_reason_limit;
@@ -58,6 +59,32 @@ function refs(value: unknown, label: string): string[] {
     throw new EffectRuntimeRequestError(`${label} requires at most ${STRIDE_REVIEW_REFERENCE_LIMIT} distinct public-safe evidence references`);
   }
   return value as string[];
+}
+function normalizeMetaGoal(value: unknown, checked: BoundedText, usage: Record<string, number>): JsonObject {
+  const label = "stride_decision.meta_goal";
+  const input = requireJsonObject(value, label);
+  exactFields(input, ["todo_id", "objective", "resolution_criterion", "previous_decision_ref", "evidence_refs", "resolution"], label);
+  const todoId = requireNonEmptyString(input.todo_id, `${label}.todo_id`);
+  if (!PLANNING_TODO_ID.test(todoId)) throw new EffectRuntimeRequestError(`${label} requires an exact Todo id`);
+  const prior = input.previous_decision_ref;
+  if (prior !== undefined && (typeof prior !== "string" || !/^replan-decision-[a-f0-9]{24}$/.test(prior))) {
+    throw new EffectRuntimeRequestError(`${label} requires a recorded previous decision reference`);
+  }
+  const evidence = prior && input.evidence_refs === undefined ? undefined : refs(input.evidence_refs, `${label}.evidence_refs`);
+  if ((!prior && (evidence?.length || input.resolution !== undefined)) ||
+      (input.resolution !== undefined && evidence?.length === 0)) {
+    throw new EffectRuntimeRequestError(`${label} resolution and evidence require a previous decision and subsequent Todo evidence`);
+  }
+  usage[`${label}.todo_id`] = todoId.length;
+  if (typeof prior === "string") usage[`${label}.previous_decision_ref`] = prior.length;
+  if (evidence) usage[`${label}.evidence_refs`] = evidence.join("").length;
+  const definition = prior && input.objective === undefined && input.resolution_criterion === undefined ? {} : {
+    objective: checked("meta_goal.objective", input.objective, STRIDE_META_GOAL_LIMITS.objective),
+    resolution_criterion: checked("meta_goal.resolution_criterion", input.resolution_criterion, STRIDE_META_GOAL_LIMITS.resolution_criterion),
+  };
+  return {todo_id: todoId, ...definition,
+    ...(prior ? {previous_decision_ref: prior} : {}), ...(evidence ? {evidence_refs: evidence} : {}),
+    ...(input.resolution !== undefined ? {resolution: checked("meta_goal.resolution", input.resolution, STRIDE_META_GOAL_LIMITS.resolution)} : {})};
 }
 function selectedCandidate(value: unknown): JsonObject {
   const input = requireJsonObject(value, "explore_review.selected_candidate");
@@ -101,7 +128,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   const historical = input.schema_version === RECORDED_STRIDE_SCHEMA;
   if (historical && input.axis_reasons === undefined) return normalizeHistoricalStrideDecision(input, bounded);
   exactFields(input, ["schema_version", "strategy_version", "reference_context_id", "reference_obligation_id", "basis",
-    "axes", ...(historical ? ["axis_reasons"] : ["action"]), "next_probe", "previous_review", "explore_review"], "stride_decision");
+    "axes", ...(historical ? ["axis_reasons"] : ["action", "meta_goal"]), "next_probe", "previous_review", "explore_review"], "stride_decision");
   if ((!historical && input.schema_version !== decisionSchema.schema_version) || normalizeStrideStrategy(input.strategy_version) !== "evidence_conditioned_v1") {
     throw new EffectRuntimeRequestError("stride_decision requires stride_decision_v2 and evidence_conditioned_v1; v1 is historical only");
   }
@@ -150,6 +177,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
     basis: input.basis, ...(historical ? {axes: {...axes}, axis_reasons: axisReasons}
       : {action: input.action, axes: axisPlans}), next_probe: normalized};
   for (const key of ["strategy_version", "reference_context_id", "reference_obligation_id", "basis"]) usage[`stride_decision.${key}`] = String(input[key]).length;
+  if (Object.hasOwn(input, "meta_goal")) output.meta_goal = normalizeMetaGoal(input.meta_goal, checked, usage);
   if (input.previous_review != null) {
     const review = requireJsonObject(input.previous_review, "stride_decision.previous_review");
     exactFields(review, ["reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson"], "previous_review");
@@ -412,6 +440,16 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     decision_value_review: {...decisionValueReview},
     review_text_limit: decisionSchema.review_text_limit,
     review_reference_limit: STRIDE_REVIEW_REFERENCE_LIMIT,
+    meta_goal_option: {
+      attachment: "agent_vision.stride_decision.meta_goal",
+      required_fields: ["todo_id", "objective", "resolution_criterion", "evidence_refs"],
+      continuation_required_fields: ["todo_id", "previous_decision_ref"],
+      field_limits: STRIDE_META_GOAL_LIMITS,
+      rule: "Optionally set a question and evidence criterion for one open Todo you can retain. Add retain:<todo_id> to todo_delta. " +
+        "Start with empty evidence_refs. To carry an open question, supply the Todo id and its exact previous_decision_ref. " +
+        "The original objective and criterion are read from that decision. When evidence_refs is omitted, reuse eligible subsequent same-Todo references from path_delta and previous_review. " +
+        "Changing the action or resolving the question requires that evidence. Add resolution only when answered. Keep each axis reason distinct and state a fact or reference once where it serves both decisions.",
+    },
     previous_decision_ref: previous,
     ...(follow ? {decision_followthrough: follow} : {}),
     previous_review_options: {adoption: decisionSchema.adoption_options, information_gain: decisionSchema.information_options, goal_gain: decisionSchema.gain_options},

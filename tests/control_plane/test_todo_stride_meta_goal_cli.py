@@ -1,0 +1,249 @@
+"""A Todo's evidence must survive normal Turns and bind its next Stride action."""
+
+from copy import deepcopy
+import json
+from pathlib import Path
+
+import pytest
+
+from canonical_authority_fixture import isolate_sqlite_runtime
+from loopx.history import load_index_snapshot
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.work_items.replan_context_codec import project_todo_stride_meta_goal, read_todo_stride_meta_goal
+from research_comparison_fixture import vision
+import test_quota_settlement_cli as fixture
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("compact", [False, True], ids=["inline", "by-reference"])
+@pytest.mark.parametrize("no_debit", [False, True], ids=["charged", "no-debit"])
+def test_todo_meta_goal_survives_turns_and_links_decisive_evidence(tmp_path, monkeypatch, provider, compact, no_debit):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 12
+    registry.write_text(json.dumps(config))
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    goal, agent, todo = fixture.GOAL_ID, fixture.AGENT_ID, fixture.TODO_ID
+    identity = ("--goal-id", goal, "--agent-id", agent)
+    journal = runtime / "goals" / goal / "runs/index.jsonl"
+    rollout = journal.parents[1] / "rollout-event-log.jsonl"
+
+    def cli(*arguments, expected=0):
+        code, packet = fixture._run_cli(registry, runtime, *arguments, cwd=project)
+        assert code == expected, packet.get("error") or packet.get("reason") or packet
+        return packet
+
+    def cadence(count):
+        cli("configure-goal", "--goal-id", goal, "--execution-stride-strategy", "evidence_conditioned_v1",
+            "--execution-replan-after-turns", str(count), "--execute")
+
+    def guard(turn, task=None):
+        return cli("quota", "should-run", *identity, "--codex-app", "--turn-instance-id", turn,
+            *(("--todo-id", task) if task else ()))
+
+    def spend(turn, task):
+        cli("quota", "spend-slot", *identity, "--todo-id", task, "--turn-instance-id", turn,
+            "--slots", "1", "--source", "heartbeat", "--execute")
+
+    def work(turn, task, times, *, meta_decision=None, expect_gap=False, settle=True):
+        packet = guard(turn, task)
+        assert packet["should_run"] and packet["selected_todo"]["todo_id"] == task
+        work_context = packet["interaction_contract"]["agent_channel"].get("work_context", {})
+        if meta_decision is None:
+            assert "stride_meta_goal" not in work_context
+        else:
+            assert work_context["stride_meta_goal"]["decision_ref"] == meta_decision
+            assert build_turn_envelope(packet)["work_context"]["stride_meta_goal"]["decision_ref"] == meta_decision
+        # Use an actual deterministic input/result pair and independently derive the verdict.
+        worst = max(times)
+        (project / f"{turn}.json").write_text(json.dumps({"samples": times, "worst_seconds": worst}))
+        assert (worst >= 30) == expect_gap
+        cli("refresh-state", *identity, "--todo-id", task, "--turn-instance-id", turn,
+            "--classification", "fixture_peak_measurement", "--delivery-batch-scale", "implementation",
+            "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation",
+            "--progress-result-class", "unchanged" if expect_gap else "advanced",
+            "--progress-surface-id", turn, "--progress-probe-kind", "peak-measurement",
+            "--progress-evidence-id", f"measurement:{turn}", "--recommended-action", f"Worst sample was {worst} seconds.",
+            "--no-global-sync", "--suppress-external-sinks")
+        if settle:
+            spend(turn, task)
+
+    def review(turn, *, scope=todo):
+        guard(turn)
+        packet = guard(turn, scope)
+        return (packet["autonomous_replan_obligation"]["replan_context"],
+                deepcopy(packet["replan_action_packet"]["stride_control"]["minimal_example"]))
+
+    def store(turn, packet, *, expected=0):
+        path = project / "stride-vision.json"
+        path.write_text(json.dumps(packet))
+        return cli("refresh-state", *identity, "--todo-id", todo, "--turn-instance-id", turn,
+            "--classification", "fixture_stride_decision", "--delivery-batch-scale", "implementation",
+            "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(path),
+            "--no-global-sync", "--suppress-external-sinks", expected=expected)
+
+    def task_record():
+        return cli("todo", "list", "--goal-id", goal, "--todo-id", todo)["todo"]["stride_meta_goal"]
+
+    def proposal(context, stride):
+        return {**vision({"objective": "Preserve the original Todo acceptance."},
+            context["evidence"][0]["evidence_ref"]), "stride_decision": stride, "todo_delta": [f"retain:{todo}"]}
+
+    cadence(1)
+    other = cli("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,
+        "--text", "Measure a different work item.", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-peak-observation")["todo_id"]
+    work("peak-baseline", todo, [16, 19])
+    context, stride = review("review-initial-question")
+    meta = {"todo_id": todo, "objective": "Does the candidate still meet the peak time limit?",
+        "resolution_criterion": "Compare the worst measured sample with the 30 second limit.", "evidence_refs": []}
+    stride["meta_goal"] = meta
+    stride["next_probe"]["scope"] = "Compare the incumbent and candidate on the same representative peak samples."
+    packet = proposal(context, stride)
+    wrong_todo = deepcopy(packet)
+    wrong_todo["stride_decision"]["meta_goal"]["todo_id"] = other
+    wrong_todo["todo_delta"] = [f"retain:{other}"]
+    before = journal.read_bytes()
+    assert "open Agent Todo" in store("review-initial-question", wrong_todo, expected=1)["error"]
+    assert journal.read_bytes() == before
+    store("review-initial-question", packet)
+    initial = task_record()
+    assert initial["meta_goal"] == meta and initial["action"] == "verify"
+    spend("review-initial-question", todo)
+
+    cadence(1 if compact else 3)
+    work("peak-representative", todo, [17, 25], meta_decision=initial["decision_ref"])
+    previous = initial["decision_ref"]
+    if compact:
+        context, stride = review("review-still-open")
+        stride["meta_goal"] = {"todo_id": todo, "previous_decision_ref": previous}
+        packet = proposal(context, stride)
+        [representative] = context["decision_followthrough"]["observations"]
+        assert representative["todo_id"] == todo
+        packet["path_delta"]["evidence_refs"] = [representative["evidence_ref"]]
+        store("review-still-open", packet)
+        checkpoint = task_record()
+        assert checkpoint["meta_goal"]["objective"] == meta["objective"]
+        assert len(checkpoint["meta_goal"]["evidence_refs"]) == 1
+        previous = checkpoint["decision_ref"]
+        spend("review-still-open", todo)
+        cadence(2)
+
+    work("peak-unrelated", other, [6, 8])
+    tail_turn = "peak-tail"
+    if no_debit:
+        guard(tail_turn, todo)
+        cli("todo", "update", *identity, "--todo-id", todo, "--status", "blocked")
+        uncommitted_events = rollout.read_bytes()
+        debits = fixture._spend_run_count(runtime)
+        closed = cli("refresh-state", *identity, "--todo-id", todo, "--turn-instance-id", tail_turn,
+            "--classification", "fixture_peak_blocked", "--delivery-batch-scale", "single_surface",
+            "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+            "--progress-blocker-id", "peak-source-unavailable", "--progress-evidence-id", "measurement:peak-tail",
+            "--vision-unchanged-reason", "The Todo still requires a valid peak measurement.",
+            "--no-global-sync", "--suppress-external-sinks")
+        assert closed["settlement_progress"]["state"] == "settled"
+        assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+        assert fixture._spend_run_count(runtime) == debits
+        assert guard(tail_turn)["effective_action"] == "heartbeat_settled_skip"
+        cli("todo", "update", *identity, "--todo-id", todo, "--status", "open")
+        result_class = "blocked"
+        resolution = "The incumbent peak source is unavailable. Test an independent measurement mechanism."
+    else:
+        work(tail_turn, todo, [22, 32], meta_decision=previous, expect_gap=True, settle=False)
+        uncommitted_events = rollout.read_bytes()
+        assert all(row["result_class"] != "unchanged" for row in task_record()["subsequent_evidence"])
+        spend(tail_turn, todo)
+        result_class = "unchanged"
+        resolution = "The tail exceeded the limit at 32 seconds. Compare a different mechanism next."
+
+    context, stride = review("review-peak-result")
+    [basis] = context["todo_meta_goals"]
+    assert basis["decision_ref"] == previous
+    assert len(basis["evidence"]) == (1 if compact else 2)
+    tail = next(row for row in basis["evidence"] if row["result_class"] == result_class)
+    stride.update(action="switch", meta_goal={"todo_id": todo, "previous_decision_ref": previous,
+        "resolution": resolution})
+    next_scope = "Test the streaming mechanism on the same peak workload."
+    stride["next_probe"]["scope"] = next_scope
+    packet = proposal(context, stride)
+    observations = context["decision_followthrough"]["observations"]
+    foreign = next(row for row in observations if row["todo_id"] == other)
+    if compact:
+        packet["path_delta"]["evidence_refs"] = [foreign["evidence_ref"]]
+    else:
+        stride["meta_goal"] = {**meta, "previous_decision_ref": previous, "resolution": resolution,
+            "evidence_refs": [foreign["evidence_ref"]]}
+    before = journal.read_bytes()
+    assert "subsequent settled work" in store("review-peak-result", packet, expected=1)["error"]
+    assert journal.read_bytes() == before
+    if compact:
+        tail_path = next(row["evidence_ref"] for row in observations
+            if row["todo_id"] == todo and row["result_class"] == result_class)
+        assert tail_path != tail["evidence_ref"]
+        packet["path_delta"]["evidence_refs"] = [tail_path]
+    else:
+        stride["meta_goal"]["evidence_refs"] = [tail["evidence_ref"]]
+
+    # The work (and for a paid attempt even the debit row) can already be
+    # visible in the run index while the closing receipt is still absent.
+    # A copied runtime isolates that interruption from the admitted live Turn.
+    pending_root = tmp_path / "uncommitted"
+    pending_goal = pending_root / "goals" / goal
+    pending_index = pending_goal / "runs/index.jsonl"
+    pending_index.parent.mkdir(parents=True)
+    pending_index.write_bytes(journal.read_bytes())
+    (pending_goal / rollout.name).write_bytes(uncommitted_events)
+    pending = project_todo_stride_meta_goal(
+        goal_id=goal, agent_id=agent, todo_id=todo, goal_ref=None,
+        runs=load_index_snapshot(pending_index, include_artifact_status=False).records,
+        history_newest_first=False, runtime_root=pending_root, include_evidence=True,
+    )
+    assert tail["evidence_ref"] not in {row["evidence_ref"] for row in pending["subsequent_evidence"]}
+
+    current_todo = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)["todo"]
+    with pytest.raises(ValueError, match="subsequent settled work"):
+        project_todo_stride_meta_goal(
+            goal_id=goal, agent_id=agent, todo_id=todo, goal_ref=None,
+            runs=load_index_snapshot(pending_index, include_artifact_status=False).records,
+            history_newest_first=False, runtime_root=pending_root, proposal=stride, path_delta=packet["path_delta"],
+            todo_delta=packet["todo_delta"], todo=current_todo, settlement_todo_id=todo,
+        )
+    accepted = store("review-peak-result", packet)
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"]
+    assert json.loads(Path(accepted["json_path"]).read_text())["agent_vision"]["stride_decision"]["meta_goal"] == stride["meta_goal"]
+    current = task_record()
+    assert current["action"] == "switch"
+    assert current["meta_goal"] == {**meta, "previous_decision_ref": previous, "resolution": resolution,
+        "evidence_refs": [tail["evidence_ref"]]}
+    assert current["next_probe"]["scope"] == next_scope
+    assert current["evidence"][0]["evidence_ref"] == tail["evidence_ref"]
+    exact = cli("history", *identity, "--evidence-ref", tail["evidence_ref"])["evidence"]
+    assert exact["progress_observation"]["evidence_ids"] == ["measurement:peak-tail"]
+    prior = cli("history", *identity, "--evidence-ref", initial["decision_ref"])["evidence"]
+    assert prior["stride_decision"]["meta_goal"] == meta
+    spend("review-peak-result", todo)
+    later = guard("peak-after-resolution", todo)
+    assert later["selected_todo"]["todo_id"] == todo
+    assert "stride_meta_goal" not in later["interaction_contract"]["agent_channel"]["work_context"]
+    cli("configure-goal", "--goal-id", goal, "--execution-stride-strategy", "off", "--execute")
+    assert task_record() == current
+
+    # Damage in the shared journal should affect only detail reads that have
+    # a recorded source in this scope. The fixture is isolated from live state.
+    journal_contents = journal.read_bytes()
+    with journal.open("ab") as stream:
+        stream.write(b'{"incomplete":"\xe2')
+    unrelated = cli("todo", "list", "--goal-id", goal, "--todo-id", other)["todo"]
+    assert unrelated["todo_id"] == other
+    assert "stride_meta_goal" not in unrelated
+    assert read_todo_stride_meta_goal(runtime_root=runtime, goal_id=goal, todo_id=todo,
+        agent_id="different-agent") is None
+    assert read_todo_stride_meta_goal(runtime_root=runtime, goal_id=goal, todo_id=todo,
+        goal_ref={"goal_id": goal, "goal_instance_id": fixture.INSTANCE_A}) is None
+    assert task_record() == {"unavailable": True}
+    journal.write_bytes(journal_contents)
+    assert task_record() == current

@@ -845,7 +845,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.context.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({readAndProjectInteractionWorkContext}) => readAndProjectInteractionWorkContext)],
     ["work_item.replan_settlement.project", lazyHandler(() => import("./work_items/replan_settlement.ts"), ({projectReplanSettlementContract}) => projectReplanSettlementContract)],
     ["work_item.replan_semantics.project", lazyHandler(() => import("./work_items/replan_semantics.ts"), ({projectReplanWriteback}) => projectReplanWriteback)],
-    ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContext}) => projectReplanContext)],
+    ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({readAndProjectReplanContext}) => readAndProjectReplanContext)],
     ["work_item.replan_context.project_snapshot", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContextSnapshot}) => projectReplanContextSnapshot)],
     ["work_item.yardstick.capture", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({normalizeWorkYardstickCapture}) => normalizeWorkYardstickCapture)],
     ["work_item.yardstick.presentation", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectWorkYardstickPresentations}) => projectWorkYardstickPresentations)],

@@ -52,6 +52,7 @@ class TodoDetailRequestMixin:
                 "text": item["text"], "status": item["status"],
                 "archive_state": item.get("archive_state", "active"),
                 "updated_at": item.get("updated_at"),
+                **({"stride_meta_goal": item["stride_meta_goal"]} if "stride_meta_goal" in item else {}),
                 **({"review_basis": basis} if basis is not None else {}),
             })
         except ValueError:

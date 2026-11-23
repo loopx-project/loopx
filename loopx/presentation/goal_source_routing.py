@@ -148,6 +148,7 @@ class GoalSourceRequestMixin:
             self._send_json({"ok": True, "goal_id": goal_id, "todo_id": todo_id,
                 "text": item["text"], "status": item["status"],
                 "evidence": item.get("evidence"), "note": item.get("note"),
+                **({"stride_meta_goal": item["stride_meta_goal"]} if "stride_meta_goal" in item else {}),
                 "archive_state": item.get("archive_state", "active"),
                 "updated_at": item.get("updated_at"), "source_access": row["source_access"]})
         except (ValueError, TypeError, KeyError):

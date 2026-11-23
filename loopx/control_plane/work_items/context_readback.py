@@ -98,6 +98,33 @@ def _user_context(
         "todos": inventory["todos"]}
 
 
+def attach_stride_meta_goal_context(
+    payload: dict[str, Any], *, stride_strategy: str, runtime_root: Path,
+) -> None:
+    if stride_strategy == "off" or not payload.get("should_run") or not payload.get("normal_delivery_allowed"):
+        return
+    selected = payload.get("selected_todo")
+    agent = (payload.get("agent_identity") or {}).get("agent_id")
+    goal_id = payload.get("goal_id")
+    channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
+    context = channel.get("work_context")
+    if not agent or not goal_id or not isinstance(context, dict) or not isinstance(selected, dict):
+        return
+    todo_id = selected.get("todo_id")
+    if not isinstance(todo_id, str):
+        return
+    from .replan_context_codec import read_todo_stride_meta_goal
+
+    try:
+        record = read_todo_stride_meta_goal(runtime_root=runtime_root, goal_id=goal_id,
+            todo_id=todo_id, agent_id=agent, goal_ref=payload.get("goal_ref"))
+    except (ValueError, OSError, RuntimeError):
+        context["stride_meta_goal"] = {"unavailable": True}
+        return
+    if record is not None and not record["meta_goal"].get("resolution"):
+        context["stride_meta_goal"] = record
+
+
 def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
                         runtime_root: Path, hook_dispatch: dict[str, Any] | None,
                         context_navigation: bool = False,

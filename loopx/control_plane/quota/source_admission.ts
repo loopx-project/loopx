@@ -42,13 +42,10 @@ interface QuotaSourceAdmission {
   locks: readonly [QuotaSourceLock, QuotaSourceLock];
 }
 
-export type QuotaAccountingOwner =
-  | Readonly<{ kind: "alias" }>
-  | Readonly<{
-    kind: "exact_source";
-    goalRef: ExactGoalRef;
-    admission: QuotaSourceAdmission;
-  }>;
+type AliasScope = Readonly<{ kind: "alias" }>;
+type ExactScope = Readonly<{ kind: "exact_source"; goalRef: ExactGoalRef }>;
+export type QuotaProjectionScope = AliasScope | ExactScope;
+export type QuotaAccountingOwner = AliasScope | Readonly<ExactScope & { admission: QuotaSourceAdmission }>;
 
 interface ClaimedLock {
   witness: QuotaSourceLock;
@@ -81,7 +78,7 @@ function sameGoalRef(left: ExactGoalRef, right: ExactGoalRef): boolean {
     && left.goalInstanceId.value === right.goalInstanceId.value;
 }
 
-export function quotaGoalRef(owner: QuotaAccountingOwner): JsonObject | null {
+export function quotaGoalRef(owner: QuotaProjectionScope): JsonObject | null {
   if (owner.kind === "alias") return null;
   return {
     goal_id: owner.goalRef.goalId.value,
@@ -114,7 +111,7 @@ export function requireQuotaOwnerProjection(
 }
 
 export function quotaOwnerOwnsProjection(
-  owner: QuotaAccountingOwner,
+  owner: QuotaProjectionScope,
   value: unknown,
 ): boolean {
   if (owner.kind === "alias") return value === undefined;

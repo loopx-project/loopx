@@ -1310,6 +1310,7 @@ class StewardTurnHost:
                     "triggers": review_view.get("triggers"),
                     "recent_evidence": list(review_view.get("evidence") or [])[:12],
                     "decision_followthrough": review_view.get("decision_followthrough"),
+                    **({"todo_meta_goals": review_view["todo_meta_goals"]} if "todo_meta_goals" in review_view else {}),
                 }
             writeback_view = _read_stage(packet.get("writeback"))
             if writeback_view is not None:

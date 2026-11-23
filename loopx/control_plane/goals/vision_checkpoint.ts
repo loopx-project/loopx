@@ -12,7 +12,7 @@ import {
   type DeliveryOutcome,
 } from "../work_items/delivery_outcome.ts";
 
-import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA, STRIDE_PROBE_LIMITS, STRIDE_AXIS_NAMES, STRIDE_PLAN_LIMIT, STRIDE_REASON_LIMIT, STRIDE_REVIEW_LIMIT} from "../work_items/stride_policy.ts";
+import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA, STRIDE_PROBE_LIMITS, STRIDE_META_GOAL_LIMITS, STRIDE_AXIS_NAMES, STRIDE_PLAN_LIMIT, STRIDE_REASON_LIMIT, STRIDE_REVIEW_LIMIT} from "../work_items/stride_policy.ts";
 import lifecycle from "../goal_vision_lifecycle.json" with {type: "json"};
 
 export const VISION_REFRESH_REQUEST_SCHEMA = "loopx_vision_refresh_request_v0";
@@ -836,6 +836,9 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
       fieldLimits[`stride_decision.axes.${axis}.reason`] = STRIDE_REASON_LIMIT;
     }
     if (strideDecision.previous_review) fieldLimits["stride_decision.previous_review.lesson"] = STRIDE_REVIEW_LIMIT;
+    if (strideDecision.meta_goal) for (const [field, limit] of Object.entries(STRIDE_META_GOAL_LIMITS)) {
+      if (Object.hasOwn(strideDecision.meta_goal as JsonObject, field)) fieldLimits[`stride_decision.meta_goal.${field}`] = limit;
+    }
     if (strideDecision.explore_review) fieldLimits["stride_decision.explore_review.reason"] = STRIDE_REVIEW_LIMIT;
   }
   fieldLimits["fallback_declarations"] = VISION_FALLBACK_DECLARATION_ENTRY_LIMIT;

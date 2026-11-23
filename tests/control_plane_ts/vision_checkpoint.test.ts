@@ -8,6 +8,7 @@ import {
   visionAuthoringContract,
   normalizeGoalPathDelta,
 } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
+import {strideControlContract} from "../../loopx/control_plane/work_items/stride_policy.ts";
 
 function finalizeRequest(overrides: Record<string, unknown> = {}) {
   return {
@@ -196,6 +197,40 @@ test("structured replans have a bounded 1800-character budget including path evi
       ...packet, path_delta: {...packet.path_delta, changed: [character.repeat(35)]},
     }})), /total_agent_vision uses 1801 chars; limit is 1800; usage: vision_patch=1120, path_delta=681, stride_decision=0, fallback_declarations=0/);
   }
+});
+
+test("a meta-goal continuation reuses its definition and path evidence within the existing budget", () => {
+  const evidenceRef = "replan-evidence-" + "a".repeat(24);
+  const continuation = {todo_id: "todo_current001", previous_decision_ref: "replan-decision-" + "b".repeat(24),
+    resolution: "The tail missed its deadline. Compare the recovery route next."};
+  const objective = "Will the current scheduler meet the deadline when a runner restarts during the peak workload?";
+  const criterion = "Reopen the persisted queue and compare its slowest completion with the original deadline.";
+  const template = strideControlContract({stride_strategy: "evidence_conditioned_v1",
+    context_id: "replan-context-" + "c".repeat(24)}, "replan-" + "d".repeat(16))!;
+  const packet = {
+    vision_patch: {vision_summary: "Preserve the accepted deadline and the queue across restart."},
+    path_delta: {outcome: "replan", prior_assumption: "The incumbent had headroom.", observed_reality: "The worst sample missed the deadline.",
+      changed: ["Compare recovery under the same workload."], evidence_refs: [evidenceRef]},
+    stride_decision: {...(template.minimal_example as Record<string, unknown>), action: "switch", meta_goal: continuation},
+  };
+  const prepare = (agent_vision_packet: unknown) =>
+    buildVisionCheckpoint(prepareRequest({agent_vision_packet})).agent_vision as Record<string, unknown>;
+  const baseline = prepare(packet).vision_budget as Record<string, number>;
+  const boundary = {...packet, vision_patch: {...packet.vision_patch, role_scope: "x".repeat(280),
+    acceptance_summary: "x".repeat(420)}, path_delta: {...packet.path_delta,
+    observed_reality: packet.path_delta.observed_reality + "x".repeat(1800 - 280 - 420 - baseline.total_usage)}};
+  const compact = prepare(boundary);
+  const budget = compact.vision_budget as Record<string, number>;
+  assert.equal(budget.total_limit, 1800);
+  assert.equal(budget.total_usage, 1800);
+  assert.deepEqual((compact.stride_decision as Record<string, unknown>).meta_goal, continuation);
+  const repeated = {...packet.stride_decision, meta_goal: {...continuation, objective,
+    resolution_criterion: criterion, evidence_refs: [evidenceRef]}};
+  assert.deepEqual((prepare({...packet, stride_decision: repeated}).stride_decision as Record<string, unknown>).meta_goal,
+    repeated.meta_goal);
+  const repeatedTotal = 1800 + objective.length + criterion.length + evidenceRef.length;
+  assert.throws(() => prepare({...boundary, stride_decision: repeated}),
+    new RegExp(`total_agent_vision uses ${repeatedTotal} chars; limit is 1800`));
 });
 
 test("prepare preserves v0 JSON-to-text compatibility", () => {

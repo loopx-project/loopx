@@ -57,6 +57,7 @@ export function TaskRequest({todo, local, sourceNamespace, onSave, onRead}: {tod
   }, [identity, local, retry, todo.goalId, sourceId, sourceNamespace, publishRead]);
   const current = local && read?.identity === identity ? read : null;
   const detail = current?.phase === "ready" ? current.detail : null;
+  const stride = detail?.stride_meta_goal;
   const editable = local && onSave && todo.claimedBy && sourceId && detail?.review_basis
     && detail.archive_state === "active" && detail.status !== "done";
   const draftLength = compactPythonTextLength(draft?.text ?? "");
@@ -87,6 +88,23 @@ export function TaskRequest({todo, local, sourceNamespace, onSave, onRead}: {tod
   }
   return <div className="personal-task-request">
     {!draft ? <MarkdownText text={detail?.text ?? todo.requestText ?? todo.text} /> : null}
+    {stride && "meta_goal" in stride ? <details className="personal-task-meta-goal">
+      <summary>{t("drawer.metaGoal")}</summary>
+      <MarkdownText text={stride.meta_goal.objective}/>
+      <dl>
+        <dt>{t("drawer.metaGoalCriterion")}</dt><dd><MarkdownText text={stride.meta_goal.resolution_criterion}/></dd>
+        {stride.meta_goal.resolution ? <><dt>{t("drawer.metaGoalResolution")}</dt>
+          <dd><MarkdownText text={stride.meta_goal.resolution}/></dd></> : null}
+        <dt>{t("drawer.metaGoalAction")}</dt><dd><code>{stride.action}</code></dd>
+        <dt>{t("drawer.metaGoalProbe")}</dt><dd><MarkdownText text={stride.next_probe.scope}/></dd>
+      </dl>
+      {stride.evidence.length ? <><h4>{t("drawer.metaGoalEvidence")}</h4><ul>{stride.evidence.map(row =>
+        <li key={row.evidence_ref}><MarkdownText text={row.summary ?? t("drawer.metaGoalEvidenceUnavailable")}/>
+          <code>{row.evidence_ref}</code></li>)}</ul></> : null}
+    </details> : stride?.unavailable ? <div className="personal-proposal-explainer" role="alert">
+      <span>{t("drawer.metaGoalUnavailable")}</span>
+      <button className="personal-secondary-action" type="button" onClick={() => setRetry(value => value + 1)}>{t("drawer.requestRetry")}</button>
+    </div> : null}
     {current?.phase !== "ready" ? <div className="personal-proposal-explainer" role={current?.phase === "error" ? "alert" : "status"}>
       <span>{t(!local ? "drawer.requestLocalOnly" : !sourceId ? "drawer.requestUnidentified" : current?.phase === "error" ? "drawer.requestError" : "drawer.requestLoading")}</span>
       {current?.phase === "error" ? <button className="personal-secondary-action" type="button" onClick={() => setRetry(value => value + 1)}>{t("drawer.requestRetry")}</button> : null}

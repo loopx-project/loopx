@@ -681,6 +681,10 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const context = object(obligation.replan_context);
   const [strideDecision] = normalizeStrideDecision(vision.stride_decision);
   const structuredReview = normalizeStrideStrategy(context.stride_strategy) !== "off";
+  const hasMetaGoal = strideDecision?.meta_goal != null;
+  if (hasMetaGoal && !structuredReview) {
+    throw new EffectRuntimeRequestError("Todo meta-goal requires an enabled Stride review");
+  }
   const selectedComparison = object(strideDecision?.explore_review).selected_candidate != null;
   const requiredStrideReview = requiresStrideDecision(obligation);
   const pathOutcome = String(path.outcome ?? "").trim();
@@ -690,11 +694,11 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const independentStride = strideDecision?.schema_version === STRIDE_DECISION_SCHEMA;
   const missingStride = structuredReview && (freshPath || requiredStrideReview) &&
     (!strideDecision || !independentStride);
-  const missingStridePath = requiredStrideReview && !evidenceLinkedPath;
+  const missingStridePath = (requiredStrideReview && !evidenceLinkedPath) || (hasMetaGoal && !freshPath);
   const staleStride = !!strideDecision && (structuredReview || selectedComparison) &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
   const reviewContextChanged = !!strideDecision && (structuredReview || selectedComparison)
-    && (requiredStrideReview || selectedComparison) && strideDecision.reference_context_id !== context.context_id;
+    && (requiredStrideReview || selectedComparison || hasMetaGoal) && strideDecision.reference_context_id !== context.context_id;
   const reviewMismatch = strideDecision && (structuredReview || selectedComparison)
     ? reviewContextChanged
       ? "Stride decision references a different review context. Read the returned context_recovery before retrying the original writeback."
@@ -728,7 +732,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     outcomes.push("fresh_vision_path_outcome");
   }
   if (staleStride || missingStride || reviewMismatch) outcomes = outcomes.filter(outcome => outcome !== "fresh_vision_path_outcome");
-  const satisfying = inconsistentTerminal || (requiredStrideReview && (missingStride || missingStridePath || staleStride || reviewMismatch))
+  const satisfying = inconsistentTerminal || ((requiredStrideReview || hasMetaGoal) && (missingStride || missingStridePath || staleStride || reviewMismatch))
     || (selectedComparison && (staleStride || reviewMismatch))
     ? [] : outcomes.filter(outcome => required.includes(outcome as SemanticOutcome));
   const replayRefused = (replayed || knownBlocker) && !satisfying.length && !inconsistentTerminal;

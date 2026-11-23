@@ -804,6 +804,79 @@ not improved model decisions or net efficiency.
 任务缺失、关闭、改由他人认领或关联改变时旧页失效。未携带任务 ID 的全局页面保持
 原契约；任务范围只改变证据相关性，不授予准入或强制选题。
 
+### Todo meta-goal / Todo 内的元目标
+
+An admitted Stride review can attach `agent_vision.stride_decision.meta_goal`
+to one open Agent Todo it retains in `todo_delta`. If the Turn is bound to a
+Todo, use that Todo's exact ID. The optional object contains `todo_id`,
+`objective`, `resolution_criterion`, and `evidence_refs`. Start a question
+with empty references. The enclosing Stride `action` and `next_probe` express
+the chosen response and the first work slice.
+
+An open meta-goal follows the Todo across ordinary Turns in
+`work_context.stride_meta_goal`. In the next applicable Stride review, submit
+`todo_id` and the exact `previous_decision_ref` from `todo_meta_goals`. Readback
+recovers the recorded objective and criterion. A continuation with the original
+text remains readable and writable.
+
+When the continuation omits `evidence_refs`, it reuses up to three distinct
+citations from the same writeback's `path_delta` and `previous_review`, in that
+order. Each must resolve to subsequent settled work on the same Todo and Agent
+within the current Goal lifetime. A typed progress citation can resolve to the
+exact settlement reference for the same observation. Explicit `evidence_refs`
+select different evidence under the same scope checks. Changing the action or
+recording a `resolution` requires qualified evidence. Omitting the whole
+`meta_goal` preserves the last question. A resolution ends the question and a
+later review can start another on the same Todo.
+
+The preview and both citation forms use the same settlement readback for the
+exact work record. A pending writeback stays readable in history. It qualifies
+after the spend receipt is committed or the settlement owner confirms a typed
+no-spend closeout.
+
+Keep new questions brief. Put actions and probes in their existing Stride
+fields and give each axis its own decision-relevant reason. Use a citation
+once when it serves both the Vision path and the meta-goal. The same
+1,800-character Vision budget counts the authored text and references.
+
+Read the latest question, action, probe and cited evidence in the App's Task
+Request details or with `loopx --format json todo list --goal-id <goal> --todo-id
+<todo>`. Saved questions stay available after disabling Stride. Detail reads
+open the decision journal when a source is recorded for the Todo in the current
+Goal lifetime. The exact CLI read also provides recent eligible source refs under
+`subsequent_evidence` for an open question. Use `loopx --format json history --goal-id <goal> --agent-id <agent>
+--evidence-ref <ref>` to resolve the exact decision and each cited source row.
+The references document which evidence the Agent cites for its choice.
+Execution, Goal acceptance and gain follow their existing evidence contracts.
+
+在已准入的 Stride 复盘中，Agent 可用 `agent_vision.stride_decision.meta_goal`
+为 `todo_delta` 中保留的一项开放 Todo 声明元目标。如果 Turn 已绑定 Todo，使用该 Todo 的
+精确 ID。首次写入 `todo_id`、`objective`、`resolution_criterion` 和空的 `evidence_refs`。
+外层的 `action` 和 `next_probe` 表达所选元决策动作及首个工作切片。
+
+普通工作 Turn 通过 `work_context.stride_meta_goal` 接续未决目标。后续复盘提交
+`todo_id` 和从 `todo_meta_goals` 取得的精确 `previous_decision_ref`。读取时沿用
+已记录的目标和判据。仍可读写带原文的续写。
+
+续写省略 `evidence_refs` 时，按顺序从本次写回的 `path_delta` 和 `previous_review`
+复用至多三条不同引用。证据须来自当前 Goal 生命周期内同一 Agent、同一 Todo 的
+后续已结算工作。类型化进展引用可解析为同一观测的精确结算引用。需要选择其他证据时，
+可显式填写 `evidence_refs`，沿用相同范围校验。改变动作或写入 `resolution` 时须有
+合格证据。省略整个 `meta_goal` 会沿用上次问题。收口后可在后续复盘中为同一 Todo
+提出新问题。
+
+预览、显式引用和简写引用共用同一条工作记录的结算回读。待结算写回仍可从历史查看。
+扣额回执提交或结算归属方确认类型化免扣额收尾后，才可作为后续证据引用。
+
+简洁提出新问题。动作和探针沿用现有 Stride 字段，各轴说明各自影响决策的依据。
+一条引用可同时支持 Vision 路径和元目标，只填写一次。实际写入的文字和引用计入原有
+1,800 字符 Vision 预算。
+
+在 App 的任务要求详情或用 `todo list --todo-id` 回读元目标、动作、探针及证据。
+关闭 Stride 后仍可查看已保存的元目标。详情仅在当前 Goal 实例下的该 Todo 有记录来源时读取决策日志。
+用 `history --evidence-ref` 回读原决策和原证据。引用记录的是 Agent 作出选择所用的证据，
+实际执行、Goal 验收和收益沿用各自的证据契约。
+
 ### Source-bound comparison selection
 
 With Explore planning and `evidence_conditioned_v1` enabled, the existing

@@ -8,6 +8,7 @@ from ..goals.acceptance_readback import configured_checks
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 import hashlib
+import json
 import shlex
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -104,6 +105,7 @@ def replan_evidence_rows(runs: Iterable[Mapping[str, Any]], *, goal_id: str, age
 
                 if ordered_history:
                     source["history_position"] = history_position
+                source["json_path"] = run.get("json_path")
                 source["goal_ref"] = run.get("goal_ref")
                 source["agent_vision"] = run.get("agent_vision")
                 vision = run.get("agent_vision")
@@ -206,6 +208,8 @@ def project_replan_context(
                 include_decisions=bool(agent_id),
                 history_newest_first=history_newest_first),
             "stride_strategy": strategy,
+            **({"settlement_runtime_root": str(Path(str(source_status["runtime_root"])).resolve())}
+               if evidence_ref is None and source_status and source_status.get("runtime_root") and source_status.get("registry") else {}),
             # Canonical caller-owned facts only. TypeScript joins the declared
             # work with the accepted decision and causally later observations.
             **({"todo_items": [{key: item[key] for key in (
@@ -228,6 +232,109 @@ def validate_replan_context(context: Any) -> dict[str, Any]:
         }))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
+
+
+def recorded_stride_meta_goal(run: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Presence in a journal row only. TypeScript qualifies identity and evidence."""
+    vision = run.get("agent_vision")
+    stride = vision.get("stride_decision") if isinstance(vision, Mapping) else None
+    meta_goal = stride.get("meta_goal") if isinstance(stride, Mapping) else None
+    return meta_goal if isinstance(meta_goal, Mapping) else None
+
+
+def _meta_goal_source_directory(
+    index_path: Path, goal_id: str, todo_id: str, goal_ref: Mapping[str, Any] | None,
+) -> Path:
+    instance = goal_ref.get("goal_instance_id") if goal_ref is not None else None
+    key = hashlib.sha256(json.dumps([goal_id, instance, todo_id]).encode()).hexdigest()
+    return index_path.parent / "stride-meta-goal-sources" / key
+
+
+def mark_todo_stride_meta_goal_source(index_path: Path, run: Mapping[str, Any]) -> None:
+    """Index the scope before a qualified refresh appends its history row."""
+    meta_goal = recorded_stride_meta_goal(run)
+    if meta_goal is None:
+        return
+    scope = _meta_goal_source_directory(index_path, run["goal_id"], meta_goal["todo_id"], run.get("goal_ref"))
+    scope.mkdir(parents=True, exist_ok=True)
+    # The marker is a routing hint. Only a committed journal row qualifies a
+    # decision, including when a write stops between marking and appending.
+    (scope / hashlib.sha256(run["agent_id"].encode()).hexdigest()).touch()
+
+
+def project_todo_stride_meta_goal(
+    *, goal_id: str, agent_id: str | None, todo_id: str, goal_ref: Mapping[str, Any] | None,
+    runs: Iterable[Mapping[str, Any]], history_newest_first: bool, runtime_root: Path | None = None,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    from .replan_history_codec import project_replan_request
+
+    try:
+        result = project_replan_request({
+            "operation": "todo_meta_goal", "obligation": None, "goal_id": goal_id,
+            "agent_id": agent_id, "todo_id": todo_id, "goal_facts": {"goal_ref": goal_ref},
+            **({"settlement_runtime_root": str(runtime_root.resolve())} if runtime_root is not None else {}),
+            "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id,
+                include_decisions=True, history_newest_first=history_newest_first),
+            **fields,
+        }, method="work_item.replan_context")
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from None
+    return cast(dict[str, Any] | None, result.get("current"))
+
+
+def read_todo_stride_meta_goal(
+    *, runtime_root: Path, goal_id: str, todo_id: str, agent_id: str | None = None,
+    goal_ref: Mapping[str, Any] | None = None, include_evidence: bool = False,
+) -> dict[str, Any] | None:
+    from ...history import load_index_snapshot, validate_goal_id_path_segment
+
+    goal_id = validate_goal_id_path_segment(goal_id)
+    index_path = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
+    source = _meta_goal_source_directory(index_path, goal_id, todo_id, goal_ref)
+    if agent_id is not None:
+        source /= hashlib.sha256(agent_id.encode()).hexdigest()
+    if not source.exists():
+        return None
+    return project_todo_stride_meta_goal(
+        goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, goal_ref=goal_ref,
+        runs=load_index_snapshot(index_path, include_artifact_status=False).records,
+        history_newest_first=False, runtime_root=runtime_root, include_evidence=include_evidence,
+    )
+
+
+def require_todo_stride_meta_goal_admission(
+    agent_vision: Mapping[str, Any] | None, *, agent_id: str, guard_scoped: bool, obligation_id: str | None,
+) -> None:
+    if recorded_stride_meta_goal({"agent_vision": agent_vision}) is not None and not (
+        agent_id and guard_scoped and obligation_id
+    ):
+        raise ValueError("A Todo meta-goal requires an admitted Stride review")
+
+
+def qualify_todo_stride_meta_goal_writeback(
+    *, agent_vision: Mapping[str, Any] | None, semantic_delta: Mapping[str, Any],
+    status_payload: Mapping[str, Any], agent_todos: Iterable[Mapping[str, Any]],
+    goal_id: str, agent_id: str, goal_ref: Mapping[str, Any] | None, settlement_todo_id: str | None,
+) -> None:
+    if agent_vision is None or semantic_delta.get("accepted") is not True:
+        return
+    meta_goal = recorded_stride_meta_goal({"agent_vision": agent_vision})
+    if meta_goal is None:
+        return
+    todo_id = str(meta_goal["todo_id"])
+    matches = [item for item in agent_todos if item.get("todo_id") == todo_id]
+    if len(matches) != 1:
+        raise ValueError("The Todo targeted by the meta-goal is missing or ambiguous")
+    live_root = status_payload.get("runtime_root") if status_payload.get("registry") else None
+    project_todo_stride_meta_goal(
+        goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, goal_ref=goal_ref,
+        runs=replan_history_from_status(status_payload, goal_id),
+        history_newest_first=not bool(live_root), runtime_root=Path(str(live_root)) if live_root else None,
+        proposal=agent_vision["stride_decision"], todo_delta=agent_vision.get("todo_delta"),
+        path_delta=agent_vision.get("path_delta"),
+        todo=matches[0], settlement_todo_id=settlement_todo_id,
+    )
 
 
 def replay_stride_review_evidence(

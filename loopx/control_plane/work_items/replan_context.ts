@@ -7,7 +7,10 @@ import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semantics.ts";
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
+import {readQuotaSettlementSnapshot, settledTodoWritebackFromSnapshot, validateQuotaSettlementScope} from "../quota/settlement_readback.ts";
+import type {QuotaProjectionScope} from "../quota/source_admission.ts";
 import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis, STRIDE_REVIEW_REFERENCE_LIMIT} from "./stride_policy.ts";
 import {PROGRESS_RESULT_CLASSES} from "./replan_history.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "./delivery_outcome.ts";
@@ -126,13 +129,17 @@ function isAccountingRow(row: JsonObject): boolean {
 }
 
 /** Preserve historical references even when a record fails work qualification. */
-function workEvidenceRef(row: JsonObject): string {
+function settledTodoEvidenceRef(row: JsonObject): string | null {
   const source = objectOrNull(row._source_facts);
-  if (row.progress_observation !== null || isAccountingRow(row)) return historicalEvidenceRef(row);
   const identity = recordedTodoIdentity(row);
-  if (!identity) return historicalEvidenceRef(row);
+  if (!identity) return null;
   const goalRef = objectOrNull(source?.goal_ref);
   return "replan-evidence-" + digest([readableEvidenceRow(row), identity, goalRef?.goal_instance_id ?? null]);
+}
+
+function workEvidenceRef(row: JsonObject): string {
+  if (row.progress_observation !== null || isAccountingRow(row)) return historicalEvidenceRef(row);
+  return settledTodoEvidenceRef(row) ?? historicalEvidenceRef(row);
 }
 
 function evidenceFactsKey(row: JsonObject): string {
@@ -215,6 +222,12 @@ function recordedDecision(row: JsonObject): JsonObject | null {
   catch { return null; }
   const identity = objectOrNull(source.settlement_identity)!;
   const autonomous = identity.binding_kind === "autonomous_replan";
+  const metaGoal = objectOrNull(stride?.meta_goal);
+  const todoDelta = objectOrNull(source.agent_vision)?.todo_delta;
+  if (metaGoal && ((!autonomous && metaGoal.todo_id !== row.todo_id) ||
+      !Array.isArray(todoDelta) || !todoDelta.includes(`retain:${metaGoal.todo_id}`))) {
+    return null;
+  }
   const decision = {history_evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
     generated_at: row.generated_at, todo_id: autonomous ? null : row.todo_id, turn_instance_id: identity.turn_instance_id,
     ...(autonomous ? {replan_obligation_id: source.replan_obligation_id} : {}),
@@ -229,17 +242,21 @@ function recordedDecision(row: JsonObject): JsonObject | null {
  * Append order belongs to the captured history, not timestamps or prose. A
  * progress observation proves neither execution nor scientific improvement.
  */
-function orderedDecisionRows(rows: JsonObject[], goalFacts: unknown): JsonObject[] {
+function orderedDecisionRows(rows: JsonObject[], goalFacts: unknown, exactGoalRef = false): JsonObject[] {
   const currentRef = objectOrNull(objectOrNull(goalFacts)?.goal_ref);
   return rows.filter(row => {
     const source = objectOrNull(row._source_facts);
-    const ref = objectOrNull(source?.goal_ref);
     return source && Number.isSafeInteger(source.history_position) &&
       Number(source.history_position) >= 0 &&
-      (!currentRef || (ref?.goal_id === currentRef.goal_id &&
-        ref?.goal_instance_id === currentRef.goal_instance_id));
+      (!currentRef && !exactGoalRef || inGoalScope(currentRef, source.goal_ref));
   }).sort((a, b) => Number(objectOrNull(b._source_facts)!.history_position) -
     Number(objectOrNull(a._source_facts)!.history_position));
+}
+
+function inGoalScope(current: JsonObject | null, recorded: unknown): boolean {
+  const ref = objectOrNull(recorded);
+  return current ? ref?.goal_id === current.goal_id && ref?.goal_instance_id === current.goal_instance_id
+    : recorded == null;
 }
 
 function plannedTodoIds(source: JsonObject): string[] {
@@ -257,6 +274,179 @@ function observationTodo(row: JsonObject): string | null {
 function plannedObservationTodo(row: JsonObject, targets: ReadonlySet<string>): string | null {
   const todo = observationTodo(row);
   return todo !== null && targets.has(todo) ? todo : null;
+}
+
+function eligibleMetaGoalTodo(todo: JsonObject, goal: string, agent: string): boolean {
+  return todo.role === "agent" && todo.status === "open" &&
+    (todo.goal_id == null || todo.goal_id === goal) &&
+    (todo.claimed_by == null || todo.claimed_by === "" || todo.claimed_by === agent);
+}
+
+type MetaGoalDecision = {row: JsonObject; decision: JsonObject; stride: JsonObject; goal: JsonObject};
+type SettledTodoWork = (row: JsonObject) => boolean;
+
+function metaGoalTodoId(row: JsonObject): unknown {
+  const vision = objectOrNull(objectOrNull(row._source_facts)?.agent_vision);
+  return objectOrNull(objectOrNull(vision?.stride_decision)?.meta_goal)?.todo_id;
+}
+
+function recordedMetaGoal(row: JsonObject): MetaGoalDecision {
+  const decision = recordedDecision(row);
+  const stride = objectOrNull(decision?.stride_decision);
+  const goal = objectOrNull(stride?.meta_goal);
+  if (!decision || !stride || !goal) {
+    throw new EffectRuntimeRequestError("Recorded Todo meta-goal is unavailable; reread the original decision");
+  }
+  return {row, decision, stride, goal};
+}
+
+function metaGoalDecisions(scoped: JsonObject[], todoIds: ReadonlySet<unknown>, settled: SettledTodoWork): Map<unknown, MetaGoalDecision> {
+  const latest = new Map<unknown, MetaGoalDecision>();
+  for (const [index, row] of scoped.entries()) {
+    const todoId = metaGoalTodoId(row);
+    if (!todoIds.has(todoId) || latest.has(todoId) || !acceptedDecisionSource(row)) continue;
+    latest.set(todoId, hydrateMetaGoal(scoped, index, recordedMetaGoal(row), settled));
+  }
+  return latest;
+}
+
+function hydrateMetaGoal(scoped: JsonObject[], index: number, current: MetaGoalDecision, settled: SettledTodoWork): MetaGoalDecision {
+  const goal = current.goal;
+  if (goal.objective !== undefined && goal.evidence_refs !== undefined) return current;
+  let expected = goal.previous_decision_ref;
+  let prior: MetaGoalDecision | undefined;
+  let priorIndex = index;
+  for (let i = index + 1; i < scoped.length; i++) {
+    const row = scoped[i];
+    if (row.agent_id !== current.row.agent_id || metaGoalTodoId(row) !== goal.todo_id || !acceptedDecisionSource(row)) continue;
+    const source = recordedMetaGoal(row);
+    if (source.decision.evidence_ref !== expected || source.goal.resolution) break;
+    if (!prior) { prior = source; priorIndex = i; }
+    const definition = goal.objective === undefined ? source.goal : goal;
+    if (definition.objective !== undefined) {
+      const evidence = metaGoalCitations(goal, current.stride, current.decision.path_delta, prior,
+        scoped.slice(index + 1, priorIndex), settled);
+      return {...current, goal: {...goal, objective: definition.objective,
+        resolution_criterion: definition.resolution_criterion, evidence_refs: evidence}};
+    }
+    expected = source.goal.previous_decision_ref;
+  }
+  throw new EffectRuntimeRequestError("Recorded Todo meta-goal reference is unavailable; reread the original decision");
+}
+
+function metaGoalWorkEvidence(
+  scoped: JsonObject[], todoId: unknown, after: JsonObject, settled: SettledTodoWork,
+): {ref: string; row: JsonObject}[] {
+  const position = Number(objectOrNull(after._source_facts)?.history_position);
+  return scoped.flatMap(row => {
+    const order = Number(objectOrNull(row._source_facts)?.history_position);
+    if (order <= position || row.agent_id !== after.agent_id || observationTodo(row) !== todoId || isAccountingRow(row) ||
+        acceptedDecisionSource(row) || hasConflictingTodoSettlement(row) ||
+        !MATERIAL_DELIVERY_OUTCOMES.some(outcome => outcome === row.delivery_outcome)) return [];
+    const ref = settledTodoEvidenceRef(row);
+    return ref && settled(row) ? [{ref, row}] : [];
+  });
+}
+
+function sharedDecisionCitations(path: unknown, stride: JsonObject | null): string[] {
+  const pathRefs = objectOrNull(path)?.evidence_refs;
+  const reviewRefs = objectOrNull(stride?.previous_review)?.evidence_refs;
+  return [...(Array.isArray(pathRefs) ? pathRefs : []), ...(Array.isArray(reviewRefs) ? reviewRefs : [])] as string[];
+}
+
+function metaGoalCitations(
+  goal: JsonObject, stride: JsonObject, path: unknown, prior: MetaGoalDecision,
+  scoped: JsonObject[], settled: SettledTodoWork,
+): string[] {
+  const work = metaGoalWorkEvidence(scoped, goal.todo_id, prior.row, settled);
+  const allowed = new Set(work.map(({ref}) => ref));
+  let refs = goal.evidence_refs as string[] | undefined;
+  if (!refs) {
+    // A typed progress row can have an older replan reference as well as its
+    // exact settlement reference. Resolve the citation through this scoped work.
+    const aliases = new Map<string, string | null>();
+    for (const {ref, row} of work) {
+      const alias = workEvidenceRef(row);
+      const match = aliases.get(alias);
+      aliases.set(alias, match === undefined || match === ref ? ref : null);
+    }
+    const shared = sharedDecisionCitations(path, stride)
+      .map(ref => allowed.has(ref) ? ref : aliases.get(ref))
+      .filter((ref): ref is string => typeof ref === "string");
+    refs = [...new Set(shared)].slice(0, STRIDE_REVIEW_REFERENCE_LIMIT);
+  }
+  if (refs.some(ref => !allowed.has(ref))) {
+    throw new EffectRuntimeRequestError("Meta-goal evidence must come from subsequent settled work on the same Todo");
+  }
+  if ((stride.action !== prior.stride.action || goal.resolution !== undefined) && refs.length === 0) {
+    throw new EffectRuntimeRequestError("Changing a meta-decision action or resolving the question requires subsequent settled work evidence on the same Todo");
+  }
+  return refs;
+}
+
+function metaGoalEvidencePreview(recorded: MetaGoalDecision, scoped: JsonObject[], settled: SettledTodoWork): JsonObject[] {
+  if (recorded.goal.resolution) return [];
+  return metaGoalWorkEvidence(scoped, recorded.goal.todo_id, recorded.row, settled).slice(0, 6)
+    .map(({ref, row}) => ({evidence_ref: ref, generated_at: row.generated_at, delivery_outcome: row.delivery_outcome,
+      result_class: objectOrNull(row.progress_observation)?.result_class ?? null}));
+}
+
+function metaGoalView(recorded: MetaGoalDecision): JsonObject {
+  return {decision_ref: recorded.decision.evidence_ref, generated_at: recorded.decision.generated_at,
+    agent_id: recorded.row.agent_id, meta_goal: recorded.goal,
+    action: recorded.stride.action, next_probe: recorded.stride.next_probe};
+}
+
+function todoMetaGoal(
+  request: JsonObject, scoped: JsonObject[], goal: string, agent: string | null, settled: SettledTodoWork,
+): JsonObject {
+  const todoId = identifier(request.todo_id, "meta-goal Todo");
+  const decision = normalizeRecordedStrideDecision(request.proposal);
+  const proposed = objectOrNull(decision?.meta_goal);
+  const previous = metaGoalDecisions(scoped, new Set([todoId]), settled).get(todoId);
+  if (!proposed) {
+    if (!previous) return {current: null};
+    const current = metaGoalView(previous);
+    if (request.include_evidence === true) {
+      const refs = previous.goal.evidence_refs as string[];
+      current.evidence = refs.map(ref => {
+        const row = scoped.find(row => row.todo_id === todoId && row.agent_id === previous.row.agent_id &&
+          !isAccountingRow(row) && !hasConflictingTodoSettlement(row) && settledTodoEvidenceRef(row) === ref);
+        return row ? {evidence_ref: ref, generated_at: row.generated_at,
+          summary: row.recommended_action ?? row.health_check ?? row.classification ?? null} : {evidence_ref: ref};
+      });
+      current.subsequent_evidence = metaGoalEvidencePreview(previous, scoped, settled);
+    }
+    return {current};
+  }
+
+  const todo = requireJsonObject(request.todo, "canonical meta-goal Todo");
+  if (!agent || proposed.todo_id !== todoId || todo.todo_id !== todoId || !eligibleMetaGoalTodo(todo, goal, agent) ||
+      request.settlement_todo_id != null && request.settlement_todo_id !== todoId ||
+      !Array.isArray(request.todo_delta) || !request.todo_delta.includes(`retain:${todoId}`)) {
+    throw new EffectRuntimeRequestError("A meta-goal requires the current open Agent Todo, retained in the Stride decision");
+  }
+  if (!previous || previous.goal.resolution) {
+    if (proposed.previous_decision_ref) throw new EffectRuntimeRequestError("Start a new meta-goal without a previous decision reference");
+    return {current: null};
+  }
+  if (proposed.previous_decision_ref !== previous.decision.evidence_ref ||
+      (proposed.objective !== undefined && (proposed.objective !== previous.goal.objective ||
+        proposed.resolution_criterion !== previous.goal.resolution_criterion))) {
+    throw new EffectRuntimeRequestError("Carry forward the current Todo meta-goal and its exact previous decision reference");
+  }
+  metaGoalCitations(proposed, decision!, request.path_delta, previous, scoped, settled);
+  return {current: metaGoalView(previous)};
+}
+
+function projectTodoMetaGoals(
+  rows: JsonObject[], request: JsonObject, goal: string, agent: string, settled: SettledTodoWork,
+): JsonObject[] {
+  if (!rows.some(row => metaGoalTodoId(row) !== undefined)) return [];
+  const scoped = orderedDecisionRows(rows, request.goal_facts, true);
+  const eligible = objects(request.todo_items, "Todo source").filter(todo => eligibleMetaGoalTodo(todo, goal, agent));
+  return [...metaGoalDecisions(scoped, new Set(eligible.map(todo => todo.todo_id)), settled).values()]
+    .slice(0, 6).map(recorded => ({...metaGoalView(recorded), evidence: metaGoalEvidencePreview(recorded, scoped, settled)}));
 }
 
 /** Reserve one source-ordered observation per displayed planned Todo before
@@ -288,6 +478,7 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
   const followed: JsonObject[] = [];
   const seen = new Set<string>();
   const legacyResultRefs = new Map<string, string>();
+  let hasMetaGoal = false;
   for (const row of [...scoped].reverse()) {
     if (isAccountingRow(row)) continue;
     const source = objectOrNull(row._source_facts)!;
@@ -296,12 +487,15 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
       if (!decision) { origin.clear(); proposed.clear(); continue; }
       const id = String(decision.evidence_ref), targets = plannedTodoIds(source);
       const path = decision.path_delta as JsonObject;
-      const review = objectOrNull(objectOrNull(decision.stride_decision)?.previous_review);
-      const refs = [...(path.evidence_refs as string[]),
-        ...(Array.isArray(review?.evidence_refs) ? review.evidence_refs as string[] : [])]
-        .map(ref => pending.has(ref) ? ref : legacyResultRefs.get(ref) ?? ref)
-        .filter(ref => pending.has(ref));
+      const stride = objectOrNull(decision.stride_decision);
+      const metaGoal = objectOrNull(stride?.meta_goal);
+      if (metaGoal) hasMetaGoal = true;
+      const pathRefs = sharedDecisionCitations(path, stride);
       for (const todo of targets) {
+        const metaRefs = metaGoal?.todo_id === todo && Array.isArray(metaGoal.evidence_refs) ? metaGoal.evidence_refs as string[] : [];
+        const refs = [...pathRefs, ...metaRefs]
+          .map(ref => pending.has(ref) ? ref : legacyResultRefs.get(ref) ?? ref)
+          .filter(ref => pending.has(ref));
         origin.set(todo, id);
         // A newer plan for the same work replaces its unexecuted proposal,
         // not the source evidence still waiting for attributable followthrough.
@@ -324,6 +518,8 @@ function workResultUse(scoped: JsonObject[]): JsonObject | null {
     // citation matches multiple formerly collapsed rows, use that alias once.
     const legacyRef = historicalEvidenceRef(row);
     if (!legacyResultRefs.has(legacyRef)) legacyResultRefs.set(legacyRef, ref);
+    const settledRef = hasMetaGoal ? settledTodoEvidenceRef(row) : null;
+    if (settledRef) legacyResultRefs.set(settledRef, ref);
     if (seen.has(ref)) continue;
     seen.add(ref);
     const adoption = proposed.get(todo);
@@ -366,6 +562,7 @@ function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
   const targets = new Set(plannedTodoIds(source));
   const citations = refs.map(ref => {
     const matches = scoped.filter(row => workEvidenceRef(row) === ref || historicalEvidenceRef(row) === ref
+      || (!isAccountingRow(row) && !hasConflictingTodoSettlement(row) && settledTodoEvidenceRef(row) === ref)
       || (objectOrNull(row.progress_observation)?.evidence_ids as unknown[] | undefined)?.includes(ref));
     const subsequent = matches.filter(row => {
       const facts = objectOrNull(row._source_facts)!;
@@ -603,13 +800,54 @@ export function validateReplanContext(value: unknown): JsonObject {
 }
 
 export async function projectReplanContextSnapshot(value: unknown): Promise<JsonObject> {
-  return projectReplanContext(await readReplanSnapshot(value));
+  return readAndProjectReplanContext(await readReplanSnapshot(value));
 }
 
-export function projectReplanContext(value: unknown): JsonObject {
+export async function readAndProjectReplanContext(value: unknown): Promise<JsonObject> {
+  const request = requireJsonObject(value, "replan context request");
+  if (request.settlement_runtime_root == null || !Array.isArray(request.rows)) return projectReplanContext(request);
+  const goalRef = objectOrNull(objectOrNull(request.goal_facts)?.goal_ref);
+  const todoIds = request.operation === "todo_meta_goal" ? new Set([request.todo_id])
+    : request.operation === "project" && request.agent_id != null &&
+        request.stride_strategy === "evidence_conditioned_v1" && request.todo_items != null
+      ? new Set(objects(request.todo_items, "Todo source").map(todo => todo.todo_id)) : new Set();
+  if (!todoIds.size || !request.rows.some(raw => {
+    const row = objectOrNull(raw);
+    return row !== null && row.goal_id === request.goal_id && (request.agent_id === null || row.agent_id === request.agent_id) &&
+      todoIds.has(metaGoalTodoId(row)) && inGoalScope(goalRef, objectOrNull(row._source_facts)?.goal_ref);
+  })) return projectReplanContext(request);
+  const {runtimeRoot, goalId} = validateQuotaSettlementScope(request.settlement_runtime_root, request.goal_id);
+  let owner: QuotaProjectionScope = {kind: "alias"};
+  if (goalRef != null) {
+    const parsed = parseExactGoalRef(goalRef);
+    if (parsed.kind !== "parsed" || parsed.value.goalId.value !== goalId) {
+      throw new EffectRuntimeRequestError("Meta-goal evidence requires the current Goal scope");
+    }
+    owner = {kind: "exact_source", goalRef: parsed.value};
+  }
+  const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, goalId);
+  const checked = new Map<JsonObject, boolean>();
+  return projectReplanContext(request, row => {
+    if (checked.has(row)) return checked.get(row)!;
+    const source = objectOrNull(row._source_facts);
+    const identity = settlementIdentityFromPlan({settlement_plan: {identity: source?.settlement_identity}});
+    const writeback = identity.failure ? null : settledTodoWritebackFromSnapshot(snapshot, owner, identity.value);
+    // The same Turn can have more than one historical writeback. Match the
+    // record verified by settlement, not every observation with that effect.
+    const matched = typeof source?.json_path === "string" && source.json_path.length > 0 &&
+      writeback?.json_path === source.json_path && writeback.generated_at === row.generated_at &&
+      writeback.delivery_outcome === row.delivery_outcome &&
+      objectOrNull(writeback.progress_observation)?.fingerprint === objectOrNull(row.progress_observation)?.fingerprint;
+    checked.set(row, matched);
+    return matched;
+  });
+}
+
+export function projectReplanContext(value: unknown, settled: SettledTodoWork = () => false): JsonObject {
   const request = requireJsonObject(value, "replan context request");
   if (request.operation === "validate") return validateReplanContext(request.context);
-  if (request.operation !== "project" && request.operation !== "resolve" && request.operation !== "review_evidence") {
+  if (request.operation !== "project" && request.operation !== "resolve" && request.operation !== "review_evidence" &&
+      request.operation !== "todo_meta_goal") {
     throw new EffectRuntimeRequestError("unsupported replan context operation");
   }
   const goal = identifier(request.goal_id, "goal_id");
@@ -639,6 +877,9 @@ export function projectReplanContext(value: unknown): JsonObject {
     if (!agent) throw new EffectRuntimeRequestError("review evidence requires agent_id");
     return reviewEvidence(rows, request);
   }
+  if (request.operation === "todo_meta_goal") {
+    return todoMetaGoal(request, orderedDecisionRows(rows, request.goal_facts, true), goal, agent, settled);
+  }
   rows.sort((a, b) => Number(b.observed_at) - Number(a.observed_at) ||
     JSON.stringify(readableEvidenceRow(a)).localeCompare(JSON.stringify(readableEvidenceRow(b))));
   // Unpaired accounting can still explain a failure. It never contributes
@@ -656,7 +897,10 @@ export function projectReplanContext(value: unknown): JsonObject {
     if (!agent) throw new EffectRuntimeRequestError("evidence resolution requires agent_id");
     const ref = identifier(request.evidence_ref, "evidence_ref");
     const legacy = rows.find(row => historicalEvidenceRef(row) === ref);
+    const settled = rows.find(row => !isAccountingRow(row) && !hasConflictingTodoSettlement(row) &&
+      settledTodoEvidenceRef(row) === ref);
     const match = unique.get(ref) ?? (legacy && {...readableEvidenceRow(legacy), evidence_ref: ref})
+      ?? (settled && {...readableEvidenceRow(settled), evidence_ref: ref})
       ?? rows.map(recordedDecision).find(decision => decision?.evidence_ref === ref);
     if (!match) throw new EffectRuntimeRequestError(
       "evidence reference is unavailable in this Goal and Agent history window; refresh replan_context",
@@ -751,10 +995,13 @@ export function projectReplanContext(value: unknown): JsonObject {
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
+  const todoMetaGoals = agent && strideStrategy !== "off" && request.todo_items != null
+    ? projectTodoMetaGoals(rows, request, goal, agent, settled) : [];
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
     ...(followthrough ? {decision_followthrough: followthrough} : {}),
+    ...(todoMetaGoals.length ? {todo_meta_goals: todoMetaGoals} : {}),
     ...(exploreBasis ? {explore_basis: exploreBasis} : {})});
   const context: JsonObject = {
     schema_version: CONTEXT_SCHEMA, context_id: contextId, goal_id: goal, agent_id: agent,
@@ -769,6 +1016,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   };
   if (strideStrategy !== "off") context.stride_strategy = strideStrategy;
   if (followthrough) context.decision_followthrough = followthrough;
+  if (todoMetaGoals.length) context.todo_meta_goals = todoMetaGoals;
   if (exploreBasis) context.explore_basis = exploreBasis;
   // Source-replayed supplemental pages qualify a proposal, not a new admission
   // context. They must not change the original context or bounded basis IDs.

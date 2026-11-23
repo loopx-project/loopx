@@ -858,6 +858,7 @@ function projectReplanView(
     ...(acceptanceIndex ? {acceptance_index: acceptanceIndex} : {}),
     triggers: obligation.triggers,
     decision_followthrough: Object.keys(follow).length ? follow : null,
+    ...(Array.isArray(context.todo_meta_goals) ? {todo_meta_goals: context.todo_meta_goals} : {}),
     planning_horizon: payload.planning_horizon == null ? null : horizon,
     action_portfolio: payload.action_portfolio ?? null,
     ...(context.explore_basis ? {capabilities: {explore: retain({

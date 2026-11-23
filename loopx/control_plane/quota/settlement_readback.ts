@@ -95,6 +95,7 @@ import {
   withBorrowedQuotaAccountingOwner,
   withQuotaAccountingOwner,
   type QuotaAccountingOwner,
+  type QuotaProjectionScope,
 } from "./source_admission.ts";
 
 export const QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA =
@@ -133,7 +134,7 @@ interface ReadbackRequest {
   tolerate_malformed_history: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
-  owner: QuotaAccountingOwner;
+  owner: QuotaProjectionScope;
 }
 
 export interface QuotaSettlementReadbackSnapshot {
@@ -234,7 +235,7 @@ function normalizeAgentId(value: unknown): string | null {
 function decodeRequest(
   value: unknown,
   admittedOwner?: QuotaAccountingOwner,
-): ReadbackRequest {
+): ReadbackRequest & {owner: QuotaAccountingOwner} {
   const request = requireJsonObject(value, "quota settlement readback request");
   if (request.schema_version !== QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA) {
     throw new EffectRuntimeRequestError(
@@ -489,7 +490,7 @@ function indexedRuns(
 export function committedMonitorPollFromSnapshot(
   snapshot: QuotaSettlementReadbackSnapshot,
   identity: Pick<SettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id" | "todo_id">,
-  owner: QuotaAccountingOwner = {kind: "alias"},
+  owner: QuotaProjectionScope = {kind: "alias"},
 ): JsonObject | null {
   if (snapshot.goalId !== identity.goal_id) {
     throw new EffectRuntimeRequestError("monitor poll snapshot scope mismatch");
@@ -1707,6 +1708,27 @@ export function readQuotaSettlementFromSnapshot(
     );
   }
   return readQuotaSettlementFromRequest(request, snapshot);
+}
+
+/** Qualify the actual writeback for a Todo Turn from an immutable history
+ * snapshot. A history scope only filters receipts and grants no admission. */
+export function settledTodoWritebackFromSnapshot(
+  snapshot: QuotaSettlementReadbackSnapshot,
+  owner: QuotaProjectionScope,
+  identity: SettlementIdentity,
+): JsonObject | null {
+  if (identity.binding_kind !== "todo") return null;
+  const request = decodeRequest({
+    schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
+    runtime_root: snapshot.runtimeRoot, goal_id: identity.goal_id, agent_id: identity.agent_id,
+    todo_id: identity.todo_id, turn_instance_id: identity.turn_instance_id,
+    infer_turn_instance_id: false, allow_unbound_binding: false,
+  });
+  const readback = readQuotaSettlementFromRequest({...request, owner}, snapshot, false);
+  if (jsonObject(readback.progress)?.state !== "settled" ||
+      readback.replay_phase !== "settled" || readback.monitor_phase === "settled") return null;
+  const run = jsonObject(readback.writeback_run);
+  return jsonObject(run?.settlement_identity)?.effect_id === identity.effect_id ? run : null;
 }
 
 /** Read under a source admission already adopted by the enclosing transaction. */
