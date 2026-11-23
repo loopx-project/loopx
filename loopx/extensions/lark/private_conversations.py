@@ -55,6 +55,7 @@ from .private_delivery_discovery import (
 from .private_ingress import PrivateSourceUnavailable, private_source_text, recovery_source_matches, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
+from .private_topic_lanes import expected_private_source, finalize_private_steward_lane, resolve_private_steward_lane
 from .return_files import read_answer_images, uploaded_chat_images, verify_chat_images
 from .private_progress import (PROGRESS_EDIT_BUDGET as PROGRESS_EDIT_BUDGET, PrivateProgressMixin,
                                presentation_phase, presentation_stream)
@@ -775,21 +776,22 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     or binding.get("audience", "owner") != "owner" or event.get("chat_type") != "p2p"):
                 return {"status": "history_answer_held"}
             request = identity_ref(binding["provider_ref"], event["message_id"])
-            control_root = self._admitted_control_root({"request_ref": request, "source": source,
-                                                       "event": event}, binding)
+            control_root = self._admitted_control_root({"request_ref": request, "source": source, "event": event}, binding)
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
-        path = self.root / f"{request}.json"
+        path, base_source = self.root / f"{request}.json", source
         record_event_timing(profile, event["message_id"], "binding_hint_ready")
 
-        def new_capture() -> dict[str, Any]:
+        def new_capture(resolved_source: dict[str, Any], auto_lane: bool) -> dict[str, Any]:
             return {"schema_version": "lark_private_chat_delivery_v0", "request_ref": request, "profile": profile,
-                    "binding_id": binding["binding_id"], "source": source, "event": event, "deliveries": {}, "status": "captured",
-                    **({"capture_origin": "provider_history"} if history_review else {})}
+                    "binding_id": binding["binding_id"], "source": resolved_source, "event": event, "deliveries": {}, "status": "captured",
+                    **({"auto_topic_lane": True} if auto_lane else {}), **({"capture_origin": "provider_history"} if history_review else {})}
 
         with exclusive_file_lock(path, operation="capture_private_chat_request"):
             record_event_timing(profile, event["message_id"], "capture_lock_acquired")
             fresh_capture = not path.exists()
+            source, auto_topic_lane = resolve_private_steward_lane(controller=self.core.controller, binding=binding, base_source=base_source,
+                event=event, existing_record=None if fresh_capture else _read_json(path), history_review=history_review, allow_auto_fork=False)
             # Retain a candidate from the locally bound owner before provider
             # identity IO can fail. This private receipt grants no execution:
             # recovery still verifies the App, current owner, source and Core
@@ -797,7 +799,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             # existing pre-capture privacy boundary.
             if (fresh_capture and binding.get("enabled") is True and binding.get("audience", "owner") == "owner"
                     and source.get("private_human_message") is True and source["sender_ref"] == binding["operator_ref"]):
-                _atomic_write_json(path, new_capture())
+                _atomic_write_json(path, new_capture(source, auto_topic_lane))
             mention_capture = self.core.capture_native_mention(binding, source) if fresh_capture else None
             if fresh_capture and path.exists():
                 captured = _read_json(path)
@@ -825,7 +827,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         not omitted_private_thread and saved_event.get("thread_id") != event.get("thread_id")):
                     return {"status": "source_conflict"}
             else:
-                record = new_capture()
+                record = new_capture(source, auto_topic_lane)
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
             # Verified transport-only replies have no Core Turn to recover.
@@ -952,6 +954,9 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     preflight = (steward_source_preflight(selected["binding"], source_message,
                         lambda fresh: self._source_message(record, selected=fresh)) if command is None else None)
                     native_mention = command is None and source_message.get("_native_mention") is True
+                    source, selected = finalize_private_steward_lane(transport=self, path=path, record=record, binding=binding,
+                        base_source=base_source, current_source=source, selected=selected, event=event, request_ref=request,
+                        fresh_capture=fresh_capture, history_review=history_review, is_control_or_mention=(command is not None or native_mention))
                     if native_mention:
                         previous_preflight = preflight
 
@@ -1025,8 +1030,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 or turn.get("session_id") != session["session_id"]
                 or record.get("profile") != selected["binding"]["transport_ref"]
                 or record.get("request_ref") != request
-                or record.get("source") != lark_private_source(
-                    provider_ref=selected["binding"]["provider_ref"], event=record["event"])
+                or record.get("source") != expected_private_source(
+                    provider_ref=selected["binding"]["provider_ref"], event=record["event"], saved_context=saved)
                 or record["source"]["source_ref"] != saved["source_ref"]
                 or any(row.get("binding_id") != saved["binding_id"]
                        or row.get("source") != record["source"]
@@ -1172,6 +1177,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             save_phase(text=text, started=True)
             return {"continue_delivery": True}
 
+        effective_placement = "source_thread" if reply_placement is None and record.get("auto_topic_lane") is True else reply_placement
         if edit:
             result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
                 before_send=before_send, delivery_attempt_recorder=lambda value: save_phase(attempt=dict(value)),
@@ -1197,8 +1203,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 save_phase()
                 return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
         elif phase_state.get("attempt"):
-            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True,
-                                            before_send=before_send)
+            result = verify_lark_inbox_reply(**{**kwargs, "reply_placement": effective_placement},
+                                            attempt=phase_state["attempt"], resume_parts=True, before_send=before_send)
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly or churn disk.
@@ -1210,7 +1216,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 phase_state["attempt"] = dict(value)
                 _atomic_write_json(path, record)
 
-            result = reply_lark_event_inbox(**kwargs, execute=True, before_send=before_send,
+            result = reply_lark_event_inbox(**{**kwargs, "reply_placement": effective_placement}, execute=True, before_send=before_send,
                                            delivery_attempt_recorder=attempt, short_message_limit=None,
                                            content_format="markdown",
                                            overlap_source_preflight=bool(kind == "terminal" and self._completed_stop_root(
@@ -1678,8 +1684,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     or turn.get("client_turn_id") != (record.get("context_recovery", {}).get("client_turn_id")
                         or f"external-{record['request_ref']}")
                     or identity_ref(saved["provider_ref"], record["event"]["message_id"]) != record["request_ref"]
-                    or record["source"] != lark_private_source(
-                        provider_ref=saved["provider_ref"], event=record["event"])):
+                    or record["source"] != expected_private_source(
+                        provider_ref=saved["provider_ref"], event=record["event"], saved_context=saved)):
                 return
             selected = self.bindings.resolve(binding_id=record["binding_id"],
                 session_context=saved, include_observation=True, **record["source"])

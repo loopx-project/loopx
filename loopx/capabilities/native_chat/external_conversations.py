@@ -1453,6 +1453,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 allocation = session.get("manager_executor_allocation") or {}
                 if (saved.get("binding_id") == binding["binding_id"]
                         and saved.get("source_ref") == source["source_ref"]
+                        and (saved.get("topic_ref") or None) == (source.get("topic_ref") or None)
                         and session.get("status") in RESUMABLE_SESSION_STATES
                         and (session.get("agent_id") == binding["executor_endpoint_id"]
                             or binding["context_kind"] == "steward" and allocation.get("selection_policy") == "flexible")):
@@ -1482,7 +1483,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         # These references enter the lock path before authority is resolved.
         # Check path-safe shape here; the typed owner checks current grants
         # and provider identity after both fences are acquired.
-        for ref in (binding_id, source.get("source_ref")):
+        for ref in (binding_id, source.get("source_ref"), *([source["topic_ref"]] if "topic_ref" in source else ())):
             if not isinstance(ref, str) or not _REQUEST_JOURNAL_STEM.fullmatch(ref):
                 raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"

@@ -368,7 +368,7 @@ def _deliver_lark_inbox_outbound(
             "lark inbox reply source message is not captured by this inbox"
         )
     if reply_placement is not None and (
-        reply_placement != "chat_root" or source_event is None
+        reply_placement not in {"chat_root", "source_thread"} or source_event is None
     ):
         raise ValueError("a new result requires its captured authorization source")
     if content_format not in {"text", "markdown"}:
@@ -409,7 +409,9 @@ def _deliver_lark_inbox_outbound(
         source_event and (source_event.get("parent_id") or source_event.get("root_id"))
     )
     placement = (
-        "chat_root"
+        "source_thread"
+        if reply_placement == "source_thread"
+        else "chat_root"
         if reply_placement == "chat_root" or source_event is None
         or (
             reply_config["placement_policy"] == "source_context"
@@ -750,7 +752,7 @@ def _deliver_lark_inbox_outbound(
     verified = bool(
         readback.get("returncode") == 0
         and readback_message is not None
-        and (reply_placement is None or _private_root_readback_matches(readback_message, chat_id))
+        and (reply_placement != "chat_root" or _private_root_readback_matches(readback_message, chat_id))
         and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
                                           attachment_names=attachment_names, image_keys=image_keys)
              if markdown else lark_readback_matches_outbound(
