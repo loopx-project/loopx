@@ -2071,3 +2071,44 @@ test("attachCompleteTurnContext preserves tokenless identity and avoids rounding
     EffectRuntimeRequestError,
   );
 });
+
+test("selectedWorkLaunchBasis detects required_write_scopes changes from work_context.sources without selected_todo exposure", () => {
+  const withScopes = (scopes: string[]) => {
+    const source = payload();
+    const interaction = source.interaction_contract as JsonObject;
+    const agent = interaction.agent_channel as JsonObject;
+    agent.work_context = {
+      complete: true,
+      selected_todo_ref: "selected_todo",
+      instruction: "Read full task requirements.",
+      selected_todo_text_verified: true,
+      sources: [
+        {
+          source: "selected_todo",
+          content: {
+            todo: {
+              required_write_scopes: scopes,
+            },
+          },
+        },
+      ],
+    };
+    const contract = evaluateTurnEnvelope({
+      operation: "compose_complete",
+      payload: source,
+      scheduler_execution_args: "",
+    });
+    return evaluateTurnEnvelope({
+      operation: "planning_facts",
+      payload: contract,
+      include_selected_work_basis: true,
+    }).selected_work_basis;
+  };
+  const emptyBasis = withScopes([]);
+  const docsBasis = withScopes(["docs/evidence/**"]);
+  const srcBasis = withScopes(["src/**"]);
+  assert.equal(typeof emptyBasis, "string");
+  assert.notEqual(emptyBasis, docsBasis);
+  assert.notEqual(docsBasis, srcBasis);
+  assert.equal(withScopes(["docs/evidence/**"]), docsBasis);
+});

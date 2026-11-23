@@ -471,6 +471,7 @@ def execute_quota_should_run(
                 existing=execution.heartbeat_receipt_existing,
                 goal_ref=goal_ref,
                 scheduler_execution_context=context.scheduler_context,
+                status_payload=status_payload,
             )
         else:
             (

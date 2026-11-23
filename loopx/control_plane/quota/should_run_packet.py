@@ -1711,7 +1711,7 @@ def _build_quota_should_run_payload(
         # Retain current facts across contract rebuilds for hooks and selection.
 
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
-            prepared.item, selected_todo,
+            prepared.item, selected_todo, project_asset=prepared.project_asset,
         )
     apply_selected_todo_execution_preparation(
         payload,
