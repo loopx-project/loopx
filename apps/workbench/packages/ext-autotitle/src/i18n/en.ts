@@ -3,8 +3,8 @@ import type { zh } from './zh';
 export const en: typeof zh = {
   lead: 'After a new thread’s first turn, the agent you choose gives it a short title by the rules below. Titles you set yourself are left alone.',
   agent: 'Naming agent',
-  chooseAgent: 'Choose an agent',
-  noAgent: 'None yet. Naming starts once you choose one.',
+  autoAgent: 'Automatic',
+  autoHint: 'Each thread is named by its own agent on its cheapest model: Luna for Codex, Gemini 3.8 Flash Low for Antigravity, Haiku for Claude. A thread whose agent has no model of known price is not named.',
   noAsk: 'This agent has no ask-first mode; while naming it may run tools on its own',
   model: 'Model',
   defaultModel: 'Default model',
