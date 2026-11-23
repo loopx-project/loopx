@@ -37,6 +37,7 @@ const HEARTBEAT_SCHEMA = 'heartbeat_agent_input_v1'
 const CONTINUATION_SCHEMA = 'loopx_dsh_continuation_v0'
 const RECEIPT_READBACK_SCHEMA = 'quota_receipt_readback_v0'
 const DEFAULT_WAIT_MS = 5 * 60_000
+const JOB_WAIT_MS = 10 * 60_000
 const MAX_WAIT_MS = 24 * 60 * 60_000
 const SELECTION_RECOVERY_COMPLETION_LIMIT = 2
 
@@ -90,11 +91,19 @@ interface Reservation extends Binding {
 interface SessionDriverRetention {
   readonly agent: Agent
   paused: boolean
+  goalBarPaused?: boolean
+  admissionFailure?: GoalBarAdmissionFailureCategoryV1 | undefined
   reservation?: Reservation | undefined
+  jobWait?: {
+    readonly turnEndSeq: SessionEvent<'turn/end'>['seq']
+    readonly until: number
+    waiting?: boolean
+    deferredPlan?: QueuePlan | undefined
+  } | undefined
 }
 
 // HMR can replace this module while the same Agent and Session keep running.
-// Retain only process-local cancellation ownership and the error pause; Core
+// Retain cancellation ownership, pause/readback state, and the host-job deadline. Core
 // remains the owner of admission and settlement. Weak keys do not retain closed Sessions.
 const retentionKey = Symbol.for('loopx.dsh.session-driver-retention.v1')
 const retainedHost = globalThis as typeof globalThis & {
@@ -130,11 +139,9 @@ interface DriverState {
   requested: boolean
   stopping: boolean
   competing: boolean
-  pauseAfterTurnError: boolean
+  readonly pauseAfterTurnError: boolean
   schedulerToken: string
   unchangedPolls: number
-  /** Safe category of the last unadmitted admission attempt, for GoalBar projection. */
-  admissionFailure?: { readonly category: GoalBarAdmissionFailureCategoryV1 } | undefined
   readonly commands: Set<string>
   readonly evaluationWaiters: Set<EvaluationWaiter>
   run?: Promise<void> | undefined
@@ -162,6 +169,10 @@ interface WaitPlan {
 }
 
 type EvaluationPlan = QueuePlan | WaitPlan
+
+interface HostJobs {
+  list(agentId: Agent['id']): readonly { readonly owner?: Agent['id'] | undefined; readonly status: string }[]
+}
 type AdmissionStage = 'resolve-command' | 'resolve-binding' | 'quota' | 'heartbeat'
   | 'pre-step-recheck' | 'maintenance-slot'
 
@@ -177,6 +188,7 @@ function preStepRejection(
 
 export interface LoopXDriverOptions {
   readonly isLiveAgent: (agent: Agent) => boolean
+  readonly getJobs?: () => HostJobs | undefined
   readonly runner?: FileRunner | undefined
   readonly resolveCommand?: (
     signal: AbortSignal,
@@ -237,6 +249,15 @@ function isHostContextMessage(message: UserMessage): boolean {
   // DSH kind identifies the producer; snapshot/catalog forms also describe plugin messages.
   const kind: string = message.source.kind
   return kind === 'runtime-context' || kind === 'time-context' || kind === 'skill-catalog'
+}
+
+function isToolJobNotice(message: UserMessage): boolean {
+  const source = record(message.source)
+  return source?.kind === 'tool-jobs' && source.form === 'notice'
+}
+
+function isAllowedStepContext(message: UserMessage): boolean {
+  return isHostContextMessage(message) || isToolJobNotice(message)
 }
 
 function sameReservation(message: UserMessage, reservation: Reservation): boolean {
@@ -440,13 +461,14 @@ function sessionErrorPause(session: Agent['session']): boolean {
  * exposes the two pending queues instead of the retired `hasPending` flag.
  */
 function inboxHasPending(inbox: Agent['inbox']): boolean {
-  return inbox.nextTurn.length > 0 || inbox.nextStep.length > 0
+  return inbox.nextTurn.some(message => !isToolJobNotice(message))
+    || inbox.nextStep.some(message => !isToolJobNotice(message))
 }
 
 /** Pending context or another automatic message cannot release a rejected step. */
 function inboxHasIndependentInput(inbox: Agent['inbox']): boolean {
   return [...inbox.nextTurn, ...inbox.nextStep].some(message => (
-    !isDriverMessage(message) && !isHostContextMessage(message)
+    !isDriverMessage(message) && !isAllowedStepContext(message)
   ))
 }
 
@@ -643,6 +665,13 @@ function exactQuota(
     && exactQuotaReceipt(payload, turnInstanceId)
 }
 
+/** Core's own typed failure to persist this exact Turn's receipt; the next evaluation may retry. */
+function receiptWriteFailed(payload: Record<string, unknown>, turnInstanceId: string): boolean {
+  const receipt = record(payload.heartbeat_receipt)
+  return payload.effective_action === 'heartbeat_receipt_write_failed'
+    && receipt?.status === 'write_failed' && receipt.turn_instance_id === turnInstanceId
+}
+
 function schedulerWait(
   payload: Record<string, unknown>,
   currentToken: string,
@@ -801,6 +830,7 @@ export class LoopXContinuationDriver {
   private readonly retryDelaysMs: readonly number[]
   private readonly runDetached: <T>(operation: () => Promise<T>) => Promise<T>
   private readonly warn: (message: string) => void
+  private readonly getJobs: LoopXDriverOptions['getJobs']
   private readonly onAdmissionChange: ((session: Agent['session']) => void) | undefined
   private command?: LoopXCommand | undefined
   private disposed = false
@@ -821,6 +851,7 @@ export class LoopXContinuationDriver {
       }
     }
     this.onAdmissionChange = options.onAdmissionChange
+    this.getJobs = options.getJobs
   }
 
   observeAgent(agent: Agent): void {
@@ -845,7 +876,6 @@ export class LoopXContinuationDriver {
     state.retrySelection = false
     state.schedulerToken = ''
     state.unchangedPolls = 0
-    this.clearAdmissionFailure(state)
     state.commands.clear()
     state.activation = foldSessionActivation(agent.session)
     this.requestEvaluation(state)
@@ -864,8 +894,14 @@ export class LoopXContinuationDriver {
   onInboxInserted(agent: Agent, message: UserMessage): void {
     const state = this.stateFor(agent)
     if (state.reservation !== undefined && sameReservation(message, state.reservation)) return
+    if (isToolJobNotice(message)) {
+      if (agent.status === 'idle') this.requestEvaluation(state)
+      return
+    }
     state.competing = true
-    if (message.source.kind === 'user') state.pauseAfterTurnError = false
+    const wait = retainedState(agent, state.activation.session).jobWait
+    if (wait !== undefined) wait.deferredPlan = undefined
+    if (message.source.kind === 'user') this.resumeAfterError(state)
     this.cancelPending(state)
   }
 
@@ -875,7 +911,7 @@ export class LoopXContinuationDriver {
       state.reservation.phase = 'claimed'
       return
     }
-    state.competing = true
+    if (!isToolJobNotice(message)) state.competing = true
   }
 
   onInboxDiscarded(agent: Agent, message: UserMessage): void {
@@ -887,7 +923,7 @@ export class LoopXContinuationDriver {
 
   onAgentError(agent: Agent): void {
     const state = this.stateFor(agent)
-    state.pauseAfterTurnError = true
+    this.setErrorPause(state, true)
     this.cancelPending(state)
   }
 
@@ -910,10 +946,11 @@ export class LoopXContinuationDriver {
       return { kind: 'unavailable', reason: 'session_unavailable' }
     }
 
+    retainedState(capture.agent, capture.session).goalBarPaused = false
+    this.resumeAfterError(state)
     state.activation = foldSessionActivation(capture.session)
     if (!state.activation.activated) return { kind: 'applied' }
 
-    state.pauseAfterTurnError = false
     state.retrySelection = state.activation.pendingSelection !== undefined
     const evaluated = new Promise<boolean>(resolve => {
       state.evaluationWaiters.add({ session: capture.session, resolve })
@@ -937,12 +974,14 @@ export class LoopXContinuationDriver {
     if (!this.captureIsLive(capture)) {
       return { kind: 'unavailable', reason: 'session_unavailable' }
     }
-    const state = this.states.get(capture.agent)
-    if (state === undefined) return { kind: 'applied' }
+    const state = this.stateFor(capture.agent)
     if (state.stopping || state.activation.session !== capture.session) {
       return { kind: 'unavailable', reason: 'session_unavailable' }
     }
 
+    const retained = retainedState(capture.agent, capture.session)
+    retained.goalBarPaused = true
+    if (retained.jobWait !== undefined) retained.jobWait.deferredPlan = undefined
     const reservation = state.reservation
     if (reservation?.phase === 'claimed' || reservation?.phase === 'admitted') {
       reservation.preserveAcrossPause = true
@@ -962,13 +1001,13 @@ export class LoopXContinuationDriver {
     capture: GoalBarSessionCapture,
   ): GoalBarContinuationAdmissionV1 {
     const state = this.states.get(capture.agent)
-    if (state === undefined || state.activation.session !== capture.session) {
+    if (state?.activation.session !== capture.session || capture.agent.session !== capture.session) {
       return GOALBAR_ADMISSION_CLEAR
     }
-    const failure = state.admissionFailure
-    return failure === undefined
+    const category = retainedState(capture.agent, capture.session).admissionFailure
+    return category === undefined
       ? GOALBAR_ADMISSION_CLEAR
-      : { state: 'failed', category: failure.category }
+      : { state: 'failed', category }
   }
 
   onSessionEvent(agent: Agent, event: SessionEvent): void {
@@ -1004,9 +1043,10 @@ export class LoopXContinuationDriver {
       state.reservation.phase = 'admitted'
       return
     }
+    if (event.type === 'turn/start') this.resetJobWait(state)
     if (event.type === 'turn/end'
       && (event.data.reason.kind === 'max-tokens' || event.data.reason.kind === 'aborted')) {
-      state.pauseAfterTurnError = true
+      this.setErrorPause(state, true)
       this.cancelPending(state)
     }
   }
@@ -1024,6 +1064,7 @@ export class LoopXContinuationDriver {
       : messages.find(message => message.id === reservation.messageId)
         ?? messages.find(message => isDriverMessage(message))
     if (submitted === undefined) return next()
+    const claimed = otherStepInputs(messages, submitted)
     const startedAt = performance.now()
     if (reservation === undefined || !sameReservation(submitted, reservation)
       || reservation.phase !== 'claimed') {
@@ -1031,20 +1072,20 @@ export class LoopXContinuationDriver {
       if (reservation !== undefined && submitted.id === reservation.messageId) {
         this.retireReservation(state)
       }
-      this.restoreCompetingMessages(agent, otherStepInputs(messages, submitted))
+      this.restoreCompetingMessages(agent, claimed, !signal.aborted)
       return { kind: 'reject' }
     }
-    if (messages.some(message => message.id !== submitted.id && !isHostContextMessage(message))) {
+    if (messages.some(message => message.id !== submitted.id && !isAllowedStepContext(message))) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('competing-messages', messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreCompetingMessages(agent, otherStepInputs(messages, submitted))
+      this.restoreCompetingMessages(agent, claimed, !signal.aborted)
       return { kind: 'reject' }
     }
 
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('authority-before-next', messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreCompetingMessages(agent, otherStepInputs(messages, submitted))
+      this.restoreCompetingMessages(agent, claimed, !signal.aborted)
       this.requestEvaluation(state)
       return { kind: 'reject' }
     }
@@ -1053,23 +1094,21 @@ export class LoopXContinuationDriver {
     try {
       decision = await next()
     } catch (error: unknown) {
-      state.pauseAfterTurnError = true
+      this.setErrorPause(state, true)
       this.retireReservation(state)
+      this.restoreCompetingMessages(agent, claimed, !signal.aborted)
       throw error
     }
-    if (signal.aborted) {
-      state.pauseAfterTurnError = true
+    if (decision.kind === 'reject' || signal.aborted) {
+      if (decision.kind === 'reject') this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-reject', messages, submitted, startedAt)}`)
+      const remaining = decision.kind === 'enter' ? otherStepInputs(decision.messages, submitted) : []
+      this.restoreCompetingMessages(agent, [...claimed, ...remaining], !signal.aborted)
+      this.setErrorPause(state, true)
       this.retireReservation(state)
-      return decision
-    }
-    if (decision.kind === 'reject') {
-      this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-reject', messages, submitted, startedAt)}`)
-      state.pauseAfterTurnError = true
-      this.retireReservation(state)
-      return decision
+      return { kind: 'reject' }
     }
     const admitted = decision.messages.find(message => message.id === reservation.messageId)
-    if (decision.messages.filter(message => !isHostContextMessage(message)).length !== 1
+    if (decision.messages.filter(message => !isAllowedStepContext(message)).length !== 1
       || admitted === undefined
       || !sameReservation(admitted, reservation)) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-batch', decision.messages, submitted, startedAt)}`)
@@ -1079,18 +1118,20 @@ export class LoopXContinuationDriver {
       if (acceptedInputs.some(message => message.source.kind === 'user')) {
         // Keep the downstream-approved human step. Putting the messages back
         // after a rejection would leave them parked until another Host wake.
+        const acceptedIds = new Set(acceptedInputs.map(message => message.id))
+        this.restoreCompetingMessages(agent, claimed.filter(message => !acceptedIds.has(message.id)), true)
         return { ...decision, messages: acceptedInputs }
       }
-      const restoredWork = this.restoreCompetingMessages(agent, remaining)
+      const restoredWork = this.restoreCompetingMessages(agent, [...claimed, ...remaining], true)
       if (!restoredWork && !inboxHasIndependentInput(agent.inbox)) {
-        state.pauseAfterTurnError = true
+        this.setErrorPause(state, true)
       }
       return { kind: 'reject' }
     }
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
       this.warn(`dsh-loopx-driver: ${preStepRejection('authority-after-next', decision.messages, submitted, startedAt)}`)
       this.retireReservation(state)
-      this.restoreCompetingMessages(agent, otherStepInputs(decision.messages, submitted))
+      this.restoreCompetingMessages(agent, [...claimed, ...otherStepInputs(decision.messages, submitted)], !signal.aborted)
       return { kind: 'reject' }
     }
     return decision
@@ -1145,9 +1186,6 @@ export class LoopXContinuationDriver {
         existing.retrySelection = false
         existing.schedulerToken = ''
         existing.unchangedPolls = 0
-        // The replaced Session's failure dies with it; its waiters are
-        // invalidated separately, so no admission change is published.
-        existing.admissionFailure = undefined
         existing.commands.clear()
         existing.activation = foldSessionActivation(agent.session)
       }
@@ -1160,7 +1198,6 @@ export class LoopXContinuationDriver {
       stopping: false,
       competing: inboxHasPending(agent.inbox),
       get pauseAfterTurnError() { return retainedState(agent, this.activation.session).paused },
-      set pauseAfterTurnError(value: boolean) { retainedState(agent, this.activation.session).paused = value },
       get reservation() { return retainedState(agent, this.activation.session).reservation },
       set reservation(value: Reservation | undefined) { retainedState(agent, this.activation.session).reservation = value },
       retrySelection: false,
@@ -1186,6 +1223,7 @@ export class LoopXContinuationDriver {
       && !state.stopping
       && state.activation.session === state.agent.session
       && state.activation.activated
+      && !retainedState(state.agent, state.activation.session).goalBarPaused
       && !state.pauseAfterTurnError
       && !state.competing
       && state.commands.size === 0
@@ -1240,6 +1278,9 @@ export class LoopXContinuationDriver {
   private async evaluate(state: DriverState): Promise<boolean> {
     if (!this.ready(state)) return false
     const session = state.agent.session
+    const jobWait = this.checkHostJobWait(state)
+    if (jobWait.waiting) return true
+
     const startedAt = performance.now()
     let stage: AdmissionStage = 'maintenance-slot'
     let admissionSignal: AbortSignal | undefined
@@ -1253,7 +1294,7 @@ export class LoopXContinuationDriver {
         evaluationStarted = true
         const signal = AbortSignal.any([controller.signal, maintenanceSignal])
         admissionSignal = signal
-        return this.buildPlan(state, signal, value => { stage = value })
+        return this.buildPlan(state, signal, value => { stage = value }, jobWait.deferredPlan)
       })
     } catch (error: unknown) {
       if (!evaluationStarted && !controller.signal.aborted
@@ -1278,8 +1319,11 @@ export class LoopXContinuationDriver {
         this.command = undefined
       }
       if (!controller.signal.aborted && !cancelled) {
+        if (error instanceof LoopXCliError && error.kind === 'typed_failure') {
+          this.clearDeferredPlan(state, jobWait.deferredPlan)
+        }
         this.warn(`dsh-loopx-driver: admission_failed stage=${stage} ${cliErrorFields(error)} signal_aborted=${admissionSignal?.aborted ?? controller.signal.aborted} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
-        this.recordAdmissionFailure(state, admissionFailureCategory(error))
+        this.failAdmission(state, error)
       }
       return evaluationStarted
     } finally {
@@ -1293,6 +1337,7 @@ export class LoopXContinuationDriver {
     }
 
     if (plan.kind === 'wait') {
+      this.clearDeferredPlan(state, jobWait.deferredPlan)
       if (plan.schedulerToken !== undefined) state.schedulerToken = plan.schedulerToken
       if (plan.unchangedPolls !== undefined) state.unchangedPolls = plan.unchangedPolls
       if (plan.delayMs !== undefined) this.schedule(state, plan.delayMs)
@@ -1303,6 +1348,11 @@ export class LoopXContinuationDriver {
     state.unchangedPolls = 0
     this.clearAdmissionFailure(state)
     if (!this.ready(state) || state.agent.session !== plan.session) return true
+    if (this.checkHostJobWait(state, plan).waiting) return true
+    return this.queuePlan(state, plan)
+  }
+
+  private queuePlan(state: DriverState, plan: QueuePlan): boolean {
     const message = automaticMessage(plan)
     const reservation: Reservation = {
       messageId: message.id,
@@ -1318,6 +1368,7 @@ export class LoopXContinuationDriver {
     state.reservation = reservation
     try {
       state.agent.followup(message)
+      this.clearDeferredPlan(state, plan)
     } catch (error: unknown) {
       this.retireReservation(state)
       this.warn(`dsh-loopx-driver: could not queue same-session work: ${renderThrown(error)}`)
@@ -1339,6 +1390,7 @@ export class LoopXContinuationDriver {
     state: DriverState,
     signal: AbortSignal,
     setStage: (stage: AdmissionStage) => void,
+    deferredPlan?: QueuePlan,
   ): Promise<EvaluationPlan> {
     const session = state.agent.session
     this.ensureReady(state, signal, session)
@@ -1356,15 +1408,16 @@ export class LoopXContinuationDriver {
       )
     }
     const binding = exactBinding(bindingPayload, String(state.agent.id))
-    if (binding === undefined) {
+    if (binding === undefined || (deferredPlan !== undefined
+      && (binding.goalId !== deferredPlan.goalId || binding.agentId !== deferredPlan.agentId))) {
       state.recoveryAttention = undefined
       return { kind: 'wait', schedulerToken: '', unchangedPolls: 0 }
     }
 
     setStage('quota')
     const selection = state.activation.pendingSelection
-    let turnInstanceId: string | undefined
-    if (selection !== undefined
+    let turnInstanceId = deferredPlan?.turnInstanceId
+    if (deferredPlan === undefined && selection !== undefined
       && selection.goalId === binding.goalId && selection.agentId === binding.agentId) {
       const receipt = await this.readSelectionReceipt(command, state.agent, selection, signal)
       this.ensureReady(state, signal, session)
@@ -1377,7 +1430,7 @@ export class LoopXContinuationDriver {
         state.activation.pendingSelection = undefined
         state.recoveryAttention = undefined
       }
-    } else {
+    } else if (deferredPlan === undefined) {
       state.activation.pendingSelection = undefined
     }
     state.retrySelection = false
@@ -1388,7 +1441,7 @@ export class LoopXContinuationDriver {
       throw new LoopXCliError(
         'typed_failure',
         'LoopX quota authority rejected automatic continuation',
-        false,
+        receiptWriteFailed(quota, turnInstanceId),
       )
     }
     if (typeof quota.should_run !== 'boolean' || !exactQuotaContext(quota, binding)
@@ -1411,6 +1464,7 @@ export class LoopXContinuationDriver {
     // A verified new Core decision clears the old hold even if reading its
     // task body later fails. A body transport error cannot revive a prior wait.
     state.recoveryAttention = undefined
+    if (deferredPlan !== undefined) return deferredPlan
     setStage('heartbeat')
     const heartbeat = await this.readHeartbeat(
       command,
@@ -1457,6 +1511,9 @@ export class LoopXContinuationDriver {
     try {
       const command = await this.loopXCommand(signal)
       const bindingPayload = await this.resolveBinding(command, state.agent, signal)
+      if (bindingPayload.ok !== true) {
+        throw new LoopXCliError('typed_failure', 'LoopX binding authority rejected automatic continuation', false)
+      }
       const binding = exactBinding(bindingPayload, String(state.agent.id))
       if (binding?.goalId !== reservation.goalId || binding.agentId !== reservation.agentId) {
         return false
@@ -1471,15 +1528,22 @@ export class LoopXContinuationDriver {
         reservation.turnInstanceId,
         { signal, revalidateOnly: true },
       )
-      return this.reservationIsCurrent(state, reservation, signal)
-        && (reservation.preserveAcrossPause
-          || exactQuota(quota, reservation, reservation.turnInstanceId))
+      if (!this.reservationIsCurrent(state, reservation, signal)) return false
+      if (reservation.preserveAcrossPause) return true
+      if (quota.ok !== true) {
+        throw new LoopXCliError('typed_failure', 'LoopX quota authority rejected automatic continuation',
+          receiptWriteFailed(quota, reservation.turnInstanceId))
+      }
+      return exactQuota(quota, reservation, reservation.turnInstanceId)
     } catch (error: unknown) {
       if (error instanceof LoopXCliError && error.kind === 'missing') {
         this.command = undefined
       }
       if (!(error instanceof LoopXCliError && error.kind === 'aborted')) {
         this.warn(`dsh-loopx-driver: admission_failed stage=pre-step-recheck ${cliErrorFields(error)} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
+        if (!reservation.preserveAcrossPause && this.reservationIsCurrent(state, reservation, signal)) {
+          this.failAdmission(state, error)
+        }
       }
       return false
     }
@@ -1679,6 +1743,58 @@ export class LoopXContinuationDriver {
     this.resolveEvaluationWaiterBatch(state, waiters, evaluated)
   }
 
+  private checkHostJobWait(
+    state: DriverState, plan?: QueuePlan,
+  ): { waiting: boolean; deferredPlan?: QueuePlan | undefined } {
+    const { agent } = state
+    const session = state.activation.session
+    const retained = retainedState(agent, session)
+    const activeJobs = this.getJobs?.()?.list(agent.id)
+      .filter(job => job.owner === agent.id && (job.status === 'running' || job.status === 'stopping')).length ?? 0
+    if (activeJobs === 0 && retained.jobWait === undefined) return { waiting: false }
+    const lastTurnEvent = session.snapshotEvents().findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
+    if (lastTurnEvent?.type !== 'turn/end' || lastTurnEvent.data.reason.kind !== 'completed') {
+      this.resetJobWait(state)
+      return { waiting: false }
+    }
+    if (retained.jobWait !== undefined && retained.jobWait.turnEndSeq !== lastTurnEvent.seq) {
+      this.resetJobWait(state)
+    }
+    const now = Date.now()
+    const previous = retained.jobWait
+    if (activeJobs === 0 || (previous !== undefined && now >= previous.until)) {
+      if (previous !== undefined) this.clearJobWaitTimer(state, previous)
+      // Revalidation can be cancelled while the same Core Turn is still eligible.
+      return { waiting: false, deferredPlan: previous?.deferredPlan }
+    }
+    const wait = retained.jobWait ??= { turnEndSeq: lastTurnEvent.seq, until: now + JOB_WAIT_MS }
+    // Keep the Core receipt identity for revalidation when the wait ends.
+    if (plan !== undefined) wait.deferredPlan = plan
+    wait.waiting = true
+    this.schedule(state, wait.until - now)
+    return { waiting: true }
+  }
+
+  private clearDeferredPlan(state: DriverState, plan: QueuePlan | undefined): void {
+    if (plan === undefined) return
+    const wait = retainedState(state.agent, plan.session).jobWait
+    if (wait?.deferredPlan === plan) wait.deferredPlan = undefined
+  }
+
+  private resetJobWait(state: DriverState): void {
+    const retained = retainedState(state.agent, state.activation.session)
+    if (retained.jobWait !== undefined) this.clearJobWaitTimer(state, retained.jobWait)
+    retained.jobWait = undefined
+  }
+
+  private clearJobWaitTimer(state: DriverState, wait: NonNullable<SessionDriverRetention['jobWait']>): void {
+    if (wait.waiting && state.timer !== undefined) {
+      this.clock.clearTimeout(state.timer)
+      state.timer = undefined
+    }
+    wait.waiting = false
+  }
+
   private cancelPending(state: DriverState): void {
     state.requested = false
     state.controller?.abort()
@@ -1699,34 +1815,48 @@ export class LoopXContinuationDriver {
     state.reservation = undefined
   }
 
-  private recordAdmissionFailure(
-    state: DriverState,
-    category: GoalBarAdmissionFailureCategoryV1,
-  ): void {
-    const current = state.admissionFailure
-    if (current !== undefined && current.category === category) return
-    state.admissionFailure = { category }
-    this.onAdmissionChange?.(state.agent.session)
+  private failAdmission(state: DriverState, error: unknown): void {
+    const category = admissionFailureCategory(error)
+    // A recoverable receipt write failure keeps the next-idle retry; genuine rejections wait for a human.
+    const recoverable = error instanceof LoopXCliError && error.retryable
+    if (category === 'admission_rejected' && !recoverable) this.setErrorPause(state, true)
+    const retained = retainedState(state.agent, state.activation.session)
+    if (retained.admissionFailure === category) return
+    retained.admissionFailure = category
+    this.onAdmissionChange?.(state.activation.session)
+  }
+
+  private setErrorPause(state: DriverState, paused: boolean): void {
+    retainedState(state.agent, state.activation.session).paused = paused
+  }
+
+  private resumeAfterError(state: DriverState): void {
+    this.setErrorPause(state, false)
+    if (retainedState(state.agent, state.activation.session).admissionFailure === 'admission_rejected') {
+      this.clearAdmissionFailure(state)
+    }
   }
 
   private clearAdmissionFailure(state: DriverState): void {
-    if (state.admissionFailure === undefined) return
-    state.admissionFailure = undefined
-    this.onAdmissionChange?.(state.agent.session)
+    const retained = retainedState(state.agent, state.activation.session)
+    if (retained.admissionFailure === undefined) return
+    retained.admissionFailure = undefined
+    this.onAdmissionChange?.(state.activation.session)
   }
 
   private restoreCompetingMessages(
     agent: Agent,
     messages: readonly UserMessage[],
+    wakeup: boolean,
   ): boolean {
     // Host context belongs to the step that requested it. Restore it only
     // alongside independent input that will actually use it.
     if (messages.every(isHostContextMessage)) return false
     for (const message of messages) {
       if (inboxContains(agent.inbox, message.id)) continue
-      agent.send(message, 'next-step', true)
+      agent.send(message, 'next-step', wakeup)
     }
-    return true
+    return messages.some(message => !isAllowedStepContext(message))
   }
 
   private stopState(state: DriverState): void {
@@ -1770,6 +1900,7 @@ function watchReplacementUnload(ctx: Context): () => boolean {
 export function apply(ctx: Context): void {
   const driver = new LoopXContinuationDriver({
     isLiveAgent: agent => ctx.agents.get(agent.id) === agent,
+    getJobs: () => ctx.get('jobs') as HostJobs | undefined,
     resolveCommand: signal => resolvePluginLoopXCommand({ signal }),
     runDetached: operation => ctx.agents.withoutInitiator(operation),
     warn: message => { ctx.logger.warn(message) },
