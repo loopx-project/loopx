@@ -186,6 +186,50 @@ def test_collision_or_changed_bytes_prevents_every_upload(bundle, wrong_case, mi
     assert not any(c[:2] == ("release", "upload") for c in calls)
 
 
+
+@pytest.mark.parametrize("failure", ["policy-held", "missing", "changed", "draft", None])
+def test_named_release_preserves_old_latest_until_qualified_bundle_readback(bundle, failure):
+    root, identity = bundle
+    if failure == "policy-held":
+        stable_runtime(root, identity, current=True)
+    files = owner.publication_files(root, identity)
+    asset_files = files[:-1] if failure == "missing" else files
+    old = {"id": 41, "tag_name": "v1.2.2"}
+    release = {"id": 42, "tag_name": identity.tag, "draft": failure == "draft", "prerelease": False}
+    latest = old
+    notes_file = root / "NOTES.md"
+    notes_file.write_text("Release notes", encoding="utf-8")
+    calls, read_remote, download = transport(asset_files, mismatch=failure == "changed")
+
+    def github(*args):
+        nonlocal latest
+        if args[:2] == ("release", "create"):
+            assert args[2] == identity.tag and "--verify-tag" in args
+            if "--latest=false" not in args:
+                latest = release
+            return b""
+        if args == ("api", f"repos/owner/repo/releases/tags/{identity.tag}"):
+            return json.dumps(release).encode()
+        if args == ("api", "repos/owner/repo/releases/latest"):
+            return json.dumps(latest).encode()
+        if args == ("api", "--method", "PATCH", "repos/owner/repo/releases/42", "-f", "make_latest=true"):
+            latest = release
+            return b""
+        return read_remote(*args)
+
+    with patch.object(owner, "gh", github), patch.object(owner.subprocess, "run", download):
+        owner.create_named_release(identity, "owner/repo", notes_file, "LoopX 1.2.3")
+        assert latest == old
+        if failure is not None:
+            with pytest.raises(owner.ReleaseArtifactError):
+                owner.promote_latest(root, identity, "owner/repo", execute=True)
+            assert latest == old
+        else:
+            owner.promote_latest(root, identity, "owner/repo", execute=False)
+            assert latest == old
+            owner.promote_latest(root, identity, "owner/repo", execute=True)
+            assert latest == release
+
 def test_recovery_attestation_failure_cannot_publish(bundle):
     root, identity = bundle
     calls, gh, download = transport([], attestation_failure=True)

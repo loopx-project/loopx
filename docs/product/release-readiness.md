@@ -310,11 +310,26 @@ qualification against the release source before uploading any package assets.
 A held stable Runtime fails that upload and therefore blocks its PyPI job.
 Desktop uploads the exact tagged build for verification and keeps
 `desktop-stable` on its published profile until the gate passes.
-Archive updaters shipped before this cutover still resolve stable through
-GitHub Latest. Before setting a product release as Latest, run
-`python scripts/release_artifacts.py check-stable-runtime --dist-dir dist`
-against the qualified bundle. Keep C1 candidates on their immutable main
-revision while the stable gate is held. Promote C1 by reviewing the policy
+Archive updaters shipped before this cutover resolve stable through GitHub
+Latest. The maintainer publishes a prepared, already tagged release through
+`create-named-release` after the final release body is approved. It passes
+`--latest=false` to GitHub at creation, keeping old stable installs on the
+previous complete release while the existing published-release workflow builds
+and uploads the new bundle.
+
+```bash
+python scripts/release_artifacts.py create-named-release --repo loopx-project/loopx \
+  --title "$RELEASE_TITLE" --notes-file "$RELEASE_BODY"
+```
+
+From the tagged source, run
+`python scripts/release_artifacts.py promote-latest --repo loopx-project/loopx --dist-dir dist`
+with its validated bundle. The command reruns stable qualification and
+downloads the published assets to check their bytes against that bundle.
+When the maintainer authorizes the pointer move, rerun with `--execute` to
+update the exact release and verify GitHub Latest. If a write response is lost,
+read the release or Latest before retrying. Keep C1 candidates on their immutable
+main revision while the stable gate is held. Promote C1 by reviewing the policy
 change with the supported installation, adoption, matched outcome and
 complete-cost evidence under RFC §9.
 Desktop packaging observes its actual archived source
@@ -342,10 +357,16 @@ Runtime 与 Desktop 的 main 和 stable 更新渠道共用
 正式版本的上传步骤先核对 stable Runtime 归档、安装资格回执与版本来源，再上传包制品。
 stable Runtime 资格未通过时，上传失败，其 PyPI 任务也不会执行。
 Desktop 保留按具体标签验证的签名构建，`desktop-stable` 继续提供已发布的契约。
-切换前已安装的归档更新器经 GitHub Latest 解析 stable。将正式版本设为 Latest 前，
-对合格制品执行 `python scripts/release_artifacts.py check-stable-runtime --dist-dir dist`。
-stable 门禁未通过时，继续通过不可变的 main 提交验证 C1 候选。推进 C1 时，按
-RFC §9 一并评审受支持的安装、采用、匹配成果和完整成本。
+切换前已安装的归档更新器经 GitHub Latest 解析 stable。维护者确认最终发布正文后，
+使用上面的 `create-named-release` 发布已打标签的版本。创建时显式传入
+`--latest=false`，让旧客户端在现有发布工作流构建和上传制品期间继续使用上一完整版本。
+
+在该标签的源码目录，用已验证的制品运行
+`python scripts/release_artifacts.py promote-latest --repo loopx-project/loopx --dist-dir dist`。命令重新核验 stable 资格，
+下载已发布的资产并核对字节。维护者授权切换后，为该命令加上 `--execute`，
+更新精确发布记录并读回 Latest。如果写入响应丢失，先读回发布记录或 Latest，再决定
+是否重试。stable 门禁未通过时，继续通过不可变的 main 提交验证 C1 候选。推进 C1 时，
+按 RFC §9 一并评审受支持的安装、采用、匹配成果和完整成本。
 桌面打包通过相同探测与支持校验器检查实际归档源码。runtime 更新在下载或激活前拒绝
 未支持的声明契约，并核对归档身份与元数据中的契约；历史 v1 描述符保留读取兼容。
 已发布的 `v2.4.0` 标签保留 `quota_packet`。新的 runtime 和 Desktop 构建只为
