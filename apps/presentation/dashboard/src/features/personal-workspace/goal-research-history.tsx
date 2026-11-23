@@ -396,8 +396,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     select(collection ?? {nodes: [], day: null}, false);
   };
   const chooseQuestion = (node: ExploreHistoryNode, parent: CollectionSelection) => {
-    const finding = defaultFinding(node);
-    select({nodes: [node.id], day: null, finding: finding?.result_id, event: finding?.event_id, collection: parent});
+    select({nodes: [node.id], day: null, collection: parent});
   };
   const resultsAnchor = useRef<HTMLDivElement>(null), reportAnchor = useRef<HTMLDivElement>(null), historyAnchor = useRef<HTMLElement>(null);
   const reportEntries = useRef(new Set<string>());

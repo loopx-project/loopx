@@ -39,9 +39,16 @@ for index in range(24):
     events.append(build_explore_node_event(goal_id=goal,node_id=node,title=title,node_kind='question',
         recorded_at=f'2026-01-04T{23 if index==23 else 0:02}:00:{index:02}Z'))
     for version,status in enumerate(('refuted','tentative')):
+        measurements=None
+        if index in (3,4):
+            measurements=[dict(metric='Errors', unit='failures', higher_is_better=False,
+                comparison_scope='validation', input_revision='revision-1', evaluation_ref='suite:validation',
+                candidate_ref=('candidate:compact','candidate:wide')[version],
+                evidence_ref=f'result:{index}-{version}', value=2 if index==4 or version==0 else 4)]
         events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'group-finding-{index}-{version}',
             title=f'候选 {index+1} · 记录 {version+1}',summary=f'原始观察 {index+1}/{version+1}：局部指标不同，完整收益和费用仍未知。',
-            status=status,recorded_at=f'2026-01-0{5 if index==23 else 4}T0{version+1}:00:{index:02}Z'))
+            status=status,measurements=measurements,evidence_refs=[m['evidence_ref'] for m in measurements or []],
+            recorded_at=f'2026-01-0{5 if index==23 else 4}T0{version+1}:00:{index:02}Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 路线阅读','events':events},ensure_ascii=False))
 `, path], {cwd: repoRoot});
 }
@@ -274,11 +281,19 @@ export const researchRouteReadingScenario = {
         await day.click();
         assert.equal(await reader.locator(".research-question-index li").count(), 24);
         await reader.locator(".research-question-index button").nth(3).click();
+        const leaders = reader.locator(".research-candidate-leaders");
+        assert(await leaders.isVisible(), "Opening a measured question from its group shows the comparison");
+        assert.match(await leaders.innerText(), /candidate:compact/);
         const questions = reader.getByRole("combobox", {name: zh ? "选择同组研究问题" : "Choose a question in this group"});
         const findings = reader.getByRole("combobox", {name: zh ? "选择问题结论" : "Choose a question finding"});
         const next = reader.getByRole("button", {name: zh ? "下一个问题" : "Next question", exact: true});
         await questions.selectOption("group-question-4");
+        assert.match(await leaders.innerText(), zh ? /2 个候选并列/ : /2 candidates tied/);
+        await page.reload();
+        await questions.waitFor();
+        assert(await leaders.isVisible(), "Reload preserves a question-level selection");
         await findings.selectOption(findingEventId("group-finding-4-0"));
+        assert(await leaders.isHidden(), "An explicitly selected finding keeps the question comparison in Sources and history");
         await reader.getByRole("button", {name: zh ? "完整研究问题" : "Full research question", exact: true}).focus();
         const questionHelp = page.locator(".context-help-popover:popover-open");
         await questionHelp.waitFor();
@@ -293,6 +308,7 @@ export const researchRouteReadingScenario = {
         assert.equal(await findings.inputValue(), findingEventId("group-finding-4-0"), "Reload retains the precise finding, not just the question");
         await next.click();
         assert.equal(await questions.inputValue(), "group-question-5");
+        assert.equal(await leaders.count(), 0, "An unmeasured question does not inherit a previous comparison");
         await page.goBack();
         assert.equal(await questions.inputValue(), "group-question-4");
         assert.equal(await findings.inputValue(), findingEventId("group-finding-4-0"));
