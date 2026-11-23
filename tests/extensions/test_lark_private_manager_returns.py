@@ -211,6 +211,51 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     assert capture.read_bytes() == before_host_calls
 
 
+def test_scheduled_native_return_retains_original_chat_when_provider_transport_is_unavailable(private_return):
+    sender, session, _, original_route, _, provider, transport, replies = private_return
+    from loopx.capabilities.manager_context import register_ingress
+    from loopx.capabilities.manager_context.roundtrip import project_chat_return_deliveries
+
+    controller = transport.core.controller
+    store = controller.store
+    session_id = session["session_id"]
+    target = {key: original_route[key] for key in ("goal_id", "agent_id")}
+    client_id = "native-steward-advancement"
+    message = "Advance the currently admitted native LoopX work."
+    accepted = store.accept_managed_turn(
+        session_id, client_turn_id=client_id, message=message, origin="native_loopx",
+        loopx_execution=True,
+    )
+    turn = store.update_turn(session_id, accepted.turn["turn_id"], status="completed")
+    register_ingress(
+        sender.root, session_id=session_id, client_turn_id=client_id, channel=session["channel_id"],
+        sender_id=session["steward_context"]["operator_ref"], message=message,
+        source_id="native_steward:steward:advancement-fixture", origin="native_loopx",
+    )
+    route = deliver(sender.root, controller.registry_path, session=session, turn=turn,
+                    request=target, source_store=store)
+    rid = route["request_id"]
+    acknowledge(sender.root, target["goal_id"], target["agent_id"], rid, "adopt", "Check the original request")
+    conclusion = "The result remains available in the original Chat conversation."
+    report(sender.root, target["goal_id"], target["agent_id"], rid, "conclusion", conclusion)
+    provider_count = len(provider.calls)
+
+    drain(sender.root, controller.registry_path, store, sender)
+    drain(sender.root, controller.registry_path, store, sender,
+          now=datetime.now(timezone.utc) + timedelta(minutes=10))
+
+    state = reply_status(sender.root, route)[0]
+    assert state["status"] == "retry_pending" and state["error"] == "return_transport_unavailable", state
+    assert replies == [] and len(provider.calls) == provider_count
+    messages = project_chat_return_deliveries(sender.root, session_id, store.messages(session_id), source_store=store)
+    followups = [item for item in messages if item.get("origin") == "manager_followup"]
+    assert len(followups) == 1
+    assert followups[0]["turn_id"] == turn["turn_id"]
+    assert conclusion in followups[0]["text"]
+    assert followups[0]["return_delivery"]["status"] == "retry_pending"
+    assert followups[0]["return_delivery"]["error"] == "return_transport_unavailable"
+
+
 @pytest.mark.parametrize("revoke_before_recovery", [False, True])
 def test_partial_return_survives_saved_attempt_recovery_until_final_delivery(private_return, revoke_before_recovery):
     sender, session, turn, route, _, provider, transport, replies = private_return

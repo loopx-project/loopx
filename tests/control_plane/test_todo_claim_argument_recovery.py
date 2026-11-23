@@ -124,7 +124,7 @@ def test_one_packet_repairs_all_grammar_errors_and_preserves_route(claim_cli, th
     after = snapshot()
     assert after[0][0]["claimed_by"] == "peer-a"
     assert applied["lease"]["version"] == 1
-    assert applied["lease"]["write_scopes"] == ["src/**"]
+    assert applied["lease"]["write_scopes"] == []
     receipt = run(receipt_args)
     assert receipt["status"] == "found"
     assert receipt["operation_id"] == operation

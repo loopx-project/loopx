@@ -167,16 +167,13 @@ def test_real_cli_local_write_guard_replay_and_causal_settlement(
     rc, outside = _run_cli(registry, runtime, *guard_args, cwd=tmp_path)
     assert rc == 0 and outside["normal_delivery_allowed"] is True, outside
     assert not outside.get("workspace_guard"), outside
-    assert outside["selected_todo"]["required_write_scopes"] == todos[0]["required_write_scopes"]
+    assert "required_write_scopes" not in outside["selected_todo"]
     hint = outside["interaction_contract"]["cli_channel"]["delivery_workspace_causality"]["refresh"]
     assert "--delivery-workspace-path" in hint
     assert _spend_run_count(runtime) == 0
     rc, guard = _run_cli(registry, runtime, *guard_args, cwd=project)
     assert rc == 0 and guard["normal_delivery_allowed"] is True, guard
-    assert (
-        guard["selected_todo"]["required_write_scopes"]
-        == todos[0]["required_write_scopes"]
-    )
+    assert "required_write_scopes" not in guard["selected_todo"]
     rc, replay = _run_cli(registry, runtime, *guard_args, cwd=project)
     assert (
         rc == 0

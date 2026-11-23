@@ -13,7 +13,7 @@ import { ClaudeAcpAdapter } from '../src/adapters/claude.js';
 import type { AgentAdapter } from '../src/adapters/types.js';
 import { ExtensionHost } from '../src/extension-host.js';
 import { loadCatalog } from '../src/extensions.js';
-import { AUTOTITLE_ID, AutoTitle, cleanTitle, namingPrompt } from '../src/autotitle.js';
+import { AUTOTITLE_ID, AutoTitle, cheapestModel, cleanTitle, namingPrompt } from '../src/autotitle.js';
 import { createHttpServer } from '../src/http.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -158,7 +158,16 @@ test('a first turn that was stopped leaves the default title, and the next turn 
   } finally { await h.close(); }
 });
 
-test('naming on send uses only the message; nothing happens without a chosen agent or the extension', async () => {
+test('with no agent chosen, each agent names on its cheapest listed model', () => {
+  const ids = (list: string[]) => cheapestModel(list.map(id => ({ id, label: id })))?.id ?? null;
+  assert.equal(ids(['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-luna']), 'gpt-6-luna', 'Codex: Luna, the first listed of the tie');
+  assert.equal(ids(['gemini-4-neon-high', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low']), 'gemini-3.8-flash-low', 'Antigravity: 3.8 Flash at the lowest effort');
+  assert.equal(ids(['default', 'opus', 'claude-fable-5-1[1m]', 'sonnet', 'haiku']), 'haiku', 'Claude: the bare alias is priced by its family');
+  assert.equal(ids(['doubao-seed-2.1-pro', 'doubao-seed-2.1-lite']), 'doubao-seed-2.1-lite');
+  assert.equal(ids(['mystery-model', 'default']), null, 'no known price: no pick');
+});
+
+test('naming on send uses only the message; nothing happens without the extension', async () => {
   const off = await setup({ install: false });
   try {
     const thread = await off.manager.createThread({ agent: 'claude', cwd: off.cwd });
@@ -176,7 +185,10 @@ test('naming on send uses only the message; nothing happens without a chosen age
     const thread = await h.manager.createThread({ agent: 'claude', cwd: h.cwd });
     await h.send(thread.id, '登录总是超时');
     await new Promise(r => setTimeout(r, 300));
-    assert.equal(h.manager.threadView(thread.id).title, '登录总是超时', 'no agent chosen: left alone');
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(h.autotitle.settings().agent, null);
+    assert.equal(await h.autotitle.namer(thread.id), null, 'automatic, and the agent lists no priced model: no namer');
+    assert.equal(h.manager.threadView(thread.id).title, '登录总是超时', 'so the thread is left alone');
     assert.equal((await h.api(`/api/threads/${thread.id}/autotitle`, 'POST')).status, 409);
 
     await h.api('/api/extensions/autotitle/settings', 'PUT', { agent: 'claude', trigger: 'sent' });

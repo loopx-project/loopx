@@ -33,7 +33,6 @@ import {
   normalizeIdempotencyKey,
   normalizeTtl,
 } from "../work_items/task_lease_acquire.ts";
-import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 
 export const COORDINATION_TODO_CLAIM_RESULT_SCHEMA =
   "loopx_coordination_todo_claim_result_v0";
@@ -619,8 +618,7 @@ async function executeClaimAttempt(
       leaseIdempotent = !leaseChanged;
       overlapAdvisories = prepared.overlapAdvisories ?? [];
     } else if (handoffMode === "hard_lease" && leaseRequest !== null) {
-      // Validate required scopes before planning; a caller cannot omit a required conflict.
-      const writeScopes = coordinationTodoWriteScopes(todo);
+      const writeScopes: string[] = [];
       const facts = canonicalTaskLeaseAcquireFacts(projection, input.goal_id, input.todo_id, input.registered_agents, input.now);
       const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: handoffMode,
         registered_agents: [...input.registered_agents], ...facts,

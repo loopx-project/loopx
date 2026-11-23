@@ -137,10 +137,18 @@ function candidate(value: unknown, label: string): Candidate {
       `${label}.successor_todo_ids`,
     ).map((item, index) => todoId(item, `${label}.successor_todo_ids[${index}]`));
   }
-  for (const field of ["required_capabilities", "required_write_scopes"] as const) {
-    if (raw[field] !== null && raw[field] !== undefined) {
-      decoded[field] = requireStringArray(raw[field], `${label}.${field}`);
-    }
+  if (raw.required_capabilities !== null && raw.required_capabilities !== undefined) {
+    decoded.required_capabilities = requireStringArray(
+      raw.required_capabilities,
+      `${label}.required_capabilities`,
+    );
+  }
+  if (raw.required_write_scopes !== null && raw.required_write_scopes !== undefined) {
+    const scopes = requireStringArray(
+      raw.required_write_scopes,
+      `${label}.required_write_scopes`,
+    );
+    if (raw.include_write_scopes === true) decoded.required_write_scopes = scopes;
   }
   if (raw.resume_ready !== null && raw.resume_ready !== undefined) {
     if (typeof raw.resume_ready !== "boolean") {

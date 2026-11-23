@@ -319,3 +319,17 @@ test('only the built-in board can defer assistant consent without losing its ori
   assert.equal(hasPermission({ ...upgraded, enabled: false }, 'events.summary'), false);
   assert.equal(hasPermission({ ...upgraded, granted: m.permissions }, 'assistant.ask'), true);
 });
+
+test('the built-in summary exposes only Goal identity, title and status, without an external LoopX extension', () => {
+  const bound = thread('goal-thread', { loopxInfo: { goalId: 'g', goalTitle: 'Proposal', basis: 'core', source: '/private/source', goals: ['private-id'] } });
+  assert.deepEqual(threadSummary(bound, null).goal, { goalId: 'g', title: 'Proposal', status: null });
+  const goal = { goalId: 'g', title: 'Updated proposal', status: 'active_state_user_gate', activationState: 'active' } as import('../src/loopx/status').LoopxGoal;
+  assert.deepEqual(threadSummary(bound, null, [goal]).goal, { goalId: 'g', title: 'Updated proposal', status: 'active_state_user_gate' });
+  assert.deepEqual(threadSummary(bound, null, [{ ...goal, activationState: 'stopped' }]).goal?.status, 'stopped');
+  assert.equal(threadSummary({ ...bound, loopxInfo: { ...bound.loopxInfo!, missing: true } }, null).goal, undefined);
+  const serialized = JSON.stringify(threadSummary(bound, null));
+  assert.ok(!serialized.includes('/private/source') && !serialized.includes('private-id'));
+  const merged = machineSummaries([{ hostId: null, label: 'local', threads: [bound], goals: [goal] }, { hostId: 'remote', label: 'remote', threads: [bound] }], null, true);
+  assert.equal(merged[0].goal?.status, 'active_state_user_gate');
+  assert.equal(merged[1].goal?.status, null, 'a remote Goal never inherits a local same-id status');
+});
