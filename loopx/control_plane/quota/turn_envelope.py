@@ -74,12 +74,14 @@ def _apply_context_projection_changes(
     return cast(dict[str, Any], projected)
 
 
-def pack_turn_source(source: Mapping[str, Any]) -> dict[str, str] | None:
+def pack_turn_source(
+    source: Mapping[str, Any], *, max_encoded_fraction: float = 1.0,
+) -> dict[str, str] | None:
     """Use the lossless wire for bounded sources that compress well."""
     raw = _encode_rpc_json(source)
     if 16 * 1024 <= len(raw) <= 1024 * 1024:
         data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
-        if len(data) + 128 < len(raw):
+        if len(data) + 128 < len(raw) * max_encoded_fraction:
             return {"encoding": "deflate-base64-json-v0", "data": data}
     return None
 
@@ -121,7 +123,10 @@ def _turn_envelope_result(
     )
     source = params.get(source_field)
     if compact_source and isinstance(source, Mapping):
-        transport = pack_turn_source(source)
+        # Base64 of ordinary prose can cost more tokens than inline JSON.
+        # Large repeated Goal bodies qualify only with a threefold byte reduction.
+        fraction = 1.0 if operation == "capability_automation_source" else 1 / 3
+        transport = pack_turn_source(source, max_encoded_fraction=fraction)
         if transport is not None:
             del request[source_field]
             request["source_transport"] = transport

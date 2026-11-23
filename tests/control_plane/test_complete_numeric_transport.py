@@ -1,6 +1,7 @@
 """Complete consumer costs and the explicit experimental hash transition."""
 from copy import deepcopy
 import json
+from hashlib import sha256
 
 import pytest
 
@@ -153,7 +154,7 @@ def test_bounded_guard_transport_matches_inline_through_native_readback(tmp_path
     compact_bytes = sum(len(_json(request).encode()) for request in requests)
     requests.clear()
     with monkeypatch.context() as patch:
-        patch.setattr(turn, "pack_turn_source", lambda source: None)
+        patch.setattr(turn, "pack_turn_source", lambda source, **kwargs: None)
         inline = guard()
     assert compact_bytes < sum(len(_json(request).encode()) for request in requests)
     assert _json(compact) == _json(inline)
@@ -163,3 +164,23 @@ def test_bounded_guard_transport_matches_inline_through_native_readback(tmp_path
     bound["observations"]["values"][-1] -= 1
     with pytest.raises(RuntimeError, match="integrity mismatch"):
         turn.attach_complete_turn_context(bound, {})
+
+
+def test_guard_preserves_inline_transport_for_dense_evidence(monkeypatch):
+    source = {"evidence": [sha256(str(index).encode()).hexdigest() for index in range(512)]}
+    # The optional capability transport can save bytes here, but the modest
+    # saving would send mostly base64 through each ordinary admission request.
+    assert turn.pack_turn_source(source) is not None
+    requests = []
+
+    def observe(method, params):
+        requests.append(params)
+        return {}
+
+    monkeypatch.setattr(turn, "effect_runtime_projection_result", observe)
+    for operation, field in (("compose_complete", "payload"),
+                             ("attach_complete_turn_context", "payload"),
+                             ("context_delivery", "context")):
+        turn._turn_envelope_result(operation, **{field: source})
+        assert requests[-1][field] is source
+        assert "source_transport" not in requests[-1]
