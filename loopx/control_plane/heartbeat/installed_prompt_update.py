@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 
+from loopx.paths import codex_automation_database
+
 from .automation_upgrade import SCHEMA, _atomic, apply_offline, bootstrap_binding, build_plan
 from .bootstrap_prompt import host_bootstrap_binding
 
@@ -58,7 +60,7 @@ def _owned(entry: dict, registry: Path, runtime_root: str | None, cli_bin: str) 
 
 def snapshot(*, registry: Path, home: Path, runtime_root: str | None = None,
              cli_bin: str = "loopx") -> dict:
-    if not (home / "sqlite/codex-dev.db").is_file():
+    if not codex_automation_database(home).is_file():
         return {"ok": True, "status": "not_installed", "entries": []}
     plan = build_plan(registry=registry, home=home, runtime_root=runtime_root, cli_bin=cli_bin)
     for entry in plan["entries"]:
@@ -76,8 +78,9 @@ def reconcile(*, before: dict, registry: Path, home: Path,
         raise ValueError("update snapshot belongs to another host home")
     if before.get("schema_version") != SCHEMA:
         raise ValueError("unsupported update snapshot schema")
-    current = {entry["automation_id"]: entry for entry in
-               build_plan(registry=registry, home=home, runtime_root=runtime_root, cli_bin=cli_bin)["entries"]}
+    plan = build_plan(registry=registry, home=home, runtime_root=runtime_root, cli_bin=cli_bin)
+    current = {entry["automation_id"]: entry for entry in plan["entries"]}
+    preview_database = before.get("database_name", "codex-dev.db")
     results = []
     api_updates = []
     for old in before["entries"]:
@@ -90,7 +93,7 @@ def reconcile(*, before: dict, registry: Path, home: Path,
             result["status"] = now["status"]
             if now.get("reason"):
                 result["reason"] = now["reason"]
-        elif any(old.get(key) != now.get(key) for key in
+        elif preview_database != plan["database_name"] or any(old.get(key) != now.get(key) for key in
                  ("source_sha256", "prompt_sha256", "target_thread_id", "goal_id", "agent_id")):
             result["status"] = "changed_since_snapshot"
         elif old.get("automatic_eligible") is True:
@@ -101,7 +104,7 @@ def reconcile(*, before: dict, registry: Path, home: Path,
                 require_closed_app()
                 applied = apply_offline(home=home, automation_id=identifier,
                     expected_prompt_sha256=old["prompt_sha256"], desired_prompt=now["desired_prompt"],
-                    expected_source_sha256=old["source_sha256"])
+                    expected_source_sha256=old["source_sha256"], expected_database=preview_database)
                 result["status"] = applied["status"]
             except (OSError, ValueError, sqlite3.Error) as error:
                 result.update(status="deferred", reason=str(error))

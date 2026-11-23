@@ -27,6 +27,7 @@ from .bootstrap_prompt import (
     render_heartbeat_bootstrap,
 )
 
+from loopx.paths import codex_automation_database
 from loopx.upgrade import (
     codex_home, infer_agent_id_from_prompt, infer_goal_id_from_prompt,
     infer_available_capabilities_from_prompt,
@@ -146,8 +147,7 @@ def _replace_prompt(source: str, prompt: str) -> str:
     raise ValueError("unsupported automation TOML prompt encoding; use the App API")
 
 
-def _connect(home: Path, *, writable: bool = False) -> sqlite3.Connection:
-    path = home / "sqlite/codex-dev.db"
+def _connect(path: Path, *, writable: bool = False) -> sqlite3.Connection:
     connection = sqlite3.connect(path.as_uri() + ("?mode=rw" if writable else "?mode=ro"), uri=True, timeout=5)
     connection.row_factory = sqlite3.Row
     columns = {row[1] for row in connection.execute("PRAGMA table_info(automations)")}
@@ -193,7 +193,8 @@ def build_plan(*, registry: Path, home: Path | None = None,
     home = (home or codex_home()).expanduser().resolve()
     goals = {str(goal["id"]): goal for goal in registry_goals(load_registry(registry))}
     entries = []
-    with closing(_connect(home)) as connection:
+    database = codex_automation_database(home)
+    with closing(_connect(database)) as connection:
         for path in sorted((home / "automations").glob("*/automation.toml")):
             entry: dict[str, Any] = {"automation_id": path.parent.name}
             try:
@@ -226,13 +227,14 @@ def build_plan(*, registry: Path, home: Path | None = None,
             except (ValueError, OSError) as error:
                 entry.update(status="blocked", reason=str(error))
             entries.append(entry)
-    return {"schema_version": SCHEMA, "ok": True, "codex_home": str(home),
+    return {"schema_version": SCHEMA, "ok": True, "codex_home": str(home), "database_name": database.name,
             "entries": entries, "writes": False,
             "policy": "Discovery is not adoption authority. Review each replacement; use the App API first."}
 
 
 def apply_offline(*, home: Path, automation_id: str, expected_prompt_sha256: str,
-                  desired_prompt: str, expected_source_sha256: str | None = None) -> dict[str, Any]:
+                  desired_prompt: str, expected_source_sha256: str | None = None,
+                  expected_database: str | None = None) -> dict[str, Any]:
     """Journaled prompt-only write, also used by qualified update-time migration.
 
     Keep the SQLite writer lock through mirror replacement and readback. TOML
@@ -245,7 +247,10 @@ def apply_offline(*, home: Path, automation_id: str, expected_prompt_sha256: str
     journal = home / "loopx-automation-backups" / (automation_id + ".json")
     if journal.is_symlink() or journal.parent.is_symlink():
         raise ValueError("symlink backup stores are not supported")
-    with closing(_connect(home, writable=True)) as connection:
+    database = codex_automation_database(home)
+    if expected_database is not None and database.name != expected_database:
+        raise ValueError("automation database changed after preview; refresh the plan")
+    with closing(_connect(database, writable=True)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         source, item, row = _read(home, automation_id, connection)
         path = home / "automations" / automation_id / "automation.toml"
@@ -260,7 +265,7 @@ def apply_offline(*, home: Path, automation_id: str, expected_prompt_sha256: str
         replacement = _replace_prompt(source, desired_prompt)
         # Entire originals stay private for recovery; no raw prompts in receipts.
         _atomic(journal, json.dumps({"schema_version": SCHEMA, "automation_id": automation_id,
-            "before": source, "after": replacement, "row": row}, ensure_ascii=False))
+            "database_name": database.name, "before": source, "after": replacement, "row": row}, ensure_ascii=False))
         if path.read_text(encoding="utf-8") != source:
             raise ValueError("automation manifest changed during migration; journal retained")
         changed = connection.execute("UPDATE automations SET prompt=? WHERE id=? AND prompt=?",
@@ -272,7 +277,7 @@ def apply_offline(*, home: Path, automation_id: str, expected_prompt_sha256: str
             raise ValueError("automation manifest changed during readback; journal retained")
         _read(home, automation_id, connection)
         connection.commit()
-    with closing(_connect(home)) as connection:
+    with closing(_connect(database)) as connection:
         final_source, _, final_row = _read(home, automation_id, connection)
         if final_source != replacement or final_row["prompt"] != desired_prompt:
             raise ValueError("automation changed after commit; inspect the retained journal")
@@ -295,7 +300,10 @@ def recover_offline(*, home: Path, automation_id: str, rollback: bool = False) -
     path = home / "automations" / automation_id / "automation.toml"
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError("symlink automation stores are not supported")
-    with closing(_connect(home, writable=True)) as connection:
+    database = codex_automation_database(home)
+    if saved.get("database_name", "codex-dev.db") != database.name:
+        raise ValueError("automation database changed since migration; reconcile through the App")
+    with closing(_connect(database, writable=True)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM automations WHERE id=?", (automation_id,)).fetchone()
         if row is None or row["prompt"] not in prompts or path.read_text(encoding="utf-8") not in (before, after):
@@ -307,6 +315,6 @@ def recover_offline(*, home: Path, automation_id: str, rollback: bool = False) -
         connection.execute("UPDATE automations SET prompt=? WHERE id=?", (tomllib.loads(selected)["prompt"], automation_id))
         connection.commit()
     _atomic(path, selected)
-    with closing(_connect(home)) as connection:
+    with closing(_connect(database)) as connection:
         _read(home, automation_id, connection)
     return {"ok": True, "status": "rolled_back" if rollback else "recovered", "automation_id": automation_id}
