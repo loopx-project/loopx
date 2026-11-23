@@ -1178,6 +1178,33 @@ def _handle_pr_lifecycle(
         generated_at=generated_at,
     )
     pending_source_events = payload.pop("_maintainer_correction_source_events", None)
+    if (
+        fetch_metadata
+        and payload.get("external_reads_performed") is True
+        and args.goal_id
+        and registry_path is not None
+    ):
+        from ...control_plane.agents.capability_memory import (
+            record_verified_agent_capability_observation,
+        )
+        from ...history import load_registry
+        from ...paths import resolve_runtime_root
+
+        try:
+            resolved_runtime = resolve_runtime_root(
+                load_registry(registry_path),
+                runtime_root_arg,
+                registry_path=registry_path,
+            )
+            record_verified_agent_capability_observation(
+                registry_path=registry_path,
+                runtime_root=resolved_runtime,
+                goal_id=args.goal_id,
+                agent_id=args.claimed_by,
+                available=("network", "external_evidence_poll"),
+            )
+        except Exception:  # noqa: BLE001 - optional host observation stays fail-open
+            pass
     if origin is not None:
         payload["origin_request"] = origin
     if should_write and ledger_path is not None:

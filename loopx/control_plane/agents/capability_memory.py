@@ -1,5 +1,6 @@
 """Adapt registered host-local Agent observations to the typed state owner."""
 
+from collections.abc import Mapping
 from typing import Any, TYPE_CHECKING, cast
 
 from pathlib import Path
@@ -9,30 +10,147 @@ from ..effect_runtime import effect_runtime_result
 from ..todos.contract import normalize_required_capabilities, normalize_todo_claimed_by
 
 
+def canonical_capability_registry_scope(
+    registry_path: Path, goal: Mapping[str, Any] | None
+) -> tuple[str, list[str]]:
+    """Unify synced global-registry mirrors with their canonical project source_registry."""
+    resolved = str(registry_path.expanduser().resolve())
+    if isinstance(goal, Mapping):
+        raw_source = str(goal.get("source_registry") or "").strip()
+        if raw_source:
+            canonical = str(Path(raw_source).expanduser().resolve())
+            if canonical != resolved:
+                return canonical, [resolved]
+    return resolved, []
+
+
 def agent_capability_memory(
     *, registry_path: Path, runtime_root: Path, goal_id: str, agent_id: str,
     available: Any = None, unavailable: Any = None, forget: Any = None,
-    execute: bool = False,
+    execute: bool = False, preserve_unavailable: bool = False,
 ) -> dict[str, Any]:
     goal_id = str(goal_id).strip()
     normalized_agent = normalize_todo_claimed_by(agent_id)
     if not normalized_agent:
         raise ValueError("agent_id must be a public-safe registered agent id")
     goal = load_goal_from_registry(registry_path, goal_id)
-    result = effect_runtime_result("agent.capability_memory", {
+    canonical_registry, legacy_registries = canonical_capability_registry_scope(
+        registry_path, goal
+    )
+    request: dict[str, Any] = {
         "schema_version": "agent_runtime_capability_request_v0",
         "runtime_root": str(runtime_root.expanduser().resolve()),
-        "registry": str(registry_path.expanduser().resolve()),
+        "registry": canonical_registry,
         "goal_id": goal_id, "agent_id": normalized_agent,
         "registered_agents": registered_agent_ids_for_goal(goal),
         "available": normalize_required_capabilities(available),
         "unavailable": normalize_required_capabilities(unavailable),
         "forget": normalize_required_capabilities(forget),
         "execute": execute,
-    })
+    }
+    if legacy_registries:
+        request["legacy_registries"] = legacy_registries
+    if preserve_unavailable:
+        request["preserve_unavailable"] = True
+    result = effect_runtime_result("agent.capability_memory", request)
     if not isinstance(result, dict) or result.get("schema_version") != "agent_runtime_capabilities_v0":
         raise TypeError("invalid agent runtime capability memory result")
     return result
+
+
+def resolve_executing_registered_agent(
+    *,
+    goal: Mapping[str, Any] | None,
+    explicit_agent_id: str | None = None,
+) -> str | None:
+    """Resolve the executing registered Agent without guessing across unbound peers."""
+    if not isinstance(goal, Mapping):
+        return None
+    registered = registered_agent_ids_for_goal(dict(goal))
+    if not registered:
+        return None
+    normalized_explicit = normalize_todo_claimed_by(explicit_agent_id) if explicit_agent_id else None
+    if normalized_explicit:
+        return normalized_explicit if normalized_explicit in registered else None
+
+    from ...thread_agent_binding import (
+        HOST_THREAD_ID_ENV,
+        ambient_host_thread_id,
+        resolve_thread_agent_binding,
+    )
+
+    bound_agents: set[str] = set()
+    saw_conflict = False
+    for surface in sorted(HOST_THREAD_ID_ENV):
+        thread_id = ambient_host_thread_id(surface)
+        if not thread_id:
+            continue
+        try:
+            binding = resolve_thread_agent_binding(
+                dict(goal), host_surface=surface, thread_id=thread_id
+            )
+        except Exception:  # noqa: BLE001 - ambient host lookup must never fail task commands
+            continue
+        status = binding.get("status")
+        if status == "conflict":
+            saw_conflict = True
+            break
+        if status == "bound":
+            candidate = normalize_todo_claimed_by(binding.get("agent_id"))
+            if candidate and candidate in registered:
+                bound_agents.add(candidate)
+    if not saw_conflict and len(bound_agents) == 1:
+        return next(iter(bound_agents))
+    if saw_conflict or len(bound_agents) > 1:
+        return None
+    if len(registered) == 1:
+        return registered[0]
+    return None
+
+
+def record_verified_agent_capability_observation(
+    *,
+    registry_path: Path | None,
+    runtime_root: Path | None,
+    goal_id: str | None,
+    available: Any,
+    agent_id: str | None = None,
+    goal: Mapping[str, Any] | None = None,
+    preserve_unavailable: bool = True,
+) -> dict[str, Any] | None:
+    """Persist a verified host runtime observation for the executing registered Agent."""
+    normalized_goal_id = str(goal_id or "").strip()
+    normalized_available = normalize_required_capabilities(available)
+    if (
+        registry_path is None
+        or runtime_root is None
+        or not normalized_goal_id
+        or not normalized_available
+    ):
+        return None
+    try:
+        resolved_goal = (
+            dict(goal)
+            if isinstance(goal, Mapping)
+            else load_goal_from_registry(registry_path, normalized_goal_id)
+        )
+        target_agent = resolve_executing_registered_agent(
+            goal=resolved_goal,
+            explicit_agent_id=agent_id,
+        )
+        if not target_agent:
+            return None
+        return agent_capability_memory(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=normalized_goal_id,
+            agent_id=target_agent,
+            available=normalized_available,
+            execute=True,
+            preserve_unavailable=preserve_unavailable,
+        )
+    except Exception:  # noqa: BLE001 - optional host capability memory must fail open
+        return None
 
 
 if TYPE_CHECKING:
@@ -46,8 +164,9 @@ def turn_start_hook(
     goal_id: str,
     agent_id: str,
     available: Any,
+    probed: Any = None,
 ) -> "TurnStartHookRegistration":
-    """Persist invocation observations through the admitted turn-start hook."""
+    """Persist invocation and auto-probed observations through the admitted turn-start hook."""
 
     from ..capability_hooks import (
         TURN_START_HOOK_RESULT_SCHEMA_VERSION,
@@ -55,16 +174,36 @@ def turn_start_hook(
     )
 
     normalized = normalize_required_capabilities(available)
+    normalized_probed = [
+        cap
+        for cap in normalize_required_capabilities(probed)
+        if cap not in normalized
+    ]
 
     def produce() -> dict[str, Any]:
-        state = agent_capability_memory(
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            available=normalized,
-            execute=True,
-        )
+        mutated = False
+        if normalized:
+            state = agent_capability_memory(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                available=normalized,
+                execute=True,
+                preserve_unavailable=False,
+            )
+            mutated = mutated or (state.get("written") is True)
+        if normalized_probed:
+            probed_state = agent_capability_memory(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                available=normalized_probed,
+                execute=True,
+                preserve_unavailable=True,
+            )
+            mutated = mutated or (probed_state.get("written") is True)
         return {
             "schema_version": TURN_START_HOOK_RESULT_SCHEMA_VERSION,
             "hook_id": "agent.capability_memory",
@@ -75,7 +214,7 @@ def turn_start_hook(
             "agent_read_required": False,
             "external_reads_performed": False,
             "external_writes_performed": False,
-            "local_private_state_mutated": state.get("written") is True,
+            "local_private_state_mutated": mutated,
             "private_content_returned": False,
             "provider_payload_returned": False,
             "error_code": None,
@@ -98,11 +237,19 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
     available: Any,
+    probed: Any = None,
 ) -> dict[str, Any]:
     """Compose capability memory without putting provider writes in quota core."""
 
+    from .capability_probe import probe_host_runtime_capabilities
+
     normalized = normalize_required_capabilities(available)
-    if not agent_id or not normalized:
+    resolved_probed = (
+        probe_host_runtime_capabilities(allow_subprocess=True)
+        if probed is None
+        else normalize_required_capabilities(probed)
+    )
+    if not agent_id or (not normalized and not resolved_probed):
         return dispatch
     from ..capability_hooks import dispatch_turn_start_hooks
 
@@ -114,6 +261,7 @@ def extend_turn_start_dispatch(
                 goal_id=goal_id,
                 agent_id=agent_id,
                 available=normalized,
+                probed=resolved_probed,
             ),
         )
     )
@@ -128,10 +276,11 @@ def extend_turn_start_dispatch(
 def resolve_agent_capabilities(
     status_payload: dict[str, Any], *, goal_id: str, agent_identity: dict[str, Any] | None,
     item: dict[str, Any], project_asset: dict[str, Any], available: Any,
-    state: dict[str, Any] | None = None,
+    state: dict[str, Any] | None = None, probed: Any = None,
 ) -> dict[str, Any]:
-    """Read current scoped observations even when the caller's status is cached."""
+    """Read current scoped observations and auto-probed host readiness."""
     from .capability_gate import _evaluate
+    from .capability_probe import probe_host_runtime_capabilities
     from ..quota.goal_boundary import declared_available_capabilities
 
     root, registry = status_payload.get("runtime_root"), status_payload.get("registry")
@@ -147,10 +296,17 @@ def resolve_agent_capabilities(
             # not drop the entire agent lane; the invocation capabilities and
             # typed goal declarations remain authoritative for this read.
             state = {}
+    resolved_probed = (
+        probe_host_runtime_capabilities(allow_subprocess=False)
+        if probed is None
+        else normalize_required_capabilities(probed)
+    )
     availability = _evaluate(
         "availability",
         goal=[*declared_available_capabilities(item), *declared_available_capabilities(project_asset)],
-        runtime=normalize_required_capabilities(available), agent=state or {},
+        runtime=normalize_required_capabilities(available),
+        probed=resolved_probed,
+        agent=state or {},
     )
     if agent_identity:
         # Default status/quota surfaces need only the compact runtime input used

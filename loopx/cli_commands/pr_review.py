@@ -295,6 +295,19 @@ def handle_pr_review_command(
             if not repository:
                 raise ValueError("approval closeout requires a GitHub repository")
             payload = read_github_approval_closeout(repository=repository, exact_head=args.check_approval_closeout)
+            if goal_id and runtime_root is not None:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    goal=goal,
+                    agent_id=review_agent_id,
+                    available=("network", "external_evidence_poll"),
+                )
             print_payload(payload, output_format(args), lambda value: json.dumps(value, indent=2))
             return 1 if payload["status"] == "hold" else 0
         if goal_id:
@@ -440,6 +453,19 @@ def handle_pr_review_command(
                     )
                 }
                 payload["local_goal_observation_write_performed"] = True
+                if source == "github_cli":
+                    from ..control_plane.agents.capability_memory import (
+                        record_verified_agent_capability_observation,
+                    )
+
+                    record_verified_agent_capability_observation(
+                        registry_path=registry_path,
+                        runtime_root=runtime_root,
+                        goal_id=goal_id,
+                        goal=goal,
+                        agent_id=review_agent_id,
+                        available=("network", "external_evidence_poll"),
+                    )
             print_payload(
                 payload,
                 output_format(args),
@@ -662,6 +688,19 @@ def handle_pr_review_command(
                     autonomous_review=autonomous_review,
                 )
                 payload["request"]["local_checkpoint_write_performed"] = True
+        if goal_id and runtime_root is not None and not args.fixture:
+            from ..control_plane.agents.capability_memory import (
+                record_verified_agent_capability_observation,
+            )
+
+            record_verified_agent_capability_observation(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                goal=goal,
+                agent_id=review_agent_id,
+                available=("network", "external_evidence_poll"),
+            )
     except Exception as exc:
         from ..usage_ping import capture_failure
         capture_failure(exc)

@@ -181,3 +181,382 @@ def test_agent_alias_uses_existing_identity_normalization(tmp_path):
                          "--agent-id", AGENT_ID)
     assert rc == 0, state
     assert state["agent_capabilities"]["available"] == ["network"]
+
+
+def test_global_registry_sync_shares_canonical_source_registry_capability_memory(tmp_path):
+    _, runtime, registry = _write_fixture(
+        tmp_path, required_capability="external_evidence_poll", provider="sqlite"
+    )
+    global_registry = runtime / "registry.global.json"
+    source_payload = json.loads(registry.read_text())
+    synced_goal = dict(source_payload["goals"][0])
+    synced_goal["source_registry"] = str(registry.resolve())
+    global_registry.parent.mkdir(parents=True, exist_ok=True)
+    global_registry.write_text(
+        json.dumps({**source_payload, "goals": [synced_goal]})
+    )
+
+    rc, recorded = _run_cli(
+        registry,
+        runtime,
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--available-capability",
+        "external_evidence_poll",
+        "--execute",
+    )
+    assert rc == 0 and recorded["agent_capabilities"]["written"] is True, recorded
+
+    rc, via_global = _run_cli(
+        global_registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert rc == 0, via_global
+    assert via_global["capability_gate"]["action"] == "run"
+
+    rc, prompt = _run_cli(
+        global_registry,
+        runtime,
+        "heartbeat-prompt",
+        "--thin",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert rc == 0, prompt
+    assert "heartbeat-prequota" in prompt["task_body"]
+    assert "--available-capability external_evidence_poll" not in prompt["task_body"]
+
+    rc, revoked = _run_cli(
+        global_registry,
+        runtime,
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--unavailable-capability",
+        "external_evidence_poll",
+        "--execute",
+    )
+    assert rc == 0, revoked
+    rc, revoked_prompt = _run_cli(
+        registry,
+        runtime,
+        "heartbeat-prompt",
+        "--thin",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert rc == 0, revoked_prompt
+    assert "heartbeat-prequota" not in revoked_prompt["task_body"]
+
+
+def test_live_task_facing_capability_commands_auto_record_observations(
+    tmp_path, monkeypatch, capsys
+):
+    from loopx.capabilities.issue_fix import pr_lifecycle
+    from loopx.cli_commands import pr_review as pr_review_cmd
+
+    def _run_inproc(*cli_args: str) -> tuple[int, dict]:
+        rc = main(
+            [
+                "--registry",
+                str(registry),
+                "--runtime-root",
+                str(runtime),
+                "--format",
+                "json",
+                *cli_args,
+            ]
+        )
+        return rc, json.loads(capsys.readouterr().out)
+
+    project, runtime, registry = _write_fixture(
+        tmp_path, required_capability="external_evidence_poll", provider="sqlite"
+    )
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("peer-b")
+    data["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        {
+            "schema_version": "loopx_thread_agent_binding_v0",
+            "host_surface": "codex-app",
+            "thread_id": "thread-agent-primary",
+            "agent_id": AGENT_ID,
+            "bound_at": "2026-11-23T00:00:00Z",
+        }
+    ]
+    registry.write_text(json.dumps(data))
+
+    fixture_path = tmp_path / "pr-fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "repository": "owner/repo",
+                "reviewer_login": "reviewer",
+                "pull_requests": [],
+            }
+        )
+    )
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-agent-primary")
+    rc, fixture_review = _run_inproc(
+        "pr-review",
+        "--goal-id",
+        GOAL_ID,
+        "--fixture",
+        str(fixture_path),
+    )
+    assert rc == 0, fixture_review
+    assert not (runtime / "agent-runtime-capabilities").exists()
+
+    monkeypatch.setattr(
+        pr_review_cmd, "resolve_current_github_repository", lambda: "owner/repo"
+    )
+    monkeypatch.setattr(
+        pr_review_cmd, "resolve_current_github_login", lambda: "reviewer"
+    )
+    monkeypatch.setattr(
+        pr_review_cmd,
+        "scan_github_pull_requests",
+        lambda **kwargs: {"pull_requests": [], "truncated": False},
+    )
+    rc, live_review = _run_inproc(
+        "pr-review",
+        "--goal-id",
+        GOAL_ID,
+    )
+    assert rc == 0, live_review
+
+    rc, state = _run_cli(
+        registry,
+        runtime,
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert rc == 0, state
+    assert state["agent_capabilities"]["available"] == [
+        "external_evidence_poll",
+        "network",
+    ]
+    rc, peer_state = _run_cli(
+        registry,
+        runtime,
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        "peer-b",
+    )
+    assert rc == 0 and peer_state["agent_capabilities"]["available"] == []
+
+    # Explicit negative observations are preserved across passive task-facing polls.
+    rc, _ = _run_cli(
+        registry,
+        runtime,
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        "peer-b",
+        "--unavailable-capability",
+        "external_evidence_poll",
+        "--execute",
+    )
+    assert rc == 0
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.setattr(
+        pr_lifecycle,
+        "fetch_github_pr_lifecycle_payload",
+        lambda reference, **kwargs: {
+            "url": f"https://github.com/{reference['repo']}/pull/{reference['number']}",
+            "number": reference["number"],
+            "state": "OPEN",
+        },
+    )
+    rc, lifecycle = _run_inproc(
+        "issue-fix",
+        "pr-lifecycle",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--claimed-by",
+        "peer-b",
+        "--repo",
+        "owner/repo",
+        "--pr-ref",
+        "#42",
+        "--fetch-metadata",
+    )
+    assert rc == 0, lifecycle
+    rc, peer_after = _run_cli(
+        registry,
+        runtime,
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        "peer-b",
+    )
+    assert rc == 0, peer_after
+    assert peer_after["agent_capabilities"]["available"] == ["network"]
+    assert peer_after["agent_capabilities"]["unavailable"] == [
+        "external_evidence_poll"
+    ]
+
+
+def test_fresh_agent_auto_probes_external_evidence_poll_by_default_and_honors_sandbox_or_revocation(
+    tmp_path, monkeypatch
+):
+    import contextlib
+    import io
+
+    from loopx.capabilities.issue_fix import pr_lifecycle
+    from loopx.todos import add_goal_todo, list_goal_todos
+
+    _, runtime, registry = _write_fixture(
+        tmp_path, required_capability="external_evidence_poll", provider="sqlite"
+    )
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["registered_agents"].append("sandbox-peer")
+    registry.write_text(json.dumps(data))
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_gh.chmod(0o755)
+    gh_cfg = tmp_path / "gh-config"
+    gh_cfg.mkdir()
+    (gh_cfg / "hosts.yml").write_text(
+        "github.com:\n    user: fixture\n    git_protocol: https\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GH_CONFIG_DIR", str(gh_cfg))
+    monkeypatch.setenv("PATH", f"{fake_bin}:{tmp_path}")
+    monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+    monkeypatch.delenv("LOOPX_OFFLINE", raising=False)
+
+    def _run_inproc(*argv: str):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(
+                [
+                    "--registry",
+                    str(registry),
+                    "--runtime-root",
+                    str(runtime),
+                    "--format",
+                    "json",
+                    *argv,
+                ]
+            )
+        return code, json.loads(buf.getvalue())
+
+    # 1. Read-only inspection on a brand-new Agent immediately sees probed availability without writing memory.
+    rc, inspected = _run_inproc(
+        "agent-capabilities", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID
+    )
+    assert rc == 0, inspected
+    assert inspected["availability"]["probed"] == ["external_evidence_poll"]
+    assert inspected["availability"]["effective"] == ["external_evidence_poll"]
+    assert not (runtime / "agent-runtime-capabilities").exists()
+
+    # 2. Zero-flag heartbeat-prompt automatically projects heartbeat-prequota for the fresh Agent.
+    rc, prompt = _run_inproc(
+        "heartbeat-prompt",
+        "--thin",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert rc == 0, prompt
+    assert "heartbeat-prequota" in prompt["task_body"]
+
+    # 3. Turn 1 executing quota should-run auto-probes & polls upstream PR wait out of the box.
+    wait_todo = add_goal_todo(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        role="agent",
+        claimed_by=AGENT_ID,
+        text="Resume automatically when upstream PR merges",
+        resume_when="pr_merged:owner/repo#77",
+    )["todo_id"]
+    calls = []
+
+    def fake_fetch(reference, **kwargs):
+        calls.append(reference)
+        return {
+            "url": f"https://github.com/{reference['repo']}/pull/{reference['number']}",
+            "state": "MERGED",
+            "mergedAt": "2026-11-23T08:00:00Z",
+        }
+
+    monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fake_fetch)
+    rc, guard = _run_inproc(
+        "quota",
+        "should-run",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--context-delivery",
+        "off",
+    )
+    assert rc == 0, guard
+    assert guard["capability_gate"]["action"] == "run"
+    assert len(calls) == 1
+    assert (
+        list_goal_todos(
+            registry_path=registry,
+            runtime_root_arg=str(runtime),
+            goal_id=GOAL_ID,
+            todo_id=wait_todo,
+        )["todo"]["resume_ready"]
+        is True
+    )
+
+    # 4. Network-disabled sandbox suppresses automatic probing for unrecorded peers.
+    monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+    rc, sandbox_state = _run_inproc(
+        "agent-capabilities", "--goal-id", GOAL_ID, "--agent-id", "sandbox-peer"
+    )
+    assert rc == 0, sandbox_state
+    assert sandbox_state["availability"]["probed"] == []
+    assert sandbox_state["availability"]["effective"] == []
+
+    # 5. Explicit revocation overrides automatic probing even when online.
+    monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+    rc, revoked = _run_inproc(
+        "agent-capabilities",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--unavailable-capability",
+        "external_evidence_poll",
+        "--execute",
+    )
+    assert rc == 0, revoked
+    assert revoked["availability"]["probed"] == ["external_evidence_poll"]
+    assert revoked["availability"]["effective"] == []

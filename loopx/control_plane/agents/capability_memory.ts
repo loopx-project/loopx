@@ -24,6 +24,10 @@ export async function agentCapabilityMemory(request: JsonObject): Promise<JsonOb
     goal_id: requireNonEmptyString(request.goal_id, "goal_id"),
     agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
   };
+  const legacyRegistries = unique(requireStringArray(request.legacy_registries ?? [], "legacy_registries"))
+    .filter(registry => registry.length > 0 && registry !== scope.registry);
+  const preserveUnavailable = request.preserve_unavailable === undefined
+    ? false : requireBoolean(request.preserve_unavailable, "preserve_unavailable");
   const registered = requireStringArray(request.registered_agents, "registered_agents");
   if (!registered.includes(scope.agent_id)) throw new TypeError("agent must be registered for this Goal");
   const supplied = unique(requireStringArray(request.available ?? [], "available"));
@@ -37,17 +41,20 @@ export async function agentCapabilityMemory(request: JsonObject): Promise<JsonOb
     throw new TypeError("capability updates must not contradict each other");
   }
   const execute = requireBoolean(request.execute, "execute");
-  const key = createHash("sha256").update(JSON.stringify(scope)).digest("hex");
-  const path = join(root, "agent-runtime-capabilities", `${key}.json`);
-  const read = async (): Promise<JsonObject> => {
+  const scopePath = (targetScope: typeof scope) => {
+    const key = createHash("sha256").update(JSON.stringify(targetScope)).digest("hex");
+    return join(root, "agent-runtime-capabilities", `${key}.json`);
+  };
+  const path = scopePath(scope);
+  const readScope = async (targetScope: typeof scope): Promise<{exists: boolean; observations: JsonObject}> => {
     let bytes: string;
-    try { bytes = await readFile(path, "utf8"); }
+    try { bytes = await readFile(scopePath(targetScope), "utf8"); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {exists: false, observations: {}};
       throw error;
     }
     const state = requireJsonObject(JSON.parse(bytes), "agent runtime capability state");
-    if (state.schema_version !== SCHEMA || Object.entries(scope).some(([k, v]) => state[k] !== v)) {
+    if (state.schema_version !== SCHEMA || Object.entries(targetScope).some(([k, v]) => state[k] !== v)) {
       throw new TypeError("agent runtime capability state scope/schema mismatch");
     }
     const observations = requireJsonObject(state.observations, "observations");
@@ -56,16 +63,34 @@ export async function agentCapabilityMemory(request: JsonObject): Promise<JsonOb
         throw new TypeError("invalid agent runtime capability observation");
       }
     }
-    return observations;
+    return {exists: true, observations};
+  };
+  const read = async (): Promise<{canonicalExists: boolean; canonical: JsonObject; merged: JsonObject}> => {
+    let merged: JsonObject = {};
+    for (const registry of legacyRegistries) {
+      const legacy = await readScope({...scope, registry});
+      merged = {...merged, ...legacy.observations};
+    }
+    const canonical = await readScope(scope);
+    return {
+      canonicalExists: canonical.exists,
+      canonical: canonical.observations,
+      merged: {...merged, ...canonical.observations},
+    };
   };
   const update = async (): Promise<JsonObject> => {
-    const previous = await read();
+    const {canonicalExists, canonical, merged: previous} = await read();
     const next = {...previous};
-    for (const c of available) next[c] = "available";
+    for (const c of available) {
+      if (!preserveUnavailable || previous[c] !== "unavailable") next[c] = "available";
+    }
     for (const c of unavailable) next[c] = "unavailable";
     for (const c of forget) delete next[c];
     const changed = JSON.stringify(sortedEntries(previous)) !== JSON.stringify(sortedEntries(next));
-    if (execute && changed) await durableWriteJson(path, {schema_version: SCHEMA, ...scope, observations: next});
+    const migrateCanonical = (!canonicalExists && Object.keys(next).length > 0)
+      || JSON.stringify(sortedEntries(canonical)) !== JSON.stringify(sortedEntries(next));
+    const shouldWrite = execute && (changed || (migrateCanonical && (available.length > 0 || unavailable.length > 0 || forget.length > 0)));
+    if (shouldWrite) await durableWriteJson(path, {schema_version: SCHEMA, ...scope, observations: next});
     const project = (observations: JsonObject) => ({
       available: Object.keys(observations).filter(c => observations[c] === "available").sort(lexical),
       unavailable: Object.keys(observations).filter(c => observations[c] === "unavailable").sort(lexical),
@@ -76,7 +101,7 @@ export async function agentCapabilityMemory(request: JsonObject): Promise<JsonOb
       ...project(execute ? next : previous),
       ...(changed && !execute ? {proposed: project(next)} : {}),
       invocation_only: supplied.filter(c => !observable(c)),
-      written: execute && changed, durable_grant_written: false,
+      written: shouldWrite, durable_grant_written: false,
     };
   };
   return execute && (available.length || unavailable.length || forget.length)

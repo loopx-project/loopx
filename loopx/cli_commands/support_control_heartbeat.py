@@ -132,15 +132,44 @@ def handle_heartbeat_prompt_command(
                 agent_registry_path, args.goal_id, effective_agent_id
             )
         reward_memory_enabled = False
+        effective_available_capabilities: list[str] | None = None
         if effective_agent_id is not None:
             from ..capabilities.reward_memory.configuration import (
                 reward_memory_automatic_ingest_for_agent,
             )
+            from ..control_plane.agents.capability_memory import (
+                resolve_agent_capabilities,
+            )
+            from ..history import load_registry
+            from ..paths import resolve_runtime_root
 
             reward_memory_enabled = reward_memory_automatic_ingest_for_agent(
                 registry_goal if isinstance(registry_goal, dict) else {},
                 effective_agent_id,
             )
+            if isinstance(registry_goal, dict):
+                try:
+                    resolved_runtime = resolve_runtime_root(
+                        load_registry(agent_registry_path),
+                        args.runtime_root,
+                        registry_path=agent_registry_path,
+                    )
+                    effective_available_capabilities = list(
+                        resolve_agent_capabilities(
+                            {
+                                "registry": str(agent_registry_path.resolve()),
+                                "runtime_root": str(resolved_runtime.resolve()),
+                            },
+                            goal_id=args.goal_id,
+                            agent_identity={"agent_id": effective_agent_id},
+                            item=registry_goal,
+                            project_asset={},
+                            available=args.available_capabilities,
+                        ).get("effective")
+                        or []
+                    )
+                except Exception:  # noqa: BLE001 - prompt rendering stays fail-open
+                    effective_available_capabilities = None
         explicit_scheduler_fields = (
             args.host_surface,
             args.scheduler_owner,
@@ -196,6 +225,7 @@ def handle_heartbeat_prompt_command(
             agent_profile=agent_profile,
             registered_agents=registered_agents,
             available_capabilities=args.available_capabilities,
+            effective_available_capabilities=effective_available_capabilities,
             runtime_profile=runtime_profile,
             scheduler_execution_context=(
                 {

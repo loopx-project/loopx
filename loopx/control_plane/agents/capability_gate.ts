@@ -180,17 +180,19 @@ export function projectRuntimeCapabilityReentry(request: JsonObject): JsonObject
   };
 }
 
-/** Agent negatives override inherited declarations; a fresh explicit observation wins. */
+/** Agent negatives override inherited and auto-probed declarations; a fresh explicit observation wins. */
 export function projectCapabilityAvailability(request: JsonObject): JsonObject {
   const goal = unique(requireStringArray(request.goal, "goal"));
   const runtime = unique(requireStringArray(request.runtime, "runtime"));
+  const probed = unique(requireStringArray(request.probed ?? [], "probed"))
+    .filter(c => OBSERVABLE_RUNTIME_CAPABILITIES.has(c));
   const state = requireJsonObject(request.agent ?? {}, "agent");
   const remembered = requireStringArray(state.available ?? [], "agent.available")
     .filter(c => OBSERVABLE_RUNTIME_CAPABILITIES.has(c));
   const unavailable = requireStringArray(state.unavailable ?? [], "agent.unavailable")
     .filter(c => OBSERVABLE_RUNTIME_CAPABILITIES.has(c) && !runtime.includes(c));
-  const runtimeAvailable = unique([...remembered, ...runtime]).filter(c => !unavailable.includes(c));
-  return {goal, agent: remembered, unavailable, invocation: runtime,
+  const runtimeAvailable = unique([...probed, ...remembered, ...runtime]).filter(c => !unavailable.includes(c));
+  return {goal, probed, agent: remembered, unavailable, invocation: runtime,
     runtime_available: runtimeAvailable,
     effective: unique([...goal, ...runtimeAvailable]).filter(c => !unavailable.includes(c))};
 }

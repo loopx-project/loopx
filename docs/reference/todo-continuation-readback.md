@@ -34,13 +34,16 @@ requirements, claims, leases or Goal acceptance. Deferred ready work still needs
 its normal lifecycle transition.
 
 The existing typed capability owner resolves `external_evidence_poll` from the
-current Goal declaration, remembered host observations and invocation facts;
-remembered revocation defeats inherited permission. No per-command flag is
-required when the owner already supplies permission. Shell/filesystem access,
-Todo requirements and explicit prequota invocation do not grant network access.
+current Goal declaration, automatic local host readiness probes (`probed`: `gh`
+CLI + configured auth outside network-disabled sandboxes), remembered host
+observations and invocation facts; remembered revocation (`--unavailable-capability`)
+defeats both inherited permission and automatic host probes. No per-command flag is
+required on equipped hosts. Shell/filesystem access alone and Todo requirements
+do not grant network access on offline/unconfigured sandboxes.
 Unavailable permission sources return a failure without contacting GitHub.
-Remove all inherited grants or record the capability as unavailable to stop
-future automatic reads; previously verified merge facts remain usable.
+Record the capability as unavailable (or set `LOOPX_AUTO_CAPABILITY_PROBE=0` /
+`LOOPX_OFFLINE=1`) to stop future automatic reads; previously verified merge
+facts remain usable.
 
 Fresh executing `quota should-run` and `turn run-once --execute` compose the
 same registered hook before collecting the governing decision. Compatibility
@@ -100,10 +103,12 @@ single-flight，并发调用只读回观察进行中，不重复请求。仓库�
 仍保留原展示边界，重启不需要重复远端读取或改写合并时间。离开 open 列表、关闭未合并或
 provider 失败不能解除等待。观察不修改 Todo 状态、要求、认领、lease 或 Goal 验收；
 已满足条件的 deferred Todo 仍走正常生命周期转换。
-既有 typed capability owner 从当前 Goal 声明、已记住的宿主观察和本次参数解析
-`external_evidence_poll`；宿主记录的撤销优先于继承授权。owner 已提供权限时，不必给
-每条命令手工补 flag。filesystem/shell、Todo 要求与显式调用 prequota 都不授予网络
-权限。权限来源不可用时只返回失败，不联系 GitHub。移除所有继承授权或记录能力不可用，
+既有 typed capability owner 从当前 Goal 声明、默认本机能力自动探测（`probed`：非离线沙箱下检测到
+`gh` CLI 与认证凭据时自动开启）、已记住的宿主观察和本次参数解析
+`external_evidence_poll`；宿主记录的撤销（`--unavailable-capability`）同时优先于继承授权和自动探测。
+本机工具就绪时无需手工传参或预先写入记忆。离线沙箱中仅凭 filesystem/shell 或 Todo 要求不会授予网络
+权限。权限来源不可用时只返回失败，不联系 GitHub。记录能力不可用（或设置
+`LOOPX_AUTO_CAPABILITY_PROBE=0` / `LOOPX_OFFLINE=1`），
 即可停止后续自动读取；已验证合并事实保留。
 
 执行性的 `quota should-run` 与新的 `turn run-once --execute` 在 governing decision
