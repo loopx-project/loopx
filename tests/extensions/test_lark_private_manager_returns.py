@@ -758,3 +758,50 @@ def test_worker_return_lost_response_does_not_republish_after_restart(private_re
     returned = [r for r in recovered.messages(session["session_id"]) if r.get("origin") == "manager_followup"]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
     assert capture.read_bytes() == starts
+
+
+@pytest.mark.parametrize(("private_return", "return_root", "interrupted_at"), [
+    ("native", "shared", "accepted"),
+    ("legacy", "separate", "preview"),
+], indirect=["private_return", "return_root"])
+def test_worker_restart_between_preview_and_locator(private_return, interrupted_at, monkeypatch):
+    sender, session, turn, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    host_requests = store.root.parent.parent / "requests.jsonl"
+    original_requests = host_requests.read_bytes()
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Inspect result")
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Original result")
+    provider.verify_replies = True
+    original_runner = transport.runner
+
+    class WorkerStopped(BaseException):
+        """Interrupt without running the ordinary provider-error settlement."""
+
+    def interrupt(args, *runner_args, **kwargs):
+        result = original_runner(args, *runner_args, **kwargs)
+        if "--content" in args and ("--dry-run" in args) == (interrupted_at == "preview"):
+            raise WorkerStopped
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(transport, "runner", interrupt)
+        with pytest.raises(WorkerStopped):
+            drain(sender.root, controller.registry_path, store, sender)
+
+    accepted = interrupted_at == "accepted"
+    assert len(replies) == int(accepted)
+    assert reply_status(sender.root, route)[0]["status"] == ("verification_required" if accepted else "queued")
+    reopened = ChatSessionStore(store.root.parent)
+    recovered = LarkManagerReturnTransport(sender.server, sender.root)
+    for minutes in (120, 125):
+        drain(sender.root, controller.registry_path, reopened, recovered,
+              now=datetime.now(timezone.utc) + timedelta(minutes=minutes))
+    final = reply_status(sender.root, route)[0]
+    assert final["status"] == ("explicit_unverified" if accepted else "delivered")
+    if accepted:
+        assert final["error"] == "provider_locator_unavailable"
+    assert len(replies) == 1
+    returns = [message for message in reopened.messages(session["session_id"]) if message.get("origin") == "manager_followup"]
+    assert [message["turn_id"] for message in returns] == [turn["turn_id"]]
+    assert host_requests.read_bytes() == original_requests

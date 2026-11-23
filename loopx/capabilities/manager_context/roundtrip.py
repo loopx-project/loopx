@@ -743,6 +743,27 @@ def _return_provider(plan, source, sender, record_attempt):
             "idempotency_key": sent.get("idempotency_key")}
 
 
+class _ReturnAttemptRecorder:
+    """Keep dispatch and locator checkpoints fenced to the same return."""
+
+    def __init__(self, transact, checkpoint, exact):
+        self.transact = transact
+        self.checkpoint = checkpoint
+        self.exact = exact
+
+    def _save(self, phase, **payload):
+        result = self.transact(phase, **payload)
+        self.checkpoint.update({key: result[key] for key in ("revision", "token")})
+
+    def before_provider_send(self):
+        # Exact returns already persisted their sending admission at prepare.
+        if not self.exact:
+            self._save("dispatch")
+
+    def __call__(self, attempt):
+        self._save("attempt", attempt=dict(attempt))
+
+
 def _deliver_return(host, path, sender, frozen_route):
     store, cancelled = host["store"], host["cancelled"]
     with _return_source(host, path, frozen_route) as facts:
@@ -771,9 +792,7 @@ def _deliver_return(host, path, sender, frozen_route):
         recovered = transact("settle", private_readback=original)
         return recovered["processed"]
 
-    def record_attempt(attempt):
-        saved = transact("attempt", attempt=dict(attempt))
-        checkpoint.update({key: saved[key] for key in ("revision", "token")})
+    record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"])
 
     try:
         store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],

@@ -360,6 +360,7 @@ def _deliver_lark_inbox_outbound(
     source_authority_verifier: SourceAuthorityVerifier | None = None,
     overlap_source_preflight: bool = False,
     recover_ambiguous_send: bool = False,
+    before_provider_send: Callable[[], None] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -672,6 +673,8 @@ def _deliver_lark_inbox_outbound(
             provider_preview_verified=True,
         )
 
+    if before_provider_send is not None:
+        before_provider_send()
     started = (time(), monotonic()) if recover_ambiguous_send else None
     send = _call(runner, provider_args)
     failure = _worker_send_failure(send) if started is not None and send.get("returncode") != 0 else None
@@ -875,6 +878,7 @@ def reply_lark_event_inbox(
     source_authority_verifier: SourceAuthorityVerifier | None = None,
     overlap_source_preflight: bool = False,
     recover_ambiguous_send: bool = False,
+    before_provider_send: Callable[[], None] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -925,6 +929,7 @@ def reply_lark_event_inbox(
         source_authority_verifier=source_authority_verifier,
         overlap_source_preflight=overlap_source_preflight,
         recover_ambiguous_send=recover_ambiguous_send,
+        before_provider_send=before_provider_send,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,

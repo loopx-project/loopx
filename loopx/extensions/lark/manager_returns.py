@@ -399,6 +399,7 @@ def _run_inbox_return(
             delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
             source_membership_verifier=source_verifier,
             recover_ambiguous_send=True,
+            before_provider_send=getattr(delivery_attempt_recorder, "before_provider_send", None),
             short_message_limit=None, attachment_keys=keys, attachment_names=attachment_names,
             finalize_reactions=not attachments,
         )

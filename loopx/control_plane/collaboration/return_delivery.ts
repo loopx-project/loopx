@@ -172,7 +172,7 @@ function returnCommand(value: unknown): ReturnCommand {
   const {request_id: id, result_key: key} = returnAddress(request);
   const now = requireNonEmptyString(request.now, "now");
   const nowMicros = returnClockMicros(now);
-  requireStringLiteral(request.phase, ["prepare", "attempt", "settle"], "return delivery phase");
+  requireStringLiteral(request.phase, ["prepare", "dispatch", "attempt", "settle"], "return delivery phase");
   const folder = join(root, ".local", "manager-context");
   return { request, folder, key, now, nowMicros,
     path: join(folder, "replies", id, `${key}.delivery.json`),
@@ -415,10 +415,18 @@ function attemptLocator(attempt: unknown): string | null {
   return savedAttempt(attempt)?.message_ref as string | null ?? null;
 }
 
+function awaitingProviderLocator(state: JsonObject): boolean {
+  return state.status === "verification_required" && state.attempt == null && state.error === "provider_locator_unavailable";
+}
+
 async function sourceFailure(command: ReturnCommand, state: JsonObject, blocker: unknown = command.facts.error): Promise<JsonObject> {
   if (command.exact) return returnResponse({ source_unavailable: true });
   const decision = classifyManagerReturnVerification({ verification_performed: false,
     reply_verified: false, blocker });
+  if (awaitingProviderLocator(state)) {
+    await writeDeliveryState(command, { status: "explicit_unverified", error: "provider_locator_unavailable" });
+    return returnResponse({ processed: 1 });
+  }
   if (state.status === "verification_required" && state.attempt != null) {
     if (decision.status === "explicit_unverified" || attemptLocator(state.attempt) === null) {
       await writeDeliveryState(command, { ...state, status: "explicit_unverified",
@@ -566,6 +574,10 @@ function deliveryOutcome(command: ReturnCommand, state: JsonObject): JsonObject 
       status: attemptLocator(state.attempt) === null ? "explicit_unverified" : "verification_required",
       error: attemptLocator(state.attempt) === null ? "provider_locator_unavailable" : "provider_delivery_unverified" };
   }
+  // After dispatch, only an observed refusal of the write permits a new send.
+  if (awaitingProviderLocator(state) && !(outcome.kind === "sent" && outcome.external_write_performed === false)) {
+    return { status: "explicit_unverified", error: "provider_locator_unavailable" };
+  }
   const checked = classifyManagerReturnVerification({ verification_performed: false,
     reply_verified: false, blocker: outcome.blocker ?? null });
   if (state.attempt != null && (checked.status === "explicit_unverified" || attemptLocator(state.attempt) === null)) {
@@ -592,6 +604,19 @@ async function finishReturn(command: ReturnCommand, state: JsonObject): Promise<
     if ((state.admission as JsonObject | undefined)?.token !== command.request.token) {
       throw new EffectRuntimeRequestError("exact return delivery admission changed");
     }
+  }
+  if (command.request.phase === "dispatch") {
+    const available = state.status == null || state.status === "queued" || state.status === "retry_pending";
+    if (command.exact || !available || !pendingDelivery(command, state) || state.attempt != null
+        || source.inspected.interim_superseded || requireJsonObject(command.facts.route, "route").kind === "peer"
+        || returnAuthorityBlocker(command)
+        || resolveConversationScope(requireJsonObject(command.facts.session, "session")).private_conversation) {
+      throw new EffectRuntimeRequestError("external return dispatch is unavailable");
+    }
+    // A restarted worker must not POST again without a provider locator.
+    const started = { status: "verification_required", error: "provider_locator_unavailable", attempts: state.attempts ?? 0 };
+    await writeDeliveryState(command, started);
+    return returnResponse({ revision: deliveryRevision(started), token: null });
   }
   if (command.request.phase === "attempt") {
     const attempt = normalizeManagerReturnDeliveryAttempt(command.request.attempt);
