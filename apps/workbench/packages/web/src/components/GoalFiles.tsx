@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { t } from '../i18n';
 import type { Thread } from '../api';
 import { fetchResults, readResult, resultKey, type ResultPage, type ResultRead, type ResultRow } from '../loopx/results';
-import { goalOf } from '../loopx/launch';
+import { goalConversation } from '../loopx/goal-navigation';
 
 /** The Goal's Files tab: the reports that still pass acceptance, and the workspace folder in the file panel. */
 export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversations }: {
@@ -13,14 +13,14 @@ export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversation
   threads: Thread[];
   /** Open the file panel on this Goal conversation's working folder. */
   onBrowse: (threadId: string) => void;
-  onOpenConversations: () => void;
+  onOpenConversations?: () => void;
 }) {
   const [page, setPage] = useState<ResultPage | null>(null);
   const [open, setOpen] = useState<ResultRead | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const generation = useRef(0);
-  const bound = threads.find(thread => goalOf(thread)?.goalId === goalId) ?? null;
+  const bound = goalConversation(goalId, threads);
 
   const load = useCallback(async (cursor?: string) => {
     const current = ++generation.current;
@@ -55,8 +55,8 @@ export function GoalFiles({ token, goalId, threads, onBrowse, onOpenConversation
           <button type="button" className="primary" onClick={() => onBrowse(bound.id)}>{t('loopx.files.browse')}</button>
         </>
         : <>
-          <p className="goal-empty">{t('loopx.files.noThread')}</p>
-          <button type="button" className="ghost" onClick={onOpenConversations}>{t('loopx.tabConversations')}</button>
+          <p className="goal-empty">{t(onOpenConversations ? 'loopx.files.noThread' : 'loopx.files.noConversationWorkspace')}</p>
+          {onOpenConversations && <button type="button" className="ghost" onClick={onOpenConversations}>{t('loopx.tabConversations')}</button>}
         </>}
     </section>
     <section className="goal-files-results" aria-label={t('loopx.files.reports')} aria-busy={busy}>
