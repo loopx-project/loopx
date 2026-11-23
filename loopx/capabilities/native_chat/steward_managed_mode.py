@@ -43,7 +43,10 @@ class StewardManagedMode:
                 session = self.store.load_session(actor["session_id"])
             else:
                 candidates = self.bindings.local_sessions(binding_id)
-                candidates = [row for row in candidates if row.get("status") != "closed"]
+                candidates = [
+                    row for row in candidates
+                    if row.get("status") != "closed" and not (row.get("steward_context") or {}).get("topic_ref")
+                ]
                 channels = {row.get("channel_id") for row in candidates}
                 if len(channels) != 1 or not candidates:
                     raise ValueError("select the original private steward conversation first")

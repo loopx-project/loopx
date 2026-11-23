@@ -7444,18 +7444,21 @@ def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypa
         return transport.root / f"{request_ref}.json"
 
     try:
+        from loopx.extensions.lark import private_mention_topics
+        import loopx.extensions.lark.private_conversations as private_conv_mod
+
         first_root = provider.event(profile, "first-topic", "Original topic")["message_id"]
         second_root = provider.event(profile, "second-topic", "Independent topic")["message_id"]
         original_event = reply(provider.event(profile, "topic-work", "wait for steer"), first_root)
-        assert transport.admit(profile, original_event)["status"] == "durably_accepted"
-        original = transport.core.read_request(path_for(original_event).stem)
-        _wait_private_upstream(store, original)
-        sid, old_turn = original["session_id"], original["turn_id"]
         different = reply(_private_mention_event(provider, profile, "topic-ask", "Answer this topic independently."),
             first_root if case == "same-topic" else second_root)
         path = path_for(different)
         old_notice = None
         if case in {"fresh", "admission-crash"}:
+            assert transport.admit(profile, original_event)["status"] == "durably_accepted"
+            original = transport.core.read_request(path_for(original_event).stem)
+            _wait_private_upstream(store, original)
+            sid, old_turn = original["session_id"], original["turn_id"]
             if case == "admission-crash":
                 with monkeypatch.context() as crash:
                     def lose_transport_write(*_args):
@@ -7467,12 +7470,27 @@ def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypa
                 assert json.loads(path.read_text())["status"] == "captured"
             assert transport.admit(profile, different)["status"] == "durably_accepted"
             queued = transport.core.read_request(path.stem)
-            assert queued["turn_id"] != old_turn and queued["session_id"] == sid
-            assert store.load_turn(sid, queued["turn_id"])["status"] == "queued"
+            assert queued["turn_id"] != old_turn and queued["session_id"] != sid
+            expected_second_topic = identity_ref(binding["provider_ref"], different["chat_id"], second_root)
+            assert queued["source"]["topic_ref"] == expected_second_topic
+            assert store.load_turn(queued["session_id"], queued["turn_id"])["status"] in {"queued", "starting", "running", "completed"}
         else:
-            from loopx.extensions.lark import private_mention_topics
-
             with monkeypatch.context() as old_behavior:
+                if case != "same-topic":
+                    old_behavior.setattr(
+                        private_conv_mod,
+                        "resolve_private_steward_lane",
+                        lambda **kw: (kw["base_source"], False),
+                    )
+                    old_behavior.setattr(
+                        private_conv_mod,
+                        "finalize_private_steward_lane",
+                        lambda **kw: (kw["current_source"], kw["selected"]),
+                    )
+                assert transport.admit(profile, original_event)["status"] == "durably_accepted"
+                original = transport.core.read_request(path_for(original_event).stem)
+                _wait_private_upstream(store, original)
+                sid, old_turn = original["session_id"], original["turn_id"]
                 old_behavior.setattr(private_mention_topics, "distinct_reply_topic", lambda *args: False)
                 old_behavior.setattr(runtime.adapters[sid], "healthcheck", lambda: False)
                 assert transport.admit(profile, different)["status"] == "command_recorded"

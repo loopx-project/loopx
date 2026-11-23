@@ -344,6 +344,48 @@ def _private_root_readback_matches(message: Mapping[str, Any], chat_id: str) -> 
         and message.get("root_id") in (None, "", message.get("message_id")))
 
 
+def _captured_source_event(config: Mapping[str, Any], source_message_id: str) -> Mapping[str, Any] | None:
+    if not source_message_id:
+        return None
+    inbox = config["inbox_path"]
+    return next(
+        (
+            event
+            for path in (inbox.glob("*.json") if isinstance(inbox, Path) and inbox.is_dir() else [])
+            if path.name != "processed.json"
+            if (event := _event_from_file(path)) is not None
+            if event.get("message_id") == source_message_id
+        ),
+        None,
+    )
+
+
+def _explicit_placement_readback_matches(
+    message: Mapping[str, Any],
+    *,
+    chat_id: str,
+    reply_placement: str | None,
+    source_message_id: str,
+    source_event: Mapping[str, Any] | None,
+) -> bool:
+    if reply_placement is None:
+        return True
+    if reply_placement == "chat_root":
+        return _private_root_readback_matches(message, chat_id)
+    if reply_placement == "source_thread":
+        expected_root = str(
+            (source_event or {}).get("root_id")
+            or (source_event or {}).get("parent_id")
+            or source_message_id
+        )
+        return (
+            message.get("chat_id") == chat_id
+            and bool(message.get("parent_id"))
+            and message.get("root_id") == expected_root
+        )
+    return False
+
+
 def _deliver_lark_inbox_outbound(
     *,
     project: str | Path,
@@ -384,27 +426,13 @@ def _deliver_lark_inbox_outbound(
     source_message_id = str(message_id or "").strip()
     if source_message_id and not MESSAGE_ID_PATTERN.fullmatch(source_message_id):
         raise ValueError("lark inbox reply requires a valid message id")
-    inbox = config["inbox_path"]
-    source_event = (
-        next(
-            (
-                event
-                for path in (inbox.glob("*.json") if inbox.is_dir() else [])
-                if path.name != "processed.json"
-                if (event := _event_from_file(path)) is not None
-                if event.get("message_id") == source_message_id
-            ),
-            None,
-        )
-        if source_message_id
-        else None
-    )
+    source_event = _captured_source_event(config, source_message_id)
     if source_message_id and source_event is None:
         raise ValueError(
             "lark inbox reply source message is not captured by this inbox"
         )
     if reply_placement is not None and (
-        reply_placement != "chat_root" or source_event is None
+        reply_placement not in {"chat_root", "source_thread"} or source_event is None
     ):
         raise ValueError("a new result requires its captured authorization source")
     if content_format not in {"text", "markdown"}:
@@ -445,7 +473,9 @@ def _deliver_lark_inbox_outbound(
         source_event and (source_event.get("parent_id") or source_event.get("root_id"))
     )
     placement = (
-        "chat_root"
+        "source_thread"
+        if reply_placement == "source_thread"
+        else "chat_root"
         if reply_placement == "chat_root" or source_event is None
         or (
             reply_config["placement_policy"] == "source_context"
@@ -799,7 +829,13 @@ def _deliver_lark_inbox_outbound(
     verified = bool(
         readback.get("returncode") == 0
         and readback_message is not None
-        and (reply_placement is None or _private_root_readback_matches(readback_message, chat_id))
+        and _explicit_placement_readback_matches(
+            readback_message,
+            chat_id=chat_id,
+            reply_placement=reply_placement,
+            source_message_id=source_message_id,
+            source_event=source_event,
+        )
         and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
                                           attachment_names=attachment_names, image_keys=image_keys)
              if markdown else lark_readback_matches_outbound(
@@ -1111,7 +1147,15 @@ def verify_lark_inbox_reply(
             verified_bot_aliases=bot_aliases or {},
         )
     )
-    if not verified or (reply_placement is not None and not _private_root_readback_matches(message, chat_id)):
+    source_message_id = str(message_id or "").strip()
+    source_event = _captured_source_event(config, source_message_id) if reply_placement is not None else None
+    if not verified or not _explicit_placement_readback_matches(
+        message,
+        chat_id=chat_id,
+        reply_placement=reply_placement,
+        source_message_id=source_message_id,
+        source_event=source_event,
+    ):
         return {
             "ok": False,
             "verification_performed": True,
@@ -1144,6 +1188,7 @@ def _verified_reply_result(*, project: str | Path, config_path: str | Path, mess
 def update_lark_inbox_reply(
     *, project: str | Path, config_path: str | Path, message_id: str,
     text: str, previous_text: str, attempt: Mapping[str, Any],
+    reply_placement: str | None = None,
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
@@ -1169,7 +1214,8 @@ def update_lark_inbox_reply(
     profile, chat_id = str(reply["sender_profile"]), str(reply["chat_id"])
     base = ["lark-cli", "--profile", profile]
     prior = reply_lark_event_inbox(project=project, config_path=config_path,
-        message_id=message_id, text=previous_text, content_format="markdown", execute=False)
+        message_id=message_id, text=previous_text, content_format="markdown",
+        reply_placement=reply_placement, execute=False)
     prior_receipt = str(prior.get("idempotency_key") or "")
     if (set(attempt) != {"schema_version", "provider", "message_ref", "intent_digest", "provider_receipt"}
             or attempt.get("schema_version") != "manager_return_delivery_attempt_v0"
@@ -1184,7 +1230,8 @@ def update_lark_inbox_reply(
         # verify and retire that sequence before creating a separate final.
         return {"ok": False, "reply_verified": False, "blocker": "provider_update_format_unsupported"}
     desired = reply_lark_event_inbox(project=project, config_path=config_path,
-        message_id=message_id, text=text, content_format="markdown", execute=False)
+        message_id=message_id, text=text, content_format="markdown",
+        reply_placement=reply_placement, execute=False)
     # Rich mentions use the existing identity-verified text sender instead.
     if desired.get("content_format") != "markdown":
         return {"ok": False, "reply_verified": False, "blocker": "provider_update_format_unsupported"}
@@ -1210,7 +1257,16 @@ def update_lark_inbox_reply(
     message = _message(_json_object(readback.get("stdout")), ref)
     if readback.get("returncode") != 0 or message is None:
         return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
+    source_message_id = str(message_id or "").strip()
+    source_event = _captured_source_event(config, source_message_id) if reply_placement is not None else None
     if (message.get("chat_id") != chat_id
+            or not _explicit_placement_readback_matches(
+                message,
+                chat_id=chat_id,
+                reply_placement=reply_placement,
+                source_message_id=source_message_id,
+                source_event=source_event,
+            )
             or not isinstance(message.get("sender"), Mapping)
             or message["sender"].get("sender_type") != "app"):
         return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_intent_conflict"}

@@ -42,8 +42,10 @@ const hasConflictingRecoveryKey = (obj: JsonObject, allowed: string): boolean =>
 const fieldsMatch = (left: JsonObject, right: JsonObject, keys: readonly string[]): boolean =>
   keys.every(key => left[key] === right[key]);
 const isStewardEndpoint = (v: unknown): boolean => v === "antigravity" || v === "codex";
-const boundChannelId = (steward: boolean, bindingId: unknown, sourceRef: unknown): string =>
-  `${steward ? "manager.external.native" : "project.external"}.${bindingId}.${sourceRef}`;
+const boundChannelId = (steward: boolean, bindingId: unknown, sourceRef: unknown, topicRef?: unknown): string =>
+  steward && isNonEmptyStr(topicRef)
+    ? `manager.external.native.${bindingId}.${sourceRef}.topic.${topicRef}`
+    : `${steward ? "manager.external.native" : "project.external"}.${bindingId}.${sourceRef}`;
 const recoveryClientBase = (row: JsonObject, version: number): string =>
   `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
 const reviewClientId = (row: JsonObject, version: number): string => `${recoveryClientBase(row, version)}-review-1`;
@@ -72,6 +74,7 @@ const matchesAttachedSession = (current: JsonObject | null, target: JsonObject):
 const matchesPrivateOwnerSource = (selected: JsonObject, row: JsonObject, source: JsonObject, context: JsonObject): boolean =>
   row.binding_id === selected.binding_id && source.private_human_message === true
   && source.sender_ref === selected.operator_ref && context.source_ref === source.source_ref
+  && (source.topic_ref ?? null) === (context.topic_ref ?? null)
   && fieldsMatch(context, selected, ["binding_id", "provider_ref", "operator_ref", "project_ref"]);
 const matchesNativeProofBase = (proof: JsonObject, current: JsonObject, row: JsonObject, failed: JsonObject): boolean =>
   proof.thread_id === current.upstream_thread_id && proof.request_ref === row.request_ref
@@ -395,8 +398,9 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     topic = {group_ref: groupRef, topic_ref: topicRef, filesystem_scope: "workspace_only"};
   } else {
     ensure(params.sender_ref === row.operator_ref && params.private_human_message === !local
-      && params.group_ref === undefined && params.topic_ref === undefined && params.group_human_message !== true,
+      && params.group_ref === undefined && (steward || params.topic_ref === undefined) && params.group_human_message !== true,
       "message audience is outside the binding grant");
+    if (steward && params.topic_ref !== undefined) topic = {topic_ref: ref(params.topic_ref, "topic reference")};
   }
   const project = boundProject(params, row);
   const goals = steward && row.goal_scope === "all_registered"
@@ -414,7 +418,7 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     const matches = steward ? matchesStewardContext(saved, context, row) : isDeepStrictEqual(saved, context);
     ensure(matches, "bound Session context changed");
   }
-  const channel = boundChannelId(steward, id, source);
+  const channel = boundChannelId(steward, id, source, steward ? topic.topic_ref : undefined);
   if (params.session !== undefined) {
     const session = requireJsonObject(params.session, "canonical bound Session");
     sessionIdentity(session.session_id, "bound Session identity");
@@ -453,7 +457,9 @@ export function listLocalBoundSessions(params: JsonObject): JsonObject {
     if (![session.project_context, session.steward_context].some(v => jsonObject(v)?.binding_id === id)
         || session.status === "closed") continue;
     const saved = requireJsonObject(steward ? session.steward_context : session.project_context, "bound Session context");
+    if (params.app_steward_entry === true && steward && saved.topic_ref !== undefined) continue;
     resolveBoundConversation({...params, source_ref: saved.source_ref, session,
+      ...(steward && saved.topic_ref !== undefined ? {topic_ref: saved.topic_ref} : {}),
       sender_ref: row.operator_ref, private_human_message: false, origin: "web", session_context: saved});
     ids.push(sessionIdentity(session.session_id, "bound Session identity"));
   }
@@ -671,7 +677,7 @@ function planStewardBindingAdoptionHold(params: JsonObject, request: JsonObject)
   ensure(matchesPrivateOwnerSource(row, request, source, context)
     && context.audience === "bound_owner" && context.grant === "portfolio_read"
     && original.goal_id === "loopx-manager" && original.session_mode === "managed_runtime"
-    && original.project_context == null && original.channel_id === boundChannelId(true, row.binding_id, source.source_ref)
+    && original.project_context == null && original.channel_id === boundChannelId(true, row.binding_id, source.source_ref, context.topic_ref)
     && matchesStewardContext(saved, context, row), "the original steward Session belongs to another source");
   return {operation: "hold_steward_binding", session_id: sessionIdentity(original.session_id, "original steward Session")};
 }
@@ -823,7 +829,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const source = requireJsonObject(row.source, "original conversation source");
   if (!matchesPrivateOwnerSource(selected, row, source, saved)
       || (!steward && saved.grant !== selected.grant)
-      || current.channel_id !== boundChannelId(steward, selected.binding_id, saved.source_ref)) return NO_RECOVERY;
+      || current.channel_id !== boundChannelId(steward, selected.binding_id, saved.source_ref, saved.topic_ref)) return NO_RECOVERY;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
   if (recovery.retained_result_review != null) {
     return (row.context_recovery as JsonObject | undefined)?.legacy_result_review === true
@@ -1679,7 +1685,7 @@ function boundConversationStatus(params: JsonObject, current: JsonObject | null)
   ensure(fieldsMatch(context, selected, ["binding_id", "project_ref", "provider_ref", "operator_ref"]),
     "status context belongs to another binding");
   const source = ref(context.source_ref, "status source identity");
-  const channel = boundChannelId(steward, selected.binding_id, source);
+  const channel = boundChannelId(steward, selected.binding_id, source, context.topic_ref);
   const recipient = params.agent_target ? agentTarget(params.agent_target) : null;
   if (recipient) {
     ensure(matchesAttachedSession(current, recipient), "status Agent Session changed");

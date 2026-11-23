@@ -300,12 +300,11 @@ def _return_inbox(
             return bool(transport._source_verified(record))
 
         source_verifier = verify_source
-        destination = {key: record[key] for key in ("profile", "binding_id", "source", "event")}
+        destination = {**{key: record[key] for key in ("profile", "binding_id", "source", "event")},
+                       **({"auto_topic_lane": True} if record.get("auto_topic_lane") is True else {})}
         message_id = _str_field(_mapping(record["event"]), "message_id")
     else:
-        snapshot, routing, target_config = _resolve_return(
-            root, registry, snapshot_provider, route, session, turn, cancelled
-        )
+        snapshot, routing, target_config = _resolve_return(root, registry, snapshot_provider, route, session, turn, cancelled)
         config_path, _ = _inbox_config(runtime_root=root, route=routing, target_payload=_mapping(snapshot["target_payload"]))
         destination, message_id = (routing, target_config), _str_field(route, "source_id").removeprefix("lark:")
     config = load_lark_event_inbox_config(project=project, config_path=config_path)
@@ -384,40 +383,33 @@ def _run_inbox_return(
             delivery_attempt_recorder(value)
 
     attachment_names = tuple(_str_field(attachment, "name") for attachment in attachments)
+    reply_placement = "source_thread" if isinstance(destination, Mapping) and destination.get("auto_topic_lane") is True else None
     if attempt is not None:
         result = verify_lark_inbox_reply(
             project=project, config_path=config_path, message_id=message_id, text=text, attempt=attempt,
-            runner=runner or _default_runner, source_membership_verifier=source_verifier,
-            attachment_keys=keys, attachment_names=attachment_names,
-            finalize_reactions=not attachments, resume_parts=True, before_send=before_send,
-        )
+            runner=runner or _default_runner, source_membership_verifier=source_verifier, attachment_keys=keys,
+            attachment_names=attachment_names, finalize_reactions=not attachments, resume_parts=True,
+            before_send=before_send, reply_placement=reply_placement)
     else:
         result = reply_lark_event_inbox(
-            project=project, config_path=config_path, message_id=message_id, text=text,
-            content_format="markdown", execute=True, runner=runner or _default_runner, before_send=before_send,
+            project=project, config_path=config_path, message_id=message_id, text=text, content_format="markdown",
+            execute=True, runner=runner or _default_runner, before_send=before_send,
             delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
-            source_membership_verifier=source_verifier,
-            recover_ambiguous_send=True,
+            source_membership_verifier=source_verifier, recover_ambiguous_send=True,
             before_provider_send=getattr(delivery_attempt_recorder, "before_provider_send", None),
             short_message_limit=None, attachment_keys=keys, attachment_names=attachment_names,
-            finalize_reactions=not attachments,
-        )
+            finalize_reactions=not attachments, reply_placement=reply_placement)
     if attachments and result.get("reply_verified") is True:
-        # The recorder persists the exact message locator before this read.
-        # Failure retains that attempt; recovery only reads it, never resends.
+        # Recorder persists exact message locator before this read; recovery only reads it, never resends.
         file_text, file_attempt = cast(Callable[..., tuple[str, dict[str, str | None]]], attachment_reply)(
-            project=project, config_path=config_path,
-            attempt=attempt if attempt is not None else observed_attempt, text=text,
-        )
+            project=project, config_path=config_path, attempt=attempt if attempt is not None else observed_attempt, text=text)
         result.update(cast(Callable[..., Payload], verify_result_files)(
             profile=sender_profile, message_id=file_attempt["message_ref"], text=file_text,
-            attachments=attachments, keys=keys, runner=runner, private_transport=private_transport,
-        ))
+            attachments=attachments, keys=keys, runner=runner, private_transport=private_transport))
         if result.get("reply_verified") is True:
             result.update(_verified_reply_result(
                 project=project, config_path=config_path, message_id=message_id,
-                runner=runner or _default_runner, finalize_reactions=True,
-            ))
+                runner=runner or _default_runner, finalize_reactions=True))
     return result
 
 
