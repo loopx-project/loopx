@@ -133,20 +133,19 @@ def _sqlite_pragma_data_version(db_path: Path) -> int | None:
 
 def _sqlite_bundle_signature(db_path: Path) -> dict[str, Any] | None:
     wal_path = Path(f"{db_path}-wal")
-    shm_path = Path(f"{db_path}-shm")
     db_stat = _stat_signature(db_path)
     wal_stat = _stat_signature(wal_path)
-    shm_stat = _stat_signature(shm_path)
-    if db_stat is None and wal_stat is None and shm_stat is None:
+    if db_stat is None and wal_stat is None:
         return None
+    # SQLite WAL-index (-shm) mtime and reader-mark bytes mutate on read-only
+    # connections (including PRAGMA data_version); committed writes always advance
+    # either the main database file/header or the -wal file/header + data_version.
     return {
         "db": db_stat,
         "wal": wal_stat,
-        "shm": shm_stat,
         "data_version": _sqlite_pragma_data_version(db_path) if db_stat is not None else None,
         "db_hdr": _head_bytes_digest(db_path, 100) if db_stat is not None else None,
         "wal_hdr": _head_bytes_digest(wal_path, 64) if wal_stat is not None else None,
-        "shm_hdr": _head_bytes_digest(shm_path, 136) if shm_stat is not None else None,
     }
 
 
@@ -454,6 +453,29 @@ def get_cached_manager_turn_context(
         return copy.deepcopy(entry.payload)
 
 
+def _is_cacheable_coverage(context: Mapping[str, Any]) -> bool:
+    if context.get("status") == "unavailable" or context.get("warnings"):
+        return False
+    coverage = context.get("coverage")
+    if not isinstance(coverage, Mapping):
+        return False
+    if any(
+        int(coverage.get(field) or 0) != 0
+        for field in ("conflicting", "unreadable", "partial", "invalid_registry_entries")
+    ):
+        return False
+    if coverage.get("complete") is True:
+        return True
+    discovered = int(coverage.get("discovered") or 0)
+    verified = int(coverage.get("verified") or 0)
+    stale = int(coverage.get("stale") or 0)
+    stopped_excluded = int(coverage.get("stopped_excluded") or 0)
+    if discovered > 0 and verified + stale + stopped_excluded == discovered:
+        return True
+    bound = context.get("bound_steward")
+    return discovered == 0 and isinstance(bound, Mapping) and bound.get("empty") is True
+
+
 def put_cached_manager_turn_context(
     fingerprint: str,
     context: Mapping[str, Any],
@@ -461,11 +483,8 @@ def put_cached_manager_turn_context(
     max_age_seconds: float = DEFAULT_MAX_AGE_SECONDS,
     now_monotonic: float | None = None,
 ) -> bool:
-    """Cache a complete, warning-free context snapshot with deep-copy isolation."""
-    if context.get("warnings"):
-        return False
-    coverage = context.get("coverage")
-    if not isinstance(coverage, Mapping) or coverage.get("complete") is not True:
+    """Cache a clean, warning-free context snapshot with deep-copy isolation."""
+    if not _is_cacheable_coverage(context):
         return False
     snapshot = copy.deepcopy(dict(context))
     now_mono = time.monotonic() if now_monotonic is None else now_monotonic

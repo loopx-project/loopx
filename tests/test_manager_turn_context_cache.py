@@ -347,7 +347,8 @@ def test_cache_bypasses_stopped_status_off_ssh_grants_env_off_and_incomplete_res
     )
     assert len(calls) == 8
 
-    # 5. Incomplete coverage or non-empty warnings are never stored.
+    # 5. Incomplete/unreadable coverage or non-empty warnings are never stored,
+    #    while clean portfolios with idle (stale) or stopped_excluded Goals cache.
     assert put_cached_manager_turn_context(
         "sha256:warn",
         {"warnings": ["registry_unreadable"], "coverage": {"complete": True}},
@@ -356,8 +357,127 @@ def test_cache_bypasses_stopped_status_off_ssh_grants_env_off_and_incomplete_res
         "sha256:incomplete",
         {"warnings": [], "coverage": {"complete": False}},
     ) is False
+    assert put_cached_manager_turn_context(
+        "sha256:unreadable_goal",
+        {
+            "warnings": [],
+            "coverage": {
+                "discovered": 2,
+                "verified": 1,
+                "stale": 1,
+                "stopped_excluded": 0,
+                "unreadable": 1,
+                "complete": False,
+            },
+        },
+    ) is False
+    assert put_cached_manager_turn_context(
+        "sha256:clean_with_stale_and_stopped",
+        {
+            "warnings": [],
+            "coverage": {
+                "discovered": 7,
+                "attempted": 6,
+                "stopped_excluded": 1,
+                "verified": 4,
+                "stale": 2,
+                "conflicting": 0,
+                "unreadable": 0,
+                "partial": 0,
+                "omitted": 1,
+                "invalid_registry_entries": 0,
+                "complete": False,
+            },
+        },
+    ) is True
     assert get_cached_manager_turn_context("sha256:warn") is None
     assert get_cached_manager_turn_context("sha256:incomplete") is None
+    assert get_cached_manager_turn_context("sha256:unreadable_goal") is None
+    assert get_cached_manager_turn_context("sha256:clean_with_stale_and_stopped") is not None
+
+
+def test_wal_sqlite_shm_reader_churn_does_not_prevent_cache_population(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    registry_path, runtime_root, _ = _setup_registry_and_goal(tmp_path)
+    goal_sha = __import__("hashlib").sha256(b"alpha").hexdigest()
+    sqlite_dir = runtime_root / "authority" / "sqlite-v0"
+    sqlite_dir.mkdir(parents=True, exist_ok=True)
+    db_path = sqlite_dir / f"authority-{goal_sha}.sqlite"
+
+    writer = sqlite3.connect(db_path)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, val TEXT)")
+    writer.execute("INSERT INTO items (val) VALUES ('v1')")
+    writer.commit()
+
+    shm_path = Path(f"{db_path}-shm")
+    calls: list[int] = []
+
+    def fake_portfolio_reading_wal(**kwargs):
+        calls.append(1)
+        # Simulate SQLite WAL reader connection touching -shm mtime/reader-marks during collection.
+        ro = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        ro.execute("SELECT COUNT(*) FROM items").fetchone()
+        ro.close()
+        if shm_path.exists():
+            import os
+            st = shm_path.stat()
+            os.utime(shm_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        raw = Path(kwargs["registry_path"]).read_bytes()
+        return {
+            "ok": True,
+            "schema_version": "goal_portfolio_v0",
+            "snapshot_id": f"sha256:{len(calls):064x}",
+            "inventory_revision": "sha256:" + __import__("hashlib").sha256(raw).hexdigest(),
+            "inventory_semantic_revision": manager_ctx.registry_semantic_revision(
+                Path(kwargs["registry_path"]), raw,
+            ),
+            "collected_at": now_iso,
+            "collection_completed_at": now_iso,
+            "coverage": {
+                "discovered": 2,
+                "attempted": 1,
+                "stopped_excluded": 1,
+                "verified": 0,
+                "stale": 1,
+                "conflicting": 0,
+                "unreadable": 0,
+                "partial": 0,
+                "omitted": 1,
+                "invalid_registry_entries": 0,
+                "complete": False,
+            },
+            "warnings": [],
+            "limitations": [],
+            "goals": [{"goal_id": "alpha", "quality": "stale", "progress": "idle", "deliveries": []}],
+        }
+
+    monkeypatch.setattr(manager_ctx, "build_goal_portfolio", fake_portfolio_reading_wal)
+    session = _bound_steward_session(tmp_path)
+
+    first = manager_ctx.collect_manager_turn_context(
+        registry_path, session, runtime_root, scope_resolver=lambda _s: ["alpha"],
+        include_details=False,
+    )
+    second = manager_ctx.collect_manager_turn_context(
+        registry_path, session, runtime_root, scope_resolver=lambda _s: ["alpha"],
+        include_details=False,
+    )
+    assert len(calls) == 1
+    assert second["snapshot_id"] == first["snapshot_id"]
+
+    # Real committed WAL write must still immediately invalidate the cache.
+    writer.execute("INSERT INTO items (val) VALUES ('v2')")
+    writer.commit()
+    third = manager_ctx.collect_manager_turn_context(
+        registry_path, session, runtime_root, scope_resolver=lambda _s: ["alpha"],
+        include_details=False,
+    )
+    assert len(calls) == 2
+    assert third["snapshot_id"] != first["snapshot_id"]
+    writer.close()
 
 
 def test_cache_ttl_lru_eviction_thread_safety_and_followthrough_fast_slow_lane_guidance(
