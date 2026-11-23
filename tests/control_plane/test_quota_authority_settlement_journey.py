@@ -856,6 +856,47 @@ def test_unprepared_turn_does_not_become_admitted_after_deferral(tmp_path, provi
     assert cli._spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_open_todo_with_committed_run_only_recovers_its_receipt(tmp_path, provider):
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    code, initial = _guard(project, runtime, registry)
+    assert code == 0 and initial["normal_delivery_allowed"]
+    identity = initial["heartbeat_receipt"]["settlement_identity"]
+    code, written = _refresh(project, runtime, registry)
+    assert code == 0 and written["appended"]
+    # Retain the real Run and original admission at the durable boundary just
+    # before the CLI records its refresh event.
+    path = rollout_event_log_path(runtime, cli.GOAL_ID)
+    rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+    retained = [row for row in rows if row["event_kind"] != "refresh_state"]
+    assert len(retained) + 1 == len(rows)
+    path.write_text("".join(json.dumps(row) + "\n" for row in retained))
+    for explicit in (False, True):
+        code, guard = cli._run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID,
+            *(["--todo-id", cli.TODO_ID] if explicit else []), cwd=project,
+        )
+        assert code == 0 and guard["normal_delivery_allowed"] is False
+        assert guard["unsettled_host_turn_recovery"]["repair"] == "durable_writeback"
+        assert guard["settlement_progress"]["state"] == "writeback_receipt_required"
+        channel = guard["interaction_contract"]["cli_channel"]
+        assert channel["settlement_plan"]["identity"] == identity
+        assert channel["spend_allowed_now"] is False and "settlement_owed" not in guard
+    template, = channel["next_cli_actions"]
+    command = (template.replace("<validated_progress>", written["classification"])
+               .replace("<scale>", written["delivery_batch_scale"])
+               .replace("<outcome>", written["delivery_outcome"]))
+    code, repaired = _execute(command, project, runtime, registry)
+    assert code == 0 and repaired["settlement_progress"]["state"] == "settled", repaired
+    assert repaired["appended"] is False and repaired["settlement_identity"] == identity
+    code, replay = _refresh(project, runtime, registry, "--settle-turn", "--settlement-receipt")
+    assert code == 0 and not replay["appended"] and replay["settlement_progress"]["state"] == "settled"
+    assert cli._classification_count(runtime, "validated_progress") == 1
+    assert cli._spend_run_count(runtime) == 1
+
+
 def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp_path):
     project, runtime, registry = cli._write_fixture(tmp_path)
     cli._initialize_fixture_authority(project, runtime)

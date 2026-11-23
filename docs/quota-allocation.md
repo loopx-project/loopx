@@ -430,7 +430,11 @@ reports observed progress without offering a spend command.
 时读取回执并返回仍待执行的步骤。
 The raw Python refresh API returns `writeback_receipt_required` until its CLI
 caller appends the refresh receipt and rereads the chain; it must not offer a
-spend command before that point. Older guards without a persisted spend source
+spend command before that point. If the CLI stops in this interval, re-entering
+the same Todo-bound Turn returns receipt recovery even while the Todo is open
+and runnable. Replay the original delivery fields and sink options to finish
+the writeback receipt. The composed command can then settle that Turn.
+Older guards without a persisted spend source
 retain the existing heartbeat default.
 
 A rejected `refresh-state`, or an Agent's state-only maintenance update, also
