@@ -808,12 +808,13 @@ from per-Turn model context optimizations in Track A):
    each checkpoint window stores a complete canonical projection JSON blob rather than
    content-addressed subtrees or normalized entity rows, multiplying database footprint
    as open/done Todos and Outcomes accumulate.
-2. **Positional array-index deltas in `commits.delta`:** `authority_state_log` encodes
-   list modifications by positional array index rather than stable entity IDs (`todo_id`,
-   `outcome_id`), so shifts or insertions near the head of long arrays amplify stored
-   commit deltas even when individual items change little.
+2. **Wide-span positional array splices in `commits.delta`:** `authority_state_log`'s
+   `arraySpliceOperations` already strips shared prefix and suffix bytes, so a single
+   insertion at the head or middle records only 1 inserted item. Wide-span reorders (e.g.,
+   moving a tail item to the head) or multi-point edits spanning long ranges still span
+   and re-emit the intervening slice, motivating future entity-ID keyed patches.
 3. **Retained capture duplication and compaction:** historical receipts/events and paired
    context-delivery captures grow linearly until explicit archiving or retention bounds
    are added.
 
-中文：长期运行的多 Outcome 本地 Goal 在存储层主要存在三类纯工程增长瓶颈（对应总路线图 Track B，优先级低于直接服务模型推理/开销的 Track A）：（1）`head.projection` 与周期 `checkpoints` 整树大 JSON 持久化造成的库体积放大；（2）`commits.delta` 对 Todo/Outcome 列表使用数组下标而非实体 ID 做差分带来的位移放大；（3）历史回执与 `context-delivery` 重复快照尚缺自动去重与有界清理。这些改造不改变现有 `user_version=2` 逻辑语义与读回 proof。
+中文：长期运行的多 Outcome 本地 Goal 在存储层主要存在三类纯工程增长瓶颈（对应总路线图 Track B，优先级低于直接服务模型推理/开销的 Track A）：（1）`head.projection` 与周期 `checkpoints` 整树大 JSON 持久化造成的库体积放大；（2）`commits.delta` 中的 `arraySpliceOperations` 已裁剪共享前后缀，队首或中间单条插入仅记录单条变化，但跨长区间的重排（如末项移至队首）或多点编辑仍会放大中间区间体积，适合后续演进为按实体 ID 差分；（3）历史回执与 `context-delivery` 重复快照尚缺自动去重与有界清理。这些改造不改变现有 `user_version=2` 逻辑语义与读回 proof。

@@ -325,12 +325,12 @@ RFC。然后比较验收成果和完整成本。晚期已验证提升是仍有�
 对长周期、多 Outcome 的本地 Goal 的结构审计表明，从持久权威状态（`head.projection`、checkpoint 与 commit delta）到单轮上下文投影（`loopx_turn_envelope_v1`、`context_delivery` 及渐进读取器）的映射存在两类性质不同的瓶颈。为优先压缩直接影响模型推理与执行成本的开销、避免阻塞在底层存储重构上，优化拆分为两条优先级明确的路径（以下仅记录单机有界观测与交付排序，不代表百 Agent 规模通过或修改默认行为）：
 
 - **Track A（优先）— 直接面向 Agent 效率与效果的优化：** 直接削减每轮输入冗余、启动读取往返次数、重复上下文干扰与 Prefix KV-Cache 失效的操作：
-  1. *包内细粒度去重（超越整包相等匹配）：* 当 `goal_objective` 等外层摘要不同但内部 `outcome_requirements` 完全相同时，通过 `outcome_requirements_ref` 在 `work_context`、`agent_todo_summary` 与 `planning_horizon` 间共享同一份完整要求列表；同时在 `loopx_turn_envelope_v1` 中对与根字段一致的 `heartbeat_recommendation.blocked_priority_fallback` 启用 `blocked_priority_fallback_ref`，避免数百 KiB 的重复投递与冗余必读指针。
-  2. *压缩启动 CLI 往返税：* 在满足安全与输出预算的前提下，为日常 `normal_run` 轮次直接内联有界 `inline_opening` 事实，减少 `should-run -> context-read --initial-read -> context-read --select` 多跳 CLI 往返，同时保留全部必读约束与权限边界。
-  3. *KV-Cache 友好的单调前缀（`KeepRaw` / `FoldToReceipt` / `EpochReset`）：* 同一 epoch 内严格保持前缀追加稳定、仅压缩动态尾部，避免轨迹中途重写已发前缀（见[可回读历史工作集 RFC](history-working-set-context-policy-v0.zh-CN.md#51-one-projection-owner)）。
+  1. *包内细粒度去重（超越整包相等匹配）：* 当 `goal_objective` 等外层摘要不同但内部 `outcome_requirements` 完全相同时，通过 `outcome_requirements_ref` 在 `work_context`、`agent_todo_summary` 与 `planning_horizon` 间共享同一份完整要求列表，并在 `loopx_turn_envelope_v1` 中对与根字段一致的 `heartbeat_recommendation.blocked_priority_fallback` 启用 `blocked_priority_fallback_ref`（**已通过 `#9328` 落地**，保留原 source hash 与 CLI/replan 读回；其余决策载体中尚未覆盖的重复切片沿同源身份规则按需收敛）。
+  2. *压缩启动 CLI 往返税：* **有界 `normal_run` CLI 开场已通过 `#9253` 落地**——在满足 `MAX_INLINE_WORK_RESPONSE_BYTES` 与输出上限时直接内联 `work_opening` / `before_work` 并保留绑定摘要的 `first_read_command` / `recovery`；后续仅针对超预算情形及其他仍需多跳 `should-run -> context-read --initial-read -> context-read --select` 的准入入口，不弱化必读约束与权限边界。
+  3. *KV-Cache 友好的单调前缀（`KeepRaw` / `FoldToReceipt` / `EpochReset`）：* 同一 epoch 内严格保持前缀追加稳定、仅压缩动态尾部，避免轨迹中途重写已发前缀（见[可回读历史工作集 RFC](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)）。
 - **Track B（延后工程项）— 纯存储与本地传输工程优化：** 改善本地磁盘占用、序列化 CPU 与写放大，但不直接改变模型可见决策质量的工作；排在 Track A 之后或由容量阈值触发：
   1. *实体归一化／子树哈希化权威快照：* 将单体大 JSON 投影（`head.projection` 与周期性 `checkpoints`）逐步演进为按实体／子树哈希索引及有界保留策略。
-  2. *按实体 ID 索引的 delta：* 用实体 ID 补丁替代按数组下标的 splice 差分，避免队列首部插入或移动引发全量重放体积膨胀。
+  2. *面向大跨度数组修改的按实体 ID 索引 delta：* 现行 `arraySpliceOperations` 已会裁剪共享前缀与共享后缀，因此队首或中间单条插入只记录单个新增项；真正产生放大的是把尾部移至队首等大跨度重排或跨长区间的多点修改（会重放中间区间内所有历史条目），实体 ID 补丁用于收敛此类大跨度 commit delta 并保持回放 proof 不变。
   3. *捕获文件去重与保留 GC：* 消除单轮内 `decision.json` 与完全相同的 `delivery.json` 的双份落盘，并为本地 `context-delivery` 历史目录增加有界清理机制。
 
 ### RFC 之外的关键覆盖与 owning sources
