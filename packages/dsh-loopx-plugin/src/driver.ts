@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { dirname, isAbsolute } from 'node:path'
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent, AgentStatus, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -38,6 +40,8 @@ const CONTINUATION_SCHEMA = 'loopx_dsh_continuation_v0'
 const RECEIPT_READBACK_SCHEMA = 'quota_receipt_readback_v0'
 const DEFAULT_WAIT_MS = 5 * 60_000
 const JOB_WAIT_MS = 10 * 60_000
+const DIAGNOSTIC_LOG_MAX_BYTES = 5 * 1024 * 1024
+const NOT_READY_LOG_INTERVAL_MS = 60_000
 const MAX_WAIT_MS = 24 * 60 * 60_000
 const SELECTION_RECOVERY_COMPLETION_LIMIT = 2
 
@@ -172,6 +176,11 @@ type EvaluationPlan = QueuePlan | WaitPlan
 
 interface HostJobs {
   list(agentId: Agent['id']): readonly { readonly owner?: Agent['id'] | undefined; readonly status: string }[]
+}
+
+interface PlanDiagnostics {
+  bindingStatus?: unknown
+  quota?: Record<string, unknown>
 }
 type AdmissionStage = 'resolve-command' | 'resolve-binding' | 'quota' | 'heartbeat'
   | 'pre-step-recheck' | 'maintenance-slot'
@@ -430,6 +439,15 @@ function foldSessionActivation(session: Agent['session']): ActivationProjection 
     projection.pendingSelection = undefined
   }
   return projection
+}
+
+// Match @deepseek-ai/dsh-home-paths without requiring it on older hosts.
+function resolveDshHome(): string {
+  const home = process.env.DSH_HOME
+  if (!home?.trim()) return resolve(homedir(), '.dsh')
+  if (home === '~') return resolve(homedir())
+  if (home.startsWith('~/') || home.startsWith('~\\')) return resolve(join(homedir(), home.slice(2)))
+  return resolve(home)
 }
 
 /** Reopening a Session must not erase its last typed failure boundary. */
@@ -829,8 +847,10 @@ export class LoopXContinuationDriver {
   private readonly makeTurnInstanceId: () => string
   private readonly retryDelaysMs: readonly number[]
   private readonly runDetached: <T>(operation: () => Promise<T>) => Promise<T>
-  private readonly warn: (message: string) => void
+  private readonly warn: (message: string, sessionId: string) => void
   private readonly getJobs: LoopXDriverOptions['getJobs']
+  private readonly diagnosticLogs: string
+  private readonly lastNotReady = new Map<string, { signature: string; time: number }>()
   private readonly onAdmissionChange: ((session: Agent['session']) => void) | undefined
   private command?: LoopXCommand | undefined
   private disposed = false
@@ -845,18 +865,52 @@ export class LoopXContinuationDriver {
       ?? (() => `dsh-loopx-${randomUUID()}`)
     this.retryDelaysMs = options.retryDelaysMs ?? [200, 750]
     this.runDetached = options.runDetached ?? (operation => operation())
-    this.warn = message => {
+    this.warn = (message, sessionId) => {
+      this.logDiagnostic('warn', sessionId, { message })
       try { options.warn?.(message) } catch {
         // Diagnostic exporters must not interrupt admission or message restoration.
       }
     }
     this.onAdmissionChange = options.onAdmissionChange
     this.getJobs = options.getJobs
+    this.diagnosticLogs = join(resolveDshHome(), 'logs')
+    this.logDiagnostic('driver_start')
+  }
+
+  private logDiagnostic(
+    kind: string,
+    sessionId: string | null = null,
+    fields: Record<string, unknown> | (() => Record<string, unknown>) = {},
+  ): void {
+    try {
+      const time = Date.now()
+      const details = typeof fields === 'function' ? fields() : fields
+      const signature = kind === 'not_ready' ? JSON.stringify(details.blockers) : undefined
+      if (signature !== undefined && sessionId !== null) {
+        const previous = this.lastNotReady.get(sessionId)
+        if (previous?.signature === signature && time - previous.time < NOT_READY_LOG_INTERVAL_MS) return
+      }
+      const line = `${JSON.stringify({ time: new Date(time).toISOString(), sessionId, kind, ...details })}\n`
+      const bytes = Buffer.byteLength(line)
+      if (bytes > DIAGNOSTIC_LOG_MAX_BYTES) return
+      const logs = this.diagnosticLogs
+      const file = join(logs, 'dsh-loopx-driver.jsonl')
+      const size = statSync(file, { throwIfNoEntry: false })?.size
+      if (size === undefined) mkdirSync(logs, { recursive: true })
+      else if (size + bytes > DIAGNOSTIC_LOG_MAX_BYTES) renameSync(file, `${file}.1`)
+      appendFileSync(file, line, { mode: 0o600 })
+      if (signature !== undefined && sessionId !== null) this.lastNotReady.set(sessionId, { signature, time })
+    } catch {
+      // Diagnostics must never interrupt Driver work.
+    }
   }
 
   observeAgent(agent: Agent): void {
     const state = this.stateFor(agent)
     state.activation = foldSessionActivation(agent.session)
+    this.logDiagnostic('observe', agent.session.id, {
+      status: agent.status, activated: state.activation.activated,
+    })
     if (agent.status === 'idle') this.requestEvaluation(state)
   }
 
@@ -865,6 +919,7 @@ export class LoopXContinuationDriver {
     if (state === undefined) return
     this.stopState(state)
     this.states.delete(agent)
+    this.lastNotReady.delete(state.activation.session.id)
   }
 
   onSessionStart(agent: Agent): void {
@@ -1066,9 +1121,12 @@ export class LoopXContinuationDriver {
     if (submitted === undefined) return next()
     const claimed = otherStepInputs(messages, submitted)
     const startedAt = performance.now()
+    const warnRejection = (reason: string, batch = messages): void => {
+      this.warn('dsh-loopx-driver: ' + preStepRejection(reason, batch, submitted, startedAt), state.activation.session.id)
+    }
     if (reservation === undefined || !sameReservation(submitted, reservation)
       || reservation.phase !== 'claimed') {
-      this.warn(`dsh-loopx-driver: ${preStepRejection(reservation === undefined ? 'missing-reservation' : !sameReservation(submitted, reservation) ? 'reservation-mismatch' : 'reservation-not-claimed', messages, submitted, startedAt)}`)
+      warnRejection(reservation === undefined ? 'missing-reservation' : !sameReservation(submitted, reservation) ? 'reservation-mismatch' : 'reservation-not-claimed')
       if (reservation !== undefined && submitted.id === reservation.messageId) {
         this.retireReservation(state)
       }
@@ -1076,14 +1134,14 @@ export class LoopXContinuationDriver {
       return { kind: 'reject' }
     }
     if (messages.some(message => message.id !== submitted.id && !isAllowedStepContext(message))) {
-      this.warn(`dsh-loopx-driver: ${preStepRejection('competing-messages', messages, submitted, startedAt)}`)
+      warnRejection('competing-messages')
       this.retireReservation(state)
       this.restoreCompetingMessages(agent, claimed, !signal.aborted)
       return { kind: 'reject' }
     }
 
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
-      this.warn(`dsh-loopx-driver: ${preStepRejection('authority-before-next', messages, submitted, startedAt)}`)
+      warnRejection('authority-before-next')
       this.retireReservation(state)
       this.restoreCompetingMessages(agent, claimed, !signal.aborted)
       this.requestEvaluation(state)
@@ -1100,7 +1158,7 @@ export class LoopXContinuationDriver {
       throw error
     }
     if (decision.kind === 'reject' || signal.aborted) {
-      if (decision.kind === 'reject') this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-reject', messages, submitted, startedAt)}`)
+      if (decision.kind === 'reject') warnRejection('downstream-reject')
       const remaining = decision.kind === 'enter' ? otherStepInputs(decision.messages, submitted) : []
       this.restoreCompetingMessages(agent, [...claimed, ...remaining], !signal.aborted)
       this.setErrorPause(state, true)
@@ -1111,7 +1169,7 @@ export class LoopXContinuationDriver {
     if (decision.messages.filter(message => !isAllowedStepContext(message)).length !== 1
       || admitted === undefined
       || !sameReservation(admitted, reservation)) {
-      this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-batch', decision.messages, submitted, startedAt)}`)
+      warnRejection('downstream-batch', decision.messages)
       this.retireReservation(state)
       const remaining = otherStepInputs(decision.messages, submitted)
       const acceptedInputs = remaining.filter(message => !inboxContains(agent.inbox, message.id))
@@ -1129,7 +1187,7 @@ export class LoopXContinuationDriver {
       return { kind: 'reject' }
     }
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
-      this.warn(`dsh-loopx-driver: ${preStepRejection('authority-after-next', decision.messages, submitted, startedAt)}`)
+      warnRejection('authority-after-next', decision.messages)
       this.retireReservation(state)
       this.restoreCompetingMessages(agent, [...claimed, ...otherStepInputs(decision.messages, submitted)], !signal.aborted)
       return { kind: 'reject' }
@@ -1153,6 +1211,7 @@ export class LoopXContinuationDriver {
   async dispose(cause: DriverDisposeCause = 'removal'): Promise<void> {
     if (this.disposed) return
     this.disposed = true
+    this.logDiagnostic('driver_dispose')
     const waits: Promise<void>[] = []
     for (const state of this.states.values()) {
       const activeAutomaticStep = state.reservation?.phase === 'claimed'
@@ -1164,7 +1223,7 @@ export class LoopXContinuationDriver {
             state.agent.cancel({ kind: 'parent' })
             waits.push(state.agent.whenIdle())
           } catch (error: unknown) {
-            this.warn(`dsh-loopx-driver: could not cancel active work: ${renderThrown(error)}`)
+            this.warn(`dsh-loopx-driver: could not cancel active work: ${renderThrown(error)}`, state.activation.session.id)
           }
         }
       }
@@ -1172,12 +1231,14 @@ export class LoopXContinuationDriver {
     }
     await Promise.allSettled(waits)
     this.states.clear()
+    this.lastNotReady.clear()
   }
 
   private stateFor(agent: Agent): DriverState {
     const existing = this.states.get(agent)
     if (existing !== undefined) {
       if (existing.activation.session !== agent.session) {
+        this.lastNotReady.delete(existing.activation.session.id)
         this.resolveEvaluationWaiters(existing, false)
         this.cancelPending(existing)
         this.retireReservation(existing)
@@ -1218,29 +1279,52 @@ export class LoopXContinuationDriver {
       && capture.agent.id === capture.session.header.id
   }
 
-  private ready(state: DriverState): boolean {
-    return !this.disposed
-      && !state.stopping
-      && state.activation.session === state.agent.session
-      && state.activation.activated
-      && !retainedState(state.agent, state.activation.session).goalBarPaused
-      && !state.pauseAfterTurnError
-      && !state.competing
-      && state.commands.size === 0
-      && state.reservation === undefined
-      && this.isLiveAgent(state.agent)
-      && state.agent.status === 'idle'
-      && !inboxHasPending(state.agent.inbox)
-      && state.agent.id === state.agent.session.id
-      && state.agent.id === state.agent.session.header.id
-      && typeof state.agent.session.header.cwd === 'string'
-      && state.agent.session.header.cwd.length > 0
+  private *readyBlockers(state: DriverState): Generator<string, void> {
+    const { agent } = state
+    if (this.disposed) yield 'disposed'
+    if (state.stopping) yield 'stopping'
+    if (state.activation.session !== agent.session) yield 'session_mismatch'
+    if (!state.activation.activated) yield 'activation'
+    if (retainedState(agent, state.activation.session).goalBarPaused) yield 'paused'
+    if (state.pauseAfterTurnError) yield 'pauseAfterTurnError'
+    if (state.competing) yield 'competing'
+    if (state.commands.size !== 0) yield 'commands'
+    if (state.reservation !== undefined) yield 'reservation'
+    if (!this.isLiveAgent(agent)) yield 'not_live'
+    if (agent.status !== 'idle') yield 'status:' + agent.status
+    if (inboxHasPending(agent.inbox)) yield 'inbox_pending'
+    if (agent.id !== agent.session.id || agent.id !== agent.session.header.id) yield 'id_mismatch'
+    const cwd = agent.session.header.cwd
+    if (typeof cwd !== 'string' || cwd.length === 0) yield 'no_cwd'
+  }
+
+  private ready(state: DriverState, logNotReady = false): boolean {
+    const remaining = this.readyBlockers(state)
+    const first = remaining.next()
+    if (first.done) return true
+    if (logNotReady) {
+      this.logDiagnostic('not_ready', state.activation.session.id, () => {
+        const blockers = [first.value, ...remaining]
+        const inbox = state.agent.inbox
+        const inboxSourceKinds = blockers.includes('inbox_pending')
+          ? [...new Set([...inbox.nextTurn, ...inbox.nextStep]
+            .filter(message => !isToolJobNotice(message)).map(message => message.source?.kind ?? 'unknown'))].sort()
+          : undefined
+        return { blockers, inboxSourceKinds }
+      })
+    }
+    return false
   }
 
   private requestEvaluation(state: DriverState): void {
-    if (state.stopping || this.disposed
-      || state.activation.session !== state.agent.session
-      || !state.activation.activated) return
+    const reason = state.stopping ? 'stopping'
+      : this.disposed ? 'disposed'
+      : state.activation.session !== state.agent.session ? 'session_mismatch'
+      : !state.activation.activated ? 'not_activated' : undefined
+    if (reason !== undefined) {
+      this.logDiagnostic('request_skipped', state.activation.session.id, { reason })
+      return
+    }
     state.requested = true
     if (state.run !== undefined) return
     let run: Promise<void>
@@ -1261,7 +1345,7 @@ export class LoopXContinuationDriver {
     } catch (error: unknown) {
       state.requested = false
       this.resolveEvaluationWaiters(state, false)
-      this.warn(`dsh-loopx-driver: could not start evaluation: ${renderThrown(error)}`)
+      this.warn(`dsh-loopx-driver: could not start evaluation: ${renderThrown(error)}`, state.activation.session.id)
       return
     }
     state.run = run
@@ -1270,13 +1354,13 @@ export class LoopXContinuationDriver {
       if (state.requested && !state.stopping) this.requestEvaluation(state)
     }
     void run.then(retire, error => {
-      this.warn(`dsh-loopx-driver: evaluation failed: ${renderThrown(error)}`)
+      this.warn(`dsh-loopx-driver: evaluation failed: ${renderThrown(error)}`, state.activation.session.id)
       retire()
     })
   }
 
   private async evaluate(state: DriverState): Promise<boolean> {
-    if (!this.ready(state)) return false
+    if (!this.ready(state, true)) return false
     const session = state.agent.session
     const jobWait = this.checkHostJobWait(state)
     if (jobWait.waiting) return true
@@ -1288,13 +1372,14 @@ export class LoopXContinuationDriver {
     state.controller = controller
     let evaluationStarted = false
     let waitingForIdle = false
+    const diagnostics: PlanDiagnostics = {}
     let plan: EvaluationPlan
     try {
       plan = await state.agent.runMaintenance(async maintenanceSignal => {
         evaluationStarted = true
         const signal = AbortSignal.any([controller.signal, maintenanceSignal])
         admissionSignal = signal
-        return this.buildPlan(state, signal, value => { stage = value }, jobWait.deferredPlan)
+        return this.buildPlan(state, signal, value => { stage = value }, diagnostics, jobWait.deferredPlan)
       })
     } catch (error: unknown) {
       if (!evaluationStarted && !controller.signal.aborted
@@ -1307,7 +1392,7 @@ export class LoopXContinuationDriver {
           }
         }).catch((idleError: unknown) => {
           if (state.controller === controller && !controller.signal.aborted) {
-            this.warn(`dsh-loopx-driver: could not wait for idle: ${renderThrown(idleError)}`)
+            this.warn(`dsh-loopx-driver: could not wait for idle: ${renderThrown(idleError)}`, session.id)
           }
         }).finally(() => {
           if (state.controller === controller) state.controller = undefined
@@ -1322,7 +1407,7 @@ export class LoopXContinuationDriver {
         if (error instanceof LoopXCliError && error.kind === 'typed_failure') {
           this.clearDeferredPlan(state, jobWait.deferredPlan)
         }
-        this.warn(`dsh-loopx-driver: admission_failed stage=${stage} ${cliErrorFields(error)} signal_aborted=${admissionSignal?.aborted ?? controller.signal.aborted} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
+        this.warn(`dsh-loopx-driver: admission_failed stage=${stage} ${cliErrorFields(error)} signal_aborted=${admissionSignal?.aborted ?? controller.signal.aborted} elapsed_ms=${Math.round(performance.now() - startedAt)}`, session.id)
         this.failAdmission(state, error)
       }
       return evaluationStarted
@@ -1330,6 +1415,14 @@ export class LoopXContinuationDriver {
       if (!waitingForIdle && state.controller === controller) state.controller = undefined
     }
 
+    this.logDiagnostic('plan', session.id, () => ({
+      planKind: plan.kind,
+      ...(plan.kind === 'wait' ? { delayMs: plan.delayMs } : {}),
+      bindingStatus: diagnostics.bindingStatus,
+      effective_action: diagnostics.quota?.effective_action,
+      state: diagnostics.quota?.state,
+      reason: diagnostics.quota?.reason,
+    }))
     // Cancellation can land after the maintenance callback has built its plan.
     if (admissionSignal?.aborted || state.agent.session !== session) return false
     if (this.ready(state)) {
@@ -1347,7 +1440,7 @@ export class LoopXContinuationDriver {
     state.schedulerToken = ''
     state.unchangedPolls = 0
     this.clearAdmissionFailure(state)
-    if (!this.ready(state) || state.agent.session !== plan.session) return true
+    if (!this.ready(state, true) || state.agent.session !== plan.session) return true
     if (this.checkHostJobWait(state, plan).waiting) return true
     return this.queuePlan(state, plan)
   }
@@ -1369,9 +1462,10 @@ export class LoopXContinuationDriver {
     try {
       state.agent.followup(message)
       this.clearDeferredPlan(state, plan)
+      this.logDiagnostic('queued', plan.session.id, { turnInstanceId: plan.turnInstanceId })
     } catch (error: unknown) {
       this.retireReservation(state)
-      this.warn(`dsh-loopx-driver: could not queue same-session work: ${renderThrown(error)}`)
+      this.warn(`dsh-loopx-driver: could not queue same-session work: ${renderThrown(error)}`, plan.session.id)
     }
     return true
   }
@@ -1381,7 +1475,7 @@ export class LoopXContinuationDriver {
     signal: AbortSignal,
     session: Agent['session'],
   ): void {
-    if (signal.aborted || !this.ready(state) || state.agent.session !== session) {
+    if (signal.aborted || !this.ready(state, true) || state.agent.session !== session) {
       throw new LoopXCliError('aborted', 'automatic admission was fenced', false)
     }
   }
@@ -1390,6 +1484,7 @@ export class LoopXContinuationDriver {
     state: DriverState,
     signal: AbortSignal,
     setStage: (stage: AdmissionStage) => void,
+    diagnostics: PlanDiagnostics,
     deferredPlan?: QueuePlan,
   ): Promise<EvaluationPlan> {
     const session = state.agent.session
@@ -1399,6 +1494,7 @@ export class LoopXContinuationDriver {
     this.ensureReady(state, signal, session)
     setStage('resolve-binding')
     const bindingPayload = await this.resolveBinding(command, state.agent, signal)
+    diagnostics.bindingStatus = bindingPayload.status
     this.ensureReady(state, signal, session)
     if (bindingPayload.ok !== true) {
       throw new LoopXCliError(
@@ -1436,6 +1532,7 @@ export class LoopXContinuationDriver {
     state.retrySelection = false
     turnInstanceId ??= this.makeTurnInstanceId()
     const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
+    diagnostics.quota = quota
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
       throw new LoopXCliError(
@@ -1540,7 +1637,7 @@ export class LoopXContinuationDriver {
         this.command = undefined
       }
       if (!(error instanceof LoopXCliError && error.kind === 'aborted')) {
-        this.warn(`dsh-loopx-driver: admission_failed stage=pre-step-recheck ${cliErrorFields(error)} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
+        this.warn(`dsh-loopx-driver: admission_failed stage=pre-step-recheck ${cliErrorFields(error)} elapsed_ms=${Math.round(performance.now() - startedAt)}`, reservation.session.id)
         if (!reservation.preserveAcrossPause && this.reservationIsCurrent(state, reservation, signal)) {
           this.failAdmission(state, error)
         }
@@ -1772,6 +1869,7 @@ export class LoopXContinuationDriver {
     if (plan !== undefined) wait.deferredPlan = plan
     wait.waiting = true
     this.schedule(state, wait.until - now)
+    this.logDiagnostic('job_wait', session.id, { activeJobs, waitUntil: wait.until })
     return { waiting: true }
   }
 

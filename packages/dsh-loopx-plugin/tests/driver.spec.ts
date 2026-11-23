@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, Logger, LoggerService } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
@@ -15,6 +18,16 @@ import {
   GoalBarCoordinator,
   goalBarCoordinator,
 } from '../src/goalbar/events.ts'
+
+let testHome: string
+beforeEach(() => {
+  testHome = mkdtempSync(join(tmpdir(), 'dsh-loopx-driver-test-'))
+  vi.stubEnv('DSH_HOME', testHome)
+})
+afterEach(() => {
+  vi.unstubAllEnvs()
+  rmSync(testHome, { recursive: true, force: true })
+})
 
 const goalId = 'goal-fixture'
 const agentId = 'agent-fixture'
@@ -998,6 +1011,170 @@ describe('host job continuation', () => {
 })
 
 describe('driver diagnostic records', () => {
+  function diagnosticHome() {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-loopx-driver-'))
+    vi.stubEnv('DSH_HOME', home)
+    const logs = join(home, 'logs')
+    const file = join(logs, 'dsh-loopx-driver.jsonl')
+    return {
+      home, logs, file,
+      read: () => readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line)),
+      cleanup() {
+        rmSync(home, { recursive: true, force: true })
+      },
+    }
+  }
+
+  it('writes diagnostics to the default DSH home when DSH_HOME is unset', async () => {
+    vi.stubEnv('HOME', testHome)
+    vi.stubEnv('USERPROFILE', testHome)
+    vi.stubEnv('DSH_HOME', undefined)
+    const driver = makeDriver(runnerFixture())
+    try {
+      const log = readFileSync(join(testHome, '.dsh', 'logs', 'dsh-loopx-driver.jsonl'), 'utf8')
+      expect(JSON.parse(log)).toMatchObject({ kind: 'driver_start' })
+    } finally { await driver.dispose() }
+  })
+
+  it('looks up an optional jobs service after Driver attachment and logs the actual wait', async () => {
+    const diagnostics = diagnosticHome()
+    const host = fakeAgent()
+    host.appendEvent(userSkillInvocationEvent())
+    host.appendEvent(turnEndEvent(1))
+    host.setStatus('running')
+    vi.spyOn(host.agent, 'runMaintenance').mockRejectedValue(new LoopXCliError('transport', 'unexpected admission', false))
+    const ctx = new Context()
+    ctx.reflect.provide('agents', {
+      get: (id: string) => id === host.agent.id ? host.agent : undefined,
+      list: () => [host.agent],
+      withoutInitiator: (operation: () => Promise<unknown>) => operation(),
+    } as never)
+    ctx.reflect.provide('loopxBootstrap', { state: 'ready' })
+    const observed = vi.spyOn(LoopXContinuationDriver.prototype, 'observeAgent')
+    const fiber = ctx.plugin(applyDriver)
+    try {
+      await waitFor(() => observed.mock.calls.length === 1)
+      const list = vi.fn(() => [{ owner: host.agent.id, status: 'running' }])
+      ctx.reflect.provide('jobs', { list })
+      host.setStatus('idle')
+      ctx.emit('agent/status', { agent: host.agent, status: 'idle' })
+      await waitFor(() => list.mock.calls.length === 1)
+      expect(list).toHaveBeenCalledWith(host.agent.id)
+      expect(diagnostics.read()).toContainEqual(expect.objectContaining({
+        sessionId, kind: 'job_wait', activeJobs: 1, waitUntil: expect.any(Number),
+      }))
+    } finally {
+      await fiber.dispose()
+      observed.mockRestore()
+      diagnostics.cleanup()
+    }
+  })
+
+  it('persists exact readiness blockers and suppresses duplicates for 60 seconds', async () => {
+    const diagnostics = diagnosticHome()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    const notice = jobNotice()
+    try {
+      host.setStatus('running')
+      observeActivated(driver, host)
+      driver.onAgentError(host.agent)
+      host.nextStep.push(userMessage('Pending input'), notice)
+      host.setStatus('idle')
+      driver.onInboxInserted(host.agent, notice)
+      now.mockReturnValue(60_999)
+      driver.onInboxInserted(host.agent, notice)
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      const blocked = {
+        sessionId, kind: 'not_ready', blockers: ['pauseAfterTurnError', 'inbox_pending'], inboxSourceKinds: ['user'],
+      }
+      expect(diagnostics.read()).toMatchObject([
+        { time: expect.any(String), sessionId: null, kind: 'driver_start' },
+        { sessionId, kind: 'observe', status: 'running', activated: true },
+        blocked,
+      ])
+      now.mockReturnValue(61_000)
+      driver.onInboxInserted(host.agent, notice)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(diagnostics.read().filter(entry => entry.kind === 'not_ready')).toMatchObject([blocked, blocked])
+      expect(fixture.quotaCalls).toHaveLength(0)
+    } finally {
+      now.mockRestore()
+      await driver.dispose()
+      diagnostics.cleanup()
+    }
+  })
+
+  it('queues normally with an unusable diagnostics home and logs after filesystem recovery', async () => {
+    const diagnostics = diagnosticHome()
+    const blockedHome = join(diagnostics.home, 'blocked')
+    writeFileSync(blockedHome, '')
+    vi.stubEnv('DSH_HOME', blockedHome)
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(host.nextTurn[0]?.source).toMatchObject({ kind: 'loopx-continuation', turnInstanceId: 'turn-stable' })
+      expect(fixture.quotaCalls).toHaveLength(1)
+
+      rmSync(blockedHome)
+      await driver.dispose()
+      const log = readFileSync(join(blockedHome, 'logs', 'dsh-loopx-driver.jsonl'), 'utf8')
+      expect(JSON.parse(log)).toMatchObject({ sessionId: null, kind: 'driver_dispose' })
+    } finally {
+      await driver.dispose()
+      diagnostics.cleanup()
+    }
+  })
+
+  it('rotates the diagnostics log at 5 MiB and replaces the previous archive', async () => {
+    const diagnostics = diagnosticHome()
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const archive = `${diagnostics.file}.1`
+    const full = Buffer.alloc(5 * 1024 * 1024)
+    mkdirSync(diagnostics.logs)
+    writeFileSync(diagnostics.file, full)
+    writeFileSync(archive, 'old archive')
+    const driver = makeDriver(fixture)
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(readFileSync(archive).equals(full)).toBe(true)
+      expect(diagnostics.read()).toMatchObject([
+        { sessionId: null, kind: 'driver_start' },
+        { sessionId, kind: 'observe', status: 'idle', activated: true },
+        { sessionId, kind: 'plan', planKind: 'queue', bindingStatus: 'bound' },
+        { sessionId, kind: 'queued', turnInstanceId: 'turn-stable' },
+      ])
+    } finally {
+      await driver.dispose()
+      diagnostics.cleanup()
+    }
+  })
+
+  it('writes skipped requests and safe admission warnings to the diagnostics log', async () => {
+    const diagnostics = diagnosticHome()
+    const fixture = runnerFixture({ typedQuotaFailure: true })
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    try {
+      driver.observeAgent(host.agent)
+      observeActivated(driver, host)
+      await waitFor(() => driver.readContinuationAdmission({ agent: host.agent, session: host.agent.session }).state === 'failed')
+      expect(diagnostics.read()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sessionId, kind: 'request_skipped', reason: 'not_activated' }),
+        expect.objectContaining({ sessionId, kind: 'warn',
+          message: expect.stringContaining('admission_failed stage=quota kind=typed_failure') }),
+      ]))
+    } finally { await driver.dispose(); diagnostics.cleanup() }
+  })
+
   it.each(['before', 'downstream'])('preserves user input with a throwing Cordis exporter in the %s batch', async phase => {
     const fixture = runnerFixture()
     const host = fakeAgent()
