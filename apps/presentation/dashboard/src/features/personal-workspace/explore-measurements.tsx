@@ -68,14 +68,27 @@ export function ExploreCandidateLeaders({feedback, complete, zh}: {
   if (!feedback.length) return null;
   const label = complete ? (zh ? "各指标的最佳记录" : "Best recorded by metric")
     : (zh ? "已读记录中的最佳表现" : "Best in loaded records");
+  const contextFields = ["evaluation_ref", "comparison_scope", "input_revision"] as const;
+  type ContextField = typeof contextFields[number];
+  const contextsByMetric = new Map<string, Record<ContextField, Set<string>>>();
+  for (const item of feedback) {
+    let contexts = contextsByMetric.get(item.metric);
+    if (!contexts) {
+      contexts = {evaluation_ref: new Set(), comparison_scope: new Set(), input_revision: new Set()};
+      contextsByMetric.set(item.metric, contexts);
+    }
+    for (const field of contextFields) contexts[field].add(item[field]);
+  }
   const row = (item: ExploreMeasurementFeedback) => {
+    const contexts = contextsByMetric.get(item.metric)!;
+    const qualifier = contextFields.filter(field => contexts[field].size > 1).map(field => item[field]).join(" · ");
     const leaders = item.candidate_leaders?.leaders ?? [];
     const count = item.candidate_leaders?.measured_candidates ?? 0;
     const lead = leaders[0];
     const key = JSON.stringify([item.metric, item.unit, item.higher_is_better, item.comparison_scope, item.input_revision, item.evaluation_ref]);
     return <details className="research-candidate-row" key={key}>
       <summary>
-        <span>{item.metric} {item.higher_is_better ? "↑" : "↓"}</span>
+        <span>{item.metric} {item.higher_is_better ? "↑" : "↓"}{qualifier && ` · ${qualifier}`}</span>
         <strong>{!lead ? (zh ? "未测量" : "Not measured") : leaders.length > 1
           ? (zh ? `${leaders.length} 个候选并列` : `${leaders.length} candidates tied`) : lead.candidate_ref}</strong>
         {lead ? <span>{formatExploreMeasurementValue(lead.value, zh)} {item.unit} · {zh ? `${count} 个实测候选` : `${count} measured candidate${count === 1 ? "" : "s"}`}</span> : null}

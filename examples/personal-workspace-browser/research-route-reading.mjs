@@ -45,6 +45,9 @@ for index in range(24):
                 comparison_scope='validation', input_revision='revision-1', evaluation_ref='suite:validation',
                 candidate_ref=('candidate:compact','candidate:wide')[version],
                 evidence_ref=f'result:{index}-{version}', value=2 if index==4 or version==0 else 4)]
+            if index==3:
+                measurements.append(dict(measurements[0],evaluation_ref='suite:holdout',
+                    evidence_ref=f'holdout:{version}',value=4 if version==0 else 2))
         events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'group-finding-{index}-{version}',
             title=f'候选 {index+1} · 记录 {version+1}',summary=f'原始观察 {index+1}/{version+1}：局部指标不同，完整收益和费用仍未知。',
             status=status,measurements=measurements,evidence_refs=[m['evidence_ref'] for m in measurements or []],
@@ -346,6 +349,26 @@ export const researchRouteReadingScenario = {
         "The late UTC record remains in its UTC group across local midnight");
       await page.keyboard.press("Escape");
       await history.getByRole("button", {name: "Timeline", exact: true}).click();
+      const missingFinding = new URL(url);
+      missingFinding.searchParams.set("research_goal", "synthetic-route-reading");
+      missingFinding.searchParams.set("research_node", "group-question-3");
+      missingFinding.searchParams.set("research_finding", "unavailable-record");
+      missingFinding.searchParams.set("research_question", "1");
+      await page.goto(missingFinding.href);
+      await reader.getByRole("status").filter({hasText: "The selected finding is absent"}).waitFor();
+      const ranks = reader.getByRole("region", {name: "Best recorded by metric"});
+      const holdout = ranks.locator("details > summary").filter({hasText: "suite:holdout"});
+      const validation = ranks.locator("details > summary").filter({hasText: "suite:validation"});
+      assert.match(await holdout.innerText(), /candidate:wide/);
+      assert.match(await validation.innerText(), /candidate:compact/);
+      await holdout.focus(); await page.keyboard.press("Enter");
+      assert.match(await holdout.locator("..").innerText(), /holdout:1/);
+      assert.equal(await reader.locator(".research-recorded-finding").count(), 0);
+      await reader.getByRole("combobox", {name: "Choose a question finding"}).selectOption(findingEventId("group-finding-3-0"));
+      assert.match(await reader.locator(".research-recorded-finding").innerText(), /原始观察 4\/1/);
+      assert.equal(await ranks.count(), 0, "Selecting a recorded finding restores individual reading");
+      assert.equal(await reader.locator(".research-node-provenance .research-candidate-leaders").count(), 1);
+
       // A saved multi-node selection retains the same local collection. A
       // forged parent cannot borrow unrelated questions for its navigation.
       const clustered = new URL(url);

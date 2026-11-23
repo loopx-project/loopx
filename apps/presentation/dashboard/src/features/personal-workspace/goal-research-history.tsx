@@ -188,7 +188,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
   const findingElement = (finding: ExploreHistoryEvent) => {
     const sections = findingSections(finding);
-    const content = <>{questionExpanded ? candidateLeaders(finding.node_id) : null}{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
+    const content = <>{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
       {sections ? <dl className="research-finding-sections"><dt>{sectionCopy.applicability}</dt><dd>{sections.applicability}</dd><dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd></dl> : null}
       {finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
       <details><summary>{zh ? "完整原文" : "Full original text"}</summary><h4>{originals.get(finding.event_id)?.title ?? finding.title}</h4><p>{originals.get(finding.event_id)?.summary ?? finding.summary}</p></details></details> : null}</>;
@@ -649,6 +649,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
           {selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
         </details> : null : <h3>{selected.latest.title}</h3> : null}{displayControl}
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
+        {selected.findings.length > 0 && !selectedFinding ? <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p> : null}
+        {questionExpanded ? candidateLeaders(selected.id) : null}
         {selected.findings.length ? <>
           {findingVersions.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
             <label><span>{zh ? "结论" : "Finding"}</span><select aria-label={zh ? "选择问题结论" : "Choose a question finding"} value={selectedFinding?.event_id ?? ""}
@@ -671,7 +673,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
               })}
             </div>
           </nav> : null}
-          {selectedFinding ? findingElement(selectedFinding) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
+          {selectedFinding ? findingElement(selectedFinding) : null}
         </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<ContextHelp label={zh ? "暂无附属结论" : "No attached findings"} icon={CircleHelp}><p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></ContextHelp></>}
         <details className="research-node-provenance" key={`sources:${selected.id}`}><summary>{zh ? "来源与历史" : "Sources and history"}</summary>
         {selectedContextCitations.length ? <><h4>{zh ? "译文依据" : "Translation context"}</h4>
