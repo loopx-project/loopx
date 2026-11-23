@@ -653,3 +653,31 @@ def test_recovery_guides_self_claim_only_for_the_retained_assignee(
     code, replay = context["cli"](*argv[:-1])
     assert code == 0 and replay["idempotent_replay"] is True and replay["appended"] is False, replay
     _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_turn_reentry_projects_execution_loss_without_repeating_work(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False)
+    before = _receipt_lines(context)
+    # Re-enter through the route a failed refresh returns and through the
+    # implicit receipt binding. Both must preserve the same original guard.
+    base = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
+            "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", TURN]
+    for scope in (["--todo-id", context["todo"]], []):
+        code, recovery = context["cli"](*base, *scope)
+        assert code == 0, (recovery.get("error_code"), recovery.get("reason"))
+        assert recovery["normal_delivery_allowed"] is False
+        assert recovery["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == TURN
+        channel = recovery["interaction_contract"]["cli_channel"]
+        assert channel["spend_allowed_now"] is False
+        preview = _projected_preview_args(channel, context["current_lease"])
+        code, result = context["cli"](*preview)
+        assert code == 0 and result["would_close_without_spend"], result
+    code, closed = context["cli"](*preview[:-1])
+    assert code == 0 and closed["settlement_progress"]["no_spend"], closed
+    code, replay = context["cli"](*preview[:-1])
+    assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert _receipt_lines(context) == before
+    _assert_no_completion_or_debit(context)
