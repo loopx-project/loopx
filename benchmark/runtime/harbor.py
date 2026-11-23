@@ -21,7 +21,7 @@ from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, normalize_claim_ttl_seconds
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 from .scheduler import phase_work_reserve
 
@@ -85,6 +85,7 @@ class BenchmarkCodex(CodexOffline):
         defer_codex_home=False,
         complete_turn=False,
         official_stop_hook=False,
+        claim_ttl_seconds=None,
         **kwargs,
     ):
         if "research_loop" in kwargs:
@@ -179,6 +180,7 @@ class BenchmarkCodex(CodexOffline):
         self.native_goal_continue = native_goal_continue
         self.goal_id, self.agent_id = goal_id, agent_id
         self.defer_codex_home = defer_codex_home
+        self.claim_ttl_seconds = normalize_claim_ttl_seconds(claim_ttl_seconds)
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
@@ -710,6 +712,8 @@ class BenchmarkCodex(CodexOffline):
                 ),
                 **({"LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds)}
                    if self.execution.timeout_seconds is not None else {}),
+                **({"LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": str(self.claim_ttl_seconds)}
+                   if self.claim_ttl_seconds is not None else {}),
                 "CODEX_BIN": "/usr/local/bin/codex",
                 "MODEL_NAME": (self.model_name or "").split("/", 1)[-1],
                 "REASONING_EFFORT": str(
