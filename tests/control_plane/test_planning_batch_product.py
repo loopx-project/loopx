@@ -1,22 +1,18 @@
-"""Product CLI, task-planning checkpoint, and HTTP tests for general planning_batch."""
+"""Product CLI and task-planning checkpoint tests for general planning_batch."""
 
 from __future__ import annotations
 
 import contextlib
-import http.client
 import io
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
-import threading
 
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_source_fixture
-from loopx.chat_action_store import ChatActionStore
-from loopx.chat_actions import ChatActionService
-from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.cli import main
 from loopx.control_plane.goals.planning_batch import (
     PLANNING_BATCH_SCHEMA_VERSION,
@@ -297,163 +293,274 @@ def test_product_cli_plan_batch_preview_apply_replay_and_checkpoint_readback(
     assert replayed["provider_revision"] == applied["provider_revision"]
 
 
-def test_http_goal_acceptance_plan_batch_preview_apply_and_replay(
+def test_product_cli_advertised_template_binds_input_digest_and_rejects_mismatch(
     product_goal: dict[str, object],
 ):
+    project = Path(str(product_goal["project"]))
     registry = Path(str(product_goal["registry"]))
     runtime_root = Path(str(product_goal["runtime_root"]))
     goal_id = str(product_goal["goal_id"])
     agent_id = str(product_goal["agent_id"])
+    task_text = "Advertise --text in planning packet templates and verify input_digest before writes."
 
-    store = ChatActionStore(runtime_root / "chat/actions")
-    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.registry_path, server.runtime_root = registry, runtime_root
-    server.verbose = False
-    server.action_store = store
-    server.action_service = ChatActionService(
-        store=store, registry_path=registry, runtime_root_override=str(runtime_root)
+    before = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
     )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    apply_template = str(before["planning_batch"]["apply_command_template"])
+    preview_template = str(before["planning_batch"]["preview_command_template"])
+    assert "--text=" in apply_template
+    assert "--text=" in preview_template
 
-    def request(method: str, path: str, body: dict[str, object] | None = None) -> tuple[int, dict[str, object]]:
-        conn = http.client.HTTPConnection(*server.server_address, timeout=30)
-        conn.request(
-            method,
-            path,
-            body=json.dumps(body) if body is not None else None,
-            headers={"Content-Type": "application/json"},
+    def run_template(template: str, proposal_file: Path) -> subprocess.CompletedProcess[str]:
+        tokens = shlex.split(template.replace("'<proposal.json>'", shlex.quote(str(proposal_file))))
+        assert tokens[0] == "loopx"
+        return subprocess.run(
+            [sys.executable, "-m", "loopx.cli", *tokens[1:]],
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
-        resp = conn.getresponse()
-        data = json.loads(resp.read())
-        conn.close()
-        return resp.status, data
 
-    try:
-        status_code, inspected = request("GET", f"/api/chat/goal-acceptance?goal_id={goal_id}")
-        assert status_code == 200, inspected
-        initial_rev = str(inspected["provider_revision"])
+    base_proposal = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": before["goal_acceptance"]["provider_revision"],
+        "outcome_id": "template-input-binding",
+        "operation_id": "template-binding-op-1",
+        "outcome": {
+            "objective": "Verify template input_digest binding.",
+            "requirements": [{"id": "req-bind", "description": "Bind planning packet input_digest."}],
+            "source": {"ref": "checkpoint:template", "summary": "Planning packet template check."},
+        },
+        "todos": [
+            {"text": "[P0] Implement input binding", "action_kind": "implement"},
+            {"text": "[P1] Verify input binding", "action_kind": "validate"},
+        ],
+    }
 
-        doc = {
-            "outcome_id": "http-plan-batch",
-            "outcome": {
-                "objective": "Plan initial work through the local HTTP product API.",
-                "requirements": [
-                    {"id": "http-preview", "description": "Support dry-run preview without writes."},
-                    {"id": "http-apply", "description": "Commit and link Todos with idempotent replay."},
-                ],
-                "source": {"ref": "api:goal-acceptance", "summary": "Local product HTTP request."},
-            },
-            "todos": [
-                {"text": "[P0] Wire HTTP plan-batch endpoint", "action_kind": "implement"},
-                {"text": "[P1] Verify HTTP readback", "action_kind": "validate", "target_key": "http-plan"},
-            ],
-        }
+    # 1. Wrong input_digest submitted through the advertised template rejects with zero writes.
+    wrong_path = project / "wrong-digest.json"
+    wrong_path.write_text(json.dumps({**base_proposal, "input_digest": "0" * 64}), encoding="utf-8")
+    wrong_proc = run_template(apply_template, wrong_path)
+    assert wrong_proc.returncode == 1
+    assert "Planning input changed" in json.loads(wrong_proc.stdout)["error"]
+    mid = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    assert mid["goal_acceptance"]["provider_revision"] == before["goal_acceptance"]["provider_revision"]
+    assert mid["existing_todos"] == []
 
-        status_code, preview = request(
-            "POST",
-            "/api/chat/goal-acceptance",
-            {
-                "goal_id": goal_id,
-                "action": "preview-plan-batch",
-                "agent_id": agent_id,
-                "document": doc,
-                "expected_provider_revision": initial_rev,
-                "operation_id": "http-batch-op",
-            },
+    # 2. Direct CLI without --text must refuse a proposal carrying input_digest before any write.
+    good_path = project / "good-digest.json"
+    good_path.write_text(json.dumps(base_proposal), encoding="utf-8")
+    no_text = _run_cli(
+        "--format",
+        "json",
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(runtime_root),
+        "todo",
+        "plan-batch",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        agent_id,
+        "--project",
+        str(project),
+        "--document",
+        str(good_path),
+        "--execute",
+        expected_rc=1,
+    )
+    assert "input_digest" in str(no_text["error"])
+    after_no_text = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    assert after_no_text["goal_acceptance"]["provider_revision"] == before["goal_acceptance"]["provider_revision"]
+    assert after_no_text["existing_todos"] == []
+
+    # 3. Valid input_digest via advertised apply_command_template commits and passes readback.
+    good_proc = run_template(apply_template, good_path)
+    assert good_proc.returncode == 0, good_proc.stdout + good_proc.stderr
+    applied = json.loads(good_proc.stdout)
+    assert applied["status"] == "ready"
+    assert applied["input_digest"] == before["input_digest"]
+    after = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    readback = validate_task_plan_readback(
+        {"input_digest": applied["input_digest"], "status": applied["status"], "todo_ids": applied["todo_ids"]},
+        before,
+        after,
+    )
+    assert readback["state_readback_verified"] is True
+
+
+def test_product_cli_interrupted_retry_with_explicit_outcome_id_rejects_mutated_todo(
+    product_goal: dict[str, object],
+):
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Reject mutated Todo retry even when explicit outcome_id and operation_id match."
+
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+    before = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    initial_rev = str(before["goal_acceptance"]["provider_revision"])
+    proposal = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": initial_rev,
+        "outcome_id": "explicit-retry-outcome",
+        "operation_id": "explicit-retry-op",
+        "outcome": {
+            "objective": "Verify interrupted retry binds full normalized proposal.",
+            "requirements": [{"id": "req-full", "description": "Preserve original ordered Todos on retry."}],
+            "source": {"ref": "checkpoint:retry", "summary": "Explicit outcome retry guard."},
+        },
+        "todos": [
+            {"text": "[P0] Original first Todo", "action_kind": "implement"},
+            {"text": "[P1] Original second Todo", "action_kind": "validate", "priority": "P1"},
+        ],
+    }
+
+    # Simulate interruption after :declare and :todo:0 committed with lost response.
+    from loopx.control_plane.goals.planning_batch import (
+        DirectPlanningBatchBackend,
+        validate_planning_batch_proposal,
+    )
+    import hashlib
+
+    validated = validate_planning_batch_proposal(proposal, require_input_digest=True, allow_product_identities=True)
+    proposal_hash = hashlib.sha256(json.dumps(validated, sort_keys=True).encode()).hexdigest()
+    backend = DirectPlanningBatchBackend(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        project=project,
+        text=task_text,
+    )
+    backend.inspect_state()
+    declare_op = f"explicit-retry-op:declare:{proposal_hash[:32]}"
+    backend.refine_outcome(
+        {**validated["outcome"], "outcome_id": "explicit-retry-outcome", "owner_agent_id": agent_id},
+        initial_rev,
+        declare_op,
+        execute=True,
+    )
+    first_written = backend.add_todo(validated["todos"][0], "explicit-retry-op:todo:0", execute=True)
+    first_todo_id = str(first_written["todo_id"])
+
+    interrupted = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    partial_rev = str(interrupted["goal_acceptance"]["provider_revision"])
+    assert len(interrupted["existing_todos"]) == 1
+
+    # Retrying with mutated todos[1] (on both --dry-run and --execute) must fail with zero writes.
+    mutated = {
+        **proposal,
+        "todos": [
+            proposal["todos"][0],
+            {"text": "[P1] Mutated second Todo", "action_kind": "validate", "priority": "P1"},
+        ],
+    }
+    mutated_path = project / "mutated-proposal.json"
+    mutated_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+    for flag in ("--dry-run", "--execute"):
+        _run_cli(
+            *prefix,
+            "todo",
+            "plan-batch",
+            "--goal-id",
+            goal_id,
+            "--agent-id",
+            agent_id,
+            "--project",
+            str(project),
+            "--text",
+            task_text,
+            "--document",
+            str(mutated_path),
+            flag,
+            expected_rc=1,
         )
-        assert status_code == 200, preview
-        assert preview["status"] == "planned"
-        assert preview["dry_run"] is True
-        assert preview["changed"] is False
-        assert preview["planned_todo_count"] == 2
-        _, after_preview = request("GET", f"/api/chat/goal-acceptance?goal_id={goal_id}")
-        assert after_preview["provider_revision"] == initial_rev
-
-        status_code, applied = request(
-            "POST",
-            "/api/chat/goal-acceptance",
-            {
-                "goal_id": goal_id,
-                "action": "plan-batch",
-                "agent_id": agent_id,
-                "document": doc,
-                "expected_provider_revision": initial_rev,
-                "operation_id": "http-batch-op",
-            },
+        after_mutated = build_task_planning_packet(
+            registry_path=registry,
+            runtime_root_arg=str(runtime_root),
+            goal_id=goal_id,
+            agent_id=agent_id,
+            text=task_text,
+            project=project,
         )
-        assert status_code == 200, applied
-        assert applied["status"] == "ready"
-        assert applied["dry_run"] is False
-        assert applied["state_readback_verified"] is True
-        assert len(applied["todo_ids"]) == 2
-        outcomes = applied["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
-        assert len(outcomes) == 1
-        assert outcomes[0]["id"] == "http-plan-batch"
-        assert outcomes[0]["todo_ids"] == applied["todo_ids"]
+        assert after_mutated["goal_acceptance"]["provider_revision"] == partial_rev
+        assert [t["todo_id"] for t in after_mutated["existing_todos"]] == [first_todo_id]
 
-        # Replay via HTTP returns the same Todo IDs and provider revision without re-writing.
-        status_code, replayed = request(
-            "POST",
-            "/api/chat/goal-acceptance",
-            {
-                "goal_id": goal_id,
-                "action": "plan-batch",
-                "agent_id": agent_id,
-                "document": doc,
-                "expected_provider_revision": initial_rev,
-                "operation_id": "http-batch-op",
-            },
-        )
-        assert status_code == 200, replayed
-        assert replayed["todo_ids"] == applied["todo_ids"]
-        assert replayed["provider_revision"] == applied["provider_revision"]
-        assert replayed["changed"] is False
-
-        # Reject unregistered agent with 409 error envelope.
-        bad_code, bad_resp = request(
-            "POST",
-            "/api/chat/goal-acceptance",
-            {
-                "goal_id": goal_id,
-                "action": "plan-batch",
-                "agent_id": "intruder",
-                "document": doc,
-                "expected_provider_revision": str(applied["provider_revision"]),
-                "operation_id": "http-batch-intruder",
-            },
-        )
-        assert bad_code == 409, bad_resp
-        assert bad_resp["error_code"] == "goal_acceptance_operation_failed"
-
-        # Reject explicit expected_provider_revision: null inside document.
-        null_rev_code, _ = request(
-            "POST",
-            "/api/chat/goal-acceptance",
-            {
-                "goal_id": goal_id,
-                "action": "preview-plan-batch",
-                "agent_id": agent_id,
-                "document": {**doc, "expected_provider_revision": None},
-                "expected_provider_revision": str(applied["provider_revision"]),
-            },
-        )
-        assert null_rev_code == 409
-
-        # Reject agent_id field on non-batch actions such as configure.
-        extra_field_code, _ = request(
-            "POST",
-            "/api/chat/goal-acceptance",
-            {
-                "goal_id": goal_id,
-                "action": "clear-checks",
-                "agent_id": agent_id,
-                "expected_provider_revision": str(applied["provider_revision"]),
-                "operation_id": "http-clear-extra-field",
-            },
-        )
-        assert extra_field_code == 409
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
+    # Retrying with the exact unchanged original proposal finishes todo:1 and binds [first_todo_id, second_id].
+    orig_path = project / "original-proposal.json"
+    orig_path.write_text(json.dumps(proposal), encoding="utf-8")
+    recovered = _run_cli(
+        *prefix,
+        "todo",
+        "plan-batch",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        agent_id,
+        "--project",
+        str(project),
+        "--text",
+        task_text,
+        "--document",
+        str(orig_path),
+        "--execute",
+    )
+    assert recovered["status"] == "ready"
+    assert len(recovered["todo_ids"]) == 2
+    assert recovered["todo_ids"][0] == first_todo_id
+    final_pkt = build_task_planning_packet(
+        registry_path=registry,
+        runtime_root_arg=str(runtime_root),
+        goal_id=goal_id,
+        agent_id=agent_id,
+        text=task_text,
+        project=project,
+    )
+    assert final_pkt["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == recovered["todo_ids"]
+    by_id = {item["todo_id"]: item for item in final_pkt["existing_todos"]}
+    assert by_id[recovered["todo_ids"][1]]["text"] == "[P1] Original second Todo"

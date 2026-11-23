@@ -127,6 +127,7 @@ def todo_authoring_steps(
     goal_id: str,
     agent_id: str | None,
     registry_path: Path | None = None,
+    planning_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """Ordered Todo-authoring steps, conditional on the runnable frontier."""
     add_template = _todo_add_command_template(
@@ -192,6 +193,7 @@ def todo_authoring_steps(
     )
     if not existing_runnable_frontier:
         batch_prefix = f"{prefix} --format json todo plan-batch"
+        text_arg = f" --text={shell_arg(planning_text)}" if planning_text is not None else ""
         return [
             {
                 "id": "plan_ranked_todos",
@@ -210,7 +212,7 @@ def todo_authoring_steps(
                 "kind": "operator_or_agent_actions",
                 "command_template": add_template,
                 "batch_command_template": (
-                    f"{batch_prefix} {route} --project . "
+                    f"{batch_prefix} {route} --project .{text_arg} "
                     "--document '<proposal.json>' --execute"
                 ),
                 "batch_schema_command": f"{batch_prefix} --schema",

@@ -1,4 +1,4 @@
-"""General initial planning batch owner shared by LoopX CLI, HTTP, and benchmark."""
+"""General initial planning batch owner shared by LoopX CLI, /loopx, and benchmark."""
 
 from __future__ import annotations
 
@@ -748,8 +748,10 @@ def apply_planning_batch(
             raise ValueError("Planning input changed")
         if require_input_digest and proposal_digest_field != expected_digest:
             raise ValueError("Planning input changed")
-    elif isinstance(proposal_digest_field, str) and require_input_digest:
-        raise ValueError("Planning input changed")
+    elif proposal_digest_field is not None:
+        raise ValueError(
+            "Planning proposal includes input_digest, but caller did not supply --text to verify it"
+        )
 
     revision = str(validated["expected_provider_revision"])
     acceptance = snapshot["goal_acceptance"]
@@ -766,6 +768,14 @@ def apply_planning_batch(
         or validated.get("operation_id")
         or (f"{id_prefix}:{expected_digest}" if expected_digest else f"{id_prefix}:{proposal_hash[:32]}")
     )
+    # When outcome_id is explicit, bind the declaration receipt to the complete
+    # normalized proposal digest (ordered Todos + revision + input binding) so
+    # an interrupted retry cannot mutate remaining Todos under the same batch.
+    declare_operation_id = (
+        f"{effective_operation}:declare:{proposal_hash[:32]}"
+        if "outcome_id" in validated
+        else f"{effective_operation}:declare"
+    )
     outcome_body = cast(dict[str, object], validated["outcome"])
     declaration: dict[str, object] = {
         **outcome_body,
@@ -781,11 +791,10 @@ def apply_planning_batch(
 
     todos = cast(list[dict[str, str]], validated["todos"])
     if not execute:
-        preview_acceptance = acceptance
+        preview_acceptance = backend.refine_outcome(
+            declaration, revision, declare_operation_id, execute=False
+        )
         if current_rev == revision:
-            preview_acceptance = backend.refine_outcome(
-                declaration, revision, f"{effective_operation}:declare", execute=False
-            )
             for index, item in enumerate(todos):
                 backend.add_todo(item, f"{effective_operation}:todo:{index}", execute=False)
         return {
@@ -804,7 +813,7 @@ def apply_planning_batch(
             **({"input_digest": expected_digest} if expected_digest is not None else {}),
         }
 
-    backend.refine_outcome(declaration, revision, f"{effective_operation}:declare", execute=True)
+    backend.refine_outcome(declaration, revision, declare_operation_id, execute=True)
     ids: list[str] = []
     for index, item in enumerate(todos):
         written = backend.add_todo(item, f"{effective_operation}:todo:{index}", execute=True)

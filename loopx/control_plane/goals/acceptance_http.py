@@ -61,14 +61,12 @@ class GoalAcceptanceRequestMixin:
             public_goal_acceptance,
             verify_goal_acceptance, goal_acceptance_route,
         )
-        from .planning_batch import DirectPlanningBatchBackend, apply_planning_batch
 
         try:
             body = self._read_json()
             if set(body) - {
                 "goal_id",
                 "action",
-                "agent_id",
                 "document",
                 "refinement",
                 "expected_provider_revision",
@@ -91,46 +89,7 @@ class GoalAcceptanceRequestMixin:
                                         str(self.server.runtime_root)),
                 "execute": True,
             }
-            if action in {"preview-plan-batch", "plan-batch"}:
-                allowed = {"goal_id", "action", "agent_id", "document", "expected_provider_revision", "operation_id"}
-                if set(body) - allowed or not {"goal_id", "action", "agent_id", "document", "expected_provider_revision"} <= set(body):
-                    raise ValueError("plan-batch requires goal_id, agent_id, document and expected_provider_revision")
-                agent_id = body.get("agent_id")
-                document = body.get("document")
-                operation_id = body.get("operation_id")
-                if (
-                    not isinstance(agent_id, str)
-                    or not agent_id.strip()
-                    or not isinstance(document, dict)
-                    or (operation_id is not None and (not isinstance(operation_id, str) or not operation_id.strip()))
-                ):
-                    raise ValueError("plan-batch requires a registered agent_id and proposal document")
-                if "expected_provider_revision" in document and document["expected_provider_revision"] != revision:
-                    raise ValueError("plan-batch expected_provider_revision mismatch")
-                proposal = {**document, "expected_provider_revision": revision}
-                route = goal_acceptance_route(self.server.registry_path, goal_id, str(self.server.runtime_root))
-                batch = apply_planning_batch(
-                    proposal=proposal,
-                    backend=DirectPlanningBatchBackend(
-                        registry_path=route["registry_path"],
-                        runtime_root_arg=route["runtime_root"],
-                        goal_id=goal_id,
-                        agent_id=agent_id,
-                    ),
-                    execute=action == "plan-batch",
-                    operation_id=operation_id,
-                )
-                result = {
-                    **public_goal_acceptance(batch),
-                    "agent_id": batch["agent_id"],
-                    "outcome_id": batch["outcome_id"],
-                    **(
-                        {"todo_ids": batch["todo_ids"], "state_readback_verified": batch["state_readback_verified"]}
-                        if "todo_ids" in batch
-                        else {"planned_todo_count": batch["planned_todo_count"]}
-                    ),
-                }
-            elif action in {"preview-handoff", "handoff"}:
+            if action in {"preview-handoff", "handoff"}:
                 if set(body) != {"goal_id", "action", "document", "expected_provider_revision", "operation_id"}:
                     raise ValueError("unexpected handoff fields")
                 if not isinstance(body["document"], dict) or not isinstance(body["operation_id"], str) or not body["operation_id"]:
@@ -152,8 +111,6 @@ class GoalAcceptanceRequestMixin:
                     **common, expected_provider_revision=revision
                 )
             elif action in {"configure", "clear-checks"}:
-                if set(body) - {"goal_id", "action", "document", "expected_provider_revision", "operation_id"}:
-                    raise ValueError("unexpected configure fields")
                 document = body.get("document")
                 if (
                     action == "configure"

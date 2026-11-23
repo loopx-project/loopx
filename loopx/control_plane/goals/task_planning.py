@@ -203,6 +203,7 @@ def build_task_planning_packet(
         goal_id=goal_id,
         agent_id=agent_id,
         registry_path=registry_path,
+        planning_text=text,
     )
     identity = {"goal_id": goal_id, "agent_id": agent_id, "text": text}
     digest = compute_task_planning_input_digest(
@@ -229,6 +230,7 @@ def build_task_planning_packet(
         goal_id,
         "--agent-id",
         agent_id,
+        f"--text={text}",
         *project_args,
     ])
     return {
