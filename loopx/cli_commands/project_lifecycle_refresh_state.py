@@ -581,6 +581,12 @@ def handle_refresh_state_command(
             sync_global=not bool(args.no_global_sync),
             goal_ref=goal_ref,
             task_lease_proof=task_lease_proof,
+            allow_same_generation_lease_renewal=(
+                getattr(args, "settle_turn", False)
+                and task_lease_proof is not None
+                and bool(getattr(args, "todo_id", None))
+                and bool(getattr(args, "turn_instance_id", None))
+            ),
             **({"goal_acceptance_preview": goal_acceptance_preview}
                if goal_acceptance_preview is not None else {}),
         )

@@ -329,7 +329,11 @@ unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
 For a fresh append, the parent can reuse the child's authoritative readback
 when the original identity, prior receipts and new spend event all match.
 An ambiguous response is reconciled through the original receipts; exact retry
-cannot debit twice. Ordinary refresh without the option retains its behavior.
+cannot debit twice. For a hard-lease Todo, a first combined writeback can use
+the original admission's lease proof after a renewal in that same generation.
+The submitted version must be between the admitted and current versions,
+inclusive, and the lease must still match the original admission. Ordinary
+refresh without the option still requires the current proof.
 When `--delivery-workspace-path` names the producing worktree, the combined
 operation also runs the owed command there, using the originating CLI's
 implementation. The normal workspace and settlement guards still apply; a
@@ -366,7 +370,9 @@ writeback 读取，避免重复交付；当前准入、选择与停止事实仍�
 `refresh-state --settle-turn` 在写回与交付后置条件通过后，执行原 Goal/Agent/
 Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
 完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
-按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+按原回执恢复，精确重试不会重复扣额。硬租约 Todo 在同一世代续期后，组合写回
+首次执行时可继续使用原准入的租约证明。提交的版本必须介于准入版本和当前版本之间
+（含两端），租约仍须与原准入匹配。不传此选项时，普通 refresh 仍须使用当前证明。
 首次追加扣额成功且原身份、前序回执和新扣额事件全部匹配时，父进程可以复用子进程的权威回读。
 指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
 继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留

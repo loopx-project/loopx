@@ -41,7 +41,9 @@ from loopx.control_plane.todos.completion_validation_store import (
 )
 from loopx.control_plane.work_items import task_lease
 from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
-from tests.control_plane.test_quota_settlement_cli import _write_fixture as write_legacy_fixture
+from tests.control_plane.test_quota_settlement_cli import (
+    _spend_run_count, _write_fixture as write_legacy_fixture,
+)
 
 
 GOAL = "execution-loss-closeout"
@@ -367,6 +369,83 @@ def _canonical(context):
 def _unchanged_state(context):
     log = rollout_event_log_path(context["runtime"], context["goal_id"])
     return (_canonical(context), context["state"].read_bytes(), _runs(context), log.read_bytes())
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("replaced", [False, True])
+def test_combined_writeback_keeps_the_admitted_lease_generation(
+    tmp_path, monkeypatch, capsys, provider, replaced,
+):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False,
+                       prepared=replaced, replace=replaced)
+    cli = context["cli"]
+    initial = context["original_lease"]
+
+    def renew(lease):
+        code, result = cli("task-lease", "renew", "--goal-id", context["goal_id"],
+                           "--todo-id", context["todo"], "--owner", OWNER,
+                           "--idempotency-key", lease["idempotency_key"],
+                           "--expected-version", str(lease["version"]), "--ttl-seconds", "2700")
+        assert code == 0 and result["ok"], result
+        return _lease(context)
+
+    if replaced:
+        admitted = initial
+        current = context["current_lease"]
+        decision = context["admitted"]
+    else:
+        admitted = renew(initial)
+        code, decision = cli(*_guard_args(context))
+        assert code == 0 and decision["normal_delivery_allowed"], decision
+        assert _readback(context).prepared_lease["prepared_lease_version"] == admitted["version"]
+        current = renew(admitted)
+        assert current["lease_epoch"] == admitted["lease_epoch"] == initial["lease_epoch"]
+        assert initial["version"] < admitted["version"] < current["version"]
+
+    plan = decision["interaction_contract"]["cli_channel"]["settlement_plan"]
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Preserve the original Turn across a lease renewal."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "An admitted Turn can settle.",
+                       "observed_reality": "An intermediate result was validated.",
+                       "retained": ["Original task"], "evidence_refs": ["evidence:renewed-lease"]},
+    }))
+    tokens = shlex.split(writeback["semantic_closeout_command_template"])
+    replacements = {"<validated_progress>": "validated_slice", "<scale>": "implementation",
+                    "<outcome>": "outcome_progress", "<file>": str(vision)}
+    args = [replacements.get(token, token) for token in tokens[tokens.index("refresh-state"):]]
+    args += ["--no-global-sync", "--suppress-external-sinks"]
+    source_before = _unchanged_state(context)
+
+    def writeback_with(lease, *, combined=True):
+        given = args.copy()
+        key = next(i for i, token in enumerate(given) if token.startswith("--task-lease-idempotency-key="))
+        given[key] = f"--task-lease-idempotency-key={lease['idempotency_key']}"
+        given[given.index("--task-lease-expected-version") + 1] = str(lease["version"])
+        if not combined:
+            given.remove("--settle-turn")
+            given.remove("--settlement-receipt")
+        return cli(*given)
+
+    rejected = [(admitted, True), (current, True)] if replaced else [
+        (initial, True), ({**current, "version": current["version"] + 1}, True), (admitted, False),
+    ]
+    for lease, combined in rejected:
+        code, result = writeback_with(lease, combined=combined)
+        assert code == 1 and result["appended"] is False, result
+        assert _unchanged_state(context) == source_before
+        assert _spend_run_count(context["runtime"]) == 0
+
+    if not replaced:
+        code, settled = writeback_with(admitted)
+        assert code == 0 and settled["settlement_progress"]["state"] == "settled", settled
+        assert settled["settlement_identity"] == plan["identity"]
+        assert _spend_run_count(context["runtime"]) == 1
+        code, replay = writeback_with(admitted)
+        assert code == 0 and replay["idempotent_replay"], replay
+        assert _spend_run_count(context["runtime"]) == 1
 
 
 def _assert_no_completion_or_debit(context):
