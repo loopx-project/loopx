@@ -36,7 +36,7 @@ def test_current_source_replay_and_different_successor_do_not_certify_selected_w
 
     identity = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-mode", "planning",
-        "--execution-replan-after-turns", "1", "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execution-replan-after-turns", "1", "--execute")
     cli("todo", "update", *identity, "--todo-id", fixture.TODO_ID,
         "--explore-result-node-ref", "comparison-retained")
     training = project / "training.json"
@@ -166,7 +166,7 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
 
     identity = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-mode", "planning",
-        "--execution-replan-after-turns", "1", "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execution-replan-after-turns", "1", "--execute")
     training = project / "training.json"
     training.write_text(json.dumps([{"x": 2, "y": 3, "observed": 6}]))
     request = {"project": str(project), "registry": str(registry), "runtime": str(runtime),

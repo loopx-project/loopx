@@ -101,6 +101,60 @@ def acceptance_goal(tmp_path, monkeypatch, request):
 
 
 
+def test_canonical_todo_wire_preserves_both_acceptance_views_across_revisions(acceptance_goal, monkeypatch):
+    from base64 import b64encode
+    from random import Random
+
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.todos.goal_todo_projection import project_todo_read
+
+    project, _, cli, _ = acceptance_goal
+    request = {
+        "kind": "canonical_fields",
+        "source": {"runtime_root": str(project.parent / "runtime"), "goal_id": "goal-acceptance"},
+        "observed_at": 1, "evaluated_at": "1970-01-01T00:00:01Z",
+    }
+    packets = []
+    rpc = effect_runtime.effect_runtime_result
+
+    def capture(method, *args, **kwargs):
+        reply = rpc(method, *args, **kwargs)
+        if method == "todo.read":
+            packets.append(reply)
+        return reply
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", capture)
+    before = project_todo_read(request)["canonical"]
+    assert "result_piece" not in packets[-1]
+    rng = Random(42)
+    expected = {}
+    for label, requirements, compressed in [
+        ("text", ["核实完整要求🙂" * 35 for _ in range(12)], True),
+        ("dense", [b64encode(rng.randbytes(1200)).decode() for _ in range(28)], False),
+    ]:
+        entries = [{"id": f"{label}-{i}", "description": value} for i, value in enumerate(requirements)]
+        document = project / "outcome.json"
+        document.write_text(json.dumps({"outcome_id": label, "owner_agent_id": "agent-a",
+            "objective": "Verify the exported contents", "requirements": entries,
+            "source": {"ref": f"fixture:{label}", "summary": "Preserve the complete input"}}))
+        code, result = cli("refine", "--agent-id", "agent-a", "--document", str(document),
+            "--expected-provider-revision", before["provider_revision"], "--operation-id", label, "--execute")
+        assert code == 0, result
+        packets.clear()
+        current = project_todo_read(request)
+        assert len(packets) == 1
+        assert (packets[0].get("result_piece", {}).get("content_encoding") == "gzip") == compressed
+        canonical = current["canonical"]
+        assert canonical["provider_revision"] != before["provider_revision"]
+        contract = canonical["goal_acceptance_contract"]
+        assert current["fields"]["agent_todos"]["goal_acceptance_contract"] == contract
+        expected[label] = entries
+        assert {outcome["id"]: [{"id": item["id"], "description": item["description"]}
+            for item in outcome["requirements"]]
+            for outcome in contract["outcome_requirements"]["outcomes"]} == expected
+        before = canonical
+
+
 def test_outcome_refinement_retains_legacy_active_goal_admission(acceptance_goal):
     project, _, cli, _ = acceptance_goal
     registry_path = project.parent / "registry.json"

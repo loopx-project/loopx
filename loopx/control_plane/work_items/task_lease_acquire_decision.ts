@@ -9,6 +9,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import type {JsonObject} from "../effect_program.ts";
 import type {TodoFact, LeaseRecord} from "./task_lease_acquire.ts";
+import {leaseEventTimestamp} from "./task_lease_record.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection, repositoryScopesMayOverlap} from "./task_lease_repository.ts";
 
@@ -777,7 +778,7 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
   if (decision.outcome !== "apply" || decision.next_lease === null) {
     throw new EffectRuntimeRequestError("lease materialization requires an apply decision");
   }
-  const at = now.toISOString().replace(/\.\d{3}Z$/u, "Z");
+  const at = leaseEventTimestamp(now);
   return {schema_version: "task_lease_v0", goal_id: identity.goal_id, todo_id: identity.todo_id,
     owner: command.owner, idempotency_key: command.idempotency_key,
     ...(decision.next_lease.write_workspace ? {write_workspace: leaseWorkspace(decision.next_lease.write_workspace)} : {}),

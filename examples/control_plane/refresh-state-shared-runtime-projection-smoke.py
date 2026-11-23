@@ -95,8 +95,6 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     goal = {
         "id": GOAL_ID,
         "domain": "refresh-state-shared-runtime-smoke",
-        # This fixture qualifies routing/writeback, not a Stride review.
-        "execution_profile": {"stride_strategy": "off"},
         "status": "active",
         "repo": str(project),
         "state_file": str(state_file.relative_to(project)),
@@ -317,6 +315,18 @@ def main() -> None:
             no_sync_unqualified["error"]
         ), no_sync_unqualified
 
+        no_sync_guard = run_cli(
+            "--registry",
+            str(source_registry),
+            "quota",
+            "should-run",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            cwd=project,
+            shared_runtime=shared_runtime,
+        )
         no_change_vision = Path(tmp) / "no-change-vision.json"
         no_change_vision.write_text(
             json.dumps(
@@ -342,6 +352,9 @@ def main() -> None:
                         "retained": ["Keep the shared-runtime projection boundary."],
                         "evidence_refs": ["evidence:shared-runtime-projection-verified"],
                     },
+                    "stride_decision": no_sync_guard["replan_action_packet"][
+                        "stride_control"
+                    ]["minimal_example"],
                 },
                 ensure_ascii=False,
                 indent=2,

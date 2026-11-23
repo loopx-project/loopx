@@ -157,8 +157,12 @@ class CheckpointWake:
                 metadata["native_session"] = {**native["metadata"], "store_members": [
                     {**member, "id": allocated[member["id"]]} for member in native["metadata"]["store_members"]]}
                 metadata["held_decision_component_id"] = decision_id
+            from .research_artifacts import research_component_exclusions
+
+            exclusions = research_component_exclusions(components)
             probe = effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "probe", "components": components, "deadline_epoch_ms": window * 1000,
+                **({"component_exclusions": exclusions} if exclusions else {}),
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
             if native is not None:
                 if restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
@@ -183,6 +187,7 @@ class CheckpointWake:
                 "action": "capture", "components": components, "destination": str(destination),
                 "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
                 "deadline_epoch_ms": window * 1000,
+                **({"component_exclusions": exclusions} if exclusions else {}),
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
     def _write_input(self, process, body, command, deadline, timeout, *, phase_limited):

@@ -498,7 +498,19 @@ def _uses_stdio_runtime() -> bool:
 
 
 def _pid_is_alive(value: object) -> bool:
-    return process_is_alive(value)
+    if not process_is_alive(value):
+        return False
+    # Unreaped Linux zombies still satisfy kill(pid, 0), yet an all-zombie
+    # thread group has terminated and must not poison runtime lock/locator recovery.
+    if (
+        sys.platform == "linux"
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value > 0
+        and _linux_thread_group_is_zombie(value)
+    ):
+        return False
+    return True
 
 
 def _recorded_pid_alive(value: object) -> bool | None:
@@ -864,6 +876,7 @@ def _stop_effect_runtime(
             if not _pid_is_alive(pid) or (
                 not_caller_child and _linux_thread_group_is_zombie(pid)
             ):
+                _reap_exited_runtime_child(info)
                 stopped = True
                 break
             # A zombie leader can still have threads writing into the namespace.

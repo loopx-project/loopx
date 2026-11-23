@@ -189,6 +189,9 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     rc, envelope = run("quota", "should-run", "--codex-app", *current)
     assert rc == 0 and envelope["replan_action_packet"]["writeback_contract"] == writeback, envelope
     vision = deepcopy(authoring["minimal_example"])
+    vision["stride_decision"] = deepcopy(
+        guard["replan_action_packet"]["stride_control"]["minimal_example"]
+    )
     vision["path_delta"].update(
         outcome="replan", observed_reality="The settled fixture has no runnable Todo.",
         retained=["Original acceptance"], evidence_refs=[])
@@ -200,7 +203,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     path.write_text(json.dumps(vision))
     rc, rejected = run(*command)
     assert rc != 0 and _spend_run_count(runtime) == 1, rejected
-    assert "typed semantic delta" in rejected["error"], rejected
+    assert "evidence" in rejected["error"].lower(), rejected
     vision["path_delta"]["evidence_refs"] = ["validation:no-runnable-fixture"]
     path.write_text(json.dumps(vision))
     rc, accepted = run(*command)
@@ -230,8 +233,7 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         return _run_cli(registry, runtime, *args, cwd=project)
 
     rc, configured = run("configure-goal", "--goal-id", GOAL_ID,
-                         "--execution-replan-after-turns", "1",
-                         "--execution-stride-strategy", "off", "--execute")
+                         "--execution-replan-after-turns", "1", "--execute")
     assert rc == 0, configured
     for stage in ("initial", "review", "subsequent"):
         binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -264,6 +266,9 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
             vision["path_delta"].update(
                 outcome="replan", observed_reality="Continue the admitted original work.",
                 retained=["Original requirements"], evidence_refs=["validation:work-link"])
+            vision["stride_decision"] = deepcopy(
+                staged["stride_control"]["minimal_example"]
+            )
             path = tmp_path / "linked-vision.json"
             path.write_text(json.dumps(vision))
             # Consume the replan-only binding, rather than inventing a Todo
@@ -288,8 +293,7 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     # Read the real immutable CLI history, not a hand-authored decision fixture.
     status = {"registry": str(registry), "runtime_root": str(runtime), "run_history": {"runs": []}}
     context = project_replan_context(
-        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status,
-        stride_strategy="evidence_conditioned_v1")
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status)
     follow = context["decision_followthrough"]
     assert [row["todo_id"] for row in follow["planned_work"]] == [TODO_ID]
     assert follow["ordinary_work"]["recorded_count"] == 1
@@ -297,12 +301,8 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     assert evidence["todo_id"] == TODO_ID
     assert follow["planned_work"][0]["ordinary_evidence_refs"] == [evidence["evidence_ref"]]
     assert follow["execution_and_goal_gain"] == "unknown"
-    # Reading this view neither enables stride nor settles another Turn.
-    ordinary = project_replan_context(
-        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status, stride_strategy="off")
-    assert ordinary["decision_followthrough"] == follow
-    assert "stride_strategy" not in ordinary
-    assert "explore_basis" not in ordinary
+    assert context["stride_strategy"] == "evidence_conditioned_v1"
+    assert "explore_basis" not in context
     assert _spend_run_count(runtime) == 3
 
     # Preserve compatibility without turning a descriptive or unsupported
@@ -313,6 +313,6 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     review["agent_vision"]["todo_delta"] = [f"action:{TODO_ID}", "Keep investigating."]
     unlinked = project_replan_context(
         goal_id=GOAL_ID, agent_id=AGENT_ID, runs=historical,
-        history_newest_first=False, stride_strategy="evidence_conditioned_v1")
+        history_newest_first=False)
     assert unlinked["decision_followthrough"]["planned_work"] == []
     assert "ordinary_work" not in unlinked["decision_followthrough"]

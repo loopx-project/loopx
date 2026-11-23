@@ -7422,6 +7422,149 @@ def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, mon
         fixture.close()
 
 
+@pytest.mark.parametrize("case", [
+    "fresh", "admission-crash", "replay", "replay-crash", "edited", "unknown", "same-topic", "stale-scope",
+])
+def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypatch, case):
+    from test_native_steward_private import finish, steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    profile = "steward-app"
+
+    def reply(event, root):
+        event.update(root_id=root, parent_id=root, thread_id=f"omt_{root}")
+        provider.messages[event["message_id"]].update(
+            {key: event[key] for key in ("root_id", "parent_id", "thread_id")},
+        )
+        return event
+
+    def path_for(event):
+        request_ref = identity_ref(binding["provider_ref"], event["message_id"])
+        return transport.root / f"{request_ref}.json"
+
+    try:
+        first_root = provider.event(profile, "first-topic", "Original topic")["message_id"]
+        second_root = provider.event(profile, "second-topic", "Independent topic")["message_id"]
+        original_event = reply(provider.event(profile, "topic-work", "wait for steer"), first_root)
+        assert transport.admit(profile, original_event)["status"] == "durably_accepted"
+        original = transport.core.read_request(path_for(original_event).stem)
+        _wait_private_upstream(store, original)
+        sid, old_turn = original["session_id"], original["turn_id"]
+        different = reply(_private_mention_event(provider, profile, "topic-ask", "Answer this topic independently."),
+            first_root if case == "same-topic" else second_root)
+        path = path_for(different)
+        old_notice = None
+        if case in {"fresh", "admission-crash"}:
+            if case == "admission-crash":
+                with monkeypatch.context() as crash:
+                    def lose_transport_write(*_args):
+                        raise OSError("lost transport admission projection")
+
+                    crash.setattr(transport, "_record_admission", lose_transport_write)
+                    with pytest.raises(OSError, match="lost transport admission"):
+                        transport.admit(profile, different)
+                assert json.loads(path.read_text())["status"] == "captured"
+            assert transport.admit(profile, different)["status"] == "durably_accepted"
+            queued = transport.core.read_request(path.stem)
+            assert queued["turn_id"] != old_turn and queued["session_id"] == sid
+            assert store.load_turn(sid, queued["turn_id"])["status"] == "queued"
+        else:
+            from loopx.extensions.lark import private_mention_topics
+
+            with monkeypatch.context() as old_behavior:
+                old_behavior.setattr(private_mention_topics, "distinct_reply_topic", lambda *args: False)
+                old_behavior.setattr(runtime.adapters[sid], "healthcheck", lambda: False)
+                assert transport.admit(profile, different)["status"] == "command_recorded"
+            transport.reconcile_request(path)
+            row = json.loads(path.read_text())
+            old_notice = row["deliveries"]["terminal"]
+            assert row["status"] == "delivered" and old_notice["verified"]
+            assert not store.queued_turns(sid)
+        assert not any(call["method"] == "turn/steer" for call in map(json.loads, capture.read_text().splitlines()))
+
+        completed = reply(_private_mention_event(provider, profile, "topic-finish", "Finish this original topic."), first_root)
+        assert transport.admit(profile, completed)["status"] == "command_recorded"
+        assert finish(runtime, original)["status"] == "completed"
+
+        if old_notice is not None:
+            transport.reconcile_request(path)
+            assert transport.core.read_request(path.stem)["status"] == "command_completed"
+            old_bytes = path.read_bytes()
+            plan = transport.root / "rejected-mention-replays" / path.name
+            plan.parent.mkdir()
+            plan.write_text(json.dumps({"message_id": different["message_id"],
+                "rejection_message_id": old_notice["attempt"]["message_ref"], "target_turn_id": old_turn}))
+            if case == "edited":
+                provider.messages[different["message_id"]]["content"] = "A different instruction."
+            elif case == "unknown":
+                store.update_ingress_receipt(sid, f"external-{path.stem}", native_steering={"may_have_sent": True})
+            elif case == "stale-scope":
+                store.update_session(sid, manager_authorization_scope_id="replaced-scope")
+            restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                runner=provider, cli_bin="lark-cli")
+            assert path in restarted.pending_delivery_paths()
+            if case == "replay-crash":
+                from loopx.capabilities.native_chat import external_mention_recovery
+
+                write = external_mention_recovery._atomic_write_json
+
+                def lose_core_projection(target, row):
+                    if target.stem == path.stem and row["status"] == "accepted":
+                        raise OSError("lost Core admission projection")
+                    write(target, row)
+
+                with monkeypatch.context() as crash:
+                    crash.setattr(external_mention_recovery, "_atomic_write_json", lose_core_projection)
+                    restarted.reconcile_request(path)
+                assert path.read_bytes() == old_bytes
+                committed = store.turn_for_client(sid, f"external-{path.stem}")
+                assert committed is not None
+                restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                    runner=provider, cli_bin="lark-cli")
+                restarted.reconcile_request(path)
+                assert restarted.core.read_request(path.stem)["turn_id"] == committed["turn_id"]
+                # A redelivery may race the original reply worker after recovery.
+                assert restarted.admit(profile, different)["status"] == "durably_accepted"
+            else:
+                restarted.reconcile_request(path)
+            if case in {"edited", "unknown", "same-topic", "stale-scope"}:
+                assert path.read_bytes() == old_bytes
+                assert store.turn_for_client(sid, f"external-{path.stem}") is None
+                return
+            transport = restarted
+            queued = transport.core.read_request(path.stem)
+            assert queued["turn_id"] != old_turn and queued["session_id"] == sid
+            assert queued["mention_delivery"]["action"] == "reject"
+        result = finish(runtime, queued)
+        assert result["status"] == "completed"
+
+        def delivered():
+            return json.loads(path.read_text())["status"] == "delivered"
+
+        _drain_app_projection(transport, delivered)
+        row = json.loads(path.read_text())
+        phase = "terminal"
+        if old_notice is not None:
+            assert row["deliveries"][phase] == old_notice
+            phase = "terminal.recovery.rejected-mention.1"
+        reply_ref = row["deliveries"][phase]["attempt"]["message_ref"]
+        assert row["deliveries"][phase]["verified"]
+        assert provider.messages[reply_ref]["chat_id"] == different["chat_id"]
+        assert provider.messages[reply_ref]["parent_id"] == different["message_id"]
+        before = capture.read_bytes(), list(provider.writes)
+        for _ in range(2):
+            transport.reconcile()
+        assert before == (capture.read_bytes(), provider.writes)
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(call["method"] == "turn/steer" for call in calls) == 1
+        assert sum(call["method"] == "turn/start" and "Answer this topic independently." in json.dumps(call.get("params"))
+                   for call in calls) == 1
+    finally:
+        runtime.close()
+        fixture.close()
+
+
 def test_private_steward_mention_requires_current_active_turn_authorization(tmp_path):
     from test_native_steward_private import steward
     from loopx.chat_manager_context import manager_authorization_scope_is_current

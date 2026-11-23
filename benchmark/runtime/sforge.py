@@ -16,11 +16,19 @@ from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
+from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRATEGY
 
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
+from .codex import (
+    DEFAULT_REPLAN_AFTER_TURNS,
+    Execution,
+    codex_settings,
+    native_child_instructions,
+    normalize_claim_ttl_seconds,
+    prepare_codex_home,
+)
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .codex_readiness import native_readiness_budget
 from .harbor import (
@@ -96,6 +104,16 @@ class SForgeEnvironment:
                 raise RuntimeError("SForge directory upload failed")
 
 
+_CARGO_TARGET_DIR = "/tmp/sforge-cargo-target"
+
+
+class _SForgeBenchmarkCodex(BenchmarkCodex):
+    """Stage the SForge shell default in the shared installer's single profile write."""
+
+    def _shell_path_restore(self) -> str:
+        return super()._shell_path_restore() + f'\nexport CARGO_TARGET_DIR="${{CARGO_TARGET_DIR:-{_CARGO_TARGET_DIR}}}"'
+
+
 class SForgeWorker(CodexAgent):
     """Native SForge lifecycle with an explicitly selected worker profile.
 
@@ -125,13 +143,14 @@ class SForgeWorker(CodexAgent):
                  native_readiness_attempt_seconds: float | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
-                 stride_strategy: str | None = None,
                  planning_horizon_goal: bool | None = None,
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
                  warm_start=None, research_sidecar: bool = False,
-                 native_result_scope: dict | None = None, complete_turn: bool = False):
+                 native_result_scope: dict | None = None, complete_turn: bool = False,
+                 claim_ttl_seconds: int | None = None):
         super().__init__(config)
+        self.claim_ttl_seconds = normalize_claim_ttl_seconds(claim_ttl_seconds)
         self.execution = profile_execution(
             profile, task_entry=task_entry,
             context_delivery=context_delivery, turn_envelope=turn_envelope,
@@ -192,11 +211,6 @@ class SForgeWorker(CodexAgent):
             replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = replan_after_todos
-        if stride_strategy is not None and not self.execution.uses_loopx:
-            raise ValueError("stride_strategy requires a heartbeat profile or turn-resume")
-        if stride_strategy is not None:
-            from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
-            stride_strategy = normalize_stride_strategy(stride_strategy)
         if planning_horizon_goal is not None:
             if not isinstance(planning_horizon_goal, bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
@@ -206,7 +220,9 @@ class SForgeWorker(CodexAgent):
             DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
             else planning_horizon_goal
         )
-        self.stride_strategy = stride_strategy
+        # Recorded, not selected: LoopX always runs the live stride policy and
+        # the same value reaches worker-profile.json and runtime-receipt.json.
+        self.stride_strategy = LIVE_STRIDE_STRATEGY if self.execution.uses_loopx else None
         self.checkpoint_request_path = None
         self.checkpoint_request = checkpoint_request
         if checkpoint_request is not None:
@@ -413,7 +429,7 @@ class SForgeWorker(CodexAgent):
             if self.profile == "official":
                 super().install_stop_hook(backend, handle, log_dir, logger)
         else:
-            self.runtime = BenchmarkCodex(
+            self.runtime = _SForgeBenchmarkCodex(
                 **common, execution_mode=self.execution.mode,
                 iteration_context=self.execution.context,
                 validation_command=self.execution.validation_command,
@@ -428,13 +444,14 @@ class SForgeWorker(CodexAgent):
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
-                stride_strategy=self.stride_strategy,
                 planning_horizon_goal=self.planning_horizon_goal,
                 checkpoint_request_path=self.checkpoint_request_path,
                 checkpoint_request=self.checkpoint_request,
                 task_objective=self.task_objective,
                 **({"goal_id": self.warm_start.goal_id, "agent_id": self.warm_start.agent_id,
                     "defer_codex_home": True} if self.warm_start is not None else {}),
+                **({"claim_ttl_seconds": self.claim_ttl_seconds}
+                   if self.claim_ttl_seconds is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
             if self.feedback == "native" and (self.execution_observation is not None
@@ -460,6 +477,7 @@ class SForgeWorker(CodexAgent):
                             model_catalog=self.runtime._model_catalog_source,
                             model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
                                 if self.runtime._model_catalog_staged else None),
+                            claim_ttl_seconds=self.claim_ttl_seconds,
                         ).encode("utf-8"),
                     }
                 research_paths = asyncio.run(self.warm_start.stage(
@@ -614,6 +632,9 @@ class SForgeWorker(CodexAgent):
                     raise RuntimeError("Could not protect fresh receiver credentials")
             self.prepared = True
         env = self.runtime._worker_env(cwd=self.cwd)
+        # Keep Rust build artifacts outside both the task workspace and
+        # RESEARCH_DIRECTORY so checkpoint probes/archives stay bounded.
+        env.setdefault("CARGO_TARGET_DIR", _CARGO_TARGET_DIR)
         if self.warm_start is not None:
             env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,

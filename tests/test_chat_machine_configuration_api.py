@@ -463,7 +463,6 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "schema_version": "todo_replan_cadence_machine_defaults_v2",
         "count_unit": "effective_turns",
         "count": 6,
-        "stride_strategy": "evidence_conditioned_v1",
         "planning_horizon_goal": True,
         "yardstick_enabled": False,
     }

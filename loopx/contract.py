@@ -23,25 +23,16 @@ from .control_plane.goals.contract_health import (
 )
 from .control_plane.goals.source_integrity import verify_authority_source_digests
 from .control_plane.goals.activation import (
-    GoalActivationState,
-    goal_activation_state,
-    normalize_goal_activation_state,
+    GoalActivationState, goal_activation_state, normalize_goal_activation_state,
 )
-from .control_plane.runtime.run_index_duplicates import (
-    classify_index_duplicate_records,
-    index_identity,
-)
+from .control_plane.runtime.run_index_duplicates import classify_index_duplicate_records, index_identity
 from .control_plane.runtime.file_reads import iter_utf8_file_reads
 from .control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from .control_plane.projects.registry_codec import load_registry
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
-from .history import (
-    RunHistoryAudit,
-    build_run_history_audit,
-    collect_history,
-)
+from .history import RunHistoryAudit, build_run_history_audit, collect_history
 from .paths import (
     DEFAULT_RUNTIME_ROOT,
     LEGACY_RUNTIME_ROOT,
@@ -493,8 +484,8 @@ def _literal_git_environment() -> dict[str, str]:
     return environment
 
 
-def _git_query(*arguments: str) -> _GitAnswer | None:
-    """One bounded local Git read, or None when it cannot answer in budget.
+def _run_git_probe(*arguments: str) -> _GitBytesAnswer | None:
+    """Start one bounded local Git read; retire its process group on timeout or cancel.
 
     Git is started in a session of its own so an exhausted budget retires the
     helpers that read would have started along with it. That session also keeps
@@ -502,47 +493,9 @@ def _git_query(*arguments: str) -> _GitAnswer | None:
     helpers before the cancellation keeps travelling.
     """
 
-    argv = ["git", *arguments]
     try:
         process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=_literal_git_environment(),
-            start_new_session=os.name == "posix",
-        )
-    except OSError:
-        return None
-    try:
-        stdout, _stderr = process.communicate(timeout=GIT_PROBE_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        _retire_owned_probe(process)
-        return None
-    except BaseException:
-        # The operator cancelled the scan. An exhausted budget keeps answering
-        # "unavailable", while Ctrl-C retires this read's helpers and stays the
-        # cancellation the caller raised.
-        _retire_owned_probe(process)
-        raise
-    return _GitAnswer(returncode=process.returncode, stdout=stdout)
-
-
-def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
-    """One bounded local Git read that keeps the raw output bytes.
-
-    Pathname listings carry their record identity in these bytes. The text read
-    above translates a CR inside a legal name into LF and replaces an
-    undecodable record with U+FFFD, so a pathname rebuilt from it can name a
-    file that does not exist and the tracked file would leave the scan.
-    """
-
-    argv = ["git", *arguments]
-    try:
-        process = subprocess.Popen(
-            argv,
+            ["git", *arguments],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=_literal_git_environment(),
@@ -556,9 +509,33 @@ def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
         _retire_owned_probe(process)
         return None
     except BaseException:
+        # The operator cancelled the scan. An exhausted budget keeps answering
+        # "unavailable", while Ctrl-C retires this read's helpers and stays the
+        # cancellation the caller raised.
         _retire_owned_probe(process)
         raise
     return _GitBytesAnswer(returncode=process.returncode, stdout=stdout, stderr=stderr)
+
+
+def _git_query(*arguments: str) -> _GitAnswer | None:
+    """One bounded local Git read, or None when it cannot answer in budget."""
+
+    answer = _run_git_probe(*arguments)
+    if answer is None:
+        return None
+    return _GitAnswer(returncode=answer.returncode, stdout=answer.stdout.decode("utf-8", "replace"))
+
+
+def _git_query_bytes(*arguments: str) -> _GitBytesAnswer | None:
+    """One bounded local Git read that keeps the raw output bytes.
+
+    Pathname listings carry their record identity in these bytes. A text read
+    translates a CR inside a legal name into LF and replaces an undecodable
+    record with U+FFFD, so a pathname rebuilt from it can name a file that
+    does not exist and the tracked file would leave the scan.
+    """
+
+    return _run_git_probe(*arguments)
 
 
 _GIT_NO_REPOSITORY_DIAGNOSTIC = (
@@ -681,7 +658,7 @@ def _is_local_private_state_path(path: Path, scan_root: Path) -> bool:
     return bool(parts & LOCAL_PRIVATE_STATE_PARTS) or path.name in LOCAL_PRIVATE_STATE_FILE_NAMES
 
 
-def _public_boundary_policy(registry: dict[str, Any]) -> dict[str, str]:
+def _public_boundary_policy(registry: Mapping[str, object]) -> dict[str, str]:
     policy = registry.get("public_boundary") if isinstance(registry, dict) else None
     if not isinstance(policy, dict):
         policy = registry.get("privacy") if isinstance(registry, dict) else None
@@ -689,10 +666,7 @@ def _public_boundary_policy(registry: dict[str, Any]) -> dict[str, str]:
         policy = {}
 
     tracked_private_doc_urls = "block"
-    raw_mode = (
-        policy.get("tracked_private_doc_urls")
-        or policy.get("private_doc_urls_in_tracked_files")
-    )
+    raw_mode = policy.get("tracked_private_doc_urls") or policy.get("private_doc_urls_in_tracked_files")
     if str(raw_mode).lower() == "allow" or policy.get("allow_tracked_private_doc_urls") is True:
         tracked_private_doc_urls = "allow"
 
@@ -700,14 +674,6 @@ def _public_boundary_policy(registry: dict[str, Any]) -> dict[str, str]:
         "schema_version": "loopx_public_boundary_policy_v0",
         "tracked_private_doc_urls": tracked_private_doc_urls,
     }
-
-
-def _hit_allowed_by_policy(name: str, git: dict[str, Any], policy: dict[str, str]) -> bool:
-    if name != "private_doc_url":
-        return False
-    if not git.get("tracked"):
-        return False
-    return policy.get("tracked_private_doc_urls") == "allow"
 
 
 def _index_duplicate_summary(index_path: Path) -> dict[str, Any]:
@@ -772,37 +738,273 @@ def _index_duplicate_warning(
     duplicate_summary: dict[str, Any] | None = None,
 ) -> str:
     safe_goal_id = str(goal_id)
-    duplicate_summary = duplicate_summary or {}
-    detail_parts = []
-    unexpected_rows = int(duplicate_summary.get("unexpected_duplicate_rows") or 0)
-    repairable_rows = int(duplicate_summary.get("repairable_duplicate_rows") or 0)
-    artifact_collision_rows = int(duplicate_summary.get("artifact_identity_collision_rows") or 0)
-    artifact_collision_groups = int(duplicate_summary.get("artifact_identity_collision_groups") or 0)
-    reward_overlay_rows = int(duplicate_summary.get("reward_overlay_rows") or 0)
-    if unexpected_rows:
-        detail_parts.append(f"unexpected={unexpected_rows}")
-    if repairable_rows:
-        detail_parts.append(f"auto_repairable={repairable_rows}")
-    if artifact_collision_groups:
-        detail_parts.append(f"artifact_identity_collisions={artifact_collision_groups}")
-    if artifact_collision_rows:
-        detail_parts.append(f"artifact_collision_rows={artifact_collision_rows}")
-    if reward_overlay_rows:
-        detail_parts.append(f"reward_overlays={reward_overlay_rows}")
+    summary = duplicate_summary or {}
+    detail_parts = [
+        f"{label}={value}"
+        for key, label in (
+            ("unexpected_duplicate_rows", "unexpected"),
+            ("repairable_duplicate_rows", "auto_repairable"),
+            ("artifact_identity_collision_groups", "artifact_identity_collisions"),
+            ("artifact_identity_collision_rows", "artifact_collision_rows"),
+            ("reward_overlay_rows", "reward_overlays"),
+        )
+        if (value := int(summary.get(key) or 0))
+    ]
     if not detail_parts and raw > unique:
         detail_parts.append(f"duplicates={raw - unique}")
     detail = f" {' '.join(detail_parts)}" if detail_parts else ""
-    inspect_command = f"`loopx history --goal-id {safe_goal_id} inspect-index-duplicates`"
-    repair_command = f"`loopx history --goal-id {safe_goal_id} repair-index-duplicates`"
-    if artifact_collision_rows:
-        action = (
-            f"inspect with {inspect_command}; artifact identity collisions need reviewed merge semantics"
-        )
-        if repairable_rows:
-            action += f"; preview safe repair for auto-repairable rows with {repair_command}"
+    inspect_cmd = f"`loopx history --goal-id {safe_goal_id} inspect-index-duplicates`"
+    repair_cmd = f"`loopx history --goal-id {safe_goal_id} repair-index-duplicates`"
+    if int(summary.get("artifact_identity_collision_rows") or 0):
+        action = f"inspect with {inspect_cmd}; artifact identity collisions need reviewed merge semantics"
+        if int(summary.get("repairable_duplicate_rows") or 0):
+            action += f"; preview safe repair for auto-repairable rows with {repair_cmd}"
     else:
-        action = f"inspect with {inspect_command}; preview repair with {repair_command}"
+        action = f"inspect with {inspect_cmd}; preview repair with {repair_cmd}"
     return f"{safe_goal_id}: duplicate index rows raw={raw} unique={unique}{detail}; {action}"
+
+
+def _iter_filtered_goals(
+    registry: dict[str, Any],
+    *,
+    goal_id_filter: str | None = None,
+    activation_state_filter: GoalActivationState | str | None = None,
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    normalized_activation = (
+        normalize_goal_activation_state(activation_state_filter)
+        if activation_state_filter is not None
+        else None
+    )
+    for goal in registry_goals(registry):
+        goal_id = str(goal.get("id") or "")
+        if goal_id_filter and goal_id != goal_id_filter:
+            continue
+        if normalized_activation is not None and goal_activation_state(goal) is not normalized_activation:
+            continue
+        yield goal_id, goal
+
+
+def _resolve_existing_state_file(goal: Mapping[str, object]) -> Path | None:
+    repo_text = str(goal.get("repo") or "").strip()
+    if not repo_text:
+        return None
+    raw_state = goal.get("state_file")
+    state_file = resolve_state_file(
+        Path(repo_text).expanduser(),
+        raw_state if isinstance(raw_state, str) or raw_state is None else str(raw_state),
+    )
+    return state_file if state_file and state_file.exists() else None
+
+
+def _parse_markdown_todo_metadata(
+    lines: list[str], start_index: int
+) -> tuple[dict[str, object], bool, bool, int]:
+    metadata: dict[str, object] = {}
+    malformed_excluded_agents = False
+    malformed_status = False
+    next_index = start_index + 1
+    while next_index < len(lines):
+        raw_line = lines[next_index]
+        if raw_line.startswith("## ") or TODO_TASK_PATTERN.match(raw_line):
+            break
+        metadata_match = TODO_METADATA_PATTERN.match(raw_line)
+        if metadata_match:
+            for raw_field in metadata_match.group("body").split():
+                if raw_field.startswith("status=") and normalize_todo_status(
+                    decode_metadata_value(raw_field.split("=", 1)[1])
+                ) is None:
+                    malformed_status = True
+        for key, value in parse_todo_metadata_tokens(raw_line) or []:
+            if key == "status" and normalize_todo_status(value) is None:
+                malformed_status = True
+            elif key in {"excluded_agent", "excluded_agents"}:
+                try:
+                    require_todo_excluded_agents(value)
+                except ValueError:
+                    malformed_excluded_agents = True
+        if parsed := parse_todo_metadata_line(raw_line):
+            metadata.update(parsed)
+        next_index += 1
+    return metadata, malformed_excluded_agents, malformed_status, next_index
+
+
+def _markdown_user_todo_scope_violation(
+    *,
+    todo_id: str,
+    task_class: str,
+    metadata: Mapping[str, object],
+    blocks_agent: object,
+    claimed_by: str | None,
+    registered_agents: list[str],
+    location: str,
+) -> tuple[str, str] | None:
+    global_gate = metadata.get("global_gate") is True
+    bound_agent = normalize_todo_bound_agent(metadata.get("bound_agent"))
+    goal_bound = normalize_todo_goal_bound(metadata.get("goal_bound")) is True
+    is_gate = task_class == TODO_TASK_CLASS_USER_GATE
+    effective_bound_agent = bound_agent or (blocks_agent if is_gate else None) or claimed_by
+    effective_goal_bound = bool(goal_bound or (global_gate and is_gate))
+    if task_class not in {TODO_TASK_CLASS_USER_ACTION, TODO_TASK_CLASS_USER_GATE}:
+        return "user_todo_task_class_missing", (
+            f"open user todo {todo_id} requires task_class=user_gate or task_class=user_action ({location})"
+        )
+    if task_class == TODO_TASK_CLASS_USER_ACTION and (blocks_agent or global_gate):
+        return "user_action_blocking_scope_invalid", (
+            f"open user_action todo {todo_id} is non-blocking and cannot set blocks_agent or global_gate=true ({location})"
+        )
+    if is_gate and blocks_agent and global_gate:
+        return "user_gate_scope_conflict", (
+            f"open user_gate todo {todo_id} in multi-agent goal cannot set both blocks_agent and global_gate=true ({location})"
+        )
+    if bound_agent and goal_bound:
+        return "user_todo_response_scope_conflict", (
+            f"open user todo {todo_id} cannot set both bound_agent and goal_bound=true ({location})"
+        )
+    if is_gate and global_gate and bound_agent:
+        return "goal_user_gate_agent_binding_invalid", (
+            f"goal-wide user_gate todo {todo_id} cannot set bound_agent; its response binding is goal_bound=true ({location})"
+        )
+    if is_gate and blocks_agent and goal_bound:
+        return "agent_user_gate_goal_binding_invalid", (
+            f"agent-scoped user_gate todo {todo_id} cannot set goal_bound=true ({location})"
+        )
+    if is_gate and blocks_agent and bound_agent and bound_agent != blocks_agent:
+        return "agent_user_gate_response_binding_mismatch", (
+            f"agent-scoped user_gate todo {todo_id} must bind to blocks_agent={blocks_agent!r}, "
+            f"not bound_agent={bound_agent!r} ({location})"
+        )
+    if bound_agent and registered_agents and bound_agent not in registered_agents:
+        return "user_todo_bound_agent_unregistered", (
+            f"open user todo {todo_id} has bound_agent={bound_agent!r}, which is not registered for this goal "
+            f"(registered_agents={', '.join(registered_agents)}, {location})"
+        )
+    if len(registered_agents) > 1 and not effective_bound_agent and not effective_goal_bound:
+        return "multi_agent_user_todo_missing_response_scope", (
+            f"open user todo {todo_id} in multi-agent goal requires bound_agent=<registered-agent> or goal_bound=true ({location})"
+        )
+    if is_gate and blocks_agent and registered_agents and blocks_agent not in registered_agents:
+        return "user_gate_blocks_unregistered_agent", (
+            f"open user_gate todo {todo_id} has blocks_agent={blocks_agent!r}, which is not registered for this goal "
+            f"(registered_agents={', '.join(registered_agents)}, {location})"
+        )
+    if is_gate and len(registered_agents) > 1 and not blocks_agent and not global_gate:
+        return "multi_agent_user_gate_missing_scope", (
+            f"open user_gate todo {todo_id} in multi-agent goal requires blocks_agent=<registered-agent> or global_gate=true ({location})"
+        )
+    return None
+
+
+def _markdown_todo_contract_diagnostics(
+    *,
+    goal_id: str,
+    state_file: Path,
+    lines: list[str],
+    registered_agents: list[str],
+) -> tuple[list[dict[str, Any]], int]:
+    diagnostics: list[dict[str, Any]] = []
+    checked = 0
+    role: str | None = None
+    in_completed_work_archive = False
+    index = 0
+
+    def add_error(code: str, message: str) -> None:
+        diagnostics.append(contract_error_diagnostic(code=code, message=f"{goal_id}: {message}", goal_id=goal_id))
+
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("## "):
+            heading_text = line.lstrip("#").strip()
+            heading = heading_text.lower()
+            in_completed_work_archive = heading_text.casefold() == COMPLETED_WORK_ARCHIVE_HEADING.casefold()
+            if "user todo" in heading or "owner review" in heading:
+                role = "user"
+            elif "agent todo" in heading:
+                role = "agent"
+            else:
+                role = None
+            index += 1
+            continue
+        match = TODO_TASK_PATTERN.match(line)
+        if not match:
+            index += 1
+            continue
+        marker, text = match.groups()
+        metadata, malformed_excluded_agents, malformed_status, next_index = _parse_markdown_todo_metadata(
+            lines, index
+        )
+        removed_continuation_policy = normalize_removed_todo_continuation_policy(
+            metadata.get("removed_continuation_policy")
+        )
+        status = str(metadata.get("status") or todo_status_from_marker(marker) or "").lower()
+        task_class = str(metadata.get("task_class") or "")
+        todo_id = str(metadata.get("todo_id") or f"line:{index + 1}")
+        if malformed_excluded_agents:
+            add_error(
+                "todo_excluded_agents_invalid",
+                f"todo {todo_id} has malformed excluded_agents metadata; "
+                "replace it with --excluded-agent <registered-agent> or remove it with --clear-excluded-agents",
+            )
+        if malformed_status:
+            add_error(
+                "todo_status_invalid",
+                f"todo {todo_id} has malformed status metadata; "
+                "replace it with status=open, status=done, status=blocked, or status=deferred",
+            )
+        if role == "agent" and removed_continuation_policy:
+            add_error(
+                "agent_todo_removed_continuation_policy",
+                f"agent todo {todo_id} uses removed continuation_policy={removed_continuation_policy}; "
+                "use continuation_policy=independent_handoff with an explicit review action_kind and "
+                "excluded_agents=<author> only when executor separation is required",
+            )
+        blocks_agent = metadata.get("blocks_agent")
+        if role == "agent" and blocks_agent:
+            add_error(
+                "agent_todo_blocks_agent_invalid",
+                f"agent todo {todo_id} uses removed blocks_agent routing; "
+                "blocks_agent is reserved for user gates, while agent executor constraints use excluded_agents",
+            )
+        excluded_agents = normalize_todo_excluded_agents(metadata.get("excluded_agents"))
+        claimed_by = normalize_todo_claimed_by(metadata.get("claimed_by"))
+        if claimed_by and claimed_by in excluded_agents:
+            add_error(
+                "todo_claimed_by_excluded_agent",
+                f"agent todo {todo_id} has claimed_by={claimed_by!r} also listed in excluded_agents",
+            )
+        archived_terminal_todo = (
+            in_completed_work_archive
+            and todo_status_from_marker(marker) in TERMINAL_TODO_STATUSES
+            and status in TERMINAL_TODO_STATUSES
+        )
+        if role != "agent" and excluded_agents and not archived_terminal_todo:
+            add_error(
+                "todo_executor_exclusion_scope_invalid",
+                f"{role or 'unscoped'} todo {todo_id} uses excluded_agents; "
+                "executor exclusions are only valid for agent todos",
+            )
+        unknown_excluded_agents = [
+            agent_id for agent_id in excluded_agents if registered_agents and agent_id not in registered_agents
+        ]
+        if role == "agent" and unknown_excluded_agents:
+            add_error(
+                "todo_excludes_unregistered_agent",
+                f"agent todo {todo_id} excludes unregistered agents: {', '.join(unknown_excluded_agents)}",
+            )
+        if role == "user" and status not in TERMINAL_TODO_STATUSES:
+            checked += 1
+            violation = _markdown_user_todo_scope_violation(
+                todo_id=todo_id,
+                task_class=task_class,
+                metadata=metadata,
+                blocks_agent=blocks_agent,
+                claimed_by=claimed_by,
+                registered_agents=registered_agents,
+                location=f"state_file={state_file}, line={index + 1}, text={text}",
+            )
+            if violation is not None:
+                add_error(*violation)
+        index = next_index
+    return diagnostics, checked
 
 
 def _todo_contract_diagnostics(
@@ -817,25 +1019,13 @@ def _todo_contract_diagnostics(
     diagnostics: list[dict[str, Any]] = []
     checked = 0
     source_snapshots: dict[Path, bytes | None] = {}
-    for goal in registry_goals(registry):
-        goal_id = str(goal.get("id") or "")
-        if goal_id_filter and goal_id != goal_id_filter:
-            continue
-        if (
-            activation_state_filter is not None
-            and goal_activation_state(goal)
-            is not normalize_goal_activation_state(activation_state_filter)
-        ):
-            continue
-
+    for goal_id, goal in _iter_filtered_goals(
+        registry,
+        goal_id_filter=goal_id_filter,
+        activation_state_filter=activation_state_filter,
+    ):
         def add_error(code: str, message: str) -> None:
-            diagnostics.append(
-                contract_error_diagnostic(
-                    code=code,
-                    message=message,
-                    goal_id=goal_id,
-                )
-            )
+            diagnostics.append(contract_error_diagnostic(code=code, message=message, goal_id=goal_id))
 
         try:
             route = resolve_goal_source_runtime_route(
@@ -847,8 +1037,7 @@ def _todo_contract_diagnostics(
                 source_registry = load_registry(
                     Path(route["source_registry"]), source_snapshots=source_snapshots,
                 )
-                goal = next(item for item in registry_goals(source_registry)
-                            if str(item.get("id") or "") == goal_id)
+                goal = next(item for item in registry_goals(source_registry) if str(item.get("id") or "") == goal_id)
             goal_runtime = Path(route["source_runtime_root"])
         except (OSError, ValueError, StopIteration) as exc:
             add_error(
@@ -862,14 +1051,12 @@ def _todo_contract_diagnostics(
         # copy cannot invalidate or rescue a promoted collection.
         try:
             canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
-            canonical = canonical_reader(
-                runtime_root=goal_runtime, goal_id=goal_id,
-            )
+            canonical = canonical_reader(runtime_root=goal_runtime, goal_id=goal_id)
         except LocalCoordinationAuthorityUnavailable as exc:
             add_error(exc.code, f"{goal_id}: canonical Todo contract unavailable: {exc}")
             continue
         if canonical is not None:
-                        #  Evaluate provider rows without reading display.
+            # Evaluate provider rows without reading display.
             try:
                 canonical_diagnostics = todo_contract_diagnostics(
                     todos=canonical["todo_contract_rows" if todo_snapshot is not None else "todos"],
@@ -887,29 +1074,19 @@ def _todo_contract_diagnostics(
                 add_error(row["code"], f"{goal_id}: canonical todo {row['todo_id']} {row['detail']}")
             continue
 
-        registered_agents = registered_agent_ids_for_goal(goal)
-        repo_text = str(goal.get("repo") or "").strip()
-        if not repo_text:
-            continue
-        state_file = resolve_state_file(Path(repo_text).expanduser(), goal.get("state_file"))
-        if not state_file or not state_file.exists():
+        state_file = _resolve_existing_state_file(goal)
+        if state_file is None:
             continue
         try:
             state_text = state_file.read_text(encoding="utf-8")
             lines = state_text.splitlines()
         except (OSError, UnicodeError) as exc:
-            add_error(
-                "active_state_read_failed",
-                f"{goal_id}: cannot read active state for todo contract check: {exc}",
-            )
+            add_error("active_state_read_failed", f"{goal_id}: cannot read active state for todo contract check: {exc}")
             continue
         try:
             state_incomplete = active_state_incomplete_warning(state_text)
         except ValueError as exc:
-            add_error(
-                "active_state_read_failed",
-                f"{goal_id}: cannot parse active state for todo contract check: {exc}",
-            )
+            add_error("active_state_read_failed", f"{goal_id}: cannot parse active state for todo contract check: {exc}")
             continue
         if state_incomplete:
             add_error(
@@ -920,282 +1097,36 @@ def _todo_contract_diagnostics(
             )
             continue
 
-        role: str | None = None
-        in_completed_work_archive = False
-        index = 0
-        while index < len(lines):
-            line = lines[index]
-            if line.startswith("## "):
-                heading_text = line.lstrip("#").strip()
-                heading = heading_text.lower()
-                in_completed_work_archive = (
-                    heading_text.casefold() == COMPLETED_WORK_ARCHIVE_HEADING.casefold()
-                )
-                if "user todo" in heading or "owner review" in heading:
-                    role = "user"
-                elif "agent todo" in heading:
-                    role = "agent"
-                else:
-                    role = None
-                index += 1
-                continue
-            match = TODO_TASK_PATTERN.match(line)
-            if not match:
-                index += 1
-                continue
-            marker, text = match.groups()
-            metadata: dict[str, Any] = {}
-            malformed_excluded_agents = False
-            malformed_status = False
-            next_index = index + 1
-            while next_index < len(lines):
-                if lines[next_index].startswith("## ") or TODO_TASK_PATTERN.match(lines[next_index]):
-                    break
-                raw_line = lines[next_index]
-                raw_metadata = parse_todo_metadata_tokens(raw_line)
-                metadata_match = TODO_METADATA_PATTERN.match(raw_line)
-                if metadata_match:
-                    for raw_field in metadata_match.group("body").split():
-                        if not raw_field.startswith("status="):
-                            continue
-                        raw_status = decode_metadata_value(raw_field.split("=", 1)[1])
-                        if normalize_todo_status(raw_status) is None:
-                            malformed_status = True
-                for key, value in raw_metadata or []:
-                    if key == "status" and normalize_todo_status(value) is None:
-                        malformed_status = True
-                    if key not in {"excluded_agent", "excluded_agents"}:
-                        continue
-                    try:
-                        require_todo_excluded_agents(value)
-                    except ValueError:
-                        malformed_excluded_agents = True
-                parsed = parse_todo_metadata_line(raw_line)
-                if parsed:
-                    metadata.update(parsed)
-                next_index += 1
-            removed_continuation_policy = normalize_removed_todo_continuation_policy(
-                metadata.get("removed_continuation_policy")
-            )
-            status = str(metadata.get("status") or todo_status_from_marker(marker) or "").lower()
-            task_class = str(metadata.get("task_class") or "")
-            todo_id = metadata.get("todo_id") or f"line:{index + 1}"
-            if malformed_excluded_agents:
-                add_error(
-                    "todo_excluded_agents_invalid",
-                    f"{goal_id}: todo {todo_id} has malformed excluded_agents metadata; "
-                    "replace it with --excluded-agent <registered-agent> or remove it "
-                    "with --clear-excluded-agents",
-                )
-            if malformed_status:
-                add_error(
-                    "todo_status_invalid",
-                    f"{goal_id}: todo {todo_id} has malformed status metadata; "
-                    "replace it with status=open, status=done, status=blocked, or "
-                    "status=deferred",
-                )
-            if role == "agent" and removed_continuation_policy:
-                add_error(
-                    "agent_todo_removed_continuation_policy",
-                    f"{goal_id}: agent todo {todo_id} uses removed continuation_policy="
-                    f"{removed_continuation_policy}; use continuation_policy=independent_handoff "
-                    "with an explicit review action_kind and excluded_agents=<author> only when "
-                    "executor separation is required",
-                )
-            blocks_agent = metadata.get("blocks_agent")
-            if role == "agent" and blocks_agent:
-                add_error(
-                    "agent_todo_blocks_agent_invalid",
-                    f"{goal_id}: agent todo {todo_id} uses removed blocks_agent routing; "
-                    "blocks_agent is reserved for user gates, while agent executor "
-                    "constraints use excluded_agents",
-                )
-            excluded_agents = normalize_todo_excluded_agents(
-                metadata.get("excluded_agents")
-            )
-            claimed_by = normalize_todo_claimed_by(metadata.get("claimed_by"))
-            if claimed_by and claimed_by in excluded_agents:
-                add_error(
-                    "todo_claimed_by_excluded_agent",
-                    f"{goal_id}: agent todo {todo_id} has claimed_by={claimed_by!r} "
-                    "also listed in excluded_agents",
-                )
-            archived_terminal_todo = (
-                in_completed_work_archive
-                and todo_status_from_marker(marker) in TERMINAL_TODO_STATUSES
-                and status in TERMINAL_TODO_STATUSES
-            )
-            if role != "agent" and excluded_agents and not archived_terminal_todo:
-                add_error(
-                    "todo_executor_exclusion_scope_invalid",
-                    f"{goal_id}: {role or 'unscoped'} todo {todo_id} uses excluded_agents; "
-                    "executor exclusions are only valid for agent todos",
-                )
-            unknown_excluded_agents = [
-                agent_id
-                for agent_id in excluded_agents
-                if registered_agents and agent_id not in registered_agents
-            ]
-            if role == "agent" and unknown_excluded_agents:
-                add_error(
-                    "todo_excludes_unregistered_agent",
-                    f"{goal_id}: agent todo {todo_id} excludes unregistered agents: "
-                    + ", ".join(unknown_excluded_agents),
-                )
-            if role == "user" and status not in TERMINAL_TODO_STATUSES:
-                checked += 1
-                global_gate = metadata.get("global_gate") is True
-                bound_agent = normalize_todo_bound_agent(metadata.get("bound_agent"))
-                goal_bound = normalize_todo_goal_bound(metadata.get("goal_bound")) is True
-                effective_bound_agent = (
-                    bound_agent
-                    or (
-                        blocks_agent
-                        if task_class == TODO_TASK_CLASS_USER_GATE
-                        else None
-                    )
-                    or claimed_by
-                )
-                effective_goal_bound = bool(
-                    goal_bound
-                    or (
-                        global_gate
-                        and task_class == TODO_TASK_CLASS_USER_GATE
-                    )
-                )
-                if task_class not in {TODO_TASK_CLASS_USER_ACTION, TODO_TASK_CLASS_USER_GATE}:
-                    add_error(
-                        "user_todo_task_class_missing",
-                        f"{goal_id}: open user todo {todo_id} requires task_class=user_gate "
-                        "or task_class=user_action "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif task_class == TODO_TASK_CLASS_USER_ACTION and (blocks_agent or global_gate):
-                    add_error(
-                        "user_action_blocking_scope_invalid",
-                        f"{goal_id}: open user_action todo {todo_id} is non-blocking and "
-                        "cannot set blocks_agent or global_gate=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif task_class == TODO_TASK_CLASS_USER_GATE and blocks_agent and global_gate:
-                    add_error(
-                        "user_gate_scope_conflict",
-                        f"{goal_id}: open user_gate todo {todo_id} in multi-agent goal "
-                        "cannot set both blocks_agent and global_gate=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif bound_agent and goal_bound:
-                    add_error(
-                        "user_todo_response_scope_conflict",
-                        f"{goal_id}: open user todo {todo_id} cannot set both "
-                        "bound_agent and goal_bound=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif (
-                    task_class == TODO_TASK_CLASS_USER_GATE
-                    and global_gate
-                    and bound_agent
-                ):
-                    add_error(
-                        "goal_user_gate_agent_binding_invalid",
-                        f"{goal_id}: goal-wide user_gate todo {todo_id} cannot set "
-                        "bound_agent; its response binding is goal_bound=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif (
-                    task_class == TODO_TASK_CLASS_USER_GATE
-                    and blocks_agent
-                    and goal_bound
-                ):
-                    add_error(
-                        "agent_user_gate_goal_binding_invalid",
-                        f"{goal_id}: agent-scoped user_gate todo {todo_id} cannot set "
-                        "goal_bound=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif (
-                    task_class == TODO_TASK_CLASS_USER_GATE
-                    and blocks_agent
-                    and bound_agent
-                    and bound_agent != blocks_agent
-                ):
-                    add_error(
-                        "agent_user_gate_response_binding_mismatch",
-                        f"{goal_id}: agent-scoped user_gate todo {todo_id} must bind "
-                        f"to blocks_agent={blocks_agent!r}, not bound_agent="
-                        f"{bound_agent!r} (state_file={state_file}, line={index + 1}, "
-                        f"text={text})",
-                    )
-                elif bound_agent and registered_agents and bound_agent not in registered_agents:
-                    add_error(
-                        "user_todo_bound_agent_unregistered",
-                        f"{goal_id}: open user todo {todo_id} has bound_agent="
-                        f"{bound_agent!r}, which is not registered for this goal "
-                        f"(registered_agents={', '.join(registered_agents)}, "
-                        f"state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif (
-                    len(registered_agents) > 1
-                    and not effective_bound_agent
-                    and not effective_goal_bound
-                ):
-                    add_error(
-                        "multi_agent_user_todo_missing_response_scope",
-                        f"{goal_id}: open user todo {todo_id} in multi-agent goal "
-                        "requires bound_agent=<registered-agent> or goal_bound=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif (
-                    task_class == TODO_TASK_CLASS_USER_GATE
-                    and blocks_agent
-                    and registered_agents
-                    and blocks_agent not in registered_agents
-                ):
-                    add_error(
-                        "user_gate_blocks_unregistered_agent",
-                        f"{goal_id}: open user_gate todo {todo_id} has blocks_agent="
-                        f"{blocks_agent!r}, which is not registered for this goal "
-                        f"(registered_agents={', '.join(registered_agents)}, "
-                        f"state_file={state_file}, line={index + 1}, text={text})",
-                    )
-                elif (
-                    task_class == TODO_TASK_CLASS_USER_GATE
-                    and len(registered_agents) > 1
-                    and not blocks_agent
-                    and not global_gate
-                ):
-                    add_error(
-                        "multi_agent_user_gate_missing_scope",
-                        f"{goal_id}: open user_gate todo {todo_id} in multi-agent goal "
-                        "requires blocks_agent=<registered-agent> or global_gate=true "
-                        f"(state_file={state_file}, line={index + 1}, text={text})",
-                    )
-            index = next_index
+        file_diagnostics, file_checked = _markdown_todo_contract_diagnostics(
+            goal_id=goal_id,
+            state_file=state_file,
+            lines=lines,
+            registered_agents=registered_agent_ids_for_goal(goal),
+        )
+        diagnostics.extend(file_diagnostics)
+        checked += file_checked
     return diagnostics, checked
 
 
-def _active_state_projection_gap_warnings(
+def _goal_source_and_projection_diagnostics(
     registry: dict[str, Any],
     *,
     goal_id_filter: str | None = None,
     activation_state_filter: GoalActivationState | str | None = None,
-) -> list[str]:
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    diagnostics: list[dict[str, Any]] = []
+    checks: list[str] = []
     warnings: list[str] = []
-    for goal in registry_goals(registry):
-        goal_id = str(goal.get("id") or "")
-        if goal_id_filter and goal_id != goal_id_filter:
-            continue
-        if (
-            activation_state_filter is not None
-            and goal_activation_state(goal)
-            is not normalize_goal_activation_state(activation_state_filter)
-        ):
-            continue
-        repo_text = str(goal.get("repo") or "").strip()
-        if not repo_text:
-            continue
-        state_file = resolve_state_file(Path(repo_text).expanduser(), goal.get("state_file"))
-        if not state_file or not state_file.exists():
+    for goal_id, goal in _iter_filtered_goals(
+        registry,
+        goal_id_filter=goal_id_filter,
+        activation_state_filter=activation_state_filter,
+    ):
+        goal_diags, goal_checks = verify_authority_source_digests(goal)
+        diagnostics.extend(goal_diags)
+        checks.extend(goal_checks)
+        state_file = _resolve_existing_state_file(goal)
+        if state_file is None:
             continue
         try:
             state_text = state_file.read_text(encoding="utf-8")
@@ -1204,36 +1135,30 @@ def _active_state_projection_gap_warnings(
         projection_gap = state_projection_gap_warning(state_text)
         if not projection_gap:
             continue
-        target_roles = ",".join(str(role) for role in projection_gap.get("target_roles") or [])
+        raw_roles = projection_gap.get("target_roles")
+        target_roles = ",".join(str(role) for role in raw_roles) if isinstance(raw_roles, (list, tuple)) else ""
         warnings.append(
             f"{goal_id}: active state has a state_projection_gap for {target_roles or 'todo'}; "
             "expand executable Next Action work into an open Agent Todo or user wait into an open User Todo"
         )
-    return warnings
+    return diagnostics, checks, warnings
 
 
-def _authority_source_diagnostics(
-    registry: dict[str, Any],
-    *,
-    goal_id_filter: str | None = None,
-    activation_state_filter: GoalActivationState | str | None = None,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    diagnostics: list[dict[str, Any]] = []
-    checks: list[str] = []
-    for goal in registry_goals(registry):
-        goal_id = str(goal.get("id") or "")
-        if goal_id_filter and goal_id != goal_id_filter:
-            continue
-        if (
-            activation_state_filter is not None
-            and goal_activation_state(goal)
-            is not normalize_goal_activation_state(activation_state_filter)
-        ):
-            continue
-        goal_diags, goal_checks = verify_authority_source_digests(goal)
-        diagnostics.extend(goal_diags)
-        checks.extend(goal_checks)
-    return diagnostics, checks
+def _resolve_scannable_file(path: Path) -> Path | None:
+    if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+        return None
+    resolved = path.resolve()
+    if resolved.name.endswith(".local.json") or not resolved.is_file():
+        return None
+    return resolved if resolved.suffix in DEFAULT_SCAN_SUFFIXES else None
+
+
+def _is_skipped_dir_name(name: str) -> bool:
+    return name in DEFAULT_SKIP_DIRS or name.endswith(".egg-info")
+
+
+def _root_sort_key(path: Path) -> tuple[int, str]:
+    return (len(path.parts), str(path))
 
 
 def _tracked_scan_files(scan_root: Path) -> list[Path]:
@@ -1269,28 +1194,10 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
 
     files: list[Path] = []
     for record in tracked.stdout.split(b"\0"):
-        if not record:
-            continue
-        path = repo_root / os.fsdecode(record)
-        if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
-            continue
-        path = path.resolve()
-        if path.name.endswith(".local.json"):
-            continue
-        if path.is_file() and path.suffix in DEFAULT_SCAN_SUFFIXES:
-            files.append(path)
+        if record:
+            if resolved := _resolve_scannable_file(repo_root / os.fsdecode(record)):
+                files.append(resolved)
     return files
-
-
-def _directory_reason(error: OSError) -> str:
-    """Keep the reason short and free of the directory's own text.
-
-    `strerror` is the host's message and every exercised `os.walk`/`os.scandir`
-    failure carries one. Falling back to `str(error)` would append the absolute
-    path, so the fallback is the error class instead.
-    """
-    reason = str(error.strerror) if error.strerror else type(error).__name__
-    return reason[:120]
 
 
 def _record_unreadable_directory(
@@ -1302,11 +1209,12 @@ def _record_unreadable_directory(
 
     ``os.walk`` swallows a listing failure by default, so a scan that cannot
     enter a directory contributes no file and reports the same clean boundary
-    as a tree that has nothing to find. The scan owner must be able to fail
-    closed on that, exactly like an unreadable file.
+    as a tree that has nothing to find. Keep the reason short via ``strerror``
+    (or the error class name) so ``str(error)`` cannot leak an absolute path.
     """
     directory = Path(error.filename) if error.filename else scan_root
-    unreadable_directories.append((directory, _directory_reason(error)))
+    reason = str(error.strerror) if error.strerror else type(error).__name__
+    unreadable_directories.append((directory, reason[:120]))
 
 
 def _display_scan_path(path: Path, root: Path) -> str:
@@ -1322,61 +1230,31 @@ def _display_scan_path(path: Path, root: Path) -> str:
     return display_path_text(rel_or_abs(path, root))
 
 
-def _unreadable_directory_label(
-    directory: Path, scan_roots: Mapping[Path, Path]
-) -> str:
-    """Name a directory relative to the outermost requested root that contains it.
-
-    Every requested root is a candidate, so a walk that started at an outer root
-    and one that started at the directory itself agree on the directory's name
-    instead of reporting the same directory twice under two labels.
-    """
-    containing = [root for root in scan_roots if directory.is_relative_to(root)]
-    if not containing:
-        return display_path_text(directory)
-    root = min(containing, key=lambda candidate: (len(candidate.parts), str(candidate)))
-    return display_path_text(directory.relative_to(scan_roots[root])) or "."
-
-
-def _unreadable_directory_labels(
+def _render_unreadable_directories(
     unreadable_directories: list[tuple[Path, str]],
     scan_roots: Mapping[Path, Path],
-) -> list[tuple[str, str]]:
-    """Pair each unreadable directory with the label its scan root renders.
-
-    The absolute directory stays the identity, so a repeated request for one
-    root and two distinct roots are told apart before the labels collapse.
-    """
-    return [
-        (_unreadable_directory_label(directory, scan_roots), reason)
-        for directory, reason in dict.fromkeys(unreadable_directories)
-    ]
-
-
-def _render_unreadable_directories(
-    unreadable_directories: list[tuple[str, str]],
 ) -> list[str]:
-    """Render each unreadable directory once, numbering colliding labels."""
+    """Label each unreadable directory relative to its outermost root, numbering collisions."""
+
+    labeled: list[tuple[str, str]] = []
+    for directory, reason in dict.fromkeys(unreadable_directories):
+        containing = [root for root in scan_roots if directory.is_relative_to(root)]
+        if not containing:
+            label = display_path_text(directory)
+        else:
+            root = min(containing, key=_root_sort_key)
+            label = display_path_text(directory.relative_to(scan_roots[root])) or "."
+        labeled.append((label, reason))
     totals: dict[str, int] = {}
-    for label, _ in unreadable_directories:
+    for label, _ in labeled:
         totals[label] = totals.get(label, 0) + 1
     seen: dict[str, int] = {}
     rendered: list[str] = []
-    for label, reason in unreadable_directories:
+    for label, reason in labeled:
         seen[label] = seen.get(label, 0) + 1
         suffix = f" ({seen[label]})" if totals[label] > 1 and seen[label] > 1 else ""
         rendered.append(f"{label}{suffix}: {reason}")
     return rendered
-
-
-def _probe_directory_listing(
-    directory: Path, unreadable_directories: list[tuple[Path, str]]
-) -> None:
-    try:
-        with os.scandir(directory):
-            pass
-    except OSError as error:
-        _record_unreadable_directory(error, directory, unreadable_directories)
 
 
 def iter_scan_files(
@@ -1400,11 +1278,14 @@ def iter_scan_files(
         tracked_files = []
     # The root is probed even when dependency pruning skips the walk, so an
     # unreadable scan target cannot pass because of how it was named.
-    _probe_directory_listing(scan_root, unreadable)
-    root_parts = set(scan_root.parts)
+    try:
+        with os.scandir(scan_root):
+            pass
+    except OSError as error:
+        _record_unreadable_directory(error, scan_root, unreadable)
     # Dependency pruning never overrides tracked repository ownership.
     if (
-        any(part in DEFAULT_SKIP_DIRS or part.endswith(".egg-info") for part in root_parts)
+        any(_is_skipped_dir_name(part) for part in scan_root.parts)
         or os.path.isfile(scan_root / "pyvenv.cfg")
     ):
         return sorted(tracked_files)
@@ -1417,22 +1298,38 @@ def iter_scan_files(
         dir_names[:] = [
             name
             for name in dir_names
-            if name not in DEFAULT_SKIP_DIRS
-            and not name.endswith(".egg-info")
+            if not _is_skipped_dir_name(name)
             and not os.path.isfile(current_dir / name / "pyvenv.cfg")
         ]
         for file_name in file_names:
-            path = current_dir / file_name
-            if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
-                continue
-            path = path.resolve()
-            if path.name.endswith(".local.json"):
-                continue
-            if not path.is_file():
-                continue
-            if path.suffix in DEFAULT_SCAN_SUFFIXES:
-                files.append(path)
+            if resolved := _resolve_scannable_file(current_dir / file_name):
+                files.append(resolved)
     return sorted(set(files + tracked_files))
+
+
+def _scan_package_lock_hits(path: Path, root: Path, text: str) -> list[str]:
+    try:
+        lockfile = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    packages = lockfile.get("packages") if isinstance(lockfile, dict) else None
+    if not isinstance(packages, dict):
+        return []
+    display_path = _display_scan_path(path, root)
+    lock_hits: list[str] = []
+    for package_path, package in packages.items():
+        if not isinstance(package, dict):
+            continue
+        resolved = package.get("resolved")
+        if (
+            isinstance(resolved, str)
+            and resolved.startswith(("http://", "https://"))
+            and not resolved.startswith(_PUBLIC_NPM_REGISTRY_PREFIX)
+        ):
+            lock_hits.append(
+                f"{display_path}: non_public_package_registry ({package_path or '<root>'})"
+            )
+    return lock_hits
 
 
 def scan_public_boundary(
@@ -1494,10 +1391,7 @@ def scan_public_boundary(
         if _is_local_private_state_path(resolved_scan_root, classification_root):
             # Explicit outgoing selection cannot turn an ignored private file
             # or a pruned private directory into a successful empty scan.
-            record_hit(
-                f"{_display_scan_path(resolved_scan_root, classification_root)}: "
-                "local_private_state"
-            )
+            record_hit(f"{_display_scan_path(resolved_scan_root, classification_root)}: local_private_state")
             continue
         for file_path in iter_scan_files(
             resolved_scan_root,
@@ -1508,9 +1402,7 @@ def scan_public_boundary(
             if _is_local_private_state_path(file_path, classification_root):
                 private_files.add(file_path)
             previous_root = file_roots.get(file_path)
-            if previous_root is None or (
-                len(display_root.parts), str(display_root)
-            ) < (len(previous_root.parts), str(previous_root)):
+            if previous_root is None or _root_sort_key(display_root) < _root_sort_key(previous_root):
                 file_roots[file_path] = display_root
     files = sorted(set(files))
     policy = _public_boundary_policy(registry or {})
@@ -1524,29 +1416,22 @@ def scan_public_boundary(
         for path in files:
             root = file_roots.get(path, path)
             if path in private_files:
-                if ownership_unavailable:
-                    # One unanswered question already decides the scan; asking
-                    # again would only spend another budget on the same hang.
-                    unavailable_git_probes.append(rel_or_abs(path, root))
-                    skipped_private_state_files.append(rel_or_abs(path, root))
-                    continue
-                git = _git_probe(path)
-                if git.get("tracked") is None:
+                rel_path = rel_or_abs(path, root)
+                if ownership_unavailable or (git := _git_probe(path)).get("tracked") is None:
+                    # Git did not answer, so ownership is unproven; stop asking
+                    # once one answer is missing and never open private state.
                     ownership_unavailable = True
-                    # Git did not answer, so ownership is unproven. Private
-                    # state is still never opened, and the scan stops asking
-                    # once one answer is missing.
-                    unavailable_git_probes.append(rel_or_abs(path, root))
-                    skipped_private_state_files.append(rel_or_abs(path, root))
+                    unavailable_git_probes.append(rel_path)
+                    skipped_private_state_files.append(rel_path)
                     continue
                 if not git.get("tracked"):
-                    skipped_private_state_files.append(rel_or_abs(path, root))
+                    skipped_private_state_files.append(rel_path)
                     ignored_flag = git.get("ignored")
                     if ignored_flag is None:
                         # Git refused the ignore question: the file is still
                         # skipped, but a clean scan would claim it is protected.
                         ownership_unavailable = True
-                        unavailable_git_probes.append(rel_or_abs(path, root))
+                        unavailable_git_probes.append(rel_path)
                     elif git.get("inside_worktree") and ignored_flag is False:
                         private_state_git_warnings.append(
                             f"{_display_scan_path(path, root)}: private state should be gitignored"
@@ -1570,33 +1455,11 @@ def scan_public_boundary(
         text = read.text
         assert text is not None
         if path.name == "package-lock.json":
-            try:
-                lockfile = json.loads(text)
-            except json.JSONDecodeError:
-                lockfile = None
-            if isinstance(lockfile, dict):
-                packages = lockfile.get("packages")
-                if isinstance(packages, dict):
-                    for package_path, package in packages.items():
-                        if not isinstance(package, dict):
-                            continue
-                        resolved = package.get("resolved")
-                        if (
-                            isinstance(resolved, str)
-                            and resolved.startswith(("http://", "https://"))
-                            and not resolved.startswith(_PUBLIC_NPM_REGISTRY_PREFIX)
-                        ):
-                            display_package = package_path or "<root>"
-                            record_hit(
-                                f"{_display_scan_path(path, root)}: "
-                                "non_public_package_registry "
-                                f"({display_package})"
-                            )
+            for lock_hit in _scan_package_lock_hits(path, root, text):
+                record_hit(lock_hit)
         folded_text = _prefilter_fold(text)
         candidate_rules = [
-            (name, rule)
-            for name, rule in LEAK_RULES.items()
-            if rule.is_candidate(folded_text)
+            (name, rule) for name, rule in LEAK_RULES.items() if rule.is_candidate(folded_text)
         ]
         if not candidate_rules:
             continue
@@ -1605,9 +1468,11 @@ def scan_public_boundary(
             for name, rule in candidate_rules:
                 if not rule.is_candidate(folded_line):
                     continue
-                scan_line = line
-                if name == "private_doc_url":
-                    scan_line = _PUBLIC_LARK_DEVELOPER_CONSOLE_HOST.sub("", scan_line)
+                scan_line = (
+                    _PUBLIC_LARK_DEVELOPER_CONSOLE_HOST.sub("", line)
+                    if name == "private_doc_url"
+                    else line
+                )
                 if rule.pattern.search(scan_line):
                     hit = f"{_display_scan_path(path, root)}:{line_no}: {name}"
                     if name == "credential" and _credential_hits_are_all_references(line):
@@ -1616,9 +1481,8 @@ def scan_public_boundary(
                     if (
                         name == "private_doc_url"
                         and policy.get("tracked_private_doc_urls") == "allow"
+                        and (git := git or _git_probe(path)).get("tracked")
                     ):
-                        git = git or _git_probe(path)
-                    if git is not None and _hit_allowed_by_policy(name, git, policy):
                         allowed_hits.append(hit)
                     else:
                         record_hit(hit, blocking=rule.blocking)
@@ -1633,22 +1497,16 @@ def scan_public_boundary(
         "scan_roots": [display_path_text(path) for path in scan_roots],
         "files": len(files),
         "scanned_files": len(files) - len(skipped_private_state_files),
-        "skipped_private_state_files": [
-            display_path_text(item) for item in skipped_private_state_files
-        ],
+        "skipped_private_state_files": [display_path_text(item) for item in skipped_private_state_files],
         "credential_reference_hits": credential_reference_hits,
         "unreadable_files": unreadable_files,
         # Identity is the absolute directory, so two roots that each hold an
         # unlistable `notes/` are both reported; colliding labels are numbered.
-        "unreadable_directories": _render_unreadable_directories(
-            _unreadable_directory_labels(unreadable_directories, directory_roots)
-        ),
+        "unreadable_directories": _render_unreadable_directories(unreadable_directories, directory_roots),
         "missing_scan_roots": missing_scan_roots,
         # A Git question that was not answered leaves the boundary unknown:
         # this list keeps a partial answer from being reported as clean.
-        "unavailable_git_probes": sorted(
-            {display_path_text(item) for item in unavailable_git_probes}
-        ),
+        "unavailable_git_probes": sorted({display_path_text(item) for item in unavailable_git_probes}),
         "allowed_hits": allowed_hits,
         "private_state_git_warnings": private_state_git_warnings,
         "policy": policy,
@@ -1656,6 +1514,14 @@ def scan_public_boundary(
         "blocking_hits": blocking_hits,
         "warnings": advisory_hits + credential_reference_hits,
     }
+
+
+_BOUNDARY_FAILURE_FIELDS = (
+    ("missing_scan_roots", "public_boundary_scan_root_missing", "scan root does not exist: "),
+    ("unreadable_directories", "public_boundary_scan_directory_unreadable", "scan directory could not be listed: "),
+    ("unreadable_files", "public_boundary_scan_file_unreadable", "scan file could not be read: "),
+    ("unavailable_git_probes", "public_boundary_scan_git_unavailable", "Git could not answer ownership for: "),
+)
 
 
 def check_contract(
@@ -1677,9 +1543,7 @@ def check_contract(
     checks: list[str] = []
 
     def add_global_error(code: str, message: str) -> None:
-        error_diagnostics.append(
-            contract_error_diagnostic(code=code, message=message)
-        )
+        error_diagnostics.append(contract_error_diagnostic(code=code, message=message))
 
     registry_payload = inspect_registry(registry_path)
     if registry_payload.get("ok"):
@@ -1693,16 +1557,15 @@ def check_contract(
                 add_global_error("registry_unavailable", error)
         problem_diagnostics = registry_payload.get("problem_diagnostics")
         if isinstance(problem_diagnostics, list):
-            error_diagnostics.extend(
-                item for item in problem_diagnostics if isinstance(item, dict)
-            )
+            error_diagnostics.extend(item for item in problem_diagnostics if isinstance(item, dict))
         else:
             for problem in registry_payload.get("problems") or []:
                 add_global_error("registry_problem", str(problem))
 
     boundary_payload = inspect_registry_boundary(registry_path)
     if boundary_payload.get("ok"):
-        git = boundary_payload.get("git") if isinstance(boundary_payload.get("git"), dict) else {}
+        raw_git = boundary_payload.get("git")
+        git = raw_git if isinstance(raw_git, dict) else {}
         checks.append(
             "registry boundary: "
             f"{boundary_payload.get('classification')} "
@@ -1720,38 +1583,24 @@ def check_contract(
 
     if registry is None:
         registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(
+    runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+    todo_contract_diagnostics, checked_user_gates = _todo_contract_diagnostics(
         registry,
-        runtime_root_override,
+        todo_snapshot=todo_snapshot,
         registry_path=registry_path,
-    )
-    todo_contract_diagnostics, checked_user_gates = (
-        _todo_contract_diagnostics(
-            registry,
-            todo_snapshot=todo_snapshot,
-            registry_path=registry_path,
-            runtime_root_override=runtime_root_override,
-            goal_id_filter=goal_id_filter,
-            activation_state_filter=activation_state_filter,
-        )
+        runtime_root_override=runtime_root_override,
+        goal_id_filter=goal_id_filter,
+        activation_state_filter=activation_state_filter,
     )
     if checked_user_gates:
         checks.append(f"user-gate scopes checked: {checked_user_gates} open multi-agent gates")
     error_diagnostics.extend(todo_contract_diagnostics)
-    source_diagnostics, source_checks = _authority_source_diagnostics(
-        registry,
-        goal_id_filter=goal_id_filter,
-        activation_state_filter=activation_state_filter,
+    source_diagnostics, source_checks, projection_warnings = _goal_source_and_projection_diagnostics(
+        registry, goal_id_filter=goal_id_filter, activation_state_filter=activation_state_filter,
     )
     error_diagnostics.extend(source_diagnostics)
     checks.extend(source_checks)
-    warnings.extend(
-        _active_state_projection_gap_warnings(
-            registry,
-            goal_id_filter=goal_id_filter,
-            activation_state_filter=activation_state_filter,
-        )
-    )
+    warnings.extend(projection_warnings)
 
     if runtime_root in {DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT} or runtime_root.exists():
         checks.append(f"runtime root resolved: {runtime_root}")
@@ -1782,94 +1631,38 @@ def check_contract(
         include_runtime_goals=True,
     ):
         raise ValueError("history audit scope does not match contract request")
-    checks.append(
-        f"run-history goals={history_audit.goal_count} runs={history_audit.run_count}"
-    )
+    checks.append(f"run-history goals={history_audit.goal_count} runs={history_audit.run_count}")
     for item in history_audit.goals:
-        raw = item.raw_index_records
-        unique = item.unique_runs
-        if item.legacy_runtime_goal and raw > unique:
-            checks.append(
-                f"{item.goal_id}: legacy runtime goal has duplicate rows "
-                f"raw={raw} unique={unique}"
-            )
+        raw, unique = item.raw_index_records, item.unique_runs
+        if raw <= unique:
             continue
-        if raw > unique:
-            duplicate_summary = _index_duplicate_summary(item.index_path)
-            if duplicate_summary.get("unexpected_duplicate_rows"):
-                warnings.append(
-                    _index_duplicate_warning(
-                        item.goal_id,
-                        raw,
-                        unique,
-                        duplicate_summary,
-                    )
-                )
-            else:
-                emitted_check = False
-                if duplicate_summary.get("reward_overlay_rows"):
-                    emitted_check = True
-                    checks.append(
-                        f"{item.goal_id}: reward overlay rows raw={raw} unique={unique} "
-                        f"overlays={duplicate_summary.get('reward_overlay_rows')}"
-                    )
-                if not emitted_check:
-                    warnings.append(
-                        _index_duplicate_warning(
-                            item.goal_id,
-                            raw,
-                            unique,
-                            duplicate_summary,
-                        )
-                    )
+        if item.legacy_runtime_goal:
+            checks.append(f"{item.goal_id}: legacy runtime goal has duplicate rows raw={raw} unique={unique}")
+            continue
+        duplicate_summary = _index_duplicate_summary(item.index_path)
+        overlay_rows = duplicate_summary.get("reward_overlay_rows")
+        if not duplicate_summary.get("unexpected_duplicate_rows") and overlay_rows:
+            checks.append(f"{item.goal_id}: reward overlay rows raw={raw} unique={unique} overlays={overlay_rows}")
+        else:
+            warnings.append(_index_duplicate_warning(item.goal_id, raw, unique, duplicate_summary))
 
     if include_public_boundary_scan:
         boundary = scan_public_boundary(scan_roots, registry=registry)
-        missing_scan_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
-        unreadable_directories = [
-            str(item) for item in boundary.get("unreadable_directories") or []
-        ]
-        unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
-        unavailable_git_probes = [
-            str(item) for item in boundary.get("unavailable_git_probes") or []
-        ]
+        boundary_lists = {
+            key: [str(item) for item in boundary.get(key) or []]
+            for key, _, _ in _BOUNDARY_FAILURE_FIELDS
+        }
         boundary_warnings = [str(item) for item in boundary.get("warnings") or []]
         public_boundary_scan = {
             "state": "completed",
-            "ok": bool(boundary.get("ok")) and not (
-                missing_scan_roots
-                or unreadable_directories
-                or unreadable_files
-                or unavailable_git_probes
-            ),
+            "ok": bool(boundary.get("ok")) and not any(boundary_lists.values()),
             "scanned_files": int(boundary.get("scanned_files") or 0),
-            "missing_scan_roots": missing_scan_roots,
-            "unreadable_directories": unreadable_directories,
-            "unreadable_files": unreadable_files,
-            "unavailable_git_probes": unavailable_git_probes,
+            **boundary_lists,
             "warnings": boundary_warnings,
         }
-        for missing_root in missing_scan_roots:
-            add_global_error(
-                "public_boundary_scan_root_missing",
-                f"scan root does not exist: {missing_root}",
-            )
-        for unreadable_directory in unreadable_directories:
-            add_global_error(
-                "public_boundary_scan_directory_unreadable",
-                f"scan directory could not be listed: {unreadable_directory}",
-            )
-        for unreadable_file in unreadable_files:
-            add_global_error(
-                "public_boundary_scan_file_unreadable",
-                f"scan file could not be read: {unreadable_file}",
-            )
-        for unavailable_probe in unavailable_git_probes:
-            add_global_error(
-                "public_boundary_scan_git_unavailable",
-                "Git could not answer ownership for: "
-                f"{unavailable_probe}",
-            )
+        for key, code, prefix in _BOUNDARY_FAILURE_FIELDS:
+            for entry in boundary_lists[key]:
+                add_global_error(code, f"{prefix}{entry}")
         if public_boundary_scan["ok"]:
             label = "completed with warnings" if boundary_warnings else "clean"
             checks.append(f"public boundary scan {label}: {boundary.get('scanned_files')} files")
@@ -1877,22 +1670,14 @@ def check_contract(
             for hit in boundary.get("blocking_hits", boundary.get("hits")) or []:
                 add_global_error("public_boundary_violation", str(hit))
         warnings.extend(boundary_warnings)
-        if boundary.get("skipped_private_state_files"):
-            checks.append(
-                "private state scan skipped: "
-                f"{len(boundary.get('skipped_private_state_files') or [])} local-private files"
-            )
-        if boundary.get("allowed_hits"):
-            checks.append(
-                "public boundary policy allowed: "
-                f"{len(boundary.get('allowed_hits') or [])} private_doc_url hits"
-            )
         warnings.extend(str(item) for item in boundary.get("private_state_git_warnings") or [])
-        if boundary.get("credential_reference_hits"):
-            checks.append(
-                "credential references downgraded: "
-                f"{len(boundary.get('credential_reference_hits') or [])} non-literal hits"
-            )
+        for key, template in (
+            ("skipped_private_state_files", "private state scan skipped: {} local-private files"),
+            ("allowed_hits", "public boundary policy allowed: {} private_doc_url hits"),
+            ("credential_reference_hits", "credential references downgraded: {} non-literal hits"),
+        ):
+            if items := boundary.get(key):
+                checks.append(template.format(len(items)))
     else:
         public_boundary_scan = {
             "state": "deferred",
@@ -1946,9 +1731,7 @@ def display_report_value(value: Any) -> Any:
 
     if isinstance(value, str):
         return display_report_text(value)
-    if isinstance(value, list):
-        return [display_report_value(item) for item in value]
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [display_report_value(item) for item in value]
     if isinstance(value, dict):
         return {

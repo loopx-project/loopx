@@ -120,10 +120,24 @@ test("terminal class changes count, while no-followup ignores complete-flag chur
     {...terminal, coverage_complete: false})).accepted, false);
 });
 
+const testObligationId = "replan-" + "1".repeat(16);
+const testContextId = "replan-context-" + "1".repeat(24);
+const testStrideDecision = {schema_version: "stride_decision_v2", strategy_version: "evidence_conditioned_v1",
+  reference_context_id: testContextId, reference_obligation_id: testObligationId, basis: "uncertain_evidence", action: "verify",
+  axes: {
+    work_slice: {plan: "Run one bounded verification slice.", reason: "Need fresh evidence before expanding."},
+    route_distance: {plan: "Keep current mechanism fixed while checking attribution.", reason: "Isolate the new hypothesis."},
+    validation_scope: {plan: "Compare on the same baseline inputs.", reason: "Ensure comparable evidence."}},
+  next_probe: {scope: "Single hypothesis check.", prediction: "New evidence confirms the hypothesis.",
+    adoption_criterion: "Distinct evidence id observed.", cost_bound: "One probe.", minimum_evidence: "Fresh attributed result."}};
+const strideStopVision = {vision_patch: {acceptance_summary: "Evidence review recorded"},
+  path_delta: {outcome: "stop", evidence_refs: ["evidence-new"]}, stride_decision: testStrideDecision};
+
 test("the effect entrypoint consumes normalized source and refuses caller-supplied outcomes", () => {
-  const obligation = {triggers: [{kind: "external_progress_review_drift"}]};
+  const obligation = {obligation_id: testObligationId, triggers: [{kind: "external_progress_review_drift"}],
+    replan_context: {context_id: testContextId}};
   const qualify = (progress_source: JsonObject | null, patch: JsonObject = {}) =>
-    projectReplanWriteback({operation: "qualify", obligation, progress_source, ...patch});
+    projectReplanWriteback({operation: "qualify", obligation, progress_source, agent_vision: strideStopVision, ...patch});
   const renamed = observation(2, {result_class: "advanced", hypothesis_id: "hypothesis-renamed"});
   assert.equal(qualify(null).accepted, false);
   assert.equal(qualify(source(renamed, baseline)).reason_code, "progress_identity_without_new_evidence");
@@ -168,9 +182,10 @@ test("fresh Vision cannot bypass missing attribution, while a false coverage fla
   const carrier = {schema_version: "typed_progress_observation_v0", result_class: "unchanged",
     fingerprint: "0000000000000001"};
   const qualify = (current: JsonObject) => projectReplanWriteback({operation: "qualify",
-    obligation: {triggers: [{kind: "external_progress_review_drift"}]}, progress_source: source(current),
+    obligation: {obligation_id: testObligationId, triggers: [{kind: "external_progress_review_drift"}],
+      replan_context: {context_id: testContextId}}, progress_source: source(current),
     agent_vision: {vision_patch: {acceptance_summary: "Retain the evidenced path"},
-      path_delta: {outcome: "continue", evidence_refs: ["evidence-path"]}}});
+      path_delta: {outcome: "continue", evidence_refs: ["evidence-path"]}, stride_decision: testStrideDecision}});
   for (const current of [carrier, {...carrier, unknown_identity: "todo-progress"}]) {
     assert.throws(() => qualify(current), /stable work, coverage or evidence field/);
   }

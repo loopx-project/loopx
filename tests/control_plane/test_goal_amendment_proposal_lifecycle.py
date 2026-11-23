@@ -343,8 +343,10 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
             "retained": ["Original Goal objective, completion criteria and proposal review authority."],
             "evidence_refs": [listed["rows"][0]["proposal_id"]],
         },
+        "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     evidence = {
+        "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>": str(vision),
         "<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
         "<surface-id>": "surface:amendment-proposal",
         "<hypothesis-id>": "hypothesis:proposal-admission",
@@ -352,11 +354,12 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         "<evidence-id>": listed["rows"][0]["proposal_id"],
     }
     refresh_args = [evidence.get(arg, arg) for arg in _projected_cli_args(refresh_command)]
+    extra_vision = [] if "--agent-vision-json" in refresh_args else ["--agent-vision-json", str(vision)]
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
         *refresh_args,
-        "--agent-vision-json", str(vision),
+        *extra_vision,
         "--no-global-sync",
         "--suppress-external-sinks",
     )

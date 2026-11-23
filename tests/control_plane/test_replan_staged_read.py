@@ -30,16 +30,20 @@ def json_bytes(value):
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def without_example(contract):
+def without_example(contract, source=None):
     expected = copy.deepcopy(contract)
+    if "vision_authoring_ref" in expected and source is not None:
+        expected.pop("vision_authoring_ref")
+        steps = source["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+        step = next(row for row in steps if row.get("kind") == "durable_writeback" and "vision_authoring" in row)
+        expected["vision_authoring"] = copy.deepcopy(step["vision_authoring"])
     if "vision_authoring" in expected:
-        expected["vision_authoring"].pop("minimal_example")
+        expected["vision_authoring"].pop("minimal_example", None)
     return expected
 
 
-@pytest.mark.parametrize("stride", ["off", "evidence_conditioned_v1"])
-def test_staged_packet_budget_and_lossless_authority(stride):
-    source = _quota_payload(stride_strategy=stride)
+def test_staged_packet_budget_and_lossless_authority():
+    source = _quota_payload()
     legacy = build_turn_envelope(source)
     source["replan_read_path"] = "/synthetic/decision.json"
     original = copy.deepcopy(source)
@@ -84,16 +88,13 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     assert json_bytes(review) <= 16384
     assert "guidance" not in review
     assert json_bytes(writer) <= 16384
-    if stride != "off":
-        assert review["decision_value_review"] == source["replan_action_packet"]["stride_control"]["decision_value_review"]
-        control = writer["stride_control"]
-        assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
-        assert "decision_followthrough" not in control and "decision_value_review" not in control
-        assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
-        assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
-        assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
-    else:
-        assert "decision_value_review" not in review
+    assert review["decision_value_review"] == source["replan_action_packet"]["stride_control"]["decision_value_review"]
+    control = writer["stride_control"]
+    assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
+    assert "decision_followthrough" not in control and "decision_value_review" not in control
+    assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
+    assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
+    assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
 
 
@@ -519,7 +520,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         assert entry.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
-        assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
+        assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"], source)
         assert (capture / "decision.json").read_bytes() == saved
         assert {key: fixture[key].read_bytes() for key in original_files} == original_files
         assert not reader_fixture["registry"].exists()
@@ -547,9 +548,32 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         assert shlex.split(bound_review.pop("next")["writeback"]) == [
             *writer_args[:-2], "--capture-sha256", capture_sha256, *writer_args[-2:],
         ]
-        assert bound_review == {key: value for key, value in review.items() if key != "next"}
+        expected_review = copy.deepcopy({key: value for key, value in review.items() if key != "next"})
+        explore_read = expected_review.get("capabilities", {}).get("explore", {}).pop("read_action", None)
+        if explore_read is not None:
+            explore_args = shlex.split(explore_read)
+            assert shlex.split(bound_review["capabilities"]["explore"].pop("read_action")) == [
+                *explore_args[:-2], "--capture-sha256", capture_sha256, *explore_args[-2:],
+            ]
+        assert bound_review == expected_review
         # A valid next operation still reaches the existing writer and semantic gate.
-        result = call_progress_cli(fixture, *fixture["refresh"])
+        vision_path = tmp_path / "staged-vision.json"
+        vision_path.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "Retain the current validation acceptance and verify the next probe."},
+            "path_delta": {
+                "outcome": "replan",
+                "prior_assumption": "The previous validation probe stalled without fresh evidence.",
+                "observed_reality": "An independent validation probe produced current evidence.",
+                "retained": ["Original validation acceptance criteria"],
+                "evidence_refs": ["evidence-current"],
+            },
+            "stride_decision": writer["stride_control"]["minimal_example"],
+        }))
+        refresh = [arg for idx, arg in enumerate(fixture["refresh"])
+            if arg != "--vision-unchanged-reason" and (idx == 0 or fixture["refresh"][idx - 1] != "--vision-unchanged-reason")]
+        result = call_progress_cli(fixture, *refresh, "--agent-vision-json", str(vision_path))
         assert result["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     finally:
         restart_effect_runtime(wait_for_exit=True)
@@ -783,7 +807,7 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
     monkeypatch.setenv("PYTHONPATH", str(stale_root))
 
-    source = _quota_payload(stride_strategy="evidence_conditioned_v1")
+    source = _quota_payload()
     outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
         "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
     source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"] = {
@@ -933,9 +957,6 @@ def test_measurement_groups_keep_bounded_replan_detail_and_reachable_remainder(t
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
-    registry = json.loads(fixture["registry"].read_text())
-    registry["goals"][0]["execution_profile"]["stride_strategy"] = "evidence_conditioned_v1"
-    fixture["registry"].write_text(json.dumps(registry))
     log = explore_result_log_path(fixture["runtime"], GOAL)
     append_explore_result_event(log, build_explore_node_event(goal_id=GOAL, agent_id=AGENT,
         node_id="question-measurement", node_kind="question", title="Does this candidate improve the outcome?"))

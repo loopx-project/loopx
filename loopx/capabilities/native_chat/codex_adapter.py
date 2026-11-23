@@ -1230,10 +1230,19 @@ class CodexAppServerAdapter:
             "steering": True,
         }
 
-    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None], *,
-                   reply_image_turn_id: str | None = None) -> dict[str, Any]:
-        return self.session.send(message, on_event=event_sink, **self._ordinary_turn_arguments(),
-            **({"reply_image_turn_id": reply_image_turn_id} if reply_image_turn_id is not None else {}))
+    def start_turn(
+        self, message: str, event_sink: Callable[[str, dict[str, Any]], None], *,
+        reply_image_turn_id: str | None = None, attachments: list[dict[str, Any]] | None = None,
+        reply_documents: bool = False,
+    ) -> dict[str, Any]:
+        arguments = self._ordinary_turn_arguments()
+        if reply_image_turn_id is not None:
+            arguments["reply_image_turn_id"] = reply_image_turn_id
+        if attachments:
+            arguments["attachments"] = attachments
+        if reply_documents:
+            arguments["reply_documents"] = True
+        return self.session.send(message, on_event=event_sink, **arguments)
 
     def _ordinary_turn_arguments(self):
         check = self._managed_read_turn_guard
@@ -1282,8 +1291,7 @@ class CodexAppServerAdapter:
         event_sink: Callable[[str, dict[str, Any]], None],
         attachments: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        return self.session.send(message, attachments=attachments, on_event=event_sink,
-            **self._ordinary_turn_arguments())
+        return self.start_turn(message, event_sink, attachments=attachments)
 
     def interrupt_turn(self, turn_id: str | None = None) -> None:
         driver = self.goal_driver
@@ -1338,7 +1346,7 @@ def start_bound_project_turn(external: ChatExternalConversations, adapter: Any, 
 
 
 def native_turn_response(session: CodexChatAgentSession, raw: str, *, output_schema: dict | None,
-                         reply_image_turn_id: str | None) -> dict[str, Any]:
+                         reply_image_turn_id: str | None, reply_documents: bool = False) -> dict[str, Any]:
     if output_schema is not None:
         try:
             result = json.loads(raw)
@@ -1353,7 +1361,8 @@ def native_turn_response(session: CodexChatAgentSession, raw: str, *, output_sch
 
     image_targets: list[str] | None = [] if reply_image_turn_id is not None else None
     response = parse_agent_response(raw, protected_paths=[session.work_dir],
-        team_plan_context=getattr(session, "team_plan_context", None), image_targets=image_targets)
+        team_plan_context=getattr(session, "team_plan_context", None), image_targets=image_targets,
+        reply_documents=reply_documents)
     if image_targets and reply_image_turn_id is not None:
         plan = capture_reply_image_plan(session.work_dir.resolve(), reply_image_turn_id, image_targets)
         if plan:

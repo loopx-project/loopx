@@ -7,6 +7,8 @@ import binascii
 import json
 import re
 import uuid
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 
@@ -168,6 +170,30 @@ def normalize_chat_attachments(value: Any) -> list[dict[str, Any]]:
                            "mime_type": mime, "name": name, "size": len(raw)})
     validate_chat_turn_envelope({"attachments": normalized})
     return normalized
+
+
+def local_goal_reply_route(session: dict[str, Any], turn: dict[str, Any], *, scope_kind: str) -> bool:
+    return (scope_kind == "owner_goal" and session.get("agent_id") == "codex"
+            and session.get("session_mode") == "managed_runtime" and turn.get("origin") == "web"
+            and session.get("project_context") is None and session.get("steward_context") is None)
+
+
+def normalize_reply_documents(value: Any, *, message: str, protected_paths: Iterable[Path | str]) -> list[dict[str, Any]]:
+    """Admit only self-contained text. The service never resolves an Agent file path."""
+    from ..chat import redact_response_markdown
+
+    if not isinstance(value, list) or not all(
+        isinstance(row, dict) and isinstance(row.get("mime_type"), str)
+        and row["mime_type"] in CHAT_TEXT_TYPES for row in value
+    ):
+        raise ValueError("reply attachments must be text documents")
+    documents = normalize_chat_attachments([{k: v for k, v in row.items() if k != "id"} for row in value])
+    validate_chat_turn_envelope({"message": message, "attachments": documents})
+    for document in documents:
+        content = text_document_content(document)
+        if redact_response_markdown(content, protected_paths=protected_paths) != content:
+            raise ValueError("document contains private paths")
+    return documents
 
 
 def normalize_local_chat_attachments(session: dict[str, Any], value: Any) -> list[dict[str, Any]]:

@@ -411,9 +411,6 @@ def qualify_replan_writeback(
             guard_scoped=guard_scoped,
             selected_obligation_id=guard_semantic_replan_obligation_id,
             transition_candidates=context.get("replan_transition_candidates", []),
-            stride_strategy=((registry_goal or {}).get("execution_profile") or {}).get(
-                "stride_strategy", "off"
-            ),
             goal_id=goal_id,
             agent_id=safe_agent_id,
             guard_recorded_at=receipt_bound_guard_recorded_at,
@@ -447,7 +444,6 @@ def qualify_replan_writeback(
             "current_obligation": obligation,
             "receipt_review": receipt_bound_replan_review,
             "transition_candidates": context.get("replan_transition_candidates", []),
-            "stride_strategy": context["stride_strategy"],
             "goal_id": goal_id,
             "guard_recorded_at": receipt_bound_guard_recorded_at,
             "guard_turn_instance_id": receipt_bound_guard_turn_instance_id,
@@ -455,7 +451,7 @@ def qualify_replan_writeback(
         if obligation and not obligation.get("replan_context") and not obligation.get("settlement_action_packet"):
             obligation = attach_receipt_replan_context(
                 obligation, None, goal_id=goal_id, agent_id=safe_agent_id,
-                source_status=status_payload, stride_strategy=context["stride_strategy"],
+                source_status=status_payload,
                 explore_reader=replan_explore_reader,
                 goal_acceptance_contract=(
                     contract if isinstance(contract := (agent_todos or {}).get("goal_acceptance_contract"), Mapping) else None

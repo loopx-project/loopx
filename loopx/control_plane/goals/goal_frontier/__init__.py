@@ -114,7 +114,7 @@ class GoalFrontierProjectionContext(dict[str, object]):
     """Typed goal-frontier context keeping ``dict`` compatibility for callers."""
 
     @overload
-    def __getitem__(self, key: Literal["stride_strategy", "schema_version"]) -> str: ...
+    def __getitem__(self, key: Literal["schema_version"]) -> str: ...
     @overload
     def __getitem__(self, key: str) -> object: ...
     def __getitem__(self, key: str) -> object:
@@ -1121,13 +1121,13 @@ def _collect_source_acceptance_gaps(
 
 def _obligation_satisfied_by_ack(
     obligation: Payload | None, ack: Payload | None, *,
-    acceptance_gaps: list[Payload], todo_succession_gap_open: bool, stride_strategy: str,
+    acceptance_gaps: list[Payload], todo_succession_gap_open: bool,
 ) -> bool:
     return bool(
         obligation
         and autonomous_replan_ack_satisfies_obligation(
             ack, replan_obligation=obligation, acceptance_gaps=acceptance_gaps,
-            todo_succession_gap_open=todo_succession_gap_open, stride_strategy=stride_strategy,
+            todo_succession_gap_open=todo_succession_gap_open,
         )
         and autonomous_replan_ack_matches_frontier(ack, obligation)
     )
@@ -1146,7 +1146,7 @@ def _reconstruct_receipt_bound_candidates(
     *, goal_id: str, agent_id: str | None, status_payload: Payload, user_todo_summary: Payload | None,
     agent_todo_summary: Payload | None, work_lane_contract: PayloadView | None,
     agent_todo_source_items: list[Payload] | None, acceptance_gaps: list[Payload],
-    frontier_counts: dict[str, int], stride_strategy: str, frontier_replan_obligation: Payload | None,
+    frontier_counts: dict[str, int], frontier_replan_obligation: Payload | None,
     frontier_transition_candidate: Payload, receipt_bound_replan_obligation_id: str | None,
     receipt_bound_guard_recorded_at: str | None,
 ) -> tuple[Payload, Payload | None]:
@@ -1167,7 +1167,7 @@ def _reconstruct_receipt_bound_candidates(
             if _as_dict(source).get("obligation_id") == receipt_bound_replan_obligation_id:
                 source_ack = replan_successor_transition_ack(
                     agent_todo_summary, agent_id=agent_id, replan_obligation=source,
-                    agent_todo_items=agent_todo_source_items, stride_strategy=stride_strategy,
+                    agent_todo_items=agent_todo_source_items,
                 )
                 frontier_transition_candidate = {
                     "obligation": source, "ack": source_ack, "reconstructed_vision_review": True,
@@ -1198,7 +1198,7 @@ def _reconstruct_receipt_bound_candidates(
 def _resolve_frontier_obligation_ack(
     *, bounded_research: PayloadView, frontier_replan_obligation: Payload | None,
     agent_todo_summary: Payload | None, agent_id: str | None,
-    agent_todo_source_items: list[Payload] | None, stride_strategy: str,
+    agent_todo_source_items: list[Payload] | None,
 ) -> tuple[list[Payload], Payload | None]:
     capability_transitions = _dict_items(bounded_research.get("settlement_transitions"))
     frontier_dict = _as_dict(frontier_replan_obligation)
@@ -1214,7 +1214,7 @@ def _resolve_frontier_obligation_ack(
     else:
         ack = replan_successor_transition_ack(
             agent_todo_summary, agent_id=agent_id, replan_obligation=frontier_replan_obligation,
-            agent_todo_items=agent_todo_source_items, stride_strategy=stride_strategy,
+            agent_todo_items=agent_todo_source_items,
         )
     return capability_transitions, ack
 
@@ -1304,10 +1304,9 @@ def build_goal_frontier_projection_context_from_status(
         goal_id=goal_id, agent_id=agent_id,
         runtime_root=runtime_root_raw if isinstance(runtime_root_raw, str) else None,
     )
-    stride_strategy = str(_as_dict(_as_dict(project_asset).get("execution_profile")).get("stride_strategy", "off"))
     replan_transition_ack = replan_successor_transition_ack(
         agent_todo_summary, agent_id=agent_id, replan_obligation=replan_obligation,
-        agent_todo_items=agent_todo_source_items, stride_strategy=stride_strategy,
+        agent_todo_items=agent_todo_source_items,
     )
     # Keep the validated history-obligation transition distinct from any
     # successor frontier obligation derived below. Exact Turn settlement may
@@ -1317,7 +1316,6 @@ def build_goal_frontier_projection_context_from_status(
     if autonomous_replan_is_required(replan_obligation) and _obligation_satisfied_by_ack(
         replan_obligation, replan_transition_ack or effective_replan_ack,
         acceptance_gaps=source_acceptance_gaps, todo_succession_gap_open=todo_succession_gap_open,
-        stride_strategy=stride_strategy,
     ):
         replan_obligation = None
         replan_scope = autonomous_replan_scope_decision(
@@ -1337,7 +1335,7 @@ def build_goal_frontier_projection_context_from_status(
     capability_transitions, frontier_transition_ack = _resolve_frontier_obligation_ack(
         bounded_research=bounded_research, frontier_replan_obligation=frontier_replan_obligation,
         agent_todo_summary=agent_todo_summary, agent_id=agent_id,
-        agent_todo_source_items=agent_todo_source_items, stride_strategy=stride_strategy,
+        agent_todo_source_items=agent_todo_source_items,
     )
     frontier_transition_candidate: Payload = {
         "obligation": frontier_replan_obligation, "ack": frontier_transition_ack,
@@ -1355,7 +1353,7 @@ def build_goal_frontier_projection_context_from_status(
         user_todo_summary=user_todo_summary, agent_todo_summary=agent_todo_summary,
         work_lane_contract=work_lane_contract, agent_todo_source_items=agent_todo_source_items,
         acceptance_gaps=acceptance_gaps, frontier_counts=frontier_counts,
-        stride_strategy=stride_strategy, frontier_replan_obligation=frontier_replan_obligation,
+        frontier_replan_obligation=frontier_replan_obligation,
         frontier_transition_candidate=frontier_transition_candidate,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
@@ -1363,7 +1361,6 @@ def build_goal_frontier_projection_context_from_status(
     if _obligation_satisfied_by_ack(
         frontier_replan_obligation, frontier_transition_ack or effective_replan_ack,
         acceptance_gaps=source_acceptance_gaps, todo_succession_gap_open=todo_succession_gap_open,
-        stride_strategy=stride_strategy,
     ):
         frontier_replan_obligation = None
         replan_transition_ack = frontier_transition_ack
@@ -1376,7 +1373,7 @@ def build_goal_frontier_projection_context_from_status(
     replan_obligation = attach_rejected_replan_feedback(replan_obligation, latest_replan_ack_feedback)
     replan_obligation = attach_receipt_replan_context(
         replan_obligation, lifecycle_candidate, goal_id=goal_id, agent_id=agent_id,
-        source_status=status_payload, stride_strategy=stride_strategy, explore_reader=replan_explore_reader,
+        source_status=status_payload, explore_reader=replan_explore_reader,
         todo_items=agent_todo_source_items,
         goal_acceptance_contract=_opt_dict(_as_dict(agent_todo_summary).get("goal_acceptance_contract")),
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
@@ -1393,7 +1390,6 @@ def build_goal_frontier_projection_context_from_status(
     return GoalFrontierProjectionContext({
         "schema_version": "goal_frontier_projection_context_v0",
         "replan_obligation": replan_obligation,
-        "stride_strategy": stride_strategy,
         "replan_scope": replan_scope,
         "goal_frontier_projection": goal_frontier_projection,
         "acceptance_gaps": acceptance_gaps,

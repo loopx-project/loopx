@@ -230,7 +230,7 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
-    fixture._configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
+    fixture._configure_autonomous_replan_fixture(project, runtime, registry)
     state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
 
     def run(*args: str) -> tuple[int, dict]:
@@ -262,7 +262,8 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
             "prior_assumption": "The monitor might need another early observation.",
             "observed_reality": "Independent evidence retains its future observation window.",
             "retained": ["Original monitor identity, state and deadline."],
-            "evidence_refs": ["evidence:replan-recommendation"]}}), encoding="utf-8")
+            "evidence_refs": ["evidence:replan-recommendation"]},
+        "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"]}), encoding="utf-8")
     refresh = ("refresh-state", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
         "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
         "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
