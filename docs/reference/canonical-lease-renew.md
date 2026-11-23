@@ -28,25 +28,19 @@ loopx --registry registry.json task-lease acquire \
   --ttl-seconds 600 --write-scope 'src/**'
 ```
 
-After expiry/release, use a new execution key and the current version from
-inspect, rather than version 0. Active effective holders and overlapping scopes
-on other effective leases reject acquisition. Archived, excluded, unregistered
-or claim-conflicting holders do not block another eligible execution. The scan
-uses all retained records, not the bounded operator display. Atomic
-`todo claim + lease` shares the same facts, decision and record materializer.
-Standalone acquire uses requested scopes; atomic claim retains its existing
-Todo-required scope intent. Neither operation expands a permission grant.
+After expiry or release, inspect the current version and acquire with a new
+execution key. An effective lease on the same Todo or on the same verified
+physical worktree blocks acquisition. The decision scans retained records and
+ignores ineligible holders. Standalone acquisition records explicitly requested
+scopes. New managed claims keep the Todo's declared paths in the Todo detail
+and acquire without a per-path list.
 
 ## Repository-relative scope identity
 
-New canonical acquisitions freeze the canonical Todo's normalized
-`task_repository` as `lease.write_repository`. There is no caller repository
-override and no inference from the CLI working directory. Within one Goal,
-overlapping relative paths conflict unless **both** execution grants have known,
-different repository identities, or the caller uses the verified cooperative
-code-edit mode below. Host/path case aliases remain overlapping.
-The existing complete-head scan, owner eligibility, TTL, generations, CAS and
-receipt identities are unchanged; an empty scope set still does not conflict.
+New canonical acquisitions freeze the Todo's normalized `task_repository` as
+`lease.write_repository`. The lease uses this identity for execution proof
+and replay. Different Todos may declare overlapping relative paths.
+A verified shared checkout remains exclusive even for disjoint paths.
 
 Scope comparison folds lexical path aliases such as `src//main.ts` and
 `src/./main.ts`, while preserving slash and dot members inside glob character
@@ -56,15 +50,13 @@ of a retained request recovers its original receipt, including after renewal.
 Equivalent strings in an accepted Todo declaration do not require a declaration
 revision before atomic claim/acquire.
 
-冲突比较会归并相对路径的词法别名，但保留 glob 字符类中的斜杠、点与字面量右括号。
+路径规范化会归并相对路径的词法别名，但保留 glob 字符类中的斜杠、点与字面量右括号。
 新租约保存规范范围；原请求的拼写仍参与不可变请求身份，旧请求在升级或续租后按原参数
 重试会恢复原回执与当前执行证明。已有 Todo 声明中的等价字符串不会要求用户先重录声明。
 
-Old grants without `write_repository` (or with null) remain unknown and
-conservatively overlap any repository for ordinary exclusive acquisition.
-Reading or renewing them does not
-backfill a namespace from today's Todo. Fresh acquisition after legal retirement
-can freeze the current Todo identity. Malformed frozen identities fail closed.
+Older leases can have an unknown repository identity. Reads and renewals preserve
+that value. A fresh acquisition can record the current Todo repository after
+the previous lease ends. Malformed frozen identities fail closed.
 Renewal, transfer and release preserve the frozen value and historical receipts.
 Current execution proof, acquire replay and inspection reject known repository
 drift with `lease_repository_divergence`; cleanup still uses exact owner/key/version.
@@ -72,13 +64,9 @@ Changing retained work requirements is not a metadata-edit shortcut: the
 [owner revision lifecycle](#revising-declared-work-requirements) retires the old
 grant atomically and requires a fresh acquisition for subsequent execution.
 
-JSON inspection exposes `lease.write_repository`; Markdown lease readback also
-shows the identity or `unknown (conservative overlap)`. This is a Goal-local,
-logical repository mutex, not a physical filesystem/symlink alias check or a
-cross-Goal lock. Unknown legacy storage remains conservative. No configuration,
-provider promotion or automatic cross-agent dispatch is added. CLI and native
-provider inspection cover this boundary; broader frontend/Lark collaboration
-delivery remains separate work, not an end-to-end completion claim.
+Lease inspection exposes `lease.write_repository`. An unknown repository is
+reported as `unknown`. Same-worktree exclusion requires verified physical
+workspace identities. A lease without that identity still fences its own Todo.
 
 ### Independent worktree code edits
 
@@ -657,10 +645,9 @@ effect fencing。新的专用 wire 保证旧 runtime 不会只执行 lease 半�
 身份错误码直接对应正在解码的字段：缺失或非字符串 Todo ID 现在返回
 `invalid_todo_id`，不再因错误文案中的下划线而误报为 `invalid_goal_id`。
 
-完整 canonical Todo/lease 集合决定 scope 冲突，不能只看 UI 页面。归档、排除、
-注销或与当前 claim 冲突的 holder 不阻挡新的合格执行。独立 acquire 和原子的
-Todo claim + lease 共用状态解释、准入和 materializer；前者使用请求 scopes，后者
-仍使用 Todo required scopes。scope 是执行冲突声明，不扩张权限。
+认领会遍历完整的 canonical Todo 和租约记录，检查同一 Todo 或同一已验证物理工作区是否已被占用。
+独立 acquire 记录显式请求的路径。自动认领把路径声明保留在 Todo 详情里，取得租约时使用空路径清单。
+写权限仍由有效授权决定。
 
 一笔 CAS 保存 lease/event/原 receipt。维护操作的身份与既有 renew digest 保持
 兼容，历史 replay 可跨后续修改，但不授予当前执行权。Acquire 的身份绑定
