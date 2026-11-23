@@ -641,13 +641,25 @@ def test_prequota_observes_blocked_and_transitive_peer_pr_dependencies(tmp_path,
     add_goal_todo(
         registry_path=registry, goal_id="goal-a", role="agent",
         text="Active lane task blocked on peer prerequisite completion", claimed_by="agent-a",
-        resume_when=f"todo_done:{peer_prereq_id}",
+        task_class="advancement_task", resume_when=f"todo_done:{peer_prereq_id}",
     )
     unrelated_peer_id = add_goal_todo(
         registry_path=registry, goal_id="goal-a", role="agent",
         text="Unrelated foreign PR wait", claimed_by="agent-b",
         status="deferred", resume_when="pr_merged:owner/repo#99",
     )["todo_id"]
+    monitor_peer_id = add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Peer PR wait referenced only by a future continuous monitor", claimed_by="agent-b",
+        status="deferred", resume_when="pr_merged:owner/repo#106",
+    )["todo_id"]
+    add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent",
+        text="Watch-only monitor not yet due", claimed_by="agent-a",
+        task_class="continuous_monitor",
+        monitor_metadata={"next_due_at": "2026-11-01T00:00:00Z", "cadence": "24h"},
+        resume_when=f"todo_done:{monitor_peer_id}",
+    )
 
     seen: list[int] = []
 
@@ -670,3 +682,4 @@ def test_prequota_observes_blocked_and_transitive_peer_pr_dependencies(tmp_path,
     assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=blocked_id)["todo"]["resume_ready"] is True
     assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=peer_prereq_id)["todo"]["resume_ready"] is True
     assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=unrelated_peer_id)["todo"]["resume_ready"] is False
+    assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=monitor_peer_id)["todo"]["resume_ready"] is False

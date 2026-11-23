@@ -68,12 +68,24 @@ test("blocked PR waits and transitive todo_done prerequisites are observed while
     task_class: "advancement_task", claimed_by: "agent-a", resume_when: "todo_done:todo_excluded_prereq"};
   const unrelatedForeign = {...waiting, todo_id: "todo_unrelated_foreign", claimed_by: "agent-b",
     resume_when: "pr_merged:owner/repo#105"};
+  const monitorPeerPrereq = {...waiting, todo_id: "todo_monitor_peer_prereq", status: "deferred",
+    claimed_by: "agent-b", resume_when: "pr_merged:owner/repo#106"};
+  const notYetDueMonitor = {todo_id: "todo_future_monitor", role: "agent", status: "open",
+    task_class: "continuous_monitor", claimed_by: "agent-a", next_due_at: "2026-11-01T00:00:00Z",
+    resume_when: "todo_done:todo_monitor_peer_prereq"};
+  const monitorIntermediate = {todo_id: "todo_monitor_relay", role: "agent", status: "open",
+    task_class: "continuous_monitor", claimed_by: "agent-b", next_due_at: "2026-11-01T00:00:00Z",
+    resume_when: "todo_done:todo_monitor_peer_prereq"};
+  const ownViaMonitorRelay = {todo_id: "todo_own_via_monitor", role: "agent", status: "open",
+    task_class: "advancement_task", claimed_by: "agent-a", resume_when: "todo_done:todo_monitor_relay"};
   const cycleA = {todo_id: "todo_cycle_a", role: "agent", status: "open",
-    task_class: "continuous_monitor", claimed_by: "agent-a", resume_when: "todo_done:todo_cycle_b"};
+    task_class: "advancement_task", claimed_by: "agent-a", resume_when: "todo_done:todo_cycle_b"};
   const cycleB = {todo_id: "todo_cycle_b", role: "agent", status: "deferred",
     task_class: "advancement_task", claimed_by: "agent-b", resume_when: "todo_done:todo_cycle_a"};
   const plan = planPrWaitObservations({...request, items: [
-    blockedOwn, peerPrereq, excludedPrereq, ownBlockedOnPeer, ownBlockedOnExcluded, unrelatedForeign, cycleA, cycleB,
+    blockedOwn, peerPrereq, excludedPrereq, ownBlockedOnPeer, ownBlockedOnExcluded,
+    unrelatedForeign, monitorPeerPrereq, notYetDueMonitor, monitorIntermediate, ownViaMonitorRelay,
+    cycleA, cycleB,
   ]});
   const refs = (plan.targets as JsonObject[]).map(target => target.pr_ref);
   assert.deepEqual(refs, ["owner/repo#77", "owner/repo#88"]);

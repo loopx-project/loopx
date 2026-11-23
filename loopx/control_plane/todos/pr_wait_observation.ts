@@ -33,6 +33,7 @@ export function planPrWaitObservations(value: unknown): JsonObject {
   if (now === null) throw new EffectRuntimeRequestError("PR observation requires a timezone-aware clock");
   const activeRows = request.items.map(row => requireJsonObject(row, "PR wait Todo"))
     .filter(row => row.role === "agent" && ["open", "deferred", "blocked"].includes(String(row.status))
+      && row.task_class === "advancement_task"
       && (row.archive_state == null || row.archive_state === "active"));
   const byId = new Map<string, JsonObject>();
   for (const row of activeRows) {
@@ -56,7 +57,7 @@ export function planPrWaitObservations(value: unknown): JsonObject {
     const upstream = target && notExcluded(target) ? todoDoneResumeTargetId(target.resume_when) : null;
     if (upstream && !reachablePrerequisites.has(upstream)) queue.push(upstream);
   }
-  const items = activeRows.filter(row => row.task_class === "advancement_task" && notExcluded(row)
+  const items = activeRows.filter(row => notExcluded(row)
     && (actorOwnedOrUnclaimed(row)
       || (typeof row.todo_id === "string" && reachablePrerequisites.has(row.todo_id.trim().toLowerCase()))));
   const evaluation = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
