@@ -100,12 +100,13 @@ export function maintainClaimExecution(head: JsonObject, input: ExecutionInput, 
  * acquisition still validates scope, eligibility and generation under one CAS. */
 export async function prepareClaimExecution(head: JsonObject,
   input: ExecutionInput & {operation_id: string; claimed_by: string; ttl_seconds?: number},
-  observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]}> {
+  observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]} |
+    {conflict: string; holder?: string}> {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now);
   const current = facts.current;
   if (current && leaseIsActive(current, input.now)) {
-    if (current.owner !== input.claimed_by) throw new AuthorityStoreProtocolError("Task is occupied by another actor");
+    if (current.owner !== input.claimed_by) return {conflict: "todo_lease_conflict", holder: String(current.owner)};
     const renewed = maintainClaimExecution(head, input, current);
     return {lease: renewed ?? current, changed: renewed !== null};
   }
@@ -127,6 +128,10 @@ export async function prepareClaimExecution(head: JsonObject,
     // Claim admission has already authorized this assignment. Acquire and the
     // Todo owner change commit together; the old assignment is not a new gate.
     todo: facts.todo === null ? null : {...facts.todo, claimed_by: input.claimed_by}, command});
+  if (decision.outcome === "conflict") {
+    const blocker = facts.other_leases[decision.conflict_indexes[0]];
+    return {conflict: decision.code, ...(typeof blocker?.owner === "string" ? {holder: blocker.owner} : {})};
+  }
   if (decision.outcome !== "apply") throw new AuthorityStoreProtocolError(`Task claim execution rejected: ${decision.code}`);
   const overlapAdvisories = (decision.overlap_advisory_indexes ?? []).map(index => ({
     todo_id: facts.other_leases[index].todo_id, owner: facts.other_leases[index].owner ?? null,

@@ -529,6 +529,8 @@ def native_execution_preparation_request(
                     and previous.get("claim_source_sha256") == claim_source_sha256
                 )
             ):
+                if previous.get("state") == "rejected":
+                    return None
                 if previous.get("state") in {"attempted", "ready"}:
                     return _preparation_readback(action, previous, event_name=event["hook_event_name"])
             if readback_for is not None:
@@ -560,6 +562,7 @@ def record_native_execution_preparation(
     *,
     source_sha256: str,
     receipt: Mapping[str, Any] | None,
+    claim_rejected: bool = False,
 ) -> None:
     """Publish readiness, or retire a refused claim, for the same saved source."""
 
@@ -577,6 +580,10 @@ def record_native_execution_preparation(
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
         if receipt is None:
+            previous = state.get("host_execution_preparation")
+            if (claim_rejected and isinstance(previous, dict) and previous.get("source_sha256") == source_sha256
+                    and previous.get("state") == "attempted"):
+                previous["state"] = "rejected"
             recovery.pop("execution_preparation", None)
             try:
                 _save(root, state)
