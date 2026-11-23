@@ -274,7 +274,7 @@ def _request(proposal: dict) -> dict:
             "text": _text(row["text"], path=f"todos[{index}].text"),
             "action_kind": _action_kind(row["action_kind"], path=f"todos[{index}].action_kind"),
         }
-        if row.get("target_key") is not None:
+        if "target_key" in row:
             item["target_key"] = _text(row["target_key"], path=f"todos[{index}].target_key")
         todos.append(item)
     if len({item["id"] for item in requirements}) != len(requirements):

@@ -242,6 +242,11 @@ def _base_proposal():
         ("outcome.requirements exceeds capacity", "got 33 items, max 32"),
         None,
     ),
+    (
+        lambda p: p["todos"][0].__setitem__("target_key", None),
+        ("todos[0].target_key", "non-empty text"),
+        None,
+    ),
 ])
 def test_planning_batch_upfront_validation_rejects_invalid_proposals_without_loopx(
     tmp_path, mutate, expected_substrings, forbidden,
@@ -311,8 +316,7 @@ raise AssertionError(args)
 """)
     proposal_path = tmp_path / "proposal.json"
     proposal = _base_proposal()
-    # Allow explicit null optional target_key cleanly in normalized payload too.
-    proposal["todos"][0]["target_key"] = None
+    proposal["todos"][0]["target_key"] = "refine-target"
     proposal_path.write_text(json.dumps(proposal))
     monkeypatch.setenv("LOOPX_TASK_STAGE", "plan")
     monkeypatch.setenv("LOOPX_CLI", str(fake_cli))
@@ -378,3 +382,62 @@ def test_planning_batch_non_bmp_utf16_boundaries_match_real_cli(tmp_path, monkey
     assert outcome["objective"] == emoji * 512
     assert outcome["requirements"][0]["description"] == emoji * 1000
     assert outcome["sources"][0]["summary"] == emoji * 256
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_planning_batch_target_key_boundary_real_cli_state(tmp_path, monkeypatch, provider):
+    import os
+    import subprocess
+
+    env, _, _, _, _ = _environment(tmp_path, monkeypatch, provider, replan="empty")
+    env["LOOPX_TASK_STAGE"] = "plan"
+    before = task_plan_packet(env, loopx_command(env))
+    cli_env = {**os.environ, **env}
+
+    # Explicit null target_key must reject upfront (rc=1) with zero Goal or Todo state changes.
+    bad_path = tmp_path / "null-target-key.json"
+    bad_path.write_text(json.dumps({
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": before["goal_acceptance"]["provider_revision"],
+        "outcome": {
+            "objective": "Verify target_key boundary.",
+            "requirements": [{"id": "req-1", "description": "Valid string passes and null rejects."}],
+            "source": {"ref": "checkpoint:target-key", "summary": "Target key CLI regression."},
+        },
+        "todos": [{"text": "[P0] Null target key todo", "action_kind": "implement", "target_key": None}],
+    }))
+    bad_proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.runtime.planning_batch", str(bad_path)],
+        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=30,
+    )
+    assert bad_proc.returncode == 1
+    assert "todos[0].target_key" in json.loads(bad_proc.stdout)["error"]
+    after_bad = task_plan_packet(env, loopx_command(env))
+    assert after_bad["goal_acceptance"]["provider_revision"] == before["goal_acceptance"]["provider_revision"]
+    assert after_bad["existing_todos"] == []
+
+    # Omitted and valid-string target_key both commit cleanly on the same real CLI boundary.
+    good_path = tmp_path / "valid-target-key.json"
+    good_path.write_text(json.dumps({
+        "input_digest": after_bad["input_digest"],
+        "expected_provider_revision": after_bad["goal_acceptance"]["provider_revision"],
+        "outcome": {
+            "objective": "Verify target_key boundary.",
+            "requirements": [{"id": "req-1", "description": "Valid string passes and null rejects."}],
+            "source": {"ref": "checkpoint:target-key", "summary": "Target key CLI regression."},
+        },
+        "todos": [
+            {"text": "[P0] Omitted target key todo", "action_kind": "implement"},
+            {"text": "[P1] Valid target key todo", "action_kind": "validate", "target_key": "bench-target"},
+        ],
+    }))
+    good_proc = subprocess.run(
+        [sys.executable, "-m", "benchmark.runtime.planning_batch", str(good_path)],
+        env=cli_env, cwd=str(tmp_path), capture_output=True, text=True, timeout=30,
+    )
+    assert good_proc.returncode == 0, good_proc.stdout + good_proc.stderr
+    assert json.loads(good_proc.stdout)["status"] == "ready"
+    after_good = task_plan_packet(env, loopx_command(env))
+    by_text = {item["text"]: item for item in after_good["existing_todos"]}
+    assert by_text["[P0] Omitted target key todo"].get("target_key") is None
+    assert by_text["[P1] Valid target key todo"]["target_key"] == "bench-target"
