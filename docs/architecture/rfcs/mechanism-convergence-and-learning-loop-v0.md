@@ -431,6 +431,22 @@ If the session-policy transport response is unavailable, recovery remains a
 structured Host Session refusal with the original journal and identity intact;
 it does not become an unrelated execution ambiguity.
 
+**Source checkpoint: Host retry and settlement recovery (2026-11-21).** A failed
+Host result that requires another model attempt now uses the existing TypeScript
+heartbeat work-requalification owner through the
+[launch adapter](../../../loopx/cli_commands/turn_decision.py). The
+[Turn adapter](../../../loopx/cli_commands/turn_run_once.py) retains the recorded
+preparation before launch and resolves a recovery lease only for a validated
+settlement effect. This removes pre-launch lease replacement rather than adding
+another generation rule. The
+[File/SQLite controls](../../../tests/test_codex_turn_completion.py) distinguish
+same-generation Host retry, replaced-generation refusal, failed task validation,
+frozen-result completion, interruption after lease retirement and once-only
+replay. On `main@3d15059fef14`, the replaced-generation counterexample reruns the
+Host and settles; the candidate refuses it while retaining the other controls.
+Full execution cutover, installed adoption, other-backend qualification and
+independent method/outcome benefit remain open.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

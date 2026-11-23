@@ -37,7 +37,10 @@ from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.turn_envelope import (
     compose_turn_decision,
 )
-from ..control_plane.quota.settlement import SettlementIdentity, build_turn_scoped_cli_settlement_plan
+from ..control_plane.quota.settlement import (
+    SettlementIdentity, build_turn_scoped_cli_settlement_plan, read_heartbeat_settlement,
+)
+from ..control_plane.quota.settlement_cli import quota_rollout_details
 from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_settlement_replan_obligation_id,
@@ -442,6 +445,20 @@ def current_turn_host_launch_decision(
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     if planned_selected_work_basis is not None and plan.get("_selected_work_basis") != planned_selected_work_basis:
         raise FirstPartyHostRuntimeRejected("current_turn_work_changed")
+    if getattr(args, "resume_turn_key", None) and identity.todo_id is not None:
+        # A new Host attempt must qualify against the retained preparation,
+        # just like quota reentry. Frozen-result settlement never launches a
+        # Host and keeps its separate completion-lease recovery path.
+        current_details = quota_rollout_details(current, args, todo_id=identity.todo_id)
+        current_details["settlement_effect_id"] = identity.effect_id
+        retained = read_heartbeat_settlement(
+            runtime_root, goal_id=identity.goal_id, agent_id=identity.agent_id,
+            todo_id=identity.todo_id, turn_instance_id=identity.turn_instance_id,
+            registry_path=registry_path, goal_ref=goal_ref,
+            heartbeat_reentry_guard=current_details,
+        )
+        if retained is None or (retained.native_child_admission or {}).get("report_permission") != "new_operation":
+            raise FirstPartyHostRuntimeRejected("goal_launch_not_allowed")
     return launch
 
 

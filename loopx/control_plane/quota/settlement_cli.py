@@ -433,7 +433,7 @@ def _cli_rollout_details(
         if isinstance(cli_channel, Mapping)
         else None
     )
-    if not spend_source and args.quota_command == "should-run" and (
+    if not spend_source and getattr(args, "quota_command", None) == "should-run" and (
         todo_id or replan_obligation_id
     ):
         # An explicit selection can bind a Turn before its hard lease creates a
@@ -506,7 +506,7 @@ def quota_rollout_details(
     )
     details: dict[str, object] = {
         "command": "quota",
-        "quota_command": args.quota_command,
+        "quota_command": getattr(args, "quota_command", ""),
         "ok": bool(payload.get("ok")),
         "should_run": bool(payload.get("should_run")),
         "appended": bool(payload.get("appended")),

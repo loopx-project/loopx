@@ -387,6 +387,18 @@ Agent 与 Todo 会话作用域、request-bound fresh 执行及原恢复事务。
 会话策略请求丢失时，恢复仍是带原因的结构化 Host Session 拒绝，并保留原
 journal 与身份，不退化成分不清执行状态的通用异常。
 
+**源码 checkpoint：Host 重试与结算恢复（2026-11-21）。** 失败的 Host 结果若需
+再次调用模型，现通过[启动适配器](../../../loopx/cli_commands/turn_decision.py)
+复用既有 TypeScript heartbeat 工作再资格 owner。
+[Turn 适配器](../../../loopx/cli_commands/turn_run_once.py) 在启动前保留原
+preparation，仅在已验证的结算 effect 中读取恢复租约。这移除启动前的租约替换，
+不新增代次判定规则。
+[File/SQLite 对照](../../../tests/test_codex_turn_completion.py) 区分同代 Host
+重试、换代拒绝、任务验证失败、冻结结果完成、租约退役后的中断恢复和只结算一次
+的重放。`main@3d15059fef14` 的换代反例会重跑 Host 并结算；候选拒绝该路径，
+同时保留其余对照。完整执行切换、已安装采用、其他后端资格及独立方法／成果收益
+仍开放。
+
 首个任务须确有反馈或方法选择需求。已有链完整时直接复用；有缺口时由真实消费者证明并修复，不为配合示例制造失败。运行实验、训练模型和发布过程各沿原权限，本文不占用其他 lane 配额或预设 PR 数。
 
 ## 12. 待确认的关键选择
