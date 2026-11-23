@@ -729,6 +729,9 @@ export function replanWorkContext(payload: JsonObject, context: JsonObject, read
         source.hook_id === "explore.turn_context" && source.capability_id === "explore") {
       return {...source, content: omitUnboundExploreResultWriteback(content)};
     }
+    if (source.source !== "goal_acceptance" || (content.status != null && content.status !== "loaded")) {
+      return value;
+    }
     const sourceContract = object(content.goal_acceptance_contract);
     const resolvedSourceContract = Object.hasOwn(sourceContract, "outcome_requirements_ref")
         && !Object.hasOwn(sourceContract, "outcome_requirements")
@@ -737,7 +740,7 @@ export function replanWorkContext(payload: JsonObject, context: JsonObject, read
         return {...rest, outcome_requirements: inlineOutcomeRequirements(payload, ref)};
       })()
       : sourceContract;
-    if (!Object.keys(acceptance).length || source.source !== "goal_acceptance" || content.status != null && content.status !== "loaded" ||
+    if (!Object.keys(acceptance).length ||
         identity(resolvedSourceContract,
           ["interaction_contract", "agent_channel", "work_context", "sources", index, "content", "goal_acceptance_contract"])
         !== identity(acceptance, [...corePath, "acceptance_contract"])) return value;

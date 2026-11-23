@@ -2318,6 +2318,14 @@ test("C1 replanGoalContext and replanCliView resolve outcome_requirements_ref wi
   const interaction = source.interaction_contract as JsonObject;
   const agent = interaction.agent_channel as JsonObject;
   source.effective_action = "autonomous_replan_required";
+  const inapplicableSources = [
+    {source: "turn_start_capability_hook", hook_id: "other.turn_context", content: {
+      goal_acceptance_contract: {outcome_requirements_ref: "capability-local-ref"},
+    }},
+    {source: "goal_acceptance", content: {status: "unavailable",
+      goal_acceptance_contract: {outcome_requirements_ref: "unavailable-source-ref"},
+    }},
+  ];
   agent.work_context = {
     complete: true,
     selected_todo_ref: "selected_todo",
@@ -2334,7 +2342,7 @@ test("C1 replanGoalContext and replanCliView resolve outcome_requirements_ref wi
           outcome_requirements: structuredClone(requirements),
         },
       },
-    }],
+    }, ...inapplicableSources],
   };
   source.replan_read_path = "/tmp/replan/decision.json";
   source.replan_read_argv = ["loopx"];
@@ -2379,6 +2387,8 @@ test("C1 replanGoalContext and replanCliView resolve outcome_requirements_ref wi
 
   const envelope = evaluateTurnEnvelope({operation: "build", payload: composed, scheduler_execution_args: ""});
   assert.equal((envelope.action_signature as JsonObject).matches, true);
+  const envContext = envelope.work_context as JsonObject;
+  assert.deepEqual((envContext.sources as unknown[]).slice(1), inapplicableSources);
   const envCoreGoal = (envelope.action as JsonObject).core_goal as JsonObject;
   const envCoreAcceptance = envCoreGoal.acceptance_contract as JsonObject;
   assert.equal("outcome_requirements_ref" in envCoreAcceptance, false);
@@ -2392,6 +2402,8 @@ test("C1 replanGoalContext and replanCliView resolve outcome_requirements_ref wi
     composed,
     evaluateTurnEnvelope({operation: "replan_cli_view", payload: composed, source_edits: true}).changes,
   );
+  const cliContext = ((cliView.interaction_contract as JsonObject).agent_channel as JsonObject).work_context as JsonObject;
+  assert.deepEqual((cliContext.sources as unknown[]).slice(1), inapplicableSources);
   const cliObligation = cliView.autonomous_replan_obligation as JsonObject;
   assert.equal("replan_context" in cliObligation, false);
   assert.equal(typeof cliObligation.context_read, "string");
