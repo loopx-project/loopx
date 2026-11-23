@@ -79,7 +79,9 @@ def run(args: argparse.Namespace, registry: Path) -> dict:
             continue
         try:
             results.append(apply_offline(home=home, automation_id=identifier,
-                expected_prompt_sha256=entry["prompt_sha256"], desired_prompt=entry["desired_prompt"]))
+                expected_prompt_sha256=entry["prompt_sha256"], desired_prompt=entry["desired_prompt"],
+                expected_source_sha256=entry["source_sha256"],
+                expected_database=plan.get("database_name", "codex-dev.db")))
         except (ValueError, OSError, sqlite3.Error) as error:
             results.append({"automation_id": identifier, "ok": False, "status": "failed", "reason": str(error)})
     return {"ok": all(item["ok"] for item in results), "results": results,

@@ -707,7 +707,7 @@ If `automation_update` is unavailable in the session and
 `fallback_hint.cli_args` (`loopx-apply-rrule`) once instead. The fallback
 requires the projected registered `--agent-id`; there is no implicit Agent
 default. It backs up
-`codex-dev.db`, syncs the automation TOML and SQLite row, and runs the bound
+the selected database (`codex.db`, or `codex-dev.db` on legacy installs), syncs the automation TOML and SQLite row, and runs the bound
 ACK; direct SQLite edits bypass the app API, so this is a bounded fallback and
 never the routine path. The bridge reuses the provided parent Turn for its
 internal `quota should-run` query. That same-Turn replay preserves the committed

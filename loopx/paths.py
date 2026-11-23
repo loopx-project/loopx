@@ -33,6 +33,15 @@ class RuntimeRouteStatus(StrEnum):
     CONFIGURED = "configured"
 
 
+def codex_automation_database(home: Path) -> Path:
+    """Use the current App store, retaining the legacy layout on older installs."""
+    current = home / "sqlite/codex.db"
+    legacy = home / "sqlite/codex-dev.db"
+    if not current.exists() and legacy.is_file():
+        return legacy
+    return current
+
+
 def default_goal_state_file(project: Path, goal_id: str) -> Path:
     return project / DEFAULT_PROJECT_GOALS / goal_id / "ACTIVE_GOAL_STATE.md"
 
