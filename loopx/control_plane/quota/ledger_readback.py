@@ -207,7 +207,101 @@ def _quota_event_artifact_path(
     return str(relocated)
 
 
-def _read_quota_event_artifact(raw_json_path: str) -> tuple[dict[str, Any] | None, str | None]:
+# Commit metadata the TypeScript writer repeats on the index row and the
+# JSON artifact. A historical row that omits the field has no binding to check.
+_COMMIT_METADATA_FIELDS = {
+    QUOTA_SLOT_SPENT_CLASSIFICATION: "quota_spend_commit",
+    QUOTA_SLOT_VOIDED_CLASSIFICATION: "quota_void_commit",
+}
+# Bindings the spend writers kept before commit metadata existed. A missing
+# side is unknown; both sides stating different values is a conflict.
+_BOUND_IDENTITY_FIELDS = (
+    "agent_id",
+    "effect_ref",
+    "turn_instance_id",
+    "todo_id",
+    "replan_obligation_id",
+    "settlement_identity",
+    "goal_ref",
+)
+
+
+def _canonical_json(value: Any) -> str:
+    """Stable object text for the same comparison the TypeScript reader uses."""
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _stated(value: Any) -> bool:
+    return value is not None and value != ""
+
+
+def _explicit_identity_conflict(index_row: dict[str, Any], retained: dict[str, Any]) -> bool:
+    for field in _BOUND_IDENTITY_FIELDS:
+        expected = index_row.get(field)
+        actual = retained.get(field)
+        if not _stated(expected) or not _stated(actual):
+            continue
+        if _canonical_json(expected) != _canonical_json(actual):
+            return True
+    return False
+
+
+def _commit_identity_conflict(index_row: dict[str, Any], artifact: dict[str, Any]) -> bool:
+    field = _COMMIT_METADATA_FIELDS.get(str(index_row.get("classification") or ""))
+    if field is None or field not in index_row:
+        return False
+    index_commit = index_row.get(field)
+    artifact_commit = artifact.get(field)
+    if not isinstance(index_commit, dict) or not isinstance(artifact_commit, dict):
+        return True
+    return _canonical_json(index_commit) != _canonical_json(artifact_commit)
+
+
+def _artifact_identity_conflict(
+    index_row: dict[str, Any],
+    artifact: dict[str, Any],
+    goal_id: str,
+) -> bool:
+    """True when the artifact cannot be the debit named by the index row.
+
+    A file in the current runs directory can still describe another commit for
+    the same Goal. Omitted historical fields stay unknown. A commit reference
+    recorded on the index must match the artifact, and any identity both sides
+    state must agree.
+    """
+
+    classification = str(index_row.get("classification") or "")
+    artifact_classification = artifact.get("classification")
+    if artifact_classification is not None and artifact_classification != classification:
+        return True
+    artifact_goal_id = artifact.get("goal_id")
+    if goal_id and artifact_goal_id is not None and artifact_goal_id != goal_id:
+        return True
+    index_generated_at = index_row.get("generated_at")
+    artifact_generated_at = artifact.get("generated_at")
+    if (
+        isinstance(index_generated_at, str)
+        and index_generated_at
+        and isinstance(artifact_generated_at, str)
+        and artifact_generated_at
+        and index_generated_at != artifact_generated_at
+    ):
+        return True
+    if _commit_identity_conflict(index_row, artifact):
+        return True
+    if _explicit_identity_conflict(index_row, artifact):
+        return True
+    event = artifact.get("quota_event")
+    return isinstance(event, dict) and _explicit_identity_conflict(index_row, event)
+
+
+def _read_quota_event_artifact(
+    raw_json_path: str,
+    *,
+    index_row: dict[str, Any] | None = None,
+    goal_id: str = "",
+) -> tuple[dict[str, Any] | None, str | None]:
     """Read the quota event out of one durable artifact.
 
     Returns ``(event, unreadable_reason)``. A readable artifact without a
@@ -233,6 +327,8 @@ def _read_quota_event_artifact(raw_json_path: str) -> tuple[dict[str, Any] | Non
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_INVALID_JSON
     if not isinstance(record, dict):
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_NOT_OBJECT
+    if index_row is not None and _artifact_identity_conflict(index_row, record, goal_id):
+        return None, QUOTA_EVENT_UNREADABLE_EVENT_INVALID
     event = cast(dict[str, Any], record.get("quota_event")) if isinstance(record.get("quota_event"), dict) else None
     if not event:
         return None, QUOTA_EVENT_UNREADABLE_EVENT_MISSING
@@ -270,7 +366,11 @@ def load_quota_event_from_run(
     )
     if artifact_path is None:
         return None
-    event, _reason = _read_quota_event_artifact(artifact_path)
+    event, _reason = _read_quota_event_artifact(
+        artifact_path,
+        index_row=run,
+        goal_id=_artifact_goal_id(run, goal_id),
+    )
     return event
 
 
@@ -309,7 +409,11 @@ def resolve_quota_event_from_run(
     # unrelated file that happens to still exist at the old location.
     if artifact_path is None:
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING
-    return _read_quota_event_artifact(artifact_path)
+    return _read_quota_event_artifact(
+        artifact_path,
+        index_row=run,
+        goal_id=_artifact_goal_id(run, goal_id),
+    )
 
 
 def quota_slot_contribution(
