@@ -1132,3 +1132,63 @@ test("pending lifecycle survives a new frontier without granting settlement or s
   assert.throws(() => projectReplanSemantics({...request,
     transition_candidates: [{...candidate, lifecycle_settled: true}]}), /identity conflicts/);
 });
+
+test("pre-upgrade off turns preserve original transition and qualify semantics while live turns require stride_decision", () => {
+  const periodic = {obligation_id: defaultObligationId, triggers: [{kind: "periodic_review_due"}],
+    replan_context: {obligation_id: defaultObligationId, context_id: defaultContextId, stride_strategy: "off"}};
+  const observation = {delta_kinds: ["new_surface"]};
+
+  // Unscoped/live defaults enforce evidence_conditioned_v1 even if historical context says off.
+  assert.deepEqual(projectReplanSemantics({operation: "transition_eligibility", obligation: periodic}), {allowed: false});
+  const liveRejected = projectReplanSemantics({operation: "qualify", obligation: periodic, observation_delta: observation});
+  assert.equal(liveRejected.accepted, false);
+
+  // Explicit admitted_stride_strategy="off" preserves pre-upgrade settlement across qualify, transition, and requirements.
+  assert.deepEqual(projectReplanSemantics({
+    operation: "transition_eligibility", obligation: periodic, admitted_stride_strategy: "off",
+  }), {allowed: true});
+  const offQualify = projectReplanSemantics({
+    operation: "qualify", obligation: periodic, observation_delta: observation, admitted_stride_strategy: "off",
+  });
+  assert.equal(offQualify.accepted, true);
+  assert.deepEqual(offQualify.satisfying_outcomes, ["new_surface"]);
+
+  const offReqs = projectReplanSemantics({
+    operation: "requirements", obligation: periodic, admitted_stride_strategy: "off",
+  });
+  assert.equal(Object.hasOwn(offReqs, "stride_control"), false);
+  assert.equal(((offReqs.writeback_contract as JsonObject).required_fields as string[]).includes("agent_vision.stride_decision"), false);
+
+  const repeat = {obligation_id: defaultObligationId, triggers: [{kind: "typed_progress_repeat"}],
+    replan_context: {obligation_id: defaultObligationId, context_id: defaultContextId, stride_strategy: "off"}};
+  const offRepeatReqs = projectReplanSemantics({
+    operation: "requirements", obligation: repeat, admitted_stride_strategy: "off",
+  });
+  assert.equal(Object.hasOwn(offRepeatReqs, "stride_control"), false);
+  assert.equal((offRepeatReqs.required_any_of as string[]).includes("fresh_vision_path_outcome"), false);
+  assert.equal((((offRepeatReqs.writeback_contract as JsonObject).required_fields as string[] | undefined) ?? []).includes("agent_vision.stride_decision"), false);
+
+  const livePeriodicReqs = projectReplanSemantics({operation: "requirements", obligation: periodic});
+  assert.equal(Object.hasOwn(livePeriodicReqs, "stride_control"), true);
+  assert.equal(((livePeriodicReqs.writeback_contract as JsonObject).required_fields as string[]).includes("agent_vision.stride_decision"), true);
+
+  const liveRepeatReqs = projectReplanSemantics({
+    operation: "requirements", obligation: repeat, admitted_stride_strategy: "evidence_conditioned_v1",
+  });
+  assert.equal(Object.hasOwn(liveRepeatReqs, "stride_control"), true);
+  assert.equal(((liveRepeatReqs.writeback_contract as JsonObject).required_fields as string[]).includes("agent_vision.stride_decision"), true);
+
+  const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    obligation_id: defaultObligationId, successor_todo_id: "todo_off_successor",
+    outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
+  const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    source: "todo_replan_successor_transition", semantic_delta: delta};
+  assert.equal(projectReplanSemantics({
+    operation: "turn_transition", guard_scoped: true, selected_obligation_id: defaultObligationId,
+    transition_candidates: [{obligation: periodic, ack}],
+  }).semantic_delta, null);
+  assert.deepEqual(projectReplanSemantics({
+    operation: "turn_transition", guard_scoped: true, selected_obligation_id: defaultObligationId,
+    transition_candidates: [{obligation: periodic, ack}], admitted_stride_strategy: "off",
+  }).semantic_delta, delta);
+});

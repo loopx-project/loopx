@@ -352,9 +352,24 @@ def ensure_turn_heartbeat_settlement_receipt(
             if task_lease_epoch is None:
                 details.pop("prepared_lease_epoch", None)
         if semantic_replan_guard_scoped:
+            already_bound = (
+                effective is not None
+                and isinstance(effective_details, dict)
+                and bool(
+                    normalize_todo_replan_obligation_id(
+                        effective_details.get("semantic_replan_obligation_id")
+                    )
+                )
+            )
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
             )
+            if (
+                normalized_semantic_replan_obligation_id
+                and not already_bound
+                and "semantic_replan_stride_strategy" not in details
+            ):
+                details["semantic_replan_stride_strategy"] = "evidence_conditioned_v1"
             if semantic_replan_capability_guard is not None:
                 details["semantic_replan_capability_id"] = semantic_replan_capability_guard["capability_id"]
                 details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
@@ -617,6 +632,15 @@ def upgrade_identityless_heartbeat_receipt(
         # correction explicitly replaces them.
         corrected_details = dict(effective_details)
         corrected_details.update(details)
+        if (
+            normalize_todo_replan_obligation_id(
+                effective_details.get("semantic_replan_obligation_id")
+            )
+            and "semantic_replan_stride_strategy" not in effective_details
+        ):
+            # Preserve pre-upgrade identityless replan receipts without injecting
+            # a post-upgrade stride strategy during binding upgrade.
+            corrected_details.pop("semantic_replan_stride_strategy", None)
         corrected_details.update(
             {
                 "turn_instance_id": turn_instance_id,

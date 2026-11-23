@@ -1783,3 +1783,312 @@ def test_writeback_uses_configured_completion_cadence(threshold: int) -> None:
     )
     with pytest.raises(ReplanWritebackRejected):
         enforce_open_replan_writeback(**arguments, registry_goal=goal)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("legacy_source", ["goal_profile", "machine_default"])
+def test_preupgrade_off_receipt_turn_settles_across_upgrade_and_new_turn_enforces_stride(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+    legacy_source: str,
+) -> None:
+    from loopx.control_plane.quota.effect_program import SettlementIdentity
+    from loopx.rollout_event_log import (
+        append_rollout_event,
+        build_rollout_event,
+        load_rollout_events,
+        rollout_event_log_path,
+    )
+
+    project = tmp_path / "project"
+    state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    state.parent.mkdir(parents=True)
+    state.write_text(_state_with_scoped_blocker_todo(), encoding="utf-8")
+    goal_entry: dict = {
+        "id": GOAL_ID,
+        "status": "active",
+        "domain": "engineering",
+        "repo": str(project),
+        "state_file": str(state.relative_to(project)),
+        "adapter": {
+            "kind": "fixture_connected_delivery_v0",
+            "status": "connected-delivery",
+        },
+        "coordination": {
+            "agent_model": "peer_v1",
+            "registered_agents": [AGENT_ID],
+        },
+    }
+    if legacy_source == "goal_profile":
+        goal_entry["execution_profile"] = {"stride_strategy": "off"}
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps({"goals": [goal_entry]}),
+        encoding="utf-8",
+    )
+    runtime_root = tmp_path / "runtime"
+    runs_index = runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    runs_index.parent.mkdir(parents=True, exist_ok=True)
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider=provider)
+
+    obs_a = {
+        "schema_version": "typed_progress_observation_v0",
+        "result_class": "blocked",
+        "blocker_id": "blocker-preupgrade-repeat",
+        "evidence_ids": ["evidence-preupgrade-repeat"],
+    }
+    runs = []
+    for idx in range(2):
+        row = {
+            "generated_at": f"2026-08-13T12:0{idx}:00+08:00",
+            "goal_id": GOAL_ID,
+            "classification": "state_refreshed",
+            "agent_id": AGENT_ID,
+            "progress_scope": "agent_lane",
+            "delivery_outcome": "outcome_gap",
+            "progress_observation": dict(obs_a),
+        }
+        with runs_index.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+        runs.append(row)
+
+    if legacy_source == "machine_default":
+        machine_path = runtime_root / "machine" / "configuration.json"
+        machine_path.parent.mkdir(parents=True, exist_ok=True)
+        machine_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "loopx_machine_configuration_v0",
+                    "namespaces": {
+                        "todo_replan_cadence": {
+                            "schema_version": "todo_replan_cadence_machine_defaults_v2",
+                            "count_unit": "effective_turns",
+                            "count": 6,
+                            "stride_strategy": "off",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    newest_runs = list(reversed(runs))
+    obligation, _ = qualify_replan_writeback(
+        newest_first_runs=newest_runs,
+        state_text=state.read_text(encoding="utf-8"),
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        registry_goal=goal_entry,
+    )
+    assert obligation is not None
+    obligation_id = obligation["obligation_id"]
+
+    # Append a pre-upgrade `quota_should_run` receipt (no `semantic_replan_stride_strategy`)
+    # admitted when raw configuration had `stride_strategy == "off"`.
+    preupgrade_turn = "turn-preupgrade-off"
+    preupgrade_identity = SettlementIdentity(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=None,
+        replan_obligation_id=obligation_id,
+        turn_instance_id=preupgrade_turn,
+    )
+    append_rollout_event(
+        rollout_event_log_path(runtime_root, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=preupgrade_turn,
+            summary="Pre-upgrade stride-off replan admission.",
+            details={
+                "command": "quota",
+                "quota_command": "should-run",
+                "ok": True,
+                "should_run": True,
+                "appended": True,
+                "todo_id": "",
+                "replan_obligation_id": obligation_id,
+                "semantic_replan_obligation_id": obligation_id,
+                "settlement_effect_id": preupgrade_identity.effect_id,
+                "must_attempt_work": True,
+                "delivery_allowed": True,
+                "quiet_noop_allowed": False,
+                "closeout_required": False,
+            },
+        ),
+    )
+
+    def _load_quota_should_run_decision(raw_stdout: str) -> dict:
+        out = json.loads(raw_stdout)
+        if "reference_file" in out:
+            nav = json.loads(Path(out["reference_file"]).read_text(encoding="utf-8"))
+            payload = json.loads(Path(nav["path"]).read_text(encoding="utf-8"))
+        else:
+            payload = out
+        packet = payload.get("replan_action_packet")
+        if isinstance(packet, dict) and isinstance(packet.get("writeback"), str):
+            tokens = shlex.split(packet["writeback"])
+            if "--decision-file" in tokens:
+                dec_path = tokens[tokens.index("--decision-file") + 1]
+                return json.loads(Path(dec_path).read_text(encoding="utf-8"))
+        return payload
+
+    # Replay `quota should-run` for `preupgrade_turn` before settlement: it must keep
+    # the pre-upgrade `"off"` packet shape and must not inject `semantic_replan_stride_strategy`.
+    capsys.readouterr()
+    rc = cli_main(
+        [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "quota",
+            "should-run",
+            "--codex-app",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--turn-instance-id",
+            preupgrade_turn,
+        ]
+    )
+    assert rc == 0
+    replayed = _load_quota_should_run_decision(capsys.readouterr().out)
+    replayed_packet = replayed["replan_action_packet"]
+    assert "stride_control" not in replayed_packet
+    assert "agent_vision.stride_decision" not in (
+        (replayed_packet.get("writeback_contract") or {}).get("required_fields") or []
+    )
+    preupgrade_events = [
+        ev
+        for ev in load_rollout_events(rollout_event_log_path(runtime_root, GOAL_ID))
+        if ev.get("event_kind") == "quota_should_run" and ev.get("run_id") == preupgrade_turn
+    ]
+    assert preupgrade_events
+    assert all(
+        "semantic_replan_stride_strategy" not in (ev.get("details") or {})
+        for ev in preupgrade_events
+    )
+
+    # Original pre-upgrade writeback without stride_decision must succeed and preserve identity.
+    settled = refresh_state_run(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id=GOAL_ID,
+        project=project,
+        state_file=None,
+        classification="state_refreshed",
+        recommended_action="Settle pre-upgrade off turn.",
+        delivery_batch_scale="single_surface",
+        delivery_outcome="outcome_gap",
+        agent_id=AGENT_ID,
+        turn_instance_id=preupgrade_turn,
+        replan_obligation_id=obligation_id,
+        autonomous_replan_recorded=True,
+        repair_delta_kinds=["blocker"],
+        progress_observation={
+            "schema_version": "typed_progress_observation_v0",
+            "result_class": "blocked",
+            "blocker_id": "blocker-preupgrade-settled",
+            "evidence_ids": ["evidence-preupgrade-settled"],
+            "work_item_id": obligation_id,
+        },
+        agent_vision_packet=None,
+        dry_run=False,
+        sync_global=False,
+    )
+    assert settled.get("ok") is True
+    assert settled["settlement_identity"]["effect_id"] == preupgrade_identity.effect_id
+    assert settled["settlement_identity"]["replan_obligation_id"] == obligation_id
+
+    # Now append a fresh repeated typed observation to trigger a new replan obligation,
+    # and verify that a newly admitted Turn on the same untouched legacy Goal stamps
+    # `semantic_replan_stride_strategy = "evidence_conditioned_v1"` and enforces stride.
+    obs_b = {
+        "schema_version": "typed_progress_observation_v0",
+        "result_class": "blocked",
+        "blocker_id": "blocker-postupgrade-repeat",
+        "evidence_ids": ["evidence-postupgrade-repeat"],
+    }
+    with runs_index.open("a", encoding="utf-8") as handle:
+        for idx in range(2):
+            handle.write(
+                json.dumps(
+                    {
+                        "generated_at": f"2099-08-13T13:0{idx}:00+08:00",
+                        "goal_id": GOAL_ID,
+                        "classification": "state_refreshed",
+                        "agent_id": AGENT_ID,
+                        "progress_scope": "agent_lane",
+                        "delivery_outcome": "outcome_gap",
+                        "progress_observation": dict(obs_b),
+                    }
+                )
+                + "\n"
+            )
+    capsys.readouterr()
+    postupgrade_turn = "turn-postupgrade-enforced"
+    rc = cli_main(
+        [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "quota",
+            "should-run",
+            "--codex-app",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--turn-instance-id",
+            postupgrade_turn,
+        ]
+    )
+    assert rc == 0
+    admitted = _load_quota_should_run_decision(capsys.readouterr().out)
+    assert "stride_control" in admitted["replan_action_packet"]
+    new_obligation_id = admitted["autonomous_replan_obligation"]["obligation_id"]
+    events = [
+        ev
+        for ev in load_rollout_events(rollout_event_log_path(runtime_root, GOAL_ID))
+        if ev.get("event_kind") == "quota_should_run" and ev.get("run_id") == postupgrade_turn
+    ]
+    assert events and events[-1]["details"]["semantic_replan_stride_strategy"] == "evidence_conditioned_v1"
+
+    before_lines = runs_index.read_text(encoding="utf-8").splitlines()
+    with pytest.raises(ValueError, match="stride_decision"):
+        refresh_state_run(
+            registry_path=registry_path,
+            runtime_root_override=str(runtime_root),
+            goal_id=GOAL_ID,
+            project=project,
+            state_file=None,
+            classification="state_refreshed",
+            recommended_action="Must require stride_decision on new turn.",
+            delivery_batch_scale="single_surface",
+            delivery_outcome="outcome_gap",
+            agent_id=AGENT_ID,
+            turn_instance_id=postupgrade_turn,
+            replan_obligation_id=new_obligation_id,
+            autonomous_replan_recorded=True,
+            repair_delta_kinds=["blocker"],
+            progress_observation={
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "blocked",
+                "blocker_id": "blocker-postupgrade-new",
+                "evidence_ids": ["evidence-postupgrade-new"],
+                "work_item_id": new_obligation_id,
+            },
+            agent_vision_packet=None,
+            dry_run=False,
+            sync_global=False,
+        )
+    assert runs_index.read_text(encoding="utf-8").splitlines() == before_lines

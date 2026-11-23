@@ -729,7 +729,7 @@ switch（尝试不同机制）或 verify（解决决定扩大或切换的具体�
 比较须绑定产物版本、输入条件和原预算，区分提交时刻与反馈实际到达时刻，并检查
 后续工作是否执行了提议的机制变化。决定记录、快照或新标识本身不证明采用、恢复
 或结果改善。这些是既有Agent问题的细化，不增加决策字段、分数阈值或结算门槛；
-继承能力配置时策略默认开启，显式关闭和已保存的旧配置保留原语义。先识别仍未满足的
+所有新 Turn 无条件启用依据证据的步幅策略，已准入的升级前 `off` Turn 与历史记录保持原有读取/结算语义。先识别仍未满足的
 权威目标、当前瓶颈分量和可能的收益空间，再选择下一机制。比较原路线接续与
 改变该瓶颈假设或机制的可行替代路线，并计入完整成本。路线停滞时，应以能区分
 这些解释的完整实验推进，不能只继续局部调参。区分干预未执行、局部改善未迁移，
@@ -838,17 +838,18 @@ Benchmark 的显式 `loopx-planned` provider 在未修改的规划 packet 外附
 这些 benchmark 专用补充不进入 Core 默认值，也不是 checkpoint 要求。比较须固定
 该 provider 处理的 revision；它不证明首次质量持平或长程研究收益。
 
-配置词表和既有 Goal/设备编辑器不变，不加第二个可选版本或策略数据库。off 保持
-普通投影/复盘；两种历史 v1 决策保留原义读取兼容，不能完成新的启用策略复盘；
-新提案使用 v2 数据格式，仍只有同一个可选策略，冻结 worker 保持确切源码。比较固定
+移除在线 `stride_strategy` 开关后，`evidence_conditioned_v1` 对所有新 Turn 无条件生效，
+不加第二个可选策略或策略数据库。升级前已在显式或继承 `off` 下准入的 Turn 在升级后
+（File 与 SQLite）继续按原结算语义与身份完成写回，未修改的旧 Goal 在新 Turn 起进入
+`evidence_conditioned_v1`。两种历史 v1 与 `off` 决定保留原义读取兼容，不能完成新的
+生效策略复盘；冻结 worker 保持确切源码。比较固定
 实现 revision，不重释旧决定；有证据后迭代同一组件，避免维护假设性的策略变体。
-启用策略的周期复盘到期，或既有停滞复核触发时（`typed_progress_repeat`、
+周期复盘到期或既有停滞复核触发时（`typed_progress_repeat`、
 `no_progress_streak`、`repeated_action_loop`、`external_progress_review_drift`），
-任何结算路径都须留下绑定本次来源的 stride 决定。
+任何新 Turn 的结算路径都须留下绑定本次来源的 stride 决定。
 类型化进展、后续任务和终止结果仍可作为证据与结果，但单独的 Todo 后续转换不能
 代替复盘。有证据的路径决定可以保留尚未完成的有用工作，不必编造新进展标识或
-Todo。验收和能力 owner 显式限定的结果仍须遵守；显式关闭、已保存的旧版仅周期
-配置和其他来源保持原有
+Todo。验收、能力 owner 显式限定的结果，以及升级前已准入 `off` Turn 的结算和其他来源仍保持原有
 出口规则。不增加检测器、阈值或动作。
 
 冻结的 [EdgeBench 诊断窗口](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
@@ -870,9 +871,12 @@ Todo。验收和能力 owner 显式限定的结果仍须遵守；显式关闭、
 结算边界。下次复盘区分计划范围与实际执行、结果质量和完整成本；保存计划不等于
 采用或收益。
 
-继承能力配置时，依据证据的步幅策略默认开启。显式关闭、已保存的旧版仅周期配置
-及历史记录保持原语义。清除覆盖可恢复继承，显式选择 off 可回退；不重写已安装
-配置、冻结 worker 或历史回执。历史解码中缺失的策略仍按 off 处理。复盘问题和
+经维护者授权移除在线开关后，`evidence_conditioned_v1` 对所有新 Turn 无条件生效。
+升级前已准入的 `off` Turn 在升级后（File 与 SQLite）保持原结算语义与身份；写入
+`todo_replan_cadence_machine_defaults_v2` 设备配置时磁盘上保留
+`"stride_strategy": "evidence_conditioned_v1"` 以保持向旧版 v2 reader 的运行时回退可读性，
+而公开 API、CLI 参数与 Dashboard 投影移除且拒绝写入 `stride_strategy`。冻结 worker、
+历史 `off` 决定与旧版 v0/v1 配置保留读取语义而不重写作废。复盘问题和
 语法示例仍一起交付，不新增决定字段、策略版本或机器强制语义分类器。目标收益、
 完整成本与交互增益仍须通过匹配接续等实验验证后再作结论。
 

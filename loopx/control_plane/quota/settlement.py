@@ -367,6 +367,15 @@ def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
             raise RuntimeError("selected review source requires a typed object and obligation")
         # Semantic eligibility and scalar bounds belong to the TS owner.
         result["selected_review_source"] = dict(review)
+    if "admitted_stride_strategy" in guard:
+        admitted_stride = guard["admitted_stride_strategy"]
+        if (
+            selected_obligation_id is None
+            or not isinstance(admitted_stride, str)
+            or admitted_stride not in {"evidence_conditioned_v1", "off"}
+        ):
+            raise RuntimeError("admitted stride strategy requires a legal strategy and obligation")
+        result["admitted_stride_strategy"] = admitted_stride
     return result
 
 

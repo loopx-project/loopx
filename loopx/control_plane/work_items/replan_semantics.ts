@@ -8,7 +8,7 @@ import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { TODO_COMPLETION_RECOVERIES } from "../todos/completion_state.ts";
 import { id as todoId, readResume, taskClass } from "../todos/read_codec.ts";
 import { indexInferredSuccessors } from "../todos/succession.ts";
-import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
+import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
 import { projectProgressDelta } from "./progress_delta.ts";
 
 const PROGRESS_OUTCOMES = [
@@ -110,8 +110,12 @@ function isExternalReview(obligation: JsonObject): boolean {
 // cannot opt an obligation out of the review.
 const STRIDE_REVIEW_TRIGGERS = new Set(["periodic_review_due", "typed_progress_repeat",
   "no_progress_streak", "repeated_action_loop", "external_progress_review_drift"]);
-function requiresStrideDecision(obligation: JsonObject): boolean {
-  return triggerKinds(obligation).some(kind => STRIDE_REVIEW_TRIGGERS.has(kind));
+function requiresStrideDecision(
+  obligation: JsonObject,
+  admittedStrideStrategy: unknown = "evidence_conditioned_v1",
+): boolean {
+  return normalizeStrideStrategy(admittedStrideStrategy) !== "off" &&
+    triggerKinds(obligation).some(kind => STRIDE_REVIEW_TRIGGERS.has(kind));
 }
 
 /** Route only a revalidated canonical transition to its original Turn guard.
@@ -181,7 +185,7 @@ function projectTurnTransition(request: JsonObject): JsonObject {
       }
       const sourceObligation = object(candidateSource.obligation);
       if (sourceObligation.obligation_id !== selected) continue;
-      if (requiresStrideDecision(sourceObligation)) continue;
+      if (requiresStrideDecision(sourceObligation, request.admitted_stride_strategy)) continue;
       const ack = object(candidateSource.ack);
       const candidate = object(ack.semantic_delta);
       if (ack.schema_version === "autonomous_replan_ack_v0" &&
@@ -349,9 +353,11 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
         openVisionReview = obligation;
       }
     }
-    if (!requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
+    if (!requiredSemanticOutcomes(obligation, request.admitted_stride_strategy).includes("new_runnable_successor")) continue;
     const result = projectTurnTransition({guard_scoped: request.guard_scoped,
       selected_obligation_id: selected, transition_candidates: [candidate],
+      ...(request.admitted_stride_strategy !== undefined
+        ? {admitted_stride_strategy: request.admitted_stride_strategy} : {}),
       goal_id: request.goal_id,
       agent_id: request.agent_id, guard_recorded_at: request.guard_recorded_at,
       guard_turn_instance_id: request.guard_turn_instance_id});
@@ -473,7 +479,10 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
 }
 
 /** One outcome policy for host projection and write-time discharge. */
-export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcome[] {
+export function requiredSemanticOutcomes(
+  obligation: JsonObject,
+  admittedStrideStrategy: unknown = "evidence_conditioned_v1",
+): SemanticOutcome[] {
   const kinds = triggerKinds(obligation);
   const acceptanceHold = kinds.some(kind => ACCEPTANCE_HOLD_TRIGGERS.has(kind));
   const declared = strings(obligation.satisfying_semantic_outcomes);
@@ -498,12 +507,12 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
   // An enabled stall review can also retain the unfinished useful experiment
   // after a current evidenced decision, without inventing progress or a Todo.
   // Explicit capability/acceptance outcome restrictions above still apply.
-  return requiresStrideDecision(obligation) || kinds.some(kind => kind === "long_todo_chain" ||
+  return requiresStrideDecision(obligation, admittedStrideStrategy) || kinds.some(kind => kind === "long_todo_chain" ||
     kind === "periodic_review_due" || EXTERNAL_REVIEW_TRIGGERS.has(kind))
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 
-function writebackProjection(required: SemanticOutcome[], externalReview: boolean): JsonObject {
+function writebackProjection(required: SemanticOutcome[], externalReview: boolean, strideEnabled: boolean): JsonObject {
   // This chooses a usable refresh path, not the only legal exit. Successor and
   // terminal alternatives still have their own typed transitions and gates.
   if (externalReview) {
@@ -527,7 +536,7 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
         preferred_input: "evidence_linked_vision_path",
         vision_authoring: visionAuthoringContract(true),
         required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs",
-          "agent_vision.stride_decision"],
+          ...(strideEnabled ? ["agent_vision.stride_decision"] : [])],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS],
         rule: "First reuse observed evidence valid for current source/acceptance; probe missing, stale or insufficient evidence. Write a JSON file with acceptance summary and evidence-linked path outcome, then run bound refresh and spend. An unchanged reason alone is insufficient. Explicit validation gates and other required_any_of contracts apply.",
       },
@@ -634,13 +643,16 @@ export function projectReplanSemantics(value: unknown): JsonObject {
       ? {kind, stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {
-    return {allowed: !requiresStrideDecision(obligation)};
+    return {allowed: !requiresStrideDecision(obligation, request.admitted_stride_strategy)};
   }
-  const required = requiredSemanticOutcomes(obligation);
+  const required = requiredSemanticOutcomes(obligation, request.admitted_stride_strategy);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
-    const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
-    const writeback = writebackProjection(required, externalReview);
+    const strideEnabled = normalizeStrideStrategy(request.admitted_stride_strategy) !== "off";
+    const strideControl = strideEnabled
+      ? strideControlContract(object(obligation.replan_context), obligation.obligation_id)
+      : null;
+    const writeback = writebackProjection(required, externalReview, strideEnabled);
     if (required.includes("coverage_backed_no_followup")) {
       writeback.writeback_contract = {...object(writeback.writeback_contract),
         no_followup_requirements: {
@@ -654,7 +666,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
             "Write back and spend with the original settlement_plan identity, not a later obligation.",
         }};
     }
-    if (requiresStrideDecision(obligation)) {
+    if (requiresStrideDecision(obligation, request.admitted_stride_strategy)) {
       const contract = object(writeback.writeback_contract);
       writeback.cli_semantic_args = VISION_CLI_ARGS;
       writeback.writeback_contract = {...contract,
@@ -665,7 +677,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
           String(contract.rule ?? "")};
     }
     return {required_any_of: required, planning_guidance: REPLAN_PLANNING_GUIDANCE,
-      stride_control: strideControl,
+      ...(strideControl ? {stride_control: strideControl} : {}),
       ...writeback};
   }
   if (request.operation !== "qualify") {
@@ -679,21 +691,23 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const path = object(vision.path_delta);
   const context = object(obligation.replan_context);
   const [strideDecision] = normalizeStrideDecision(vision.stride_decision);
+  const admittedStrideStrategy = normalizeStrideStrategy(request.admitted_stride_strategy);
+  const structuredReview = admittedStrideStrategy !== "off";
   const selectedComparison = object(strideDecision?.explore_review).selected_candidate != null;
-  const requiredStrideReview = requiresStrideDecision(obligation);
+  const requiredStrideReview = requiresStrideDecision(obligation, admittedStrideStrategy);
   const pathOutcome = String(path.outcome ?? "").trim();
   const evidenceLinkedPath = Boolean(String(patch.acceptance_summary ?? "").trim() &&
     (FRESH_PATH_DISPOSITIONS.has(pathOutcome) || pathOutcome === "stop") && strings(path.evidence_refs).length);
   const freshPath = evidenceLinkedPath && FRESH_PATH_DISPOSITIONS.has(pathOutcome);
   const independentStride = strideDecision?.schema_version === STRIDE_DECISION_SCHEMA;
-  const missingStride = (freshPath || requiredStrideReview) &&
+  const missingStride = structuredReview && (freshPath || requiredStrideReview) &&
     (!strideDecision || !independentStride);
   const missingStridePath = requiredStrideReview && !evidenceLinkedPath;
-  const staleStride = !!strideDecision &&
+  const staleStride = !!strideDecision && (structuredReview || selectedComparison) &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
-  const reviewContextChanged = !!strideDecision
+  const reviewContextChanged = !!strideDecision && (structuredReview || selectedComparison)
     && (requiredStrideReview || selectedComparison) && strideDecision.reference_context_id !== context.context_id;
-  const reviewMismatch = strideDecision
+  const reviewMismatch = strideDecision && (structuredReview || selectedComparison)
     ? reviewContextChanged
       ? "Stride decision references a different review context. Read the returned context_recovery before retrying the original writeback."
       : strideReviewMismatch(strideDecision, context, request.stride_review_evidence, vision.todo_delta)

@@ -1679,6 +1679,9 @@ def _build_active_quota_payload(
                 quota_decision_agent_id(payload) or prepared.requested_agent_id
             ),
             bounded_research_frontier=bounded_research_frontier,
+            admitted_stride_strategy=prepared.admitted_stride_strategy_for(
+                payload["autonomous_replan_obligation"]
+            ),
         )
     return payload
 

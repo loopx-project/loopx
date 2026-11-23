@@ -67,6 +67,9 @@ from .control_plane.work_items.semantic_replan_writeback import (
     qualify_refresh_replan_writeback,
 )
 from .capabilities.progress_review.context import external_progress_review_context
+from .control_plane.work_items.stride_policy_codec import (
+    resolve_receipt_bound_stride_strategy,
+)
 from .control_plane.work_items.refresh_recommendation import (
     DEFAULT_REFRESH_ACTION as DEFAULT_REFRESH_ACTION,
     RECOMMENDED_ACTION_SOURCE_ACTIVE_NEXT_ACTION as RECOMMENDED_ACTION_SOURCE_ACTIVE_NEXT_ACTION,
@@ -1160,6 +1163,11 @@ def refresh_state_run(
             settlement_todo_id=(settlement_identity.todo_id if settlement_identity else None),
             settlement_guard_scoped=(
                 settlement_replan_guard.get("scope") == "turn_guard"
+            ),
+            admitted_stride_strategy=resolve_receipt_bound_stride_strategy(
+                settlement_replan_guard,
+                raw_goal=registry_goal,
+                runtime_root=runtime_root,
             ),
             receipt_bound_guard_recorded_at=(
                 settlement_readback.admission_recorded_at

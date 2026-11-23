@@ -487,6 +487,11 @@ def quota_rollout_details(
         "selected_todo_id": normalize_todo_id(selected_todo.get("todo_id")) if selected_todo else None,
         "replan_obligation_id": replan_obligation_id or "",
         "semantic_replan_obligation_id": semantic_replan_obligation_id or "",
+        **(
+            {"semantic_replan_stride_strategy": "evidence_conditioned_v1"}
+            if semantic_replan_obligation_id
+            else {}
+        ),
         "target_key": payload.get("target_key") or "",
         "successor_todo_ids": ",".join(
             str(successor_id)

@@ -394,16 +394,23 @@ def test_legacy_machine_stride_strategy_loads_and_is_ignored(tmp_path: Path, leg
     assert store.read_bytes() == before, "reading must not migrate the stored device file"
 
     # A whole-document write of the same legacy shape is accepted (restore of an
-    # old backup) and persists without the removed field.
+    # old backup) and persists the v2 rollback key without exposing it publicly.
     owner = build_builtin_machine_configuration_registry()
     configuration = _machine_configuration()
     configuration["namespaces"]["todo_replan_cadence"] = dict(saved["namespaces"]["todo_replan_cadence"])
     preview = configure_machine_configuration(runtime_root=runtime_root, registry=owner, configuration=configuration)
-    configure_machine_configuration(runtime_root=runtime_root, registry=owner, configuration=configuration,
+    applied = configure_machine_configuration(runtime_root=runtime_root, registry=owner, configuration=configuration,
         execute=True, expected_plan_revision=preview["plan_revision"])
     stored = json.loads(store.read_text())["namespaces"]["todo_replan_cadence"]
     assert stored == {"schema_version": "todo_replan_cadence_machine_defaults_v2",
-                      "count_unit": "effective_turns", "count": 4}
+                      "count_unit": "effective_turns", "count": 4,
+                      "stride_strategy": "evidence_conditioned_v1"}
+    assert "stride_strategy" not in (
+        applied["machine_configuration"]["namespaces"]["todo_replan_cadence"]
+    )
+    review_after = _cadence_review(registry_path, runtime_root)
+    assert "stride_strategy" not in review_after["machine_current"]
+    assert "stride_strategy" not in review_after["effective_configuration"]["configuration"]
 
 
 @pytest.mark.parametrize("legacy", ["off", "evidence_conditioned_v1"])
@@ -556,14 +563,22 @@ def test_legacy_stride_field_rejects_unsupported_or_ambiguous_versions(schema_ve
 
 @pytest.mark.parametrize("legacy", [None, "off", "evidence_conditioned_v1"])
 def test_v2_machine_defaults_make_stride_strategy_optional_on_read(legacy):
+    from loopx.capabilities.todo_replan_cadence.machine_defaults import (
+        todo_replan_cadence_machine_configuration_namespace,
+    )
+
     raw = {"schema_version": "todo_replan_cadence_machine_defaults_v2",
            "count_unit": "effective_turns", "count": 6, "yardstick_enabled": True}
     if legacy is not None:
         raw["stride_strategy"] = legacy
-    assert normalize_todo_replan_cadence_machine_defaults(raw) == {
+    normalized = normalize_todo_replan_cadence_machine_defaults(raw)
+    assert normalized == {
         "schema_version": "todo_replan_cadence_machine_defaults_v2",
         "count_unit": "effective_turns", "count": 6, "yardstick_enabled": True,
+        "stride_strategy": "evidence_conditioned_v1",
     }
+    ns = todo_replan_cadence_machine_configuration_namespace()
+    assert "stride_strategy" not in ns.project_public(normalized)
 
 
 def test_horizon_goal_defaults_on_with_explicit_overrides_and_clear(tmp_path):
@@ -727,10 +742,82 @@ def test_legacy_cadence_keeps_yardstick_absent_and_default_off(version):
     legacy.update({"completed_todos": 2} if version == 0 else {"count_unit": "effective_turns", "count": 6})
     expected = dict(legacy)
     if version == 2:
-        legacy["stride_strategy"] = "off"  # legacy v2 files load; the field is dropped
+        legacy["stride_strategy"] = "off"  # legacy v2 files load; persisted v2 writes keep rollback key
+        expected["stride_strategy"] = "evidence_conditioned_v1"
     assert normalize_todo_replan_cadence_machine_defaults(legacy) == expected
     machine = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {"todo_replan_cadence": legacy}}
     assert "yardstick_enabled" not in apply_todo_replan_cadence_machine_default({}, machine)["execution_profile"]
     if version < 2:
         with pytest.raises(ValueError):
             normalize_todo_replan_cadence_machine_defaults({**legacy, "yardstick_enabled": True})
+
+
+def test_v2_machine_defaults_persist_stride_strategy_for_rollback_while_public_omits_it(
+    tmp_path: Path,
+) -> None:
+    from loopx.capabilities.machine_configuration.contract import merge_machine_configuration_namespace
+    from loopx.capabilities.machine_configuration.store import (
+        inspect_machine_configuration,
+        machine_configuration_store_path,
+        project_machine_configuration,
+    )
+
+    _repo, registry_path, runtime_root = _fixture(tmp_path)
+    owner = build_builtin_machine_configuration_registry()
+    store = machine_configuration_store_path(runtime_root)
+    pre_upgrade = json.loads(store.read_text(encoding="utf-8"))
+    pre_upgrade["namespaces"]["todo_replan_cadence"] = {
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns",
+        "count": 4,
+        "stride_strategy": "off",
+    }
+    store.write_text(json.dumps(pre_upgrade), encoding="utf-8")
+
+    # Edit review cadence via public update; stride_strategy is not accepted in public writes.
+    updated = merge_machine_configuration_namespace(
+        _machine_configuration(),
+        namespace="todo_replan_cadence",
+        namespace_configuration={
+            "schema_version": "todo_replan_cadence_machine_defaults_v2",
+            "count_unit": "effective_turns",
+            "count": 5,
+        },
+        registry=owner,
+    )
+    preview = configure_machine_configuration(
+        runtime_root=runtime_root, registry=owner, configuration=updated,
+    )
+    applied = configure_machine_configuration(
+        runtime_root=runtime_root,
+        registry=owner,
+        configuration=updated,
+        execute=True,
+        expected_plan_revision=preview["plan_revision"],
+    )
+
+    # Raw persisted bytes satisfy the prior v2 reader's required schema keys.
+    persisted = json.loads(store.read_text(encoding="utf-8"))["namespaces"]["todo_replan_cadence"]
+    assert set(persisted) == {
+        "schema_version", "count_unit", "count", "stride_strategy",
+    }
+    assert persisted == {
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns",
+        "count": 5,
+        "stride_strategy": "evidence_conditioned_v1",
+    }
+
+    # Public projections and capability views continue omitting the removed switch.
+    inspected = inspect_machine_configuration(runtime_root, registry=owner)
+    assert "stride_strategy" not in applied["machine_configuration"]["namespaces"]["todo_replan_cadence"]
+    assert "stride_strategy" not in inspected["machine_configuration"]["namespaces"]["todo_replan_cadence"]
+    assert "stride_strategy" not in project_machine_configuration(
+        json.loads(store.read_text(encoding="utf-8")), registry=owner,
+    )["namespaces"]["todo_replan_cadence"]
+    review = _cadence_review(registry_path, runtime_root)
+    assert review["machine_current"] == {
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns",
+        "count": 5,
+    }

@@ -4873,6 +4873,7 @@ def test_legacy_todo_guard_keeps_current_replan_gate_strict(
     for event in events:
         if event.get("event_kind") == "quota_should_run":
             event["details"].pop("semantic_replan_obligation_id", None)
+            event["details"].pop("semantic_replan_stride_strategy", None)
     log_path.write_text(
         "".join(json.dumps(event) + "\n" for event in events),
         encoding="utf-8",

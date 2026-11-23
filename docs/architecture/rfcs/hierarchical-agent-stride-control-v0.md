@@ -893,7 +893,7 @@ times separately. Check whether later work implemented the proposed mechanism;
 a decision record, saved snapshot or new identifier alone does not establish
 adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
-the inherited capability default enables the strategy; explicit off and saved legacy configurations retain their meaning. Identify the remaining authoritative goal gap, its limiting
+evidence-conditioned stride is unconditionally active for new Turns, while already-admitted pre-upgrade `off` Turns and saved historical records retain read/settlement semantics. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with plausible alternatives that change the limiting assumption or
 mechanism, including complete cost. A stalled route calls for a discriminating
@@ -1055,22 +1055,24 @@ benchmark-specific additions are not installed as Core defaults or checkpoint
 requirements. This provider treatment must be revision-pinned in comparisons;
 it does not establish initial-quality parity or long-horizon research gain.
 
-The activation vocabulary and existing Goal/device editor stay unchanged; no
-second selectable strategy or policy database is added. Off retains ordinary
-projection/review semantics. Both historical v1 decision shapes retain read
-compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
-their exact source. Pin implementation revisions for comparisons; do not
+With the live `stride_strategy` switch removed, `evidence_conditioned_v1` is
+unconditionally live for new Turns; no second selectable strategy or policy
+database is added. Already-admitted pre-upgrade Turns tied to explicit or
+inherited `off` retain their original admitted settlement semantics and identity
+across upgrade (File and SQLite), while new Turns on untouched legacy Goals
+enter `evidence_conditioned_v1`. Historical v1 and `off` records remain
+decodable on read, cannot discharge fresh `evidence_conditioned_v1` reviews,
+and frozen workers retain their exact source. Pin implementation revisions for comparisons; do not
 reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
-For an enabled periodic review or an existing observed-stall review
+For a live periodic review or an existing observed-stall review
 (`typed_progress_repeat`, `no_progress_streak`, `repeated_action_loop`,
 `external_progress_review_drift`), every settlement path requires a current,
 source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. An evidenced path decision can retain unfinished useful
 work without a fabricated new progress identifier or Todo. Explicit acceptance
-and capability outcome restrictions still apply; explicit off, saved legacy
-cadence-only configurations and other sources
-retain their prior exit policies. No new detector, threshold or action is added.
+and capability outcome restrictions, as well as pre-upgrade receipt-bound `off`
+settlement and other sources, retain their prior exit policies. No new detector, threshold or action is added.
 
 The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
 reports 902 completed native turns and no submissions over one post-hoc selected
@@ -1098,11 +1100,15 @@ Keep dependencies, acceptance, risk, authority and per-Turn settlement boundarie
 The next review must distinguish declared scope from actual execution, outcome
 quality and full cost; preserving a plan is not adoption or benefit.
 
-Evidence-conditioned stride is the capability default for inherited configuration.
-Explicit off, saved legacy cadence-only configurations and historical records
-retain their semantics. Clear overrides to inherit, or select off to roll back;
-no installed configuration, frozen worker or historical receipt is rewritten.
-The codec's missing historical strategy remains off. Review questions and syntax
+Evidence-conditioned stride (`evidence_conditioned_v1`) is unconditionally live
+for all new Turns; the live on/off toggle is removed by maintainer authorization.
+Already-admitted pre-upgrade `off` Turns retain their original settlement
+semantics and identity across upgrade (File and SQLite), and persisted
+`todo_replan_cadence_machine_defaults_v2` writes retain `"stride_strategy": "evidence_conditioned_v1"`
+on disk so runtime rollback to earlier v2 readers remains readable, while public
+APIs, CLI flags, and Dashboard views omit and reject `stride_strategy`. Frozen
+workers, historical `off` decisions, and legacy v0/v1 files remain readable
+without being rewritten. Review questions and syntax
 examples remain together; no extra decision fields, strategy versions or
 machine-enforced semantic classifier are added. Matched continuation must still
 qualify target benefit and full cost before promotion or synergy claims.

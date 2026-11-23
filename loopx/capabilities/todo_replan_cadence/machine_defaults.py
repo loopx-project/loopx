@@ -57,6 +57,15 @@ def _apply_public_update(_current: Any, update: Mapping[str, Any]) -> dict[str, 
     return dict(update)
 
 
+def _project_public_todo_replan_cadence(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Hide persistence-only rollback compatibility fields from public surfaces."""
+    return {
+        key: item
+        for key, item in value.items()
+        if key != LEGACY_STRIDE_STRATEGY_KEY
+    }
+
+
 def normalize_replan_cadence_configuration(raw: Mapping[str, Any]) -> dict[str, Any]:
     if set(raw) == {"completed_todos"}:
         return {
@@ -115,12 +124,17 @@ def normalize_todo_replan_cadence_machine_defaults(
             expected.add("yardstick_enabled")
     if set(raw) != expected:
         raise ValueError("review configuration fields do not match its schema version")
-    return {
+    normalized = {
         "schema_version": version,
         **normalize_replan_cadence_configuration(
             {key: value for key, value in raw.items() if key != "schema_version"}
         ),
     }
+    if version == TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2:
+        # Persist `stride_strategy` in v2 machine configuration so rolling back
+        # to prior releases with strict v2 field sets stays readable.
+        normalized[LEGACY_STRIDE_STRATEGY_KEY] = "evidence_conditioned_v1"
+    return normalized
 
 
 def cadence_configuration_value(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -153,7 +167,7 @@ def todo_replan_cadence_machine_configuration_namespace() -> (
             }
         ),
         normalize=normalize_todo_replan_cadence_machine_defaults,
-        project_public=lambda value: dict(value),
+        project_public=_project_public_todo_replan_cadence,
         apply_public_update=_apply_public_update,
         title="Goal review and stride",
         description=(

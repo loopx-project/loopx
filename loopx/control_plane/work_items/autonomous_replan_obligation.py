@@ -136,6 +136,7 @@ def build_autonomous_replan_cli_actions(
     runtime_root: str | None = None,
     successor_closeout_guard: str | None = None,
     quota_guard_action: str | None = None,
+    admitted_stride_strategy: str | None = None,
 ) -> list[str]:
     lifecycle_reentry = project_todo_lifecycle_settlement_reentry(
         payload,
@@ -183,7 +184,10 @@ def build_autonomous_replan_cli_actions(
         ""
         if preferred_input == "exact_historical_ack"
         else writeback_contract.get("cli_semantic_args")
-        or replan_writeback_requirements(obligation)["cli_semantic_args"]
+        or replan_writeback_requirements(
+            obligation,
+            admitted_stride_strategy=admitted_stride_strategy,
+        )["cli_semantic_args"]
     )
     delivery_args = (
         "--delivery-batch-scale single_surface "

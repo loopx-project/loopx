@@ -150,6 +150,8 @@ class _QuotaDecisionPreparation:
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None
     receipt_bound_replan_execution_pending: bool
+    receipt_bound_replan_obligation_id: str | None
+    receipt_bound_admitted_stride_strategy: str | None
     user_todo_summary: dict[str, Any] | None
     agent_todo_summary: dict[str, Any] | None
     agent_todo_planning_source_items: list[dict[str, Any]]
@@ -191,6 +193,17 @@ class _QuotaDecisionPreparation:
     def inbox_priority_due(self) -> bool:
         return self.inbox_reply_due or self.inbox_material_review_due
 
+    def admitted_stride_strategy_for(
+        self, obligation: Mapping[str, Any]
+    ) -> str | None:
+        if (
+            self.receipt_bound_replan_obligation_id
+            and obligation.get("obligation_id")
+            == self.receipt_bound_replan_obligation_id
+        ):
+            return self.receipt_bound_admitted_stride_strategy
+        return None
+
 
 def _preserve_receipt_bound_replan_obligation(
     replan_obligation: Mapping[str, Any] | None,
@@ -203,6 +216,7 @@ def _preserve_receipt_bound_replan_obligation(
     goal_id: str | None = None,
     guard_recorded_at: str | None = None,
     guard_turn_instance_id: str | None = None,
+    admitted_stride_strategy: str | None = None,
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
@@ -218,6 +232,11 @@ def _preserve_receipt_bound_replan_obligation(
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
             "receipt_review": receipt_review,
+            **(
+                {"admitted_stride_strategy": admitted_stride_strategy}
+                if admitted_stride_strategy is not None
+                else {}
+            ),
             "goal_id": goal_id,
             "guard_recorded_at": guard_recorded_at,
             "guard_turn_instance_id": guard_turn_instance_id,
@@ -256,6 +275,7 @@ def _prepare_quota_replan_context(
     receipt_bound_guard_recorded_at: str | None,
     receipt_bound_guard_turn_instance_id: str | None,
     receipt_bound_replan_review: Mapping[str, Any] | None,
+    receipt_bound_admitted_stride_strategy: str | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Project the current frontier and contextualize its receipt-bound review."""
@@ -263,6 +283,11 @@ def _prepare_quota_replan_context(
     # cannot be prerequisites for spending its receipt (or replaying it).
     reconstruct_review = receipt_bound_replay_phase not in (
         ReceiptBoundReplayPhase.SETTLEMENT_PENDING, ReceiptBoundReplayPhase.SETTLED,
+    )
+    admitted_stride_strategy = (
+        receipt_bound_admitted_stride_strategy
+        if receipt_bound_replan_guard_scoped and receipt_bound_replan_obligation_id
+        else None
     )
     goal_frontier_context = build_goal_frontier_projection_context_from_status(
         replan_explore_reader=replan_explore_reader,
@@ -285,6 +310,7 @@ def _prepare_quota_replan_context(
             receipt_bound_replan_obligation_id if reconstruct_review else None
         ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_admitted_stride_strategy=admitted_stride_strategy,
     )
     replan_obligation = (
         None
@@ -302,6 +328,7 @@ def _prepare_quota_replan_context(
             goal_id=safe_goal_id,
             guard_recorded_at=receipt_bound_guard_recorded_at,
             guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
+            admitted_stride_strategy=admitted_stride_strategy,
         )
     )
     if replan_obligation and not replan_obligation.get("replan_context") and not replan_obligation.get("settlement_action_packet"):
@@ -755,6 +782,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    receipt_bound_admitted_stride_strategy: str | None = None,
 ) -> _QuotaDecisionPreparation:
     quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
@@ -1057,6 +1085,7 @@ def _prepare_quota_should_run_item(
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
+        receipt_bound_admitted_stride_strategy=receipt_bound_admitted_stride_strategy,
         replan_explore_reader=replan_explore_reader,
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}
@@ -1109,6 +1138,15 @@ def _prepare_quota_should_run_item(
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_execution_pending=receipt_bound_replan_execution_pending,
+        receipt_bound_replan_obligation_id=normalize_todo_replan_obligation_id(
+            receipt_bound_replan_obligation_id
+        ),
+        receipt_bound_admitted_stride_strategy=(
+            receipt_bound_admitted_stride_strategy
+            if receipt_bound_replan_guard_scoped
+            and normalize_todo_replan_obligation_id(receipt_bound_replan_obligation_id)
+            else None
+        ),
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
         agent_todo_planning_source_items=agent_todo_planning_source_items,

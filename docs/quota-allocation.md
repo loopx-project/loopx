@@ -171,11 +171,15 @@ or `completed_todos`) and `count`. Existing v0/v1 configurations remain readable
 without migrating them on inspection. The stride strategy is not configurable:
 `evidence_conditioned_v1` is always on and adds evidence-conditioned scope and
 route advice, with unchanged admission and semantic exits. There is no
-`--execution-stride-strategy` flag, Dashboard selector or device field. A
+`--execution-stride-strategy` flag or Dashboard selector. A
 `stride_strategy` value saved by an earlier release (`off` or
-`evidence_conditioned_v1`) in a v2 device file or Goal profile still loads, but
-it is ignored and dropped the next time that configuration is written; new
-writes that include `stride_strategy` are rejected. See the
+`evidence_conditioned_v1`) in a v2 device file or Goal profile still loads and
+is ignored for new Turns (while already-admitted pre-upgrade receipt-bound `off`
+Turns retain their original settlement semantics across upgrade). Rewriting a
+Goal profile drops legacy `stride_strategy`, whereas saving a v2 device file
+persists `"stride_strategy": "evidence_conditioned_v1"` on disk so runtime rollback
+to prior v2 readers stays readable while public projections omit it; new writes
+that supply `stride_strategy` are rejected. See the
 [versioned strategy contract](reference/protocols/goal-vision-replan-contract-v0.md#configure-and-roll-back-the-stride-strategy). It is built into the control plane and needs
 no provider installation. The CLI, settings readback, quota decision and
 writeback validation use the same effective configuration.

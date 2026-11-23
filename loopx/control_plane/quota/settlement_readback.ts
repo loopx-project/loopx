@@ -568,11 +568,13 @@ export function projectSemanticReplanGuard(
   const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition",
     "semantic_replan_review_stop_condition_sha256", "semantic_replan_review_stop_contract_id"]
     .some(field => Object.hasOwn(receiptDetails, field));
+  const hasAdmittedStride = Object.hasOwn(receiptDetails, "semantic_replan_stride_strategy");
   if (hasCapability && hasReview) throw new EffectRuntimeRequestError(
     "a review source cannot replace a capability guard", "malformed_settlement_state");
   if (!Object.hasOwn(receiptDetails, "semantic_replan_obligation_id")) {
     if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
     if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
+    if (hasAdmittedStride) throw new EffectRuntimeRequestError("an admitted stride strategy requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "legacy_unscoped",
@@ -583,6 +585,7 @@ export function projectSemanticReplanGuard(
   if (rawObligationId === "" || rawObligationId === null) {
     if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
     if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
+    if (hasAdmittedStride) throw new EffectRuntimeRequestError("an admitted stride strategy requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "turn_guard",
@@ -597,6 +600,17 @@ export function projectSemanticReplanGuard(
     );
   }
   const reviewKind = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_kind, "receipt review kind") : null;
+  let admittedStrideStrategy: string | null = null;
+  if (hasAdmittedStride) {
+    const rawStride = receiptDetails.semantic_replan_stride_strategy;
+    if (rawStride !== "evidence_conditioned_v1" && rawStride !== "off") {
+      throw new EffectRuntimeRequestError(
+        "heartbeat receipt semantic_replan_stride_strategy is malformed",
+        "malformed_settlement_state",
+      );
+    }
+    admittedStrideStrategy = rawStride;
+  }
   const stop = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition")
     ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
   const stopDigest = Object.hasOwn(receiptDetails, "semantic_replan_review_stop_condition_sha256")
@@ -636,6 +650,7 @@ export function projectSemanticReplanGuard(
         capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,
         frontier_revision: receiptDetails.semantic_replan_frontier_revision}),
     } : {}),
+    ...(admittedStrideStrategy !== null ? {admitted_stride_strategy: admittedStrideStrategy} : {}),
   };
 }
 

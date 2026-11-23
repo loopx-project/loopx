@@ -556,8 +556,13 @@ and no separate stride timer. An explicit Goal review unit/count still pins that
 interval, and clearing the cadence restores live device defaults via the editor
 or `--clear-execution-replan-after-turns --clear-execution-replan-after-todos --execute`.
 Legacy saved `stride_strategy` fields in `registry.json` or
-`machine_configuration.json` remain readable on load, are ignored at runtime,
-and are dropped on rewrite. Activation cannot authorize experiments, spend
+`machine/configuration.json` remain readable on load and are ignored for new Turns
+(while already-admitted pre-upgrade receipt-bound `off` Turns retain their original
+settlement semantics across upgrade). Rewriting a Goal profile drops legacy
+`stride_strategy`, whereas saving v2 `machine/configuration.json` persists
+`"stride_strategy": "evidence_conditioned_v1"` on disk for rollback compatibility
+with prior v2 readers while public projections omit it and reject writes that supply
+`stride_strategy`. Activation cannot authorize experiments, spend
 quota, clone a checkpoint, relax acceptance or rewrite a frozen experiment.
 
 在既有「Goal 复盘与步幅」能力中心中选择设备默认值或明确的 Goal 来配置复盘周期
@@ -565,7 +570,11 @@ quota, clone a checkpoint, relax acceptance or rewrite a frozen experiment.
 现为无条件生效的在线策略，不再提供在线开关，也没有第二个独立计时器。显式设置 Goal
 计数依据和数量仍会固定该周期，可通过编辑器或 `--clear-execution-replan-after-turns
 --clear-execution-replan-after-todos --execute` 恢复设备默认值。旧配置文件中残留的
-`stride_strategy` 字段在读取时保持兼容、运行时忽略、重写时移除；历史引用仍可读取。
+`stride_strategy` 字段在读取时保持兼容，并对新 Turn 忽略（升级前已准入的 `off`
+回执 Turn 在 File 与 SQLite 上保留原结算语义）；重写 Goal 配置时移除旧字段，写入 v2
+`machine/configuration.json` 时磁盘上保留 `"stride_strategy": "evidence_conditioned_v1"`
+以保住向旧版 v2 reader 的运行时回退可读性，同时公开投影不暴露且拒绝传入
+`stride_strategy`；历史引用仍可读取。
 策略不会授权实验、消耗配额、复制 checkpoint、放宽验收或改写冻结实验。
 
 ### Structured stride control

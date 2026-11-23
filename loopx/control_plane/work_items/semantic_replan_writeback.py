@@ -77,10 +77,12 @@ class ReplanWritebackRejected(ValueError):
         *,
         obligation: Mapping[str, Any],
         semantic_delta: Mapping[str, Any] | None,
+        admitted_stride_strategy: str | None = None,
     ) -> None:
         super().__init__(message)
         self.obligation = dict(obligation)
         self.semantic_delta = dict(semantic_delta or {})
+        self.admitted_stride_strategy = admitted_stride_strategy
 
 
 def project_replan_writeback_rejection(
@@ -133,6 +135,7 @@ def project_replan_writeback_rejection(
             settlement_chain_ready=False,
             lifecycle_actor_args=scoped_cli_args,
             runtime_root=runtime_root,
+            admitted_stride_strategy=rejection.admitted_stride_strategy,
         )
     )
     capability_guard = obligation.get("capability_guard")
@@ -224,6 +227,7 @@ def _build_writeback_projection_context(
     replan_source_route: Mapping[str, Any] | None,
     guard_scoped: bool,
     guard_semantic_replan_obligation_id: str | None,
+    admitted_stride_strategy: str | None = None,
     receipt_bound_guard_recorded_at: str | None,
     receipt_bound_guard_turn_instance_id: str | None,
     goal_ref: Mapping[str, Any] | None,
@@ -293,6 +297,9 @@ def _build_writeback_projection_context(
         goal_status=str((registry_goal or {}).get("status") or "active"),
         receipt_bound_replan_obligation_id=(guard_semantic_replan_obligation_id if guard_scoped else None),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_admitted_stride_strategy=(
+            admitted_stride_strategy if guard_scoped and guard_semantic_replan_obligation_id else None
+        ),
         agent_profile=(
             cast(dict[str, Any], cast(dict[str, Any], agent_identity).get("agent_profile"))
             if isinstance(cast(dict[str, Any], agent_identity).get("agent_profile"), dict)
@@ -319,6 +326,7 @@ def qualify_replan_writeback(
     effective_turn_cadence: dict[str, Any] | None = None,
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
+    admitted_stride_strategy: str | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
@@ -386,6 +394,7 @@ def qualify_replan_writeback(
         replan_source_route=replan_source_route,
         guard_scoped=guard_scoped,
         guard_semantic_replan_obligation_id=guard_semantic_replan_obligation_id,
+        admitted_stride_strategy=admitted_stride_strategy,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         goal_ref=goal_ref,
@@ -411,6 +420,7 @@ def qualify_replan_writeback(
             guard_scoped=guard_scoped,
             selected_obligation_id=guard_semantic_replan_obligation_id,
             transition_candidates=context.get("replan_transition_candidates", []),
+            admitted_stride_strategy=admitted_stride_strategy,
             goal_id=goal_id,
             agent_id=safe_agent_id,
             guard_recorded_at=receipt_bound_guard_recorded_at,
@@ -444,6 +454,11 @@ def qualify_replan_writeback(
             "current_obligation": obligation,
             "receipt_review": receipt_bound_replan_review,
             "transition_candidates": context.get("replan_transition_candidates", []),
+            **(
+                {"admitted_stride_strategy": admitted_stride_strategy}
+                if admitted_stride_strategy is not None
+                else {}
+            ),
             "goal_id": goal_id,
             "guard_recorded_at": receipt_bound_guard_recorded_at,
             "guard_turn_instance_id": receipt_bound_guard_turn_instance_id,
@@ -474,11 +489,18 @@ def qualify_replan_writeback(
         completion_turn_key=completion_turn_key,
     ):
         return None, None
+    obligation_id = str(obligation.get("obligation_id") or "").strip()
+    effective_stride_strategy = (
+        admitted_stride_strategy
+        if (not guard_scoped or obligation_id == str(guard_semantic_replan_obligation_id or "").strip())
+        else None
+    )
     semantic_delta = semantic_delta_from_writeback(
         obligation=obligation,
         progress_observation=progress_observation,
         agent_vision=agent_vision,
         history_runs=newest_first_runs,
+        admitted_stride_strategy=effective_stride_strategy,
     )
     if (
         "coverage_backed_no_followup"
@@ -512,6 +534,7 @@ def enforce_open_replan_writeback(
     completion_turn_key: str | None = None,
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
+    admitted_stride_strategy: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
@@ -549,6 +572,7 @@ def enforce_open_replan_writeback(
         todo_fields=todo_fields,
         guard_scoped=guard_scoped,
         guard_semantic_replan_obligation_id=guard_semantic_replan_obligation_id,
+        admitted_stride_strategy=admitted_stride_strategy,
         capability_evidence=capability_evidence,
         guard_capability=guard_capability,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
@@ -571,11 +595,18 @@ def enforce_open_replan_writeback(
         return None
     if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:
         return semantic_delta
+    obligation_id = str(obligation.get("obligation_id") or "").strip()
+    effective_stride_strategy = (
+        admitted_stride_strategy
+        if (not guard_scoped or obligation_id == str(guard_semantic_replan_obligation_id or "").strip())
+        else None
+    )
     if isinstance(semantic_delta, dict) and semantic_delta.get("reason_code"):
         raise ReplanWritebackRejected(
             str(semantic_delta.get("reason") or "invalid replan writeback"),
             obligation=obligation,
             semantic_delta=semantic_delta,
+            admitted_stride_strategy=effective_stride_strategy,
         )
     raise ReplanWritebackRejected(
         (
@@ -587,6 +618,7 @@ def enforce_open_replan_writeback(
         ),
         obligation=obligation,
         semantic_delta=semantic_delta,
+        admitted_stride_strategy=effective_stride_strategy,
     )
 
 
@@ -602,6 +634,7 @@ def qualify_refresh_replan_writeback(
     settlement_todo_id: str | None,
     settlement_guard_scoped: bool,
     settlement_guard_semantic_replan_obligation_id: str | None,
+    admitted_stride_strategy: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
@@ -691,6 +724,7 @@ def qualify_refresh_replan_writeback(
         guard_semantic_replan_obligation_id=(
             settlement_guard_semantic_replan_obligation_id
         ),
+        admitted_stride_strategy=admitted_stride_strategy,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,

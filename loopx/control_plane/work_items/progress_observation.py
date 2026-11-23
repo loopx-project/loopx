@@ -219,11 +219,19 @@ def _normalized_window(
 
 def replan_writeback_requirements(
     obligation: Mapping[str, Any],
+    *,
+    admitted_stride_strategy: str | None = None,
 ) -> dict[str, Any]:
     """Adapt the shared typed discharge policy for CLI and host projection."""
     try:
         result = project_replan_semantics({
-            "operation": "requirements", "obligation": dict(obligation),
+            "operation": "requirements",
+            "obligation": dict(obligation),
+            **(
+                {"admitted_stride_strategy": admitted_stride_strategy}
+                if admitted_stride_strategy is not None
+                else {}
+            ),
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -236,11 +244,20 @@ def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
     return list(replan_writeback_requirements(obligation)["required_any_of"])
 
 
-def replan_successor_transition_allowed(obligation: Mapping[str, Any]) -> bool:
+def replan_successor_transition_allowed(
+    obligation: Mapping[str, Any],
+    *,
+    admitted_stride_strategy: str | None = None,
+) -> bool:
     """Ask the typed owner whether a Todo transition can settle this review."""
     try:
         result = project_replan_semantics({
             "operation": "transition_eligibility", "obligation": dict(obligation),
+            **(
+                {"admitted_stride_strategy": admitted_stride_strategy}
+                if admitted_stride_strategy is not None
+                else {}
+            ),
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -252,6 +269,7 @@ def replan_successor_transition_allowed(obligation: Mapping[str, Any]) -> bool:
 def guarded_replan_transition_delta(
     *, guard_scoped: bool, selected_obligation_id: str | None,
     transition_candidates: list[dict[str, Any]],
+    admitted_stride_strategy: str | None = None,
     goal_id: str | None = None, agent_id: str | None = None,
     guard_recorded_at: str | None = None,
     guard_turn_instance_id: str | None = None,
@@ -262,6 +280,11 @@ def guarded_replan_transition_delta(
             "operation": "turn_transition", "guard_scoped": guard_scoped,
             "selected_obligation_id": selected_obligation_id,
             "transition_candidates": transition_candidates,
+            **(
+                {"admitted_stride_strategy": admitted_stride_strategy}
+                if admitted_stride_strategy is not None
+                else {}
+            ),
             "goal_id": goal_id,
             "agent_id": agent_id,
             "guard_recorded_at": guard_recorded_at,
@@ -315,6 +338,7 @@ def semantic_delta_from_writeback(
     progress_observation: Mapping[str, Any] | None,
     agent_vision: Mapping[str, Any] | None = None,
     history_runs: Iterable[Mapping[str, Any]] | None = None,
+    admitted_stride_strategy: str | None = None,
 ) -> dict[str, Any]:
     """Qualify concrete typed writeback evidence against one obligation.
 
@@ -383,7 +407,7 @@ def semantic_delta_from_writeback(
     source_review = None
     stride = vision.get("stride_decision")
     review = stride.get("previous_review") if isinstance(stride, Mapping) else None
-    if (runs is not None and context is not None
+    if (runs is not None and context is not None and admitted_stride_strategy != "off"
             and context.get("decision_followthrough") and isinstance(review, Mapping)):
         from .replan_context_codec import replay_stride_review_evidence
 
@@ -392,6 +416,11 @@ def semantic_delta_from_writeback(
         result = project_replan_semantics({
             "operation": "qualify", "obligation": dict(obligation),
             "progress_source": progress_source, "agent_vision": vision,
+            **(
+                {"admitted_stride_strategy": admitted_stride_strategy}
+                if admitted_stride_strategy is not None
+                else {}
+            ),
             **({"stride_review_evidence": source_review} if source_review is not None else {}),
         })
     except EffectRuntimeRejected as exc:
@@ -429,6 +458,7 @@ def build_replan_action_packet(
     goal_id: str | None = None,
     agent_id: str | None = None,
     bounded_research_frontier: Mapping[str, Any] | None = None,
+    admitted_stride_strategy: str | None = None,
 ) -> dict[str, Any]:
     settlement_packet = obligation.get("settlement_action_packet")
     if isinstance(settlement_packet, Mapping):
@@ -473,7 +503,10 @@ def build_replan_action_packet(
             "explore_result_node_refs"
         ),
     )
-    requirements = replan_writeback_requirements(obligation)
+    requirements = replan_writeback_requirements(
+        obligation,
+        admitted_stride_strategy=admitted_stride_strategy,
+    )
     writeback_contract = requirements["writeback_contract"]
     successor_summary = str(
         selected_gap_values.get("successor_summary") or ""

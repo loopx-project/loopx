@@ -8,6 +8,9 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from ..work_items.stride_policy_codec import (
+    resolve_receipt_bound_stride_strategy,
+)
 from ...quota import build_quota_should_run
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
 from ...command_invocation import (
@@ -64,6 +67,9 @@ ProgressReviewContextReader = Callable[[Mapping[str, Any], Path], dict[str, Any]
 def _receipt_bound_guard_fields(
     readback: QuotaSettlementReadback | None,
     obligation_id: str | None,
+    *,
+    raw_goal: Mapping[str, Any] | None = None,
+    runtime_root: Path | None = None,
 ) -> dict[str, Any]:
     """Adapt the recorded guard identity and time for the shared decision owner."""
     guard = getattr(readback, "semantic_replan_guard", None)
@@ -85,6 +91,15 @@ def _receipt_bound_guard_fields(
         "receipt_bound_admission_event_id": getattr(readback, "admission_event_id", None),
         "receipt_bound_guard_turn_instance_id": identity.turn_instance_id if identity is not None else None,
         "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
+        "receipt_bound_admitted_stride_strategy": (
+            resolve_receipt_bound_stride_strategy(
+                guard,
+                raw_goal=raw_goal,
+                runtime_root=runtime_root,
+            )
+            if guard_scoped
+            else None
+        ),
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
 
@@ -899,7 +914,10 @@ def build_live_quota_should_run_decision(
         settlement_readback.replay_phase if settlement_readback else None
     )
     receipt_bound_guard_fields = _receipt_bound_guard_fields(
-        settlement_readback, receipt_bound_replan_obligation_id,
+        settlement_readback,
+        receipt_bound_replan_obligation_id,
+        raw_goal=registered_goal,
+        runtime_root=runtime_root,
     )
     admission_event_id = receipt_bound_guard_fields.pop("receipt_bound_admission_event_id")
     if (

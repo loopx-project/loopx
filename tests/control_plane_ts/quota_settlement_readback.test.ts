@@ -74,9 +74,36 @@ test("semantic replan guard distinguishes legacy, none, and exact selection", ()
     scope: "turn_guard",
     selected_obligation_id: "replan-0000000000000001",
   });
+  assert.deepEqual(projectSemanticReplanGuard({
+    semantic_replan_obligation_id: "replan-0000000000000001",
+    semantic_replan_stride_strategy: "evidence_conditioned_v1",
+  }), {
+    schema_version: "semantic_replan_guard_v0",
+    scope: "turn_guard",
+    selected_obligation_id: "replan-0000000000000001",
+    admitted_stride_strategy: "evidence_conditioned_v1",
+  });
   assert.throws(
     () => projectSemanticReplanGuard({ semantic_replan_obligation_id: "bad" }),
     /semantic replan guard is malformed/,
+  );
+  assert.throws(
+    () => projectSemanticReplanGuard({ semantic_replan_stride_strategy: "evidence_conditioned_v1" }),
+    /selected obligation/,
+  );
+  assert.throws(
+    () => projectSemanticReplanGuard({
+      semantic_replan_obligation_id: "",
+      semantic_replan_stride_strategy: "evidence_conditioned_v1",
+    }),
+    /selected obligation/,
+  );
+  assert.throws(
+    () => projectSemanticReplanGuard({
+      semantic_replan_obligation_id: "replan-0000000000000001",
+      semantic_replan_stride_strategy: "invalid_strategy",
+    }),
+    /semantic_replan_stride_strategy is malformed/,
   );
 });
 
