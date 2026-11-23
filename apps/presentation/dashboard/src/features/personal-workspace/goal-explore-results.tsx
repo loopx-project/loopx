@@ -31,8 +31,13 @@ function relatedCandidateMeasurements(findings: Finding[], selected?: Finding) {
         row.input_revision, row.evaluation_ref, row.evidence_ref]);
       const previous = byResult.get(key);
       if (previous) {
-        previous.conflict ||= previous.measurement.value !== row.value
-          || previous.measurement.higher_is_better !== row.higher_is_better;
+        const {value, higher_is_better} = previous.measurement;
+        previous.conflict ||= higher_is_better !== row.higher_is_better
+          || (value !== null && row.value !== null && value !== row.value);
+        if (value === null && row.value !== null) {
+          previous.finding = finding;
+          previous.measurement = row;
+        }
       } else {
         byResult.set(key, {finding, measurement: row, conflict: false});
       }

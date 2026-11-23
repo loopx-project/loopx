@@ -40,14 +40,19 @@ quality={**profile,'candidate_ref':candidate,'evidence_ref':'result:quality','va
 latency={**quality,'metric':'latency','unit':'ms','higher_is_better':False,'evidence_ref':'result:latency','value':21.5}
 independent={**quality,'comparison_scope':'validation:independent','evaluation_ref':'evaluator:independent-v1',
     'evidence_ref':'result:independent','value':63}
-unmeasured={**quality,'metric':'memory','unit':'MiB','evidence_ref':'result:memory','value':None}
+unmeasured_memory={**quality,'metric':'memory','unit':'MiB','evidence_ref':'result:memory','value':None}
+unmeasured_disk={**unmeasured_memory,'metric':'disk','evidence_ref':'result:disk'}
+unmeasured_energy={**unmeasured_memory,'metric':'energy','unit':'J','evidence_ref':'result:energy'}
 measurements=[
     [quality,latency],
     [{**quality,'value':999}],
     [{**latency,'higher_is_better':True},independent],
-    [independent,unmeasured],
+    [independent,unmeasured_memory,unmeasured_energy],
+    [{**unmeasured_memory,'value':84}],
+    [{**unmeasured_disk,'value':96}],
+    [unmeasured_disk],
 ]
-for index in range(4):
+for index in range(len(measurements)):
     node=f'independent-{index}'
     events.append(build_explore_node_event(goal_id=goal,node_id=node,title='合成研究：质量、延迟和未知成本应如何一起判断？',recorded_at='2026-01-01T00:00:00Z'))
     events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'other-{index}',title='同名独立问题的记录',status='refuted',
@@ -204,7 +209,7 @@ export const researchFindingReaderScenario = {
       assert.equal(await questionGroups.nth(0).locator("h4").innerText(), await questionGroups.nth(1).locator("h4").innerText(),
         "Identical titles from different question IDs remain separate groups");
       await history.getByRole("button", {name: /显示更多问题/}).click();
-      assert.equal(await questionGroups.count(), 5, "Every independent question remains reachable");
+      assert.equal(await questionGroups.count(), 8, "Every independent question remains reachable");
       assert.match(await questionGroups.last().innerText(), /1 条决策记录.*已反驳 1.*停止/s);
       await history.getByRole("button", {name: /^中段 ·/}).click();
       assert.equal(await questionGroups.count(), 1, "Time filtering applies before grouping");
@@ -268,12 +273,27 @@ export const researchFindingReaderScenario = {
       const related = finding.locator(".explore-related-measurements");
       await related.locator(":scope > summary").click();
       const readings = await related.locator(".explore-measurement-reading strong").allTextContents();
-      assert.deepEqual(readings.sort(), ["63", "Not measured"], "Separate evaluations and unknown values survive; repeated and conflicting readings do not recur as other results");
+      assert.deepEqual(readings.sort(), ["63", "84", "96", "Not measured"],
+        "Measured readings survive same-direction unknown citations in both orders; independent unknowns and genuine conflicts keep their meaning");
       assert.match(await related.innerText(), /Conflicting readings from the same result/);
-      assert.deepEqual(await finding.locator(":scope > .explore-measurements .explore-measurement-reading strong").allTextContents(), ["70", "21.5"]);
+      const originalReadings = finding.locator(":scope > .explore-measurements .explore-measurement-reading strong");
+      assert.deepEqual(await originalReadings.allTextContents(), ["70", "21.5"]);
+      const order = await findingPicker.evaluate(element => Array.from(element.options, option => option.value));
+      assert.notEqual(order.indexOf("other-3") < order.indexOf("other-4"), order.indexOf("other-6") < order.indexOf("other-5"),
+        "The memory and disk groups encounter measured and unknown readings in opposite orders");
+
+      for (const [unknownId, measuredId, value] of [["other-3", "other-4", "84"], ["other-6", "other-5", "96"]]) {
+        await findingPicker.selectOption(unknownId);
+        assert((await originalReadings.allTextContents()).includes("Not measured"), "The selected original preserves its unknown reading");
+        await related.locator(":scope > summary").click();
+        const measuredSource = related.locator(":scope > section").filter({has: page.getByText(value, {exact: true})});
+        await measuredSource.locator(".explore-related-finding-source").click();
+        assert.equal(await findingPicker.inputValue(), measuredId);
+        assert.deepEqual(await originalReadings.allTextContents(), [value], "The associated result opens its measured source");
+      }
+
       await findingPicker.selectOption("other-1");
-      assert.equal(await finding.locator(":scope > .explore-measurements .explore-measurement-reading strong").textContent(), "999",
-        "Readers can still open the original finding with the disputed value");
+      assert.equal(await originalReadings.textContent(), "999", "Readers can still open the original finding with the disputed value");
 
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
       assert(readback.source_unchanged && readback.mutation_attempts === 0, "Reading, switching and recovery have no execution or source-write effect");
