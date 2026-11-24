@@ -563,11 +563,12 @@ Self-service:
    ```bash
    node=<supported node binary> &&
    node_qualifies() {
-     case "$1" in
-       *$'\n'* | *$'\r'*) return 1 ;;
+     normalized="$(printf '%s' "$1" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+     case "$normalized" in
+       '' | *$'\n'*) return 1 ;;
      esac
-     printf '%s\n' "$1" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || return 1
-     printf '%s\n' "$1" | awk '
+     printf '%s\n' "$normalized" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || return 1
+     printf '%s\n' "$normalized" | awk '
        {
          sub(/^v/, "")
          n = split($0, a, /[.+-]/)
@@ -607,16 +608,17 @@ Self-service:
    ```
 
    `node_qualifies` is the single version judgment shared by the candidate
-   and the installed link, and it follows `probe_node()`: the whole captured
-   output must be exactly one `v?[maj.min.pat]` line — extra output lines
-   fail the newline check before anything is matched — with an optional
-   prerelease after `-` and an optional build after `+`; malformed fields or
-   missing segments fail the shape check. The base triple must reach
-   22.22.3, and a base sitting exactly on the minimum is rejected when a
-   prerelease is present, while `22.22.3+build-5`, whose hyphen belongs to
-   the build metadata, still qualifies. The installed link is qualified
-   through the same function after the swap, with the `else` branch above as
-   the undo path. The two `--version` lines remain as the readback prints.
+   and the installed link, and it follows `probe_node()`'s order: the whole
+   captured output is trimmed of its surrounding whitespace and carriage
+   returns first, and the single-line, shape, and floor checks then run on
+   that normalized result — a CRLF or whitespace-padded launcher output
+   qualifies exactly as the plain form does. Extra non-empty lines inside
+   the output still fail, the base triple must reach 22.22.3, and a base
+   sitting exactly on the minimum is rejected when a prerelease is present,
+   while `22.22.3+build-5`, whose hyphen belongs to the build metadata,
+   still qualifies. The installed link is qualified through the same
+   function after the swap, with the `else` branch above as the undo path.
+   The two `--version` lines remain as the readback prints.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
