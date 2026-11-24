@@ -34,4 +34,3 @@ export function useLoopxStatus(token: string | undefined, refreshMs = 15000) {
   }, [token, refreshMs, nonce]);
   return { ...read, reload: () => setNonce(value => value + 1) };
 }
-
