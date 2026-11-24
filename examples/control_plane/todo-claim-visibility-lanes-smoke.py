@@ -517,7 +517,7 @@ def assert_claim_visibility_lanes_split_current_other_and_task_class() -> None:
     assert lanes["current_agent_claimed_monitor_count"] == 1, lanes
     assert lanes["claimed_by_others_count"] == 1, lanes
     current = lanes["current_agent_claimed_advancement_items"][0]
-    assert current["required_write_scopes"] == ["loopx/**"], current
+    assert "required_write_scopes" not in current, current
     assert current["decision_scope"]["scope_key"] == "claim", current
     assert lanes["claimed_by_others_items"][0]["todo_id"] == "todo_other_advancement"
 

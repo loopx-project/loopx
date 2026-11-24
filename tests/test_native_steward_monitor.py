@@ -858,9 +858,15 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
     if not background_recovered:
         assert local_watch_row(runtime, actor, todo_id) == watch
     if queued_request is not None:
-        assert [row["turn_id"] for row in store.queued_turns(foreground_sid)] == [queued_request["turn_id"]]
+        assert store.queued_turns(foreground_sid) == [queued_request]
     if stopped_recovery is not None:
         assert store.load_turn(sid, stopped_recovery["turn_id"]) == stopped_recovery
+    if background_recovered:
+        # The owning App conversation still mirrors the queued user input.
+        # The background observation must not add a provider message of its own.
+        transport._web_projection_scan_at = 0
+        writes.append(("steward-app", "**你（App）**\n\n" + queued_request["message"]))
+    transport.reconcile()
     transport.reconcile()
     assert capture.read_bytes() == calls and steward[2].writes == writes
 
@@ -1049,10 +1055,12 @@ def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(stewar
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_restarted_host_reads_paused_state_then_runs_one_fresh_native_generation(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_monitor import steward_background_session_id
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
-    _, runtime, _, _, binding, capture, _ = steward
-    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    store, runtime, _, _, binding, capture, _ = steward
+    foreground_id, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    foreground_messages = store.messages(foreground_id)
     plan = monitor.configure(binding["binding_id"], operation="pause")["plan"]
     monitor.configure(binding["binding_id"], operation="pause", execute=True, expected_plan_id=plan["plan_id"])
     retained, calls = monitor.current(actor), capture.read_bytes()
@@ -1069,9 +1077,12 @@ def test_restarted_host_reads_paused_state_then_runs_one_fresh_native_generation
         due_window(monitor, actor)
         turns = pump_steward_monitors(restarted)
         assert len(turns) == 1 and finish(restarted, turns[0])["status"] == "completed"
+        background_id = steward_background_session_id(binding["binding_id"])
+        assert turns[0]["session_id"] == background_id
         assert not pump_steward_monitors(restarted) and capture.read_bytes() == calls
         assert monitor.current(actor)["todo_id"] == retained["todo_id"]
-        assert len(restarted.store.list_sessions()) == 1
+        assert {row["session_id"] for row in restarted.store.list_sessions()} == {foreground_id, background_id}
+        assert restarted.store.messages(foreground_id) == foreground_messages
     finally:
         restarted.close()
 
