@@ -375,7 +375,7 @@ class ChatActionService(
         })
 
     def _creation_agent_eligibility(
-        self, agent_id: str, *, project: Path | None = None
+        self, agent_id: str, *, project: Path | None = None, host_session: bool = False
     ) -> dict[str, object]:
         """Availability refusal for a Goal's first Agent becomes a typed gate.
 
@@ -385,10 +385,14 @@ class ChatActionService(
         names the Agent and, when the catalog states it, why it is unavailable.
         Nothing is written and nothing is granted; a working Agent still goes
         through the same eligibility check.
+
+        ``host_session`` (``open_session=false``): the host that asked runs the
+        Goal's conversation on its own copy of the Agent, so this core's endpoint
+        for it need not be live; it must still be registered and able to run tools.
         """
 
         try:
-            return self._agent_eligibility(agent_id, project=project)
+            return self._agent_eligibility(agent_id, project=project, require_healthy=not host_session)
         except _AgentUnavailableError as exc:
             row = exc.capability
             gate: dict[str, object] = {
@@ -412,6 +416,7 @@ class ChatActionService(
         *,
         project: Path | None = None,
         requires_tools: bool = True,
+        require_healthy: bool = True,
     ) -> dict[str, object]:
         if self.runtime_controller is None:
             return {
@@ -433,7 +438,7 @@ class ChatActionService(
         )
         if row is None:
             raise _AgentUnavailableError("selected Agent endpoint is not registered")
-        if row.get("available") is not True:
+        if require_healthy and row.get("available") is not True:
             raise _AgentUnavailableError("selected Agent endpoint is not healthy", capability=row)
         if requires_tools and row.get("tool_calls") is not True:
             raise ValueError("selected Agent endpoint cannot execute Goal tools")
@@ -735,7 +740,6 @@ class ChatActionService(
                 raise conflict
         elif current_fingerprint != proposal.get("expected_state_fingerprint"):
             return self._stale_proposal(proposal_id, current_fingerprint)
-        self._agent_eligibility(str(parameters.get("agent_id") or "codex"), project=project)
         self.store.save_checkpoint(
             proposal_id,
             step="workspace_validated",
@@ -744,6 +748,13 @@ class ChatActionService(
                 "workspace_ref": str(parameters.get("workspace_ref") or "current"),
                 "workspace_digest": workspace_digest,
             },
+        )
+        # The workspace is already verified. Keep its identity if the Agent
+        # goes offline between preview and confirmation.
+        self._agent_eligibility(
+            str(parameters.get("agent_id") or "codex"),
+            project=project,
+            require_healthy=parameters.get("open_session") is not False,
         )
         runtime_root = resolve_runtime_root(
             self._registry(), self.runtime_root_override, registry_path=self.registry_path
@@ -1289,7 +1300,9 @@ class ChatActionService(
                 }
             )
             agent_id = str(normalized.get("agent_id") or "codex")
-            eligibility = self._creation_agent_eligibility(agent_id, project=project)
+            eligibility = self._creation_agent_eligibility(
+                agent_id, project=project, host_session=normalized.get("open_session") is False
+            )
             workspace_binding = self._goal_workspace_binding(
                 project, source_goal, requested_ref=str(normalized.get("workspace_ref") or "current")
             )

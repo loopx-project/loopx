@@ -19,21 +19,20 @@ from datetime import datetime, timezone
 from functools import cached_property, partial
 from itertools import tee
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ...capabilities.native_chat.external_conversations import (
     ChatExternalConversations,
     QUOTA_BACKLOG_BATCH_SIZE,
     STEWARD_BINDING_ADOPTION_PENDING,
 )
-from ...capabilities.native_chat.file_discovery import (
-    FileChatDiscovery, optional_file_fingerprint, reply_image_workspace,
-)
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery, reply_image_workspace
 from ...chat.attachments import CHAT_IMAGE_MAX_COUNT
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
+from . import private_mention_topics
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
 from .event_collector_runtime import enrich_lark_event_reply_context
@@ -48,13 +47,18 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
 from .outbound import normalize_lark_outbound_text, present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
 from .private_delivery_discovery import (
-    PrivateDeliveryDiscovery, answer_image_retry_waits, answer_image_source_matches, answer_media_dispatch,
-    failure_notice_receipt_unknown, historical_image_plan, historical_image_reply_matches, historical_image_source,
-    is_answer_image_followup, prepared_steward_binding_waits, private_answer_images, resumable_answer_image_session,
+    PrivateDeliveryDiscovery, answer_image_retry_delay, answer_image_retry_waits,
+    answer_image_source_matches, answer_media_dispatch, context_recovery_backoff_valid,
+    context_recovery_fingerprints, failure_notice_receipt_unknown,
+    historical_image_reply_matches, historical_image_source, is_answer_image_followup,
+    load_historical_image_plan, prepared_steward_binding_waits, private_answer_images,
+    record_context_recovery_noop_backoff, remote_answer_image_urls_plausible,
+    resumable_answer_image_session, session_recovery_backoff_token,
 )
 from .private_ingress import PrivateSourceUnavailable, private_source_text, recovery_source_matches, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from . import private_steward_triage as triage
+from .private_topic_lanes import expected_private_source, finalize_private_steward_lane, resolve_private_steward_lane
 from .return_files import read_answer_images, uploaded_chat_images, verify_chat_images
 from .private_progress import (PROGRESS_EDIT_BUDGET as PROGRESS_EDIT_BUDGET, PrivateProgressMixin,
                                presentation_phase, presentation_stream)
@@ -631,8 +635,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
                       session_id=admitted["session_id"], turn_id=admitted["turn_id"],
                       response=admitted.get("response"), response_code=admitted.get("response_code"))
-        if admitted.get("context_recovery"):
-            record["context_recovery"] = admitted["context_recovery"]
+        if recovery := admitted.get("context_recovery") or private_mention_topics.replay_presentation(admitted):
+            record["context_recovery"] = recovery
         if admitted.get("mention_delivery"):
             record["mention_delivery"] = admitted["mention_delivery"]
         _atomic_write_json(path, record)
@@ -774,21 +778,22 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     or binding.get("audience", "owner") != "owner" or event.get("chat_type") != "p2p"):
                 return {"status": "history_answer_held"}
             request = identity_ref(binding["provider_ref"], event["message_id"])
-            control_root = self._admitted_control_root({"request_ref": request, "source": source,
-                                                       "event": event}, binding)
+            control_root = self._admitted_control_root({"request_ref": request, "source": source, "event": event}, binding)
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
-        path = self.root / f"{request}.json"
+        path, base_source = self.root / f"{request}.json", source
         record_event_timing(profile, event["message_id"], "binding_hint_ready")
 
-        def new_capture() -> dict[str, Any]:
+        def new_capture(resolved_source: dict[str, Any], auto_lane: bool) -> dict[str, Any]:
             return {"schema_version": "lark_private_chat_delivery_v0", "request_ref": request, "profile": profile,
-                    "binding_id": binding["binding_id"], "source": source, "event": event, "deliveries": {}, "status": "captured",
-                    **({"capture_origin": "provider_history"} if history_review else {})}
+                    "binding_id": binding["binding_id"], "source": resolved_source, "event": event, "deliveries": {}, "status": "captured",
+                    **({"auto_topic_lane": True} if auto_lane else {}), **({"capture_origin": "provider_history"} if history_review else {})}
 
         with exclusive_file_lock(path, operation="capture_private_chat_request"):
             record_event_timing(profile, event["message_id"], "capture_lock_acquired")
             fresh_capture = not path.exists()
+            source, auto_topic_lane = resolve_private_steward_lane(controller=self.core.controller, binding=binding, base_source=base_source,
+                event=event, existing_record=None if fresh_capture else _read_json(path), history_review=history_review, allow_auto_fork=False)
             # Retain a candidate from the locally bound owner before provider
             # identity IO can fail. This private receipt grants no execution:
             # recovery still verifies the App, current owner, source and Core
@@ -796,7 +801,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             # existing pre-capture privacy boundary.
             if (fresh_capture and binding.get("enabled") is True and binding.get("audience", "owner") == "owner"
                     and source.get("private_human_message") is True and source["sender_ref"] == binding["operator_ref"]):
-                _atomic_write_json(path, new_capture())
+                _atomic_write_json(path, new_capture(source, auto_topic_lane))
             mention_capture = self.core.capture_native_mention(binding, source) if fresh_capture else None
             if fresh_capture and path.exists():
                 captured = _read_json(path)
@@ -824,7 +829,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                         not omitted_private_thread and saved_event.get("thread_id") != event.get("thread_id")):
                     return {"status": "source_conflict"}
             else:
-                record = new_capture()
+                record = new_capture(source, auto_topic_lane)
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
             # Verified transport-only replies have no Core Turn to recover.
@@ -951,6 +956,9 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     preflight = (steward_source_preflight(selected["binding"], source_message,
                         lambda fresh: self._source_message(record, selected=fresh)) if command is None else None)
                     native_mention = command is None and source_message.get("_native_mention") is True
+                    source, selected = finalize_private_steward_lane(transport=self, path=path, record=record, binding=binding,
+                        base_source=base_source, current_source=source, selected=selected, event=event, request_ref=request,
+                        fresh_capture=fresh_capture, history_review=history_review, is_control_or_mention=(command is not None or native_mention))
                     if native_mention:
                         previous_preflight = preflight
 
@@ -966,6 +974,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                                 raise ValueError("native mention source changed")
 
                         preflight = verify_mention
+                        native_mention = private_mention_topics.steer_in_topic(self, path, record, binding)
                     admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                         request_ref=request, message=text, command=command, attachments=attachments,
                         defer_background_stop=defer_background_stop, source_preflight=preflight,
@@ -1024,8 +1033,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 or turn.get("session_id") != session["session_id"]
                 or record.get("profile") != selected["binding"]["transport_ref"]
                 or record.get("request_ref") != request
-                or record.get("source") != lark_private_source(
-                    provider_ref=selected["binding"]["provider_ref"], event=record["event"])
+                or record.get("source") != expected_private_source(
+                    provider_ref=selected["binding"]["provider_ref"], event=record["event"], saved_context=saved)
                 or record["source"]["source_ref"] != saved["source_ref"]
                 or any(row.get("binding_id") != saved["binding_id"]
                        or row.get("source") != record["source"]
@@ -1171,16 +1180,14 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             save_phase(text=text, started=True)
             return {"continue_delivery": True}
 
+        effective_placement = "source_thread" if reply_placement is None and record.get("auto_topic_lane") is True else reply_placement
+        placed_kwargs = {**kwargs, "reply_placement": effective_placement}
         if edit:
-            result = update_lark_inbox_reply(**kwargs, previous_text=edit["text"], attempt=edit["attempt"],
-                before_send=before_send, delivery_attempt_recorder=lambda value: save_phase(attempt=dict(value)),
-                require_previous_text_match=edit_only)
+            result = update_lark_inbox_reply(**placed_kwargs, previous_text=edit["text"], attempt=edit["attempt"],
+                before_send=before_send, delivery_attempt_recorder=lambda value: save_phase(attempt=dict(value)), require_previous_text_match=edit_only)
             if not edit_only and result.get("blocker") == "provider_update_edit_limit":
-                # A confirmed edit rejection plus fresh non-matching readback
-                # proves this final did not reach the draft. Preserve its proof
-                # and use the existing source-bound, idempotent final sender.
-                # Recovery of older, already-started final edits takes this
-                # same path; an ambiguous failure must never take it.
+                # Confirmed edit rejection plus fresh non-matching readback proves this final did not reach the draft;
+                # preserve its proof and use the idempotent final sender (never taken on ambiguous failures).
                 stream["edit_limit_reached"] = True
                 rejected = {"blocker": result["blocker"], "edit_from": edit, "attempt": phase_state.get("attempt")}
                 for key in ("edit_from", "attempt", "started"):
@@ -1188,16 +1195,14 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 save_phase(rejected_update=rejected)
                 return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
             if not edit_only and result.get("blocker") in {"provider_update_too_large", "provider_update_format_unsupported"}:
-                # Do not truncate long/mention-bearing final answers to fit a
-                # draft. Close it, then use the established full final sender.
+                # Close the draft without truncating long/mention-bearing finals, then use the full final sender.
                 if not self._close_progress(path, record, inbox=inbox) and not stream.get("edit_limit_reached"):
                     return False
                 phase_state.pop("edit_from", None)
                 save_phase()
                 return self._deliver(path, record, phase, text, inbox=inbox, finalize_source=finalize_source)
         elif phase_state.get("attempt"):
-            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True,
-                                            before_send=before_send)
+            result = verify_lark_inbox_reply(**placed_kwargs, attempt=phase_state["attempt"], resume_parts=True, before_send=before_send)
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly or churn disk.
@@ -1209,7 +1214,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 phase_state["attempt"] = dict(value)
                 _atomic_write_json(path, record)
 
-            result = reply_lark_event_inbox(**kwargs, execute=True, before_send=before_send,
+            result = reply_lark_event_inbox(**{**kwargs, "reply_placement": effective_placement}, execute=True, before_send=before_send,
                                            delivery_attempt_recorder=attempt, short_message_limit=None,
                                            content_format="markdown",
                                            overlap_source_preflight=bool(kind == "terminal" and self._completed_stop_root(
@@ -1314,15 +1319,23 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         now = datetime.now(timezone.utc).timestamp()
         if answer_image_retry_waits(record, now):
             return False
-        state.update(status="pending", next_check_at=now + ANSWER_IMAGE_RETRY_SECONDS)
+        retry_count = int(state.get("retry_count") or 0) + 1
+        state.update(
+            status="pending",
+            retry_count=retry_count,
+            next_check_at=now + answer_image_retry_delay(retry_count, base_seconds=ANSWER_IMAGE_RETRY_SECONDS),
+        )
         _atomic_write_json(path, record)
         try:
             event = record["event"]
             origin = event.get("content")
             if (not isinstance(targets, list) or not 1 <= len(targets) <= CHAT_IMAGE_MAX_COUNT
-                    or event.get("message_type") != "text"
-                    or not isinstance(origin, str) or not authorized() or not self._source_authority(
-                        record, record["profile"], event["chat_id"], event["message_id"], expected_text=origin)[1]):
+                    or event.get("message_type") != "text" or not isinstance(origin, str)):
+                raise ValueError("answer image source unavailable or not authorized")
+            if answer_image_plan is None and not remote_answer_image_urls_plausible(origin, targets):
+                raise ValueError("answer image targets are not verifiable remote URLs")
+            if not authorized() or not self._source_authority(
+                    record, record["profile"], event["chat_id"], event["message_id"], expected_text=origin)[1]:
                 raise ValueError("answer image source unavailable or not authorized")
             if answer_image_plan is not None and (
                     None in targets or [target for target in targets if isinstance(target, str)] != remote_targets):
@@ -1346,38 +1359,26 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     return False
                 state.update(status="delivered")
                 state.pop("attachments", None)
+                state.pop("retry_count", None)
                 _atomic_write_json(path, record)
                 return True
         except (KeyError, ValueError, OSError, http.client.HTTPException):
             pass
         state["status"] = "unverified"
         _atomic_write_json(path, record)
-        notice = ("正文已送达，图片尚未核验送达。"
-                  if answer_image_plan is not None else "正文已送达，图片尚未核验送达。有链接的图名可打开原始来源。")
-        self._deliver(path, record, "answer_image_notice." + phase, notice,
-                      inbox=inbox, authorization_check=authorized, finalize_source=False)
+        notice_phase = "answer_image_notice." + phase
+        if (record["deliveries"].get(notice_phase) or {}).get("verified") is not True:
+            notice = ("正文已送达，图片尚未核验送达。"
+                      if answer_image_plan is not None else "正文已送达，图片尚未核验送达。有链接的图名可打开原始来源。")
+            self._deliver(path, record, notice_phase, notice,
+                          inbox=inbox, authorization_check=authorized, finalize_source=False)
         return False
 
     def _load_historical_image_plan(self, path: Path, record: dict[str, Any]) -> dict | None:
-        if record.get("historical_answer_images") is not None:
-            return record["historical_answer_images"]
-        if not re.fullmatch(r"[a-f0-9]{24}", path.stem):
-            raise ValueError("invalid original request reference")
-        # This is a private local operator input, scoped to the existing receipt.
-        # It is never loaded from a project, provider message or model response.
-        try:
-            with (self.root / "historical-answer-images" / path.name).open("rb") as handle:
-                raw = handle.read(40_001)
-        except FileNotFoundError:
-            return None
-        if len(raw) > 40_000:
-            raise ValueError("original image repair descriptor exceeds its size limit")
-        plan = json.loads(raw)
-        if not isinstance(plan, dict) or path.stem != record.get("request_ref"):
-            raise ValueError("invalid original image repair descriptor")
-        plan = historical_image_plan(self.core, record, plan)
-        state = record["historical_answer_images"] = {"plan": plan, "status": "pending"}
-        _atomic_write_json(path, record)
+        had_state = record.get("historical_answer_images") is not None
+        state = load_historical_image_plan(self.root, self.core, path, record)
+        if state is not None and not had_state:
+            _atomic_write_json(path, record)
         return state
 
     def _reconcile_historical_answer_images(self, path: Path) -> int:
@@ -1390,7 +1391,9 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
             now = datetime.now(timezone.utc).timestamp()
             if not state or state.get("status") != "pending" or state.get("next_check_at", 0) > now:
                 return 0
-            state["next_check_at"] = now + ANSWER_IMAGE_RETRY_SECONDS
+            retry_count = int(state.get("retry_count") or 0) + 1
+            state["retry_count"] = retry_count
+            state["next_check_at"] = now + answer_image_retry_delay(retry_count, base_seconds=ANSWER_IMAGE_RETRY_SECONDS)
             _atomic_write_json(path, record)
             plan = state["plan"]
             try:
@@ -1456,6 +1459,7 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                 return 0
             state.update(status="delivered")
             state.pop("attachments", None)
+            state.pop("retry_count", None)
             _atomic_write_json(path, record)
             return 1
 
@@ -1487,47 +1491,53 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                  and not is_answer_image_followup(row) and not failure_notice_receipt_unknown(row)]
         return [*paths, *self._pending_web_projection_paths()]
 
-    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[tuple[int, ...], ...], int]]:
+    def _noop_backoff_cache(self) -> dict[Path, tuple[tuple[Any, ...], int]]:
         cache = getattr(self, "_context_recovery_noop_backoff", None)
         if cache is None:
             cache = {}
             self._context_recovery_noop_backoff = cache
         return cache
 
+    def _session_token_cache(self) -> dict[Path, tuple[tuple[int, ...], tuple[str, bool, str]]]:
+        cache = getattr(self, "_session_backoff_token_cache", None)
+        if cache is None:
+            cache = {}
+            self._session_backoff_token_cache = cache
+        return cache
+
+    def _session_recovery_backoff_token(self, session_path: Path) -> tuple[str, bool, str] | None:
+        return session_recovery_backoff_token(session_path, self._session_token_cache())
+
     def _context_recovery_fingerprints(
-        self, path: Path, request_ref: str, session_id: str, turn_id: str,
-    ) -> tuple[tuple[int, ...], ...] | None:
-        core_root = getattr(self.core, "root", None)
-        store = getattr(getattr(self.core, "controller", None), "store", None)
-        if not isinstance(core_root, Path) or store is None:
-            return None
-        try:
-            tokens = tuple(optional_file_fingerprint(item) for item in (
-                path, core_root / f"{request_ref}.json", store._turn_path(session_id, turn_id),
-                store._session_path(session_id), store._event_path(session_id, turn_id)))
-        except (OSError, ValueError, TypeError, AttributeError):
-            return None
-        return None if any(token is None for token in tokens) else tokens
+        self, path: Path, request_ref: str, session_id: str, turn_id: str, *,
+        path_fp: tuple[int, ...] | None = None,
+        session_tokens: dict[Path, tuple[str, bool, str] | None] | None = None,
+    ) -> tuple[Any, ...] | None:
+        return context_recovery_fingerprints(
+            self.core, path, request_ref, session_id, turn_id, self._session_token_cache(),
+            path_fp=path_fp, session_tokens=session_tokens,
+        )
+
+    @staticmethod
+    def _context_recovery_backoff_valid(saved: tuple[Any, ...], current: tuple[Any, ...] | None) -> bool:
+        return context_recovery_backoff_valid(saved, current)
 
     def _clear_context_recovery_noop_backoff(self, path: Path) -> None:
         self._noop_backoff_cache().pop(path, None)
 
-    def _record_context_recovery_noop_backoff(self, path: Path, row: Mapping[str, Any]) -> None:
-        cache = self._noop_backoff_cache()
-        current = self._context_recovery_fingerprints(path, row["request_ref"], row["session_id"], row["turn_id"])
-        if current is None:
-            # An untrusted token is not a stable backoff identity.
-            cache.pop(path, None)
-            self._context_recovery_probe_at[path] = time.monotonic() + 60.0
-            return
-        prev = cache.get(path)
-        streak = prev[1] + 1 if prev is not None and prev[0] == current else 1
-        cache[path] = (current, streak)
-        if streak <= 1:
-            delay = 60.0
-        else:
-            delay = float(min(1800, 60 * (2 ** min(streak - 1, 5))) + zlib.crc32(path.name.encode("utf-8")) % 60)
-        self._context_recovery_probe_at[path] = time.monotonic() + delay
+    def _record_context_recovery_noop_backoff(
+        self, path: Path, row: Mapping[str, Any], *, stagger_first: bool = False,
+        fingerprints: tuple[Any, ...] | None | object = _UNSET,
+    ) -> None:
+        current = (
+            self._context_recovery_fingerprints(path, row["request_ref"], row["session_id"], row["turn_id"])
+            if fingerprints is _UNSET else fingerprints
+        )
+        record_context_recovery_noop_backoff(
+            self._noop_backoff_cache(), self._context_recovery_probe_at, path,
+            None if current is _UNSET else cast(tuple[object, ...] | None, current),
+            now_monotonic=time.monotonic(), stagger_first=stagger_first,
+        )
 
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
@@ -1537,7 +1547,13 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         now = datetime.now(timezone.utc).timestamp()
         planned_repairs = self._planned_historical_repairs()
         noop_backoff = self._noop_backoff_cache()
-        for path, row, repairs in self._delivery_discovery.rows():
+        scanned_rows: list[tuple[Path, dict[str, Any], bool]] = []
+        session_tokens: dict[Path, tuple[str, bool, str] | None] = {}
+        rows_iter = getattr(self._delivery_discovery, "rows_with_fingerprints", None)
+        entries = (rows_iter() if callable(rows_iter)
+                   else ((path, row, repairs, None) for path, row, repairs in self._delivery_discovery.rows()))
+        for path, row, repairs, path_fp in entries:
+            scanned_rows.append((path, row, repairs))
             receipt_unknown = failure_notice_receipt_unknown(row)
             if row["status"] != "delivered" and not receipt_unknown:
                 if triage.pending(row) and not answer_image_retry_waits(row, now):
@@ -1548,11 +1564,15 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     and time.monotonic() >= self._historical_image_probe_at.get(path, 0)):
                 paths.append(path)
             elif row.get("session_id") and row.get("turn_id"):
+                current_fp: object = _UNSET
                 saved_backoff = noop_backoff.get(path)
-                if saved_backoff is not None and self._context_recovery_fingerprints(
-                        path, row["request_ref"], row["session_id"], row["turn_id"]) != saved_backoff[0]:
-                    noop_backoff.pop(path, None)
-                    self._context_recovery_probe_at.pop(path, None)
+                if saved_backoff is not None:
+                    current_fp = self._context_recovery_fingerprints(
+                        path, row["request_ref"], row["session_id"], row["turn_id"],
+                        path_fp=path_fp, session_tokens=session_tokens)
+                    if not context_recovery_backoff_valid(saved_backoff[0], current_fp):
+                        noop_backoff.pop(path, None)
+                        self._context_recovery_probe_at.pop(path, None)
                 if time.monotonic() >= self._context_recovery_probe_at.get(path, 0):
                     # Only a discovery/backoff hint, never execution authority.
                     # The canonical request, provider effect inventory and source
@@ -1570,7 +1590,19 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     if repairs or candidate:
                         self._context_recovery_probe_at[path] = now_mono + 60
                         paths.append(path)
-        return [*paths, *self._web_projection_paths()]
+                    else:
+                        if current_fp is _UNSET:
+                            current_fp = self._context_recovery_fingerprints(
+                                path, row["request_ref"], row["session_id"], row["turn_id"],
+                                path_fp=path_fp, session_tokens=session_tokens)
+                        self._record_context_recovery_noop_backoff(
+                            path, row, stagger_first=True, fingerprints=current_fp)
+        self._web_projection_scan_rows = scanned_rows
+        try:
+            web_paths = self._web_projection_paths()
+        finally:
+            self._web_projection_scan_rows = None
+        return [*paths, *private_mention_topics.pending_replays(self, set(paths)), *web_paths]
 
     def is_recovery_path(self, path: Path) -> bool:
         """Schedule recovery of persisted attempts after fresh replies."""
@@ -1635,8 +1667,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
                     or turn.get("client_turn_id") != (record.get("context_recovery", {}).get("client_turn_id")
                         or f"external-{record['request_ref']}")
                     or identity_ref(saved["provider_ref"], record["event"]["message_id"]) != record["request_ref"]
-                    or record["source"] != lark_private_source(
-                        provider_ref=saved["provider_ref"], event=record["event"])):
+                    or record["source"] != expected_private_source(
+                        provider_ref=saved["provider_ref"], event=record["event"], saved_context=saved)):
                 return
             selected = self.bindings.resolve(binding_id=record["binding_id"],
                 session_context=saved, include_observation=True, **record["source"])
@@ -1676,6 +1708,8 @@ class LarkPrivateConversations(PrivateProgressMixin, PrivateWebProjectionMixin):
         row = _read_json(path)
         if "triage" in row:
             return triage.reconcile(self, path)
+        if private_mention_topics.reconcile_rejection(self, path, row):
+            return 0
         historical_images = row.get("historical_answer_images")
         if (row.get("status") == "delivered" and (
                 (historical_images or {}).get("status") == "pending"

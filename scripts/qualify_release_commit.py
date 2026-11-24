@@ -282,6 +282,7 @@ def _remove_tree_tolerant(root: Path) -> None:
 def _isolated_env(
     root: Path,
     *,
+    repo_root: Path,
     python_bin: Path,
     extra_bin_dirs: Sequence[Path],
 ) -> dict[str, str]:
@@ -308,7 +309,7 @@ def _isolated_env(
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(_STRIPPED_ENV_PREFIXES)
+        if key != "PYTHONHOME" and not key.startswith(_STRIPPED_ENV_PREFIXES)
     }
     path_parts = [str(python_bin.parent), *(str(item) for item in extra_bin_dirs)]
     if env.get("PATH"):
@@ -316,6 +317,7 @@ def _isolated_env(
     env.update(
         {
             "PATH": os.pathsep.join(path_parts),
+            "PYTHONPATH": str(repo_root),
             "HOME": str(home),
             "USERPROFILE": str(home),
             "TMPDIR": str(tmp),
@@ -446,7 +448,7 @@ def run_preflight(
         )
         return receipt
     root = Path(tempfile.mkdtemp(prefix="lxq-preflight-")).resolve()
-    env = _isolated_env(root, python_bin=python_bin, extra_bin_dirs=extra_bin_dirs)
+    env = _isolated_env(root, repo_root=repo_root, python_bin=python_bin, extra_bin_dirs=extra_bin_dirs)
     cmd = [
         str(python_bin),
         "-m",
@@ -511,7 +513,7 @@ def _run_shard(
         return cached, None
 
     root = Path(tempfile.mkdtemp(prefix=f"lxq-{group}-")).resolve()
-    env = _isolated_env(root, python_bin=python_bin, extra_bin_dirs=extra_bin_dirs)
+    env = _isolated_env(root, repo_root=repo_root, python_bin=python_bin, extra_bin_dirs=extra_bin_dirs)
     shard_durations_file: Path | None = None
     cmd = [
         str(python_bin),

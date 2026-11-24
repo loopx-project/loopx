@@ -62,8 +62,6 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file,
-                        # This fixture isolates vision authoring from Stride review.
-                        "execution_profile": {"stride_strategy": "off"},
                         "adapter": {"kind": "fixture", "status": "connected-read-only"},
                         "authority_sources": [],
                         "coordination": {
@@ -300,6 +298,11 @@ def assert_vision_budget(provider: str) -> None:
             "acceptance_summary"
         ], missing_baseline_gap
 
+        valid_packet = json.loads(valid_path.read_text(encoding="utf-8"))
+        valid_packet["stride_decision"] = missing_baseline_quota[
+            "replan_action_packet"
+        ]["stride_control"]["minimal_example"]
+        write_json(valid_path, valid_packet)
         valid = payload(
             run_cli(registry_path, runtime, vision_path=valid_path, check=True)
         )
@@ -360,7 +363,7 @@ def assert_vision_budget(provider: str) -> None:
         ), latest_status_vision
         assert latest_status_vision["todo_delta"] == ["create_successor"], latest_status_vision
         assert "field_limits" not in latest_status_vision["vision_budget"], latest_status_vision
-        assert latest_status_vision["vision_budget"]["field_usage"] == {
+        expected_usage = {
             "vision_summary": 63,
             "role_scope": 38,
             "acceptance_summary": 44,
@@ -371,7 +374,13 @@ def assert_vision_budget(provider: str) -> None:
             "path_delta.observed_reality": 58,
             "path_delta.retained[0]": 47,
             "path_delta.evidence_refs[0]": 27,
-        }, latest_status_vision
+            "stride_decision.strategy_version": 23,
+        }
+        for key, value in expected_usage.items():
+            assert latest_status_vision["vision_budget"]["field_usage"].get(key) == value, (
+                key,
+                latest_status_vision,
+            )
         assert latest_status_checkpoint["agent_id"] == AGENT_ID, latest_status_checkpoint
         assert latest_status_checkpoint["decision"] == "patched", latest_status_checkpoint
         assert latest_status_checkpoint["triggers"][0]["kind"] == (
@@ -418,6 +427,7 @@ def assert_vision_budget(provider: str) -> None:
         )["error"], unexplained_inline_drift.stdout
 
         drift_packet = json.loads(valid_path.read_text(encoding="utf-8"))
+        drift_packet.pop("stride_decision", None)
         drift_packet["vision_patch"]["vision_summary"] = (
             "Wait for one supporting pull request."
         )

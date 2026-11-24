@@ -1497,7 +1497,7 @@ test("provider-first atomic claim replays current execution and rejects expired 
   assert.equal(lease.schema_version, "task_lease_v0");
   assert.equal(lease.owner, "agent-a");
   assert.equal(lease.idempotency_key, "turn:claim-with-lease");
-  assert.deepEqual(lease.write_scopes, ["loopx/control_plane/**"]);
+  assert.deepEqual(lease.write_scopes, []);
   assert.equal(lease.version, 1);
   assert.equal(lease.lease_epoch, 1);
 

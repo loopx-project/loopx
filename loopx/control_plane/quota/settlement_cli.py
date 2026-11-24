@@ -7,6 +7,7 @@ import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
+from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
 from ..todos.contract import (
     normalize_todo_id,
@@ -26,6 +27,10 @@ from .heartbeat_receipt import (
     heartbeat_receipt_view,
     requalify_bound_heartbeat_receipt,
     upgrade_identityless_heartbeat_receipt,
+)
+from .selected_todo_projection import (
+    raw_agent_todo_summaries_from_status,
+    resolve_selected_todo_write_contract,
 )
 from .settlement import (
     QuotaSettlementReadback,
@@ -51,6 +56,7 @@ def reconcile_existing_heartbeat_receipt(
     scheduler_execution_context: (
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
+    status_payload: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str]:
     """Bind or qualify same-Turn work without replacing its settlement identity."""
 
@@ -152,6 +158,7 @@ def reconcile_existing_heartbeat_receipt(
                     todo_id=rollout_todo_id,
                     replan_obligation_id=rollout_replan_obligation_id,
                     scheduler_execution_context=scheduler_execution_context,
+                    status_payload=status_payload,
                 )
                 rollout_details["settlement_effect_id"] = expected_effect_id
                 replan_packet = (
@@ -194,6 +201,7 @@ def reconcile_existing_heartbeat_receipt(
                 todo_id=rollout_todo_id,
                 replan_obligation_id=rollout_replan_obligation_id,
                 scheduler_execution_context=scheduler_execution_context,
+                status_payload=status_payload,
             )
             receipt, upgraded = upgrade_identityless_heartbeat_receipt(
                 runtime_root,
@@ -234,6 +242,7 @@ def reconcile_existing_heartbeat_receipt_for_turn(
     scheduler_execution_context: (
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
+    status_payload: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str, bool, str, bool]:
     """Reconcile an existing receipt and report whether the turn is receipt-ready."""
 
@@ -245,6 +254,7 @@ def reconcile_existing_heartbeat_receipt_for_turn(
         existing=existing,
         goal_ref=goal_ref,
         scheduler_execution_context=scheduler_execution_context,
+        status_payload=status_payload,
     )
     return receipt, status, appended, stall_observation, True
 
@@ -299,6 +309,15 @@ def quota_rollout_settlement_binding(
         # decision and must not become this receipt's settlement identity.
         # Keeping the recovery receipt identity-less lets a verified same-Turn
         # reentry bind the next independent action without rewriting history.
+        return None, None
+
+    if (
+        args.quota_command == "should-run"
+        and payload.get("effective_action") == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
+        and payload.get("should_run") is False
+    ):
+        # A scoped wait can retain a missing Vision obligation for diagnosis.
+        # Its receipt grants no replan or Todo settlement identity on replay.
         return None, None
 
     explicit_todo_id = normalize_todo_id(getattr(args, "todo_id", None))
@@ -414,7 +433,7 @@ def _cli_rollout_details(
         if isinstance(cli_channel, Mapping)
         else None
     )
-    if not spend_source and args.quota_command == "should-run" and (
+    if not spend_source and getattr(args, "quota_command", None) == "should-run" and (
         todo_id or replan_obligation_id
     ):
         # An explicit selection can bind a Turn before its hard lease creates a
@@ -436,6 +455,7 @@ def quota_rollout_details(
     scheduler_execution_context: (
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
+    status_payload: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     successor_todo_ids = (
         payload.get("successor_todo_ids")
@@ -456,7 +476,16 @@ def quota_rollout_details(
         else {}
     )
     retained_disposition = str(retained_selection.get("disposition") or "")
-    workspace_causality = build_delivery_workspace_causality(selected_todo)
+    selected_todo_contract = resolve_selected_todo_write_contract(
+        selected_todo,
+        *raw_agent_todo_summaries_from_status(
+            status_payload,
+            goal_id=str(
+                payload.get("goal_id") or getattr(args, "goal_id", "") or ""
+            ),
+        ),
+    )
+    workspace_causality = build_delivery_workspace_causality(selected_todo_contract)
     interaction = (
         payload.get("interaction_contract")
         if isinstance(payload.get("interaction_contract"), Mapping)
@@ -477,7 +506,7 @@ def quota_rollout_details(
     )
     details: dict[str, object] = {
         "command": "quota",
-        "quota_command": args.quota_command,
+        "quota_command": getattr(args, "quota_command", ""),
         "ok": bool(payload.get("ok")),
         "should_run": bool(payload.get("should_run")),
         "appended": bool(payload.get("appended")),

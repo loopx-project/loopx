@@ -100,32 +100,38 @@ export function maintainClaimExecution(head: JsonObject, input: ExecutionInput, 
  * acquisition still validates scope, eligibility and generation under one CAS. */
 export async function prepareClaimExecution(head: JsonObject,
   input: ExecutionInput & {operation_id: string; claimed_by: string; ttl_seconds?: number},
-  observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]}> {
+  observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]} |
+    {conflict: string; holder?: string}> {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now);
   const current = facts.current;
   if (current && leaseIsActive(current, input.now)) {
-    if (current.owner !== input.claimed_by) throw new AuthorityStoreProtocolError("Task is occupied by another actor");
+    if (current.owner !== input.claimed_by) return {conflict: "todo_lease_conflict", holder: String(current.owner)};
     const renewed = maintainClaimExecution(head, input, current);
     return {lease: renewed ?? current, changed: renewed !== null};
   }
   const todo = index.todos.get(input.todo_id)!;
-  const writeScopes = coordinationTodoWriteScopes(todo);
+  const declaredScopes = coordinationTodoWriteScopes(todo);
   // Only declared repository code work can use the code-edit isolation mode.
-  // Shared-state and historical callers retain their conservative exclusion.
+  // Stop collecting per-path write_scopes on new leases by default while still
+  // enforcing symlink isolation and same-checkout exclusivity.
   const workspace = observeWorkspace && todo.task_domain === "code" &&
-    typeof todo.task_repository === "string" && writeScopes.length > 0
-    ? await observeWorkspace(writeScopes) : null;
+    typeof todo.task_repository === "string" && todo.task_repository.length > 0
+    ? await observeWorkspace(declaredScopes) : null;
   const command = {owner: input.claimed_by,
     idempotency_key: `claim-${canonicalAuthoritySha256({goal_id: input.goal_id, todo_id: input.todo_id,
       owner: input.claimed_by, operation_id: input.operation_id})}`,
     expected_version: current ? leaseVersion(current) : 0, ttl_seconds: normalizeTtl(input.ttl_seconds),
-    write_scopes: writeScopes, ...(workspace ? {write_workspace: workspace} : {})};
+    write_scopes: [] as string[], ...(workspace ? {write_workspace: workspace} : {})};
   const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: String(head.handoff_mode),
     registered_agents: [...input.registered_agents], ...facts,
     // Claim admission has already authorized this assignment. Acquire and the
     // Todo owner change commit together; the old assignment is not a new gate.
     todo: facts.todo === null ? null : {...facts.todo, claimed_by: input.claimed_by}, command});
+  if (decision.outcome === "conflict") {
+    const blocker = facts.other_leases[decision.conflict_indexes[0]];
+    return {conflict: decision.code, ...(typeof blocker?.owner === "string" ? {holder: blocker.owner} : {})};
+  }
   if (decision.outcome !== "apply") throw new AuthorityStoreProtocolError(`Task claim execution rejected: ${decision.code}`);
   const overlapAdvisories = (decision.overlap_advisory_indexes ?? []).map(index => ({
     todo_id: facts.other_leases[index].todo_id, owner: facts.other_leases[index].owner ?? null,

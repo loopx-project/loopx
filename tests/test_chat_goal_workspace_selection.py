@@ -394,7 +394,7 @@ def test_first_goal_preview_refuses_an_unavailable_agent_as_a_typed_gate(tmp_pat
     server.registry_path, server.runtime_root, server.runtime_root_override = registry, runtime, str(runtime)
     server.action_store = ChatActionStore(runtime / "chat/actions")
     server.action_service = ChatActionService(store=server.action_store, registry_path=registry,
-        chat_store=sessions, runtime_controller=controller, workspace_roots=[project])
+        chat_store=sessions, runtime_controller=controller, workspace_roots=[project], runtime_root_override=runtime)
     server.chat_store, server.runtime_controller, server.verbose = sessions, controller, False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -437,6 +437,36 @@ def test_first_goal_preview_refuses_an_unavailable_agent_as_a_typed_gate(tmp_pat
         status, previewed = request("/api/actions/preview", create)
         assert status == 201, previewed
         assert previewed["proposal"]["action_kind"] == "goal.create"
+
+        # A host that runs the Goal's conversation itself (open_session=false) does not
+        # need this core's endpoint live; the Agent must still be registered.
+        hosted = {**create, "idempotency_key": "hosted",
+                  "normalized_parameters": {**create["normalized_parameters"], "goal_id": "goal-hosted", "open_session": False}}
+        catalog["rows"] = [{"agent_id": "codex", "available": False, "tool_calls": True, "trust_scope": "read_only",
+                            "unavailable_reason": "executable_not_found"}]
+        status, hosted_preview = request("/api/actions/preview", hosted)
+        assert status == 201, hosted_preview
+        catalog["rows"] = []
+        status, hosted_unregistered = request("/api/actions/preview", hosted)
+        assert status == 409 and hosted_unregistered["gate"]["registered"] is False
+
+        # Losing the endpoint after preview keeps the checked workspace, but
+        # creates no Goal. Restoring it can finish the same confirmation.
+        proposal_id = previewed["proposal"]["proposal_id"]
+        apply_path = f"/api/actions/{proposal_id}/apply"
+        status, _ = request(apply_path, {})
+        assert status >= 400
+        failed = next(row for row in request("/api/actions")[1]["proposals"] if row["proposal_id"] == proposal_id)
+        assert failed["status"] == "failed"
+        assert set(failed["checkpoint"]["steps"]) == {"workspace_validated"}
+        assert json.loads(registry.read_text())["goals"] == []
+
+        catalog["rows"] = [{"agent_id": "codex", "available": True, "tool_calls": True, "trust_scope": "read_only"}]
+        status, recovered = request(apply_path, {})
+        assert status == 202, recovered
+        assert recovered["proposal"]["proposal_id"] == proposal_id
+        assert recovered["proposal"]["receipt"]["resource_ids"]["goal_id"] == "goal-first"
+        assert [goal["id"] for goal in json.loads(registry.read_text())["goals"]] == ["goal-first"]
     finally:
         server.shutdown()
         thread.join(timeout=5)

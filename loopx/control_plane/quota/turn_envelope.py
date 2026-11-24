@@ -74,12 +74,14 @@ def _apply_context_projection_changes(
     return cast(dict[str, Any], projected)
 
 
-def pack_turn_source(source: Mapping[str, Any]) -> dict[str, str] | None:
+def pack_turn_source(
+    source: Mapping[str, Any], *, max_encoded_fraction: float = 1.0,
+) -> dict[str, str] | None:
     """Use the lossless wire for bounded sources that compress well."""
     raw = _encode_rpc_json(source)
     if 16 * 1024 <= len(raw) <= 1024 * 1024:
         data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
-        if len(data) + 128 < len(raw):
+        if len(data) + 128 < len(raw) * max_encoded_fraction:
             return {"encoding": "deflate-base64-json-v0", "data": data}
     return None
 
@@ -114,10 +116,19 @@ def _turn_envelope_result(
         addition_tokens = source_number_tokens(params["context_additions"])
         if addition_tokens:
             request["context_addition_tokens"] = addition_tokens
-    if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
-        transport = pack_turn_source(payload)
+    source_field = "context" if operation == "context_delivery" else "payload"
+    compact_source = (
+        operation in {"compose_complete", "attach_complete_turn_context", "context_delivery"}
+        or (operation == "capability_automation_source" and set(params) == {"payload"})
+    )
+    source = params.get(source_field)
+    if compact_source and isinstance(source, Mapping):
+        # Base64 of ordinary prose can cost more tokens than inline JSON.
+        # Large repeated Goal bodies qualify only with a threefold byte reduction.
+        fraction = 1.0 if operation == "capability_automation_source" else 1 / 3
+        transport = pack_turn_source(source, max_encoded_fraction=fraction)
         if transport is not None:
-            del request["payload"]
+            del request[source_field]
             request["source_transport"] = transport
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
@@ -484,9 +495,15 @@ def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str
                                     resume_verified: bool = False,
                                     resume_sections: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Native IO adapter; the shared typed owner reduces continuity assumptions."""
-    return _turn_envelope_result("native_context_lifecycle", state=dict(state),
+    source = dict(state)
+    result = _turn_envelope_result("native_context_lifecycle", state=source, source_edits=True,
         event=dict(event), new_epoch=new_epoch, pages=pages, pages_verified=pages_verified,
         resume_verified=resume_verified, **({"resume_sections": dict(resume_sections)} if resume_sections else {}))
+    try:
+        return _apply_context_projection_changes(source, result)
+    except RuntimeError as error:
+        # The native hook retires an invalid reduction under the journal lock.
+        raise ValueError("Invalid native context journal edits") from error
 
 
 def restore_context_delivery(

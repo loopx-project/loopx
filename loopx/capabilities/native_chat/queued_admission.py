@@ -16,6 +16,16 @@ if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController
 
 
+def unbound_input_source_denial(session: dict[str, Any]) -> str | None:
+    """Identify Sessions whose input must pass through their original source."""
+    if session.get("steward_context") is not None:
+        return "bound steward Chat requires its external source admission"
+    context = session.get("project_context") or {}
+    if context.get("audience") in {"bound_owner", "bound_group"}:
+        return "bound project steering requires its external source admission"
+    return None
+
+
 def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, message: str,
                  attachments: list[dict[str, Any]] | None, work_dir: Path | None, objective: str,
                  origin: str, external_agent_target: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:

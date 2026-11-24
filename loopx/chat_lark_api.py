@@ -59,6 +59,20 @@ def manager_source_scope_resolver(
             if bindings is None:
                 raise ValueError("Steward conversation bindings are unavailable")
             return bindings.steward_scope(session)
+        if isinstance(session.get("steward_background_context"), dict) and session.get("steward_context") is None:
+            bindings = controller.project_contexts.conversation_bindings
+            if bindings is None:
+                raise ValueError("Steward conversation bindings are unavailable")
+            bg_context = session["steward_background_context"]
+            binding_id = str(bg_context.get("binding_id") or "")
+            if (
+                session.get("goal_id") != "loopx-manager"
+                or session.get("project_context") is not None
+                or session.get("session_id") != f"steward.background.{binding_id}"
+                or session.get("channel_id") != f"manager.external.steward.background.{binding_id}"
+            ):
+                raise ValueError("bound steward background audience changed")
+            return list(bindings.session_context(bg_context)["context"]["goal_ids"])
         return authorized_manager_goal_ids(
             build_lark_goal_topic_runtime_snapshot(
                 registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,

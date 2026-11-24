@@ -319,6 +319,10 @@ def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypat
     def observed(method, params, **kwargs):
         if method == "quota.turn_envelope.evaluate":
             calls.append(params["operation"])
+            if params["operation"] == "session_plan":
+                # Session reuse consumes validated lineage, never the full Goal body.
+                assert {"payload", "context", "envelope", "complete_host_request",
+                        "source_transport"}.isdisjoint(params)
         return invoke(method, params, **kwargs)
 
     monkeypatch.setattr(transport, "effect_runtime_projection_result", observed)
@@ -335,8 +339,10 @@ def test_plan_uses_one_complete_source_check_without_weakening_refusal(monkeypat
         result = plan()
         assert result["route"]["would_invoke_host"] is True
         assert result["transaction"]["turn_instance_id"] == "original-turn"
-    assert calls == (["consumer_version", "driver_lineage"] if case == "historical"
-                     else ["planning_facts"])
+    expected = ["consumer_version", "driver_lineage"] if case == "historical" else ["planning_facts"]
+    if not error:
+        expected.append("session_plan")
+    assert calls == expected
     assert (envelope, contract) == original
 
 
@@ -908,3 +914,202 @@ def test_real_structured_host_reads_same_complete_replan_source(tmp_path, monkey
     assert "before reading detail_ref.replan_action_packet.writeback" in prompt
     assert "outer Turn executor owns those effects" in prompt
     assert _spend_run_count(runtime) == 0
+
+
+def test_python_c1_bridge_deduplicates_outcome_requirements_with_transport_packing():
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision,
+        build_turn_envelope,
+        complete_turn_host_source,
+        compose_turn_decision,
+        prepare_context_delivery,
+        projected_host_model_input,
+    )
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    requirements = {
+        "schema_version": "loopx_goal_outcomes_v0",
+        "revision": 4,
+        "current_lifetime": True,
+        "outcomes": [
+            {
+                "id": f"out-{idx}",
+                "owner_agent_id": AGENT_ID,
+                "objective": f"Verify outcome {idx} cleanly without duplicating requirements " + ("x" * 180),
+                "revision": 2,
+                "todo_ids": [f"t-{idx}"],
+                "sources": [{"ref": f"docs/{idx}.md", "summary": "S" * 900}],
+                "requirements": [{
+                    "id": f"r-{idx}",
+                    "description": "Independent check " + ("y" * 180),
+                    "status": "unverified",
+                    "planning_satisfied": False,
+                }],
+                "basis_digest": "sha256:" + (f"{idx}" * 64)[:64],
+                "work": "complete",
+            }
+            for idx in range(20)
+        ],
+    }
+    source = _quota_payload()
+    source["effective_action"] = "normal_run"
+    source["normal_delivery_allowed"] = True
+    source.pop("replan_action_packet", None)
+    source.pop("autonomous_replan_obligation", None)
+    source["interaction_contract"]["mode"] = "bounded_delivery"
+    wc = source["interaction_contract"]["agent_channel"].setdefault(
+        "work_context",
+        {
+            "complete": True,
+            "selected_todo_ref": "selected_todo",
+            "instruction": "Read full task requirements.",
+            "selected_todo_text_verified": True,
+            "sources": [],
+        },
+    )
+    wc["sources"] = list(wc.get("sources") or []) + [{
+        "source": "goal_acceptance",
+        "content": {
+            "ok": True,
+            "status": "loaded",
+            "goal_acceptance_contract": {
+                "checks": ["pytest"],
+                "goal_objective": {"schema_version": "goal_objective_revision_v0", "objective": "Deliver Z", "agent_adoption": {"adopted": True}},
+                "outcome_requirements": copy.deepcopy(requirements),
+            },
+        },
+    }]
+    wc_idx = len(wc["sources"]) - 1
+    source["planning_horizon"] = {
+        **(source.get("planning_horizon") or {}),
+        "core_goal": {
+            "goal_id": GOAL_ID,
+            "objective": "Deliver Z",
+            "acceptance_contract": {
+                "checks": ["pytest"],
+                "goal_objective": {"schema_version": "goal_objective_revision_v0", "objective": "Deliver Z", "adoptions": []},
+                "outcome_requirements": copy.deepcopy(requirements),
+            },
+        },
+    }
+    source["agent_todo_summary"] = {
+        "schema_version": "todo_summary_v0",
+        "open_count": 1,
+        "all_open_count": 1,
+        "open": [],
+        "goal_acceptance_contract": {
+            "checks": ["pytest"],
+            "goal_objective": {"schema_version": "goal_objective_revision_v0", "objective": "Deliver Z", "agent_adoption": {"adopted": False}},
+            "outcome_requirements": copy.deepcopy(requirements),
+        },
+    }
+    fallback = {
+        "schema_version": "blocked_priority_fallback_v0",
+        "kind": "blocked_priority_fallback",
+        "notify_user": False,
+        "reason": "Blocked fallback mirror " + ("z" * 160),
+        "blocked_items": [{"todo_id": "t-blocked", "reason": "waiting"}],
+    }
+    source["blocked_priority_fallback"] = copy.deepcopy(fallback)
+    source["heartbeat_recommendation"] = {
+        **(source.get("heartbeat_recommendation") or {}),
+        "blocked_priority_fallback": copy.deepcopy(fallback),
+    }
+
+    composed = compose_turn_decision(source)
+    expected_ref = (
+        f"$.interaction_contract.agent_channel.work_context.sources[{wc_idx}]"
+        ".content.goal_acceptance_contract.outcome_requirements"
+    )
+    assert composed["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements_ref"] == expected_ref
+    assert "outcome_requirements" not in composed["planning_horizon"]["core_goal"]["acceptance_contract"]
+    assert composed["agent_todo_summary"]["goal_acceptance_contract"]["outcome_requirements_ref"] == expected_ref
+    assert "outcome_requirements" not in composed["agent_todo_summary"]["goal_acceptance_contract"]
+    assert composed["heartbeat_recommendation"]["blocked_priority_fallback"] == fallback
+    assert composed["blocked_priority_fallback"] == fallback
+    assert_complete_turn_decision(composed)
+    envelope = build_turn_envelope(composed)
+
+    host_request = {
+        "schema_version": "loopx_turn_host_request_v1",
+        "turn_key": "sha256:" + ("a" * 64),
+        "source_decision_hash": envelope["action_signature"]["source_decision_hash"],
+        "work_contract": composed,
+    }
+    checked = complete_turn_host_source(host_request, include_model_context=True)
+    model_input = projected_host_model_input(host_request, checked)
+    assert model_input["schema_version"] == "loopx_turn_model_context_v0"
+    assert model_input["task_context"]["agent_todo_summary"]["goal_acceptance_contract"]["outcome_requirements_ref"] == expected_ref
+
+    prog = prepare_context_delivery(
+        composed,
+        scope={
+            "goal_id": GOAL_ID,
+            "agent_id": composed["agent_identity"]["agent_id"],
+            "session_id": "py-c1-session",
+            "context_epoch": "ep-1",
+        },
+        capture_id="c1" * 32,
+        surface="complete_turn",
+        native_projection={
+            "path": "/tmp/py-c1/decision.json",
+            "sha256": "b" * 64,
+            "command_template": "loopx quota context-read --select <pointer>",
+            "progressive_enabled": True,
+            "initial_read_output_bytes": 24000,
+        },
+        include_initial_read_plan=True,
+    )
+    pointers = prog["context"]["context_details"]["unread_context_index"]["pointers"]
+    assert any(p.startswith(f"/interaction_contract/agent_channel/work_context/sources/{wc_idx}/") for p in pointers)
+    assert not any(p.startswith("/planning_horizon/") or p.startswith("/agent_todo_summary/") for p in pointers)
+
+
+@pytest.mark.parametrize("same_adoption", [True, False])
+def test_signed_projection_keeps_requirements_that_differ_beyond_js_precision(same_adoption):
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    contract = {
+        "goal_objective": {"agent_adoption": {"adopted": True}},
+        "outcome_requirements": {
+            "schema_version": "loopx_goal_outcomes_v0",
+            "outcomes": [{
+                "id": "measurement",
+                "requirements": [{
+                    "description": "Retain the exact source measurement for independent verification.",
+                    "measurement": 2**53,
+                }],
+            }],
+        },
+    }
+    horizon = copy.deepcopy(contract)
+    horizon["outcome_requirements"]["outcomes"][0]["requirements"][0]["measurement"] += 1
+    if not same_adoption:
+        horizon["goal_objective"]["agent_adoption"]["adopted"] = False
+
+    source = _quota_payload()
+    source["effective_action"] = "normal_run"
+    source["normal_delivery_allowed"] = True
+    source.pop("replan_action_packet", None)
+    source.pop("autonomous_replan_obligation", None)
+    source["interaction_contract"]["mode"] = "bounded_delivery"
+    source["interaction_contract"]["agent_channel"]["work_context"] = {
+        "complete": True,
+        "sources": [{
+            "source": "goal_acceptance",
+            "content": {"status": "loaded", "goal_acceptance_contract": contract},
+        }],
+    }
+    source["planning_horizon"] = {"core_goal": {"goal_id": GOAL_ID, "acceptance_contract": horizon}}
+
+    composed = compose_turn_decision(source)
+    assert composed["planning_horizon"]["core_goal"]["acceptance_contract"] == horizon
+
+    envelope = build_turn_envelope(composed)
+    action_goal = envelope["action"]["planning_horizon"]["core_goal"]
+    assert "acceptance_contract_ref" not in action_goal
+    assert "outcome_requirements_ref" not in action_goal["acceptance_contract"]
+    assert "outcome_requirements" in action_goal["acceptance_contract"]
+    assert action_goal["acceptance_contract"]["goal_objective"] == horizon["goal_objective"]
+    assert envelope["action_signature"]["matches"] is True

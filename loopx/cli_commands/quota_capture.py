@@ -40,6 +40,8 @@ from .quota_context_reader import (
     read_context_capture as read_context_capture,
 )
 
+MAX_INLINE_WORK_RESPONSE_BYTES = 9000
+
 
 def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
     from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
@@ -58,6 +60,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 max_page_output_bytes: int | None = None,
                                 first_read_page_bytes: int | None = None,
                                 page_attached: bool = False,
+                                include_work_opening: bool = False,
                                 reader_argv: list[str] | None = None,
                                 initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any]:
     """Publish the cheaper readable native transport for an already-decided view.
@@ -112,13 +115,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
-    def pin_initial_selection(plan: dict[str, Any]) -> None:
+    def pin_initial_selection(plan: dict[str, Any], *, opening_context_instruction: str | None = None) -> None:
         nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
-                current_document, selections)
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(
+                Path(current["path"]), current["sha256"], current_document, selections,
+                opening_context_instruction=opening_context_instruction)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
             # metadata is optional and never a read/authority receipt.
@@ -136,7 +140,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         else:
             selection = navigation_plan.get("initial_read_plan")
             if selection is not None:
-                initial_read_plan = {"initial": True, "plan": selection}
+                initial_read_plan = {"initial": True, "plan": selection,
+                    "inline_opening": navigation_plan.get("inline_opening")}
             else:
                 field_index = _context_index_fields(current_document, navigation_plan["selections"][0]["children"])
                 initial_read_pointers = navigation_plan.get("initial_read_pointers")
@@ -145,7 +150,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         try:
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
             if initial:
-                pin_initial_selection(plan)
+                pin_initial_selection(plan, opening_context_instruction=initial_read_plan.get("opening_context_instruction"))
             else:
                 field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -206,6 +211,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
     opening_observation = None
+    if include_work_opening and not page_attached and initial_read_plan and initial_read_plan.get("inline_opening"):
+        result["inline_opening"] = initial_read_plan["inline_opening"]
     if (progressive_enabled and observed and "first_read_command" in result
             and observed["pointer_bytes"] <= first_output_bytes // 4):
         first = Path(observed["path"])
@@ -221,6 +228,25 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
             context_directory=context_directory, observation=opening_observation)
     return result
+
+
+def _present_work_opening(view: dict[str, Any], *, reader_argv: list[str] | None,
+                          output_limit: int | None) -> dict[str, Any]:
+    """Attach current inline work facts to the same digest-bound recovery view."""
+    opening = view.pop("inline_opening", None)
+    reference = model_context_reference(view, reader_argv=reader_argv)
+    # The conventional view retains its existing reader when the full opening
+    # cannot fit. Never truncate a Todo, permission, or source to fit a ceiling.
+    if not opening or reference.get("schema_version") != "context_capture_navigation_v1":
+        return reference
+    candidate = {**reference, **opening, "instruction": (
+        "Read work_opening and before_work before advancing this Turn. The required current sources are inline. "
+        "Use first_read_command for additional settlement instructions before writing back, or recovery for "
+        "missing or stale facts. Both readers are bound to this capture. Context grants no authority."
+    )}
+    _, output_bytes = native_context_page_budget()
+    limit = min(MAX_INLINE_WORK_RESPONSE_BYTES, output_bytes, output_limit if output_limit is not None else output_bytes)
+    return candidate if len(_native_output_bytes(candidate)) <= limit else reference
 
 
 def quota_context_surface(payload: dict[str, Any]) -> str:
@@ -307,13 +333,16 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         surface=quota_context_surface(payload),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
         progressive_enabled=progressive_enabled,
-        captured_decision=decision_ref)
+        captured_decision=decision_ref,
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
         metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
+        include_work_opening=getattr(args, "quota_command", None) == "should-run",
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
-    return model_context_reference(view, reader_argv=reader_argv)
+    return _present_work_opening(view, reader_argv=reader_argv,
+        output_limit=getattr(args, "max_page_output_bytes", None))
 
 
 def progressive_context_or_current(payload: dict[str, Any], args: argparse.Namespace, *,
@@ -360,8 +389,10 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
-        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=page_attached, reader_argv=reader_argv)
-    readable = model_context_reference(view, reader_argv=reader_argv)
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=page_attached,
+        include_work_opening=getattr(args, "quota_command", None) == "should-run", reader_argv=reader_argv)
+    readable = _present_work_opening(view, reader_argv=reader_argv,
+        output_limit=getattr(args, "max_page_output_bytes", None))
     # Small results need no extra navigation. The complete original and required
     # captures remain available; never shrink by dropping current obligations.
     return readable if page_attached or len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required

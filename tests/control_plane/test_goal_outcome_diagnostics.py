@@ -44,7 +44,15 @@ def arguments(project, cli, entrypoint, document, operation):
         "synthetic/private-ref",
         "source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)",
     ),
-    ("synthetic-private-ref ", "source ref must be bounded nonempty text"),
+    (
+        "synthetic-private-ref ",
+        "source ref must be bounded nonempty text (no leading/trailing whitespace; max 128 UTF-16 code units)",
+    ),
+    (
+        "/private/path/" + ("x" * 130),
+        "source ref must be bounded nonempty text (got 144 UTF-16 code units, max 128); "
+        "must also be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)",
+    ),
 ])
 def test_native_rejection_then_corrected_same_operation(acceptance_goal, entrypoint, source_ref, detail):
     project, _, cli, run = acceptance_goal
@@ -165,3 +173,99 @@ def test_review_capacity_diagnosis_and_lossless_review_recovery(acceptance_goal,
     assert code == 0, replay
     assert (replay if entrypoint == "refine" else replay["goal_outcome_update"])["status"] == "replayed"
     assert cli("inspect")[1] == current
+
+
+def test_outcome_schema_rejection_explains_limits_and_missing_fields_without_leaks(acceptance_goal):
+    project, _, cli, run = acceptance_goal
+    revision = cli("inspect")[1]["provider_revision"]
+    path = project / "bad-refinement.json"
+    bad_document = {
+        "outcome_id": "export",
+        "owner_agent_id": "agent-a",
+        "objective": "Produce a usable export",
+        "requirements": [{"id": "content", "SECRET_CALLER_KEY": "SECRET_CALLER_VAL"}],
+        "source": {"ref": "evidence:v1", "summary": "ok"},
+    }
+    path.write_text(json.dumps(bad_document))
+    code, rejected = run(
+        "goal-acceptance", "refine", "--goal-id", "goal-acceptance",
+        "--agent-id", "agent-a", "--document", str(path), "--operation-id", "missing-req-desc",
+        "--expected-provider-revision", revision, "--execute",
+    )
+    assert code == 1 and rejected["error"] == "goal_acceptance_invalid_request", rejected
+    assert rejected["error_detail"] == (
+        "outcome fields are missing or unsupported "
+        "(missing: description; unsupported field count: 1; allowed: id, description)"
+    )
+    serialized = json.dumps(rejected)
+    assert "SECRET_CALLER_KEY" not in serialized and "SECRET_CALLER_VAL" not in serialized
+
+    oversized_summary = refinement("evidence:v2")
+    oversized_summary["source"]["summary"] = "S" * 513
+    path.write_text(json.dumps(oversized_summary))
+    code, rejected_summary = run(
+        "goal-acceptance", "refine", "--goal-id", "goal-acceptance",
+        "--agent-id", "agent-a", "--document", str(path), "--operation-id", "oversized-summary",
+        "--expected-provider-revision", revision, "--execute",
+    )
+    assert code == 1
+    assert rejected_summary["error_detail"] == "source summary must be bounded nonempty text (got 513 UTF-16 code units, max 512)"
+    assert "S" * 20 not in json.dumps(rejected_summary)
+
+    emoji = "\U0001f600"
+    exact_non_bmp = {
+        "outcome_id": "emoji-boundary",
+        "owner_agent_id": "agent-a",
+        "objective": emoji * 512,
+        "requirements": [{"id": "req-1", "description": emoji * 1000}],
+        "source": {"ref": "evidence:emoji-ok", "summary": emoji * 256},
+    }
+    path.write_text(json.dumps(exact_non_bmp, ensure_ascii=False), encoding="utf-8")
+    code, accepted_emoji = run(
+        "goal-acceptance", "refine", "--goal-id", "goal-acceptance",
+        "--agent-id", "agent-a", "--document", str(path), "--operation-id", "emoji-at-limit",
+        "--expected-provider-revision", revision, "--execute",
+    )
+    assert code == 0 and accepted_emoji["status"] == "applied", accepted_emoji
+    revision = accepted_emoji["provider_revision"]
+
+    for idx, (field, bad_doc, expected_detail) in enumerate([
+        (
+            "objective",
+            {**refinement("evidence:over-obj"), "objective": emoji * 513},
+            "outcome objective must be bounded nonempty text (got 1026 UTF-16 code units, max 1024)",
+        ),
+        (
+            "description",
+            {
+                **refinement("evidence:over-desc"),
+                "requirements": [{"id": "content", "description": emoji * 1001}],
+            },
+            "requirement description must be bounded nonempty text (got 2002 UTF-16 code units, max 2000)",
+        ),
+        (
+            "summary",
+            {
+                **refinement("evidence:over-sum"),
+                "source": {"ref": "evidence:over-sum", "summary": emoji * 257},
+            },
+            "source summary must be bounded nonempty text (got 514 UTF-16 code units, max 512)",
+        ),
+    ]):
+        path.write_text(json.dumps(bad_doc, ensure_ascii=False), encoding="utf-8")
+        code, rejected_emoji = run(
+            "goal-acceptance", "refine", "--goal-id", "goal-acceptance",
+            "--agent-id", "agent-a", "--document", str(path), "--operation-id", f"emoji-over-{idx}-{field}",
+            "--expected-provider-revision", revision, "--execute",
+        )
+        assert code == 1 and rejected_emoji["error"] == "goal_acceptance_invalid_request", rejected_emoji
+        assert rejected_emoji["error_detail"] == expected_detail
+        assert emoji not in json.dumps(rejected_emoji, ensure_ascii=False)
+
+    help_result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "goal-acceptance", "--help"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert help_result.returncode == 0
+    assert "Outcome declaration (refine):" in help_result.stdout
+    assert "requirements[*].id" in help_result.stdout and "UTF-16 code units" in help_result.stdout

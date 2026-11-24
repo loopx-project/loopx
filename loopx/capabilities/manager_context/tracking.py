@@ -15,6 +15,7 @@ from ...control_plane.collaboration.inbox import (
     _receipt as _receipt,
     record_read as record_read,
     controlled_request_readback,
+    read_inbox_transaction,
 )
 from ...control_plane.collaboration.goal_instance_scope import (
     CollaborationGoalScope,
@@ -228,7 +229,15 @@ def query(
         )
         projected, todos_cache = [], {}
         core_read_goals = set(evidence_goal_scope(root, channel_id, registry_path=registry_path) or []) if not owner_scope else set()
-        for row in rows[offset : offset + limit]:
+        page = rows[offset : offset + limit]
+        returns = []
+        if page:
+            returns = read_inbox_transaction(root, {
+                "operation": "receipt_states",
+                "rows": [{"request_id": row["request_id"], "source_kind": row.get("source_kind")} for row in page],
+                "return_statuses_only": True,
+            })["return_items"]
+        for row, return_statuses in zip(page, returns, strict=True):
             read, read_error = _receipt(root, "reads", row)
             decision, decision_error = _receipt(root, "decisions", row)
             work = read_linked_work(root, registry_path, row, todos_cache,
@@ -262,8 +271,7 @@ def query(
                 evidence_verification="receiver_linked_reference_not_independent_verification",
                 warnings=warnings,
             )
-            from .roundtrip import reply_status
-            item["return_replies"] = reply_status(root, row)
+            item["return_replies"] = return_statuses
             if owner_scope:
                 item["decision"]["reason"] = decision.get("reason")
             else:

@@ -1,5 +1,13 @@
 {
-  "surface": "quota_packet",
-  "schema_version": null,
-  "interaction_schema_version": "loopx_interaction_contract_v0"
+  "current": {
+    "surface": "complete_turn",
+    "schema_version": "loopx_turn_envelope_v1",
+    "interaction_schema_version": "loopx_interaction_contract_v0"
+  },
+  "public_channel": "current",
+  "historical": {
+    "surface": "quota_packet",
+    "schema_version": null,
+    "interaction_schema_version": "loopx_interaction_contract_v0"
+  }
 }

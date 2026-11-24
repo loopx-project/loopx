@@ -19,7 +19,7 @@ from tests.control_plane.test_quota_settlement_cli import (
     _initialize_fixture_authority,
     _write_fixture,
 )
-from test_closed_loop import SOURCE, _find, _goal, _newest_first_runs, _refresh
+from test_closed_loop import SOURCE, _find, _goal, _newest_first_runs, _refresh, _stride_vision
 
 
 @pytest.mark.parametrize("unbound_field", ["agent_id", "todo_id", "ack_agent_id"])
@@ -75,10 +75,9 @@ def test_unattributed_newer_result_cannot_hide_existing_obligation(tmp_path, unb
         _refresh(project, runtime, registry, autonomous_replan_recorded=True,
                  progress_observation=rows[0]["progress_observation"])
     assert index.read_bytes() == before
-    # Isolate the external-review identity rule without weakening that default gate.
-    configure_goal(registry_path=registry, goal_id=GOAL_ID,
-                   execution_stride_strategy="off", execute=True)
+    # Supplying a current terminal stride review reaches the external-review identity rule.
     with pytest.raises(ValueError, match="already claimed in the obligation window"):
         _refresh(project, runtime, registry, autonomous_replan_recorded=True,
-                 progress_observation=rows[0]["progress_observation"])
+                 progress_observation=rows[0]["progress_observation"],
+                 agent_vision_packet=_stride_vision(registry, runtime, outcome="stop"))
     assert index.read_bytes() == before

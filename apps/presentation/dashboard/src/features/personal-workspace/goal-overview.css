@@ -190,6 +190,13 @@
 .goal-outcome-evidence h6 { margin: 0 0 6px; font: inherit; font-weight: 500; }
 .goal-outcome .goal-outcome-evidence li { display: block; min-height: 0; padding: 4px 0; border: 0; }
 .goal-overview .goal-outcomes-more { padding: 4px 0; min-height: 32px; border: 0; background: transparent; color: var(--pw-muted); font-size: var(--text-caption); }
+.goal-outcome-handoff { margin-block-start: 8px; }
+.goal-outcome-handoff summary { cursor: pointer; }
+.goal-outcome-handoff form, .goal-outcome-handoff fieldset { display: grid; gap: 8px; }
+.goal-outcome-handoff form { padding-block: 10px; }
+.goal-outcome-handoff fieldset { min-width: 0; margin: 0; border: 0; padding: 0; }
+.goal-outcome-handoff label, .goal-outcome-handoff-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.goal-outcome-handoff small { color: var(--pw-muted); overflow-wrap: anywhere; }
 .goal-outcomes-more[aria-expanded="true"] svg { transform: rotate(180deg); }
 .goal-outcome details { margin-top: 8px; }
 .goal-outcome form { display: grid; gap: 8px; margin-top: 8px; }

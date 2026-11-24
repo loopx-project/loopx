@@ -369,7 +369,7 @@ def goal_quota_with_spend_ledger(
     goal: Mapping[str, object] | None,
     runs: Sequence[Mapping[str, object]],
     *,
-    now: datetime | None = None,
+    now: datetime | None = None, runs_dir: Path | None = None,
 ) -> dict[str, object]:
     payload = goal_quota_config(goal)
     goal_id = str(goal.get("id") or "") if goal else ""
@@ -409,7 +409,7 @@ def goal_quota_with_spend_ledger(
         generated_at = _parse_timestamp(run.get("generated_at"))
         if generated_at is None or generated_at < window_start or generated_at > current_time:
             continue
-        contribution, unreadable_reason = quota_slot_observation(run)
+        contribution, unreadable_reason = quota_slot_observation(run, runs_dir=runs_dir, goal_id=goal_id)
         if unreadable_reason is not None:
             # The index row claims a spend or a void that cannot be read back.
             # Counting it as no spend would silently hand the Goal fresh quota,
@@ -1419,9 +1419,8 @@ def spend_quota_slot(
         turn_instance_id=turn_instance_id, effect_ref=normalized_effect_ref or None,
         source=source, registry_path=registry_path, goal_ref=goal_ref,
     )
-    if not preview.get("ok"):
-        return preview
     return record_quota_slot_spend_from_preview(
         preview, status_payload, goal_id=safe_goal_id, execute=execute,
         source=source, registry_path=registry_path, goal_ref=goal_ref,
+        settlement_identity=settlement_readback.identity.value if settlement_readback else None,
     )

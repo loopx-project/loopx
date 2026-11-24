@@ -4,9 +4,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import shlex
 import sys
 
 import pytest
+from loopx import rollout_event_log
 from loopx.agent_registry import registered_agent_ids_for_goal
 
 from canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
@@ -19,7 +21,7 @@ from loopx.control_plane.goals.source_session_registration import (
     configure_source_creation_goal,
     register_fresh_source_session_project,
 )
-from loopx.control_plane.quota import settlement
+from loopx.control_plane.quota import execution_preparation, settlement
 from loopx.control_plane.projects.registry_codec import load_project_registry
 from loopx.control_plane.quota.effect_program import SettlementIdentity
 from loopx.control_plane.quota.execution_preparation import prepared_lease_receipt_fields
@@ -40,7 +42,9 @@ from loopx.control_plane.todos.completion_validation_store import (
 )
 from loopx.control_plane.work_items import task_lease
 from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
-from tests.control_plane.test_quota_settlement_cli import _write_fixture as write_legacy_fixture
+from tests.control_plane.test_quota_settlement_cli import (
+    _spend_run_count, _write_fixture as write_legacy_fixture,
+)
 
 
 GOAL = "execution-loss-closeout"
@@ -253,7 +257,6 @@ def _fixture(tmp_path, monkeypatch, capsys, provider, *, prepared=True,
 
         # Registered transport clock seams, never edits to persisted lease bytes.
         monkeypatch.setattr(runtime_time, "datetime", AfterExpiryDatetime)
-        monkeypatch.setattr(local_authority, "now_local", lambda: after_expiry.isoformat())
         monkeypatch.setattr(task_lease, "now_utc", lambda: after_expiry.astimezone(timezone.utc))
         assert runtime_time.now_utc() == after_expiry.astimezone(timezone.utc)
         replacement = _claim(context, replacement_owner, "execution-loss-replacement-claim")
@@ -295,6 +298,19 @@ def _closeout_args(context, *, lease=None, execution_loss=True):
               if not execution_loss else []),
             "--no-global-sync", "--suppress-external-sinks",
             *_proof(lease or context["current_lease"])]
+
+
+def _projected_preview_args(cli_channel, lease):
+    [command] = [
+        action for action in cli_channel["next_cli_actions"]
+        if "--execution-loss-closeout" in action and "--dry-run" in action
+    ]
+    tokens = shlex.split(command)
+    assert tokens[-1] == "--dry-run"
+    args = tokens[1:]
+    args[args.index("<current-key>")] = lease["idempotency_key"]
+    args[args.index("<current-version>")] = str(lease["version"])
+    return args
 
 
 def _lease(context):
@@ -355,6 +371,83 @@ def _unchanged_state(context):
     return (_canonical(context), context["state"].read_bytes(), _runs(context), log.read_bytes())
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("replaced", [False, True])
+def test_combined_writeback_keeps_the_admitted_lease_generation(
+    tmp_path, monkeypatch, capsys, provider, replaced,
+):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False,
+                       prepared=replaced, replace=replaced)
+    cli = context["cli"]
+    initial = context["original_lease"]
+
+    def renew(lease):
+        code, result = cli("task-lease", "renew", "--goal-id", context["goal_id"],
+                           "--todo-id", context["todo"], "--owner", OWNER,
+                           "--idempotency-key", lease["idempotency_key"],
+                           "--expected-version", str(lease["version"]), "--ttl-seconds", "2700")
+        assert code == 0 and result["ok"], result
+        return _lease(context)
+
+    if replaced:
+        admitted = initial
+        current = context["current_lease"]
+        decision = context["admitted"]
+    else:
+        admitted = renew(initial)
+        code, decision = cli(*_guard_args(context))
+        assert code == 0 and decision["normal_delivery_allowed"], decision
+        assert _readback(context).prepared_lease["prepared_lease_version"] == admitted["version"]
+        current = renew(admitted)
+        assert current["lease_epoch"] == admitted["lease_epoch"] == initial["lease_epoch"]
+        assert initial["version"] < admitted["version"] < current["version"]
+
+    plan = decision["interaction_contract"]["cli_channel"]["settlement_plan"]
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Preserve the original Turn across a lease renewal."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "An admitted Turn can settle.",
+                       "observed_reality": "An intermediate result was validated.",
+                       "retained": ["Original task"], "evidence_refs": ["evidence:renewed-lease"]},
+    }))
+    tokens = shlex.split(writeback["semantic_closeout_command_template"])
+    replacements = {"<validated_progress>": "validated_slice", "<scale>": "implementation",
+                    "<outcome>": "outcome_progress", "<file>": str(vision)}
+    args = [replacements.get(token, token) for token in tokens[tokens.index("refresh-state"):]]
+    args += ["--no-global-sync", "--suppress-external-sinks"]
+    source_before = _unchanged_state(context)
+
+    def writeback_with(lease, *, combined=True):
+        given = args.copy()
+        key = next(i for i, token in enumerate(given) if token.startswith("--task-lease-idempotency-key="))
+        given[key] = f"--task-lease-idempotency-key={lease['idempotency_key']}"
+        given[given.index("--task-lease-expected-version") + 1] = str(lease["version"])
+        if not combined:
+            given.remove("--settle-turn")
+            given.remove("--settlement-receipt")
+        return cli(*given)
+
+    rejected = [(admitted, True), (current, True)] if replaced else [
+        (initial, True), ({**current, "version": current["version"] + 1}, True), (admitted, False),
+    ]
+    for lease, combined in rejected:
+        code, result = writeback_with(lease, combined=combined)
+        assert code == 1 and result["appended"] is False, result
+        assert _unchanged_state(context) == source_before
+        assert _spend_run_count(context["runtime"]) == 0
+
+    if not replaced:
+        code, settled = writeback_with(admitted)
+        assert code == 0 and settled["settlement_progress"]["state"] == "settled", settled
+        assert settled["settlement_identity"] == plan["identity"]
+        assert _spend_run_count(context["runtime"]) == 1
+        code, replay = writeback_with(admitted)
+        assert code == 0 and replay["idempotent_replay"], replay
+        assert _spend_run_count(context["runtime"]) == 1
+
+
 def _assert_no_completion_or_debit(context):
     if context["source_profile"]:
         todo = next(row for row in _canonical(context)["todos"] if row["todo_id"] == context["todo"])
@@ -403,11 +496,26 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
     original = _readback(context)
     _assert_original_prepared_generation(context, original)
     assert not original.writeback.receipts and not original.spend.receipts
+    argv = _closeout_args(context)
     if not source_profile:
-        # A fresh guard recognizes the generation change before attempting to
-        # re-enter the original guard. It offers only the administrative route.
+        before_replay = _unchanged_state(context)
+        replay_args = _guard_args(context)
+        selection = replay_args.index("--todo-id")
+        del replay_args[selection:selection + 2]
+
+        code, same_turn = context["cli"](*replay_args)
+        assert code == 0, same_turn
+        assert same_turn["normal_delivery_allowed"] is False
+        assert same_turn["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+        debt = same_turn["unsettled_host_turn_recovery"]
+        assert debt["prior_turn_instance_id"] == TURN
+        assert debt["repair"] == "execution_loss_closeout"
+        assert _unchanged_state(context) == before_replay
+
+        # A fresh host Turn can also discover the outstanding original debt.
+        route = str(tmp_path / "fixture launcher" / "loopx")
         code, recovery = context["cli"](
-            "quota", "should-run", "--context-delivery", "off", "--codex-app",
+            "--cli-bin", route, "quota", "should-run", "--context-delivery", "off", "--codex-app",
             "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", "needs-recovery",
         )
         assert code == 0, recovery
@@ -419,9 +527,8 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
         assert recovery["execution_obligation"]["delivery_allowed"] is False
         cli_channel = recovery["interaction_contract"]["cli_channel"]
         assert cli_channel["spend_allowed_now"] is False
-        assert any("--execution-loss-closeout" in cmd and "--dry-run" in cmd
-                   for cmd in cli_channel["next_cli_actions"])
-    argv = _closeout_args(context)
+        argv = _projected_preview_args(cli_channel, context["current_lease"])[:-1]
+        assert argv[:2] == ["--cli-bin", route]
     before = _unchanged_state(context)
     code, preview = context["cli"](*argv, "--dry-run")
     assert code == 0 and preview["would_close_without_spend"] is True, preview
@@ -456,6 +563,95 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_guard_cannot_requalify_a_replaced_pre_epoch_receipt(tmp_path, monkeypatch, capsys, provider):
+    # Older writers recorded the key digest and version but lacked an epoch.
+    # Produce that receipt at admission; replay with the current reader.
+    with monkeypatch.context() as writer:
+        writer.setattr(execution_preparation, "prepared_lease_receipt_fields",
+                       lambda proof, *, lease_epoch=None: prepared_lease_receipt_fields(proof))
+        context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False)
+    original = _readback(context)
+    first = context["original_lease"]
+    assert original.prepared_lease == {
+        "prepared_lease_key_sha256": sha256(first["idempotency_key"].encode()).hexdigest(),
+        "prepared_lease_version": first["version"],
+    }
+    fenced = _reject_without_effect(context, _guard_args(context),
+                                    expected_code="heartbeat_receipt_identity_conflict")
+    assert "original task lease generation" in fenced["reason"]
+    assert fenced["heartbeat_receipt"]["settlement_identity"] == original.identity.value.as_dict()
+    assert "wait for the next real host Turn" in fenced["recommended_action"]
+    assert "execution-loss closeout without quota spend" in fenced["recommended_action"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("whole_second_writer", [False, True], ids=["precise", "legacy-clock"])
+def test_replacement_and_closeout_in_receipt_second(tmp_path, monkeypatch, capsys, provider,
+                                                   whole_second_writer):
+    second = datetime.now(timezone.utc).replace(microsecond=0)
+    clock = second + timedelta(milliseconds=250)
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock.astimezone(tz) if tz else clock.astimezone().replace(tzinfo=None)
+
+    monkeypatch.setattr(runtime_time, "datetime", FixtureDatetime)
+    monkeypatch.setattr(rollout_event_log, "datetime", FixtureDatetime)
+    monkeypatch.setattr(task_lease, "now_utc", lambda: clock)
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, replace=False, source_profile=False)
+    original = _readback(context)
+    assert runtime_time.parse_timestamp(original.heartbeat_receipt["recorded_at"]) == clock
+
+    run = context["cli"]
+    binding = ["--goal-id", context["goal_id"], "--todo-id", context["todo"]]
+    first = context["original_lease"]
+    clock = second + timedelta(milliseconds=450)
+    code, released = run("task-lease", "release", *binding, "--owner", OWNER,
+                         "--idempotency-key", first["idempotency_key"],
+                         "--expected-version", str(first["version"]))
+    assert code == 0, released
+    assert runtime_time.parse_timestamp(_lease(context)["released_at"]) == clock
+
+    clock = second + timedelta(milliseconds=650)
+    if whole_second_writer:
+        # A legacy writer can only attest to the second it observed.
+        monkeypatch.setattr(local_authority, "now_local_iso", lambda *, timespec: second.isoformat())
+    code, claimed = run("todo", "claim", *binding, "--agent-id", OWNER, "--claimed-by", OWNER,
+                        "--claim-operation-id", "replacement-within-receipt-second")
+    assert code == 0, claimed
+    lease = _lease(context)
+    assert lease["lease_epoch"] > first["lease_epoch"]
+    if whole_second_writer:
+        assert runtime_time.parse_timestamp(lease["acquired_at"]) == second
+        rejected = _reject_without_effect(context, _closeout_args(context, lease=lease))
+        assert "clock is stale or ambiguous" in str(rejected)
+        return
+    assert runtime_time.parse_timestamp(lease["acquired_at"]) == clock
+
+    clock = second + timedelta(milliseconds=725)
+    code, renewed = run("task-lease", "renew", *binding, "--owner", OWNER,
+                        "--idempotency-key", lease["idempotency_key"],
+                        "--expected-version", str(lease["version"]), "--ttl-seconds", "2700")
+    assert code == 0, renewed
+    current = _lease(context)
+    assert runtime_time.parse_timestamp(current["updated_at"]) == clock
+    argv = _closeout_args(context, lease=current)
+
+    # A clock behind the renewal still cannot establish the required ordering.
+    clock = second + timedelta(milliseconds=700)
+    _reject_without_effect(context, argv)
+    clock = second + timedelta(milliseconds=850)
+    code, closed = run(*argv)
+    assert code == 0 and closed["settlement_progress"]["no_spend"] is True, closed
+    assert closed["settlement_identity"] == original.identity.value.as_dict()
+    code, replay = run(*argv)
+    assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert _receipt_lines(context) == context["receipt_lines"]
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_rejects_same_generation_and_business_side_effects(tmp_path, monkeypatch, capsys, provider):
     context = _fixture(tmp_path, monkeypatch, capsys, provider, replace=False, source_profile=False)
     code, recovery = context["cli"](
@@ -479,3 +675,111 @@ def test_rejects_another_owner_and_stale_proof(tmp_path, monkeypatch, capsys, pr
     args = _closeout_args(context)
     args[args.index("--agent-id") + 1] = PEER
     _reject_without_effect(context, args)
+
+
+def test_execution_loss_closeout_uses_canonical_write_timeout(tmp_path, monkeypatch, capsys):
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.quota import execution_preparation
+
+    context = _fixture(tmp_path, monkeypatch, capsys, "file", source_profile=False)
+    seen_timeouts: list[object] = []
+    real_call = effect_runtime.effect_runtime_result
+
+    def recording_call(method, request, *, timeout=None):
+        if method == "quota.execution_loss_closeout.commit":
+            seen_timeouts.append(timeout)
+        return real_call(method, request, timeout=timeout) if timeout is not None else real_call(method, request)
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", recording_call)
+    monkeypatch.setattr(execution_preparation, "effect_runtime_result", recording_call)
+    code, closed = context["cli"](*_closeout_args(context))
+    assert code == 0, closed
+    assert seen_timeouts == [effect_runtime.CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("owner", [OWNER, PEER])
+@pytest.mark.parametrize("runtime_root_alias", [
+    pytest.param(False, id="direct-path"),
+    pytest.param(True, id="runtime-root-alias", marks=pytest.mark.skipif(
+        sys.platform == "win32", reason="requires directory symlink privileges",
+    )),
+])
+def test_recovery_guides_self_claim_only_for_the_retained_assignee(
+    tmp_path, monkeypatch, capsys, provider, owner, runtime_root_alias,
+):
+    fixture_path = tmp_path
+    if runtime_root_alias:
+        fixture_path = tmp_path / "storage-alias"
+        fixture_path.symlink_to(tmp_path, target_is_directory=True)
+    context = _fixture(fixture_path, monkeypatch, capsys, provider, source_profile=False,
+                       replacement_owner=owner)
+    lease = context["current_lease"]
+    code, released = context["cli"](
+        "task-lease", "release", "--goal-id", context["goal_id"], "--todo-id", context["todo"],
+        "--owner", owner, "--idempotency-key", lease["idempotency_key"],
+        "--expected-version", str(lease["version"]),
+    )
+    assert code == 0, released
+    code, recovery = context["cli"](
+        "quota", "should-run", "--context-delivery", "off", "--codex-app",
+        "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", "needs-control-writer",
+    )
+    assert code == 0, recovery
+    debt = recovery["unsettled_host_turn_recovery"]
+    assert debt["repair"] == "execution_loss_closeout"
+    assert debt["reason_code"] == "execution_loss_control_writer_required"
+    assert "execution_preparation" not in recovery
+    assert recovery["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert recovery["execution_obligation"]["delivery_allowed"] is False
+    cli_channel = recovery["interaction_contract"]["cli_channel"]
+    assert cli_channel["spend_allowed_now"] is False
+    claim_commands = [command for command in cli_channel["next_cli_actions"] if "todo claim" in command]
+    if owner == PEER:
+        assert not claim_commands
+        _assert_no_completion_or_debit(context)
+        return
+
+    [claim_command] = claim_commands
+    tokens = shlex.split(claim_command)
+    code, claimed = context["cli"](*tokens[tokens.index("todo"):])
+    assert code == 0, claimed
+    current = _lease(context)
+    assert current["owner"] == OWNER and current["lease_epoch"] > lease["lease_epoch"]
+    argv = _projected_preview_args(cli_channel, current)
+    code, preview = context["cli"](*argv)
+    assert code == 0 and preview["would_close_without_spend"] is True, preview
+    code, closed = context["cli"](*argv[:-1])
+    assert code == 0 and closed["settlement_progress"]["no_spend"] is True, closed
+    assert closed["settlement_identity"] == _readback(context).identity.value.as_dict()
+    code, replay = context["cli"](*argv[:-1])
+    assert code == 0 and replay["idempotent_replay"] is True and replay["appended"] is False, replay
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_turn_reentry_projects_execution_loss_without_repeating_work(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False)
+    before = _receipt_lines(context)
+    # Re-enter through the route a failed refresh returns and through the
+    # implicit receipt binding. Both must preserve the same original guard.
+    base = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
+            "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", TURN]
+    for scope in (["--todo-id", context["todo"]], []):
+        code, recovery = context["cli"](*base, *scope)
+        assert code == 0, (recovery.get("error_code"), recovery.get("reason"))
+        assert recovery["normal_delivery_allowed"] is False
+        assert recovery["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == TURN
+        channel = recovery["interaction_contract"]["cli_channel"]
+        assert channel["spend_allowed_now"] is False
+        preview = _projected_preview_args(channel, context["current_lease"])
+        code, result = context["cli"](*preview)
+        assert code == 0 and result["would_close_without_spend"], result
+    code, closed = context["cli"](*preview[:-1])
+    assert code == 0 and closed["settlement_progress"]["no_spend"], closed
+    code, replay = context["cli"](*preview[:-1])
+    assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert _receipt_lines(context) == before
+    _assert_no_completion_or_debit(context)

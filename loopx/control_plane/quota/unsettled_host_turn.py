@@ -176,6 +176,7 @@ def _prior_closeout_preflight(
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
+    inspect_current_execution_loss: bool = False,
 ) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
     """Ask the typed owner which prior Turn must still be closed out.
 
@@ -199,6 +200,7 @@ def _prior_closeout_preflight(
             current_turn_instance_id=current_turn_instance_id,
             goal_ref=goal_ref,
             owner_action_id=owner_action_id,
+            inspect_current_execution_loss=inspect_current_execution_loss,
             source_admission=source_admission,
         )
 
@@ -213,6 +215,7 @@ def _read_prior_closeout_preflight(
     owner_action_id: str | None,
     source_admission: Mapping[str, Any] | None,
     borrow_source_admission: bool = False,
+    inspect_current_execution_loss: bool = False,
 ) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
     try:
         request_runtime_root = (
@@ -228,6 +231,7 @@ def _read_prior_closeout_preflight(
                 "goal_id": goal_id,
                 "agent_id": agent_id,
                 "exclude_turn_instance_id": current_turn_instance_id,
+                **({"inspect_current_execution_loss": True} if inspect_current_execution_loss else {}),
                 "owner_action_id": owner_action_id,
                 **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
                 **({"source_admission": dict(source_admission)} if source_admission is not None else {}),
@@ -319,6 +323,8 @@ def recovery_admission_append_precondition(
                 owner_action_id=goal_owner_resume_id(goal),
                 source_admission=source_admission,
                 borrow_source_admission=source_admission is not None,
+                inspect_current_execution_loss=(recovery.get("repair") == "execution_loss_closeout"
+                    and recovery.get("prior_turn_instance_id") == turn_instance_id),
             )
             if (current is None or current[3]["checkpoint"] != recovery["admission_checkpoint"]
                     or current[3]["count"] != recovery["admissions_without_progress"]):
@@ -336,6 +342,7 @@ def _unsettled_host_turn_recovery(
     current_turn_instance_id: str | None,
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
+    inspect_current_execution_loss: bool = False,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return None
@@ -347,6 +354,7 @@ def _unsettled_host_turn_recovery(
         registry_path=registry_path,
         goal_ref=goal_ref,
         owner_action_id=owner_action_id,
+        inspect_current_execution_loss=inspect_current_execution_loss,
     )
     if preflight is None:
         return None
@@ -416,6 +424,7 @@ def apply_unsettled_host_turn_recovery_if_required(
     ),
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
+    inspect_current_execution_loss: bool = False,
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
@@ -430,6 +439,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         current_turn_instance_id=current_turn_instance_id,
         goal_ref=goal_ref,
         owner_action_id=owner_action_id,
+        inspect_current_execution_loss=inspect_current_execution_loss,
     )
     if verdict is None:
         return False
@@ -553,6 +563,10 @@ def _apply_recovery_projection(
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)
+    if recovery.get("repair") == "execution_loss_closeout":
+        # Ordinary preparation was built for potential current work. Its
+        # claim must never replace the prior Turn's administrative recovery.
+        payload.pop("execution_preparation", None)
     payload.update(
         {
             "decision": "blocked_wait" if attention else "unsettled_host_turn_recovery",

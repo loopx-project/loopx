@@ -29,7 +29,7 @@ def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, p
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
     host = ["--codex-app"]
     if complete:
-        host = ["--runtime-profile", "generic_cli", "--complete-turn"]
+        host = ["--runtime-profile", "generic_cli"]
         monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
         monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
         monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", "9876543210.125")
@@ -424,7 +424,7 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
     assert _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)[0] == 0
     command = ["quota", "should-run", *binding, "--turn-instance-id", TURN_ID,
-        "--runtime-profile", "generic_cli", "--complete-turn", "--context-delivery", "off"]
+        "--runtime-profile", "generic_cli", "--context-delivery", "off"]
     directory = tmp_path / "failed-capture"
     def unavailable(*args, **kwargs):
         raise EffectRuntimeStartupError("synthetic complete-context transport unavailable", diagnostic_code="fixture_unavailable")
@@ -460,16 +460,21 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("command", ["status", "context-read", "spend-slot"])
-def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, command):
+@pytest.mark.parametrize("flag", ["--turn-envelope", "--complete-turn"])
+def test_retired_display_aliases_rejected_before_admission(tmp_path, flag, capsys):
+    from loopx.cli import build_parser
+
     registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
-    rc, failed = _run_cli(registry, runtime, "quota", command, "--complete-turn")
-    assert rc == 1 and failed["reason"] == "--complete-turn requires JSON quota should-run"
+    with pytest.raises(SystemExit, match="2"):
+        build_parser().parse_args([
+            "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run", flag,
+        ])
+    assert f"unrecognized arguments: {flag}" in capsys.readouterr().err
     assert not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_compatibility_alias_soft_claim_reuses_the_original_default_receipt(tmp_path, provider):
+def test_complete_turn_soft_claim_reuses_the_original_default_receipt(tmp_path, provider):
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
     command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
@@ -478,7 +483,7 @@ def test_compatibility_alias_soft_claim_reuses_the_original_default_receipt(tmp_
     assert rc == 0 and original.get("schema_version") == "loopx_turn_envelope_v1"
     original_cli = original["interaction_contract"]["cli_channel"]
     assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
-    rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
+    rc, complete = _run_cli(registry, runtime, *command, cwd=project)
     assert rc == 0 and complete["schema_version"] == "loopx_turn_envelope_v1", complete
     cli = complete["interaction_contract"]["cli_channel"]
     assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.
@@ -1060,3 +1065,181 @@ def test_owed_command_checks_child_receipts_or_recovers_without_another_debit(tm
     assert replay["ok"] and replay["quota_spend"]["idempotent_replay"] and _spend_run_count(runtime) == 1
     assert readbacks == ([TURN_ID] if response == "complete" else [TURN_ID, TURN_ID])
     assert result["settlement_result"] == replay["settlement_result"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("persistent_conflict", [False, True], ids=["once", "persistent"])
+def test_combined_settlement_recovers_only_one_rejected_index_write(
+    tmp_path, monkeypatch, provider, persistent_conflict,
+):
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from types import SimpleNamespace
+
+    from loopx.cli_commands import refresh_settlement
+    from loopx.entrypoint import main
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    attempts = []
+
+    def concurrent_child(argv, **kwargs):
+        attempts.append(argv)
+        if persistent_conflict or len(attempts) == 1:
+            competing = [*argv[:5], *route, "quota", "spend-slot", "--execute",
+                         "--source", "controller", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+            # Inject another real CLI debit after the original preview.
+            # The rest of the child runs the unmodified package entry point.
+            interleave = f"""
+import json
+import subprocess
+from loopx.control_plane.quota import slot_accounting
+commit = slot_accounting.record_quota_slot_spend_from_preview
+def commit_after_competitor(preview, status, **kwargs):
+    result = subprocess.run({competing!r}, capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout)["appended"] is True, result.stdout
+    return commit(preview, status, **kwargs)
+slot_accounting.record_quota_slot_spend_from_preview = commit_after_competitor
+"""
+            entry = argv[3].replace("import runpy;", interleave + "\nimport runpy;", 1)
+            argv = [*argv[:3], entry, *argv[4:]]
+        result = subprocess.run(argv, **kwargs)
+        if persistent_conflict or len(attempts) == 1:
+            failure = json.loads(result.stdout)
+            assert result.returncode == 1, failure
+            assert failure["error_code"] == "index_digest_conflict" and not failure["appended"]
+        return result
+
+    refresh = ["refresh-state", *binding, "--classification", "verified",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+    stdout = StringIO()
+    with monkeypatch.context() as patch, redirect_stdout(stdout):
+        patch.chdir(project)
+        patch.setattr(refresh_settlement, "subprocess", SimpleNamespace(
+            run=concurrent_child, TimeoutExpired=subprocess.TimeoutExpired))
+        rc = main([*route, *refresh])
+    outcome = json.loads(stdout.getvalue())
+    assert len(attempts) == 2 and attempts[0] == attempts[1], outcome
+    assert outcome["settlement_identity"] == identity and outcome["appended"]
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 2  # One original plus one competitor, or two competitors.
+    receipts = outcome["settlement_result"]["receipts"]
+    assert all(row["effect_id"] == identity["effect_id"] for row in receipts)
+    if persistent_conflict:
+        assert rc == 1 and outcome["settlement_progress"]["state"] == "spend_required", outcome
+        assert outcome["quota_spend"]["error_code"] == "index_digest_conflict"
+        assert [row["step_kind"] for row in receipts] == ["validation", "durable_writeback"]
+        owed = outcome["settlement_owed"]
+        assert owed["effect_id"] == identity["effect_id"] and owed["kind"] == "quota_spend"
+    else:
+        assert rc == 0 and outcome["settlement_progress"]["state"] == "settled", outcome
+        assert [row["step_kind"] for row in receipts] == ["validation", "durable_writeback", "quota_spend"]
+        rc, replay = _run_cli(registry, runtime, *refresh, cwd=project)
+        assert rc == 0 and replay["idempotent_replay"] and replay["settlement_result"]["receipts"] == receipts
+        assert _spend_run_count(runtime) == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("omit_boundary", [True, False], ids=["default_boundary", "in_flight_boundary"])
+def test_persistent_unthrottled_settle_turn_conflict_recovers_via_should_run(
+    tmp_path, monkeypatch, provider, omit_boundary,
+):
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from types import SimpleNamespace
+    import shlex
+    import subprocess
+
+    from loopx.cli_commands import refresh_settlement
+    from loopx.entrypoint import main
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    reg_data = json.loads(registry.read_text(encoding="utf-8"))
+    reg_data["goals"][0]["quota"]["allowed_slots"] = 10
+    registry.write_text(json.dumps(reg_data, indent=2), encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    attempts = []
+
+    def persistent_conflict_child(argv, **kwargs):
+        attempts.append(argv)
+        competing = [*argv[:5], *route, "quota", "spend-slot", "--execute",
+                     "--source", "controller", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+        interleave = f"""
+import json
+import subprocess
+from loopx.control_plane.quota import slot_accounting
+commit = slot_accounting.record_quota_slot_spend_from_preview
+def commit_after_competitor(preview, status, **kwargs):
+    result = subprocess.run({competing!r}, capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout)["appended"] is True, result.stdout
+    return commit(preview, status, **kwargs)
+slot_accounting.record_quota_slot_spend_from_preview = commit_after_competitor
+"""
+        entry = argv[3].replace("import runpy;", interleave + "\nimport runpy;", 1)
+        result = subprocess.run([*argv[:3], entry, *argv[4:]], **kwargs)
+        failure = json.loads(result.stdout)
+        assert result.returncode == 1 and failure["error_code"] == "index_digest_conflict", failure
+        assert failure["appended"] is False
+        return result
+
+    refresh = ["refresh-state", *binding, "--classification", "verified",
+               "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+               *([] if omit_boundary else ["--delivery-boundary", "in_flight_continuation"]),
+               "--no-global-sync", "--suppress-external-sinks", "--settle-turn", "--settlement-receipt"]
+    stdout = StringIO()
+    with monkeypatch.context() as patch, redirect_stdout(stdout):
+        patch.chdir(project)
+        patch.setattr(refresh_settlement, "subprocess", SimpleNamespace(
+            run=persistent_conflict_child, TimeoutExpired=subprocess.TimeoutExpired))
+        rc = main([*route, *refresh])
+    outcome = json.loads(stdout.getvalue())
+    assert rc == 1 and len(attempts) == 2 and attempts[0] == attempts[1], outcome
+    assert outcome["settlement_progress"]["state"] == "spend_required", outcome
+    owed_command = outcome["settlement_owed"]["command"]
+    assert _spend_run_count(runtime) == 2
+
+    for extra in (
+        ["--codex-app", "--todo-id", TODO_ID],
+        ["--codex-app"],
+        ["--runtime-profile", "generic_cli"],
+        [],
+    ):
+        rc, rerun = _run_cli(
+            registry, runtime, "quota", "should-run",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", TURN_ID, *extra, cwd=project,
+        )
+        assert rc == 0, (extra, rerun)
+        assert rerun["decision"] == "unsettled_host_turn_recovery", (extra, rerun)
+        assert rerun["effective_action"] == "unsettled_host_turn_recovery", (extra, rerun)
+        assert rerun["unsettled_host_turn_recovery"]["repair"] == "quota_spend", (extra, rerun)
+        assert rerun["settlement_progress"]["state"] == "spend_required", (extra, rerun)
+        assert rerun["settlement_owed"]["command"] == owed_command, (extra, rerun)
+        assert rerun["interaction_contract"]["cli_channel"]["next_cli_actions"] == [owed_command]
+
+    settled_out = StringIO()
+    with monkeypatch.context() as patch, redirect_stdout(settled_out):
+        patch.chdir(project)
+        rc_retry = main(shlex.split(owed_command)[1:])
+    assert rc_retry == 0
+    settled = json.loads(settled_out.getvalue())
+    assert settled["appended"] is True, settled
+    assert settled["settlement_progress"]["state"] == "settled", settled
+    assert settled["settlement_identity"] == identity, settled
+    assert _spend_run_count(runtime) == 3

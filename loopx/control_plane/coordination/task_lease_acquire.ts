@@ -117,8 +117,8 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
       return failed(decision.code, decision.code === "handoff_mode_retired"
         ? "Legacy ownership cannot grant new execution; release retained leases and review handoff-mode plan-migration/migrate before acquiring again."
         : `canonical task lease acquire rejected: ${decision.code}`, {
-        ...(decision.code === "write_scope_conflict" ? {recommended_action:
-          "Coordinate shared writes with the listed holders. For isolated code edits, use your own separate Git worktree and acquire with --write-worktree; file overlaps become integration advisories. A known same-checkout collision remains rejected. Never take over a foreign lease or use code-edit mode for shared runtime state."} : {}),
+        ...(decision.code === "workspace_lease_conflict" ? {recommended_action:
+          "Use an independent Git worktree and acquire with --write-worktree, or release your conflicting lease; two active leases cannot share one physical checkout. Never take over a foreign lease."} : {}),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(facts.current),
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
         ...ownConflictRecovery,

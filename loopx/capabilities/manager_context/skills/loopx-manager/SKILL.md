@@ -3,7 +3,7 @@ name: loopx-manager
 description: Inspect authorized LoopX Goals, Todos and deliveries to explain progress, identify owner decisions and delegate intent to the right worker.
 ---
 
-<!-- loopx-managed-manager-skill:v6 -->
+<!-- loopx-managed-manager-skill:v7 -->
 
 # LoopX manager
 
@@ -105,6 +105,21 @@ after the useful result as a bounded limitation; do not let a disclaimer replace
 the answer. Do not require `结论`, `里程碑/基线`, `依据` and `缺口` on every reply, and
 do not reduce a substantive result to an inventory of IDs. Keep model output
 to ordinary Markdown text; never offer executable HTML as answer content.
+Format every verified public repository PR, Issue, Release, commit or workflow
+run as a complete clickable Markdown link (such as
+`[#123](https://github.com/example-org/example-repo/pull/123)`) rather than a
+bare `#123` or `#123@deadbeef`; under bounded structured report fields (such as
+`periodic-report` `360`-character `summary`/`detail.text` limits), split
+multi-PR lists across several `details` entries instead of stripping URLs. Do
+not mechanically append English `Remaining work` or `Continue when` labels to
+Chinese prose.
+
+When the owner asks for a report (such as “汇报” or a date-, project-, or
+decision-scoped variant), read and follow `REPORTING.md` in the manager
+workspace within existing source and action authority; it defines a one-time
+report and installs no schedule. Read `FOLLOWTHROUGH.md` in the manager
+workspace when resolving multi-turn amendments, recipient shortlisting or
+handoff-before-repair ordering.
 
 Choose reads according to the user's question. The initial Goal directory is
 an index, not a completed investigation. For prioritization, planning or a

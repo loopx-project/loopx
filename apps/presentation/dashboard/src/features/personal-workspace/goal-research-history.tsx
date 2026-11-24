@@ -13,7 +13,7 @@ import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent, type ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
-import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
+import {ExploreCandidateLeaders, ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
 
 type CollectionSelection = {nodes: string[]; day: string | null};
@@ -257,6 +257,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   }, [read.events, displayProjection, originalGoalId]);
   const value = history.value;
   const measurementFeedback = value?.measurementFeedback ?? [];
+  const candidateLeaders = (nodeId: string) => <ExploreCandidateLeaders feedback={measurementFeedback.filter(row => row.node_id === nodeId)} complete={read.complete} zh={zh}/>;
   const measurementSummary = (nodeId: string) => {
     const feedback = measurementFeedback.filter(item => item.node_id === nodeId);
     return feedback.length ? <ExploreMeasurements title={zh ? "最近记录与历史最佳" : "Latest recorded and historical best"}
@@ -395,8 +396,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     select(collection ?? {nodes: [], day: null}, false);
   };
   const chooseQuestion = (node: ExploreHistoryNode, parent: CollectionSelection) => {
-    const finding = defaultFinding(node);
-    select({nodes: [node.id], day: null, finding: finding?.result_id, event: finding?.event_id, collection: parent});
+    select({nodes: [node.id], day: null, collection: parent});
   };
   const resultsAnchor = useRef<HTMLDivElement>(null), reportAnchor = useRef<HTMLDivElement>(null), historyAnchor = useRef<HTMLElement>(null);
   const reportEntries = useRef(new Set<string>());
@@ -649,6 +649,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
           {selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
         </details> : null : <h3>{selected.latest.title}</h3> : null}{displayControl}
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
+        {selected.findings.length > 0 && !selectedFinding ? <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p> : null}
+        {questionExpanded ? candidateLeaders(selected.id) : null}
         {selected.findings.length ? <>
           {findingVersions.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
             <label><span>{zh ? "结论" : "Finding"}</span><select aria-label={zh ? "选择问题结论" : "Choose a question finding"} value={selectedFinding?.event_id ?? ""}
@@ -671,7 +673,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
               })}
             </div>
           </nav> : null}
-          {selectedFinding ? findingElement(selectedFinding) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
+          {selectedFinding ? findingElement(selectedFinding) : null}
         </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<ContextHelp label={zh ? "暂无附属结论" : "No attached findings"} icon={CircleHelp}><p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></ContextHelp></>}
         <details className="research-node-provenance" key={`sources:${selected.id}`}><summary>{zh ? "来源与历史" : "Sources and history"}</summary>
         {selectedContextCitations.length ? <><h4>{zh ? "译文依据" : "Translation context"}</h4>
@@ -680,6 +682,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
             {citation.source_id} · {zh ? "行" : "lines"} {citation.first_line}–{citation.last_line}
           </button>)}</div></> : null}
         {selected.findings.length && selectedFinding?.title === selected.latest.title && selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
+        {!questionExpanded ? candidateLeaders(selected.id) : null}
         {measurementSummary(selected.id)}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
         {selectedEdges.length ? <><h4>{copy.links}</h4><ul>{selectedEdges.map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul></> : null}

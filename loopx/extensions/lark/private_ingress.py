@@ -19,7 +19,8 @@ from typing import Any
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery
 from ...file_lock import try_exclusive_file_lock
 from ...chat_store import _read_json
-from .conversation_identity import identity_ref, lark_private_source
+from .conversation_identity import identity_ref
+from .private_topic_lanes import expected_private_source
 from .goal_channel_transport import call, json_payload, lark_args
 from .group_history import _provider_page
 from .inbox_reply import _message
@@ -230,10 +231,11 @@ def project_private_reply_history(store: Any, session: dict[str, Any],
                 native = _read_json(store.root / "external-requests" / f"{request}.json")
                 if not isinstance(record.get("event"), dict):
                     raise ValueError("unreadable original event")
-                source = lark_private_source(provider_ref=saved["provider_ref"], event=record["event"])
+                source = expected_private_source(
+                    provider_ref=saved["provider_ref"], event=record["event"], saved_context=saved
+                )
                 # Recovery moves the correlation journal forward, retaining its
-                # original failed Turn. Read those exact recorded identities;
-
+                # original failed Turn. Read those exact recorded identities.
                 recoveries = [native.get("context_recovery") or {}, *native.get("context_recovery_history", [])]
                 if any(not isinstance(row, dict) for row in recoveries):
                     raise ValueError("unreadable recovery identities")
@@ -464,7 +466,7 @@ class PrivateIngressObserver:
                     **{key: canonical.get(key) for key in ("root_id", "parent_id", "thread_id")}}
                 yield binding["transport_ref"], history
             except (OSError, ValueError, KeyError, TypeError):
-                continue  # Preserve every gap;
+                continue  # Preserve every gap.
 
     def _records(self) -> list[dict[str, Any]]:
         paths = sorted(self.transport.root.glob("*.json"))

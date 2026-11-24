@@ -6,6 +6,8 @@ on:
       - 'apps/desktop/**'
       - 'scripts/desktop_*'
       - 'tests/desktop/**'
+      - 'loopx/cli_commands/public_default_contract.json'
+      - 'loopx/cli_commands/update_artifact.py'
       - '.github/workflows/desktop-updater.yml'
   release:
     types: [published]
@@ -294,13 +296,23 @@ jobs:
           # nullglob, Bash passes the unmatched pattern to `gh`, which exits
           # before the feed and channel pointer are published.
           shopt -s nullglob
+          channel_action="$(python - <<'PY'
+          from loopx.cli_commands.update_artifact import PUBLIC_DEFAULT_CONTRACT, public_channel_allows_default
+
+          print("promote" if public_channel_allows_default(PUBLIC_DEFAULT_CONTRACT) else "hold")
+          PY
+          )"
           if [ "$EVENT_NAME" != release ]; then
-            gh release create "$RELEASE_TAG" --prerelease --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime preview."
+            gh release create "$RELEASE_TAG" --prerelease --latest=false --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime candidate for exact-revision qualification."
           fi
           for artifact in dist/updater/*.gz dist/updater/*.sig dist/updater/*.exe; do
             gh release upload "$RELEASE_TAG" "$artifact"
           done
           gh release upload "$RELEASE_TAG" dist/updater/desktop-updater.json --clobber
+          if [ "$channel_action" != promote ]; then
+            echo "::notice title=Desktop channel retained::The candidate's default contract is pending public channel qualification."
+            exit 0
+          fi
           # Channel pointers are independent of repository Latest, which also
           # serves separately versioned plugin releases. Advance only after the
           # immutable signed assets and feed are completely uploaded.

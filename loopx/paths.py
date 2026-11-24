@@ -4,6 +4,7 @@ import ast
 import os
 import re
 import stat
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 
@@ -30,6 +31,15 @@ class RuntimeRouteStatus(StrEnum):
     CONFLICT = "conflict"
     INVALID = "invalid"
     CONFIGURED = "configured"
+
+
+def codex_automation_database(home: Path) -> Path:
+    """Use the current App store, retaining the legacy layout on older installs."""
+    current = home / "sqlite/codex.db"
+    legacy = home / "sqlite/codex-dev.db"
+    if not current.exists() and legacy.is_file():
+        return legacy
+    return current
 
 
 def default_goal_state_file(project: Path, goal_id: str) -> Path:
@@ -334,6 +344,35 @@ def registry_project_root(registry_path: Path) -> Path:
     expanded = registry_path.expanduser().resolve()
     parent = expanded.parent
     return parent.parent if parent.name == ".loopx" else parent
+
+
+def goal_state_file_from_record(
+    goal: Mapping[str, object],
+    *,
+    registry_path: Path,
+) -> Path | None:
+    """Resolve the state file a Goal record declares, for hook payloads.
+
+    Absolute values win. A project registry already owns its project, so a
+    relative value resolves there as it always has. A global registry lives in
+    the runtime root instead, which would point the hook at a file the project
+    never wrote; there the Goal's own repo decides, with the registry directory
+    as the last fallback, which is the rule the retired-goal route already uses.
+    """
+
+    value = goal.get("state_file")
+    if not value:
+        return None
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return path
+    expanded = registry_path.expanduser()
+    if expanded.parent.name == ".loopx":
+        return registry_project_root(expanded) / path
+    repo = goal.get("repo")
+    if repo:
+        return Path(str(repo)).expanduser() / path
+    return expanded.parent / path
 
 
 def resolve_runtime_root(

@@ -2,6 +2,7 @@
 import {createHash} from "node:crypto";
 import {gzipSync} from "node:zlib";
 import {readTodo, TODO_READ_REQUEST, TODO_READ_RESULT} from "./read_projection.ts";
+import {object} from "./read_codec.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {MAX_INLINE_RESPONSE_BYTES, MAX_LOCAL_SNAPSHOT_BYTES, openPrivateSnapshotSource} from "../effect_runtime_snapshot.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -55,8 +56,20 @@ export async function readTodoRuntime(value: unknown): Promise<JsonObject> {
   // Keep one complete source transaction for a large quota bundle. The
   // lossless adapter codec changes no rows or selection/wait semantics.
   // Reads beyond the existing complete-frame budget retain their old paging.
-  const compressed = input.kind === "quota_projection" && decoded.length > inlineBytes && decoded.length <= completeBytes;
-  const bytes = compressed ? gzipSync(decoded) : decoded;
+  let bytes = decoded;
+  if (input.kind === "quota_projection" && decoded.length > inlineBytes && decoded.length <= completeBytes) {
+    bytes = gzipSync(decoded);
+  } else if (input.kind === "canonical_fields" && decoded.length >= 16 * 1024 && decoded.length <= 1024 * 1024) {
+    // Configured Goals expose the same acceptance document in both views.
+    // Bound synchronous work and keep dense replies inline after base64 overhead.
+    const acceptance = object(result.canonical).goal_acceptance_contract;
+    const summary = object(object(result.fields).agent_todos);
+    if (acceptance != null && summary.goal_acceptance_contract === acceptance) {
+      const candidate = gzipSync(decoded, {level: 1});
+      if (4 * Math.ceil(candidate.length / 3) < decoded.length / 3) bytes = candidate;
+    }
+  }
+  const compressed = bytes !== decoded;
   const size = compressed ? quotaPieceBytes : pieceBytes;
   if (page === null && !compressed && bytes.length <= completeBytes) return result;
   const digest = createHash("sha256").update(bytes).digest("hex");

@@ -180,6 +180,15 @@ test("canonical diagnostics keep metadata and non-terminal user rules without re
   assert.deepEqual(codes([agent({status: "bogus"})]), ["todo_status_invalid"]);
   assert.deepEqual(codes([open({task_class: "user_action", excluded_agents: ["agent-a"]})]), ["todo_executor_exclusion_scope_invalid"]);
   assert.deepEqual(codes([open({status: "done", archive_state: "archive", excluded_agents: ["agent-a"]})]), []);
+  const archived = agent({status: "done", done: true, archive_state: "archive", excluded_agents: ["agent-other"]});
+  const before = structuredClone(archived);
+  assert.deepEqual(codes([archived]), []);
+  assert.deepEqual(archived, before);
+  for (const fields of [{status: "deferred"}, {status: "open", done: false}, {archive_state: "active"}]) {
+    assert.deepEqual(codes([{...archived, ...fields}]), ["todo_excludes_unregistered_agent"]);
+  }
+  assert.deepEqual(codes([{...archived, claimed_by: "agent-other"}]), ["todo_claimed_by_excluded_agent"]);
+  assert.deepEqual(codes([{...archived, excluded_agents: ["!"]}]), ["todo_excluded_agents_invalid"]);
   assert.deepEqual(codes([agent({claimed_by: "agent-a", excluded_agents: ["agent-b"]})], ["agent-a", "agent-b"]), []);
   // A historical executor claim does not override explicit whole-Goal scope.
   for (const fields of [

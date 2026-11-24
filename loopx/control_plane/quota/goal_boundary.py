@@ -158,6 +158,7 @@ def _registry_boundary_projection(goal: Mapping[str, Any]) -> dict[str, Any]:
     coordination: dict[str, Any] = (
         coordination_value if isinstance(coordination_value, dict) else {}
     )
+    goal_repo = goal.get("repo")
     write_scope_value = coordination.get("write_scope")
     write_scope = write_scope_value if isinstance(write_scope_value, list) else []
     normalized_write_scope: list[str] = []
@@ -165,7 +166,10 @@ def _registry_boundary_projection(goal: Mapping[str, Any]) -> dict[str, Any]:
         scope = str(value).strip()
         if scope and scope not in normalized_write_scope:
             normalized_write_scope.append(scope)
-    boundary_authority = checkpointed_boundary_authority_summary(coordination)
+    boundary_authority = checkpointed_boundary_authority_summary(
+        coordination,
+        goal_repo=goal_repo,
+    )
     if boundary_authority:
         for scope in normalize_required_write_scopes(
             boundary_authority.get("active_write_scope")
@@ -174,7 +178,12 @@ def _registry_boundary_projection(goal: Mapping[str, Any]) -> dict[str, Any]:
                 normalized_write_scope.append(scope)
         boundary["checkpointed_boundary_authority"] = boundary_authority
     if normalized_write_scope:
-        boundary["write_scope"] = normalized_write_scope
+        from ..coordination.configuration import fold_write_scope_subpaths
+
+        boundary["write_scope"] = fold_write_scope_subpaths(
+            normalized_write_scope,
+            goal_repo=goal_repo,
+        )
     available_capabilities = declared_available_capabilities(goal)
     if available_capabilities:
         boundary["available_capabilities"] = available_capabilities

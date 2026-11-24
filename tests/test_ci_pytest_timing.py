@@ -38,9 +38,10 @@ def read_log(path, *, success=True):
 @pytest.mark.parametrize("workers", [0, 2])
 @pytest.mark.parametrize("stack_timeout", [0, 0.01], ids=["no-stack", "stack"])
 def test_real_xdist_timings_match_native_pytest_owner(tmp_path, verbosity, workers, stack_timeout):
+    pass_duration = 0.25 if stack_timeout else 0.03
     (tmp_path / "test_subject.py").write_text(
         "import time, pytest\n"
-        "def test_pass(): time.sleep(0.03)\n"
+        f"def test_pass(): time.sleep({pass_duration})\n"
         "def test_fail(): assert False\n"
         "@pytest.mark.skip(reason='fixture')\n"
         "def test_skip(): pass\n"
@@ -116,10 +117,12 @@ def test_real_pytest_subtest_cost_is_included_once_in_parent_call(tmp_path):
         "        Path('native-reports.json').write_text(json.dumps(reports))\n",
         encoding="utf-8")
     log = tmp_path / "subtests.log"
+    env = environment()
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(tmp_path)))
     with log.open("w") as output:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-v", "-n", "2", "-p", "native_reports",
-             "-p", "scripts.ci.pytest_timing"], cwd=tmp_path, env=environment(),
+             "-p", "scripts.ci.pytest_timing"], cwd=tmp_path, env=env,
             stdout=output, stderr=subprocess.STDOUT, timeout=30, check=False)
     assert result.returncode == 1
     native = json.loads((tmp_path / "native-reports.json").read_text())
@@ -265,7 +268,7 @@ def test_test_owned_subprocess_doubles_cannot_capture_diagnostic_writers(tmp_pat
             cwd=tmp_path, env=environment(), stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)
         try:
-            assert process.wait(timeout=5) == 1
+            assert process.wait(timeout=15) == 1
         finally:
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)

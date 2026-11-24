@@ -469,7 +469,7 @@ class CodexChatAgentSession:
     resolved_reasoning_effort: str | None = None
     service_tier: str | None = None
     response_timeout_sec: float = 30.0
-    idle_timeout_sec: float = 180.0
+    idle_timeout_sec: float | None = None
     hard_timeout_sec: float | None = None
     next_request_id: int = 5
     current_turn_id: str = ""
@@ -518,7 +518,7 @@ class CodexChatAgentSession:
         goal_id: str | None,
         objective: str,
         response_timeout_sec: float = 30.0,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         resume_thread_id: str | None = None,
         fork_thread_id: str | None = None,
@@ -1026,15 +1026,19 @@ class CodexChatAgentSession:
             )
         return raw
 
-    def _next_message(self, *, deadline: float, check: Callable[[], None] | None = None) -> dict[str, Any]:
+    def _next_message(self, *, deadline: float | None = None, check: Callable[[], None] | None = None) -> dict[str, Any]:
         while True:
             if check is not None:
                 check()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise self._runtime_error("Codex app-server timed out.")
+            if deadline is None:
+                timeout = 0.5
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise self._runtime_error("Codex app-server timed out.")
+                timeout = min(0.5, remaining)
             try:
-                message = self.messages.get(timeout=min(0.5, remaining))
+                message = self.messages.get(timeout=timeout)
             except queue.Empty:
                 continue
             return self._unwrap_stream_message(message)
@@ -1050,7 +1054,7 @@ class CodexChatAgentSession:
         waiter.put(message)
         return True
 
-    def _next_event(self, *, deadline: float, check: Callable[[], None] | None = None) -> dict[str, Any]:
+    def _next_event(self, *, deadline: float | None = None, check: Callable[[], None] | None = None) -> dict[str, Any]:
         while True:
             if check is not None:
                 check()
@@ -1514,6 +1518,7 @@ class CodexChatAgentSession:
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
         check_running: Callable[[], None] | None = None,
         reply_image_turn_id: str | None = None,
+        reply_documents: bool = False,
         _native_task: bool = False,
         sandbox_policy: dict[str, object] | None = None,
     ) -> dict[str, Any]:
@@ -1540,6 +1545,7 @@ class CodexChatAgentSession:
                 project_work=self.project_context is not None and self.sandbox == "workspace-write",
                 public_source_read_context=self._public_source_read_context,
                 reply_image_directory=image_dir,
+                reply_documents=reply_documents,
             )
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
         from .chat.attachments import native_attachment_inputs
@@ -1548,8 +1554,8 @@ class CodexChatAgentSession:
         # the caller's fence through its write, then release before waiting for
         # the native acknowledgement or model output.
         started_at = time.monotonic()
-        start_timeout = min(self.idle_timeout_sec, self.hard_timeout_sec
-                            if self.hard_timeout_sec is not None else self.idle_timeout_sec)
+        start_limits = [v for v in (self.idle_timeout_sec, self.hard_timeout_sec) if v is not None]
+        start_deadline = started_at + min(start_limits) if start_limits else None
         if _native_task:
             # Publication may be uncertain. Every subsequent ordinary send
             # must narrow the sticky native policy, even after an exception.
@@ -1577,7 +1583,7 @@ class CodexChatAgentSession:
                 ),
             },
             request_id=request_id,
-            deadline=started_at + start_timeout,
+            deadline=start_deadline,
             **({"write_guard": turn_start_guard} if turn_start_guard is not None else {}),
         )
         turn_id = _extract_id(turn_result, "turn", "turnId")
@@ -1741,7 +1747,7 @@ class CodexChatAgentSession:
         emit_visible(display_filter.finish())
         raw_response = completed_agent_response if completed_agent_response is not None else "".join(parts)
         response = native_turn_response(self, raw_response, output_schema=output_schema,
-                                        reply_image_turn_id=reply_image_turn_id)
+                                        reply_image_turn_id=reply_image_turn_id, reply_documents=reply_documents)
         if output_schema is None and on_event:
             if (
                 CHAT_REVIEW_OPEN_TAG not in raw_response
@@ -1754,14 +1760,17 @@ class CodexChatAgentSession:
         self.current_turn_id = ""
         return response
 
-    def _turn_deadline(self, started_at: float, last_activity_at: float) -> float:
+    def _turn_deadline(self, started_at: float, last_activity_at: float) -> float | None:
         now = time.monotonic()
         if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:
             raise self._timeout_error("hard_timeout", "Codex Chat turn reached its hard time limit.")
-        if now - last_activity_at >= self.idle_timeout_sec:
+        if self.idle_timeout_sec is not None and now - last_activity_at >= self.idle_timeout_sec:
             raise self._timeout_error("idle_timeout", "Codex Chat turn stopped producing activity.")
-        deadline = last_activity_at + self.idle_timeout_sec
-        return min(deadline, started_at + self.hard_timeout_sec) if self.hard_timeout_sec is not None else deadline
+        deadlines = [
+            *([started_at + self.hard_timeout_sec] if self.hard_timeout_sec is not None else []),
+            *([last_activity_at + self.idle_timeout_sec] if self.idle_timeout_sec is not None else []),
+        ]
+        return min(deadlines) if deadlines else None
 
     def _timeout_error(self, error_code: str, summary: str) -> CodexChatTimeoutError:
         return CodexChatTimeoutError(

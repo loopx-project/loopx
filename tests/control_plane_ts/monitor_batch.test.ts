@@ -279,3 +279,34 @@ test("historical unranked monitor receipts replay without applying the new defau
     assert.throws(() => replay({...input, intent}, receipt), /request mismatch/);
   }
 });
+
+test("clearing a previously scoped transition emits clear_fields on todo_upsert", () => {
+  const base = request();
+  const scopedInput: MonitorBatchInput = {
+    ...base,
+    intent: {},
+    observation: {
+      todo_id: "todo_watch",
+      target_key: "watch-a",
+      generated_at: "2026-09-01T01:00:00Z",
+      result_hash: "result-a",
+      material_change: false,
+    },
+    todos: [{
+      ...base.todos[0]!,
+      result_hash: "result-a",
+      material_change: "true",
+      material_change_generation: 1,
+      consecutive_no_change: "0",
+      material_change_scope: "case-a/run-1",
+      material_change_scope_generations: "95866d27011023fae340614c:1",
+    }],
+  };
+  const cleared = planMonitorBatch(scopedInput);
+  assert.equal(cleared.mutations.length, 1);
+  const mutation = cleared.mutations[0]!;
+  assert.equal(mutation.kind, "todo_upsert");
+  assert.deepEqual(mutation.clear_fields, ["material_change_scope"]);
+  assert.equal("material_change_scope" in mutation.todo, false);
+  assert.equal(mutation.todo.material_change_scope_generations, "95866d27011023fae340614c:1");
+});

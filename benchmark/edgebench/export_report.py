@@ -19,6 +19,7 @@ from pathlib import Path
 from loopx.capabilities.benchmark_toolkit.experiment_board import (
     normalize_benchmark_experiment_board_row,
 )
+from .causal_attribution import validate_historical_stride_strategy
 from .feedback_hook import FEEDBACK_PAYLOAD
 from .result_publication import native_grading_complete
 
@@ -278,8 +279,10 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if receipt.get("stride_strategy") != profile.get("stride_strategy"):
             raise ValueError("Profile disagrees with runtime: stride_strategy")
         if "stride_strategy" in receipt:
-            from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
-            normalize_stride_strategy(receipt["stride_strategy"])
+            # Read-only history: absent, "off" or evidence_conditioned_v1.
+            if receipt["stride_strategy"] is None:
+                raise ValueError("stride_strategy must be omitted rather than null")
+            validate_historical_stride_strategy(receipt["stride_strategy"])
         if number(final["best_score"]) != number(receipt["best_score"]):
             raise ValueError("Final and runtime scores disagree")
         score_entries = [

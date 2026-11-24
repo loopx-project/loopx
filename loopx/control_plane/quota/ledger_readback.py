@@ -11,6 +11,8 @@ from typing import Any, cast
 
 import json
 import math
+import os
+import stat
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -91,7 +93,262 @@ def _slot_count(value: Any) -> int | None:
     return None
 
 
-def _read_quota_event_artifact(raw_json_path: str) -> tuple[dict[str, Any] | None, str | None]:
+def _expanded_stored_path(stored_path: str) -> Path | None:
+    """Expand ``~`` when that account can be resolved.
+
+    An unknown ``~user`` raises ``RuntimeError``. The path is then not a
+    copied run file, and callers keep the stored-path observation.
+    """
+
+    try:
+        return Path(stored_path).expanduser()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _lexical_absolute(path: Path) -> Path:
+    """Collapse ``.`` and ``..`` without resolving symlinks.
+
+    The TypeScript reader uses lexical ``path.resolve`` for the goal-id check,
+    so a symlink target must not decide which goal the stored path names.
+    """
+
+    return Path(os.path.abspath(path))
+
+
+def _copied_goal_run_file_name(stored_path: str, goal_id: str, extension: str) -> str | None:
+    """File name when ``stored_path`` is ``<any>/goals/<goalId>/runs/<file>``.
+
+    ``extension`` is ``.json`` or ``.md``. A runtime copy leaves the old
+    absolute path in the index row. Only that same-goal runs file may be
+    opened from the current runs directory.
+    """
+
+    if not goal_id:
+        return None
+    raw = _expanded_stored_path(stored_path)
+    if raw is None or not raw.is_absolute():
+        return None
+    normalized = _lexical_absolute(raw)
+    file_name = normalized.name
+    runs_parent = normalized.parent
+    goal_dir = runs_parent.parent
+    goals_dir = goal_dir.parent
+    if (
+        not file_name
+        or file_name in {".", ".."}
+        or normalized.suffix != extension
+        or runs_parent.name != "runs"
+        or goal_dir.name != goal_id
+        or goals_dir.name != "goals"
+    ):
+        return None
+    return file_name
+
+
+def _relative_to_runs_dir(path: Path, runs_real: Path) -> str | None:
+    """Path relative to ``runs_real``, or None when the volumes differ.
+
+    Windows ``os.path.relpath`` raises ``ValueError`` across drives. A
+    different volume is not inside the runs directory.
+    """
+
+    try:
+        return os.path.relpath(path, runs_real)
+    except ValueError:
+        return None
+
+
+def _stays_inside_runs_dir(runs_dir: Path, stored_path: str) -> bool:
+    """True when the stored path is already lexically inside ``runs_dir``."""
+
+    try:
+        runs_real = Path(runs_dir).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    expanded = _expanded_stored_path(stored_path)
+    if expanded is None:
+        return False
+    resolved = _lexical_absolute(expanded)
+    relative = _relative_to_runs_dir(resolved, runs_real)
+    return bool(
+        relative
+        and relative != "."
+        and relative != ".."
+        and not relative.startswith(".." + os.sep)
+        and not os.path.isabs(relative)
+    )
+
+
+def _relocated_run_artifact_path(
+    runs_dir: Path,
+    goal_id: str,
+    stored_path: str,
+    extension: str,
+) -> Path | None:
+    """Same-named regular file in the current runs directory, or None.
+
+    Symlinks, directories, and files whose real path leaves the runs directory
+    are not substitutes for the stored artifact.
+    """
+
+    file_name = _copied_goal_run_file_name(stored_path, goal_id, extension)
+    if file_name is None or _stays_inside_runs_dir(runs_dir, stored_path):
+        return None
+    try:
+        runs_real = Path(runs_dir).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not runs_real.is_dir():
+        return None
+    candidate = runs_real / file_name
+    try:
+        if not stat.S_ISREG(candidate.lstat().st_mode):
+            return None
+        target = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    relative = _relative_to_runs_dir(target, runs_real)
+    if relative != file_name:
+        return None
+    return target
+
+
+def relocated_run_artifact_path(
+    runs_dir: Path,
+    goal_id: str,
+    stored_path: str,
+    extension: str,
+) -> Path | None:
+    """Same-named regular ``.json`` or ``.md`` file inside ``runs_dir``.
+
+    Symlinks, directories, and files whose real path leaves the runs directory
+    are not substitutes. A stored path that is already inside ``runs_dir``, or
+    that does not name this goal's runs file, returns None so the caller keeps
+    the stored path.
+    """
+
+    return _relocated_run_artifact_path(runs_dir, goal_id, stored_path, extension)
+
+
+def _quota_event_artifact_path(
+    raw_json_path: str,
+    *,
+    runs_dir: Path | None,
+    goal_id: str,
+) -> str | None:
+    """Path to open, or None when a known runs directory must not leave itself.
+
+    Callers that do not know the current runs directory keep the stored path.
+    Callers that do keep a path already inside that directory, or the same-named
+    regular file copied into it. Every other absolute location stays unread.
+    """
+
+    if runs_dir is None:
+        return raw_json_path
+    if _stays_inside_runs_dir(runs_dir, raw_json_path):
+        return raw_json_path
+    relocated = _relocated_run_artifact_path(runs_dir, goal_id, raw_json_path, ".json")
+    if relocated is None:
+        return None
+    return str(relocated)
+
+
+# Commit metadata the TypeScript writer repeats on the index row and the
+# JSON artifact. A historical row that omits the field has no binding to check.
+_COMMIT_METADATA_FIELDS = {
+    QUOTA_SLOT_SPENT_CLASSIFICATION: "quota_spend_commit",
+    QUOTA_SLOT_VOIDED_CLASSIFICATION: "quota_void_commit",
+}
+# Bindings the spend writers kept before commit metadata existed. A missing
+# side is unknown; both sides stating different values is a conflict.
+_BOUND_IDENTITY_FIELDS = (
+    "agent_id",
+    "effect_ref",
+    "turn_instance_id",
+    "todo_id",
+    "replan_obligation_id",
+    "settlement_identity",
+    "goal_ref",
+)
+
+
+def _canonical_json(value: Any) -> str:
+    """Stable object text for the same comparison the TypeScript reader uses."""
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _stated(value: Any) -> bool:
+    return value is not None and value != ""
+
+
+def _explicit_identity_conflict(index_row: dict[str, Any], retained: dict[str, Any]) -> bool:
+    for field in _BOUND_IDENTITY_FIELDS:
+        expected = index_row.get(field)
+        actual = retained.get(field)
+        if not _stated(expected) or not _stated(actual):
+            continue
+        if _canonical_json(expected) != _canonical_json(actual):
+            return True
+    return False
+
+
+def _commit_identity_conflict(index_row: dict[str, Any], artifact: dict[str, Any]) -> bool:
+    field = _COMMIT_METADATA_FIELDS.get(str(index_row.get("classification") or ""))
+    if field is None or field not in index_row:
+        return False
+    index_commit = index_row.get(field)
+    artifact_commit = artifact.get(field)
+    if not isinstance(index_commit, dict) or not isinstance(artifact_commit, dict):
+        return True
+    return _canonical_json(index_commit) != _canonical_json(artifact_commit)
+
+
+def _artifact_identity_conflict(
+    index_row: dict[str, Any],
+    artifact: dict[str, Any],
+    goal_id: str,
+) -> bool:
+    """True when the artifact cannot be the debit named by the index row.
+
+    A file in the current runs directory can still describe another commit for
+    the same Goal. Omitted historical fields stay unknown. A commit reference
+    recorded on the index must match the artifact, and any identity both sides
+    state must agree.
+    """
+
+    classification = str(index_row.get("classification") or "")
+    artifact_classification = artifact.get("classification")
+    if artifact_classification is not None and artifact_classification != classification:
+        return True
+    artifact_goal_id = artifact.get("goal_id")
+    if goal_id and artifact_goal_id is not None and artifact_goal_id != goal_id:
+        return True
+    index_generated_at = index_row.get("generated_at")
+    artifact_generated_at = artifact.get("generated_at")
+    if (
+        isinstance(index_generated_at, str)
+        and index_generated_at
+        and isinstance(artifact_generated_at, str)
+        and artifact_generated_at
+        and index_generated_at != artifact_generated_at
+    ):
+        return True
+    if _commit_identity_conflict(index_row, artifact):
+        return True
+    if _explicit_identity_conflict(index_row, artifact):
+        return True
+    event = artifact.get("quota_event")
+    return isinstance(event, dict) and _explicit_identity_conflict(index_row, event)
+
+
+def _read_quota_event_artifact(
+    raw_json_path: str,
+    *,
+    index_row: dict[str, Any] | None = None,
+    goal_id: str = "",
+) -> tuple[dict[str, Any] | None, str | None]:
     """Read the quota event out of one durable artifact.
 
     Returns ``(event, unreadable_reason)``. A readable artifact without a
@@ -117,13 +374,26 @@ def _read_quota_event_artifact(raw_json_path: str) -> tuple[dict[str, Any] | Non
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_INVALID_JSON
     if not isinstance(record, dict):
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_NOT_OBJECT
+    if index_row is not None and _artifact_identity_conflict(index_row, record, goal_id):
+        return None, QUOTA_EVENT_UNREADABLE_EVENT_INVALID
     event = cast(dict[str, Any], record.get("quota_event")) if isinstance(record.get("quota_event"), dict) else None
     if not event:
         return None, QUOTA_EVENT_UNREADABLE_EVENT_MISSING
     return event, None
 
 
-def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
+def _artifact_goal_id(run: dict[str, Any], goal_id: str | None) -> str:
+    if goal_id:
+        return str(goal_id)
+    return str(run.get("goal_id") or "")
+
+
+def load_quota_event_from_run(
+    run: dict[str, Any],
+    *,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
+) -> dict[str, Any] | None:
     if str(run.get("classification") or "") not in {
         QUOTA_SLOT_SPENT_CLASSIFICATION,
         QUOTA_SLOT_VOIDED_CLASSIFICATION,
@@ -136,12 +406,26 @@ def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
     raw_json_path = str(run.get("json_path") or "")
     if not raw_json_path:
         return None
-    event, _reason = _read_quota_event_artifact(raw_json_path)
+    artifact_path = _quota_event_artifact_path(
+        raw_json_path,
+        runs_dir=runs_dir,
+        goal_id=_artifact_goal_id(run, goal_id),
+    )
+    if artifact_path is None:
+        return None
+    event, _reason = _read_quota_event_artifact(
+        artifact_path,
+        index_row=run,
+        goal_id=_artifact_goal_id(run, goal_id),
+    )
     return event
 
 
 def resolve_quota_event_from_run(
     run: dict[str, Any],
+    *,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Resolve one run's quota event and report why it could not be read.
 
@@ -162,10 +446,29 @@ def resolve_quota_event_from_run(
     raw_json_path = str(run.get("json_path") or "")
     if not raw_json_path:
         return None, QUOTA_EVENT_UNREADABLE_MISSING_SOURCE
-    return _read_quota_event_artifact(raw_json_path)
+    artifact_path = _quota_event_artifact_path(
+        raw_json_path,
+        runs_dir=runs_dir,
+        goal_id=_artifact_goal_id(run, goal_id),
+    )
+    # A known runs directory that cannot accept this path has no safe artifact.
+    # Leaving the stored absolute path unread stops a copy from opening an
+    # unrelated file that happens to still exist at the old location.
+    if artifact_path is None:
+        return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING
+    return _read_quota_event_artifact(
+        artifact_path,
+        index_row=run,
+        goal_id=_artifact_goal_id(run, goal_id),
+    )
 
 
-def quota_slot_contribution(run: dict[str, Any]) -> tuple[str, str, int] | None:
+def quota_slot_contribution(
+    run: dict[str, Any],
+    *,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
+) -> tuple[str, str, int] | None:
     """Classify one run's contribution to the rolling-window slot ledger.
 
     ``goal_quota_with_spend_ledger`` enforces quota from this rule and the
@@ -176,12 +479,19 @@ def quota_slot_contribution(run: dict[str, Any]) -> tuple[str, str, int] | None:
     ledger already assumed.
     """
 
-    contribution, _reason = quota_slot_observation(run)
+    contribution, _reason = quota_slot_observation(
+        run,
+        runs_dir=runs_dir,
+        goal_id=goal_id,
+    )
     return contribution
 
 
 def quota_slot_observation(
     run: dict[str, Any],
+    *,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> tuple[tuple[str, str, int] | None, str | None]:
     """Observe one run's slot contribution and its readability.
 
@@ -191,7 +501,11 @@ def quota_slot_observation(
     must report instead of silently dropping.
     """
 
-    event, reason = resolve_quota_event_from_run(run)
+    event, reason = resolve_quota_event_from_run(
+        run,
+        runs_dir=runs_dir,
+        goal_id=goal_id,
+    )
     if reason:
         return None, reason
     if not event:

@@ -1,6 +1,5 @@
 """Real sibling Git worktrees and the public lease CLI on both canonical providers."""
 import json
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -94,16 +93,16 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     assert "write_workspace" in first["lease"]
     assert first["lease"]["write_repository"] == repository
     assert first["lease"]["write_workspace"]["repository"] == repository
-    assert first["integration_overlap_advisories"][0]["todo_id"] == "todo_worktree_d"
+    assert "integration_overlap_advisories" not in first
     assert cli("inspect", "d")["lease"] == legacy["lease"]
     assert str(tmp_path) not in json.dumps(first["lease"])
     conflict = acquire("c", alias, expected=1)
-    assert conflict["error_code"] == "write_scope_conflict"
+    assert conflict["error_code"] == "workspace_lease_conflict"
     assert conflict["conflicts"][0]["owner"] == "agent-a"
     assert "--write-worktree" in conflict["recommended_action"]
-    assert acquire("e", None, expected=1)["error_code"] == "write_scope_conflict"
+    assert acquire("e", None)["acquired"] is True
     second = acquire("b", Path("../b"))
-    assert {row["todo_id"] for row in second["integration_overlap_advisories"]} == {"todo_worktree_a", "todo_worktree_d"}
+    assert "integration_overlap_advisories" not in second
     assert second["lease"]["write_workspace"] != first["lease"]["write_workspace"]
     replay = acquire("a", alias)
     assert replay["original_receipt"] == first["original_receipt"]
@@ -187,77 +186,27 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
     git("remote", "set-url", "origin", "https://github.com/example/project.git")
     (b / "nested").mkdir()
     monkeypatch.chdir(b / "nested")
-    overlap = {
-        "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scopes": peer_scopes,
-        "reason": "independent_worktree_integration_overlap",
-    }
     if large_peer_scope:
         preview = claim("b", "preview-b", "--thin", "--dry-run")
-        assert preview["integration_overlap_advisories"] == [overlap]
+        assert "integration_overlap_advisories" not in preview
         assert "integration_overlap_detail_command" not in preview
     accepted = claim("b", "claim-b", "--thin")
     assert accepted["execution_managed"]
-    if large_peer_scope:
-        assert accepted["integration_overlap_advisories"] == [{
-            "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scope_count": len(peer_scopes),
-            "reason": "independent_worktree_integration_overlap",
-        }]
-        command = shlex.split(accepted["integration_overlap_detail_command"])
-        assert command[-7:] == ["todo", "receipt", "--goal-id", goal, "--operation-id", "claim-b", "--thin"]
-        observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
-        detail = json.loads(observed.stdout)
-        assert detail["ok"] and detail["status"] == "found"
-        assert detail["thin"] is True
-        assert detail["provider_revision"] == accepted["provider_revision"]
-        original = subprocess.run(command[:-1], capture_output=True, text=True, timeout=30, check=True)
-        full_receipt = json.loads(original.stdout)["receipts"][0]
-        detail_receipt = detail["receipts"][0]
-        assert detail_receipt == {**full_receipt, "result": {
-            "claim_operation_id": "claim-b",
-            "todo_id": "todo_ordinary_b",
-            "integration_overlap_advisories": [overlap],
-        }}
-        assert full_receipt["result"]["lease"]["owner"] == "agent-b"
-        assert len(observed.stdout.encode("utf-8")) < len(original.stdout.encode("utf-8"))
-    else:
-        assert accepted["integration_overlap_advisories"] == [overlap]
-        assert "integration_overlap_detail_command" not in accepted
+    assert "integration_overlap_advisories" not in accepted
+    assert "integration_overlap_detail_command" not in accepted
     second = cli(["task-lease", "inspect"], "b")["lease"]
     assert "write_workspace" in first
     assert first["write_workspace"] != second["write_workspace"]
+    assert second["write_scopes"] == []
     assert str(tmp_path) not in json.dumps(second)
     assert cli(["todo", "list"], "b")["todo"]["claimed_by"] == "agent-b"
     replay = claim("b", "claim-b")
     assert replay["status"] == "replayed"
-    assert replay["integration_overlap_advisories"] == [overlap]
+    assert "integration_overlap_advisories" not in replay
     assert cli(["task-lease", "inspect"], "b")["lease"] == second
     released = cli(["task-lease", "release"], "b", "--owner", "agent-b",
         "--idempotency-key", second["idempotency_key"], "--expected-version", str(second["version"]))
     assert released["released"]
-    if large_peer_scope:
-        observed = subprocess.run(command, capture_output=True, text=True, timeout=30, check=True)
-        late = json.loads(observed.stdout)
-        assert released["provider_revision"] != detail["provider_revision"]
-        assert late == detail
-        original = subprocess.run(command[:-1], capture_output=True, text=True, timeout=30, check=True)
-        assert json.loads(original.stdout)["receipts"][0] == full_receipt
-        missing = subprocess.run(
-            [*command[:-2], "missing-claim", "--thin"], capture_output=True, text=True, timeout=30, check=True,
-        )
-        assert json.loads(missing.stdout)["status"] == "missing"
-        subprocess.run([
-            *command[:-7], "todo", "add", "--goal-id", goal, "--role", "agent",
-            "--text", "A different operation", "--operation-id", "add-task",
-        ], capture_output=True, text=True, timeout=30, check=True)
-        original_add = subprocess.run(
-            [*command[:-2], "add-task"], capture_output=True, text=True, timeout=30, check=True,
-        )
-        assert json.loads(original_add.stdout)["status"] == "found"
-        rejected = subprocess.run(
-            [*command[:-2], "add-task", "--thin"], capture_output=True, text=True, timeout=30,
-        )
-        assert rejected.returncode == 1
-        assert "requires an exact managed claim receipt" in json.loads(rejected.stdout)["error"]
     assert claim("b", "claim-b", expected=1)["ok"] is False
     assert not cli(["task-lease", "inspect"], "b")["active"]
 
@@ -314,7 +263,7 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     # Only the accepted operation's clock is synthetic. Git observation, the
     # managed claim, its receipt and both provider transactions remain real.
     with monkeypatch.context() as clock:
-        clock.setattr("loopx.control_plane.coordination.local_authority.now_local", lambda: "2001-01-01T00:00:00Z")
+        clock.setattr("loopx.control_plane.coordination.local_authority.now_local_iso", lambda *, timespec: "2001-01-01T00:00:00Z")
         assert claim("a", "expired-original")["execution_managed"]
     monkeypatch.chdir(b)
     assert claim("b", "peer-current")["execution_managed"]
@@ -336,10 +285,7 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     monkeypatch.chdir(a)
     ordinary_preview = claim("a", "independent-preview", preview=True)
     assert ordinary_preview["status"] == "planned"
-    assert ordinary_preview["integration_overlap_advisories"] == [{
-        "todo_id": "todo_expiry_b", "owner": "agent-b", "write_scopes": ["src/**"],
-        "reason": "independent_worktree_integration_overlap",
-    }]
+    assert "integration_overlap_advisories" not in ordinary_preview
     refused = run(attempt, expected=1)
     assert refused["error_code"] == "claim_execution_unavailable"
     assert snapshot() == original, "recovery previews cannot acquire or renew either execution"
@@ -347,7 +293,8 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     assert recovery["action"] == "claim_task", recovery
     assert recovery["execution_authority_granted"] is False
     prepared = run([*recovery["claim"]["cli_args"], "--claim-operation-id", "explicit-recovery"], route=False)
-    assert prepared["integration_overlap_advisories"] == ordinary_preview["integration_overlap_advisories"]
+    assert prepared["execution_managed"]
+    assert "integration_overlap_advisories" not in prepared
     assert run(attempt, expected=1)["recovery"]["action"] == "reconcile_lease_owner"
     retry = [prepared["claim_operation_id"] if arg == "expired-original" else arg for arg in attempt]
     assert run(retry)["ok"]

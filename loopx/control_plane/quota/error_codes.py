@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from ..effect_runtime import EffectRuntimeHostPermissionError
+
+if TYPE_CHECKING:
+    from ..effect_program import SettlementIdentity
 
 
 class CloseoutQueryUnavailableError(RuntimeError):
@@ -30,6 +34,17 @@ class QuotaCommandValidationError(ValueError):
 
 class HeartbeatReceiptIdentityConflictError(ValueError):
     """Public-safe diagnostic for a same-turn settlement identity conflict."""
+
+
+class QuotaRunIndexConflict(ValueError):
+    """A quota spend was definitively rejected by the run-index CAS."""
+
+    reason_code = "index_digest_conflict"
+
+    def __init__(self, message: str, *, settlement_identity: SettlementIdentity | None = None) -> None:
+        super().__init__(message)
+        # Binding checked before commit. Current debt requires a fresh ledger read.
+        self.settlement_identity = settlement_identity
 
 
 class QuotaIdentityPrecondition(StrEnum):
@@ -233,6 +248,8 @@ def quota_error_code(exc: BaseException) -> str:
         return exc.error_code
     if isinstance(exc, HeartbeatReceiptIdentityConflictError):
         return "heartbeat_receipt_identity_conflict"
+    if isinstance(exc, QuotaRunIndexConflict):
+        return exc.reason_code
     if isinstance(exc, PermissionError):
         return "quota_state_permission_denied"
     if isinstance(exc, OSError):

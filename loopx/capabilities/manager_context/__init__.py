@@ -292,6 +292,7 @@ def turn_start_hook(
             str(runtime_root),
             "manager-inbox",
             "read",
+            "--attention-only",
             *(["--format", "markdown"] if model_read else []),
             "--goal-id",
             goal_id,
@@ -349,7 +350,10 @@ def evidence_goal_scope(runtime_root: Path, channel: str, *, registry_path: Path
 def _require_external_channel(channel: str) -> None:
     # Legacy manager connections and native App/source bindings both identify
     # one exact audience. Never accept a prefix or a partially specified binding.
-    if not re.fullmatch(r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24})", channel):
+    if not re.fullmatch(
+        r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24}(?:\.topic\.[a-f0-9]{24})?)",
+        channel,
+    ):
         raise ValueError("an exact external manager channel is required")
 
 
@@ -473,7 +477,10 @@ def configure_delivery_scope(runtime_root: Path, *, channel: str,
                              local_delivery_scope: str, sender_id: str | None = None,
                              execute: bool = False, if_absent: bool = False) -> dict:
     """One owner policy for current/future registered recipients, not execution."""
-    if not re.fullmatch(r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24})", channel):
+    if not re.fullmatch(
+        r"manager\.external\.(?:[a-f0-9]{24}|native\.[a-f0-9]{24}\.[a-f0-9]{24}(?:\.topic\.[a-f0-9]{24})?)",
+        channel,
+    ):
         raise ValueError("an exact external manager channel is required")
     path = _root(runtime_root) / "policy.json"
 

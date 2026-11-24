@@ -333,8 +333,7 @@ def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_repla
             "ok", "error", "error_code", "effective_action", "reason", "blocker", "autonomous_replan_obligation")})
         return result
 
-    call("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "2",
-        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    call("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "2", "--execute")
     # The actor records requested work through ordinary Todo operations. The
     # observation producer neither creates these stages nor imposes a strategy.
     root = call("todo", "add", "--goal-id", fixture.GOAL_ID, "--role", "agent",
@@ -513,7 +512,7 @@ def test_ordinary_entry_observes_an_existing_candidate_with_stride_off_and_prese
 
     agent = harbor.BenchmarkCodex(logs_dir=tmp_path / "logs", model_name="fixture",
         goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID,
-        execution_observation="local_probe", stride_strategy="off")
+        execution_observation="local_probe")
     env = dict(os.environ)
     monkeypatch.setattr(agent, "_profile_env", lambda: env)
     environment = Environment()
@@ -526,7 +525,7 @@ def test_ordinary_entry_observes_an_existing_candidate_with_stride_off_and_prese
     assert [todo["todo_id"] for todo in listed["todos"]] == [fixture.TODO_ID]
     assert all(todo.get("target_key") != "research-continuation" for todo in listed["todos"])
     configured = call("configure-goal", "--goal-id", fixture.GOAL_ID)
-    assert configured["after"]["execution_profile"]["stride_strategy"] == "off"
+    assert "stride_strategy" not in configured["after"]["execution_profile"]
     assert candidate.read_bytes() == original_candidate
     call("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-graph-enabled", "--execute")
     work_turn = "ordinary-local-observation"

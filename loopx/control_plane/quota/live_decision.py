@@ -96,6 +96,24 @@ def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
             and packet.get("decision") == "historical_ack_recorded")
 
 
+def _prepared_execution_needs_readback(
+    payload: Mapping[str, Any],
+    readback: QuotaSettlementReadback | None,
+    receipt_todo_id: str | None,
+) -> bool:
+    """Ask the receipt owner to check a prepared generation missing from the current projection."""
+    if readback is None or readback.replay_phase is not ReceiptBoundReplayPhase.OPEN:
+        return False
+    prepared = readback.prepared_lease
+    if not prepared or prepared.get("prepared_lease_epoch") is None:
+        return False
+    current = payload.get("execution_preparation") or {}
+    return (
+        current.get("todo_id") != receipt_todo_id
+        or current.get("lease_epoch") != prepared["prepared_lease_epoch"]
+    )
+
+
 def _original_replan_settlement_required(
     payload: Mapping[str, Any], readback: QuotaSettlementReadback | None,
 ) -> bool:
@@ -110,7 +128,8 @@ def _original_replan_settlement_required(
         and packet.get("decision") == readback.replay_phase.value
         and identity is not None and identity.replan_obligation_id is not None
         and identity.replan_obligation_id == packet.get("obligation_id")
-        and (readback.progress or {}).get("next_step") == "quota_spend"
+        and ((readback.progress or {}).get("next_step") == "quota_spend"
+             or (readback.progress or {}).get("checkpoint_recovery_required") is True)
         and payload.get("should_run") is True
         and payload.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
     )
@@ -132,6 +151,18 @@ def _project_receipt_replan_settlement(
     if identity is None:
         raise ValueError("original replan settlement identity is unavailable")
     payload["heartbeat_receipt"] = {**(readback.heartbeat_receipt or {}), "settlement_identity": identity.as_dict()}
+    if (readback.progress or {}).get("checkpoint_recovery_required") is True:
+        reason = (
+            "Read checkpoint-context for the original blocked writeback. Reassess its evidence and submit "
+            "only the original checkpoint supplement. Preserve its delivery fields and quota."
+        )
+        packet = {**payload["replan_action_packet"], "decision": "vision_outcome_checkpoint_required",
+                  "required_outcome": "durable_writeback_receipt",
+                  "writeback_contract": {"rule": reason}}
+        obligation = payload["autonomous_replan_obligation"]
+        payload["autonomous_replan_obligation"] = {**obligation, "recommended_action": reason,
+            "guidance_actions": [reason], "settlement_action_packet": packet}
+        payload.update(replan_action_packet=packet, recommended_action=reason)
     payload["interaction_contract"] = build_interaction_contract(payload,
         available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id, registry_path=str(registry_path), runtime_root=str(runtime_root))
@@ -1064,6 +1095,9 @@ def build_live_quota_should_run_decision(
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,
+            inspect_current_execution_loss=_prepared_execution_needs_readback(
+                payload, settlement_readback, receipt_bound_todo_id
+            ),
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,

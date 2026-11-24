@@ -451,6 +451,7 @@ def _execute_quota_command(
         Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None
     goal_ref: dict[str, str] | None = None
+    status_payload: Mapping[str, object] | None = None
     reentry: tuple[argparse.Namespace, str | None] | None = None
     should_run_state: ShouldRunExecutionState | None = None
     try:
@@ -516,6 +517,19 @@ def _execute_quota_command(
                     include_presentation_projections=False,
                 ),
             )
+            if bool(args.execute) and payload.get("ok") and args.available_capabilities:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                    preserve_unavailable=False,
+                )
         elif args.quota_command in {
             "scheduler-ack",
             "scheduler-ack-current",
@@ -553,6 +567,19 @@ def _execute_quota_command(
                 registry_path=registry_path,
                 goal_ref=goal_ref,
             )
+            if bool(args.execute) and payload.get("ok") and args.available_capabilities:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                    preserve_unavailable=False,
+                )
         elif args.quota_command == "void-slot":
             payload = _export("void_quota_slot")(
                 status_payload,
@@ -596,6 +623,8 @@ def _execute_quota_command(
             args,
             registry_path=registry_path,
             runtime_root_arg=runtime_root_arg,
+            resolved_runtime_root=context.runtime_root if context else None,
+            goal_ref=goal_ref,
             error=exc,
         )
     if should_run_state is not None:
@@ -645,6 +674,7 @@ def _execute_quota_command(
             todo_id=rollout_todo_id,
             replan_obligation_id=rollout_replan_obligation_id,
             scheduler_execution_context=scheduler_context,
+            status_payload=status_payload,
         )
         if heartbeat_turn_id and args.quota_command == "should-run":
             from .quota_should_run import record_should_run_heartbeat_receipt

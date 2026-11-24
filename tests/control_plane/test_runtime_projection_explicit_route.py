@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -216,6 +217,114 @@ def test_route_projection_with_missing_artifact_is_not_current(
         goal_id=DEFAULT_CONFLICT_GOAL,
         route_id="route-a",
         source_generated_at="2026-10-06T00:00:00Z",
+        marker_field="shared_runtime_projection",
+    )
+
+
+def test_route_source_selection_ignores_relocated_artifact_probes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loopx.history as history_module
+
+    runtime_a = tmp_path / "runtime-a"
+    runtime_b = tmp_path / "runtime-b"
+    runs_a = runtime_a / "goals" / DEFAULT_CONFLICT_GOAL / "runs"
+    runs_a.mkdir(parents=True)
+    rows = []
+    for index in range(4):
+        json_path = runs_a / f"run-{index}.json"
+        markdown_path = runs_a / f"run-{index}.md"
+        json_path.write_text("{}\n", encoding="utf-8")
+        markdown_path.write_text("# run\n", encoding="utf-8")
+        rows.append(
+            {
+                "generated_at": f"2026-03-01T12:00:0{index}Z",
+                "goal_id": DEFAULT_CONFLICT_GOAL,
+                "classification": "state_refreshed",
+                "json_path": str(json_path),
+                "markdown_path": str(markdown_path),
+                "runtime_projection_route": {
+                    "route_id": "route-a" if index in {1, 3} else "other-route",
+                    "projection_enabled": index != 1,
+                },
+            }
+        )
+    (runs_a / "index.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    shutil.copytree(runs_a, runtime_b / "goals" / DEFAULT_CONFLICT_GOAL / "runs")
+    shutil.rmtree(runtime_a)
+    calls: list[object] = []
+    original = history_module._indexed_artifact_exists
+
+    def observe(
+        value: object,
+        *,
+        artifact_root: Path | None,
+        runs_dir: Path | None = None,
+        goal_id: str | None = None,
+        extension: str | None = None,
+    ) -> bool:
+        calls.append(value)
+        return original(
+            value,
+            artifact_root=artifact_root,
+            runs_dir=runs_dir,
+            goal_id=goal_id,
+            extension=extension,
+        )
+
+    monkeypatch.setattr(history_module, "_indexed_artifact_exists", observe)
+
+    selected = runtime_projection_route._latest_route_source_row(
+        runtime_root=runtime_b,
+        goal_id=DEFAULT_CONFLICT_GOAL,
+        route_id="route-a",
+    )
+
+    assert selected is not None
+    assert selected["generated_at"] == rows[3]["generated_at"]
+    assert selected["json_path"] == rows[3]["json_path"]
+    assert "json_exists" not in selected
+    assert "markdown_exists" not in selected
+    assert calls == []
+
+
+def test_route_projection_currency_still_sees_relocated_artifacts(tmp_path: Path) -> None:
+    runtime_a = tmp_path / "runtime-a"
+    runtime_b = tmp_path / "runtime-b"
+    runs_a = runtime_a / "goals" / DEFAULT_CONFLICT_GOAL / "runs"
+    json_path = runs_a / "projection.json"
+    markdown_path = runs_a / "projection.md"
+    json_path.parent.mkdir(parents=True)
+    json_path.write_text("{}\n", encoding="utf-8")
+    markdown_path.write_text("# projection\n", encoding="utf-8")
+    generated_at = "2026-10-06T00:00:00Z"
+    (runs_a / "index.jsonl").write_text(
+        json.dumps(
+            {
+                "generated_at": generated_at,
+                "json_path": str(json_path),
+                "markdown_path": str(markdown_path),
+                "shared_runtime_projection": {
+                    "runtime_projection_route_id": "route-a",
+                    "source_generated_at": generated_at,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    shutil.copytree(runs_a, runtime_b / "goals" / DEFAULT_CONFLICT_GOAL / "runs")
+    shutil.rmtree(runtime_a)
+
+    assert runtime_projection_route._route_projection_is_current(
+        target_runtime_root=runtime_b,
+        goal_id=DEFAULT_CONFLICT_GOAL,
+        route_id="route-a",
+        source_generated_at=generated_at,
         marker_field="shared_runtime_projection",
     )
 

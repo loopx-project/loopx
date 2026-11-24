@@ -1126,7 +1126,7 @@ test("accepted in-flight writeback closes only the exact Turn, not its Todo", as
   const cases = [
     {name: "both effects", spend: true, expected: "settled"},
     {name: "spend still required", spend: false, expected: "settlement_pending"},
-    {name: "writeback receipt missing", spend: true, remove: "refresh_state", expected: "open"},
+    {name: "writeback receipt missing", spend: true, remove: "refresh_state", expected: "settlement_pending"},
     {name: "spend receipt missing", spend: true, remove: "quota_spend", expected: "settlement_pending"},
   ];
   for (const entry of cases) await t.test(entry.name, async () => {
@@ -1139,6 +1139,10 @@ test("accepted in-flight writeback closes only the exact Turn, not its Todo", as
       }
       const result = await readQuotaSettlement(request(root));
       assert.equal(result.replay_phase, entry.expected);
+      if (entry.remove === "refresh_state") {
+        assert.equal((result.progress as any).state, "writeback_receipt_required");
+        assert.equal((result.progress as any).next_step, "durable_writeback");
+      }
       assert.equal(result.completion_event, null);
       assert.equal((result.terminal_closeout as any).payload.ok, false);
     } finally { await rm(root, {recursive: true, force: true}); }
@@ -1154,7 +1158,7 @@ test("accepted semantic progress settles its Turn while the Todo stays open", as
   const cases = [
     {name: "paid progress", spend: true, expected: "settled"},
     {name: "spend still required", spend: false, expected: "settlement_pending"},
-    {name: "missing writeback receipt", spend: true, remove: "refresh_state", expected: "open"},
+    {name: "missing writeback receipt", spend: true, remove: "refresh_state", expected: "settlement_pending"},
     {name: "missing spend receipt", spend: true, remove: "quota_spend", expected: "settlement_pending"},
     ...[
       ["not accepted", {satisfied: false}],
@@ -1190,6 +1194,10 @@ test("accepted semantic progress settles its Turn while the Todo stays open", as
       assert.equal(result.completion_event, null);
       assert.equal((result.terminal_closeout as any).payload.ok, false);
       if (entry.name === "paid progress") assert.equal((result.progress as any).state, "settled");
+      if ("remove" in entry && entry.remove === "refresh_state") {
+        assert.equal((result.progress as any).state, "writeback_receipt_required");
+        assert.equal((result.progress as any).next_step, "durable_writeback");
+      }
     } finally { await rm(root, {recursive: true, force: true}); }
   });
 });
@@ -1204,7 +1212,7 @@ test("qualified path replan closes its Turn without a preselected obligation or 
     {name: "qualified semantic delta", ack: {...accepted, delta_contract: null,
       semantic_delta: {schema_version: "replan_semantic_delta_v0", accepted: true}}, spend: true, expected: "settled"},
     {name: "spend still required", ack: accepted, spend: false, expected: "settlement_pending"},
-    {name: "missing writeback receipt", ack: accepted, spend: true, remove: "refresh_state", expected: "open"},
+    {name: "missing writeback receipt", ack: accepted, spend: true, remove: "refresh_state", expected: "settlement_pending"},
     {name: "missing spend receipt", ack: accepted, spend: true, remove: "quota_spend", expected: "settlement_pending"},
     {name: "unrecorded", ack: {...accepted, recorded: false}, spend: true, expected: "open"},
     {name: "truthy is not recorded", ack: {...accepted, recorded: "true"}, spend: true, expected: "open"},
@@ -1235,6 +1243,10 @@ test("qualified path replan closes its Turn without a preselected obligation or 
       }
       const result = await readQuotaSettlement(request(root));
       assert.equal(result.replay_phase, entry.expected);
+      if ("remove" in entry && entry.remove === "refresh_state") {
+        assert.equal((result.progress as any).state, "writeback_receipt_required");
+        assert.equal((result.progress as any).next_step, "durable_writeback");
+      }
       assert.equal(result.completion_event, null);
       assert.equal((result.terminal_closeout as any).payload.ok, false);
     } finally { await rm(root, {recursive: true, force: true}); }
@@ -1944,7 +1956,10 @@ test(`${kind} no-spend closeout retains exact receipt identity and historical de
     const debited = await readQuotaSettlement(request(spent));
     assert.equal((debited.spend as any).payload.ok, true);
     assert.equal((debited.progress as any).closeout_kind, undefined);
-    assert.equal((await readQuotaSettlement(request(malformed))).replay_phase, "open");
+    const rejected = await readQuotaSettlement(request(malformed));
+    assert.equal((rejected.progress as any).state, "spend_required");
+    assert.equal((rejected.progress as any).closeout_kind, undefined);
+    assert.equal(rejected.replay_phase, "settlement_pending");
   } finally {
     await Promise.all([missing, missingWriteback, spent, malformed].map(path =>
       rm(path, { recursive: true, force: true })));
@@ -2700,5 +2715,75 @@ test("readback exposes matching supersede_event when records are included", asyn
     assert.equal((readback.supersede_event as any)?.todo_id, todoId);
   } finally {
     await rm(runtimeRoot, {recursive: true, force: true});
+  }
+});
+
+test("default verified writeback without boundary or completion enters settlement_pending until spend settles", async t => {
+  const missingRequiredCheckpoint = {
+    schema_version: "vision_checkpoint_v0",
+    agent_id: agentId,
+    decision: "missing_required",
+    satisfied: false,
+    delivery_boundary: "semantic_closeout",
+    triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_progress"}],
+  };
+  const cases: {
+    name: string;
+    options: Parameters<typeof fixture>[0];
+    removeEvent?: string;
+    expectedProgress: string;
+    expectedReplayPhase: string;
+  }[] = [
+    {
+      name: "default writeback without checkpoint stays settlement_pending",
+      options: {writeback: true, spend: false},
+      expectedProgress: "spend_required",
+      expectedReplayPhase: "settlement_pending",
+    },
+    {
+      name: "default writeback with missing_required semantic checkpoint stays settlement_pending",
+      options: {writeback: true, spend: false, visionCheckpoint: missingRequiredCheckpoint},
+      expectedProgress: "spend_required",
+      expectedReplayPhase: "settlement_pending",
+    },
+    {
+      name: "spend run without quota_spend receipt stays settlement_pending",
+      options: {writeback: true, spend: true, visionCheckpoint: missingRequiredCheckpoint},
+      removeEvent: "quota_spend",
+      expectedProgress: "spend_receipt_required",
+      expectedReplayPhase: "settlement_pending",
+    },
+    {
+      name: "completed spend without completion or accepted checkpoint stays open",
+      options: {writeback: true, spend: true, visionCheckpoint: missingRequiredCheckpoint},
+      expectedProgress: "settled",
+      expectedReplayPhase: "open",
+    },
+    {
+      name: "monitor poll precedence remains settled even when writeback exists without spend",
+      options: {monitor: true, writeback: true, spend: false},
+      expectedProgress: "spend_required",
+      expectedReplayPhase: "settled",
+    },
+  ];
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      const runtimeRoot = await fixture(entry.options);
+      try {
+        if (entry.removeEvent) {
+          const log = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+          const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+          await writeFile(
+            log,
+            rows.filter(row => row.event_kind !== entry.removeEvent).map(row => JSON.stringify(row)).join("\n") + "\n",
+          );
+        }
+        const readback = await readQuotaSettlement(request(runtimeRoot));
+        assert.equal((readback.progress as any)?.state, entry.expectedProgress);
+        assert.equal(readback.replay_phase, entry.expectedReplayPhase);
+      } finally {
+        await rm(runtimeRoot, {recursive: true, force: true});
+      }
+    });
   }
 });

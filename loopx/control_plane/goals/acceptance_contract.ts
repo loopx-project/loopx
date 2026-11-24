@@ -592,7 +592,7 @@ export class GoalAcceptanceRead {
 
   contract(registeredAgents?: unknown): JsonObject {
     const checks = structuredClone(this.checks());
-    const outcomes = projectGoalOutcomes(this.head, this.goalId, checks);
+    const outcomes = projectGoalOutcomes(this.head, this.goalId, checks, registeredAgents);
     const objective = projectGoalObjective(this.head, registeredAgents);
     return {...checks, ...(outcomes === null ? {} : {outcome_requirements: outcomes}),
       ...(objective === null ? {} : {goal_objective: objective})};
@@ -683,7 +683,31 @@ export function validateAcceptanceCompletion(head: JsonObject, goalId: string, t
     "acceptance completion basis changed");
   const results = normalizeAcceptanceResults(receipt.results, requirements.criterion_ids);
   acceptanceRequire(results.every(item => item.passed), "acceptance completion criteria failed");
+  // Older completion receipts could omit oracle versions. Keep their task
+  // outcome without treating it as a current observation of the artifact.
+  validateOracleResults(requirements.criteria, results.filter(item => item.oracle_evidence !== undefined));
   return {...receipt, results};
+}
+
+/** A bound Task can supply the whole selected-work check when it covered
+ * every criterion and recorded the actual checked bytes. The terminal caller
+ * passes the post-completion projection from the same provider transaction. */
+export function selectedWorkCompletionVerification(head: JsonObject, goalId: string, todoId: string,
+  operationId: string, evidence: JsonObject): AcceptanceState | null {
+  const state = readGoalAcceptance(head, goalId);
+  const scope = state?.document.scope;
+  if (!state || scope?.kind !== "selected_work" || scope.todo_ids.length !== 1 || scope.todo_ids[0] !== todoId ||
+      evidence.todo_id !== todoId || evidence.contract_revision !== state.revision || evidence.contract_digest !== state.digest) {
+    return null;
+  }
+  const results = normalizeAcceptanceResults(evidence.results);
+  if (results.length !== state.document.criteria.length || results.some(item => !item.passed || item.oracle_evidence === undefined)) {
+    return null;
+  }
+  const verification: AcceptanceVerification = {operation_id: operationId, contract_revision: state.revision,
+    contract_digest: state.digest, todo_id: null, work_digest: goalAcceptanceWorkDigest(head, goalId, scope),
+    results: normalizeAcceptanceResults(results, state.document.criteria.map(criterion => criterion.id))};
+  return {...state, verification};
 }
 
 export function acceptanceSourceBinding(
@@ -723,7 +747,8 @@ export function acceptanceCompletionEvidence(
       typeof row.criterion_id === "string" && receipt.command_label === row.criterion_id &&
       receipt.stdout_captured === false && receipt.stderr_captured === false && receipt.local_path_captured === false,
       "Acceptance completion requires the configured criterion's public-safe runner receipt.");
-    results.push({criterion_id: row.criterion_id, passed: receipt.passed, exit_code: receipt.exit_code});
+    results.push({criterion_id: row.criterion_id, passed: receipt.passed, exit_code: receipt.exit_code,
+      ...(receipt.oracle_evidence === undefined ? {} : {oracle_evidence: receipt.oracle_evidence})});
     validationReceipts.push({criterion_id: row.criterion_id, receipt: Object.fromEntries([
       "schema_version", "command_label", "passed", "exit_code", "status", "summary",
       "stdout_captured", "stderr_captured", "local_path_captured",

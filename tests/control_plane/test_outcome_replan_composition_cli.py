@@ -96,9 +96,8 @@ def _review_packet(control: dict | None) -> dict:
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("stride", [False, True])
 def test_batched_review_previews_post_refinement_basis_and_recovers_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -117,8 +116,7 @@ def test_batched_review_previews_post_refinement_basis_and_recovers_once(
     def inspect() -> dict:
         return call("goal-acceptance", "inspect", "--goal-id", GOAL_ID)
 
-    call("configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "1",
-         *(["--execution-stride-strategy", "evidence_conditioned_v1"] if stride else []), "--execute")
+    call("configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "1", "--execute")
     original = {"outcome_id": "export", "owner_agent_id": AGENT_ID,
         "objective": "Deliver a recoverable export", "todo_ids": [TODO_ID],
         "requirements": [{"id": "content", "description": "Preserve the original content"}],
@@ -141,7 +139,7 @@ def test_batched_review_previews_post_refinement_basis_and_recovers_once(
                "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID)
     assert "periodic_review_due" in {row["kind"] for row in due["autonomous_replan_obligation"]["triggers"]}
     bound = _bind_selected_replan_guard(registry, runtime, project, TURN_ID, todo_id=TODO_ID)
-    control = bound["replan_action_packet"].get("stride_control") if stride else None
+    control = bound["replan_action_packet"]["stride_control"]
     packet = _review_packet(control)
     decision = tmp_path / "decision.json"
     decision.write_text(json.dumps(packet))
@@ -158,39 +156,37 @@ def test_batched_review_previews_post_refinement_basis_and_recovers_once(
     batch = (*refresh, "--goal-outcome-update-json", str(update))
     index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     original_index = index.read_bytes()
-    preview = call(*batch, "--dry-run", expected_code=1 if stride else 0)
+    preview = call(*batch, "--dry-run", expected_code=1)
     assert preview["goal_outcome_update"]["status"] == "planned"
-    if stride:
-        assert preview["replan_transition"]["reason_code"] == "stride_review_basis_mismatch"
+    assert preview["replan_transition"]["reason_code"] == "stride_review_basis_mismatch"
     assert inspect() == before and index.read_bytes() == original_index
     assert _spend_run_count(runtime) == 1
 
     # Execution keeps its sequential, non-atomic contract. A rejected review
     # must retain the independently committed refinement receipt.
-    actual = call(*batch, expected_code=1 if stride else 0)
+    actual = call(*batch, expected_code=1)
     assert actual["goal_outcome_update"]["status"] == "applied"
     after = inspect()
     assert after["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 2
-    if stride:
-        assert actual["appended"] is False
-        assert actual["replan_transition"]["reason_code"] == "stride_review_basis_mismatch"
-        assert index.read_bytes() == original_index
-        fresh = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
-        assert fresh["heartbeat_receipt"]["settlement_identity"] == bound["heartbeat_receipt"]["settlement_identity"]
-        current = fresh["replan_action_packet"]["stride_control"]
-        assert current["reference_context_id"] != control["reference_context_id"]
-        # Read the current facts before authoring against this new basis. Merely
-        # replaying the stale packet still cannot settle the review.
-        context = fresh["interaction_contract"]["agent_channel"]["work_context"]
-        acceptance = next(row["content"] for row in context["sources"] if row.get("source") == "goal_acceptance")
-        assert acceptance["goal_acceptance_contract"] == after["goal_acceptance_contract"]
-        replay = call(*batch, expected_code=1)
-        assert replay["goal_outcome_update"]["status"] == "replayed"
-        assert inspect() == after and index.read_bytes() == original_index
-        decision.write_text(json.dumps(_review_packet(current)))
-        actual = call(*refresh)
-        assert "goal_outcome_update" not in actual
+    assert actual["appended"] is False
+    assert actual["replan_transition"]["reason_code"] == "stride_review_basis_mismatch"
+    assert index.read_bytes() == original_index
+    fresh = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    assert fresh["heartbeat_receipt"]["settlement_identity"] == bound["heartbeat_receipt"]["settlement_identity"]
+    current = fresh["replan_action_packet"]["stride_control"]
+    assert current["reference_context_id"] != control["reference_context_id"]
+    # Read the current facts before authoring against this new basis. Merely
+    # replaying the stale packet still cannot settle the review.
+    context = fresh["interaction_contract"]["agent_channel"]["work_context"]
+    acceptance = next(row["content"] for row in context["sources"] if row.get("source") == "goal_acceptance")
+    assert acceptance["goal_acceptance_contract"] == after["goal_acceptance_contract"]
+    replay = call(*batch, expected_code=1)
+    assert replay["goal_outcome_update"]["status"] == "replayed"
+    assert inspect() == after and index.read_bytes() == original_index
+    decision.write_text(json.dumps(_review_packet(current)))
+    actual = call(*refresh)
+    assert "goal_outcome_update" not in actual
     assert actual["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     spent = call(*_projected_cli_args(actual["settlement_owed"]["command"], turn_instance_id=TURN_ID))
     assert spent["ok"] and _spend_run_count(runtime) == 2

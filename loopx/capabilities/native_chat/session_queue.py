@@ -1,9 +1,62 @@
 """The existing same-Session FIFO, preparation and recovery consumer."""
+from collections.abc import Iterator
+from contextlib import contextmanager
+import os
 from pathlib import Path
 from typing import Any
 import threading
 
 from ...chat_store import CHAT_SESSION_MODE_ATTACHED, TERMINAL_TURN_STATES
+
+STEWARD_MAX_CONCURRENT_LANES_DEFAULT = 4
+
+
+def _resolve_steward_max_concurrent_lanes(controller: Any) -> int:
+    configured = getattr(controller, "max_steward_concurrent_lanes", None)
+    if isinstance(configured, int) and not isinstance(configured, bool) and 1 <= configured <= 32:
+        return configured
+    raw_env = os.environ.get("LOOPX_STEWARD_MAX_CONCURRENT_LANES", "").strip()
+    if raw_env.isdigit():
+        parsed = int(raw_env)
+        if 1 <= parsed <= 32:
+            return parsed
+    return STEWARD_MAX_CONCURRENT_LANES_DEFAULT
+
+
+def _steward_lane_semaphore(controller: Any) -> tuple[threading.BoundedSemaphore, int]:
+    limit = _resolve_steward_max_concurrent_lanes(controller)
+    with controller.lock:
+        current = getattr(controller, "_steward_lane_semaphore_state", None)
+        if current is None or current[1] != limit:
+            current = (threading.BoundedSemaphore(limit), limit)
+            controller._steward_lane_semaphore_state = current
+        return current
+
+
+@contextmanager
+def _acquire_steward_lane_slot(controller: Any, session: dict[str, Any] | None, turn: dict[str, Any] | None) -> Iterator[None]:
+    """Bound concurrent active upstream model Turns across Steward Topic Lanes."""
+    channel_id = str((session or {}).get("channel_id") or "")
+    if (
+        not session
+        or not isinstance(session.get("steward_context"), dict)
+        or not channel_id.startswith("manager.external.native.")
+        or _is_observation_only_monitor_turn(turn)
+    ):
+        yield
+        return
+    semaphore, _ = _steward_lane_semaphore(controller)
+    acquired = False
+    while not controller.closed.is_set():
+        if semaphore.acquire(timeout=0.05):
+            acquired = True
+            break
+    if not acquired:
+        raise RuntimeError("chat runtime closed before steward lane slot acquisition")
+    try:
+        yield
+    finally:
+        semaphore.release()
 
 
 def _is_observation_only_monitor_turn(turn: dict[str, Any] | None) -> bool:
@@ -163,14 +216,20 @@ def _drain_session_queue_events(controller: Any, *, session_id: str, work_dir: P
             with controller.lock:
                 controller.turn_done_events[(session_id, turn_id)] = done_event
             try:
-                controller._run_turn(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    message=str(turn.get("message") or ""),
-                    attachments=turn.get("attachments") or [],
-                    adapter=adapter,
-                    done_event=done_event,
-                )
+                with _acquire_steward_lane_slot(controller, current, turn):
+                    controller._run_turn(
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        message=str(turn.get("message") or ""),
+                        attachments=turn.get("attachments") or [],
+                        adapter=adapter,
+                        done_event=done_event,
+                    )
+            except RuntimeError as exc:
+                if str(exc) == "chat runtime closed before steward lane slot acquisition":
+                    controller._release_done_event((session_id, turn_id), done_event, drop_event=True)
+                    return
+                raise
             except OSError:
                 # _run_turn has released its execution fence/done event.
                 # A failed error checkpoint must not kill this queue worker;

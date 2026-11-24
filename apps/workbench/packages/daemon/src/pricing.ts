@@ -73,6 +73,12 @@ const FAMILY_PRICES: Array<[RegExp, string]> = [
   [/^(?:doubao-)?seed-(?:\d+[.-])*lite(?:-[a-z0-9]+)*$/, 'doubao-seed-2.1-lite'],
 ];
 
+/** The list price of a model id, exact or by its family; null when the table does not know it. */
+export function listedPrice(model: string): ModelPrice | null {
+  const id = model.trim().toLowerCase();
+  return prices.get(id) ?? prices.get(FAMILY_PRICES.find(([pattern]) => pattern.test(id))?.[1] ?? '') ?? null;
+}
+
 export type CostReason = 'missing_model' | 'unknown_price' | 'missing_tokens' | 'invalid_usage';
 export type CostAssumption = 'configured_model' | 'cache_split' | 'cache_ttl' | 'context_tier' | 'model_alias' | 'time_tier' | 'family_fallback';
 export interface CostRange { amount: number; maxAmount: number }
@@ -96,7 +102,7 @@ export function estimateCost(sample: UsageSample, configuredModel: string | null
   const resolution = pricingModel(sample, configuredModel);
   if (!resolution) return 'missing_model';
   const { model, assumedAlias: alias } = resolution;
-  const listed = prices.get(model) ?? prices.get(FAMILY_PRICES.find(([pattern]) => pattern.test(model))?.[1] ?? '');
+  const listed = listedPrice(model);
   if (!listed) return 'unknown_price';
   if (!valid(sample.input) || !valid(sample.output)) return 'missing_tokens';
   if ([sample.cacheRead, sample.cacheWrite].some(n => n !== undefined && !valid(n))

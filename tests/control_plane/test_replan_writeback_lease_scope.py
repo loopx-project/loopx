@@ -17,15 +17,13 @@ from test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("case,strategy", [
-    ("planning", "off"), ("planning", "evidence_conditioned_v1"),
-    ("foreign_turn", "off"), ("explicit_execution", "off"),
-    ("prepared_execution", "off"), ("stopped", "off"),
+@pytest.mark.parametrize("case", [
+    "planning", "foreign_turn", "explicit_execution", "prepared_execution", "stopped",
 ])
-def test_planning_closeout_keeps_business_execution_authority(tmp_path, monkeypatch, provider, case, strategy):
+def test_planning_closeout_keeps_business_execution_authority(tmp_path, monkeypatch, provider, case):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy=strategy)
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
     turn = "lease-scoped-planning"
@@ -69,16 +67,15 @@ def test_planning_closeout_keeps_business_execution_authority(tmp_path, monkeypa
             prepared_lease_key_sha256=hashlib.sha256(b"unadmitted-execution").hexdigest(),
             prepared_lease_version=1, prepared_lease_epoch=1)
         log.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    if strategy != "off":
-        vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
-            "vision_patch": {"acceptance_summary": "Retain the original task and verify the complete planning scope."},
-            "path_delta": {"outcome": "replan", "prior_assumption": "The next scope needed review.",
-                "observed_reality": "A bounded comparison identifies the next complete check.",
-                "retained": ["Original task and acceptance"], "evidence_refs": ["evidence:planning-scope"]},
-            "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"]}
-        vision_path = tmp_path / "vision.json"
-        vision_path.write_text(json.dumps(vision))
-        args += ["--agent-vision-json", str(vision_path)]
+    vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Retain the original task and verify the complete planning scope."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "The next scope needed review.",
+            "observed_reality": "A bounded comparison identifies the next complete check.",
+            "retained": ["Original task and acceptance"], "evidence_refs": ["evidence:planning-scope"]},
+        "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"]}
+    vision_path = tmp_path / "vision.json"
+    vision_path.write_text(json.dumps(vision))
+    args += ["--agent-vision-json", str(vision_path)]
     rc, result = _run_cli(registry, runtime, *args, cwd=project)
     if case == "planning":
         assert rc == 0 and result["ok"], result.get("error") or result

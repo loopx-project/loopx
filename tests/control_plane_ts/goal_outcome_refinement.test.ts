@@ -27,6 +27,23 @@ function outcomeGaps(head: JsonObject, acceptance: JsonObject = {}): JsonObject[
   return projectGoalOutcomes(head, goal, acceptance)!.acceptance_gaps as JsonObject[];
 }
 
+test("an outcome records missing registration only against the observed roster of its own lifetime", () => {
+  const base = fixture();
+  const head = {...base, goal_outcomes: refineGoalOutcome(base, goal, null, "author", patch())};
+  const registered = projectGoalOutcomes(head, goal, {}, ["author", "peer"])!;
+  const unknown = projectGoalOutcomes(head, goal, {})!;
+  assert.deepEqual(unknown, registered);
+  for (const roster of [[], ["peer"]]) {
+    const projected = projectGoalOutcomes(head, goal, {}, roster)!;
+    const [observed] = projected.outcomes as JsonObject[];
+    const {owner_registration_missing, ...retained} = observed;
+    assert.equal(owner_registration_missing, true);
+    assert.deepEqual(retained, (registered.outcomes as JsonObject[])[0]);
+    assert.deepEqual(projected.acceptance_gaps, registered.acceptance_gaps);
+  }
+  assert.deepEqual(projectGoalOutcomes(head, goal, {}, ["author"]), unknown);
+});
+
 function outcomeAck(gaps: JsonObject[]): JsonObject {
   return {recorded: true, agent_id: "author", generated_at: "2026-08-01T00:00:00Z",
     semantic_delta: {accepted: true, obligation_id: "replan-1111111111111111",
@@ -198,7 +215,10 @@ for (const provider of ["file", "sqlite"] as const) test(`${provider}: recreated
   const successor = {...goalRef, goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
   assert.equal((await transitionGoalAcceptanceLifecycle(store, {goal_id: goal, actor_agent_id: null,
     operation_id: "retire", transition: {kind: "retire", goal_ref: goalRef}})).status, "applied");
-  const retiring = await inspectGoalAcceptance(store, goal, undefined, goalRef);
+  const retiring = await inspectGoalAcceptance(store, goal, undefined, goalRef, true, undefined, ["peer"]);
+  const historical = (retiring.goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject;
+  assert.equal(historical.current_lifetime, false);
+  assert.equal((historical.outcomes as JsonObject[])[0].owner_registration_missing, undefined);
   assert.equal((await refineGoalAcceptanceOutcome(store, {...first, operation_id: "during-retirement",
     expected_provider_revision: retiring.provider_revision})).reason_code, "goal_acceptance_goal_retiring");
   assert.equal((await transitionGoalAcceptanceLifecycle(store, {goal_id: goal, actor_agent_id: null,
@@ -521,4 +541,50 @@ for (const checksConfigured of [false, true]) test(`upgrade: every Goal receives
       review: [{id: "opening", conclusion: "unmet", evidence_refs: ["tour.txt"], note: "Introduction still missing"}]}});
   assert.equal(((review.goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject).goal_completion_assessed, false);
   assert.equal((((review.goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject).acceptance_gaps as JsonObject[]).length, 1);
+});
+
+test("outcome validation errors report exact limits, missing keys and opaque-id rules without echoing inputs", () => {
+  const head = fixture();
+  assert.throws(
+    () => refineGoalOutcome(head, goal, null, "author", patch({source: {ref: "/tmp/SECRET_PATH/" + "x".repeat(130), summary: "ok"}})),
+    error => {
+      assert.match(String(error), /source ref must be bounded nonempty text \(got 147 UTF-16 code units, max 128\)/);
+      assert.match(String(error), /must also be an opaque identifier/);
+      assert.doesNotMatch(String(error), /SECRET_PATH/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => refineGoalOutcome(head, goal, null, "author", patch({requirements: [{id: "r1", SECRET_EXTRA: "SECRET_VAL"}] as unknown as JsonObject[]})),
+    error => {
+      assert.equal(
+        (error as Error).message,
+        "outcome fields are missing or unsupported (missing: description; unsupported field count: 1; allowed: id, description)",
+      );
+      assert.doesNotMatch((error as Error).message, /SECRET_EXTRA|SECRET_VAL/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => refineGoalOutcome(head, goal, null, "author", patch({
+      requirements: Array.from({length: 33}, (_, i) => ({id: `r${i}`, description: `Keep ${i}`})),
+    })),
+    /requirements exceeds its supported capacity \(got 33 items, max 32\)/,
+  );
+  const emoji = "\u{1F600}";
+  const accepted = refineGoalOutcome(head, goal, null, "author", patch({
+    objective: emoji.repeat(512),
+    requirements: [{id: "opening", description: emoji.repeat(1000)}],
+    source: {ref: "message:emoji-boundary", summary: emoji.repeat(256)},
+  }));
+  assert.equal(accepted.outcomes[0].objective.length, 1024);
+  assert.equal(accepted.outcomes[0].requirements[0].description.length, 2000);
+  assert.equal(accepted.outcomes[0].sources[0].summary.length, 512);
+  for (const [overflow, expected] of [
+    [{objective: emoji.repeat(513)}, /outcome objective must be bounded nonempty text \(got 1026 UTF-16 code units, max 1024\)/],
+    [{requirements: [{id: "opening", description: emoji.repeat(1001)}]}, /requirement description must be bounded nonempty text \(got 2002 UTF-16 code units, max 2000\)/],
+    [{source: {ref: "message:emoji-over", summary: emoji.repeat(257)}}, /source summary must be bounded nonempty text \(got 514 UTF-16 code units, max 512\)/],
+  ] as const) {
+    assert.throws(() => refineGoalOutcome(head, goal, null, "author", patch(overflow)), expected);
+  }
 });

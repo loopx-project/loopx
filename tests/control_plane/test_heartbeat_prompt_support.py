@@ -456,11 +456,11 @@ def test_heartbeat_scopes_project_skill_to_material_changes(mode: str) -> None:
         assert obligation in body, obligation
 
 
-@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "envelope"])
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "captured_thin"])
 @pytest.mark.parametrize("profile", ["generic_cli", "codex_app_heartbeat"])
 def test_timed_wait_guidance_survives_prompt_compaction(mode: str, profile: str, tmp_path: Path) -> None:
-    options = ({"thin": True, "turn_envelope": True, "decision_output_root": tmp_path,
-                "turn_instance_id": "timed-wait-turn"} if mode == "envelope" else {mode: True})
+    options = ({"thin": True, "decision_output_root": tmp_path, "turn_instance_id": "timed-wait-turn"}
+               if mode == "captured_thin" else {mode: True})
     payload = build_heartbeat_prompt(goal_id="timed-wait-fixture", agent_id="agent-wait",
                                      runtime_profile=profile, **options)
     body = payload["task_body"]

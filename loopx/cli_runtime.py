@@ -203,6 +203,15 @@ def resolve_cli_registry(
 		# native-session scope; machine defaults keep their separate route owner.
 		if args.quota_command in {"context-project", "replan-view"} or has_explicit_context_read_source(args):
 			return registry_path, registry_was_configured
+	if (
+		args.command == "todo"
+		and getattr(args, "todo_command", None) == "plan-batch"
+		and getattr(args, "schema", False)
+		and getattr(args, "text", None) is None
+	):
+		# Static plan-batch schema reads no Goal or runtime-root state;
+		# option validation still runs in handle_todo_command.
+		return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
 			runtime_root = (

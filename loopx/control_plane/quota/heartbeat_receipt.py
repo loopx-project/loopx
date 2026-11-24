@@ -9,6 +9,7 @@ from ...file_lock import exclusive_cross_runtime_file_lock
 from ...rollout_event_log import (
     _append_rollout_event_line,
     build_rollout_event,
+    iter_rollout_events,
     load_rollout_events,
     rollout_event_log_path,
 )
@@ -195,7 +196,9 @@ def find_heartbeat_receipt(
     turn_instance_id: str,
     goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
-    events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
+    events = list(iter_rollout_events(
+        rollout_event_log_path(runtime_root, goal_id), committed_only=True,
+    ))
     event, _ = _effective_heartbeat_receipt(
         _heartbeat_receipt_events(
             events,

@@ -77,6 +77,7 @@ def _worker_args(project, runtime, registry, script, request):
 _REVIEW_HOST = r'''import json,sys
 from hashlib import sha256
 from pathlib import Path
+from shlex import split
 import subprocess
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 request=json.loads(Path(sys.argv[1]).read_text())
@@ -93,6 +94,11 @@ guard=cli("quota","should-run","--runtime-profile","generic_cli","--goal-id",req
 assert guard["effective_action"]=="autonomous_replan_required",guard
 identity=guard["heartbeat_receipt"]["settlement_identity"]
 assert identity["replan_obligation_id"]==request["obligation"],guard
+def read_stage(command):
+    proc=subprocess.run(split(command),capture_output=True,text=True,timeout=60,check=True)
+    return json.loads(proc.stdout)
+review=read_stage(guard["replan_action_packet"]["review"])
+assert review["stage"]=="review" and review["obligation_id"]==identity["replan_obligation_id"]
 with Path(request["counts"]).open("a") as stream:
     stream.write(json.dumps({"work":"R2","D":1,"P":1})+"\n")
 original=Path(request["original"])
@@ -101,7 +107,13 @@ artifact=Path(request["artifact"])
 artifact.write_text(json.dumps({"review":"R2","original_sha256":sha256(original.read_bytes()).hexdigest(),
                                 "adopted_original":True})+"\n")
 evidence="fixture:review:"+sha256(artifact.read_bytes()).hexdigest()
+writer=read_stage(review["next"]["writeback"])
+assert writer["stage"]=="writeback" and writer["source_hash"]==review["source_hash"]
+stride=writer["stride_control"]["minimal_example"]
+assert stride["reference_obligation_id"]==identity["replan_obligation_id"]
+assert stride["reference_context_id"]==writer["context_id"]==review["context_id"]
 vision={"schema_version":"goal_vision_replan_contract_v0","state":"no_followup",
+  "stride_decision":stride,
   "vision_patch":{"vision_summary":"Complete and independently read back the finite original probe.",
                   "acceptance_summary":"The original artifact was verified and its result was recovered."},
   "path_delta":{"schema_version":"goal_path_delta_v0","outcome":"stop",

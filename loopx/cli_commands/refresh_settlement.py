@@ -11,12 +11,14 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from ..command_invocation import loopx_cli_argv
 from ..control_plane.effect_program import (
     SETTLEMENT_RECEIPT_SCHEMA_VERSION, SettlementStepKind, decode_settlement_receipt_payload,
 )
+from ..control_plane.quota.error_codes import QuotaRunIndexConflict
 from ..control_plane.quota.settlement import (
     SettlementIdentity, attach_settlement_progress, read_heartbeat_settlement, render_owed_host_command,
     settlement_result_payload,
@@ -98,6 +100,15 @@ def _has_verified_fresh_spend(
     )
 
 
+def _run_owed_spend(argv: list[str], workspace: Path | None, timeout: float) -> tuple[int, dict[str, Any]]:
+    result = subprocess.run(argv, cwd=workspace, capture_output=True, text=True,
+        encoding="utf-8", timeout=timeout, check=False)
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise ValueError("quota settlement CLI returned a non-object result")
+    return result.returncode, value
+
+
 def settle_refreshed_turn(
     payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
     goal_id: str, agent_id: str, todo_id: str | None,
@@ -107,8 +118,8 @@ def settle_refreshed_turn(
 ) -> None:
     """Follow one owed step, then verify its exact receipts; never collect a guard.
 
-    A failed/ambiguous child is not retried here. The original refresh or owed
-    command remains replayable under the shared exactly-once settlement owner.
+    A definitive run-index rejection allows one retry of the same owed command.
+    Ambiguous outcomes go through authoritative receipt readback.
     """
     if payload.get("ok") is not True or payload.get("dry_run"):
         return
@@ -171,17 +182,22 @@ def settle_refreshed_turn(
                 "import sys; sys.path.insert(0, sys.argv.pop(1)); "
                 "import runpy; runpy.run_module('loopx.entrypoint', run_name='__main__')"
             )
-            result = subprocess.run(
-                [sys.executable, "-P", "-c", entry, str(Path(__file__).resolve().parents[2]),
-                 "--format", "json", *command_args],
-                cwd=workspace,
-                capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
-            )
-            value = json.loads(result.stdout)
-            if not isinstance(value, dict):
-                raise ValueError("quota settlement CLI returned a non-object result")
-            spent = value
-            if result.returncode or spent.get("ok") is not True:
+            argv = [sys.executable, "-P", "-c", entry, str(Path(__file__).resolve().parents[2]),
+                    "--format", "json", *command_args]
+            timeout = 60
+            deadline = monotonic() + timeout
+            returncode, spent = _run_owed_spend(argv, workspace, timeout)
+            conflict = QuotaRunIndexConflict.reason_code
+            if (returncode == 1 and spent.get("ok") is False and spent.get("appended") is False
+                    and spent.get("error_code") == conflict and spent.get("status") == conflict
+                    and spent.get("mode") == "spend-slot" and spent.get("goal_id") == goal_id
+                    and (remaining := deadline - monotonic()) > 0):
+                # The CAS rejection proves the first invocation made no debit.
+                # A new invocation rereads the same Turn and can replay its receipt
+                # if another process has already settled it.
+                spent = {}
+                returncode, spent = _run_owed_spend(argv, workspace, remaining)
+            if returncode or spent.get("ok") is not True:
                 error = str(spent.get("error") or spent.get("reason") or "quota settlement CLI failed")
         except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired, SystemExit) as exc:
             error = str(exc)

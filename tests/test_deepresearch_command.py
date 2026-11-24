@@ -14,6 +14,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from loopx.capabilities.deep_research.runtime import add_source, load_state, start_research
+
 
 def _run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -177,6 +181,87 @@ def test_duplicate_source_is_rejected_so_claims_are_reused(tmp_path: Path) -> No
     data = json.loads(duplicate.stdout)
     assert data["ok"] is False
     assert "already recorded as s1" in data["error"]
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("https://example.org/Report", "https://example.org/report"),
+        ("https://example.org/?Key=value", "https://example.org/?key=value"),
+        ("https://example.org/?key=Value", "https://example.org/?key=value"),
+        ("https://example.org/#Section", "https://example.org/#section"),
+        ("https://example.org/report", "https://example.org/report/"),
+        ("https://example.org/?key=value", "https://example.org/?key=value/"),
+        ("https://example.org/#section", "https://example.org/#section/"),
+        ("https://User@example.org/report", "https://user@example.org/report"),
+        ("https://example.org/report", "https://example.org/report?"),
+        ("https://example.org/report", "https://example.org/report#"),
+    ],
+)
+def test_distinct_http_sources_preserve_locator_and_claim_lineage(
+    tmp_path: Path, first: str, second: str
+) -> None:
+    start_research(tmp_path, question="Compare sources", max_sources=3, max_subquestions=0)
+    for index, ref in enumerate((first, second), start=1):
+        result = add_source(
+            tmp_path, url_or_path=ref, tool="fixture", title=None,
+            claims=[{"text": f"Observation {index}"}],
+        )
+        assert result["source_id"] == f"s{index}"
+        assert result["claim_ids"] == [f"c{index}"]
+    state = load_state(tmp_path)
+    assert state is not None
+    assert [source["url_or_path"] for source in state["sources"]] == [first, second]
+    assert [claim["source_id"] for claim in state["claims"]] == ["s1", "s2"]
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("HTTPS://EXAMPLE.ORG/Report", "https://example.org/Report"),
+        ("HTTP://EXAMPLE.ORG/Report", "http://example.org/Report"),
+        ("https://example.org", "https://example.org/"),
+        ("https://example.org?Key=Value", "https://EXAMPLE.ORG/?Key=Value"),
+        ("https://example.org#Section", "https://EXAMPLE.ORG/#Section"),
+        ("https://User@EXAMPLE.ORG:8443/Report", "https://User@example.org:8443/Report"),
+        ("https://example.org/report?", "https://example.org/report?"),
+        ("https://example.org/report#", "https://example.org/report#"),
+        ("Docs/Report.md/", "docs/report.md"),
+    ],
+)
+def test_equivalent_sources_are_rejected_without_mutating_the_ledger(
+    tmp_path: Path, first: str, second: str
+) -> None:
+    start_research(tmp_path, question="Compare sources", max_sources=3, max_subquestions=0)
+    add_source(
+        tmp_path, url_or_path=first, tool="fixture", title=None,
+        claims=[{"text": "Original observation"}],
+    )
+    before = load_state(tmp_path)
+    with pytest.raises(ValueError, match="already recorded as s1"):
+        add_source(
+            tmp_path, url_or_path=second, tool="fixture", title=None,
+            claims=[{"text": "Duplicate observation"}],
+        )
+    assert load_state(tmp_path) == before
+
+
+def test_cli_records_case_sensitive_sources_in_the_report(tmp_path: Path) -> None:
+    _start(tmp_path)
+    refs = ("https://example.org/Report", "https://example.org/report")
+    for index, ref in enumerate(refs, start=1):
+        added = _add_source(tmp_path, ref, [{"text": f"Observation {index}"}])
+        assert added["source_id"] == f"s{index}"
+    _payload(_resolve_question(
+        tmp_path, question_id="q1", answer="The sources are distinct.",
+        evidence=["c1", "c2"],
+    ))
+    report = _payload(_run_cli("deepresearch", "report", "--project", ".", cwd=tmp_path))
+    content = Path(report["report_path"]).read_text(encoding="utf-8")
+    assert all(ref in content for ref in refs)
+    state = load_state(tmp_path)
+    assert state is not None
+    assert [claim["source_id"] for claim in state["claims"]] == ["s1", "s2"]
 
 
 def test_answers_without_ledger_evidence_are_rejected(tmp_path: Path) -> None:

@@ -92,13 +92,12 @@ def test_projection_rejects_invalid_typed_records_and_preserves_scoped_prose():
 
 
 @pytest.mark.parametrize("source", ["active_state", "registry"])
-@pytest.mark.parametrize("stride_strategy", ["off", "evidence_conditioned_v1"])
 @pytest.mark.parametrize("objective", [
     "Read /home/runner/work/task.md and meet its acceptance criteria.",
     "Optimize the accepted result. Write test inputs to /tmp/task-seeds.txt.",
 ])
 def test_goal_and_evidence_paths_survive_scoped_replan(
-    tmp_path: Path, source: str, stride_strategy: str, objective: str,
+    tmp_path: Path, source: str, objective: str,
 ) -> None:
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
@@ -119,7 +118,6 @@ def test_goal_and_evidence_paths_survive_scoped_replan(
         goal_id="evidence-goal", agent_id="agent-a", runs=(),
         source_status={"registry": str(registry), "runtime_root": str(runtime),
                        "run_history": {"runs": []}},
-        stride_strategy=stride_strategy,
     )
     assert context["core_goal"]["objective"] == objective
     assert context["core_goal"]["objective_source"] == source
@@ -285,14 +283,28 @@ def test_truncated_display_cannot_make_an_old_blocker_new(count):
         "schema_version": "typed_progress_observation_v0", "result_class": "blocked",
         "blocker_id": f"blocker-{i}", "evidence_ids": [f"proof-{i}"],
     }) for i in range(count)]
-    obligation = {"obligation_id": "replan-a", "triggers": [{"kind": "typed_progress_repeat"}],
+    obligation = {"obligation_id": "replan-aaaaaaaaaaaaaaaa", "triggers": [{"kind": "typed_progress_repeat"}],
                   "progress_baseline": rows[-1]["progress_observation"]}
     obligation["replan_context"] = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows, obligation=obligation)
     assert obligation["replan_context"]["coverage_truncated"] is True
     assert not any(row.get("blocker_id") == "blocker-0" for row in obligation["replan_context"]["coverage_ledger"])
+    from loopx.control_plane.work_items.progress_observation import build_replan_action_packet
+
+    packet = build_replan_action_packet(obligation, goal_id="evidence-goal", agent_id="agent-a")
+    stop_vision = {
+        "vision_patch": {"acceptance_summary": "Stop repeating already-recorded blockers."},
+        "path_delta": {"outcome": "stop", "evidence_refs": ["proof-0"]},
+        "stride_decision": packet["stride_control"]["minimal_example"],
+    }
     with pytest.raises(ValueError, match="complete evidence history"):
-        semantic_delta_from_writeback(obligation=obligation, progress_observation=rows[0]["progress_observation"])
-    result = semantic_delta_from_writeback(obligation=obligation, progress_observation=rows[0]["progress_observation"], history_runs=rows)
+        semantic_delta_from_writeback(
+            obligation=obligation, progress_observation=rows[0]["progress_observation"],
+            agent_vision=stop_vision,
+        )
+    result = semantic_delta_from_writeback(
+        obligation=obligation, progress_observation=rows[0]["progress_observation"],
+        agent_vision=stop_vision, history_runs=rows,
+    )
     assert result["accepted"] is False
     assert result["reason_code"] == "progress_observation_replayed"
 

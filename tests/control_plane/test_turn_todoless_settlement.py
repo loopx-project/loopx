@@ -27,7 +27,7 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True, capture_dir=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     if replan:
-        _configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
+        _configure_autonomous_replan_fixture(project, runtime, registry)
     else:
         state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
         state.write_text('---\nstatus: active\nowner_mode: goal\nobjective: "Answer the fixture request."\n---\n\n'
@@ -56,10 +56,11 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True, capture_dir=None):
     return project, runtime, registry, turn, guard, original
 
 
-def _host(tmp_path, *, observation=True, changed=True, fail_once=False):
+def _host(tmp_path, *, observation=True, changed=True, fail_once=False, stride_decision=None):
     # An explicit local process seam, no model or network. It consumes the
     # actual native prompt and produces an independently validated artifact.
-    source = '''
+    stride_json = json.dumps(stride_decision)
+    source = f'''
 import json, pathlib, re, sys
 args = sys.argv[1:]
 prompt = sys.stdin.read()
@@ -67,16 +68,19 @@ root = pathlib.Path.cwd()
 counter = root / "host-count.txt"
 counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
 (root / "received.txt").write_text(prompt)
-(root / "plan.json").write_text(json.dumps({"inputs": [17, 25]}))
-vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
-    "vision_patch": {"acceptance_summary": "Use the validated plan; retain the future monitor.",
-                     "advancement_policy": "as_needed"},
-    "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "replan",
+(root / "plan.json").write_text(json.dumps({{"inputs": [17, 25]}}))
+vision = {{"schema_version": "goal_vision_replan_contract_v0", "state": "active",
+    "vision_patch": {{"acceptance_summary": "Use the validated plan; retain the future monitor.",
+                     "advancement_policy": "as_needed"}},
+    "path_delta": {{"schema_version": "goal_path_delta_v0", "outcome": "replan",
         "prior_assumption": "Another unchanged probe might improve the plan.",
         "observed_reality": "The verified plan makes another probe unnecessary.",
         "changed": ["Use the verified plan instead of repeating the probe."],
-        "evidence_refs": ["fixture:validated-plan"]}}
-candidate = {"schema_version": "loopx_turn_result_v0",
+        "evidence_refs": ["fixture:validated-plan"]}}}}
+stride = {stride_json}
+if stride is not None:
+    vision["stride_decision"] = stride
+candidate = {{"schema_version": "loopx_turn_result_v0",
     "turn_key": re.search(r'"turn_key":"([^"]+)"', prompt).group(1),
     "completed_phases": ["host_execute", "typed_result"],
     "result_kind": "replan_required", "classification": "fixture_bound_planning",
@@ -85,13 +89,13 @@ candidate = {"schema_version": "loopx_turn_result_v0",
     "next_action": "Use the verified plan.", "delivery_batch_scale": "single_surface",
     "delivery_outcome": "outcome_progress", "path_delta_mode": "material_replan",
     "agent_vision_json": json.dumps(vision), "vision_unchanged_reason": "",
-    "progress_observation_json": json.dumps({"schema_version": "typed_progress_observation_v0",
+    "progress_observation_json": json.dumps({{"schema_version": "typed_progress_observation_v0",
         "result_class": "advanced", "surface_id": "surface-validated-plan",
         "hypothesis_id": "hypothesis-existing", "probe_kind": "probe-existing",
-        "evidence_ids": ["fixture:validated-plan"]}),
-    "work_evidence": ["artifact:plan.json"], "validation_evidence": ["check:plan-inputs"]}
+        "evidence_ids": ["fixture:validated-plan"]}}),
+    "work_evidence": ["artifact:plan.json"], "validation_evidence": ["check:plan-inputs"]}}
 pathlib.Path(args[args.index("--output-last-message") + 1]).write_text(json.dumps(candidate))
-print(json.dumps({"type": "thread.started", "thread_id": "bound-planning-session"}), flush=True)
+print(json.dumps({{"type": "thread.started", "thread_id": "bound-planning-session"}}), flush=True)
 '''
     if not observation:
         source = source.replace('pathlib.Path(args[args.index', 'candidate.pop("progress_observation_json")\npathlib.Path(args[args.index')
@@ -129,7 +133,7 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
     project, runtime, registry, turn, guard, original = _fixture(tmp_path, monkeypatch, provider)
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
-    host = _host(tmp_path)
+    host = _host(tmp_path, stride_decision=guard["replan_action_packet"]["stride_control"]["minimal_example"])
     code, result = _run_turn(project, runtime, registry, host, turn=turn)
     assert code == 0 and result["status"] == "committed", json.dumps(result, indent=2)
     [journal_path] = (runtime / "goals" / GOAL_ID / "turns").glob("*.json")
@@ -278,8 +282,8 @@ def test_unbound_request_does_not_gain_a_planning_binding(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_explicit_retry_keeps_the_bound_planning_session(tmp_path, monkeypatch, provider):
-    project, runtime, registry, turn, _guard, _original = _fixture(tmp_path, monkeypatch, provider)
-    host = _host(tmp_path, fail_once=True)
+    project, runtime, registry, turn, guard, _original = _fixture(tmp_path, monkeypatch, provider)
+    host = _host(tmp_path, fail_once=True, stride_decision=guard["replan_action_packet"]["stride_control"]["minimal_example"])
     code, failed = _run_turn(project, runtime, registry, host, turn=turn)
     assert code == 1 and failed["result_kind"] == "host_failure", failed
     assert (project / "host-count.txt").read_text() == "1"

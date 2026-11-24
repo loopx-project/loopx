@@ -169,7 +169,6 @@ def test_projected_terminal_replan_fields_execute_without_guessed_flags(tmp_path
     from loopx.install_contract import render_host_cli_command
 
     call, _, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
-    call("configure-goal", "--goal-id", GOAL, "--execution-stride-strategy", "off", "--execute")
     # The complete delivery has no remaining Todo; retain its accepted mainline.
     rows = [json.loads(row) for row in index.read_text().splitlines()]
     vision = deepcopy(next(row["agent_vision"] for row in rows if "agent_vision" in row))
@@ -195,6 +194,9 @@ def test_projected_terminal_replan_fields_execute_without_guessed_flags(tmp_path
         "observed_reality": "Independent validation covers the complete source scope.",
         "stopped": ["Repeated source checks"], "evidence_refs": ["validation:complete-source"],
     }
+    vision["stride_decision"] = deepcopy(
+        original["replan_action_packet"]["stride_control"]["minimal_example"]
+    )
     path = tmp_path / "author's terminal.json"
     path.write_text(json.dumps(vision), encoding="utf-8")
     command = next(action for action in original["interaction_contract"]["cli_channel"]["next_cli_actions"]
@@ -457,7 +459,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert all("--replan-obligation-id " + obligation_id in command for command in actions)
     assert all("--turn-instance-id " + TURN in command for command in actions)
     envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-                    "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
+                    "--agent-id", AGENT, "--turn-instance-id", TURN)
     assert envelope["replan_action_packet"]["settlement_only"] is True
     assert envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == actions
     assert envelope["contract_binding"]["source_decision_hash"]
@@ -486,7 +488,7 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert pending_plan["identity"] == identity
     assert pending_plan["ordered_steps"] == [cli["settlement_plan"]["ordered_steps"][-1]]
     pending_envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-        "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope")
+        "--agent-id", AGENT, "--turn-instance-id", TURN)
     assert pending_envelope["interaction_contract"]["cli_channel"]["next_cli_actions"] == spend_actions
     assert pending_envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == pending_plan
     assert pending_envelope["contract_binding"]["source_decision_hash"]

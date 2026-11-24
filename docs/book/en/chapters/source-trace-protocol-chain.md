@@ -491,7 +491,7 @@ For a control-plane failure, verify in order:
 After a trace, these should hold on their own:
 
 1. **Every renamed or redefined field comes with a full consumer list.** Updating producers alone is incomplete, and a missing-field fallback counts as a consumer.
-2. The test is the first boundary that violates the invariant, not the final return value.
+2. **Success at every layer is not evidence that the chain is correct.** The test is the first boundary that violates the invariant, not the final return value.
 3. **A missing field's default participates in the decision.** So the contract must state whether absence means reject, repair, or compatibility fallback.
 4. **Authority has exactly one canonical source.** Several places may read a field and only one owns it; mistaking a reader for the owner is the most common leftover from a cross-layer change.
 5. **Judging authority follows the protocol document; judging current behavior follows the source.** When they conflict, pick by conflict type and make this change update the other side.

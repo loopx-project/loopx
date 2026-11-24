@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  cp,
   mkdtemp,
   mkdir,
   readFile,
@@ -11,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -288,6 +289,21 @@ test("preview finds an inline spend event and preserves the legacy payload witho
   assert.equal(result.record?.classification, "quota_slot_voided");
   assert.deepEqual((await readdir(fixture.runsDir)).sort(), filesBefore);
   assert.equal(await readFile(fixture.indexPath, "utf8"), fixture.indexContent);
+});
+
+test("void preview hashes the original bytes even when decoding replaces a byte", async (t) => {
+  const fixture = await targetFixture(t);
+  const bytes = Buffer.concat([
+    Buffer.from('{"annotation":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}\r\n' + fixture.indexContent),
+  ]);
+  await writeFile(fixture.indexPath, bytes);
+  const result = await evaluateQuotaVoidCommit(await request(fixture, { execute: false }));
+  assert.equal(result.status, "preview");
+  assert.equal(result.payload.slots, 2);
+  assert.equal(result.index_digest, "sha256:" + createHash("sha256").update(bytes).digest("hex"));
+  assert.deepEqual(await readFile(fixture.indexPath), bytes);
 });
 
 test("target lookup falls back to the bounded legacy JSON artifact", async (t) => {
@@ -833,4 +849,85 @@ test("legacy slot coercion truncates numeric strings and clamps both slot floors
       testCase.expectedAfter,
     );
   }
+});
+
+test("void receipt replay follows a copied runtime and rejects unsafe paths", async (t) => {
+  const fixture = await targetFixture(t);
+  const params = await request(fixture);
+  const written = await evaluateQuotaVoidCommit(params);
+  assert.equal(written.status, "written");
+  const copiedRoot = await tempRuntime(t);
+  const copiedRuns = join(copiedRoot, "goals", goalId, "runs");
+  await cp(fixture.runsDir, copiedRuns, { recursive: true });
+  const copiedFixture: TargetFixture = {
+    ...fixture,
+    runtimeRoot: copiedRoot,
+    runsDir: copiedRuns,
+    indexPath: join(copiedRuns, "index.jsonl"),
+  };
+  const originalJson = String(written.payload.json_path);
+  const originalBytes = await readFile(originalJson);
+  const originalIndex = await readFile(fixture.indexPath, "utf8");
+  const preview = await evaluateQuotaVoidCommit(await request(copiedFixture, { execute: false }));
+  assert.equal(preview.status, "preview");
+  const copiedParams = await request(copiedFixture);
+  const replayed = await evaluateQuotaVoidCommit(copiedParams);
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayed.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(copiedFixture.indexPath, "utf8"), originalIndex);
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  assert.equal((await evaluateQuotaVoidCommit(copiedParams)).status, "replayed");
+
+  const copiedIndexBytes = await readFile(copiedFixture.indexPath);
+  await writeFile(
+    copiedFixture.indexPath,
+    copiedIndexBytes.subarray(0, copiedIndexBytes.length - 2),
+  );
+  const repaired = await evaluateQuotaVoidCommit(copiedParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(await readFile(copiedFixture.indexPath, "utf8"), originalIndex);
+  assert.equal(await readFile(fixture.indexPath, "utf8"), originalIndex);
+  const repairedReceipt = await transactionReceipt(copiedRuns, String(params.effect_id));
+  assert.equal(repairedReceipt.value.json_path, originalJson);
+  assert.equal(repairedReceipt.value.request_digest, written.request_digest);
+  const replayedAfterRepair = await evaluateQuotaVoidCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(await readFile(copiedFixture.indexPath, "utf8"), originalIndex);
+
+  const receipt = await transactionReceipt(copiedRuns, String(params.effect_id));
+  const otherRuns = join(copiedRoot, "goals", "other-goal", "runs");
+  await mkdir(otherRuns, { recursive: true });
+  const otherJson = join(otherRuns, basename(originalJson));
+  await writeFile(otherJson, originalBytes);
+  const escaped = {
+    ...receipt.value,
+    json_path: otherJson,
+    index_record: {
+      ...(receipt.value.index_record as Record<string, unknown>),
+      json_path: otherJson,
+    },
+    payload: {
+      ...(receipt.value.payload as Record<string, unknown>),
+      json_path: otherJson,
+    },
+  };
+  await writeFile(receipt.path, `${JSON.stringify(escaped)}\n`, "utf8");
+  await assert.rejects(
+    () => evaluateQuotaVoidCommit(copiedParams),
+    /JSON path is outside its run directory/,
+  );
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+
+  await writeFile(receipt.path, `${JSON.stringify(receipt.value)}\n`, "utf8");
+  const copiedJson = join(copiedRuns, basename(originalJson));
+  await unlink(copiedJson);
+  await symlink(originalJson, copiedJson);
+  await assert.rejects(
+    () => evaluateQuotaVoidCommit(copiedParams),
+    /JSON path is outside its run directory/,
+  );
+  assert.deepEqual(await readFile(originalJson), originalBytes);
 });

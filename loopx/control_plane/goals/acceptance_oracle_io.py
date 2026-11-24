@@ -6,8 +6,23 @@ No configuration, evidence classification or acceptance decision is owned here.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
+import sys
 from typing import Any
+
+
+# The typed oracle accepts this as an argv token for one pinned Python script.
+# It is resolved only for oracle execution, outside the persisted definition.
+ORACLE_HOST_PYTHON = "loopx:python"
+
+
+def oracle_host_python() -> str:
+    executable = Path(sys.executable or "")
+    if not executable.is_absolute() or not executable.is_file() or not os.access(executable, os.X_OK):
+        raise FileNotFoundError("the LoopX runtime's Python is unavailable")
+    # Keep the invoked path so a virtual environment retains its own prefix.
+    return str(executable)
 
 
 def oracle_file_versions(
@@ -81,9 +96,12 @@ def run_snapshot_oracle(
         if not stable:
             return {}, False
         try:
+            argv = criterion["validation_argv"]
+            if argv[0] == ORACLE_HOST_PYTHON:
+                argv = [oracle_host_python(), *argv[1:]]
             receipt = run_caller_validation(
                 snapshot,
-                validation_argv=criterion["validation_argv"],
+                validation_argv=argv,
                 validation_label=criterion["validation_label"],
                 timeout_seconds=criterion["validation_timeout_seconds"],
             )

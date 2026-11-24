@@ -2,11 +2,12 @@ import { EXECUTION_PREPARATION_SCHEMA_VERSION } from "../work_items/execution_pr
 import { leaseEpoch } from "../work_items/task_lease_record.ts";
 import { capturedContextSelection } from "./context_selection.ts";
 import {
-  contextReadSectionDigests, initialContextReadPointers, normalWorkReadContext,
+  contextReadSectionDigests, inlineNormalWorkOpening, initialContextReadPointers, normalWorkReadContext,
   prepareProgressiveContext, prepareProgressiveContextDelivery, progressiveContextPlan,
   type PreparationScopeDetail, type ReusableExactBody,
 } from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
+import {turnSessionPlan} from "../turn_driver/session_binding.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {
@@ -44,13 +45,13 @@ import {
   shellQuote, text, textList,
 } from "./turn_envelope_codec.ts";
 import {
-  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, type ReplanReadPrecision, bindReplanSuccessorContract,
-  deferredReplanWriteback, nativeReplanPresentation, referenceCurrentTaskTitle,
-  referenceExploreGuidance, referenceGoalAcceptance, referenceReplanAuthoring,
-  referenceVisionContinuation, replanActionPacket, replanAuthoringContract, replanCliView,
-  replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
-  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision, resolveExploreGuidance,
-  responsePlan, selectedTodo, unboundExploreReplan, userChannel,
+  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN,
+  type ReplanReadPrecision, bindReplanSuccessorContract, deferredReplanWriteback, inlineOutcomeRequirements,
+  nativeReplanPresentation, referenceCurrentTaskTitle, referenceExploreGuidance, referenceGoalAcceptance,
+  referenceReplanAuthoring, referenceVisionContinuation, replanActionPacket, replanAuthoringContract,
+  replanCliView, replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
+  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision,
+  resolveExploreGuidance, responsePlan, selectedTodo, unboundExploreReplan, userChannel,
 } from "./turn_envelope_references.ts";
 
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
@@ -582,19 +583,90 @@ function turnActionProjection(payload: JsonObject, precision?: ReplanReadPrecisi
     }};
     projection.action = action;
   }
-  if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
-    const index = sources.findIndex((value) => {
-      const source = object(value);
-      return source.source === "goal_acceptance"
-        && (object(source.content).status === undefined || object(source.content).status === "loaded")
-        && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
-    });
-    if (index >= 0) {
-      const compactCore = {...core};
-      delete compactCore.acceptance_contract;
-      compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
-      action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+  if (Object.keys(acceptance).length > 0) {
+    if ("outcome_requirements" in acceptance && "outcome_requirements_ref" in acceptance) {
+      throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+    }
+    if ("outcome_requirements_ref" in acceptance && !("outcome_requirements" in acceptance)) {
+      const match = typeof acceptance.outcome_requirements_ref === "string"
+        ? WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN.exec(acceptance.outcome_requirements_ref) : null;
+      const index = match ? Number(match[1]) : -1;
+      const source = object(Array.isArray(sources) ? sources[index] : null);
+      const content = object(source.content);
+      const sourceContract = object(content.goal_acceptance_contract);
+      if (match && source.source === "goal_acceptance"
+        && (content.status === undefined || content.status === "loaded")
+        && Object.keys(object(sourceContract.outcome_requirements)).length > 0
+        && !("outcome_requirements_ref" in sourceContract)) {
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: {...core, acceptance_contract: {
+          ...acceptance,
+          outcome_requirements_ref: `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`,
+        }}};
+        projection.action = action;
+        return projection;
+      }
+      const inlinedAcceptance = {...acceptance};
+      delete inlinedAcceptance.outcome_requirements_ref;
+      inlinedAcceptance.outcome_requirements = inlineOutcomeRequirements(payload, acceptance.outcome_requirements_ref);
+      action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+        ...core, acceptance_contract: inlinedAcceptance,
+      }};
       projection.action = action;
+      return projection;
+    }
+    if (Array.isArray(sources)) {
+      // The parsed values can coincide after numeric rounding. Compare the
+      // original carrier identities before replacing either signed field.
+      const identity = precision?.identity ?? contextSourceIdentity(payload);
+      const horizonPath = ["planning_horizon", "core_goal", "acceptance_contract"];
+      const contractPath = (index: number) => [
+        "interaction_contract", "agent_channel", "work_context", "sources", index,
+        "content", "goal_acceptance_contract",
+      ];
+      const horizonIdentity = identity(acceptance, horizonPath);
+      const index = sources.findIndex((value, index) => {
+        const source = object(value);
+        const content = object(source.content);
+        return source.source === "goal_acceptance"
+          && (content.status === undefined || content.status === "loaded")
+          && identity(object(content.goal_acceptance_contract), contractPath(index)) === horizonIdentity;
+      });
+      if (index >= 0) {
+        const compactCore = {...core};
+        delete compactCore.acceptance_contract;
+        compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+        projection.action = action;
+        return projection;
+      }
+      const requirements = object(acceptance.outcome_requirements);
+      if (Object.keys(requirements).length > 0 && !("outcome_requirements_ref" in acceptance)) {
+        const requirementsIdentity = identity(requirements, [...horizonPath, "outcome_requirements"]);
+        const requirementsBytes = Buffer.byteLength(JSON.stringify(requirements), "utf8");
+        const reqIndex = sources.findIndex((value, index) => {
+          const source = object(value);
+          const content = object(source.content);
+          const contract = object(content.goal_acceptance_contract);
+          const ref = `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`;
+          return source.source === "goal_acceptance"
+            && (content.status === undefined || content.status === "loaded")
+            && !("outcome_requirements_ref" in contract)
+            && Object.keys(object(contract.outcome_requirements)).length > 0
+            && requirementsBytes > ref.length + 24
+            && identity(object(contract.outcome_requirements),
+              [...contractPath(index), "outcome_requirements"]) === requirementsIdentity;
+        });
+        if (reqIndex >= 0) {
+          const compactAcceptance = {...acceptance};
+          delete compactAcceptance.outcome_requirements;
+          compactAcceptance.outcome_requirements_ref =
+            `$.work_context.sources[${reqIndex}].content.goal_acceptance_contract.outcome_requirements`;
+          action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+            ...core, acceptance_contract: compactAcceptance,
+          }};
+          projection.action = action;
+        }
+      }
     }
   }
   // The context owner already bounds these contributions. Replacing them with
@@ -904,6 +976,24 @@ function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string |
   return capturedTodoTextSha256(declared, context, decision.recommended_action, todoId);
 }
 
+/** Selected Todo write scopes can live in work_context.sources when page-0 selected_todo omits them. */
+function selectedTodoRequiredWriteScopes(decision: JsonObject, todoId: string): unknown {
+  const context = object(object(object(decision.interaction_contract).agent_channel).work_context);
+  const records = (Array.isArray(context.sources) ? context.sources : [])
+    .map(value => jsonObject(value))
+    .filter(source => source?.source === "selected_todo")
+    .map(source => jsonObject(jsonObject(source!.content)?.todo))
+    .filter((record): record is JsonObject =>
+      record !== null && (record.todo_id === undefined || record.todo_id === todoId));
+  for (const record of records) {
+    if (Object.hasOwn(record, "required_write_scopes")) {
+      return record.required_write_scopes ?? [];
+    }
+  }
+  const selected = object(decision.selected_todo);
+  return selected.required_write_scopes ?? [];
+}
+
 /** Launch rechecks the admitted task, not the provider revision or the bounded
  * action signature. Progress, diagnostics and receipt changes are not edits to
  * the work. Losing the verified body on a fresh read is not a match. */
@@ -913,7 +1003,7 @@ function selectedWorkLaunchBasis(decision: JsonObject, verifiedTextSha256?: stri
   if (!todoId || todoId !== selected.todo_id) return null;
   const textSha256 = verifiedTextSha256 === undefined ? completeTaskTextSha256(decision, todoId) : verifiedTextSha256;
   return textSha256 === null ? null : canonicalHash({todo_id: todoId, text_sha256: textSha256,
-    required_write_scopes: selected.required_write_scopes ?? [],
+    required_write_scopes: selectedTodoRequiredWriteScopes(decision, todoId),
     required_capabilities: selected.required_capabilities ?? []});
 }
 
@@ -997,7 +1087,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);
-  source = referenceVisionContinuation(source, sourceIdentity);
+  source = referenceVisionContinuation(source, sourceIdentity, true);
   source = referenceQuotaSummaryLanes(source, sourceIdentity);
   return sealCompleteTurnDecision(source, request.scheduler_execution_args, sourceIdentity);
 }
@@ -1293,6 +1383,14 @@ function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" |
   return paths;
 }
 
+function readyWorkOpening(context: JsonObject): JsonObject | undefined {
+  return inlineNormalWorkOpening(context, {
+    work_lane_contract: context.work_lane_contract, goal_boundary: context.goal_boundary,
+    goal_acceptance: context.goal_acceptance, task_scope: context.task_scope,
+    latest_run_recommended_action: context.latest_run_recommended_action,
+  });
+}
+
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const normalOnly = request.normal_work_initial_read === undefined ? false
@@ -1302,8 +1400,10 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
     ? {...request, include_initial_read_plan: false} : request;
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(scoped, initial ? initialContextReadPointers(
+  const selection = capturedContextSelection(scoped, initial ? initialContextReadPointers(
     context ?? requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
+  const opening = context && selection.initial_read_plan ? readyWorkOpening(context) : undefined;
+  return opening ? {...selection, inline_opening: opening} : selection;
 }
 
 /** Only the exact list can carry forward. Current boundary controls stay inline. */
@@ -1331,52 +1431,49 @@ function readyWriteScope(context: JsonObject): ReusableExactBody | undefined {
 
 /** Work preparation retains current controls and keeps long scope lists at their exact source addresses. */
 function progressivePreparationScopes(payload: JsonObject): PreparationScopeDetail[] {
+  const boundary = jsonObject(payload.goal_boundary);
+  const cba = jsonObject(boundary?.checkpointed_boundary_authority);
+  const hasActiveApprovalScopes = cba?.schema_version === "checkpointed_boundary_authority_v0" &&
+    Array.isArray(cba.active_write_scope) && cba.active_write_scope.some(s => typeof s === "string" && s.length > 0);
   const interaction = jsonObject(payload.interaction_contract);
   const cli = jsonObject(interaction?.cli_channel);
   const preparation = jsonObject(cli?.execution_preparation);
-  if (interaction?.schema_version !== INTERACTION_CONTRACT_SCHEMA_VERSION ||
-      payload.should_run !== true ||
-      jsonObject(interaction.agent_channel)?.delivery_allowed !== false ||
-      cli?.spend_allowed_now !== false || cli.spend_after_validation !== false) return [];
   const obligation = jsonObject(payload.execution_obligation);
-  const repair = payload.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR &&
+  const repair = interaction?.schema_version === INTERACTION_CONTRACT_SCHEMA_VERSION &&
+    payload.should_run === true &&
+    jsonObject(interaction.agent_channel)?.delivery_allowed === false &&
+    cli?.spend_allowed_now === false && cli.spend_after_validation === false &&
+    payload.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR &&
     interaction.mode === EffectiveAction.AGENT_WORKSPACE_REPAIR && payload.workspace_repair_allowed === true &&
     payload.normal_delivery_allowed === false && payload.recovery_delivery_allowed === false &&
     obligation?.kind === EffectiveAction.AGENT_WORKSPACE_REPAIR && obligation.contract === "agent_workspace_guard" &&
     obligation.must_attempt_work === true && obligation.delivery_allowed === false;
-  if (!repair && payload.effective_action !== EffectiveAction.NORMAL_RUN) return [];
-  const selecting = hasUnboundActionSelection(cli);
+  const prepEligible = interaction?.schema_version === INTERACTION_CONTRACT_SCHEMA_VERSION &&
+    payload.should_run === true &&
+    jsonObject(interaction.agent_channel)?.delivery_allowed === false &&
+    cli?.spend_allowed_now === false && cli.spend_after_validation === false &&
+    (repair || payload.effective_action === EffectiveAction.NORMAL_RUN);
+  const selecting = prepEligible && hasUnboundActionSelection(cli);
   const selected = jsonObject(payload.selected_todo);
-  const claiming = cli.selection_required !== true && payload.normal_delivery_allowed === false &&
+  const claiming = prepEligible && cli?.selection_required !== true && payload.normal_delivery_allowed === false &&
     preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
     preparation.delivery_allowed === false && typeof selected?.todo_id === "string" &&
     preparation.todo_id === selected.todo_id && jsonObject(preparation.claim)?.host_execution_allowed === true;
-  if (!repair && !selecting && !claiming) return [];
-  const boundary = jsonObject(payload.goal_boundary);
+  if (!repair && !selecting && !claiming && !hasActiveApprovalScopes) return [];
   // The recovery pointer and its guidance also cost bytes. Leave short lists inline.
   const longScope = (value: unknown) => Array.isArray(value) && value.every(scope => typeof scope === "string")
     && Buffer.byteLength(JSON.stringify(value)) >= 1024;
   const scopes: PreparationScopeDetail[] = [];
-  if (boundary && !Object.hasOwn(boundary, "write_scope_pointer") && longScope(boundary.write_scope)) scopes.push({
+  if ((repair || selecting || claiming) && boundary && !Object.hasOwn(boundary, "write_scope_pointer") && longScope(boundary.write_scope)) scopes.push({
     path: ["goal_boundary", "write_scope"],
     marker_path: ["goal_boundary", "write_scope_pointer"],
     instruction: repair
       ? "If workspace repair needs the Goal's write scopes, select /goal_boundary/write_scope from the source below. "
       : "If work preparation needs the Goal's write scopes, select the pointer in goal_boundary.write_scope_pointer from the source below. ",
   });
-  if (selected?.schema_version === "quota_selected_todo_v0" &&
-      typeof selected.todo_id === "string" && longScope(selected.required_write_scopes)) scopes.push({
-    path: ["selected_todo", "required_write_scopes"],
-    instruction: "If this preparation needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. ",
-  });
-  const suggestions = jsonObject(payload.action_portfolio)?.suggested_actions;
-  if (selecting && Array.isArray(suggestions)) suggestions.forEach((value, index) => {
-    const candidate = jsonObject(value);
-    if (typeof candidate?.todo_id !== "string" || !longScope(candidate.required_write_scopes)) return;
-    const path = ["action_portfolio", "suggested_actions", index, "required_write_scopes"];
-    scopes.push({path,
-      instruction: `If choosing a candidate depends on its requested write scopes, select /${path.join("/")} from the source below. `,
-    });
+  if (hasActiveApprovalScopes) scopes.push({
+    path: ["goal_boundary", "checkpointed_boundary_authority", "active_write_scope"],
+    instruction: "If this turn depends on checkpointed approved write scopes, select /goal_boundary/checkpointed_boundary_authority/active_write_scope from the source below. ",
   });
   const finalScope = scopes.at(-1);
   if (finalScope) finalScope.instruction += repair
@@ -1395,8 +1492,17 @@ const resolveViewWriteback = (
 ): JsonObject => object(actionProjection(payload, false, precision, verifiedSourceHash).writeback);
 
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
-  const request = requireJsonObject(value, "turn envelope request");
+  let request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (Object.hasOwn(request, "source_transport") && (operation === "compose_complete" ||
+      operation === "attach_complete_turn_context" || operation === "context_delivery")) {
+    const field = operation === "context_delivery" ? "context" : "payload";
+    const source = decodeTurnSource(request, field);
+    // Projection edits must still address the caller's original inline shape.
+    const {source_transport: _transport, ...options} = request;
+    request = {...options, [field]: source};
+  }
+  if (operation === "session_plan") return turnSessionPlan(request);
   if (operation === "planning_facts") return completePlanningFacts(request);
   if (operation === "recorded_plan_lineage") {
     const {work, decision} = checkedTurnPlanSource(
@@ -1607,10 +1713,17 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       if (request.surface === "complete_turn") checkedContextPresentationSource(request);
       return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
     }
+    const context = requireJsonObject(request.context, "current projection");
     return prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
+      checkedContextPresentationPlan(request), readyWriteScope(context),
+      request.include_initial_read_plan === true ? readyWorkOpening(context) : undefined);
   }
-  if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
+  if (operation === "native_context_lifecycle") {
+    const journal = updateNativeContextLifecycle(request);
+    return request.source_edits === true
+      ? contextProjectionChanges(requireJsonObject(request.state, "native context journal"), journal)
+      : journal;
+  }
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(

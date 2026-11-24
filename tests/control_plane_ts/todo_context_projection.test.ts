@@ -179,6 +179,28 @@ test("handoff context is an exclusive read lens with aligned stages", () => {
   assert.deepEqual(Object.keys(result), ["handoff_context"]);
 });
 
+test("index labels preserve the complete two-stage handoff and source scalar facts", () => {
+  const record = {goal_id: "original", role: "agent", index: 1, text: "Original",
+    note: 1, successor_todo_ids: ["todo_next"], handoff: {to_agent: "receiver"}};
+  const labels = {goal_id: "listed", role: "user", source: "attention_queue",
+    schema_version: "todo_index_item_v0", text: "Original", title: "Indexed title"};
+  const original = {record, python_values: [
+    [["index"], "1.0", "1.0", "1"], [["note"], "1.0", "1.0", "1"],
+    [["text"], "Original", "'raw source text'", null],
+  ]};
+  const event = {record: {todo_id: "todo_event", text: "Event"}};
+  const sources = [original, event];
+  const full = {record: {...record, ...labels}, python_values: original.python_values.slice(0, 2)};
+  const reference = projectTodoContextPage({handoff_sources: sources, handoff_followups: [full, null]});
+  assert.deepEqual(projectTodoContextPage({handoff_sources: sources, handoff_index_labels: [labels, null]}), reference);
+  assert.equal(record.text, "Original");
+  for (const invalid of [[], [labels, {}], [{...labels, note: "replacement"}, null], [{...labels, role: 1}, null]]) {
+    assert.throws(() => projectTodoContextPage({handoff_sources: sources, handoff_index_labels: invalid}));
+  }
+  assert.throws(() => projectTodoContextPage({handoff_sources: sources, handoff_followups: [full, null],
+    handoff_index_labels: [labels, null]}));
+});
+
 // Captured before the cutover; independent rule cases below constrain its meaning.
 import displayFixture from "./fixtures/todo_summary_display.json" with {type: "json"};
 import {projectTodoSummaryDisplay} from "../../loopx/control_plane/todos/context_projection.ts";

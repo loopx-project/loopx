@@ -116,6 +116,31 @@ test("a new brief retains unresolved original-route delivery without reopening r
   }
 });
 
+test("a reservation keeps a prior peer return visible alongside the delivery conflict", () => {
+  const conflict = {...conclusion, request_revision: 2, result_key: "conflicting-return",
+    status: "retry_pending", error: "manager_return_payload_conflict"};
+  const peerReturn = {...conclusion, status: "delivered"};
+  const history = Array.from({length: 3}, (_, index) => ({...conclusion, request_revision: 2,
+    result_key: `read-return-${index}`, status: "delivered", consumed: true}));
+  const batch = projectDelegationTurnItems({observations: [observation({
+    direction: "outgoing",
+    request: {...request, source_kind: "peer"},
+    receipt: {...settled, request_control_view: {revision: 2, control_state: "effect_pending",
+      active_reservation: {reservation_id: "reserved"}}},
+    results: [conflict, peerReturn, ...history],
+  })]}) as Record<string, any>;
+  const [row] = batch.items;
+  assert.equal(row.step, "reconcile_reservation");
+  assert.equal(row.pending_return_count, 1);
+  assert.deepEqual(row.returns.map(({result_key, request_revision, error}: Record<string, unknown>) =>
+    [result_key, request_revision, error]), [
+    ["conflicting-return", 2, "manager_return_payload_conflict"],
+    ["conclusion", 1, undefined],
+  ]);
+  assert.equal(batch.return_attention.count, 1);
+  assert.deepEqual(batch.return_attention.items[0].returns, row.returns);
+});
+
 test("a bounded agenda never mistakes omitted or unavailable work for an empty queue", () => {
   const items = Array.from({length: 26}, (_, i) => ({...project()[0], request_id: String(i), direction: i < 23 ? "incoming" : "outgoing"}));
   const result = projectDelegationTurnContext({batches: [{items, incoming_count: 23, outgoing_count: 3,

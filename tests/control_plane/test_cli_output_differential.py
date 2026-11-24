@@ -182,7 +182,8 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
 
 
 @pytest.mark.parametrize('damage', [None, 'missing', 'changed', 'material', 'unknown', 'later', 'row', 'growth'])
-def test_complete_quota_migration_requires_original_controls_and_bounded_scope(tmp_path, damage):
+@pytest.mark.parametrize('variant', [None, 'quota_should_run_turn_envelope_blocking_user_gate'])
+def test_complete_quota_migration_requires_original_controls_and_bounded_scope(tmp_path, damage, variant):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
@@ -211,6 +212,9 @@ def test_complete_quota_migration_requires_original_controls_and_bounded_scope(t
         chars=1000, utf8_bytes=1000, compact_payload_chars=1000, lines=1,
         semantic_json_keys=['interaction_contract'], markdown_anchor='# LoopX Quota Should Run',
         projection_envelope_schema_versions=['loopx_projection_envelope_v0'], quota_controls=before)
+    if variant:
+        base.update(row_id=f'variant/{variant}/small/json', variant_id=variant,
+                    qualification_policy='explicit_opt_in_cold_path')
     candidate = {**copy.deepcopy(base), 'chars': 2500, 'utf8_bytes': 2500, 'compact_payload_chars': 2500,
         'output_contract_version': 'loopx_turn_envelope_v1', 'markdown_anchor': '# LoopX Turn Envelope',
         'quota_controls': after}

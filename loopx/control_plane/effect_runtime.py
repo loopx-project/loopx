@@ -15,7 +15,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
@@ -23,7 +23,11 @@ from pathlib import Path
 from threading import Lock
 from typing import IO, Any, Literal, TypeAlias
 
-from ..file_lock import process_is_alive
+from ..file_lock import (
+    _effect_file_identity_from_fd,
+    _remove_created_effect_file,
+    process_is_alive,
+)
 from .runtime.file_reads import iter_binary_file_reads
 from .runtime.private_permissions import protect_private_path, require_private_path
 from .runtime.node_probe import (
@@ -494,7 +498,19 @@ def _uses_stdio_runtime() -> bool:
 
 
 def _pid_is_alive(value: object) -> bool:
-    return process_is_alive(value)
+    if not process_is_alive(value):
+        return False
+    # Unreaped Linux zombies still satisfy kill(pid, 0), yet an all-zombie
+    # thread group has terminated and must not poison runtime lock/locator recovery.
+    if (
+        sys.platform == "linux"
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value > 0
+        and _linux_thread_group_is_zombie(value)
+    ):
+        return False
+    return True
 
 
 def _recorded_pid_alive(value: object) -> bool | None:
@@ -860,6 +876,7 @@ def _stop_effect_runtime(
             if not _pid_is_alive(pid) or (
                 not_caller_child and _linux_thread_group_is_zombie(pid)
             ):
+                _reap_exited_runtime_child(info)
                 stopped = True
                 break
             # A zombie leader can still have threads writing into the namespace.
@@ -1277,12 +1294,6 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
     while time.monotonic() < lock_deadline:
         try:
             descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
-                lock_file.write(f"{os.getpid()}\n")
-                lock_file.flush()
-                os.fsync(lock_file.fileno())
-            acquired = True
-            break
         except FileExistsError:
             existing = _read_info(info_path, fingerprint=fingerprint)
             if existing is not None:
@@ -1300,6 +1311,24 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
             except OSError:
                 pass
             time.sleep(STARTUP_POLL_SECONDS)
+        else:
+            identity = None
+            try:
+                try:
+                    identity = _effect_file_identity_from_fd(descriptor)
+                    # Keep the raw descriptor owned here across stream construction.
+                    with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as lock_file:
+                        lock_file.write(f"{os.getpid()}\n")
+                        lock_file.flush()
+                        os.fsync(lock_file.fileno())
+                finally:
+                    with suppress(OSError):
+                        os.close(descriptor)
+            except BaseException:
+                _remove_created_effect_file(lock, identity)
+                raise
+            acquired = True
+            break
     if not acquired:
         existing = _read_info(info_path, fingerprint=fingerprint)
         if existing is not None:

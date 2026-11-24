@@ -110,7 +110,7 @@ def test_heartbeat_worker_qualifies_current_source_at_actual_spawn(tmp_path, mon
         observations.append(denied)
     original_command = worker.native_command
 
-    def after_session_selection(*arguments):
+    def after_session_selection(*arguments, **keywords):
         if refusal == "missing_state":
             state.rename(state.with_suffix(".saved"))
             for registry in (source, mirror):
@@ -126,7 +126,7 @@ def test_heartbeat_worker_qualifies_current_source_at_actual_spawn(tmp_path, mon
                     reason="Stop before the actual heartbeat model launch.", actor_kind="owner", execute=True)
             assert stopped["written"] and json.loads(source.read_text())["goals"][0]["activation"]["state"] == "stopped"
             observations.append(stopped)
-        return original_command(*arguments)
+        return original_command(*arguments, **keywords)
 
     monkeypatch.setattr(worker, "native_command", after_session_selection)
     bindings_before = _bindings(runtime)

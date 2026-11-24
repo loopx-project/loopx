@@ -208,7 +208,14 @@ def test_default_app_stores_follow_codex_home_and_capabilities_are_explicit(
 
     defaults = _parse_args(["--agent-id", "codex-fixture"])
     assert defaults.automations_root == codex_home / "automations"
-    assert defaults.db_path == codex_home / "sqlite/codex-dev.db"
+    assert defaults.db_path == codex_home / "sqlite/codex.db"
+    defaults.db_path.parent.mkdir(parents=True)
+    legacy = codex_home / "sqlite/codex-dev.db"
+    legacy.touch()
+    assert _parse_args(["--agent-id", "codex-fixture"]).db_path == legacy
+    defaults.db_path.touch()
+    assert _parse_args(["--agent-id", "codex-fixture"]).db_path == defaults.db_path
+    assert _parse_args(["--agent-id", "codex-fixture", "--db-path", str(legacy)]).db_path == legacy
     assert defaults.capability == []
 
     explicit = _parse_args(

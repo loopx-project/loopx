@@ -1763,6 +1763,14 @@ input before admission; this is not a file-sync or arbitrary-path grant. Images
 retain their existing routes. Source delivery does not prove comprehension,
 automatic material adoption, full GQ06 qualification or lower model cost.
 
+A local managed Codex Goal can also return a requested Markdown or plain-text
+file in its web reply. Open the original conversation and choose **Download
+source**. Reopening the message retrieves the captured bytes even after the
+workspace file changes. The Agent supplies the filename, MIME type, byte count
+and inline base64 data in the reply envelope. The same count, size and UTF-8
+checks apply. A file containing a protected local path is withheld and the
+answer reports the delivery failure. LoopX never opens a path from the reply.
+
 ### Default Lark private images reuse native Turn attachments
 
 Ordinary project and steward private conversations accept images and image/text

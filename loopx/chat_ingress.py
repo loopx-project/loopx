@@ -99,12 +99,16 @@ def chat_runtime_activation_lock(runtime_root: Path, *, timeout_seconds: float |
     )
 
 
-def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
+def chat_runtime_activation_state(
+    runtime_root: Path, *, active_session_ids: list[str] | None = None,
+) -> dict[str, int]:
     """Strict read of all accepted work; never initialize or recover a store.
 
     The caller holds ``chat_runtime_activation_lock`` through the service switch.
     Session summaries alone omit queued input and are insufficient for this check.
     Unknown or unreadable records must not authorize stopping their consumer.
+    When requested, collect Sessions with active pointers during this same scan.
+    Their pointers only select recovery candidates. Turn records decide admission.
     """
     from .chat_store import CHAT_SESSION_SCHEMA_VERSION, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
 
@@ -139,6 +143,10 @@ def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
                 counts["nonterminal_turns"] += 1
         if not active_found:
             raise ValueError("active Chat Turn state is missing")
+        if active_id and active_session_ids is not None:
+            if session.get("session_id") != directory.name:
+                raise ValueError("active Chat Session identity does not match its directory")
+            active_session_ids.append(directory.name)
     return counts
 
 
