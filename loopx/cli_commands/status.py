@@ -25,6 +25,7 @@ from ..control_plane.status.agent_lane_projection import (
     compact_agent_lane_status_payload_for_display,
 )
 from ..control_plane.todos.contract import normalize_todo_claimed_by
+from ..control_plane.todos.quota_selection import StaleCanonicalQuotaSourceError
 from ..control_plane.quota.goal_boundary import registry_goal_by_id
 from ..control_plane.todos.quota_summary import (
     compact_agent_lane_todos_for_status_display,
@@ -215,55 +216,66 @@ def handle_status_command(
         payload = None
         cache_metadata = None
         with effect_runtime_request_scope():
-            if args.use_projection_cache:
-                payload, cache_metadata = load_status_projection_cache(
-                    registry_path=registry_path,
-                    runtime_root=runtime_root,
-                    limit=collection_limit,
-                    include_task_graph=args.include_task_graph,
-                    goal_id=args.goal_id,
-                    max_age_seconds=args.projection_cache_ttl_seconds,
-                    available_capabilities=args.available_capabilities,
-                    agent_lane_id=args.agent_id,
-                )
-            if payload is None:
-                payload = collect_status(
-                    registry_path=registry_path,
-                    runtime_root_override=runtime_root_arg,
-                    limit=collection_limit,
-                    include_task_graph=args.include_task_graph,
-                    goal_id=args.goal_id,
-                    available_capabilities=args.available_capabilities,
-                    agent_lane_id=args.agent_id,
-                )
-                if args.write_projection_cache:
-                    cache_metadata = write_status_projection_cache(
+            for attempt in range(2):
+                payload = None
+                cache_metadata = None
+                if attempt == 0 and args.use_projection_cache:
+                    payload, cache_metadata = load_status_projection_cache(
                         registry_path=registry_path,
                         runtime_root=runtime_root,
                         limit=collection_limit,
                         include_task_graph=args.include_task_graph,
                         goal_id=args.goal_id,
-                        payload=payload,
                         max_age_seconds=args.projection_cache_ttl_seconds,
                         available_capabilities=args.available_capabilities,
                         agent_lane_id=args.agent_id,
                     )
-                    payload["projection_cache"] = cache_metadata
-                elif cache_metadata:
-                    payload["projection_cache"] = cache_metadata
-            if args.agent_id:
-                attach_agent_lane_next_actions(payload, agent_id=args.agent_id)
-                _trim_run_history_for_status_display(
-                    payload,
-                    display_limit=display_limit,
-                    collection_limit=collection_limit,
-                )
-                compact_agent_lane_todos_for_status_display(payload)
-                compact_agent_lane_status_payload_for_display(
-                    payload,
-                    agent_id=args.agent_id,
-                )
-                compact_agent_lane_todo_index_for_status_display(payload)
+                if payload is None:
+                    payload = collect_status(
+                        registry_path=registry_path,
+                        runtime_root_override=runtime_root_arg,
+                        limit=collection_limit,
+                        include_task_graph=args.include_task_graph,
+                        goal_id=args.goal_id,
+                        available_capabilities=args.available_capabilities,
+                        agent_lane_id=args.agent_id,
+                    )
+                    if args.write_projection_cache:
+                        cache_metadata = write_status_projection_cache(
+                            registry_path=registry_path,
+                            runtime_root=runtime_root,
+                            limit=collection_limit,
+                            include_task_graph=args.include_task_graph,
+                            goal_id=args.goal_id,
+                            payload=payload,
+                            max_age_seconds=args.projection_cache_ttl_seconds,
+                            available_capabilities=args.available_capabilities,
+                            agent_lane_id=args.agent_id,
+                        )
+                        payload["projection_cache"] = cache_metadata
+                    elif cache_metadata:
+                        payload["projection_cache"] = cache_metadata
+                if args.agent_id:
+                    try:
+                        attach_agent_lane_next_actions(
+                            payload,
+                            agent_id=args.agent_id,
+                            propagate_stale_canonical_source=attempt == 0,
+                        )
+                    except StaleCanonicalQuotaSourceError:
+                        continue
+                    _trim_run_history_for_status_display(
+                        payload,
+                        display_limit=display_limit,
+                        collection_limit=collection_limit,
+                    )
+                    compact_agent_lane_todos_for_status_display(payload)
+                    compact_agent_lane_status_payload_for_display(
+                        payload,
+                        agent_id=args.agent_id,
+                    )
+                    compact_agent_lane_todo_index_for_status_display(payload)
+                break
         pending_composition_retries = collect_pending_composition_retry_projection(
             runtime_root, args.goal_id, agent_id=args.agent_id
         )
@@ -669,7 +681,10 @@ def _agent_reward_memory_projection(
 
 
 def attach_agent_lane_next_actions(
-    payload: dict[str, object], *, agent_id: str
+    payload: dict[str, object],
+    *,
+    agent_id: str,
+    propagate_stale_canonical_source: bool = False,
 ) -> dict[str, object]:
     safe_agent_id = str(agent_id or "").strip()
     if not safe_agent_id:
@@ -722,6 +737,10 @@ def attach_agent_lane_next_actions(
             obligation = (frontier or {}).get("obligation") or {}
             if selected.get("capability_guard") and selected.get("obligation_id") == obligation.get("obligation_id"):
                 guard["autonomous_replan_obligation"] = obligation
+        except StaleCanonicalQuotaSourceError:
+            if propagate_stale_canonical_source:
+                raise
+            continue
         except Exception:
             continue
         next_action = guard.get("agent_lane_next_action")
@@ -918,17 +937,26 @@ def handle_review_packet_command(
 ) -> int:
     selected_format = output_format(args, "review_packet_format")
     try:
-        status_payload = collect_status(
-            registry_path=registry_path,
-            runtime_root_override=runtime_root_arg,
-            limit=max(0, args.limit),
-            include_task_graph=not args.handoff_only,
-            goal_id=args.goal_id,
-            available_capabilities=args.available_capabilities,
-            agent_lane_id=args.agent_id,
-        )
-        if args.agent_id:
-            attach_agent_lane_next_actions(status_payload, agent_id=args.agent_id)
+        for attempt in range(2):
+            status_payload = collect_status(
+                registry_path=registry_path,
+                runtime_root_override=runtime_root_arg,
+                limit=max(0, args.limit),
+                include_task_graph=not args.handoff_only,
+                goal_id=args.goal_id,
+                available_capabilities=args.available_capabilities,
+                agent_lane_id=args.agent_id,
+            )
+            if args.agent_id:
+                try:
+                    attach_agent_lane_next_actions(
+                        status_payload,
+                        agent_id=args.agent_id,
+                        propagate_stale_canonical_source=attempt == 0,
+                    )
+                except StaleCanonicalQuotaSourceError:
+                    continue
+            break
         if args.handoff_only:
             payload = build_project_agent_handoff(
                 status_payload, goal_id=args.goal_id, action_kind=args.action_kind,

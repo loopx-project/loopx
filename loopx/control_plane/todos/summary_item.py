@@ -147,15 +147,14 @@ def canonical_todo_authority_check(value: dict[str, Any]) -> dict[str, Any] | No
         or value.request_identity is not todo_projection_request_identity()
         or not isinstance(value.read, dict)
         or not isinstance(value.expected, dict)
+        or not isinstance(value.rollout_log_stat, dict)
     ):
         return None
-    check: dict[str, Any] = {
+    return {
         "read": value.read,
         "expected_source": value.expected,
+        "rollout_log_stat": value.rollout_log_stat,
     }
-    if value.rollout_log_stat is not None:
-        check["rollout_log_stat"] = value.rollout_log_stat
-    return check
 
 
 class _QuotaProjectedSummary(dict[str, Any]):

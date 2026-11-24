@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -500,6 +501,251 @@ def test_status_reused_quota_projection_rejects_stale_and_unavailable_authority(
             if authority_dir.exists():
                 shutil.rmtree(authority_dir)
             hidden.rename(authority_dir)
+
+
+def _write_pr_wait_status_fixture(
+    tmp_path: Path, *, provider: str, seed_rollout_log: bool
+) -> tuple[Path, Path, Path]:
+    project = tmp_path / "project"
+    runtime = tmp_path / "runtime"
+    state = project / "ACTIVE_GOAL_STATE.md"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("# Hotpath Goal\n\nKeep state concise.\n", encoding="utf-8")
+    records: list[dict[str, Any]] = [
+        {
+            "schema_version": "todo_item_v0",
+            "todo_id": "todo_adv_primary",
+            "index": 1,
+            "role": "agent",
+            "status": "done",
+            "done": True,
+            "no_followup": True,
+            "text": "[P1] Completed primary work",
+            "priority": "P1",
+            "task_class": "advancement_task",
+            "claimed_by": AGENT_ID,
+            "completed_at": "2026-11-24T09:00:00Z",
+            "archive_state": "active",
+            "source_section": "Agent Todo",
+        },
+        {
+            "schema_version": "todo_item_v0",
+            "todo_id": "todo_wait_pr_41",
+            "index": 2,
+            "role": "agent",
+            "status": "deferred",
+            "done": False,
+            "text": "[P1] Resume follow-up after PR 41 merges",
+            "priority": "P1",
+            "task_class": "advancement_task",
+            "claimed_by": AGENT_ID,
+            "task_repository": f"git:github.com/{REPO_SLUG}",
+            "resume_when": "pr_merged:#41",
+            "archive_state": "active",
+            "source_section": "Agent Todo",
+        },
+    ]
+    goal_entry: dict[str, Any] = {
+        "id": GOAL_ID,
+        "status": "active",
+        "domain": "software",
+        "repo": str(project),
+        "state_file": state.name,
+        "adapter": {"kind": "read_only_project_map_v0", "status": "connected"},
+        "coordination": {"registered_agents": [AGENT_ID]},
+        "available_capabilities": ["shell"],
+    }
+    registry = project / ".loopx" / "registry.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime),
+                "goals": [goal_entry],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=records)
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    log_path = rollout_event_log_path(runtime, GOAL_ID)
+    if seed_rollout_log:
+        append_rollout_event(
+            log_path,
+            build_rollout_event(
+                goal_id=GOAL_ID,
+                event_kind="evidence_log_read",
+                agent_id=AGENT_ID,
+                status="completed",
+                summary="Baseline log event prior to PR merge.",
+                recorded_at="2026-11-24T09:30:00Z",
+            ),
+        )
+    return registry, runtime, log_path
+
+
+def _install_rollout_toctou_preload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    log_path: Path,
+    mode: str,
+) -> Path:
+    flag_path = tmp_path / "injected.flag"
+    merge_event = build_rollout_event(
+        goal_id=GOAL_ID,
+        event_kind="pr_merge",
+        agent_id=AGENT_ID,
+        pr_ref=f"{REPO_SLUG}#41",
+        status="merged",
+        summary="PR 41 merged.",
+        recorded_at="2026-11-24T10:00:00Z",
+    )
+    merge_line = json.dumps(merge_event, sort_keys=True, ensure_ascii=False) + "\n"
+    resolved_log = str(log_path.expanduser().resolve(strict=False))
+    hook_path = tmp_path / f"toctou-hook-{mode}.mjs"
+    hook_path.write_text(
+        'import { appendFileSync, writeFileSync } from "node:fs";\n'
+        'import fsPromises from "node:fs/promises";\n'
+        'import { syncBuiltinESMExports } from "node:module";\n'
+        'import { resolve } from "node:path";\n'
+        f"const targetLog = {json.dumps(resolved_log)};\n"
+        f"const flagPath = {json.dumps(str(flag_path))};\n"
+        f"const mergeLine = {json.dumps(merge_line)};\n"
+        f"const mode = {json.dumps(mode)};\n"
+        "let sawRead = false;\n"
+        "let injected = false;\n"
+        "const isTarget = (arg) => typeof arg === 'string' && resolve(arg) === targetLog;\n"
+        "const origReadFile = fsPromises.readFile.bind(fsPromises);\n"
+        "const origStat = fsPromises.stat.bind(fsPromises);\n"
+        "fsPromises.readFile = async function (pathArg, ...rest) {\n"
+        "  try {\n"
+        "    const data = await origReadFile(pathArg, ...rest);\n"
+        "    if (isTarget(pathArg)) {\n"
+        "      sawRead = true;\n"
+        "      if (mode === 'after_read_before_post_stat' && !injected) {\n"
+        "        injected = true;\n"
+        "        appendFileSync(targetLog, mergeLine, 'utf8');\n"
+        "        writeFileSync(flagPath, '1', 'utf8');\n"
+        "      }\n"
+        "    }\n"
+        "    return data;\n"
+        "  } catch (error) {\n"
+        "    if (mode === 'created_after_enoent' && !injected && isTarget(pathArg) && error?.code === 'ENOENT') {\n"
+        "      injected = true;\n"
+        "      writeFileSync(targetLog, mergeLine, 'utf8');\n"
+        "      writeFileSync(flagPath, '1', 'utf8');\n"
+        "    }\n"
+        "    throw error;\n"
+        "  }\n"
+        "};\n"
+        "fsPromises.stat = async function (pathArg, ...rest) {\n"
+        "  const info = await origStat(pathArg, ...rest);\n"
+        "  if (mode === 'after_snapshot_before_line86' && sawRead && !injected && isTarget(pathArg)) {\n"
+        "    injected = true;\n"
+        "    appendFileSync(targetLog, mergeLine, 'utf8');\n"
+        "    writeFileSync(flagPath, '1', 'utf8');\n"
+        "  }\n"
+        "  return info;\n"
+        "};\n"
+        "syncBuiltinESMExports();\n",
+        encoding="utf-8",
+    )
+    existing_node_options = os.environ.get("NODE_OPTIONS", "").strip()
+    monkeypatch.setenv(
+        "NODE_OPTIONS",
+        f"{existing_node_options} --import={hook_path.as_uri()}".strip(),
+    )
+    restart_effect_runtime()
+    return flag_path
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    ("mode", "seed_rollout_log"),
+    [
+        ("after_read_before_post_stat", True),
+        ("after_snapshot_before_line86", True),
+        ("created_after_enoent", False),
+    ],
+)
+def test_status_agent_lane_never_emits_stale_resume_ready_on_mid_read_pr_merge_toctou(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    mode: str,
+    seed_rollout_log: bool,
+) -> None:
+    registry, runtime, log_path = _write_pr_wait_status_fixture(
+        tmp_path, provider=provider, seed_rollout_log=seed_rollout_log
+    )
+    flag_path = _install_rollout_toctou_preload(
+        tmp_path, monkeypatch, log_path=log_path, mode=mode
+    )
+    try:
+        payload, rendered_md = _run_status_cli(registry, runtime, agent_id=AGENT_ID)
+    finally:
+        restart_effect_runtime()
+
+    assert flag_path.is_file(), f"expected {mode} TOCTOU window hook to fire"
+    assert payload["ok"] is True
+    item = payload["attention_queue"]["items"][0]
+    agent_todos = item["agent_todos"]
+    assert agent_todos["items"][0]["todo_id"] == "todo_wait_pr_41"
+    assert agent_todos["items"][0]["resume_ready"] is True
+    assert agent_todos["deferred_work_counts"]["ready"] == 1
+    assert agent_todos["deferred_work_counts"]["blocked"] == 0
+    frontier = item["project_asset"]["agent_scope_frontier"]
+    assert frontier["action"] == "successor_replan_required"
+    assert frontier["deferred_resume_candidates"][0]["todo_id"] == "todo_wait_pr_41"
+    assert frontier["deferred_resume_candidates"][0]["resume_ready"] is True
+    assert "todo_wait_pr_41" in rendered_md
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_status_agent_lane_recovers_when_pr_merge_lands_between_collect_status_and_batch_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    import loopx.cli_commands.status as status_cli_module
+
+    registry, runtime, log_path = _write_pr_wait_status_fixture(
+        tmp_path, provider=provider, seed_rollout_log=True
+    )
+    original_attach = status_cli_module.attach_agent_lane_next_actions
+    appended = False
+
+    def append_before_first_attach(payload: dict[str, object], **kwargs: Any) -> dict[str, object]:
+        nonlocal appended
+        if not appended:
+            appended = True
+            append_rollout_event(
+                log_path,
+                build_rollout_event(
+                    goal_id=GOAL_ID,
+                    event_kind="pr_merge",
+                    agent_id=AGENT_ID,
+                    pr_ref=f"{REPO_SLUG}#41",
+                    status="merged",
+                    summary="PR 41 merged before quota batch.",
+                    recorded_at="2026-11-24T10:05:00Z",
+                ),
+            )
+        return original_attach(payload, **kwargs)
+
+    monkeypatch.setattr(status_cli_module, "attach_agent_lane_next_actions", append_before_first_attach)
+    payload, _ = _run_status_cli(registry, runtime, agent_id=AGENT_ID)
+
+    assert appended is True
+    assert payload["ok"] is True
+    item = payload["attention_queue"]["items"][0]
+    assert item["agent_todos"]["items"][0]["todo_id"] == "todo_wait_pr_41"
+    assert item["agent_todos"]["items"][0]["resume_ready"] is True
+    assert item["agent_todos"]["deferred_work_counts"]["ready"] == 1
+    assert item["project_asset"]["agent_scope_frontier"]["action"] == "successor_replan_required"
+    assert item["project_asset"]["agent_scope_frontier"]["deferred_resume_candidates"][0]["resume_ready"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

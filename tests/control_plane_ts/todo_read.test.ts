@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import {mkdtemp, writeFile, rm} from "node:fs/promises";
+import {appendFileSync, writeFileSync} from "node:fs";
+import fsPromises, {appendFile, mkdtemp, rm, writeFile} from "node:fs/promises";
+import {syncBuiltinESMExports} from "node:module";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 import {readTodo, TODO_READ_REQUEST} from "../../loopx/control_plane/todos/read_projection.ts";
+import {projectCanonicalQuotaBatch, readCanonicalTodoProjection} from "../../loopx/control_plane/todos/read_transaction.ts";
+import {goalRolloutEventLogPath} from "../../loopx/control_plane/rollout_receipt_log.ts";
 import {readAgent, readScope} from "../../loopx/control_plane/todos/read_codec.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {openLocalAuthorityStore, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
@@ -378,3 +382,165 @@ test("query display limits preserve complete source coverage and report the fina
     source: {runtime_root: root, goal_id: goal}, observed_at: Date.parse(now) / 1000, evaluated_at: now,
     query: {goal_id: goal, todo_id: items[0].todo_id, read_scope: "active", state_file: state}}), /invalid summary completion coordinates/);
 });
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider} canonical rollout_log_stat refuses mid-read pr_merge TOCTOU and binds strictly to consumed snapshot`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-todo-rollout-toctou-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const state = join(root, "state.md"), goal = "goal-toctou";
+    await writeFile(state, "# Synthetic Goal\n");
+    if (provider === "sqlite") await selectLocalSqliteAuthority(root, goal, true);
+    const store = await openLocalAuthorityStore(root, goal);
+    const waiting = row("todo_wait_pr", {
+      status: "deferred", done: true, task_repository: "git:github.com/example/hotpath",
+      resume_when: "pr_merged:#41",
+    });
+    const projection = {
+      goal_id: goal, handoff_mode: "soft_claim", todos: [waiting], leases: [],
+      todo_read_model: coordinationTodoReadModel([waiting], TODO_CANONICAL_READ_RECORD_SCHEMA),
+    };
+    const committed = await store.commitAuthority({
+      expected_provider_revision: null, operation_id: "seed-toctou", events: [], next_projection: projection, receipts: [],
+    });
+    assert.equal(committed.status, "applied");
+    if (committed.status !== "applied") return;
+    const fence = await engageLegacyCoordinationWriterFence({
+      schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+      runtime_root: root, goal_id: goal, state_path: state,
+      fence: {
+        schema_version: "loopx_legacy_coordination_writer_fence_v0", state: "engaged",
+        goal_id: goal, fence_id: "toctou-fixture", source_version: "fixture",
+        source_projection_sha256: canonicalAuthoritySha256(projection),
+        expected_shadow_provider_revision: committed.provider_revision,
+      },
+    });
+    assert.equal(fence.status, "applied");
+
+    const logPath = goalRolloutEventLogPath(root, goal);
+    const baseEvent = JSON.stringify({
+      schema_version: "loopx_rollout_event_v0", event_kind: "evidence_log_read",
+      goal_id: goal, event_id: "ev-base-1", recorded_at: "2026-11-24T09:00:00Z",
+    }) + "\n";
+    const mergeEvent = JSON.stringify({
+      schema_version: "loopx_rollout_event_v0", event_kind: "pr_merge",
+      goal_id: goal, event_id: "ev-merge-41", pr_ref: "example/hotpath#41",
+      recorded_at: "2026-11-24T10:00:00Z",
+    }) + "\n";
+    const readReq: JsonObject = {
+      schema_version: TODO_READ_REQUEST, kind: "canonical_fields",
+      source: {runtime_root: root, goal_id: goal},
+      rollout_event_source: {runtime_root: root, goal_id: goal},
+      rollout_events: [], observed_at: Date.parse(now) / 1000, evaluated_at: now,
+    };
+
+    const origReadFile = fsPromises.readFile.bind(fsPromises);
+    const origStat = fsPromises.stat.bind(fsPromises);
+
+    // 1) Missing log (ENOENT) created with pr_merge before post-projection stat check -> refuse reuse.
+    {
+      let injected = false;
+      const readHook = t.mock.method(fsPromises, "readFile", async (pathArg: unknown, ...rest: unknown[]) => {
+        try {
+          return await (origReadFile as (...args: unknown[]) => Promise<unknown>)(pathArg, ...rest);
+        } catch (error) {
+          if (!injected && pathArg === logPath && (error as NodeJS.ErrnoException)?.code === "ENOENT") {
+            injected = true;
+            writeFileSync(logPath, mergeEvent, "utf8");
+          }
+          throw error;
+        }
+      });
+      syncBuiltinESMExports();
+      try {
+        const res = await readCanonicalTodoProjection(readReq);
+        assert.equal(injected, true);
+        assert.equal(res.rollout_log_stat, undefined);
+      } finally {
+        readHook.mock.restore();
+        syncBuiltinESMExports();
+      }
+    }
+
+    // 2) Append during readFile (preStat !== postStat) -> refuse reuse.
+    await writeFile(logPath, baseEvent, "utf8");
+    {
+      let injected = false;
+      const readHook = t.mock.method(fsPromises, "readFile", async (pathArg: unknown, ...rest: unknown[]) => {
+        const bytes = await (origReadFile as (...args: unknown[]) => Promise<unknown>)(pathArg, ...rest);
+        if (!injected && pathArg === logPath) {
+          injected = true;
+          appendFileSync(logPath, mergeEvent, "utf8");
+        }
+        return bytes;
+      });
+      syncBuiltinESMExports();
+      try {
+        const res = await readCanonicalTodoProjection(readReq);
+        assert.equal(injected, true);
+        assert.equal(res.rollout_log_stat, undefined);
+      } finally {
+        readHook.mock.restore();
+        syncBuiltinESMExports();
+      }
+    }
+
+    // 3) Append strictly after readReceiptLogSnapshotWithStat post-stat and before read_transaction post-projection stat -> refuse reuse.
+    await writeFile(logPath, baseEvent, "utf8");
+    {
+      let sawRead = false;
+      let injected = false;
+      const readHook = t.mock.method(fsPromises, "readFile", async (pathArg: unknown, ...rest: unknown[]) => {
+        const bytes = await (origReadFile as (...args: unknown[]) => Promise<unknown>)(pathArg, ...rest);
+        if (pathArg === logPath) sawRead = true;
+        return bytes;
+      });
+      const statHook = t.mock.method(fsPromises, "stat", async (pathArg: unknown, ...rest: unknown[]) => {
+        const info = await (origStat as (...args: unknown[]) => Promise<unknown>)(pathArg, ...rest);
+        if (sawRead && !injected && pathArg === logPath) {
+          injected = true;
+          appendFileSync(logPath, mergeEvent, "utf8");
+        }
+        return info;
+      });
+      syncBuiltinESMExports();
+      try {
+        const res = await readCanonicalTodoProjection(readReq);
+        assert.equal(injected, true);
+        assert.equal(res.rollout_log_stat, undefined);
+        const sourceIdentity = (res.source_projection as JsonObject).source;
+        await assert.rejects(() => projectCanonicalQuotaBatch({
+          schema_version: "todo_quota_planning_batch_v0",
+          authority_checks: [{read: readReq, expected_source: sourceIdentity}],
+          requests: [],
+        }), /quota canonical source changed|requires one or two/);
+        await assert.rejects(() => projectCanonicalQuotaBatch({
+          schema_version: "todo_quota_planning_batch_v0",
+          authority_checks: [{read: readReq, expected_source: sourceIdentity}],
+          requests: [{schema_version: "todo_quota_planning_request_v4", current_time: now}],
+        }), /quota canonical source changed/);
+      } finally {
+        readHook.mock.restore();
+        statHook.mock.restore();
+        syncBuiltinESMExports();
+      }
+    }
+
+    // 4) Clean read binds rollout_log_stat; subsequent pr_merge invalidates batch check; re-read observes resume_ready=true.
+    await writeFile(logPath, baseEvent, "utf8");
+    const before = await readCanonicalTodoProjection(readReq);
+    assert.ok(before.rollout_log_stat, "clean read must bind rollout_log_stat");
+    const beforeItems = ((before.fields as JsonObject).agent_todos as JsonObject).items as JsonObject[];
+    assert.equal(beforeItems[0].resume_ready, false);
+    const sourceIdentity = (before.source_projection as JsonObject).source;
+    await appendFile(logPath, mergeEvent, "utf8");
+    await assert.rejects(() => projectCanonicalQuotaBatch({
+      schema_version: "todo_quota_planning_batch_v0",
+      authority_checks: [{read: readReq, expected_source: sourceIdentity, rollout_log_stat: before.rollout_log_stat}],
+      requests: [{schema_version: "todo_quota_planning_request_v4", current_time: now}],
+    }), /quota canonical source changed/);
+    const after = await readCanonicalTodoProjection(readReq);
+    assert.ok(after.rollout_log_stat);
+    const afterItems = ((after.fields as JsonObject).agent_todos as JsonObject).items as JsonObject[];
+    assert.equal(afterItems[0].resume_ready, true);
+  });
+}

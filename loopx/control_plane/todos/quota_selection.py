@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import json
 
@@ -28,6 +28,19 @@ from .summary_item import TODO_SUMMARY_SOURCE_KEYS
 from .user_gate import is_user_gate_todo_item
 from .route_continuation import build_todo_route_continuation_facts
 from .handoff_gate import todo_summary_handoff_gates
+
+
+class StaleCanonicalQuotaSourceError(ValueError):
+    """Canonical Todo or rollout-log snapshot changed after initial collection."""
+
+
+def raise_quota_runtime_rejection(
+    exc: EffectRuntimeRejected, *, cause: BaseException | None = None,
+) -> NoReturn:
+    """Preserve typed stale-source rejections without substring classification."""
+    if exc.diagnostic_code == "quota_canonical_source_changed":
+        raise StaleCanonicalQuotaSourceError(str(exc)) from cause
+    raise ValueError(str(exc)) from cause
 
 
 def _closure_source_facts(value: dict[str, Any]) -> dict[str, Any]:
@@ -232,7 +245,7 @@ def project_quota_planning(
         else:
             wire = effect_runtime_result("todo.quota_planning.project", request, large_local_snapshot=True)
     except EffectRuntimeRejected as exc:
-        raise ValueError(str(exc)) from None
+        raise_quota_runtime_rejection(exc)
     if summary_kind:
         return _decode_quota_summary_wire(wire, value)
     result = _decode_quota_planning_wire(wire)
@@ -346,7 +359,7 @@ def project_quota_wires_with_head_checks(
             large_local_snapshot=True,
         )
     except EffectRuntimeRejected as exc:
-        raise ValueError(str(exc)) from exc
+        raise_quota_runtime_rejection(exc, cause=exc)
     if isinstance(result, dict) and result.get("canonical") is not None:
         first_read = cast(dict[str, Any], authority_checks[0]["read"])
         first_source = cast(dict[str, Any], first_read["source"])

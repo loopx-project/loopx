@@ -9,7 +9,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireBoolean} from "../runtime_decode.ts";
 import {schedulerTimestampMilliseconds} from "../scheduler/state_store.ts";
-import {evaluateTodoResumeConditionsFromSource} from "./resume_condition.ts";
+import {evaluateTodoResumeConditionsFromSource, type TodoResumeRolloutReadOptions} from "./resume_condition.ts";
 import {readTodoPriority, todoPriorityRank} from "./priority.ts";
 import {evaluateTodoSuccession, validateTodoSuccession, SUCCESSION_CONTEXT_FIELDS} from "./succession.ts";
 import {projectTodoSummary} from "./summary_projection.ts";
@@ -170,7 +170,10 @@ function projectCapabilityActions(
   };
 }
 
-export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObject> {
+export async function projectTodoReadGroup(
+  input: JsonObject,
+  options?: TodoResumeRolloutReadOptions,
+): Promise<JsonObject> {
   if (!Array.isArray(input.items) || !Array.isArray(input.lineage)) throw new EffectRuntimeRequestError("Todo read requires complete source arrays");
   const items = input.items.map(value => ({...requireJsonObject(value, "Todo read item")}));
   const lineage = input.lineage.map(value => requireJsonObject(value, "Todo read lineage"));
@@ -192,7 +195,7 @@ export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObjec
       const result = await evaluateTodoResumeConditionsFromSource({schema_version: "todo_resume_evaluation_request_v0", items: waiting,
         source_items: [...(Array.isArray(input.resume_lineage) ? input.resume_lineage : lineage), ...items], rollout_events: input.rollout_events ?? [], evaluated_at: input.evaluated_at!,
         ...(input.rollout_event_source == null ? {} : {rollout_event_source: input.rollout_event_source}),
-        available_capabilities: input.available_capabilities ?? null});
+        available_capabilities: input.available_capabilities ?? null}, options);
       const conditions = new Map((result.conditions as JsonObject[]).map(row => [row.todo_id, row.condition]));
       for (const item of waiting) {
         item.resume_condition = conditions.get(item.todo_id) ?? {schema_version: "todo_resume_condition_v0", resume_when: item.resume_when!, satisfied: false, unsupported: true};
@@ -261,7 +264,10 @@ export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObjec
     orchestration: Object.fromEntries(Object.entries(projected.orchestration).map(([name, ordinals]) => [name, ordinals.map(i => compacts[i]!)]))};
 }
 
-export async function projectCanonicalTodoFields(input: JsonObject): Promise<JsonObject> {
+export async function projectCanonicalTodoFields(
+  input: JsonObject,
+  options?: TodoResumeRolloutReadOptions,
+): Promise<JsonObject> {
   if (!Array.isArray(input.todos)) throw new EffectRuntimeRequestError("canonical Todo read source must be an array");
   const original = input.todos.map(value => requireJsonObject(value, "canonical Todo source"));
   const decisions = original.filter(row => row.role === "user");
@@ -285,7 +291,7 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
     const grouped = await projectTodoReadGroup({...input, items, lineage, lineage_facts: lineageFacts, evaluated: false, role, source_section: section,
       selection: typeof detailId === "string" && detailId ? {role, todo_id: detailId, status: null, agent_id: null} : input.selection ?? null,
       item_limit: null, full_selection: true, resume_lineage: items.some(row => readResume(row.resume_when))
-        ? all.map(row => structureCanonicalTodo(row, row.role ?? null, row.source_section ?? section)) : []});
+        ? all.map(row => structureCanonicalTodo(row, row.role ?? null, row.source_section ?? section)) : []}, options);
     if (grouped.rejection) return grouped;
     const summary = requireJsonObject(grouped.summary, "canonical Todo summary");
     if (role === "agent" && input.retained !== true) {

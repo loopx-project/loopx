@@ -1,5 +1,4 @@
 /** Canonical provider IO and full-source summaries share one read transaction. */
-import {stat} from "node:fs/promises";
 import type {JsonObject} from "../effect_program.ts";
 import {requireBoolean, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -22,6 +21,8 @@ import {localAuthorityOpenFailure, openRuntimeAuthorityStore as openRuntimeStore
   requireLocalAuthorityRuntimeRoot as runtimeRoot,
   type LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 import {goalRolloutEventLogPath} from "../rollout_receipt_log.ts";
+import {isReceiptLogStat, receiptLogStatsEqual, statReceiptLog, type ReceiptLogStat} from "../runtime/receipt_log_snapshot.ts";
+import type {RolloutLogReadWitness} from "./resume_condition.ts";
 
 const includesArchivedRows = (query: JsonObject): boolean =>
   query.read_scope === "completed_history" || query.include_archived === true;
@@ -44,9 +45,15 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
   const query = requireJsonObject(input.query ?? {}, "Todo query");
   const includeArchived = includesArchivedRows(query);
   const retained = query.read_scope === "completed_history";
+  const expectedLogPath = (typeof source.runtime_root === "string" && typeof source.goal_id === "string")
+    ? goalRolloutEventLogPath(source.runtime_root, source.goal_id)
+    : null;
+  const preProjectionStat = expectedLogPath !== null ? await statReceiptLog(expectedLogPath) : undefined;
+  const rolloutReads: RolloutLogReadWitness[] = [];
   let projected = await projectCanonicalTodoFields({...input, todos, retained, include_archived: includeArchived,
     goal_acceptance_contract: canonical.goal_acceptance_contract ?? null,
-    goal_acceptance_work_guards: guards});
+    goal_acceptance_work_guards: guards},
+    {onRolloutLogRead: witness => rolloutReads.push(witness)});
   if (input.read_pipeline !== undefined) {
     if (input.kind !== "canonical_fields" || input.query != null || !Array.isArray(input.read_pipeline) || !input.read_pipeline.length) {
       throw new EffectRuntimeRequestError("Todo select pipeline requires a complete canonical read");
@@ -83,10 +90,20 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
       const {canonical_contract_fields: _contractFields, read_observed_at: _readObserved, ...replayRead} = input;
       replay = {replay_read: replayRead};
     }
-    const rolloutLogStat = (projected.fields && !projected.rejection &&
-      typeof source.runtime_root === "string" && typeof source.goal_id === "string")
-      ? await readRolloutLogStat(source.runtime_root, source.goal_id)
-      : undefined;
+    let rolloutLogStat: ReceiptLogStat | undefined;
+    if (projected.fields && !projected.rejection && expectedLogPath !== null) {
+      const postProjectionStat = await statReceiptLog(expectedLogPath);
+      if (rolloutReads.length > 0) {
+        if (rolloutReads.every(witness =>
+          witness.stable && witness.logPath === expectedLogPath &&
+          receiptLogStatsEqual(witness.stat, postProjectionStat)
+        )) {
+          rolloutLogStat = rolloutReads[0]!.stat;
+        }
+      } else if (preProjectionStat !== undefined && receiptLogStatsEqual(preProjectionStat, postProjectionStat)) {
+        rolloutLogStat = preProjectionStat;
+      }
+    }
     return {
       ...(input.return_projection === true && projected.projection
         ? {schema_version: TODO_READ_RESULT, projection: projected.projection, field_evaluations: projected.field_evaluations}
@@ -103,7 +120,7 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
 function validateCanonicalSource(canonical: JsonObject, expected: JsonObject): void {
   if (canonical.status !== "loaded" || Object.keys(expected).length !== 4 ||
       ["source_authority", "store_identity", "provider_revision", "cursor"].some(field => expected[field] !== canonical[field])) {
-    throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read");
+    throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
   }
 }
 
@@ -116,7 +133,7 @@ function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expec
   }
   const field = requireJsonObject(fields[reference.field], "quota source field");
   if ((fieldDigests?.[reference.field] ?? canonicalAuthoritySha256(field)) !== reference.field_sha256) {
-    throw new EffectRuntimeRequestError("quota source projection no longer matches the original complete read");
+    throw new EffectRuntimeRequestError("quota source projection no longer matches the original complete read", "quota_canonical_source_changed");
   }
   const record = JSON.parse(JSON.stringify(field)) as JsonObject;
   if (!Array.isArray(reference.changes)) throw new EffectRuntimeRequestError("quota source changes must be an array");
@@ -164,19 +181,6 @@ function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expec
     throw new EffectRuntimeRequestError("canonical Todo scalar facts cannot be replaced by caller source differences");
   }
   return decodeTodoReadSource({record, python_values: reference.python_values ?? []});
-}
-
-async function readRolloutLogStat(runtimeRootValue: string, goalId: string): Promise<JsonObject> {
-  const logPath = goalRolloutEventLogPath(runtimeRootValue, goalId);
-  try {
-    const info = await stat(logPath);
-    return {exists: true, size: info.size, mtime_ms: String(info.mtimeMs)};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return {exists: false, size: 0, mtime_ms: null};
-    }
-    throw error;
-  }
 }
 
 /** Batch quota planning from already-loaded canonical summaries after checking
@@ -235,13 +239,12 @@ export async function projectCanonicalQuotaBatch(
         cursor: authority.cursor,
       };
       validateCanonicalSource(canonicalHead, expected);
-      if (check.rollout_log_stat !== undefined) {
-        const expectedStat = requireJsonObject(check.rollout_log_stat, "expected rollout log stat");
-        const currentStat = await readRolloutLogStat(String(source.runtime_root), goalId);
-        if (currentStat.exists !== expectedStat.exists || currentStat.size !== expectedStat.size ||
-            currentStat.mtime_ms !== expectedStat.mtime_ms) {
-          throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read");
-        }
+      if (!isReceiptLogStat(check.rollout_log_stat)) {
+        throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
+      }
+      const currentStat = await statReceiptLog(goalRolloutEventLogPath(String(source.runtime_root), goalId));
+      if (!receiptLogStatsEqual(currentStat, check.rollout_log_stat)) {
+        throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
       }
       verified.add(dedupeKey);
     } catch (error) {
