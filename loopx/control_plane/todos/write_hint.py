@@ -6,14 +6,11 @@ from typing import Any
 def build_todo_write_hint(goal_id: str) -> dict[str, str]:
     return {
         "rule": (
-            "When verified evidence shows only the owner can unblock an action, "
-            "record or reuse a User Todo gate this turn, even if Next Action "
-            "already mentions it. Link the smallest blocked Todo; split it out "
-            "if its parent still has independent work. Tell the owner what to "
-            "do and how to verify it. Before yielding, reuse a runnable independent "
-            "Todo or check the Goal's acceptance for a useful independent successor "
-            "to record. Settle any bound Turn and rerun normal admission to continue. "
-            "Use a user_action for non-blocking requests."
+            "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted "
+            "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner "
+            "the action and verification check. Before yielding, reuse a runnable independent "
+            "Todo or check Goal acceptance for a useful independent successor to record. "
+            "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action."
         ),
         "user_gate_command_template": (
             f"loopx todo add --goal-id {goal_id} --role user "
