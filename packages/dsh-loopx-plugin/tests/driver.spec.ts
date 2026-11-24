@@ -3585,6 +3585,52 @@ describe('continuation Core command route parity', () => {
     expect(unpinned).toHaveLength(1)
     expect(unpinned[0]).toContain('candidate=managed-launcher')
   })
+
+  it('keeps a host-injected absolute executable pinned without the resolver field', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const injected = join(tmpdir(), 'injected', 'loopx')
+    const driver = pinnedRouteDriver(fixture, {
+      file: injected,
+      prefix: [],
+      skillCommand: 'loopx',
+      version: 'loopx 2.4.0',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    // The injected file is exactly what the Driver spawns, so Core embeds it.
+    expect(fixture.quotaCalls.length).toBeGreaterThan(0)
+    for (const argv of fixture.quotaCalls) {
+      expect(argv[argv.indexOf('--cli-bin') + 1]).toBe(injected)
+    }
+    expect(fixture.heartbeatArgv.length).toBeGreaterThan(0)
+    for (const argv of fixture.heartbeatArgv) {
+      expect(argv.filter(value => value === '--cli-bin')).toHaveLength(2)
+      expect(argv[argv.indexOf('--cli-bin') + 1]).toBe(injected)
+    }
+    expect(warnings).toEqual([])
+  })
+
+  it.each([
+    ['bare', 'loopx'],
+    ['relative', join('bin', 'loopx')],
+  ])('leaves a host-injected %s name unbound and discloses it once', async (_kind, file) => {
+    // A name that depends on the caller's PATH or working directory is not a
+    // file the Driver can hand to Core; it keeps Core's default route.
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = pinnedRouteDriver(fixture, {
+      file, prefix: [], skillCommand: file, version: 'loopx 2.4.0',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    for (const argv of [...fixture.quotaCalls, ...fixture.heartbeatArgv]) {
+      expect(argv).not.toContain('--cli-bin')
+    }
+    expect(warnings.filter(value => value.includes('cli_route_unpinned'))).toHaveLength(1)
+  })
 })
 
 describe.skipIf(process.platform === 'win32')(

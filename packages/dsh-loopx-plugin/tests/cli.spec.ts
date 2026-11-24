@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   LoopXCliError,
   cliErrorFields,
+  coreRouteBin,
   resolveLoopXCommand,
   runFile,
   runJsonCommand,
@@ -443,6 +444,31 @@ describe.skipIf(process.platform === 'win32')('Core --cli-bin PATH resolution', 
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('route handed to Core for rendering', () => {
+  const shape = { skillCommand: 'loopx', version: 'loopx 2.4.0' }
+  const absolute = join(tmpdir(), 'injected', 'loopx')
+
+  it('embeds the resolver-bound route over the spawned file', () => {
+    expect(coreRouteBin({
+      ...shape, file: join(tmpdir(), 'other', 'loopx'), prefix: [], cliBin: absolute,
+    })).toBe(absolute)
+  })
+
+  it('passes a host-injected absolute executable through without re-resolving it', () => {
+    expect(coreRouteBin({ ...shape, file: absolute, prefix: [] })).toBe(absolute)
+  })
+
+  it.each([
+    ['a bare name', { file: 'loopx', prefix: [] }],
+    ['a relative path', { file: join('bin', 'loopx'), prefix: [] }],
+    ['an interpreter prefix', { file: join(tmpdir(), 'python3'), prefix: [join(tmpdir(), 'loopx_cli.py')] }],
+    ['an option-like value', { file: absolute, prefix: [], cliBin: '--cli-bin' }],
+    ['a control character', { file: absolute, prefix: [], cliBin: 'loop\nx' }],
+  ])('reports %s as unbound', (_label, command) => {
+    expect(coreRouteBin({ ...shape, ...command })).toBeUndefined()
   })
 })
 

@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { accessSync, constants, statSync } from 'node:fs'
-import { delimiter, join, resolve } from 'node:path'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 // 2.4.0 adds the original-Turn receipt reader used by selection recovery.
@@ -541,12 +541,19 @@ function discoverExecutablePath(
 }
 
 /**
- * The one executable Core may embed as `--cli-bin` for this command, if any.
- * Resolver-produced commands bind `cliBin` at discovery; a value Core's
- * parser would reject is reported as unbound instead of breaking invocation.
+ * The one absolute executable Core may embed as `--cli-bin`, if any.
+ *
+ * Resolver-produced commands bind `cliBin` at discovery. A host-injected
+ * command may predate that field: when it names one absolute executable with
+ * no interpreter prefix, that file is exactly what the Driver spawns, so it
+ * passes through unchanged and is never re-resolved. Anything else — a bare
+ * or relative name, which depends on the caller's PATH or working directory,
+ * an interpreter-prefixed route, or a value Core's parser would reject — is
+ * unbound, so Core keeps its bare `loopx` fallback and the Driver discloses it.
  */
 export function coreRouteBin(command: LoopXCommand): string | undefined {
   const route = command.cliBin
+    ?? (command.prefix.length === 0 && isAbsolute(command.file) ? command.file : undefined)
   if (route === undefined || route === '' || route.startsWith('-')
     || /[\u0000-\u001f]/u.test(route)) {
     return undefined
