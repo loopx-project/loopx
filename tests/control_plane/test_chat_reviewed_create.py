@@ -401,6 +401,18 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
                 assert read(original_root) == edited
             return
         if change == "saved_assignment":
+            from loopx.control_plane.todos import provider_projection
+
+            def display_unavailable(**kwargs):
+                raise OSError("synthetic display outage")
+
+            with monkeypatch.context() as fault:
+                fault.setattr(provider_projection, "project_current_canonical_todos", display_unavailable)
+                _, result = post(path, {})
+                failure = result["proposal"]["failure"]
+                assert failure["error_code"] == "canonical_create_projection_pending"
+                assert failure["details"]["operation_id"] == f"chat-todo:{created['canonical_receipt']['preview_id']}"
+                assert read(original_root) == original
             code, refused = post(f"/api/actions/{proposal_id}/regenerate", {})
             assert code == 409 and refused["error_code"] == "action_conflict", refused
             assert read(original_root) == original
@@ -485,10 +497,10 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             original = read(original_root)
             unrelated_todo = next(row for row in original["todos"] if row["todo_id"] == added["todo_id"])
         if not legacy and change == "lost_assignment_checkpoint":
-            def lose_assignment_checkpoint(proposal_id, *, step, receipt):
+            def lose_assignment_checkpoint(proposal_id, *, step, receipt, **kwargs):
                 if step == "todo_assigned":
                     raise OSError("Interrupted after assigning the original Todo")
-                return checkpoint(proposal_id, step=step, receipt=receipt)
+                return checkpoint(proposal_id, step=step, receipt=receipt, **kwargs)
 
             with monkeypatch.context() as fault:
                 fault.setattr(store, "save_checkpoint", lose_assignment_checkpoint)

@@ -167,3 +167,38 @@ def test_committed_todo_survives_lost_external_journal_reply_without_a_second_wr
     assert row["todo_receipt"]["receipt_id"] == lost[0]["receipt_id"]
     assert _todos(project).count("Add reader comments later") == 1
     assert any("规范写入回执已读回" in text for _, text in provider.writes)
+
+
+def test_original_owner_recovers_pending_todo_display(steward, tmp_path, monkeypatch):  # noqa: F811
+    from loopx.control_plane.todos import provider_projection
+
+    project, _, _ = prepare(steward, tmp_path, monkeypatch)
+    store, _, provider, transport, _, _, _ = steward
+    actions = transport.core.actions
+    preview = actions.store.list()[0]
+    proposal_id = preview["proposal_id"]
+    command = f"/confirm {proposal_id}"
+
+    def unavailable(*_args, **_kwargs):
+        raise PermissionError("synthetic display failure")
+
+    with monkeypatch.context() as faults:
+        faults.setattr(provider_projection, "atomic_write_state_text", unavailable)
+        transport.admit("steward-app", provider.event("steward-app", "pending-display", command))
+        transport.reconcile()
+        pending = actions.load(proposal_id)
+        assert pending["status"] == "failed"
+        assert pending["failure"]["details"]["canonical_committed"] is True
+        canonical = read_canonical_todos_if_promoted(runtime_root=store.root.parent, goal_id=GOAL_ID)
+        assert len(canonical["todos"]) == 1
+        assert "Add reader comments later" not in _todos(project)
+        assert any(profile == "steward-app" and "待办已创建，展示尚未更新" in text and command in text
+                   for profile, text in provider.writes)
+
+    transport.admit("steward-app", provider.event("steward-app", "retry-display", command))
+    transport.reconcile()
+    recovered = actions.load(proposal_id)
+    assert recovered["status"] == "applied"
+    assert recovered["receipt"]["resource_ids"]["todo_id"] == canonical["todos"][0]["todo_id"]
+    assert _todos(project).count("Add reader comments later") == 1
+    assert read_canonical_todos_if_promoted(runtime_root=store.root.parent, goal_id=GOAL_ID) == canonical

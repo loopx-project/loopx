@@ -344,14 +344,12 @@ class ExternalStewardCommissionMixin:
                     else:
                         result = self.actions.apply(argument, steward_context=context, steward_confirmed_at=row["created_at"])
                         applied = result["proposal"]
-                        if applied.get("status") != "applied":
-                            raise ValueError("the creation preview became stale; prepare a new preview")
-                        resources = applied["receipt"]["resource_ids"]
                         if applied["action_kind"] == "todo.create":
-                            row.update(todo_receipt=applied["receipt"], response=(
-                                f"已记录待办：{applied['normalized_parameters']['text']}\n"
-                                f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。"))
+                            row.update(todo_confirmation_readback(applied, argument))
                         else:
+                            if applied.get("status") != "applied":
+                                raise ValueError("the creation preview became stale; prepare a new preview")
+                            resources = applied["receipt"]["resource_ids"]
                             # Persist a committed creation before fallible adoption.
                             row.update(commission_resources=resources, commission_adoption_pending=True,
                                        commission_gate=bool(result.get("gate")))
@@ -384,6 +382,20 @@ class ExternalStewardCommissionMixin:
             row["response"] += "首轮执行有待处理 Gate；请在本机查看该 Goal 的操作回执。"
 
 
+def todo_confirmation_readback(proposal: dict[str, Any], proposal_id: str) -> dict[str, Any]:
+    failure = proposal.get("failure") or {}
+    if (proposal.get("status") == "failed" and failure.get("error_code") == "canonical_create_projection_pending"
+            and (failure.get("details") or {}).get("canonical_committed") is True):
+        return {"response": ("待办已创建，展示尚未更新。请在原确认有效期内"
+                             f"重试 /confirm {proposal_id} 以完成更新。")}
+    if proposal.get("status") != "applied":
+        raise ValueError("the creation preview became stale; prepare a new preview")
+    receipt = proposal["receipt"]
+    return {"todo_receipt": receipt, "response": (
+        f"已记录待办：{proposal['normalized_parameters']['text']}\n"
+        f"目标：{receipt['resource_ids']['goal_id']}；规范写入回执已读回。本次没有启动执行。")}
+
+
 __all__ = [
     "ExternalStewardCommissionMixin",
     "NativeStewardCommandError",
@@ -391,4 +403,5 @@ __all__ = [
     "native_command",
     "native_fast_path_triage",
     "parse_steward_fast_path_intent",
+    "todo_confirmation_readback",
 ]

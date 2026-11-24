@@ -9,12 +9,14 @@ from threading import Event
 import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+from loopx.chat import apply_todo_review_preview, build_todo_review_preview
 from loopx.chat import todo_creation
 from loopx.chat_action_store import ActionConflictError, ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.chat.todo_source import ChatTodoSourceChanged
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos import provider_create
-from loopx.control_plane.todos.mutation_api import add_goal_todo
+from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -311,3 +313,160 @@ def test_witness_only_create_retains_existing_receipt_identity(confirmation):
     assert (applied["status"], replayed["status"]) == ("applied", "replayed")
     assert replayed["todo_id"] == applied["todo_id"]
     assert _snapshot(runtime) == saved
+
+
+@pytest.mark.parametrize("edited_since_creation", [False, True])
+def test_legacy_creation_recovers_only_the_receipt_from_the_reviewed_provider_history(
+    confirmation, tmp_path, edited_since_creation,
+):
+    service, registry, runtime, provider = confirmation
+    text = "Verify the release checklist"
+    request = {"goal_id": "goal-a", "text": text}
+    preview = build_todo_review_preview(registry_path=registry, **request)
+    preview_id = preview["preview_id"]
+    legacy = service.store.create_preview(action_kind="todo.create", summary=text,
+        normalized_parameters=request, context={"kind": "goal", "goal_id": "goal-a"},
+        expected_state_fingerprint=preview_id, permission_classification="durable_write",
+        validation_evidence=[], available_transitions=["apply", "cancel"], idempotency_key="legacy-created")
+    proposal_id = legacy["proposal_id"]
+    service.store.start_apply(proposal_id)
+    result = apply_todo_review_preview(registry_path=registry, **request, preview_id=preview_id)
+    receipt = result["receipt"]
+    todo_id = receipt["todo_id"]
+    service.store.save_checkpoint(proposal_id, step="todo_created",
+        receipt={"todo_id": todo_id, "canonical_receipt": receipt})
+    committed = _snapshot(runtime)
+
+    # An independent store can reuse the operation and Todo ID. Its receipt's
+    # predecessor will still differ from the original reviewed revision.
+    other_registry, other_runtime, _ = promoted_create_fixture(tmp_path / "replacement", provider=provider)
+    replacement = add_goal_todo(registry_path=other_registry, **request, role="agent",
+                               operation_id=f"chat-todo:{preview_id}")
+    assert replacement["todo_id"] == todo_id
+    other = _snapshot(other_runtime)
+    reopened = ChatActionService(store=service.store, registry_path=other_registry)
+    with pytest.raises(ChatTodoSourceChanged, match="Restore the original Goal source"):
+        reopened.apply(proposal_id)
+    assert _snapshot(other_runtime) == other
+    assert _snapshot(runtime) == committed
+
+    if edited_since_creation:
+        update_goal_todo(registry_path=registry, goal_id="goal-a", todo_id=todo_id,
+                         agent_id="agent-a", text="Review the updated release checklist")
+        edited = _snapshot(runtime)
+        assert edited["todos"][0]["todo_id"] == todo_id
+        assert edited["todos"][0]["title"] == "Review the updated release checklist"
+        assert edited["cursor"] != committed["cursor"]
+        committed = edited
+
+    reopened = ChatActionService(store=service.store, registry_path=registry)
+    recovered = reopened.apply(proposal_id)["proposal"]
+    assert recovered["status"] == "applied"
+    assert recovered["receipt"]["projection_verified"] is True
+    assert recovered["receipt"]["projection_delivery"] in {"current", "delivered"}
+    assert recovered["receipt"]["canonical_receipt"] == receipt
+    assert reopened.apply(proposal_id)["proposal"]["receipt"] == recovered["receipt"]
+    assert _snapshot(runtime) == committed
+
+
+@pytest.mark.parametrize("kind, assign", [
+    ("todo.create", False), ("todo.create", True), ("monitor.create", False),
+])
+def test_pending_create_display_recovers_original_confirmation(confirmation, monkeypatch, kind, assign):
+    from loopx.chat_action_store import ActionConflictError
+    from loopx.control_plane.todos import provider_projection
+
+    service, registry, runtime, _ = confirmation
+    record = json.loads(registry.read_text())["goals"][0]
+    display = registry.parent / "project" / record["state_file"]
+    proposal_id = _preview(service, kind, "display-pending", agent="agent-a" if assign else None)
+    original_write = provider_projection.atomic_write_state_text
+    writes = 0
+
+    def write(path, text, **kwargs):
+        nonlocal writes
+        writes += 1
+        if assign and writes == 1:
+            return original_write(path, text, **kwargs)
+        raise PermissionError("synthetic display failure")
+
+    with monkeypatch.context() as faults:
+        faults.setattr(provider_projection, "atomic_write_state_text", write)
+        pending = service.apply(proposal_id)["proposal"]
+        assert pending["status"] == "failed" and pending.get("receipt") is None
+        failure = pending["failure"]
+        assert failure["error_code"] == "canonical_create_projection_pending"
+        details = failure["details"]
+        assert details["canonical_committed"] is True and details["projection_delivery"] == "pending"
+        todo_id = details["todo_id"]
+        assert details["operation_id"] == f"{'chat-assign' if assign else 'chat-create'}:{proposal_id}"
+        with pytest.raises(ActionConflictError, match="recover the original"):
+            service.cancel(proposal_id)
+        assert service.store.load(proposal_id)["failure"]["details"] == details
+        committed = _snapshot(runtime)
+        assert [row["todo_id"] for row in committed["todos"]] == [todo_id]
+        if assign:
+            assert committed["todos"][0]["claimed_by"] == "agent-a"
+            assert "claimed_by=agent-a" not in display.read_text()
+        else:
+            assert todo_id not in display.read_text()
+        with pytest.raises(ActionConflictError, match="recover the original operation"):
+            service.regenerate(proposal_id)
+        if kind == "monitor.create":
+            def unexpected_create(**kwargs):
+                pytest.fail("Display recovery re-entered the Monitor create writer")
+
+            faults.setattr(todo_creation, "add_goal_todo", unexpected_create)
+        retry = service.apply(proposal_id)["proposal"]
+        assert retry["failure"]["details"] == details
+        assert _snapshot(runtime) == committed
+
+    reopened = ChatActionService(store=ChatActionStore(runtime / "chat" / "actions"),
+                                 registry_path=registry)
+    recovered = reopened.apply(proposal_id)["proposal"]
+    assert recovered["status"] == "applied", recovered
+    assert recovered["receipt"]["projection_verified"] is True
+    assert recovered["receipt"]["projection_delivery"] in {"current", "delivered"}
+    assert recovered["receipt"]["resource_ids"]["todo_id"] == todo_id
+    assert todo_id in display.read_text()
+    if assign:
+        assert "claimed_by=agent-a" in display.read_text()
+    assert reopened.apply(proposal_id)["proposal"]["receipt"] == recovered["receipt"]
+    assert _snapshot(runtime) == committed
+
+
+def test_pending_monitor_confirmation_preserves_the_registered_source_fence(confirmation, monkeypatch, tmp_path):
+    from loopx import paths
+
+    service, registry, runtime, _ = confirmation
+    defaults = (tmp_path / "current", tmp_path / "legacy")
+    for root in defaults:
+        root.mkdir()
+        (root / "machine.json").write_text("{}")
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", defaults[0])
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", defaults[1])
+
+    original_registry = registry.read_text()
+    unbound = json.loads(original_registry)
+    del unbound["common_runtime_root"]
+    registry.write_text(json.dumps(unbound))
+    service.runtime_root_override = str(runtime)
+    display = tmp_path / "project" / unbound["goals"][0]["state_file"]
+    original_display = display.read_bytes()
+    proposal_id = _preview(service, "monitor.create", "unbound-display")
+
+    pending = service.apply(proposal_id)["proposal"]
+    todo_id = pending["failure"]["details"]["todo_id"]
+    committed = _snapshot(runtime)
+    assert [row["todo_id"] for row in committed["todos"]] == [todo_id]
+    assert service.apply(proposal_id)["proposal"]["status"] == "failed"
+    assert display.read_bytes() == original_display and _snapshot(runtime) == committed
+
+    registry.write_text(original_registry)
+    applied = service.apply(proposal_id)["proposal"]
+    assert applied["status"] == "applied", applied
+    assert applied["receipt"]["resource_ids"]["todo_id"] == todo_id
+    assert todo_id in display.read_text() and _snapshot(runtime) == committed
+    for root in defaults:
+        assert list(root.iterdir()) == [root / "machine.json"]
+        assert (root / "machine.json").read_text() == "{}"

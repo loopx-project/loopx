@@ -61,20 +61,27 @@ class ChatTodoSource:
             "operation_id": operation_id,
         }, timeout=15.0)
         if (not isinstance(result, dict) or result.get("source_authority") != source_authority
+                or result.get("decision_read_from_provider") is not True or result.get("legacy_fallback_used") is not False
                 or result.get("status") not in {"found", "missing"}):
             raise ChatTodoSourceChanged("The original Task operation receipt could not be read from its source.")
         return result
 
-    def _created_todo_operation(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
+    def todo_operation_receipt(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
         result = self._operation_receipt(operation_id, source_authority)
         receipts = result.get("receipts", []) if result["status"] == "found" else []
         if (not isinstance(receipts, list) or len(receipts) != 1 or not isinstance(receipts[0], dict)
                 or not isinstance(result.get("provider_revision"), str)):
             raise ChatTodoSourceChanged("The original Task creation receipt is unavailable. Inspect the original source before retrying.")
-        created = receipts[0]
-        if (created.get("schema_version") != "loopx_coordination_todo_create_receipt_v0"
-                or created.get("goal_id") != str(self.goal["id"]) or created.get("todo_id") != todo_id
-                or created.get("operation_id") != operation_id or not isinstance(created.get("todo"), dict)):
+        receipt = receipts[0]
+        if (receipt.get("goal_id") != str(self.goal["id"]) or receipt.get("todo_id") != todo_id
+                or receipt.get("operation_id") != operation_id):
+            raise ChatTodoSourceChanged("The original operation receipt does not identify this Todo.")
+        return result
+
+    def _created_todo_operation(self, operation_id: str, todo_id: str, source_authority: str) -> dict[str, Any]:
+        result = self.todo_operation_receipt(operation_id, todo_id, source_authority)
+        created = result["receipts"][0]
+        if created.get("schema_version") != "loopx_coordination_todo_create_receipt_v0" or not isinstance(created.get("todo"), dict):
             raise ChatTodoSourceChanged("The original Task creation receipt does not identify this Todo.")
         return result
 
@@ -126,8 +133,9 @@ class ChatTodoSource:
                 "cursor": str(int(cursor) - 1),
             },
         }, timeout=15.0)
-        if not isinstance(original, dict) or original.get("status") != "loaded":
-            raise ChatTodoSourceChanged("The original Task store could not be verified.")
+        if (not isinstance(original, dict) or original.get("status") != "loaded"
+                or original.get("decision_read_from_provider") is not True or original.get("legacy_fallback_used") is not False):
+            raise ChatTodoSourceChanged("The original Task store could not be verified. Restore the original Goal source before retrying.")
         # The verified historical receipt proves creation. A pending
         # assignment still needs the original Todo snapshot before it can write.
         if assignment_pending:

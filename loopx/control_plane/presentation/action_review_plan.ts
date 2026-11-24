@@ -17,7 +17,8 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
-  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry" | "todo_creation_retry";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry"
+  | "todo_creation_retry" | "canonical_create_projection_pending";
 
 export type OperationReviewContent = {
   title: string;
@@ -563,7 +564,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const creationContext = objectValue(proposal.context);
   const legacyCreateMatches = originalTodoMatches && createdTodo !== null && !Object.hasOwn(createdTodo, "source")
     && createReceipt?.schema_version === "loopx_chat_todo_receipt_v0"
-    && textValue(createReceipt.receipt_id) && textValue(createReceipt.preview_revision)
+    && createReceipt.outcome === "todo_added" && textValue(createReceipt.receipt_id) && textValue(createReceipt.preview_revision)
     && (creationContext?.goal_id == null || creationContext.goal_id === parameters?.goal_id)
     && !textValue(creationContext?.binding_id);
   const legacySourceGate = proposal.status === "gated" && legacyCreateMatches
@@ -652,7 +653,10 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
   }
-  if (originalTodoMatches && parameters?.start_execution === true
+  const pendingDisplay = (failure?.error_code === "canonical_create_projection_pending"
+      && objectValue(failure.details)?.canonical_committed === true)
+    || (objectValue(steps?.todo_assigned) ?? createdTodo)?.projection_delivery === "pending";
+  if (originalTodoMatches && parameters?.start_execution === true && !pendingDisplay
       && proposal.permission_classification === "durable_write" && identity.proposalId && identity.sourceFingerprint
       && (proposal.status === "applying" || legacySourceGate || (proposal.status === "failed" && failure?.retry_safe === true))) {
     return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
@@ -680,7 +684,8 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && failure?.retry_safe !== false
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
       && (interruptedBeforePlan || preparedCreateMatches || recordedCreateMatches || legacyCreateMatches)) {
-    return {...finish({interaction: "review", canApply: true, reason: "todo_creation_retry"}), retryOriginal: true};
+    return {...finish({interaction: "review", canApply: true,
+      reason: pendingDisplay ? "canonical_create_projection_pending" : "todo_creation_retry"}), retryOriginal: true};
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null

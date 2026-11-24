@@ -16,6 +16,120 @@ const browser = await launchBrowser(createRequire(import.meta.url)("playwright")
 const textByWidth = {1200: "Reconcile delivery records after an interrupted confirmation",
   390: "Review the incident response guide after an interrupted confirmation"};
 
+async function goalTab(page, label) {
+  const tab = page.getByRole("navigation", {name: /Goal view|Goal 视图/})
+    .getByRole("button", {name: label});
+  const goal = page.locator(".personal-goal-link:visible").first();
+  const nav = page.locator(".personal-mobile-menu:visible").first();
+  await tab.or(goal).or(nav).first().waitFor();
+  if (!await tab.isVisible()) {
+    if (await nav.isVisible()) await nav.click();
+    await goal.click();
+  }
+  await tab.click();
+}
+
+async function verifyPendingDisplay({page, post, origin, width, provider, snapshot, fixture = "/__confirmation_fixture/display"}) {
+  await post(fixture, {hold: true});
+  const original = await snapshot();
+  const titles = width === 390
+    ? ["核对欠付项的责任人与跟进记录", "保留交接文档中的原始验收证据"]
+    : ["Review follow-up owners in the release checklist", "Preserve evidence for the support handover after release"];
+  const operations = [];
+  for (let i = 0; i < titles.length; i++) {
+    const [created, preview] = await post("/api/actions/preview", {
+      action_kind: "todo.create", context: {kind: "goal", goal_id: "goal-a"},
+      normalized_parameters: {goal_id: "goal-a", text: titles[i]}, summary: "Create task",
+      idempotency_key: "display-confirmation-" + width + "-" + i,
+    });
+    assert.equal(created, 201, JSON.stringify(preview));
+    const id = preview.proposal.proposal_id;
+    const path = "/api/actions/" + id;
+    const [, pending] = await post(path + "/apply");
+    assert.equal(pending.proposal.failure.error_code, "canonical_create_projection_pending");
+    const createdStep = pending.proposal.checkpoint.steps.todo_created;
+    assert.equal(createdStep.projection_delivery, "pending");
+    operations.push({id, path, title: titles[i], todo: createdStep.todo_id, receipt: createdStep.canonical_receipt.receipt_id});
+    assert.equal((await post(path + "/cancel"))[0], 409);
+  }
+  const committed = await snapshot();
+  assert.equal(committed.ids.length, original.ids.length + 2);
+  assert.notEqual(operations[0].todo, operations[1].todo);
+  await page.goto(origin + "/chat/?goal=goal-a");
+  await goalTab(page, /^(Overview|概览)$/);
+  await page.reload();
+  await goalTab(page, /^(Overview|概览)$/);
+  const overview = page.getByRole("region", {name: /Display updates pending|展示待更新/});
+  await overview.waitFor();
+  for (const {title} of operations) await overview.getByRole("button", {name: title, exact: true}).waitFor();
+  await page.screenshot({path: resolve(output, provider + "-" + width + "-display-overview.png")});
+  await goalTab(page, /^(Chat|对话)$/);
+  const cards = page.locator(".personal-proposal-row[data-action-kind='todo.create']");
+  const card = title => cards.filter({hasText: title});
+  // As with ordinary confirmations, these two persisted records have the
+  // same action title. Both must remain selectable without first doing IO.
+  for (const {title} of operations) await card(title).waitFor();
+  await page.screenshot({path: resolve(output, provider + "-" + width + "-display-chat.png")});
+  const [earlier, later] = operations;
+  await card(later.title).click();
+  const retry = page.getByRole("dialog").getByRole("button", {name: /^(Retry original operation|重试原操作)$/});
+  await retry.waitFor();
+  // Replace the upstream reply after apply ran. File finishes display, while
+  // SQLite keeps it pending. Both temporarily lose the two readback routes.
+  await post(fixture, {hold: provider === "sqlite", gateway_reply: later.id, hold_list: true, hold_detail: true});
+  const gateway = page.waitForResponse(response => response.url().endsWith(later.path + "/apply"));
+  const unavailable = [later.path, "/api/actions"].map(path => page.waitForResponse(response =>
+    response.request().method() === "GET" && new URL(response.url()).pathname === path && response.status() === 503));
+  await retry.click();
+  const [reply] = await Promise.all([gateway, ...unavailable]);
+  assert.equal(reply.status(), 502);
+  assert.match(reply.headers()["content-type"], /^text\/html\b/);
+  await retry.waitFor();
+  assert.ok(await retry.isEnabled());
+  assert.equal(await page.getByRole("dialog").getByRole("button", {name: /regenerate|重新生成/i}).count(), 0);
+  await page.screenshot({path: resolve(output, provider + "-" + width + "-gateway-recovery.png")});
+  await post(fixture, {hold: false, hold_list: false, hold_detail: false});
+  function checkReceipt(proposal, operation) {
+    assert.equal(proposal.proposal_id, operation.id);
+    assert.equal(proposal.receipt.receipt_id, operation.receipt);
+    assert.equal(proposal.receipt.resource_ids.todo_id, operation.todo);
+    assert.equal(proposal.receipt.projection_verified, true);
+  }
+  async function recover(operation) {
+    const outcome = page.waitForResponse(response => response.url().endsWith(operation.path + "/apply"));
+    await retry.click();
+    const response = await outcome;
+    assert.equal(response.status(), 200);
+    checkReceipt((await response.json()).proposal, operation);
+    await page.keyboard.press("Escape");
+  }
+  const observed = (await (await fetch(origin + later.path)).json()).proposal;
+  if (provider === "sqlite") {
+    assert.equal(observed.failure.error_code, "canonical_create_projection_pending");
+    assert.equal(observed.checkpoint.steps.todo_created.canonical_receipt.receipt_id, later.receipt);
+  } else {
+    checkReceipt(observed, later);
+  }
+  await recover(later);
+  await goalTab(page, /^(Overview|概览)$/);
+  await overview.getByRole("button", {name: earlier.title, exact: true}).click();
+  // A connection drop with the list unavailable still uses exact readback.
+  await post(fixture, {drop_reply: earlier.id, hold_list: true});
+  const disconnected = page.waitForEvent("requestfailed", {
+    predicate: request => request.method() === "POST" && request.url().endsWith(earlier.path + "/apply"),
+  });
+  await retry.click();
+  await disconnected;
+  await page.getByRole("dialog").getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
+  const exact = await fetch(origin + earlier.path);
+  checkReceipt((await exact.json()).proposal, earlier);
+  await post(fixture, {hold_list: false});
+  await page.keyboard.press("Escape");
+  await overview.waitFor({state: "hidden"});
+  assert.deepEqual(await snapshot(), committed);
+  console.log(provider + " " + width + "px: HTML 502 and two failed reads keep the original retry; both receipts recovered");
+}
+
 async function verify(provider, interruptedStep) {
   const child = spawn(resolveTestPython({repoRoot: root}),
     ["-u", fileURLToPath(new URL("todo-confirmation-http-fixture.py", import.meta.url)), provider, assetDir, interruptedStep],
@@ -64,16 +178,7 @@ async function verify(provider, interruptedStep) {
         });
         await page.goto(origin + "/chat/?goal=goal-a");
         async function openConfirmation() {
-          const chat = page.getByRole("navigation", {name: /Goal view|Goal 视图/})
-            .getByRole("button", {name: /^(Chat|对话)$/});
-          const goal = page.locator(".personal-goal-link:visible").first();
-          const nav = page.locator(".personal-mobile-menu:visible").first();
-          await chat.or(goal).or(nav).first().waitFor();
-          if (!await chat.isVisible()) {
-            if (await nav.isVisible()) await nav.click();
-            await goal.click();
-          }
-          await chat.click();
+          await goalTab(page, /^(Chat|对话)$/);
           const card = page.locator(".personal-proposal-row").filter({hasText: text});
           await card.first().click();
         }
@@ -145,6 +250,7 @@ async function verify(provider, interruptedStep) {
         await drawer.getByRole("button", {name: /^(View updated Goal|查看更新后的 Goal)$/}).waitFor();
         await page.screenshot({path: resolve(output, capturePrefix + "-" + width + "-result.png")});
         console.log(provider + " " + width + "px: " + interruptedStep + "; original proposal and one Todo write across reload");
+        if (!beforeWrite) await verifyPendingDisplay({page, post, origin, width, provider, snapshot});
       } catch (error) {
         await page.screenshot({path: resolve(output, capturePrefix + "-" + width + "-failure.png")});
         error.message += "\n" + (await page.locator("body").innerText()).slice(0, 1000);
@@ -166,6 +272,33 @@ async function verify(provider, interruptedStep) {
     assert.equal(created, 201);
     assert.equal(successor.proposal.regenerated_from, preview.proposal_id);
     assert.notEqual(successor.proposal.proposal_id, preview.proposal_id);
+    if (interruptedStep === "todo_created") {
+      const display = "/__confirmation_fixture/display";
+      const [previewCode, monitor] = await post("/api/actions/preview", {
+        action_kind: "monitor.create", context: {kind: "goal", goal_id: "goal-a"},
+        normalized_parameters: {goal_id: "goal-a", agent_id: "agent-a", target: "Review release readiness",
+          target_key: "release-readiness", cadence: "2h", timezone: "UTC", stop_condition: "watch_only"},
+        summary: "Review release readiness", idempotency_key: "monitor-display-recovery",
+      });
+      assert.equal(previewCode, 201);
+      const monitorPath = "/api/actions/" + monitor.proposal.proposal_id;
+      const original = await snapshot();
+      await post(display, {hold: true});
+      const [, pending] = await post(monitorPath + "/apply");
+      const saved = pending.proposal.checkpoint.steps.todo_created;
+      assert.equal(pending.proposal.failure.error_code, "canonical_create_projection_pending");
+      const committed = await snapshot();
+      assert.deepEqual(committed.ids, [...original.ids, saved.todo_id].sort());
+      assert.equal((await post(monitorPath + "/cancel"))[0], 409);
+      assert.deepEqual(await snapshot(), committed);
+      await post(display, {hold: false});
+      const [applied, recovered] = await post(monitorPath + "/apply");
+      assert.equal(applied, 200);
+      assert.equal(recovered.proposal.receipt.resource_ids.todo_id, saved.todo_id);
+      assert.equal(recovered.proposal.receipt.projection_verified, true);
+      assert.deepEqual(await snapshot(), committed);
+      console.log(provider + ": the Monitor cancel returns 409 and the original confirmation recovers its display");
+    }
   } finally {
     child.kill("SIGINT");
     await exited;

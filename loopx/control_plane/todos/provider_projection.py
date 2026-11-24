@@ -82,6 +82,7 @@ def project_current_canonical_todos(
     execute: bool = True,
     registry_data: Mapping[str, Any] | None = None,
     canonical_snapshot: dict[str, Any] | None = None,
+    expected_store_identity: str | None = None,
 ) -> dict[str, Any]:
     """Render one exact canonical head into machine-owned Markdown regions."""
 
@@ -114,6 +115,8 @@ def project_current_canonical_todos(
         attempt = 0
         while True:
             attempt += 1
+            if expected_store_identity is not None and authority_read.get("store_identity") != expected_store_identity:
+                raise ValueError("canonical Todo projection store identity changed")
             provider_revision = authority_read.get("provider_revision")
             if not isinstance(provider_revision, str) or not provider_revision:
                 raise ValueError("canonical Todo authority omitted provider revision")
@@ -179,6 +182,8 @@ def project_current_canonical_todos(
             )
             if not isinstance(confirmed, dict) or not isinstance(confirmed.get("projection_readback"), dict):
                 raise ValueError("canonical projection confirmation is missing")
+            if expected_store_identity is not None and confirmed.get("store_identity") != expected_store_identity:
+                raise ValueError("canonical Todo projection store identity changed during readback")
             confirmation = confirmed["projection_readback"]
             if confirmation["next_action"] == "finish":
                 break
@@ -222,6 +227,7 @@ def settle_canonical_todo_projection(
     state_file: Path | None = None,
     only_if_promoted: bool = False,
     canonical_snapshot: dict[str, Any] | None = None,
+    expected_store_identity: str | None = None,
 ) -> dict[str, Any]:
     """Drain the committed provider head, preserving a successful mutation."""
 
@@ -246,6 +252,7 @@ def settle_canonical_todo_projection(
             state_file=state_file,
             execute=True,
             canonical_snapshot=canonical_snapshot,
+            expected_store_identity=expected_store_identity,
         )
     except Exception as error:  # noqa: BLE001 - canonical commit already landed
         if isinstance(error, LocalCoordinationAuthorityUnavailable):

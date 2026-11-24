@@ -47,7 +47,7 @@ test("an interrupted Task start retries only its original saved Task", () => {
 
 test("a retained Todo confirmation can recover the original result after a source gate", () => {
   const receipt = {schema_version: "loopx_chat_todo_receipt_v0", status: "applied", todo_id: "todo-original",
-    goal_id: "report", preview_id: "reviewed", preview_revision: "original-revision", receipt_id: "saved-receipt"};
+    goal_id: "report", preview_id: "reviewed", preview_revision: "original-revision", receipt_id: "saved-receipt", outcome: "todo_added"};
   const created = {todo_id: receipt.todo_id, canonical_receipt: receipt};
   const proposal = {proposal_id: "create-task", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
     permission_classification: "durable_write", normalized_parameters: {goal_id: "report", start_execution: false},
@@ -119,26 +119,33 @@ test("a Todo saved before create preparation was introduced retries from its ori
 test("a confirmation saved before source binding remains reachable on its original card", () => {
   const receipt = {schema_version: "loopx_chat_todo_receipt_v0", receipt_id: "original-create",
     todo_id: "todo-original", goal_id: "report", preview_id: "reviewed", preview_revision: "original-revision",
-    status: "applied"};
+    status: "applied", outcome: "todo_added"};
   const created = {todo_id: "todo-original", canonical_receipt: receipt};
   const proposal = {proposal_id: "confirmed", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
-    status: "failed", permission_classification: "durable_write", normalized_parameters: {goal_id: "report"},
+    status: "failed", permission_classification: "durable_write", normalized_parameters: {goal_id: "report", agent_id: "agent-a"},
     context: {kind: "goal", goal_id: "report"}, checkpoint: {steps: {todo_created: created}}};
   const gated = {...proposal, status: "gated", gate: {kind: "canonical_authority_required"}};
-  for (const original of [proposal, {...proposal, status: "applying"}, gated]) {
+  const createOnly = {...proposal, normalized_parameters: {goal_id: "report"}};
+  const displayPending = {...createOnly,
+    failure: {error_code: "canonical_create_projection_pending", details: {canonical_committed: true}}};
+  for (const original of [proposal, {...proposal, status: "applying"}, gated, createOnly, displayPending]) {
     const plan = compileActionReviewPlan(original);
     assert.equal(plan.proposalId, "confirmed");
     assert.equal(plan.canApply, true);
     assert.equal(plan.retryOriginal, true);
     assert.equal(plan.prohibitRegeneration, true);
   }
+  assert.equal(compileActionReviewPlan(displayPending).reason, "canonical_create_projection_pending");
   for (const change of [
     {context: {kind: "goal", goal_id: "different-report"}},
     {context: {...proposal.context, binding_id: "steward-chat"}},
-    {checkpoint: {steps: {todo_created: {...created, canonical_receipt: {...receipt, preview_revision: ""}}}}},
     {checkpoint: {steps: {todo_created: {...created, source: null}}}},
   ]) {
     assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+  for (const change of [{preview_revision: null}, {preview_id: "another-review"}, {outcome: "todo_already_exists"}]) {
+    const checkpoint = {steps: {todo_created: {...created, canonical_receipt: {...receipt, ...change}}}};
+    assert.equal(compileActionReviewPlan({...proposal, checkpoint}).retryOriginal, undefined);
   }
   assert.equal(compileActionReviewPlan({...gated, gate: {kind: "authenticated_steward_confirmation_required"}}).canApply, false);
 });
@@ -705,4 +712,33 @@ test("a plan card frame is refused for anything that was never an admitted previ
   const operation = compileActionReviewPlan(operationProposal("awaiting_confirmation"));
   assert.equal(operation.operationFrame?.kind, "confirmation");
   assert.equal(operation.reviewCardFrame, undefined);
+});
+
+
+test("task and monitor creation recover the original pending display without accepting an unrelated proposal", () => {
+  const prepared = {operation_id: "chat-create:reviewed", preview_id: "original-preview",
+    source_identity: "route", source_authority: "sqlite_v0", expected_provider_revision: "revision",
+    expected_registry_sha256: "a".repeat(64), expected_store_identity: "sqlite:fixture"};
+  const proposal = {schema_version: "loopx_chat_action_proposal_v1", proposal_id: "reviewed",
+    expected_state_fingerprint: "original-preview", permission_classification: "durable_write",
+    normalized_parameters: {goal_id: "goal-a"}, status: "failed",
+    checkpoint: {steps: {todo_create_prepared: prepared}},
+    failure: {error_code: "canonical_create_projection_pending", retry_safe: true,
+      details: {canonical_committed: true, todo_id: "todo_created"}}};
+  for (const action_kind of ["todo.create", "monitor.create"]) {
+    const action = {...proposal, action_kind};
+    const plan = compileActionReviewPlan(action);
+    assert.equal(plan.reason, "canonical_create_projection_pending");
+    assert.equal(plan.retryOriginal, true);
+    assert.equal(plan.canApply, true);
+    assert.equal(compileActionReviewPlan({...action, failure: null, status: "applying"}).reason, "todo_creation_retry");
+    const interrupted = {...action, failure: null, status: "applying",
+      checkpoint: {steps: {...action.checkpoint.steps, todo_created: {projection_delivery: "pending"}}}};
+    assert.equal(compileActionReviewPlan(interrupted).reason, "canonical_create_projection_pending");
+    assert.equal(compileActionReviewPlan({...action, status: "applied", receipt: {projection_verified: true}}).interaction, "completed");
+    for (const change of [{status: "stale"}, {checkpoint: null}, {permission_classification: "protected"},
+      {proposal_id: "different"}, {action_kind: "todo.update"}, {failure: {retry_safe: false}}]) {
+      assert.equal(compileActionReviewPlan({...action, ...change}).retryOriginal, undefined);
+    }
+  }
 });
