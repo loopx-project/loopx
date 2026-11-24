@@ -7,7 +7,10 @@ from typing import cast
 from ..goals.goal_vision_policy import COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD
 from ..runtime.time import now_utc
 from .frontier_deadline import todo_summary_frontier_deadline
-from .quota_selection import project_quota_planning
+from .quota_selection import (
+    _decode_quota_summary_wire, collect_quota_authority_checks,
+    project_quota_planning, project_quota_wires_with_head_checks,
+)
 from .summary_item import todo_planning_source_items, todo_summary_source_items
 
 Payload = dict[str, object]
@@ -19,25 +22,12 @@ QUOTA_PAYLOAD_VISIBILITY_LANE_LIMIT = 2
 QUOTA_PAYLOAD_USER_ACTION_ITEM_LIMIT = 3
 QUOTA_PAYLOAD_DIAGNOSTIC_LANE_LIMIT = 2
 QUOTA_PAYLOAD_COMPACTION_SCHEMA_VERSION = "quota_todo_summary_payload_compaction_v0"
-AGENT_LANE_STATUS_TODO_COMPACTION_SCHEMA_VERSION = (
-    "agent_lane_status_todo_summary_compaction_v1"
-)
-AGENT_LANE_STATUS_TODO_REFERENCE_SCHEMA_VERSION = (
-    "agent_lane_status_todo_reference_v0"
-)
+AGENT_LANE_STATUS_TODO_COMPACTION_SCHEMA_VERSION = "agent_lane_status_todo_summary_compaction_v1"
+AGENT_LANE_STATUS_TODO_REFERENCE_SCHEMA_VERSION = "agent_lane_status_todo_reference_v0"
 QUOTA_PAYLOAD_ITEM_FIELDS = (
-    "goal_acceptance_guard",
-    "schema_version",
-    "index",
-    "text",
-    "title",
-    "todo_id",
-    "status",
-    "priority",
-    "task_class",
-    "action_kind",
-    "task_domain",
-    "decision_scope",
+    "goal_acceptance_guard", "schema_version", "index", "text", "title",
+    "todo_id", "status", "priority", "task_class", "action_kind",
+    "task_domain", "decision_scope",
     "required_decision_scopes",
     "task_repository",
     "continuation_policy",
@@ -450,7 +440,8 @@ def _quota_projection_request(
     source: Payload, *, agent_identity: PayloadView | None,
     filter_user_gate_blocks_agent: bool, available_capabilities: object = None,
     resolve_capacity: bool = False, summary_kind: str = "user",
-    consume_display_views: bool = False, display_view_names: list[str] | None = None,
+    consume_display_views: bool = False,
+    display_view_names: list[str] | None = None, include_source_reference: bool = True,
 ) -> Payload:
     return cast(Payload, project_quota_planning(
         source, all_open_items=[], source_open_count=source.get("open_count"),
@@ -459,6 +450,7 @@ def _quota_projection_request(
         available_capabilities=available_capabilities, resolve_capacity=resolve_capacity,
         summary_kind=summary_kind, consume_display_views=consume_display_views,
         request_only=True, display_view_names=display_view_names,
+        include_source_reference=include_source_reference,
     ))
 
 
@@ -551,32 +543,32 @@ def select_quota_todo_summaries_with_terminal(
 def select_quota_todo_contexts(
     user_canonical: object, user_asset: object, agent_canonical: object, agent_asset: object,
     *, agent_identity: PayloadView | None, available_capabilities: object,
+    reuse_fresh_canonical_snapshot: bool = False,
 ) -> tuple[Payload | None, Payload | None, dict[str, list[Payload]], list[Payload]]:
     """The quota caller explicitly consumes both summaries and Agent displays.
 
     One native read transaction materializes each complete source. A supplied
     compatibility source retains its full codec and cannot acquire authority.
     """
-    from .quota_selection import _decode_quota_summary_wire
     from .summary_item import _QuotaProjectedSummary
 
-    values: list[Payload] = []
-    roles: list[str] = []
+    selected = [
+        (role, *pair) for role, c, a in (("user", user_canonical, user_asset), ("agent", agent_canonical, agent_asset))
+        if (pair := _select_todo_source(c, a)) is not None
+    ]
+    values = [source for _, _, source in selected]
+    roles = [role for role, _, _ in selected]
+    authority_checks = (
+        collect_quota_authority_checks(values)
+        if reuse_fresh_canonical_snapshot and selected else []
+    )
     requests: list[Payload] = []
-    for role, canonical, asset in (
-        ("user", user_canonical, user_asset),
-        ("agent", agent_canonical, agent_asset),
-    ):
-        selected = _select_todo_source(canonical, asset)
-        if selected is None:
-            continue
-        kind, source = selected
-        values.append(source)
-        roles.append(role)
+    for role, kind, source in selected:
         request = _quota_projection_request(
             source, agent_identity=agent_identity, filter_user_gate_blocks_agent=role == "user",
             available_capabilities=available_capabilities, resolve_capacity=True,
             summary_kind=kind, consume_display_views=role == "agent",
+            include_source_reference=not authority_checks,
         )
         summary_req = _as_dict(request.get("summary_request"))
         if summary_req is not None:
@@ -587,7 +579,11 @@ def select_quota_todo_contexts(
     views: dict[str, list[Payload]] = {"summary": [], "planning": [], "terminal": []}
     user_rows: list[Payload] = []
     if requests:
-        wires = _project_quota_wires(requests, error="invalid complete quota projection response")
+        error = "invalid complete quota projection response"
+        wires = (
+            project_quota_wires_with_head_checks(requests, authority_checks=authority_checks, error=error)
+            if authority_checks else _project_quota_wires(requests, error=error)
+        )
         for role, source, wire in zip(roles, values, wires, strict=True):
             summaries[role] = cast(Payload, _decode_quota_summary_wire(wire, source))
             wire_dict = _as_dict(wire)

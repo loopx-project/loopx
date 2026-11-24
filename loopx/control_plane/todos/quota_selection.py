@@ -117,6 +117,7 @@ def project_quota_planning(
     summary_kind: str | None = None,
     consume_display_views: bool = False, request_only: bool = False,
     display_view_names: list[str] | None = None,
+    include_source_reference: bool = True,
 ) -> dict[str, Any]:
     identity = agent_identity if isinstance(agent_identity, dict) else {}
     profile = identity.get("agent_profile")
@@ -170,7 +171,7 @@ def project_quota_planning(
             return None
 
     from .summary_item import canonical_todo_source_reference
-    reference = canonical_todo_source_reference(value) if summary_kind else None
+    reference = canonical_todo_source_reference(value) if summary_kind and include_source_reference else None
     resume_request = None if reference is not None or request_only else build_referenced_todo_resume_planning_request(
         value,
         agent_id=agent,
@@ -310,3 +311,49 @@ def _decode_quota_summary_wire(wire: Any, source: dict[str, Any]) -> dict[str, A
                 "first_open_items", "first_executable_items", "monitor_open_items", "backlog_items"))):
         raise RuntimeError(error)
     return summary
+
+
+def collect_quota_authority_checks(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build head-verification checks for small already-loaded canonical snapshots."""
+    from .summary_item import canonical_todo_authority_check, canonical_todo_source_reference
+
+    checks: list[dict[str, Any]] = []
+    for source in sources:
+        items = source.get("items")
+        if isinstance(items, list) and len(items) > 500:
+            return []
+        check = canonical_todo_authority_check(source)
+        if check is None or canonical_todo_source_reference(source) is None:
+            return []
+        checks.append(check)
+    return checks
+
+
+def project_quota_wires_with_head_checks(
+    requests: list[Any], *, authority_checks: list[dict[str, Any]], error: str,
+) -> list[object]:
+    """Batch quota planning over loaded summaries after checking live TS authority/log stat."""
+    from ..coordination.local_authority import validate_canonical_todo_read
+
+    try:
+        result = effect_runtime_result(
+            "todo.quota_planning.project",
+            {
+                "schema_version": "todo_quota_planning_batch_v0",
+                "authority_checks": authority_checks,
+                "requests": requests,
+            },
+            large_local_snapshot=True,
+        )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    if isinstance(result, dict) and result.get("canonical") is not None:
+        first_read = cast(dict[str, Any], authority_checks[0]["read"])
+        first_source = cast(dict[str, Any], first_read["source"])
+        validate_canonical_todo_read(result["canonical"], goal_id=str(first_source["goal_id"]))
+    if not isinstance(result, dict) or result.get("schema_version") != "todo_quota_planning_batch_result_v0":
+        raise RuntimeError(error)
+    wires = result.get("quota_wires")
+    if not isinstance(wires, list) or len(wires) != len(requests):
+        raise RuntimeError(error)
+    return cast(list[object], wires)

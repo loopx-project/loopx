@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from ..todos.contract import (
@@ -34,7 +35,7 @@ def autonomous_backlog_candidates(
 ) -> dict[str, Any] | None:
     return _autonomous_backlog_candidates(
         items,
-        open_todo_items=open_todo_items,
+        open_todo_items=partial(open_todo_items, include_handoff_note=False),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         normalize_todo_text=normalize_todo_text,
         advancement_task_class=TODO_TASK_CLASS_ADVANCEMENT,
@@ -49,7 +50,7 @@ def autonomous_monitor_candidates(
 ) -> dict[str, Any] | None:
     return _autonomous_monitor_candidates(
         items,
-        open_todo_items=open_todo_items,
+        open_todo_items=partial(open_todo_items, include_handoff_note=False),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         normalize_todo_text=normalize_todo_text,
         monitor_task_class=TODO_TASK_CLASS_MONITOR,

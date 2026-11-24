@@ -12,9 +12,7 @@ if TYPE_CHECKING:
 
 from .control_plane import compact_control_plane_policy
 from .control_plane.effect_program import (
-    ReceiptBoundMonitorPhase,
-    ReceiptBoundReplayPhase,
-    ReceiptBoundTerminalPhase,
+    ReceiptBoundMonitorPhase, ReceiptBoundReplayPhase, ReceiptBoundTerminalPhase,
 )
 from .control_plane.goals.activation import goal_is_stopped
 from .control_plane.quota.blocked_retry import overlay_active_turn_retries
@@ -824,6 +822,7 @@ def build_quota_should_run(
     goal_ref: Mapping[str, object] | None = None,
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     app_scheduler_state_observer: Callable[[Mapping[str, object]], None] | None = None,
+    reuse_fresh_canonical_snapshot: bool = False,
 ) -> dict[str, object]:
     from .control_plane.quota.should_run import build_quota_should_run as _build_quota_should_run
 
@@ -861,6 +860,7 @@ def build_quota_should_run(
         runtime_root=runtime_root, workspace_path=workspace_path, goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         replan_explore_reader=read_explore_context, app_scheduler_state_observer=app_scheduler_state_observer,
+        reuse_fresh_canonical_snapshot=reuse_fresh_canonical_snapshot,
     )
 
 

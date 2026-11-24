@@ -319,7 +319,13 @@ export function createEffectRuntimeHandlers(
     ["goal.fallback_disposition.project", lazyHandler(() => import("./goals/goal_frontier/fallback_disposition.ts"), ({projectFallbackDisposition}) => projectFallbackDisposition)],
     ["todo.pr_wait_observation.plan", lazyHandler(() => import("./todos/pr_wait_observation.ts"), ({planPrWaitObservationsFromSource}) => planPrWaitObservationsFromSource)],
     ["todo.resume_planning.project", lazyHandler(() => import("./todos/resume_planning.ts"), ({projectTodoResumePlanning}) => projectTodoResumePlanning)],
-    ["todo.quota_planning.project", lazyHandler(() => import("./todos/quota_selection.ts"), ({projectTodoQuotaPlanning}) => projectTodoQuotaPlanning)],
+    ["todo.quota_planning.project", lazyHandler(
+      () => Promise.all([import("./todos/quota_selection.ts"), import("./todos/read_transaction.ts")]),
+      ([{projectTodoQuotaPlanning}, {projectCanonicalQuotaBatch}]) =>
+        (params) => params?.schema_version === "todo_quota_planning_batch_v0"
+          ? projectCanonicalQuotaBatch(params)
+          : projectTodoQuotaPlanning(params),
+    )],
     ["todo.frontier_revision.project", lazyHandler(() => import("./todos/frontier_revision.ts"), ({projectAdvancementFrontier}) => projectAdvancementFrontier)],
     ["goal.long_todo_chain.evaluate", lazyHandler(() => import("./todos/frontier_revision.ts"), ({evaluateLongTodoChain}) => evaluateLongTodoChain)],
     ["scheduler.state_transition.evaluate", lazyHandler(() => import("./scheduler/state_transition_rules.ts"), ({evaluateSchedulerStateTransition}) => evaluateSchedulerStateTransition)],

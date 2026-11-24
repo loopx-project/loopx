@@ -14,19 +14,25 @@ class _CanonicalTodoSummary(dict[str, Any]):
     def __init__(self, value: dict[str, Any], *, read: dict[str, Any],
                  expected: dict[str, Any], field: str, digest: str,
                  basis: bytes, request_identity: object, evaluations: Any = None,
-                 source_row_fields: tuple[str, ...] = ()) -> None:
+                 source_row_fields: tuple[str, ...] = (),
+                 handoff_gates_evaluated: bool = False,
+                 rollout_log_stat: Any = None) -> None:
         super().__init__(value)
         self.read, self.expected, self.field, self.digest = read, expected, field, digest
         self.basis, self.request_identity = basis, request_identity
         self.evaluations = evaluations
         self.source_row_fields = source_row_fields
+        self.handoff_gates_evaluated = handoff_gates_evaluated
+        self.rollout_log_stat = rollout_log_stat
 
     def __deepcopy__(self, memo: dict[int, Any]) -> _CanonicalTodoSummary:
         from copy import deepcopy
         result = _CanonicalTodoSummary({}, read=deepcopy(self.read, memo),
             expected=deepcopy(self.expected, memo), field=self.field, digest=self.digest,
             basis=self.basis, request_identity=self.request_identity,
-            evaluations=deepcopy(self.evaluations, memo), source_row_fields=self.source_row_fields)
+            evaluations=deepcopy(self.evaluations, memo), source_row_fields=self.source_row_fields,
+            handoff_gates_evaluated=self.handoff_gates_evaluated,
+            rollout_log_stat=deepcopy(self.rollout_log_stat, memo))
         memo[id(self)] = result
         result.update(deepcopy(dict(self), memo))
         return result
@@ -38,7 +44,9 @@ def preserve_canonical_todo_source(source: dict[str, Any], value: dict[str, Any]
     return _CanonicalTodoSummary(value, read=source.read, expected=source.expected,
         field=source.field, digest=source.digest, basis=source.basis,
         request_identity=source.request_identity, evaluations=source.evaluations,
-        source_row_fields=source.source_row_fields)
+        source_row_fields=source.source_row_fields,
+        handoff_gates_evaluated=source.handoff_gates_evaluated,
+        rollout_log_stat=source.rollout_log_stat)
 
 
 def bind_canonical_todo_sources(result: dict[str, Any], read: dict[str, Any]) -> None:
@@ -64,7 +72,9 @@ def bind_canonical_todo_sources(result: dict[str, Any], read: dict[str, Any]) ->
             expected=metadata["source"], field=field, digest=digest,
             basis=observed, request_identity=identity,
             evaluations=(result.get("field_evaluations") or {}).get(field),
-            source_row_fields=tuple(metadata.get("source_row_fields", [])))
+            source_row_fields=tuple(metadata.get("source_row_fields", [])),
+            handoff_gates_evaluated=True,
+            rollout_log_stat=result.get("rollout_log_stat"))
 
 
 def canonical_todo_select_read(params: dict[str, Any]) -> dict[str, Any] | None:
@@ -127,6 +137,25 @@ def canonical_todo_source_reference(value: dict[str, Any]) -> dict[str, Any] | N
     return {"read": value.read, "expected_source": value.expected,
         "field": value.field, "field_sha256": value.digest,
         "changes": changes, "python_values": current.get("python_values", [])}
+
+
+def canonical_todo_authority_check(value: dict[str, Any]) -> dict[str, Any] | None:
+    from ..effect_runtime import todo_projection_request_identity
+
+    if (
+        not isinstance(value, _CanonicalTodoSummary)
+        or value.request_identity is not todo_projection_request_identity()
+        or not isinstance(value.read, dict)
+        or not isinstance(value.expected, dict)
+    ):
+        return None
+    check: dict[str, Any] = {
+        "read": value.read,
+        "expected_source": value.expected,
+    }
+    if value.rollout_log_stat is not None:
+        check["rollout_log_stat"] = value.rollout_log_stat
+    return check
 
 
 class _QuotaProjectedSummary(dict[str, Any]):
