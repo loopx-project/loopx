@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import sys
 from typing import Any, cast
 
 import pytest
@@ -1079,3 +1081,185 @@ def test_heartbeat_prequota_shares_todo_read_and_preserves_active_wait_and_ack_r
     assert second_result["checks"]["acknowledged_pr_reviews"]["already_reconciled_count"] == 1
     assert second_result["checks"]["acknowledged_pr_reviews"]["reconciled_count"] == 0
     assert sum(m == "todo.read" for m, _ in calls) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_heartbeat_prequota_detects_concurrent_subprocess_todo_add_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    import loopx.heartbeat_prequota as heartbeat_prequota_module
+
+    registry, runtime, state = _write_goal_fixture(
+        tmp_path,
+        provider=provider,
+        deferred_count=0,
+        include_pr_wait=False,
+        include_pr_review_gate=True,
+        capability_granted=True,
+    )
+    pr_url_41 = f"https://github.com/{REPO_SLUG}/pull/41"
+    pr_url_42 = f"https://github.com/{REPO_SLUG}/pull/42"
+    record_issue_fix_pr_review_ack(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        todo_id="todo_pr_review_41",
+        agent_id=AGENT_ID,
+        project=state.parent,
+        url=pr_url_41,
+        owner_acknowledged=True,
+        generated_at="2026-11-24T09:10:00Z",
+    )
+
+    pr_wait_list_calls = 0
+    original_pr_wait_list = cast(
+        "Callable[..., dict[str, Any]]",
+        getattr(pr_wait_reconcile, "list_goal_todos"),
+    )
+
+    def tracked_pr_wait_list(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal pr_wait_list_calls
+        pr_wait_list_calls += 1
+        return original_pr_wait_list(*args, **kwargs)
+
+    monkeypatch.setattr(pr_wait_reconcile, "list_goal_todos", tracked_pr_wait_list)
+
+    concurrent_add_committed = False
+    observed_pr_numbers: list[int] = []
+
+    def fake_fetch(reference: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal concurrent_add_committed
+        number = int(reference["number"])
+        observed_pr_numbers.append(number)
+        if number == 41 and not concurrent_add_committed:
+            concurrent_add_committed = True
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "loopx.cli",
+                    "--registry",
+                    str(registry),
+                    "--runtime-root",
+                    str(runtime),
+                    "--format",
+                    "json",
+                    "todo",
+                    "add",
+                    "--goal-id",
+                    GOAL_ID,
+                    "--role",
+                    "agent",
+                    "--status",
+                    "deferred",
+                    "--priority",
+                    "P1",
+                    "--task-class",
+                    "advancement_task",
+                    "--action-kind",
+                    "validate",
+                    "--task-repository",
+                    f"git:github.com/{REPO_SLUG}",
+                    "--resume-when",
+                    f"pr_merged:{REPO_SLUG}#42",
+                    "--text",
+                    "[P1] Resume follow-up after PR 42 merges",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert proc.returncode == 0, proc.stderr + proc.stdout
+            added_payload = json.loads(proc.stdout)
+            assert added_payload["ok"] is True
+        return {
+            "url": pr_url_42 if number == 42 else pr_url_41,
+            "number": number,
+            "state": "OPEN",
+            "baseRepository": {"nameWithOwner": REPO_SLUG},
+            "headRepository": {"nameWithOwner": REPO_SLUG},
+        }
+
+    monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fake_fetch)
+
+    calls = _capture_rpc_calls(monkeypatch)
+
+    # 1) During ACK's OPEN #41 read, another CLI subprocess commits `todo add` for #42.
+    #    PR dependency planning must detect provider_revision/cursor drift, re-read authoritative
+    #    Todos, plan #42, and execute 1 external observation in the SAME cycle.
+    drifted = run_heartbeat_pre_quota(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    drifted_methods = [method for method, _ in calls]
+    assert drifted["ok"] is True
+    assert concurrent_add_committed is True
+    assert observed_pr_numbers == [41, 42]
+    assert drifted["checks"]["acknowledged_pr_reviews"]["reconciled_count"] == 0
+    assert drifted["checks"]["pr_dependencies"]["external_read_count"] == 1
+    assert [row["pr_ref"] for row in drifted["checks"]["pr_dependencies"]["results"]] == [
+        f"{REPO_SLUG}#42"
+    ]
+    assert (
+        drifted["checks"]["pr_dependencies"]["plan"]["waiting_targets"][0]["pr_ref"]
+        == f"{REPO_SLUG}#42"
+    )
+    assert drifted_methods.count("todo.authority_head.verify") == 1
+    assert pr_wait_list_calls == 1
+
+    # 2) Control case with NO concurrent write: shared_todo_cache witness matches live head
+    #    so PR dependency planning reuses the cached snapshot with ZERO duplicate list_goal_todos calls.
+    calls.clear()
+    pr_wait_list_calls = 0
+    observed_pr_numbers.clear()
+    reused = run_heartbeat_pre_quota(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    reused_methods = [method for method, _ in calls]
+    assert reused["ok"] is True
+    assert observed_pr_numbers == [41]
+    assert (
+        reused["checks"]["pr_dependencies"]["plan"]["waiting_targets"][0]["pr_ref"]
+        == f"{REPO_SLUG}#42"
+    )
+    assert reused_methods.count("todo.authority_head.verify") == 1
+    assert pr_wait_list_calls == 0
+
+    # 3) Fail-closed verification error: if live witness verification errors, fall back to
+    #    an authoritative list_goal_todos read without crashing or returning stale Todos.
+    from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+
+    original_witness_rpc = getattr(heartbeat_prequota_module, "effect_runtime_result")
+
+    def failing_witness_rpc(method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == "todo.authority_head.verify":
+            raise EffectRuntimeStartupError(
+                "witness check unavailable",
+                diagnostic_code="startup_failed",
+            )
+        return original_witness_rpc(method, *args, **kwargs)
+
+    monkeypatch.setattr(
+        heartbeat_prequota_module,
+        "effect_runtime_result",
+        failing_witness_rpc,
+    )
+    pr_wait_list_calls = 0
+    fail_closed = run_heartbeat_pre_quota(
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    assert fail_closed["ok"] is True
+    assert pr_wait_list_calls == 1
+    monkeypatch.setattr(
+        heartbeat_prequota_module,
+        "effect_runtime_result",
+        original_witness_rpc,
+    )

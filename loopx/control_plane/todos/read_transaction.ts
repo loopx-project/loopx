@@ -183,6 +183,94 @@ function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expec
   return decodeTodoReadSource({record, python_values: reference.python_values ?? []});
 }
 
+const EXPECTED_WITNESS_FIELDS = ["source_authority", "provider_revision", "cursor"] as const;
+
+async function loadCanonicalAuthorityHeadWitness(
+  rawRuntimeRoot: unknown,
+  rawGoalId: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<{ok: true; goalId: string; head: JsonObject} | {ok: false; canonical: JsonObject}> {
+  let sourceAuthority = "file_v0";
+  try {
+    const root = runtimeRoot(rawRuntimeRoot);
+    const goalId = requireAuthorityStoreId(rawGoalId, "goal id");
+    await requireCanonicalAuthority(root, goalId, "todo_read");
+    const store = await openRuntimeStore(root, goalId, dependencies);
+    sourceAuthority = sourceAuthorityFor(store);
+    const {identity, authority} = await readAuthoritySnapshot(store);
+    if (identity.status !== "available") {
+      return {ok: false, canonical: {
+        ...identity, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
+        source_authority: sourceAuthority, decision_read_from_provider: true, legacy_fallback_used: false}};
+    }
+    if (authority.status !== "loaded") {
+      return {ok: false, canonical: {
+        ...authority, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
+        source_authority: sourceAuthority, decision_read_from_provider: true, legacy_fallback_used: false}};
+    }
+    return {
+      ok: true,
+      goalId,
+      head: {
+        status: "loaded",
+        source_authority: sourceAuthority,
+        store_identity: identity.store_identity,
+        provider_revision: authority.provider_revision,
+        cursor: authority.cursor,
+      },
+    };
+  } catch (error) {
+    if (error instanceof EffectRuntimeRequestError) throw error;
+    return {ok: false, canonical: {
+      schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
+      status: "failed",
+      reason_code: "canonical_snapshot_unavailable",
+      reason: error instanceof Error ? error.message : "invalid authority check",
+      source_authority: sourceAuthority,
+      decision_read_from_provider: true,
+      legacy_fallback_used: false,
+      ...localAuthorityOpenFailure(error),
+      ...canonicalAuthorityRouteFailure(error)}};
+  }
+}
+
+/** Verify whether the live canonical Todo head revision and cursor match a previously captured witness. */
+export async function verifyCanonicalTodoAuthorityWitness(
+  value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<JsonObject> {
+  const input = requireJsonObject(value, "Todo authority witness verification");
+  if (input.schema_version !== "todo_authority_head_verify_v0") {
+    throw new EffectRuntimeRequestError("Todo authority witness schema mismatch");
+  }
+  const rawExpected = input.expected_witness;
+  if (typeof rawExpected !== "object" || rawExpected === null || Array.isArray(rawExpected)) {
+    return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: "expected_witness_incomplete"};
+  }
+  const expected = rawExpected as JsonObject;
+  if (!EXPECTED_WITNESS_FIELDS.every(key => typeof expected[key] === "string" && (expected[key] as string).trim() !== "")) {
+    return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: "expected_witness_incomplete"};
+  }
+  try {
+    const live = await loadCanonicalAuthorityHeadWitness(input.runtime_root, input.goal_id, dependencies);
+    if (!live.ok) {
+      return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: String(live.canonical.reason_code ?? "canonical_head_unavailable")};
+    }
+    const matches = EXPECTED_WITNESS_FIELDS.every(key => live.head[key] === expected[key]) &&
+      (expected.store_identity === undefined || live.head.store_identity === expected.store_identity);
+    return {
+      schema_version: "todo_authority_head_verify_result_v0",
+      fresh: matches,
+      reason_code: matches ? "matched" : "canonical_witness_drifted",
+      source_authority: live.head.source_authority,
+      provider_revision: live.head.provider_revision,
+      cursor: live.head.cursor,
+    };
+  } catch {
+    return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: "canonical_witness_check_failed"};
+  }
+}
+
 /** Batch quota planning from already-loaded canonical summaries after checking
  * the live authority head and rollout log stat against mutation/unavailability. */
 export async function projectCanonicalQuotaBatch(
@@ -213,53 +301,17 @@ export async function projectCanonicalQuotaBatch(
       rollout_log_stat: check.rollout_log_stat ?? null,
     }));
     if (verified.has(dedupeKey)) continue;
-    let sourceAuthority = "file_v0";
-    try {
-      const root = runtimeRoot(source.runtime_root);
-      const goalId = requireAuthorityStoreId(source.goal_id, "goal id");
-      await requireCanonicalAuthority(root, goalId, "todo_read");
-      const store = await openRuntimeStore(root, goalId, dependencies);
-      sourceAuthority = sourceAuthorityFor(store);
-      const {identity, authority} = await readAuthoritySnapshot(store);
-      if (identity.status !== "available") {
-        return {schema_version: TODO_READ_RESULT, canonical: {
-          ...identity, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
-          source_authority: sourceAuthority, decision_read_from_provider: true, legacy_fallback_used: false}};
-      }
-      if (authority.status !== "loaded") {
-        return {schema_version: TODO_READ_RESULT, canonical: {
-          ...authority, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
-          source_authority: sourceAuthority, decision_read_from_provider: true, legacy_fallback_used: false}};
-      }
-      const canonicalHead: JsonObject = {
-        status: "loaded",
-        source_authority: sourceAuthority,
-        store_identity: identity.store_identity,
-        provider_revision: authority.provider_revision,
-        cursor: authority.cursor,
-      };
-      validateCanonicalSource(canonicalHead, expected);
-      if (!isReceiptLogStat(check.rollout_log_stat)) {
-        throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
-      }
-      const currentStat = await statReceiptLog(goalRolloutEventLogPath(String(source.runtime_root), goalId));
-      if (!receiptLogStatsEqual(currentStat, check.rollout_log_stat)) {
-        throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
-      }
-      verified.add(dedupeKey);
-    } catch (error) {
-      if (error instanceof EffectRuntimeRequestError) throw error;
-      return {schema_version: TODO_READ_RESULT, canonical: {
-        schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
-        status: "failed",
-        reason_code: "canonical_snapshot_unavailable",
-        reason: error instanceof Error ? error.message : "invalid authority check",
-        source_authority: sourceAuthority,
-        decision_read_from_provider: true,
-        legacy_fallback_used: false,
-        ...localAuthorityOpenFailure(error),
-        ...canonicalAuthorityRouteFailure(error)}};
+    const live = await loadCanonicalAuthorityHeadWitness(source.runtime_root, source.goal_id, dependencies);
+    if (!live.ok) return {schema_version: TODO_READ_RESULT, canonical: live.canonical};
+    validateCanonicalSource(live.head, expected);
+    if (!isReceiptLogStat(check.rollout_log_stat)) {
+      throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
     }
+    const currentStat = await statReceiptLog(goalRolloutEventLogPath(String(source.runtime_root), live.goalId));
+    if (!receiptLogStatsEqual(currentStat, check.rollout_log_stat)) {
+      throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
+    }
+    verified.add(dedupeKey);
   }
   const wires = input.requests.map(request => projectTodoQuotaPlanning(request));
   return {schema_version: "todo_quota_planning_batch_result_v0", quota_wires: wires};

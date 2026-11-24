@@ -6,7 +6,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
 import {readTodo, TODO_READ_REQUEST} from "../../loopx/control_plane/todos/read_projection.ts";
-import {projectCanonicalQuotaBatch, readCanonicalTodoProjection} from "../../loopx/control_plane/todos/read_transaction.ts";
+import {projectCanonicalQuotaBatch, readCanonicalTodoProjection, verifyCanonicalTodoAuthorityWitness} from "../../loopx/control_plane/todos/read_transaction.ts";
 import {goalRolloutEventLogPath} from "../../loopx/control_plane/rollout_receipt_log.ts";
 import {readAgent, readScope} from "../../loopx/control_plane/todos/read_codec.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -542,5 +542,102 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.ok(after.rollout_log_stat);
     const afterItems = ((after.fields as JsonObject).agent_todos as JsonObject).items as JsonObject[];
     assert.equal(afterItems[0].resume_ready, true);
+  });
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`verifyCanonicalTodoAuthorityWitness detects ${provider} revision/cursor drift cleanly`, async t => {
+    const root = await mkdtemp(join(tmpdir(), `witness-${provider}-`));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const state = join(root, "state.md");
+    const goal = `witness-goal-${provider}`;
+    await writeFile(state, "# Synthetic Goal\n");
+    if (provider === "sqlite") await selectLocalSqliteAuthority(root, goal, true);
+    const store = await openLocalAuthorityStore(root, goal);
+    const baseTodos = [row("todo_a", {index: 1})];
+    const baseProjection = {
+      goal_id: goal, handoff_mode: "soft_claim", todos: baseTodos, leases: [],
+      todo_read_model: coordinationTodoReadModel(baseTodos, TODO_CANONICAL_READ_RECORD_SCHEMA),
+    };
+    const commit1 = await store.commitAuthority({
+      expected_provider_revision: null,
+      operation_id: "seed-witness-1",
+      events: [],
+      receipts: [],
+      next_projection: baseProjection,
+    });
+    assert.equal(commit1.status, "applied");
+    if (commit1.status !== "applied") return;
+    const fence = await engageLegacyCoordinationWriterFence({
+      schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+      runtime_root: root, goal_id: goal, state_path: state,
+      fence: {
+        schema_version: "loopx_legacy_coordination_writer_fence_v0", state: "engaged",
+        goal_id: goal, fence_id: `witness-fence-${provider}`, source_version: "fixture",
+        source_projection_sha256: canonicalAuthoritySha256(baseProjection),
+        expected_shadow_provider_revision: commit1.provider_revision,
+      },
+    });
+    assert.equal(fence.status, "applied");
+
+    const sourceAuthority = `${provider}_v0`;
+    const matched = await verifyCanonicalTodoAuthorityWitness({
+      schema_version: "todo_authority_head_verify_v0",
+      runtime_root: root,
+      goal_id: goal,
+      expected_witness: {
+        source_authority: sourceAuthority,
+        provider_revision: commit1.provider_revision,
+        cursor: commit1.cursor,
+      },
+    });
+    assert.equal(matched.fresh, true);
+    assert.equal(matched.reason_code, "matched");
+
+    const incomplete = await verifyCanonicalTodoAuthorityWitness({
+      schema_version: "todo_authority_head_verify_v0",
+      runtime_root: root,
+      goal_id: goal,
+      expected_witness: {
+        source_authority: sourceAuthority,
+        provider_revision: "",
+        cursor: commit1.cursor,
+      },
+    });
+    assert.equal(incomplete.fresh, false);
+    assert.equal(incomplete.reason_code, "expected_witness_incomplete");
+
+    const nextTodos = [
+      row("todo_a", {index: 1}),
+      row("todo_b", {index: 2, status: "deferred", resume_when: "pr_merged:example/hotpath#42"}),
+    ];
+    const nextProjection = {
+      goal_id: goal, handoff_mode: "soft_claim", todos: nextTodos, leases: [],
+      todo_read_model: coordinationTodoReadModel(nextTodos, TODO_CANONICAL_READ_RECORD_SCHEMA),
+    };
+    const commit2 = await store.commitAuthority({
+      expected_provider_revision: commit1.provider_revision,
+      operation_id: "seed-witness-2",
+      events: [],
+      receipts: [],
+      next_projection: nextProjection,
+    });
+    assert.equal(commit2.status, "applied");
+    if (commit2.status !== "applied") return;
+
+    const drifted = await verifyCanonicalTodoAuthorityWitness({
+      schema_version: "todo_authority_head_verify_v0",
+      runtime_root: root,
+      goal_id: goal,
+      expected_witness: {
+        source_authority: sourceAuthority,
+        provider_revision: commit1.provider_revision,
+        cursor: commit1.cursor,
+      },
+    });
+    assert.equal(drifted.fresh, false);
+    assert.equal(drifted.reason_code, "canonical_witness_drifted");
+    assert.equal(drifted.provider_revision, commit2.provider_revision);
+    assert.equal(drifted.cursor, commit2.cursor);
   });
 }
