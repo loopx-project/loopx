@@ -361,7 +361,17 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       // Revisit an earlier row while several entries remain open. The order
       // they were expanded and the position of the keyboard reader can differ.
       const otherSummaries = results.locator(".research-record-entry > summary");
-      for (const index of [0, 1, 2]) await otherSummaries.nth(index).press("Enter");
+      await otherSummaries.first().press("Enter");
+      const expansion = await otherSummaries.evaluateAll(summaries => {
+        for (const summary of summaries.slice(1)) summary.click();
+        summaries[1].focus();
+        const state = JSON.parse(new URL(location.href).searchParams.get("research_records"));
+        return {
+          expected: summaries.map(summary => summary.closest("[data-research-record]").dataset.researchRecord),
+          persisted: state.expanded,
+        };
+      });
+      assert.deepEqual(expansion.persisted, expansion.expected, "Reload can recover every activated entry immediately");
       const readingSummary = otherSummaries.nth(1);
       await readingSummary.focus();
       const readingId = await readingSummary.evaluate(el => el.closest("[data-research-record]").dataset.researchRecord);
