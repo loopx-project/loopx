@@ -219,11 +219,13 @@ def test_nokv_jsonl_helper_starts_without_loopx_on_the_interpreter_path(
     `[python, "-I", <file>]`.
     """
 
-    # Ground truth, not an assumption about the fixture: without the helper's
-    # bootstrap there is no route from this interpreter to LoopX at all.
+    # A source-checkout runner may export PYTHONPATH even for a fresh venv.
+    sdk_environment = dict(os.environ)
+    sdk_environment.pop("PYTHONPATH", None)
     probe = subprocess.run(
         [sdk_only_python, *prefix, "-c", "import loopx"],
         cwd=tmp_path,
+        env=sdk_environment,
         capture_output=True,
         timeout=180,
     )
@@ -235,7 +237,7 @@ def test_nokv_jsonl_helper_starts_without_loopx_on_the_interpreter_path(
     result = subprocess.run(
         [sdk_only_python, *prefix, str(NOKV_HELPER)],
         cwd=tmp_path,
-        env={**os.environ, "PYTHONIOENCODING": LOCALE_CODEC, "PYTHONUTF8": "0"},
+        env={**sdk_environment, "PYTHONIOENCODING": LOCALE_CODEC, "PYTHONUTF8": "0"},
         input=_request_bytes(
             {
                 "request_id": "r1",
