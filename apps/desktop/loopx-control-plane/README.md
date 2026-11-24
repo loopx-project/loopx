@@ -579,29 +579,31 @@ Self-service:
    To restore a backup, replace the launcher directory entry in the way that
    preserves the backup's own entry type, and never copy through the current
    link — `cp` would follow it and rewrite the supported Node binary that
-   other tools share:
+   other tools share. A missing launcher is a recoverable state too: an
+   interrupted repair leaves only the backup, and `rm -f` accepts that.
 
    ```bash
    newest=$(ls -td ~/.local/bin/node.before-loopx.* | head -1) &&
-   shasum "$newest/node" &&
-   rm ~/.local/bin/node &&
+   rm -f ~/.local/bin/node &&
    if [ -L "$newest/node" ]; then
      ln -s "$(readlink "$newest/node")" ~/.local/bin/node
    else
      cp "$newest/node" ~/.local/bin/node
    fi &&
-   shasum "$newest/node" "$HOME/.local/bin/node"
+   shasum ~/.local/bin/node
    ```
 
-   The two `shasum` lines bracket the restore: the first reads the backup's
-   launcher, the second reads the restored entry through its route, and the
-   two must match. The backup keeps the launcher's own entry type: a symlink
-   is recreated with the same target, so a later version-manager update is
-   still followed; a regular file is copied byte for byte. Removing the
-   current entry before the copy is what keeps the supported Node binary
-   safe — nothing writes through the link into a binary other tools share.
-   To double-check the candidate itself, checksum the path you chose as
-   `<supported node binary>`; the restore never writes to it.
+   The backup keeps the launcher's own entry type and raw link value: a
+   symlink is recreated with its original target string at the original
+   location, so a relative link resolves exactly as it did before the repair
+   and a later version-manager update of its target is still followed; a
+   regular file is copied byte for byte. The final `shasum` reads the
+   restored entry through its route and is the readback that the original
+   routing works again. Removing the current entry before the copy is what
+   keeps the supported Node binary safe — nothing writes through the link
+   into a binary other tools share. To double-check the candidate itself,
+   checksum the path you chose as `<supported node binary>`; the restore
+   never writes to it.
 
    `node_found` of `true` with no `node_version` means the App found a `node`
    it could not read a version from: inspect that entry with `ls -l` and the
