@@ -18,22 +18,26 @@ GOAL = "claim-guard-fixture-goal"
 TODO = "todo_claim_guard"
 
 
+PROVIDER_AUTHORITY = {"file": "file_v0", "sqlite": "sqlite_v0"}
+
+
 @pytest.fixture(params=["file", "sqlite"])
 def authority(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    provider = request.param
     runtime, registry, state = tmp_path / "runtime", tmp_path / ".loopx/registry.json", tmp_path / "state.md"
     registry.parent.mkdir()
     state.write_text("## Agent Todo\n")
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "repo": str(tmp_path), "state_file": state.name,
         "coordination": {"registered_agents": ["agent-a", "agent-b"]}}]}))
-    yield runtime, registry, state
+    yield runtime, registry, state, provider
     effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
-def _seed(runtime: Path, todos: list[dict], state: Path) -> None:
+def _seed(runtime: Path, todos: list[dict], state: Path, provider: str) -> None:
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL, todos=todos, handoff_mode="soft_claim")
-    initialize_canonical_authority(runtime, GOAL, projection, state_path=state)
+    initialize_canonical_authority(runtime, GOAL, projection, state_path=state, provider=provider)
 
 
 def _claim(runtime: Path, registry: Path, actor: str, key: str, **extra):
@@ -62,11 +66,12 @@ def _open_todo(**fields) -> dict:
 
 
 def test_claim_on_todo_bound_to_another_agent_is_rejected_without_side_effects(authority):
-    runtime, registry, state = authority
-    _seed(runtime, [_open_todo(bound_agent="agent-b")], state)
+    runtime, registry, state, provider = authority
+    _seed(runtime, [_open_todo(bound_agent="agent-b")], state, provider)
     rejected = _claim(runtime, registry, "agent-a", "guard-bound-mismatch")
     assert rejected["status"] == "failed" and rejected["reason_code"] == "bound_agent_mismatch", rejected
     assert rejected["decision_read_from_provider"] is True
+    assert rejected["source_authority"] == PROVIDER_AUTHORITY[provider], rejected
     todo = _todo(runtime)
     assert not todo.get("claimed_by")
     receipt = effect_runtime_result("coordination.local_authority.operation_receipt", {
@@ -76,12 +81,13 @@ def test_claim_on_todo_bound_to_another_agent_is_rejected_without_side_effects(a
     # The bound agent itself still claims normally.
     accepted = _claim(runtime, registry, "agent-b", "guard-bound-owner")
     assert accepted["status"] == "applied", accepted
+    assert accepted["source_authority"] == PROVIDER_AUTHORITY[provider], accepted
     assert _todo(runtime)["claimed_by"] == "agent-b"
 
 
 def test_claim_wires_reject_an_unqualified_goal_ref_before_any_provider_effect(authority):
-    runtime, registry, state = authority
-    _seed(runtime, [_open_todo()], state)
+    runtime, registry, state, provider = authority
+    _seed(runtime, [_open_todo()], state, provider)
     for goal_ref in (None, {"goal_id": GOAL, "goal_instance_id": "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}):
         rejected = _claim(runtime, registry, "agent-a", "guard-goal-ref", goal_ref=goal_ref)
         assert rejected["status"] == "failed", rejected
@@ -92,15 +98,20 @@ def test_claim_wires_reject_an_unqualified_goal_ref_before_any_provider_effect(a
     # Omitting the field keeps the ordinary claim path.
     accepted = _claim(runtime, registry, "agent-a", "guard-goal-ref-clean")
     assert accepted["status"] == "applied", accepted
+    assert accepted["source_authority"] == PROVIDER_AUTHORITY[provider], accepted
     assert _todo(runtime)["claimed_by"] == "agent-a"
 
 
 def test_ordinary_unclaimed_self_claim_and_same_key_replay_keep_room_off_parity(authority):
-    runtime, registry, state = authority
-    _seed(runtime, [_open_todo()], state)
+    runtime, registry, state, provider = authority
+    _seed(runtime, [_open_todo()], state, provider)
     first = _claim(runtime, registry, "agent-a", "guard-parity-key")
     assert first["status"] == "applied" and first.get("claimed_by") == "agent-a", first
-    revision = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)["provider_revision"]
+    assert first["source_authority"] == PROVIDER_AUTHORITY[provider], first
+    snapshot = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
+    assert snapshot["source_authority"] == PROVIDER_AUTHORITY[provider], snapshot
+    revision = snapshot["provider_revision"]
     replay = _claim(runtime, registry, "agent-a", "guard-parity-key")
     assert replay["status"] == "replayed", replay
+    assert replay["source_authority"] == PROVIDER_AUTHORITY[provider], replay
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)["provider_revision"] == revision
