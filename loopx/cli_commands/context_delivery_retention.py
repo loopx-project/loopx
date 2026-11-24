@@ -410,8 +410,6 @@ def _resume_checkpoint_cohort(
         protected=protected, active_digests=active_digests, runtime_root=runtime_root,
         abs_root=abs_root, resolved_root=resolved_root, uid=uid,
         max_inspect_bytes_per_sweep=max_inspect_bytes_per_sweep,
-        ref_scan_remaining=ref_scan_remaining,
-        max_ref_scan_bytes_per_sweep=max_ref_scan_bytes_per_sweep,
         inspected_by_name=inspected_by_name,
         settlement_cache=settlement_cache, read_json=read_json,
     )
@@ -420,7 +418,7 @@ def _resume_checkpoint_cohort(
         protected.update(saved_protected)
         inspected_by_name.clear()
         return None
-    preliminary_reclaimable, ref_scan_remaining = verified
+    preliminary_reclaimable = verified
 
     protected.update(_expand_protected_closure(protected, owned_by_name=inspected_by_name))
     remaining_targets = [
@@ -597,6 +595,7 @@ def _verify_targets_via_ref_scan(
                     return [], invalid_found
                 _persist_paused_refscan(
                     root=root, uid=uid, remaining_targets=remaining_targets,
+                    inspected_by_name=inspected_by_name,
                     protected=protected, active_digests=active_digests,
                     seen_frontiers=seen_frontiers, round_frontier=round_frontier,
                     next_frontier=next_frontier, referrer_witnesses=referrer_witnesses,

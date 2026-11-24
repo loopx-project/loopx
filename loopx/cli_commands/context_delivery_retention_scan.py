@@ -909,6 +909,7 @@ def _valid_sha256_tuple(raw: object) -> frozenset[str] | None:
 from .context_delivery_retention_checkpoint import (  # noqa: E402
     RETENTION_REFSCAN_CHECKPOINT_NAME as RETENTION_REFSCAN_CHECKPOINT_NAME,
     _RefScanCheckpoint as _RefScanCheckpoint,
+    _ReferrerSummary as _ReferrerSummary,
     _TargetCohortIdentity as _TargetCohortIdentity,
     _cohort_identities_for_candidates as _cohort_identities_for_candidates,
     _load_refscan_checkpoint as _load_refscan_checkpoint,

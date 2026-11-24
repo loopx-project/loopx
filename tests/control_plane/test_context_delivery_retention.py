@@ -1917,18 +1917,27 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
     assert res_corrupt.swept is True and res_corrupt.deleted == 0
     checkpoint_path.unlink()
 
-    # Unsupported v1 checkpoint fails closed even with safe 0600 permissions.
-    checkpoint_path.write_text('{"version":1}', encoding="utf-8")
-    os.chmod(checkpoint_path, 0o600)
-    res_v1 = maybe_prune_context_delivery_root(
-        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 3.0
-    )
-    assert res_v1.swept is True and res_v1.deleted == 0
-    checkpoint_path.unlink()
+    # Unsupported v1/v2 checkpoints fail closed even with safe 0600 permissions.
+    for old_ver in (1, 2):
+        checkpoint_path.write_text(json.dumps({"version": old_ver}), encoding="utf-8")
+        os.chmod(checkpoint_path, 0o600)
+        res_old = maybe_prune_context_delivery_root(
+            root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 3.0
+        )
+        assert res_old.swept is True and res_old.deleted == 0
+        checkpoint_path.unlink()
 
-    # Valid v2 structure with overlapping BFS waves / referrers / targets fails closed even at 0600.
-    valid_v2 = {
-        "version": 2,
+    # Valid v3 structure with overlapping BFS waves / referrers / targets fails closed even at 0600.
+    empty_summary = {
+        "data_digests": [],
+        "reader_digests": [],
+        "admissions": [],
+        "referenced_names": [],
+        "referenced_digests": [],
+        "byte_size": 0,
+    }
+    valid_v3 = {
+        "version": 3,
         "target_cohort": [
             {
                 "name": "decision-small-016",
@@ -1943,16 +1952,21 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
         "active_frontier": ["decision-small-016"],
         "next_frontier": [],
         "referrer_witnesses": {},
+        "referrer_summaries": {},
         "completed_witnesses": {},
         "round_witnesses": {},
     }
     for bad_override in (
         {"seen_frontiers": ["decision-small-016"]},
         {"next_frontier": ["decision-small-016"]},
-        {"referrer_witnesses": {"decision-small-016": [1, 0, 0, 1]}},
+        {
+            "referrer_witnesses": {"decision-small-016": [1, 0, 0, 1]},
+            "referrer_summaries": {"decision-small-016": empty_summary},
+        },
+        {"referrer_witnesses": {"decision-small-017": [1, 0, 0, 1]}},
         {"completed_witnesses": {"decision-small-017": [1, 0, 0, 1]}},
     ):
-        bad_payload = {**valid_v2, **bad_override}
+        bad_payload = {**valid_v3, **bad_override}
         checkpoint_path.write_text(json.dumps(bad_payload), encoding="utf-8")
         os.chmod(checkpoint_path, 0o600)
         res_bad = maybe_prune_context_delivery_root(
@@ -1961,8 +1975,8 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
         assert res_bad.swept is True and res_bad.deleted == 0
         checkpoint_path.unlink()
 
-    # Otherwise valid v2 payload with loose group/world permissions must also fail closed.
-    checkpoint_path.write_text(json.dumps(valid_v2), encoding="utf-8")
+    # Otherwise valid v3 payload with loose group/world permissions must also fail closed.
+    checkpoint_path.write_text(json.dumps(valid_v3), encoding="utf-8")
     os.chmod(checkpoint_path, 0o644)
     res_perm = maybe_prune_context_delivery_root(
         root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 4.0
@@ -2045,9 +2059,10 @@ def test_sqlite_540_backlog_resumable_checkpoint_and_tamper_protection(
     assert checkpoint_path.is_file()
     assert (checkpoint_path.lstat().st_mode & 0o077) == 0
     ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert ckpt_payload["version"] == 2
+    assert ckpt_payload["version"] == 3
     assert ckpt_payload["seen_frontiers"] == []
     assert ckpt_payload["completed_witnesses"] == {}
+    assert ckpt_payload["referrer_summaries"] == {}
     assert "decision-backlog-020" in ckpt_payload["round_witnesses"]
 
     # Tamper previously scanned decision-backlog-020 between Sweep 1 and Sweep 2 to add an
@@ -2239,11 +2254,12 @@ def test_sqlite_540_backlog_with_expired_referrer_reclaims_across_5_sweeps(
         counts_after_sweep.append(remaining_seeded())
         if checkpoint_path.is_file():
             payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            assert payload["version"] == 2
+            assert payload["version"] == 3
             if payload["seen_frontiers"]:
                 seen_round2_checkpoint = True
                 assert payload["active_frontier"] == ["decision-backlog-020"]
                 assert "decision-backlog-020" in payload["referrer_witnesses"]
+                assert "decision-backlog-020" in payload["referrer_summaries"]
                 assert payload["completed_witnesses"]
                 assert payload["round_witnesses"]
 
@@ -2626,3 +2642,168 @@ def test_referrer_tamper_vanish_fallback_and_round1_false_positive_caught_in_rou
     assert res_fp.swept is True and res_fp.deleted == 1
     assert (fp_root / "decision-000-t0").is_dir()
     assert not (fp_root / "decision-001-t1").exists()
+
+
+def test_sqlite_5x50mib_referrers_plus_16mib_capture_reclaims_without_stall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """5 x ~50 MiB referrers + 16 MiB trailing capture do not stall subsequent 256 MiB sweeps."""
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+
+    blob_50mib = "r" * (50 * 1024 * 1024)
+    blob_16mib = "u" * (16 * 1024 * 1024)
+    now = time.time()
+    old_mtime = now - 200_000.0
+    recent_mtime = now - 3_600.0
+
+    def seed_eight_aged(root: Path, *, link_referrers: bool) -> list[str]:
+        names: list[str] = []
+        for idx in range(2):
+            name = f"decision-aged-t{idx}"
+            d = _make_dir(root, name, mtime=old_mtime + idx)
+            _write_owned_json(d / "decision.json", {"ok": True, "decision": "wait"}, mtime=old_mtime + idx)
+            os.utime(d, (old_mtime + idx, old_mtime + idx))
+            names.append(name)
+        for idx in range(5):
+            name = f"decision-aged-r{idx}"
+            rd = root / name
+            rd.mkdir(mode=0o700)
+            payload: dict[str, object] = {"ok": True, "decision": "wait", "blob": blob_50mib}
+            if link_referrers:
+                payload["decision_capture_path"] = str(root / "decision-aged-t0" / "decision.json")
+            target = rd / "decision.json"
+            digest = _write_owned_json(target, payload, mtime=old_mtime + 10 + idx)
+            _write_owned_json(
+                rd / "decision.reader.json",
+                {"schema_version": "context_capture_read_reference_v1", "path": str(target), "sha256": digest},
+                mtime=old_mtime + 10 + idx,
+            )
+            os.utime(rd, (old_mtime + 10 + idx, old_mtime + 10 + idx))
+            names.append(name)
+        late = root / "decision-aged-zlate"
+        late.mkdir(mode=0o700)
+        late_target = late / "decision.json"
+        late_digest = _write_owned_json(
+            late_target, {"ok": True, "decision": "wait", "blob": blob_16mib}, mtime=old_mtime + 20
+        )
+        _write_owned_json(
+            late / "decision.reader.json",
+            {"schema_version": "context_capture_read_reference_v1", "path": str(late_target), "sha256": late_digest},
+            mtime=old_mtime + 20,
+        )
+        os.utime(late, (old_mtime + 20, old_mtime + 20))
+        names.append("decision-aged-zlate")
+        return names
+
+    # 1. Single-sweep unit verification: Sweep 1 saves v3 checkpoint with 5 referrers,
+    #    Sweep 2 verifies referrers in O(stat) with 0 scan-bytes deducted -> deletes t0 & t1 (8 -> 6).
+    unit_rt = tmp_path / "unit-rt"
+    unit_rt.mkdir(mode=0o700)
+    unit_root = unit_rt / "context-delivery"
+    unit_root.mkdir(mode=0o700)
+    unit_names = seed_eight_aged(unit_root, link_referrers=True)
+
+    res1 = maybe_prune_context_delivery_root(
+        unit_root, runtime_root=unit_rt, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now,
+    )
+    assert res1.swept is True and res1.deleted == 0
+    ckpt_unit = unit_root / RETENTION_REFSCAN_CHECKPOINT_NAME
+    ckpt_data = json.loads(ckpt_unit.read_text(encoding="utf-8"))
+    assert ckpt_data["version"] == 3
+    assert len(ckpt_data["referrer_witnesses"]) == 5
+    assert len(ckpt_data["referrer_summaries"]) == 5
+    assert all(
+        summary["byte_size"] > 50 * 1024 * 1024
+        for summary in ckpt_data["referrer_summaries"].values()
+    )
+
+    res2 = maybe_prune_context_delivery_root(
+        unit_root, runtime_root=unit_rt, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 1.0,
+    )
+    assert res2.swept is True and res2.deleted == 2
+    assert not ckpt_unit.exists()
+    assert sum(1 for name in unit_names if (unit_root / name).exists()) == 6
+
+    # 2. Tamper-detection guard on large cached referrer: mutating r0 fails O(stat) check and protects t0.
+    tamper_rt = tmp_path / "tamper-rt"
+    tamper_rt.mkdir(mode=0o700)
+    tamper_root = tamper_rt / "context-delivery"
+    tamper_root.mkdir(mode=0o700)
+    seed_eight_aged(tamper_root, link_referrers=True)
+    res_t1 = maybe_prune_context_delivery_root(
+        tamper_root, runtime_root=tamper_rt, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now,
+    )
+    assert res_t1.swept is True and res_t1.deleted == 0
+    r0_dir = tamper_root / "decision-aged-r0"
+    _write_owned_json(
+        r0_dir / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "goal-tamper-large",
+            "runtime_root": str(tamper_rt),
+            "heartbeat_receipt": {"turn_instance_id": "turn-tamper-large", "event_id": "evt-tl"},
+            "decision_capture_path": str(tamper_root / "decision-aged-t0" / "decision.json"),
+            "blob": blob_50mib + "!",
+        },
+        mtime=now + 5.0,
+    )
+    os.utime(r0_dir, (now + 5.0, now + 5.0))
+    for step in range(1, 4):
+        maybe_prune_context_delivery_root(
+            tamper_root, runtime_root=tamper_rt, min_age_seconds=86400.0,
+            keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 5.0 + step,
+        )
+    assert (tamper_root / "decision-aged-t0").is_dir()
+    assert not (tamper_root / "decision-aged-t1").exists()
+
+    # 3. Paired real SQLite CLI 5-sweep check (default byte/keep/delete caps, only interval=0):
+    #    both unreferenced control and 5 x ~50 MiB referenced case reclaim 8 -> 6 and preserve active readback.
+    def run_paired_cli_5_sweeps(*, label: str, link_referrers: bool) -> int:
+        sub = tmp_path / label
+        sub.mkdir()
+        project, runtime, registry = _write_fixture(sub, provider="sqlite")
+        managed_root = runtime.expanduser().resolve() / "context-delivery"
+        managed_root.mkdir(parents=True, mode=0o700)
+        for idx in range(64):
+            _make_dir(managed_root, f"decision-recent-{idx:02d}", mtime=recent_mtime + idx)
+        active_guard, _ = _run_measured_begin_turn(
+            project=project, registry=registry, runtime=runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            extra_env={"LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "0"},
+            begin_turn=True,
+        )
+        active_ref = Path(str(active_guard["reference_file"]))
+        aged_names = seed_eight_aged(managed_root, link_referrers=link_referrers)
+        for _ in range(5):
+            _run_measured_begin_turn(
+                project=project, registry=registry, runtime=runtime,
+                goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+                extra_env={"LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0"},
+                begin_turn=False,
+            )
+        rc_read, read_active = _run_cli(
+            registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
+        )
+        assert rc_read == 0 and read_active["ok"] is True
+        return sum(1 for name in aged_names if (managed_root / name).exists())
+
+    assert run_paired_cli_5_sweeps(label="cli-ctrl", link_referrers=False) == 6
+    assert run_paired_cli_5_sweeps(label="cli-exp", link_referrers=True) == 6
