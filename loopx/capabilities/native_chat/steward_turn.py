@@ -694,38 +694,11 @@ class StewardTurnHost:
                               admission_retry: bool = False, claim_args: list[str] | None = None,
                               retain_for_retry: Callable[[], bool] | None = None):
         """Both generation and cached validation use the original Todo owner."""
-        from .steward_commands import native_command
+        from .steward_commands import acquire_steward_task_lease, native_command
+
         actor = request["actor"]
-        if claim_args is not None:
-            operation_id = f"todo-claim:native-turn:{turn_id}"
-            claim = native_command(self.controller, [*claim_args, "--claim-operation-id", operation_id])
-            if claim.get("claim_operation_id") != operation_id:
-                raise ValueError("native task preparation did not return its original claim")
-            receipts = native_command(self.controller, ["todo", "receipt", "--goal-id", actor["goal_id"],
-                "--operation-id", operation_id])["receipts"]
-            lease = receipts[0]["result"].get("lease") if len(receipts) == 1 else None
-            if not isinstance(lease, dict):
-                raise ValueError("native task preparation could not read back its original lease")
-        else:
-            observed = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"]])
-            retained = observed.get("lease")
-            if request.get("resume_turn_key") and not recovery:
-                # A new Host attempt still belongs to the original admitted lease.
-                # Its launch guard independently matches the persisted generation.
-                if (observed.get("active") is not True or not isinstance(retained, dict)
-                        or retained.get("owner") != actor["agent_id"]
-                        or retained.get("idempotency_key") != request["turn_instance_id"]):
-                    raise ValueError("the original report launch lease is no longer active")
-                lease = retained
-            else:
-                version = retained["version"] if retained else 0
-                suffix = (".validation-recovery." + str(version) if recovery else
-                    ".admission-retry." + turn_id if admission_retry else "")
-                lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
-                    "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                    "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
-                    "--expected-version", str(version)])["lease"]
+        lease = acquire_steward_task_lease(self.controller, request, turn_id,
+            recovery=recovery, admission_retry=admission_retry, claim_args=claim_args)
         try:
             yield lease
         finally:
