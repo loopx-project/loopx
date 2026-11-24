@@ -437,6 +437,17 @@ the writeback receipt. The composed command can then settle that Turn.
 Older guards without a persisted spend source
 retain the existing heartbeat default.
 
+When a bound `quota spend-slot` returns `index_digest_conflict`, run the
+guard in `settlement_recovery.next_cli_actions`. It reads the original Turn.
+Execute its `settlement_owed.command` only when present. If another writer
+already settled the debit, the retry ends there. An unbound spend requires a
+fresh preview.
+
+已绑定轮次的 `quota spend-slot` 遇到索引冲突时，执行
+`settlement_recovery.next_cli_actions` 中的命令以核对原轮次。仅当返回
+`settlement_owed.command` 时才执行该命令。如果其他写入者已完成扣额，本次重试
+到此结束。未绑定轮次的扣额须重新预演。
+
 A rejected `refresh-state`, or an Agent's state-only maintenance update, also
 returns `settlement_recovery` when a persisted Turn still owes closeout. Its
 identity and progress come from the same typed receipt reader as guard recovery.

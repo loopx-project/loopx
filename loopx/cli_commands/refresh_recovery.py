@@ -6,15 +6,33 @@ its exact readback and CLI continuation. It never admits or settles a Turn.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ..control_plane.effect_program import SettlementIdentity
 from ..control_plane.quota.settlement import attach_settlement_progress, read_heartbeat_settlement
 from ..command_invocation import loopx_cli_argv
 from ..install_contract import render_host_cli_command
 from ..history import load_registry
 from ..paths import resolve_runtime_root
+
+
+def original_turn_guard_command(
+    identity: SettlementIdentity, *, registry_path: Path, runtime_root: Path,
+    goal_ref: Mapping[str, object] | None, available_capabilities: Sequence[str],
+) -> str:
+    """Re-enter the verified original binding so the guard reads its current phase."""
+    return render_host_cli_command([
+        *loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root", str(runtime_root),
+        "--format", "json", "quota", "should-run",
+        "--runtime-profile", "generic_cli",
+        "--goal-id", identity.goal_id, "--agent-id", identity.agent_id,
+        "--turn-instance-id", identity.turn_instance_id,
+        *(["--todo-id", identity.todo_id] if identity.todo_id else []),
+        *(["--goal-instance-id", str(goal_ref["goal_instance_id"])] if goal_ref is not None else []),
+        *[word for capability in available_capabilities for word in ("--available-capability", capability)],
+    ])
 
 
 def attach_refresh_settlement_recovery(
@@ -49,16 +67,10 @@ def attach_refresh_settlement_recovery(
         owed = recovery.get("settlement_owed")
         # Use the current complete guard with the original binding. Replan
         # guards recover their obligation from the Turn receipt.
-        command = render_host_cli_command([
-            *loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root", str(runtime_root),
-            "--format", "json", "quota", "should-run",
-            "--runtime-profile", "generic_cli",
-            "--goal-id", identity.goal_id, "--agent-id", identity.agent_id,
-            "--turn-instance-id", identity.turn_instance_id,
-            *(["--todo-id", identity.todo_id] if identity.todo_id else []),
-            *(["--goal-instance-id", str(goal_ref["goal_instance_id"])] if goal_ref is not None else []),
-            *[word for capability in args.available_capabilities or [] for word in ("--available-capability", capability)],
-        ])
+        command = original_turn_guard_command(
+            identity, registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
+            available_capabilities=args.available_capabilities or (),
+        )
         recovery.update(required=True, settlement_identity=identity.as_dict(),
             next_cli_actions=[owed["command"] if isinstance(owed, dict) else command],
             instruction="This response does not settle the original Turn. Follow its recovery with the same identity; "

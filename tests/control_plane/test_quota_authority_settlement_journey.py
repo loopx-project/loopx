@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import test_quota_settlement_cli as cli
 from canonical_authority_fixture import initialize_canonical_authority
-from codex_checkpoint_fixture import selected_context_values
+from codex_checkpoint_fixture import read_cli_policy_payload, selected_context_values
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota import slot_accounting
@@ -822,6 +822,8 @@ def test_original_turn_refuses_readiness_from_a_replacement_lease(hard_lease_tod
     assert debt["prior_turn_instance_id"] == cli.TURN_ID
     assert debt["repair"] == "execution_loss_closeout"
     assert debt["execution_loss"]["original_prepared_epoch"] == admitted["execution_preparation"]["lease_epoch"]
+    assert debt["execution_loss"]["current_lease_epoch"] == replacement_lease["lease_epoch"]
+    assert "settlement_owed" not in recovery
     assert journal.read_bytes() == before_retry
 
     code, refused = _refresh(
@@ -960,14 +962,20 @@ def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("binding", ["explicit", "inferred", "unbound"])
 def test_spend_index_conflict_keeps_its_diagnostic_and_retries_the_same_turn(
-    tmp_path, monkeypatch, capsys, provider,
+    tmp_path, monkeypatch, capsys, provider, binding,
 ):
     project, runtime, registry = cli._write_fixture(tmp_path)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["quota"]["allowed_slots"] = 10
+    registry.write_text(json.dumps(config))
     cli._initialize_fixture_authority(project, runtime, provider=provider)
     code, guard = _guard(project, runtime, registry)
     assert code == 0, guard
-    code, refreshed = _refresh(project, runtime, registry)
+    # Older writes may settle accounting while leaving the work binding open.
+    boundary = ("--delivery-boundary", "in_flight_continuation") if binding == "explicit" else ()
+    code, refreshed = _refresh(project, runtime, registry, *boundary)
     assert code == 0, refreshed
     command = refreshed["settlement_owed"]["command"]
 
@@ -982,12 +990,23 @@ def test_spend_index_conflict_keeps_its_diagnostic_and_retries_the_same_turn(
         assert code == 0 and competing["appended"] is True, competing
         return commit(preview, status, **kwargs)
 
+    attempt = shlex.split(command)[1:]
+    if binding == "inferred":
+        for flag in ("--turn-instance-id", "--max-page-output-bytes"):
+            index = attempt.index(flag)
+            del attempt[index:index + 2]
+    elif binding == "unbound":
+        attempt = [
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "spend-slot", "--execute", "--source", "adapter",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        ]
     with monkeypatch.context() as patch:
         patch.chdir(project)
         patch.setattr(
             slot_accounting, "record_quota_slot_spend_from_preview", spend_with_competing_write,
         )
-        code = cli_main(shlex.split(command)[1:])
+        code = cli_main(attempt)
     rejected = json.loads(capsys.readouterr().out)
     assert code == 1 and rejected["ok"] is False, rejected
     assert cli._spend_run_count(runtime) == 1
@@ -996,15 +1015,32 @@ def test_spend_index_conflict_keeps_its_diagnostic_and_retries_the_same_turn(
     assert rejected["appended"] is False
     assert "same Turn" in rejected["recommended_action"]
 
-    code, still_owed = _refresh(project, runtime, registry)
+    if binding == "unbound":
+        assert "settlement_recovery" not in rejected
+        assert "fresh preview" in rejected["recommended_action"]
+        return
+
+    recovery = rejected["settlement_recovery"]
+    assert recovery["settlement_identity"] == refreshed["settlement_identity"]
+    [reentry] = recovery["next_cli_actions"]
+    assert "--execute" not in shlex.split(reentry)
+    assert reentry in render_quota_slot_preview_markdown(rejected)
+    code, guard_view = _execute(reentry, project, runtime, registry)
+    still_owed = read_cli_policy_payload(json.dumps(guard_view), returncode=code)
     assert code == 0 and still_owed["settlement_owed"]["command"] == command, still_owed
-    code, recovered = _execute(command, project, runtime, registry)
+    assert cli._spend_run_count(runtime) == 1
+    code, recovered = _execute(still_owed["settlement_owed"]["command"], project, runtime, registry)
     assert code == 0 and recovered["settlement_progress"]["state"] == "settled", recovered
     assert recovered["settlement_identity"] == refreshed["settlement_identity"]
     assert recovered["appended"] is True
     code, replay = _execute(command, project, runtime, registry)
     assert code == 0 and replay["appended"] is False, replay
     assert replay["settlement_identity"] == recovered["settlement_identity"]
+    code, guard_view = _execute(reentry, project, runtime, registry)
+    settled = read_cli_policy_payload(json.dumps(guard_view), returncode=code)
+    assert code == 0 and settled["heartbeat_receipt"]["settlement_identity"] == recovered["settlement_identity"]
+    assert settled["heartbeat_receipt"]["status"] == "replayed"
+    assert "settlement_owed" not in settled
     assert cli._spend_run_count(runtime) == 2
 
 
