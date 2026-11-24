@@ -564,11 +564,21 @@ Self-service:
    node=<supported node binary> &&
    "$node" --version &&
    "$node" -e "const [maj,min,pat]=process.versions.node.split('.').map(Number);process.exit(maj>22||(maj===22&&(min>22||(min===22&&pat>=3)))?0:1)" &&
+   node="$(cd "$(dirname "$node")" && pwd)/$(basename "$node")" &&
+   "$node" --version &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    mkdir "$backup" &&
    mv ~/.local/bin/node "$backup/node" &&
-   ln -s "$node" ~/.local/bin/node
+   ln -s "$node" ~/.local/bin/node &&
+   "$HOME/.local/bin/node" --version
    ```
+
+   The chain normalizes the candidate to an absolute path before anything is
+   moved: a relative value such as `./toolchain/node` works in the Terminal's
+   current directory but would dangle from `~/.local/bin`, where the link
+   actually lives. The second `--version` runs the normalized path and the
+   final line runs the installed launcher link as its own readback — both must
+   succeed, and any failure stops before the original launcher is moved.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
