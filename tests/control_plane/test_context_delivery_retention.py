@@ -104,20 +104,25 @@ def _make_dir(parent: Path, name: str, *, mtime: float) -> Path:
 
 
 def test_retention_module_uses_zero_any_and_exact_defaults() -> None:
-    source_path = ROOT / "loopx" / "cli_commands" / "context_delivery_retention.py"
-    source = source_path.read_text(encoding="utf-8")
-    assert "type: ignore" not in source
-    tree = ast.parse(source)
-    any_names = [
-        node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "Any"
-    ]
-    any_attrs = [
-        node.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "Any"
-    ]
-    assert any_names == []
-    assert any_attrs == []
+    for filename in (
+        "context_delivery_retention.py",
+        "context_delivery_retention_scan.py",
+    ):
+        source_path = ROOT / "loopx" / "cli_commands" / filename
+        source = source_path.read_text(encoding="utf-8")
+        assert len(source.splitlines()) <= 1000, f"{filename} exceeds 1000 LOC"
+        assert "type: ignore" not in source
+        tree = ast.parse(source)
+        any_names = [
+            node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "Any"
+        ]
+        any_attrs = [
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "Any"
+        ]
+        assert any_names == []
+        assert any_attrs == []
     assert CONTEXT_DELIVERY_EPHEMERAL_PREFIXES == (
         "decision-",
         "recovery-",
@@ -1839,3 +1844,195 @@ def test_sqlite_aged_512kib_backlog_peak_rss_bounded_across_should_run(
         registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
     )
     assert rc_read2 == 0 and read2["ok"] is True
+
+
+def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
+    tmp_path: Path,
+) -> None:
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+
+    root = tmp_path / "context-delivery"
+    root.mkdir(mode=0o700)
+    now = 14_000_000.0
+    very_old = now - 200_000.0
+
+    # Oldest directory holds 2 valid files totaling ~9 MiB (> 8 MiB max_inspect_bytes_per_sweep).
+    oversized = root / "decision-000-oversized"
+    oversized.mkdir(mode=0o700)
+    dec_path = oversized / "decision.json"
+    deliv_path = oversized / "delivery.json"
+    _write_owned_json(
+        dec_path,
+        {"ok": True, "decision": "wait", "blob": "a" * (4_600 * 1024)},
+        mtime=very_old,
+    )
+    _write_owned_json(
+        deliv_path,
+        {"schema_version": "context_delivery_v1", "blob": "b" * (4_600 * 1024)},
+        mtime=very_old,
+    )
+    os.utime(oversized, (very_old, very_old))
+
+    # Followed by 79 smaller valid aged captures; with default keep_recent=64, 15 smaller
+    # dirs behind the 9 MiB dir must be reclaimed while the 9 MiB dir stays protected.
+    for index in range(1, 80):
+        _make_dir(root, f"decision-small-{index:03d}", mtime=very_old + index)
+
+    res = maybe_prune_context_delivery_root(root, min_age_seconds=86400.0, now=now)
+    assert res.swept is True
+    assert res.deleted == 15
+    assert oversized.is_dir()
+    for index in range(1, 16):
+        assert not (root / f"decision-small-{index:03d}").exists()
+
+    # Security boundaries on .retention-refscan.json: symlinked, corrupt, and unsafe-perm
+    # checkpoints must fail closed (0 deletions) without corrupting external targets.
+    outside_target = tmp_path / "outside-checkpoint.json"
+    outside_target.write_text('{"preserve":true}\n', encoding="utf-8")
+    checkpoint_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
+
+    checkpoint_path.symlink_to(outside_target)
+    res_sym = maybe_prune_context_delivery_root(
+        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 1.0
+    )
+    assert res_sym.swept is True and res_sym.deleted == 0
+    assert checkpoint_path.is_symlink()
+    assert outside_target.read_text(encoding="utf-8") == '{"preserve":true}\n'
+    checkpoint_path.unlink()
+
+    checkpoint_path.write_text("{corrupt-json", encoding="utf-8")
+    os.chmod(checkpoint_path, 0o600)
+    res_corrupt = maybe_prune_context_delivery_root(
+        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 2.0
+    )
+    assert res_corrupt.swept is True and res_corrupt.deleted == 0
+    checkpoint_path.unlink()
+
+    checkpoint_path.write_text('{"version":1}', encoding="utf-8")
+    os.chmod(checkpoint_path, 0o644)
+    res_perm = maybe_prune_context_delivery_root(
+        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 3.0
+    )
+    assert res_perm.swept is True and res_perm.deleted == 0
+
+
+def test_sqlite_540_backlog_resumable_checkpoint_and_tamper_protection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+
+    def run_measured_begin_turn(extra_env: dict[str, str]) -> tuple[dict[str, object], float]:
+        cmd = [
+            sys.executable, "-m", "loopx.entrypoint",
+            "--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+            "--begin-turn",
+        ]
+        probe = (
+            "import json, resource, subprocess, sys;"
+            "p = subprocess.run(sys.argv[1:], capture_output=True, text=True);"
+            "rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss;"
+            "mib = rss / (1024 * 1024) if sys.platform == 'darwin' else rss / 1024;"
+            "print(json.dumps({'rc': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr, 'rss_mib': mib}))"
+        )
+        wrapper = subprocess.run(
+            [sys.executable, "-c", probe, *cmd],
+            cwd=project, check=True, capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(ROOT), **extra_env},
+        )
+        measured = json.loads(wrapper.stdout)
+        assert measured["rc"] == 0, measured["stderr"] or measured["stdout"]
+        payload = json.loads(str(measured["stdout"]))
+        assert isinstance(payload, dict) and payload.get("ok") is True
+        return payload, float(measured["rss_mib"])
+
+    # Create active unsettled capture + disabled RSS baseline before seeding 540 dirs.
+    active_guard, baseline_rss_mib = run_measured_begin_turn(
+        {"LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "0"}
+    )
+    active_ref = Path(str(active_guard["reference_file"]))
+
+    old_mtime = time.time() - 200_000.0
+    seeded_names: list[str] = []
+    for index in range(540):
+        name = f"decision-backlog-{index:03d}"
+        _make_512kib_dir(managed_root, name, mtime=old_mtime + index)
+        seeded_names.append(name)
+
+    def remaining_seeded() -> int:
+        return sum(1 for name in seeded_names if (managed_root / name).exists())
+
+    # Sweep 1 with default budgets (only throttle disabled): hits >256 MiB ref-scan cap,
+    # saves atomic 0600 .retention-refscan.json, keeps RSS flat, deletes 0.
+    _, sweep1_rss_mib = run_measured_begin_turn(
+        {"LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0"}
+    )
+    assert remaining_seeded() == 540
+    assert sweep1_rss_mib < baseline_rss_mib + 30.0
+    checkpoint_path = managed_root / RETENTION_REFSCAN_CHECKPOINT_NAME
+    assert checkpoint_path.is_file()
+    assert (checkpoint_path.lstat().st_mode & 0o077) == 0
+    ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert ckpt_payload["version"] == 1
+    assert "decision-backlog-020" in ckpt_payload["scanned_witnesses"]
+
+    # Tamper previously scanned decision-backlog-020 between Sweep 1 and Sweep 2 to add an
+    # unsettled admission pointing to cohort target decision-backlog-000.
+    tamper_dir = managed_root / "decision-backlog-020"
+    tamper_target = tamper_dir / "decision.json"
+    tamper_digest = _write_owned_json(
+        tamper_target,
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": GOAL_ID,
+            "runtime_root": str(runtime),
+            "heartbeat_receipt": {"turn_instance_id": "turn-tamper-20", "event_id": "evt-tamper"},
+            "decision_capture_path": str(managed_root / "decision-backlog-000" / "decision.json"),
+        },
+        mtime=time.time(),
+    )
+    _write_owned_json(
+        tamper_dir / "decision.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(tamper_target),
+            "sha256": tamper_digest,
+        },
+        mtime=time.time(),
+    )
+
+    # Sweep 2 with default budgets: resumes checkpoint cleanly, detects tampered 020 and
+    # protects decision-backlog-000, removes checkpoint, deletes >= 10 captures, RSS stays flat.
+    _, sweep2_rss_mib = run_measured_begin_turn(
+        {"LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0"}
+    )
+    deleted_after_sweep2 = 540 - remaining_seeded()
+    assert deleted_after_sweep2 >= 10
+    assert (managed_root / "decision-backlog-000").is_dir()
+    assert not checkpoint_path.exists()
+    assert sweep2_rss_mib < baseline_rss_mib + 30.0
+    rc_read, read_active = _run_cli(
+        registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
+    )
+    assert rc_read == 0 and read_active["ok"] is True
