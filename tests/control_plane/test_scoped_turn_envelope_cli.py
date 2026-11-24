@@ -357,7 +357,8 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     explore_payload = json.loads(explore_cold_read.stdout)
     assert explore_payload["ok"] is True
 
-    # Uncaptured --context-delivery off omits deferred_settlement_details, retains complete 11-field
+    # Uncaptured --context-delivery off omits deferred_settlement_details, preserves all 33 full
+    # inline goal_acceptance outcomes for disabled-delivery parity, retains complete 11-field
     # vision_authoring, and executes its verbatim explore cold_read_command cleanly.
     _, uncaptured = cli(
         "quota", "should-run", "--codex-app", "--context-delivery", "off",
@@ -365,13 +366,19 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
         "--turn-instance-id", "turn-routine",
     )
     assert "deferred_settlement_details" not in uncaptured
-    assert len(json.dumps(uncaptured).encode("utf-8")) < 100_000
-    uncaptured_ga_reqs = next(
-        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+    uncaptured_ga = next(
+        s["content"]["goal_acceptance_contract"]
         for s in uncaptured["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if s.get("source") == "goal_acceptance"
     )
+    uncaptured_ga_reqs = uncaptured_ga["outcome_requirements"]
+    assert "projection_mode" not in uncaptured_ga_reqs
     assert "capture_read_command" not in uncaptured_ga_reqs
+    assert len(uncaptured_ga_reqs["outcomes"]) == 33
+    assert all(
+        "requirements" in row and "sources" in row and "summary_only" not in row
+        for row in uncaptured_ga_reqs["outcomes"]
+    )
     uncaptured_step1 = uncaptured["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
     assert uncaptured_step1["vision_authoring"] == detail_step1["vision_authoring"]
     uncaptured_explore_read = subprocess.run(
@@ -552,24 +559,45 @@ def test_scoped_acceptance_cold_read_binds_original_workspace_across_sibling_cwd
         assert all(row["objective"].startswith("Workspace A outcome") for row in outcomes[1:])
 
     # Default relative `.loopx/registry.json` invocation in Workspace A also binds absolutely across cwd.
+    ws_a_rel = _seed_mature_goal(
+        tmp_path / "ws_a_rel",
+        monkeypatch,
+        provider=provider,
+        outcome_count=9,
+        goal_id="shared-goal",
+        objective_prefix="Workspace A rel outcome",
+    )
+    _claim_current_todo(ws_a_rel)
+    rel_native = tmp_path / "native_rel"
+    rel_native.mkdir(mode=0o700)
+    rel_captures = tmp_path / "captures_rel"
+    rel_captures.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", f"cross-ws-rel-{provider}")
+    codex_context_hook(
+        str(rel_native),
+        {"hook_event_name": "SessionStart", "session_id": f"cross-ws-rel-{provider}", "cwd": str(ws_a_rel["project"]), "source": "startup"},
+    )
     rel_proc = subprocess.run(
         [
             sys.executable, "-m", "loopx.cli",
-            "--runtime-root", str(ws_a["runtime"]),
+            "--runtime-root", str(ws_a_rel["runtime"]),
             "--format", "json",
-            "quota", "should-run", "--codex-app", "--context-delivery", "off",
+            "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
             "--goal-id", "shared-goal", "--agent-id", "worker", "--todo-id", "todo_current",
-            "--turn-instance-id", "turn-ws-a",
+            "--turn-instance-id", "turn-ws-a-rel", "--codex-context-dir", str(rel_native),
+            "--decision-output-root", str(rel_captures),
         ],
-        cwd=ws_a["project"],
+        cwd=ws_a_rel["project"],
         capture_output=True,
         text=True,
     )
     assert rel_proc.returncode == 0, rel_proc.stdout + rel_proc.stderr
-    rel_decision = json.loads(rel_proc.stdout)
+    rel_view = json.loads(rel_proc.stdout)
+    _, rel_req_ref = read_context_read_reference(rel_view["recovery"]["reference_file"])
+    rel_req_ctx = json.loads(Path(rel_req_ref["path"]).read_bytes())
     rel_reqs = next(
         s["content"]["goal_acceptance_contract"]
-        for s in rel_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        for s in rel_req_ctx["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if s.get("source") == "goal_acceptance"
     )["outcome_requirements"]
     rel_cold_proc = subprocess.run(
@@ -581,7 +609,7 @@ def test_scoped_acceptance_cold_read_binds_original_workspace_across_sibling_cwd
     assert rel_cold_proc.returncode == 0, rel_cold_proc.stdout + rel_cold_proc.stderr
     rel_outcomes = json.loads(rel_cold_proc.stdout)["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
     assert len(rel_outcomes) == 9
-    assert all(row["objective"].startswith("Workspace A outcome") for row in rel_outcomes[1:])
+    assert all(row["objective"].startswith("Workspace A rel outcome") for row in rel_outcomes[1:])
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -731,3 +759,139 @@ def test_captured_turn_recovers_admission_time_outcomes_after_goal_advances(
     assert detail_reqs["revision"] == admitted_rev + 1
     assert "hreq-post-admission" in [r["id"] for r in detail_reqs["outcomes"][1]["requirements"]]
     assert decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["revision"] == admitted_rev
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_disabled_context_delivery_preserves_full_inline_outcomes_without_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    env = _seed_mature_goal(
+        tmp_path,
+        monkeypatch,
+        provider=provider,
+        outcome_count=9,
+        goal_id="disabled-delivery-goal",
+        objective_prefix="Disabled delivery outcome",
+    )
+    cli = env["cli"]
+    _claim_current_todo(env)
+
+    _, before_inspect = cli("goal-acceptance", "inspect", "--goal-id", "disabled-delivery-goal")
+    admitted_rev = before_inspect["goal_acceptance_contract"]["outcome_requirements"]["revision"]
+    provider_rev = before_inspect["provider_revision"]
+    orig_hist0 = before_inspect["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][1]
+    assert orig_hist0["id"] == "outcome-hist-0"
+    orig_req_ids = [req["id"] for req in orig_hist0["requirements"]]
+    assert len(orig_req_ids) == 8
+
+    # 1. Explicit `--context-delivery off` with NO capture location must keep all 9 full outcomes
+    #    and all 8 historical requirements inline (never compacting without a capture reader).
+    _, off_nocapture = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off",
+        "--goal-id", "disabled-delivery-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-off-nocapture",
+    )
+    assert "deferred_settlement_details" not in off_nocapture
+    off_reqs = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in off_nocapture["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert "projection_mode" not in off_reqs
+    assert off_reqs["revision"] == admitted_rev
+    assert len(off_reqs["outcomes"]) == 9
+    assert all("summary_only" not in row and "requirements" in row for row in off_reqs["outcomes"])
+    assert [r["id"] for r in off_reqs["outcomes"][1]["requirements"]] == orig_req_ids
+
+    # Uncaptured compose_turn_decision (without capture_reference_file) also refuses to compact outcomes.
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    stripped_input = {
+        key: copy.deepcopy(val)
+        for key, val in off_nocapture.items()
+        if key not in {"schema_version", "contract_binding", "deferred_settlement_details"}
+    }
+    composed_no_capture = compose_turn_decision(
+        stripped_input,
+        scheduler_execution_context=None,
+        composed_settlement=True,
+        include_goal_acceptance_detail=False,
+        capture_reference_file=None,
+    )
+    assert "deferred_settlement_details" not in composed_no_capture
+    nocap_reqs = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in composed_no_capture["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert "projection_mode" not in nocap_reqs
+    assert len(nocap_reqs["outcomes"]) == 9
+    assert [r["id"] for r in nocap_reqs["outcomes"][1]["requirements"]] == orig_req_ids
+
+    # 2. Advance live Goal acceptance (`admitted_rev -> admitted_rev + 1`).
+    refine_doc = tmp_path / "advance-disabled-delivery.json"
+    refine_doc.write_text(json.dumps({
+        "outcome_id": "outcome-hist-0",
+        "owner_agent_id": "peer-0",
+        "objective": orig_hist0["objective"],
+        "todo_ids": orig_hist0["todo_ids"],
+        "storage_format": "records",
+        "source": {"ref": "spec:post-off-admission", "summary": "Post-admission requirement provenance."},
+        "requirements": [
+            {"id": req["id"], "description": req["description"]}
+            for req in orig_hist0["requirements"]
+        ] + [
+            {"id": "hreq-post-off-admission", "description": "Added after off admission."},
+        ],
+    }))
+    _, refined = cli(
+        "goal-acceptance", "refine",
+        "--goal-id", "disabled-delivery-goal",
+        "--agent-id", "peer-0",
+        "--document", str(refine_doc),
+        "--operation-id", "op-advance-after-off",
+        "--expected-provider-revision", provider_rev,
+        "--execute",
+    )
+    assert refined["ok"] is True
+
+    # Same-Turn `--include-detail goal_acceptance` reads live rev + 1 while initial output already holds all rev reqs inline.
+    _, detail_after = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off",
+        "--include-detail", "goal_acceptance",
+        "--goal-id", "disabled-delivery-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-off-nocapture",
+    )
+    detail_after_reqs = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in detail_after["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert detail_after_reqs["revision"] == admitted_rev + 1
+    assert "hreq-post-off-admission" in [r["id"] for r in detail_after_reqs["outcomes"][1]["requirements"]]
+    assert [r["id"] for r in off_reqs["outcomes"][1]["requirements"]] == orig_req_ids
+
+    # 3. `--context-delivery off` combined with `--decision-output-dir` keeps full inline parity
+    #    without adding `deferred_settlement_details.goal_acceptance` bloat.
+    off_capture_dir = tmp_path / "off-capture-dir"
+    _, off_with_dir = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off",
+        "--decision-output-dir", str(off_capture_dir),
+        "--goal-id", "disabled-delivery-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-off-nocapture",
+    )
+    off_dir_decision = json.loads((off_capture_dir / "decision.json").read_text())
+    for payload in (off_with_dir, off_dir_decision):
+        assert "goal_acceptance" not in payload.get("deferred_settlement_details", {})
+        dir_reqs = next(
+            s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+            for s in payload["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+            if s.get("source") == "goal_acceptance"
+        )
+        assert "projection_mode" not in dir_reqs
+        assert dir_reqs["revision"] == admitted_rev + 1
+        assert len(dir_reqs["outcomes"]) == 9
+        assert all("summary_only" not in row and "requirements" in row for row in dir_reqs["outcomes"])
+        assert "hreq-post-off-admission" in [r["id"] for r in dir_reqs["outcomes"][1]["requirements"]]

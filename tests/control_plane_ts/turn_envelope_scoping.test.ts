@@ -256,7 +256,12 @@ test("scoped per-Turn goal_acceptance shrinks 33+ outcomes while retaining relev
   ];
   const expectedDigest = canonicalHash(origOutcomes);
 
-  const composed = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const composed = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: "",
+    capture_reference_file: "state/captures/decision.reader.json",
+  });
   const wcSources = (((composed.interaction_contract as JsonObject).agent_channel as JsonObject)
     .work_context as JsonObject).sources as JsonObject[];
   const gaContract = (wcSources[1].content as JsonObject).goal_acceptance_contract as JsonObject;
@@ -270,12 +275,14 @@ test("scoped per-Turn goal_acceptance shrinks 33+ outcomes while retaining relev
   assert.equal(reqs.compacted_outcome_count, 29);
   assert.equal(reqs.outcome_revision, 33);
   assert.equal(reqs.full_outcomes_sha256, expectedDigest);
-  assert.equal(reqs.capture_read_command, undefined);
+  assert.equal(
+    reqs.capture_read_command,
+    "loopx --format json quota context-read --reference-file state/captures/decision.reader.json --select /deferred_settlement_details/goal_acceptance",
+  );
   assert.equal(reqs.cold_read_command, "loopx --format json goal-acceptance inspect --goal-id g1");
+  assert.match(String(reqs.cold_read_instruction), /capture_read_command reads immutable admission-time goal_acceptance/);
   assert.match(String(reqs.cold_read_instruction), /--include-detail goal_acceptance/);
-  assert.match(String(reqs.cold_read_instruction), /bound registry and runtime root/);
-  assert.match(String(reqs.cold_read_instruction), /not immutable historical replay/);
-  assert.equal(composed.deferred_settlement_details, undefined);
+  assert.deepEqual((composed.deferred_settlement_details as JsonObject).goal_acceptance, fullOutcomes);
 
   const outcomes = reqs.outcomes as JsonObject[];
   assert.equal(outcomes.length, 33);
@@ -328,15 +335,38 @@ test("scoped per-Turn goal_acceptance shrinks 33+ outcomes while retaining relev
   assert.ok((planFull.deferred as unknown[]).length > 30);
   const fullWcBytes = Buffer.byteLength(JSON.stringify(((((fullComposed.interaction_contract as JsonObject).agent_channel as JsonObject).work_context as JsonObject).sources as JsonObject[])[1]));
   const scopedWcBytes = Buffer.byteLength(JSON.stringify(wcSources[1]));
-  assert.ok(scopedWcBytes < fullWcBytes * 0.25);
-  assert.ok(Buffer.byteLength(JSON.stringify(composed)) < Buffer.byteLength(JSON.stringify(fullComposed)) * 0.38);
+  // Including capture_read_command + read_modes on all 29 summary_only rows brings wcSources[1]
+  // from ~20% to ~33% of fullWcBytes (>65% savings) while keeping admission readback addressable.
+  assert.ok(scopedWcBytes < fullWcBytes * 0.38);
+  // First-read progressive delivery strips deferred_settlement_details while keeping captured decision complete.
   assert.ok(Buffer.byteLength(JSON.stringify(progScoped)) < Buffer.byteLength(JSON.stringify(progBaseline)) * 0.30);
 });
 
-test("small Goals, replan turns, audit required, closeout, detail flags, and fail-closed gates preserve full outcomes", () => {
-  // Small Goal <= 6 outcomes stays verbatim.
+test("small Goals, uncaptured runs, replan turns, audit required, closeout, detail flags, and fail-closed gates preserve full outcomes", () => {
+  const captureOpts = {captureReferenceFile: "state/captures/decision.reader.json"};
+
+  // Small Goal <= 6 outcomes stays verbatim even when captured.
   const small = baseNormalPayload(4);
-  assert.equal(scopeTurnGoalAcceptance(small), small);
+  assert.equal(scopeTurnGoalAcceptance(small, captureOpts), small);
+
+  // Uncaptured call without captureReferenceFile always returns payload unchanged (100% inline outcomes).
+  const uncaptured33 = baseNormalPayload(33);
+  assert.equal(scopeTurnGoalAcceptance(uncaptured33), uncaptured33);
+  assert.equal(scopeTurnGoalAcceptance(uncaptured33, {}), uncaptured33);
+
+  const uncapturedComposed = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: uncaptured33,
+    scheduler_execution_args: "",
+  });
+  const uncapturedGa = (((((uncapturedComposed.interaction_contract as JsonObject).agent_channel as JsonObject)
+    .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject)
+    .goal_acceptance_contract as JsonObject;
+  const uncapturedReqs = uncapturedGa.outcome_requirements as JsonObject;
+  assert.equal(uncapturedReqs.projection_mode, undefined);
+  assert.equal((uncapturedReqs.outcomes as JsonObject[]).length, 33);
+  assert.equal((uncapturedReqs.outcomes as JsonObject[]).every(o => o.summary_only === undefined), true);
+  assert.equal(uncapturedComposed.deferred_settlement_details, undefined);
 
   // Replan, vision audit, closeout, legacy lifetime, goal-wide criteria, missing relation, global gap, detail flag.
   for (const [name, mutate] of [
@@ -367,16 +397,17 @@ test("small Goals, replan turns, audit required, closeout, detail flags, and fai
   ] as const) {
     const candidate = baseNormalPayload(33);
     mutate(candidate);
-    const out = scopeTurnGoalAcceptance(candidate);
+    const out = scopeTurnGoalAcceptance(candidate, captureOpts);
     assert.equal(out, candidate, `${name} must preserve full outcomes`);
   }
 
-  // Explicitly requesting include_goal_acceptance_detail keeps all 33 outcomes verbatim in composeCompleteTurnDecision.
+  // Explicitly requesting include_goal_acceptance_detail keeps all 33 outcomes verbatim even with captureReferenceFile.
   const source = baseNormalPayload(33);
   const full = evaluateTurnEnvelope({
     operation: "compose_complete",
     payload: source,
     scheduler_execution_args: "",
+    capture_reference_file: "state/captures/decision.reader.json",
     include_goal_acceptance_detail: true,
   });
   const wcReqs = (((((full.interaction_contract as JsonObject).agent_channel as JsonObject)
@@ -385,6 +416,7 @@ test("small Goals, replan turns, audit required, closeout, detail flags, and fai
   const outcomeReq = wcReqs.outcome_requirements as JsonObject;
   assert.equal(outcomeReq.projection_mode, undefined);
   assert.equal((outcomeReq.outcomes as JsonObject[]).every(o => o.summary_only === undefined), true);
+  assert.equal((full.deferred_settlement_details as JsonObject).goal_acceptance, undefined);
 });
 
 test("lean routine settlement_plan compacts static prose and preserves commands, identity, and triggered turns", () => {
@@ -542,9 +574,12 @@ test("scoped goal_acceptance cold_read_command binds original cli_argv, registry
     payload: source,
     scheduler_execution_args: "",
     cli_argv: ["/opt/custom loopx", "--cli-bin", "/opt/custom loopx"],
+    capture_reference_file: "state/captures/decision.reader.json",
   });
   const expectedCmd =
     "'/opt/custom loopx' --cli-bin '/opt/custom loopx' --registry 'state/ws a/registry.json' --runtime-root 'state/ws a/runtime' --format json goal-acceptance inspect --goal-id g1";
+  const expectedCaptureCmd =
+    "'/opt/custom loopx' --cli-bin '/opt/custom loopx' --format json quota context-read --reference-file state/captures/decision.reader.json --select /deferred_settlement_details/goal_acceptance";
   const wcReqs = ((((((composed.interaction_contract as JsonObject).agent_channel as JsonObject)
     .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject)
     .goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject;
@@ -552,9 +587,10 @@ test("scoped goal_acceptance cold_read_command binds original cli_argv, registry
   assert.equal(wcReqs.full_outcome_count, 9);
   assert.equal(wcReqs.outcome_revision, 33);
   assert.equal(wcReqs.full_outcomes_sha256, expectedOutcomesSha);
-  assert.equal(wcReqs.capture_read_command, undefined);
+  assert.equal(wcReqs.capture_read_command, expectedCaptureCmd);
   assert.equal(wcReqs.cold_read_command, expectedCmd);
-  assert.match(String(wcReqs.cold_read_instruction), /not immutable historical replay/i);
+  assert.match(String(wcReqs.cold_read_instruction), /capture_read_command reads immutable admission-time goal_acceptance/);
+  assert.match(String(wcReqs.cold_read_instruction), /cold_read_command and --include-detail goal_acceptance query current live workspace state/);
 
   const compactRows = (wcReqs.outcomes as JsonObject[]).filter(row => row.summary_only === true);
   assert.equal(compactRows.length, 8);
@@ -607,6 +643,7 @@ test("scoped goal_acceptance cold_read_command binds original cli_argv, registry
     payload: source,
     scheduler_execution_args: "",
     cli_argv: ["loopx"],
+    capture_reference_file: "state/captures/decision.reader.json",
     cli_registry: "/workspace/ws a/.loopx/registry.json",
     cli_runtime_root: "/workspace/ws a/runtime",
   });

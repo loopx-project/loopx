@@ -45,7 +45,10 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
             scheduler_execution_context=scheduler_context,
             composed_settlement=True,
             include_vision_detail="vision" in detail_sections,
-            include_goal_acceptance_detail="goal_acceptance" in detail_sections,
+            include_goal_acceptance_detail=(
+                "goal_acceptance" in detail_sections
+                or getattr(args, "context_delivery", None) == "off"
+            ),
             cli_argv=current_loopx_cli_argv(),
             capture_reference_file=capture_reference_file,
             cli_registry=cli_registry,

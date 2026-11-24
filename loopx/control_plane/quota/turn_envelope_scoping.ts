@@ -1,15 +1,21 @@
 /** Scoped per-Turn goal acceptance and lean routine settlement projections.
  *
- * Ordinary routine execution Turns keep full acceptance bodies only for
- * Turn-relevant outcomes (Todo linkage, active/unmet owned outcomes, open
- * gaps, or ambiguous/fail-closed linkage) and represent remaining historical or
- * other-agent outcomes as compact index entries with an explicit cold-read
- * command (`loopx goal-acceptance inspect`). Routine `durable_writeback` steps
- * keep the canonical complete `vision_authoring` contract intact in the
- * decision (trimmed only in progressive first-read opening groups) while
- * compacting non-triggered optional explore attachment prose into explicit
- * `cold_read_command` hints (`explore turn-context`) and preserving complete
- * optional attachments inside `deferred_settlement_details` for captured turns.
+ * On captured routine execution Turns (`captureReferenceFile` provided), keeps
+ * full acceptance bodies only for Turn-relevant outcomes (Todo linkage,
+ * active/unmet owned outcomes, open gaps, or ambiguous/fail-closed linkage),
+ * preserves the complete admission-time `goal_acceptance` contract inside
+ * `deferred_settlement_details.goal_acceptance` for immutable `capture_read_command`
+ * recovery, and represents remaining historical or other-agent outcomes as
+ * compact index entries with separate immutable `capture_read_command` and live
+ * `cold_read_command` (`loopx goal-acceptance inspect`) pointers. Without a
+ * capture reference file (or with explicit `--context-delivery off` / detail
+ * flags), preserves all inline acceptance outcomes verbatim.
+ *
+ * Routine `durable_writeback` steps keep the canonical complete `vision_authoring`
+ * contract intact in the decision (trimmed only in progressive first-read opening
+ * groups) while compacting non-triggered optional explore attachment prose into
+ * explicit `cold_read_command` hints (`explore turn-context`) and preserving
+ * complete optional attachments inside `deferred_settlement_details` for captured turns.
  */
 import {isDeepStrictEqual} from "node:util";
 import {exploreResultWritebackAffordance} from "../capabilities/explore_context_delivery.ts";
@@ -331,6 +337,8 @@ export function scopeTurnGoalAcceptance(
   options: ScopeGoalAcceptanceOptions = {},
 ): JsonObject {
   if (!isRoutineNormalRun(payload)) return payload;
+  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
+  if (!captureReferenceFile) return payload;
   const goalId = nonEmptyString(payload.goal_id);
   const agentId = nonEmptyString(object(payload.agent_identity).agent_id ?? payload.agent_id);
   const selectedTodo = jsonObject(payload.selected_todo);
@@ -385,12 +393,11 @@ export function scopeTurnGoalAcceptance(
   const cliArgv = options.cliArgv ?? ["loopx"];
   const registry = options.registry ?? payload.registry;
   const runtimeRoot = options.runtimeRoot ?? payload.runtime_root;
-  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
   const coldReadOptions: ScopeGoalAcceptanceOptions = {
     cliArgv,
     registry,
     runtimeRoot,
-    ...(captureReferenceFile ? {captureReferenceFile} : {}),
+    captureReferenceFile,
   };
   const coldReadCommand = goalAcceptanceColdReadCommand({
     cliArgv,
@@ -398,13 +405,11 @@ export function scopeTurnGoalAcceptance(
     runtimeRoot,
     goalId,
   });
-  const captureReadCommand = captureReferenceFile
-    ? goalAcceptanceCaptureReadCommand({
-      cliArgv,
-      captureReferenceFile,
-      selectPointer: "/deferred_settlement_details/goal_acceptance",
-    })
-    : null;
+  const captureReadCommand = goalAcceptanceCaptureReadCommand({
+    cliArgv,
+    captureReferenceFile,
+    selectPointer: "/deferred_settlement_details/goal_acceptance",
+  });
 
   let compactedCount = 0;
   const scopedOutcomes: unknown[] = [];
@@ -451,15 +456,13 @@ export function scopeTurnGoalAcceptance(
     compacted_outcome_count: compactedCount,
     outcome_revision: requirements.revision ?? null,
     full_outcomes_sha256: fullDigest,
-    ...(captureReadCommand ? {capture_read_command: captureReadCommand} : {}),
+    capture_read_command: captureReadCommand,
     cold_read_command: coldReadCommand,
-    cold_read_instruction: captureReadCommand
-      ? "capture_read_command reads immutable admission-time goal_acceptance from this Turn capture (verify outcome_revision and full_outcomes_sha256); cold_read_command and --include-detail goal_acceptance query current live workspace state rather than replaying historical Turn state."
-      : "cold_read_command and --include-detail goal_acceptance query current live workspace Goal acceptance in the bound registry and runtime root (check outcome_revision/full_outcomes_sha256 for drift), not immutable historical replay.",
+    cold_read_instruction:
+      "capture_read_command reads immutable admission-time goal_acceptance from this Turn capture (verify outcome_revision and full_outcomes_sha256); cold_read_command and --include-detail goal_acceptance query current live workspace state rather than replaying historical Turn state.",
     outcomes: scopedOutcomes,
   };
   const scopedPayload = replaceInlineOutcomeRequirements(payload, owner, scopedRequirements);
-  if (!captureReferenceFile) return scopedPayload;
   return {
     ...scopedPayload,
     deferred_settlement_details: {
