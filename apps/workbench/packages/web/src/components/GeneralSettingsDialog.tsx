@@ -28,10 +28,12 @@ export function GeneralSettingsDialog({ api, onSave, onClose }: {
     if (!value || saving) return;
     const before = value;
     const next = { ...value, ...patch };
-    if (next.startupPage === value.startupPage && next.autoArchiveDays === value.autoArchiveDays && next.autoImportLocal === value.autoImportLocal) return;
+    const prevCapture = value.ledgerCapture !== false;
+    const nextCapture = next.ledgerCapture !== false;
+    if (next.startupPage === value.startupPage && next.autoArchiveDays === value.autoArchiveDays && next.autoImportLocal === value.autoImportLocal && nextCapture === prevCapture) return;
     // One write at a time keeps the shown choice aligned with the daemon's saved value.
     setValue(next); setSaving(true); setError('');
-    void api.saveGeneralSettings(next).then(saved => { setValue(saved); onSave(saved); })
+    void api.saveGeneralSettings({ ...next, ledgerCapture: nextCapture }).then(saved => { setValue(saved); onSave(saved); })
       .catch(error => { setValue(before); setError(String(error)); }).finally(() => setSaving(false));
   };
   const archiveOptions: GeneralSettings['autoArchiveDays'][] = [null, 1, 3, 7, 15, 30];
@@ -78,6 +80,19 @@ export function GeneralSettingsDialog({ api, onSave, onClose }: {
             </Popover>
           </div>
           <p className="panel-hint general-hint">{t('general.autoImportLocalHint')}</p>
+          <div className="personal-setting-line general-setting-line">
+            <span>{t('general.ledgerCapture')}</span>
+            <Popover label={t('general.ledgerCapture')} triggerLabel={t('general.ledgerCapture')} placement="below" align="end"
+              triggerClassName="context-btn general-select" panelClassName="general-startup-menu" disabled={saving}
+              trigger={<>{t(value.ledgerCapture !== false ? 'general.ledgerCaptureOn' : 'general.ledgerCaptureOff')}<IconChevron size={12} open /></>}>
+              {close => [true, false].map(ledgerCapture => <button key={String(ledgerCapture)} type="button" className="pop-item compact"
+                role="menuitemradio" aria-checked={(value.ledgerCapture !== false) === ledgerCapture} onClick={() => { close(); save({ ledgerCapture }); }}>
+                <span className="pop-item-label">{t(ledgerCapture ? 'general.ledgerCaptureOn' : 'general.ledgerCaptureOff')}</span>
+                <span className="pop-item-check">{(value.ledgerCapture !== false) === ledgerCapture && <IconCheck size={14} />}</span>
+              </button>)}
+            </Popover>
+          </div>
+          <p className="panel-hint general-hint">{t('general.ledgerCaptureHint')}</p>
           <div className="personal-setting-line general-setting-line">
             <span>{t('quickSwitch.handle')}</span>
             <Popover label={t('quickSwitch.handle')} triggerLabel={t('quickSwitch.handle')} placement="below" align="end"

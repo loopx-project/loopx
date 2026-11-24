@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Thread } from '../api';
+import type { StewardLedgerItem, StewardLedgerSnapshot, Thread } from '../api';
 import { t } from '../i18n';
 import { joinGoalConversation } from '../loopx/join';
 import { goalConversation, hasGoalConversations, type GoalRequest, type GoalSection } from '../loopx/goal-navigation';
@@ -8,8 +8,14 @@ import { GoalDetails } from './GoalDetails';
 import { GoalLifecycle } from './GoalLifecycle';
 import { IconChevron, IconChevronRight, IconHand, IconPlay, IconRefresh, IconStop, IconCrab } from './icons';
 
-/** The steward reads and manages Goals in the same paper overview as a conversation. */
-export function StewardOverview({ token, goals, attention, failure, loading, onChanged, onRetry, threads, onOpenThread, defaultAgent, pickDirectory, onOpenAll, onBrowseFiles, focusedGoal }: {
+function localFolderLabel(cwd: string): string {
+  const clean = cwd.replace(/[\\/]+$/, '');
+  const parts = clean.split(/[\\/]/).filter(Boolean);
+  return parts.slice(-2).join('/') || cwd;
+}
+
+/** The steward reads and manages Goals and open local sessions in the same paper overview on demand. */
+export function StewardOverview({ token, goals, attention, failure, loading, onChanged, onRetry, threads, onOpenThread, defaultAgent, pickDirectory, onOpenAll, onBrowseFiles, focusedGoal, ledger, onPeekSession }: {
   token: string | undefined;
   goals: LoopxGoal[];
   attention: LoopxAttention[];
@@ -24,6 +30,8 @@ export function StewardOverview({ token, goals, attention, failure, loading, onC
   onOpenAll?: () => void;
   onBrowseFiles?: (threadId: string) => void;
   focusedGoal?: GoalRequest;
+  ledger?: StewardLedgerSnapshot | null;
+  onPeekSession?: (target: StewardLedgerItem['jumpTarget'], title?: string) => void;
 }) {
   const [expandedGoalId, setExpandedGoalId] = useState(focusedGoal?.goalId ?? null);
   useEffect(() => { setExpandedGoalId(focusedGoal?.goalId ?? null); }, [focusedGoal]);
@@ -32,6 +40,12 @@ export function StewardOverview({ token, goals, attention, failure, loading, onC
   const needs = goals.filter(goal => goal.activationState !== 'stopped' && needsYou.has(goal.goalId));
   const active = goals.filter(goal => goal.activationState === 'active' && !needsYou.has(goal.goalId));
   const unknown = goals.filter(goal => goal.activationState !== 'active' && goal.activationState !== 'stopped' && !needsYou.has(goal.goalId));
+  const localOpen = ledger?.ledgerCapture === false
+    ? []
+    : (ledger?.items ?? []).filter(item => !item.goalId && item.phase !== 'done_recent');
+  const localScanOff = ledger?.ledgerCapture !== false
+    && ledger?.sourceHealth.localSessions.status === 'unavailable'
+    && ledger?.sourceHealth.localSessions.reason === 'local_scan_disabled';
   const cannotJoin = !defaultAgent && [...needs, ...active].some(goal => !goalConversation(goal.goalId, threads));
   const canOpenBoard = !failure && hasGoalConversations(goals, threads);
   const row = (goal: LoopxGoal, waiting = false) => <GoalRow key={goal.goalId} token={token} goal={goal} waiting={waiting}
@@ -55,8 +69,43 @@ export function StewardOverview({ token, goals, attention, failure, loading, onC
           {unknown.map(goal => row(goal))}
         </GoalGroup>}
         {focusedGoal?.goalId && !goals.some(goal => goal.goalId === focusedGoal.goalId) && <div className="overview-goal" data-goal-id={focusedGoal.goalId}><span className="overview-goal-title">{focusedGoal.goalId}</span><p className="overview-empty" role="status">{t(loading ? 'common.loading' : 'loopx.goalGone')}</p></div>}
-        {!goals.length && !focusedGoal?.goalId && <p className="overview-empty" role="status">{t(loading ? 'common.loading' : 'loopx.overview.empty')}</p>}
+        {!goals.length && !localOpen.length && !focusedGoal?.goalId && <p className="overview-empty" role="status">{t(loading ? 'common.loading' : 'loopx.overview.empty')}</p>}
       </>}
+      {localOpen.length > 0 && (
+        <GoalGroup
+          label={t('loopx.stewardLocalGroup')}
+          count={localOpen.length}
+          icon={<IconPlay size={14} />}
+          waiting={localOpen.some(item => item.phase === 'needs_user')}
+        >
+          {localOpen.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              className="steward-local-row"
+              onClick={() => {
+                if (onPeekSession) onPeekSession(item.jumpTarget, item.title);
+                else if (item.jumpTarget.kind === 'thread') onOpenThread(item.jumpTarget.threadId);
+              }}
+            >
+              <span className="steward-local-head">
+                <span className="steward-local-title" title={item.title}>{item.title}</span>
+                {item.phase !== 'idle_open' && (
+                  <span className={`steward-phase-tag is-${item.phase}`}>
+                    {t(`loopx.stewardMentionPhase.${item.phase}` as const)}
+                  </span>
+                )}
+              </span>
+              <span className="steward-local-sub">
+                {item.agent}
+                {item.cwd ? ` · ${localFolderLabel(item.cwd)}` : ''}
+                {item.summary ? ` · ${item.summary}` : ''}
+              </span>
+            </button>
+          ))}
+        </GoalGroup>
+      )}
+      {localScanOff && <p className="overview-empty steward-scan-gap" role="status">{t('loopx.stewardLocalScanOff')}</p>}
     </div>
     <div className="overview-foot">
       <span className="overview-readings">{!failure && (goals.length > 0 || !loading) ? t('loopx.overview.summary', goals.filter(goal => goal.activationState === 'active').length, goals.length) : ''}</span>
