@@ -26,11 +26,13 @@ def test_actual_quota_outputs_establish_the_migrated_actions() -> None:
 
 @pytest.fixture
 def isolated_source(tmp_path, monkeypatch):
+    # The witness executes the classifier's real imports in the isolated tree.
+    # Copy the owning control plane so a new import cannot strand the mutation.
+    shutil.copytree(
+        ROOT / "loopx/control_plane", tmp_path / "loopx/control_plane",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     for name in ["scripts/quota_run_decision_witness.mts",
-                 "loopx/control_plane/quota/run_decision.ts",
-                 "loopx/control_plane/quota/effective_action.generated.ts",
-                 "loopx/control_plane/runtime_decode.ts",
-                 "loopx/control_plane/effect_runtime_errors.ts",
                  "tests/control_plane_ts/fixtures/quota_run_decision.json"]:
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
