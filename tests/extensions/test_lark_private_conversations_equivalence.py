@@ -1,4 +1,4 @@
-"""Paired origin/main vs HEAD behavioral equivalence tests for private Lark conversations."""
+"""Paired immutable baseline vs HEAD behavioral equivalence tests for private Lark conversations."""
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -25,11 +25,14 @@ from loopx.extensions.lark.conversation_identity import identity_ref, lark_priva
 from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
 
 
+BASELINE_COMMIT = "f0ca9cef0e394b62d4a0f28c54beba16cb7aa29c"
+
+
 @cache
-def _load_origin_main_module() -> ModuleType | None:
+def _load_baseline_module(ref: str = BASELINE_COMMIT) -> ModuleType:
     repo_root = Path(__file__).resolve().parents[2]
     proc = subprocess.run(
-        ["git", "show", "origin/main:loopx/extensions/lark/private_conversations.py"],
+        ["git", "show", f"{ref}:loopx/extensions/lark/private_conversations.py"],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -37,26 +40,59 @@ def _load_origin_main_module() -> ModuleType | None:
         check=False,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    module_name = "loopx.extensions.lark._origin_main_private_conversations"
+        detail = proc.stderr.strip() or f"exit={proc.returncode}"
+        raise RuntimeError(f"paired equivalence baseline {ref} is unavailable: {detail}")
+    module_name = f"loopx.extensions.lark._baseline_{ref[:12]}_private_conversations"
     mod = ModuleType(module_name)
     mod.__file__ = str(repo_root / "loopx" / "extensions" / "lark" / "private_conversations.py")
     mod.__package__ = "loopx.extensions.lark"
     sys.modules[module_name] = mod
     try:
-        exec(compile(proc.stdout, "origin/main:loopx/extensions/lark/private_conversations.py", "exec"), mod.__dict__)
-    except Exception:
+        exec(compile(proc.stdout, f"{ref}:loopx/extensions/lark/private_conversations.py", "exec"), mod.__dict__)
+    except Exception as exc:
         sys.modules.pop(module_name, None)
-        return None
+        raise RuntimeError(f"paired equivalence baseline {ref} failed to load: {exc}") from exc
     return mod
 
 
 def _variants() -> list[tuple[str, ModuleType]]:
-    variants: list[tuple[str, ModuleType]] = [("HEAD", head_mod)]
-    base = _load_origin_main_module()
-    if base is not None:
-        variants.insert(0, ("origin/main", base))
+    base = _load_baseline_module(BASELINE_COMMIT)
+    if base is head_mod or base.LarkPrivateConversations is head_mod.LarkPrivateConversations:
+        raise RuntimeError("paired equivalence baseline resolved to HEAD module")
+    variants: list[tuple[str, ModuleType]] = [(f"baseline_{BASELINE_COMMIT[:10]}", base), ("HEAD", head_mod)]
+    assert len(variants) == 2
     return variants
+
+
+def test_missing_or_unreadable_baseline_fails_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    variants = _variants()
+    assert [name for name, _ in variants] == [f"baseline_{BASELINE_COMMIT[:10]}", "HEAD"]
+    assert variants[0][1] is not head_mod
+    assert variants[1][1] is head_mod
+    assert variants[0][1].LarkPrivateConversations is not head_mod.LarkPrivateConversations
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        _load_baseline_module("0" * 40)
+
+    def _corrupt_git_show(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=["git", "show"], returncode=0, stdout="def broken(:\n", stderr="")
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(subprocess, "run", _corrupt_git_show)
+        with pytest.raises(RuntimeError, match="failed to load"):
+            _load_baseline_module("syntax-error-baseline-ref")
+        _load_baseline_module.cache_clear()
+        try:
+            with pytest.raises(RuntimeError, match="failed to load"):
+                _variants()
+        finally:
+            _load_baseline_module.cache_clear()
+
+
+def _assert_paired_equal(outputs: list[dict[str, Any]]) -> dict[str, Any]:
+    assert len(outputs) == 2, f"expected paired [baseline, HEAD] execution, got {len(outputs)} result(s)"
+    assert outputs[0] == outputs[1]
+    return outputs[0]
 
 
 @contextmanager
@@ -420,13 +456,16 @@ def test_exported_surface_and_identity_equivalence() -> None:
         "_planned_historical_repairs",
     )
     assert head_mod.APP_ID_PATTERN is identity_shapes.LARK_APP_ID_PATTERN
-    for _name, mod in _variants():
+    seen: list[str] = []
+    for name, mod in _variants():
+        seen.append(name)
         for attr in expected_module_attrs:
             assert hasattr(mod, attr), f"missing module attr {attr}"
         for attr in expected_class_attrs:
             assert hasattr(mod.LarkPrivateConversations, attr), f"missing class attr {attr}"
         assert mod.APP_ID_PATTERN is identity_shapes.LARK_APP_ID_PATTERN
         assert mod.CHAT_CONTROL_COMMANDS == {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
+    assert seen == [f"baseline_{BASELINE_COMMIT[:10]}", "HEAD"]
 
 
 def test_message_normalization_and_status_equivalence() -> None:
@@ -492,12 +531,11 @@ def test_message_normalization_and_status_equivalence() -> None:
             "command_texts": [mod._command_text(c) for c in ("no_session", "stop_requested", "unknown")],
         })
 
-    for entry in results:
-        assert entry == results[0]
-    assert results[0]["msg_types"] == ["text", "image", None]
-    assert results[0]["senders"] == [True, False, False, False]
-    assert results[0]["hints"] == ["/status", "/stop", "/new", "/stop", None, None]
-    assert results[0]["cmd_inputs"] == ["/stop", "@_user_1 /stop", "quote @_user_1 /stop", None]
+    baseline = _assert_paired_equal(results)
+    assert baseline["msg_types"] == ["text", "image", None]
+    assert baseline["senders"] == [True, False, False, False]
+    assert baseline["hints"] == ["/status", "/stop", "/new", "/stop", None, None]
+    assert baseline["cmd_inputs"] == ["/stop", "@_user_1 /stop", "quote @_user_1 /stop", None]
 
 
 def test_debounce_backoff_and_queue_discovery_equivalence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -588,11 +626,11 @@ def test_debounce_backoff_and_queue_discovery_equivalence(tmp_path: Path, monkey
             "probe_after_close_reset": probe_after_close > clock[0],
         })
 
-    assert outputs[0] == outputs[-1]
-    assert outputs[0]["body_paths"] == [f"{'b' * 24}.json"]
-    assert outputs[0]["delivery_1"] == [f"{'b' * 24}.json"]
-    assert outputs[0]["probe_1_delta"] == 60.0 + outputs[0]["expected_stagger"]
-    assert outputs[0]["probe_2_delta"] == 120.0 + outputs[0]["expected_stagger"]
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["body_paths"] == [f"{'b' * 24}.json"]
+    assert baseline["delivery_1"] == [f"{'b' * 24}.json"]
+    assert baseline["probe_1_delta"] == 60.0 + baseline["expected_stagger"]
+    assert baseline["probe_2_delta"] == 120.0 + baseline["expected_stagger"]
 
 
 def test_target_and_mention_resolution_equivalence(tmp_path: Path) -> None:
@@ -658,12 +696,12 @@ def test_target_and_mention_resolution_equivalence(tmp_path: Path) -> None:
             "auth_ok": auth_ok,
         })
 
-    assert outputs[0] == outputs[-1]
-    assert outputs[0]["p2p_mention"] is True
-    assert outputs[0]["recall_hidden"] is None
-    assert outputs[0]["recall_shown"] == {"deleted": True}
-    assert outputs[0]["grp_cmd_input"] == "/status"
-    assert outputs[0]["auth_ok"] == ("LoopX Bot", True)
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["p2p_mention"] is True
+    assert baseline["recall_hidden"] is None
+    assert baseline["recall_shown"] == {"deleted": True}
+    assert baseline["grp_cmd_input"] == "/status"
+    assert baseline["auth_ok"] == ("LoopX Bot", True)
 
 
 def test_admit_control_history_and_conflict_equivalence(tmp_path: Path) -> None:
@@ -721,12 +759,12 @@ def test_admit_control_history_and_conflict_equivalence(tmp_path: Path) -> None:
             "grp_ctrl_res": grp_ctrl_res,
         })
 
-    assert outputs[0] == outputs[-1]
-    assert outputs[0]["status_res"] == {"status": "command_recorded"}
-    assert outputs[0]["conflict_res"] == {"status": "source_conflict"}
-    assert outputs[0]["delegate_res"] == {"status": "command_rejected"}
-    assert outputs[0]["audio_res"] == {"status": "command_recorded"}
-    assert outputs[0]["grp_ctrl_res"] == {"status": "command_recorded"}
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["status_res"] == {"status": "command_recorded"}
+    assert baseline["conflict_res"] == {"status": "source_conflict"}
+    assert baseline["delegate_res"] == {"status": "command_rejected"}
+    assert baseline["audio_res"] == {"status": "command_recorded"}
+    assert baseline["grp_ctrl_res"] == {"status": "command_recorded"}
 
 
 def test_deliver_progress_fallback_and_ambiguous_recovery_equivalence(tmp_path: Path) -> None:
@@ -788,13 +826,13 @@ def test_deliver_progress_fallback_and_ambiguous_recovery_equivalence(tmp_path: 
             "ambig_blocker": after_ambig["deliveries"]["terminal"]["blocker"],
         })
 
-    assert outputs[0] == outputs[-1]
-    assert outputs[0]["edit_limit_reached"] is True
-    assert outputs[0]["terminal_verified"] is True
-    assert outputs[0]["rejected_blocker"] == "provider_update_edit_limit"
-    assert outputs[0]["ambig_ok"] is False
-    assert outputs[0]["ambig_no_resend"] is True
-    assert outputs[0]["ambig_blocker"] == "provider_delivery_receipt_unknown"
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["edit_limit_reached"] is True
+    assert baseline["terminal_verified"] is True
+    assert baseline["rejected_blocker"] == "provider_update_edit_limit"
+    assert baseline["ambig_ok"] is False
+    assert baseline["ambig_no_resend"] is True
+    assert baseline["ambig_blocker"] == "provider_delivery_receipt_unknown"
 
 
 def test_deliver_completed_answer_image_backoff_and_return_inbox_equivalence(
@@ -875,11 +913,11 @@ def test_deliver_completed_answer_image_backoff_and_return_inbox_equivalence(
             "next_check_delta": final_row["answer_images"]["next_check_at"] - 5000.0,
         })
 
-    assert outputs[0] == outputs[-1]
-    assert outputs[0]["steps"] == (False, False, False)
-    assert outputs[0]["img_status"] == "unverified"
-    assert outputs[0]["retry_count"] == 1
-    assert outputs[0]["next_check_delta"] == 300.0
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["steps"] == (False, False, False)
+    assert baseline["img_status"] == "unverified"
+    assert baseline["retry_count"] == 1
+    assert baseline["next_check_delta"] == 300.0
 
 
 def test_reconcile_request_recovery_and_terminal_delivery_equivalence(tmp_path: Path) -> None:
@@ -947,7 +985,7 @@ def test_reconcile_request_recovery_and_terminal_delivery_equivalence(tmp_path: 
             "fail_text_kept": "原会话已保留。" in fail_row["deliveries"]["terminal"]["text"],
         })
 
-    assert outputs[0] == outputs[-1]
-    assert outputs[0]["wait_rc"] == 0 and outputs[0]["wait_no_io"] is True
-    assert outputs[0]["done_rc"] == 1 and outputs[0]["done_status"] == "delivered"
-    assert outputs[0]["fail_rc"] == 1 and outputs[0]["fail_status"] == "delivered" and outputs[0]["fail_text_kept"] is True
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["wait_rc"] == 0 and baseline["wait_no_io"] is True
+    assert baseline["done_rc"] == 1 and baseline["done_status"] == "delivered"
+    assert baseline["fail_rc"] == 1 and baseline["fail_status"] == "delivered" and baseline["fail_text_kept"] is True

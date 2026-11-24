@@ -134,7 +134,7 @@ class PrivateSourceVerificationMixin:
     def _group_source_message(self, profile: str, message_id: str) -> PayloadView | None:
         # The display-oriented mget projection omits reply ancestry. Read the
         # original provider envelope for group provenance, including root @.
-        payload = _lark_payload(
+        payload = _pc()._lark_payload(
             self.runner, self.cli_bin, profile,
             ["api", "GET", f"/open-apis/im/v1/messages/{message_id}", "--as", "bot"],
         )
@@ -145,7 +145,7 @@ class PrivateSourceVerificationMixin:
     ) -> tuple[PayloadView | None, PayloadView | None]:
         # Read both admitted IDs at once. Callers verify the returned envelopes
         # and the current Core selection before using either as authority.
-        payload = _lark_payload(
+        payload = _pc()._lark_payload(
             runner or self.runner, self.cli_bin, profile,
             ["api", "GET", "/open-apis/im/v1/messages/mget",
              "--params", json.dumps({"message_ids": [message_id, other_id]}), "--as", "bot"],
@@ -235,8 +235,8 @@ class PrivateSourceVerificationMixin:
                 or not isinstance(original.get("mentions"), list)
                 or not lark_event_mentions_bot(
                     original, bot_display_name=str(observation["bot_display_name"]),
-                    bot_app_id=str(observation["bot_app_id"]),
-                    bot_open_id=str(observation["bot_open_id"]), allow_text_fallback=False,
+                    bot_app_id=str(observation.get("bot_app_id") or ""),
+                    bot_open_id=str(observation.get("bot_open_id") or ""), allow_text_fallback=False,
                 )):
             return None
         if _msg_type(merged) == "text":
