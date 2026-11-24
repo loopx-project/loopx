@@ -646,8 +646,14 @@ def _promotion_artifact_exists(
     path = Path(text)
     # Path("") is ".", so a missing path still probes the working directory.
     # That matches the previous ``Path(stored).exists()`` check.
-    if str(path) and path.exists():
-        return True
+    if str(path):
+        try:
+            if path.exists():
+                return True
+        except (OSError, RuntimeError):
+            # A historical path can name an account that does not exist here.
+            # It is evidence of missing promotion output, not a doctor failure.
+            pass
     segment = _promotion_goal_segment(goal_id)
     stored = text.strip()
     if segment is None or not stored:

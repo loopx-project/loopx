@@ -180,6 +180,33 @@ def test_doctor_legacy_goal_history_observes_copied_promotion_artifacts(
     assert not (runtime_b / PROMOTION_READINESS_RUNTIME_INDEX).exists()
 
 
+def test_doctor_promotion_readiness_tolerates_an_unknown_user_alias(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    runs = runtime / "goals" / GOAL_ID / "runs"
+    stale = Path("~loopx-stale-operator/goals/history-relocated-run/runs/readiness.json")
+    stale_markdown = Path("~loopx-stale-operator/goals/history-relocated-run/runs/readiness.md")
+    index_path = _write_index(
+        runs,
+        [
+            _row(
+                stale,
+                stale_markdown,
+                classification=PROMOTION_READINESS_CLASSIFICATION,
+                recommended_action="The historical artifact path is unavailable on this host.",
+            )
+        ],
+    )
+    original = index_path.read_bytes()
+
+    event = latest_promotion_readiness_event(runtime, GOAL_ID)
+    assert event["available"] is True
+    assert event["json_exists"] is False
+    assert event["markdown_exists"] is False
+    assert index_path.read_bytes() == original
+
+
 def test_runtime_release_ledger_remaps_only_same_goal_run_files(
     tmp_path: Path,
 ) -> None:
