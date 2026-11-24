@@ -446,21 +446,28 @@ def _should_propagate_node_compile_cache() -> bool:
 
 
 @contextmanager
-def _run_scoped_node_compile_cache(*, enabled: bool = True) -> Iterator[Path | None]:
+def _run_scoped_node_compile_cache(
+    cleanup_failures: list[dict[str, object]], *, enabled: bool,
+) -> Iterator[None]:
     if not enabled or not _should_propagate_node_compile_cache():
-        yield None
+        yield
         return
     cache_dir = Path(tempfile.mkdtemp(prefix="loopx-smoke-compile-cache-"))
     os.chmod(cache_dir, 0o700)
     token = _ACTIVE_NODE_COMPILE_CACHE.set(cache_dir)
     try:
-        yield cache_dir
+        yield
     finally:
         _ACTIVE_NODE_COMPILE_CACHE.reset(token)
         try:
             remove_owned_tree(cache_dir)
         except FileNotFoundError:
             pass
+        except OSError as exc:
+            cleanup_failures.append({
+                "ok": False, "status": "failed",
+                "reason": f"Node compile cache cleanup failed for {cache_dir}: {exc}",
+            })
 
 
 def _run_check(
@@ -900,6 +907,7 @@ def build_canary_smoke_suite_run(
 
     results: list[dict[str, Any]] = []
     suite_guard_failures: list[dict[str, Any]] = []
+    cleanup_failures: list[dict[str, object]] = []
     requested_parallel_jobs = _coerce_parallel_jobs(parallel_jobs)
     effective_parallel_jobs = 1
     serial_check_count = 0
@@ -950,7 +958,7 @@ def build_canary_smoke_suite_run(
         parallel_check_count = len(selected) - serial_check_count
         if selected and not fail_fast and parallel_check_count:
             effective_parallel_jobs = min(requested_parallel_jobs, parallel_check_count)
-        with _run_scoped_node_compile_cache(enabled=bool(selected)):
+        with _run_scoped_node_compile_cache(cleanup_failures, enabled=bool(selected)):
             if effective_parallel_jobs <= 1:
                 for index, check in enumerate(selected, start=1):
                     _progress_check_started(
@@ -1054,42 +1062,42 @@ def build_canary_smoke_suite_run(
                     )
                 results = [indexed_results[index] for index in sorted(indexed_results)]
         if side_effect_guard["enforced"]:
-                final_ok, tracked_after, final_stderr = _tracked_change_paths(repo_root=repo_root)
-                side_effects = sorted(set(tracked_after) - set(tracked_before))
-                side_effect_guard.update(
-                    {
-                        "git_status_final_ok": final_ok,
-                        "tracked_after": _display_git_paths(tracked_after),
-                        "tracked_side_effects": _display_git_paths(side_effects),
-                    }
-                )
-                if final_stderr:
-                    side_effect_guard["git_status_final_stderr_tail"] = final_stderr[-800:]
-                if effective_parallel_jobs > 1 and side_effects:
-                    guard_failure = {
-                        "schema_version": "canary_smoke_suite_guard_failure_v0",
-                        "status": "failed_tracked_side_effect",
-                        "ok": False,
-                        "reason": (
-                            "parallel smoke-suite run produced tracked side effects; "
-                            "rerun with --jobs 1 to attribute the script precisely"
-                        ),
-                        "tracked_side_effects": _display_git_paths(side_effects),
-                    }
-                    if clean_start:
-                        restore = _restore_tracked_paths(
-                            side_effects,
-                            repo_root=repo_root,
-                            expected_paths=tracked_before,
-                        )
-                        guard_failure["tracked_side_effect_restore"] = restore
-                        side_effect_guard["auto_restored"] = (
-                            bool(side_effect_guard.get("auto_restored")) or bool(restore.get("ok"))
-                        )
-                    suite_guard_failures.append(guard_failure)
+            final_ok, tracked_after, final_stderr = _tracked_change_paths(repo_root=repo_root)
+            side_effects = sorted(set(tracked_after) - set(tracked_before))
+            side_effect_guard.update(
+                {
+                    "git_status_final_ok": final_ok,
+                    "tracked_after": _display_git_paths(tracked_after),
+                    "tracked_side_effects": _display_git_paths(side_effects),
+                }
+            )
+            if final_stderr:
+                side_effect_guard["git_status_final_stderr_tail"] = final_stderr[-800:]
+            if effective_parallel_jobs > 1 and side_effects:
+                guard_failure = {
+                    "schema_version": "canary_smoke_suite_guard_failure_v0",
+                    "status": "failed_tracked_side_effect",
+                    "ok": False,
+                    "reason": (
+                        "parallel smoke-suite run produced tracked side effects; "
+                        "rerun with --jobs 1 to attribute the script precisely"
+                    ),
+                    "tracked_side_effects": _display_git_paths(side_effects),
+                }
+                if clean_start:
+                    restore = _restore_tracked_paths(
+                        side_effects,
+                        repo_root=repo_root,
+                        expected_paths=tracked_before,
+                    )
+                    guard_failure["tracked_side_effect_restore"] = restore
+                    side_effect_guard["auto_restored"] = (
+                        bool(side_effect_guard.get("auto_restored")) or bool(restore.get("ok"))
+                    )
+                suite_guard_failures.append(guard_failure)
 
     display_items = results if execute else normalized
-    failures = [item for item in results if not item.get("ok")] + suite_guard_failures
+    failures = [item for item in results if not item.get("ok")] + suite_guard_failures + cleanup_failures
     git_required_skips = [
         item for item in results if item.get("status") == "skipped_git_required"
     ]
@@ -1124,6 +1132,7 @@ def build_canary_smoke_suite_run(
         "selected_check_count": len(selected),
         "executed_check_count": len(results),
         "failure_count": len(failures),
+        **({"cleanup_failures": cleanup_failures} if cleanup_failures else {}),
         "git_required_skip_count": len(git_required_skips),
         "timeout_count": len(timed_out),
         "tracked_side_effect_failure_count": len(side_effect_failures),
@@ -1204,8 +1213,9 @@ def build_catalog_canary_run(
         for check in selected
     ]
     results = []
+    cleanup_failures: list[dict[str, object]] = []
     if execute:
-        with _run_scoped_node_compile_cache(enabled=bool(selected)):
+        with _run_scoped_node_compile_cache(cleanup_failures, enabled=bool(selected)):
             results = [
                 _run_check(
                     check,
@@ -1215,7 +1225,7 @@ def build_catalog_canary_run(
                 for check in selected
             ]
 
-    failures = [item for item in results if not item.get("ok")]
+    failures = [item for item in results if not item.get("ok")] + cleanup_failures
     git_required_skips = [
         item for item in results if item.get("status") == "skipped_git_required"
     ]
@@ -1240,6 +1250,7 @@ def build_catalog_canary_run(
         "selected_check_count": len(selected),
         "executed_check_count": len(results),
         "failure_count": len(failures),
+        **({"cleanup_failures": cleanup_failures} if cleanup_failures else {}),
         "git_required_skip_count": len(git_required_skips),
         "unsafe_command_count": len(unsafe),
         "selection_inputs": plan.get("selection_inputs"),
@@ -1273,6 +1284,8 @@ def render_catalog_canary_run_markdown(payload: dict[str, Any]) -> str:
         str(payload.get("note") or ""),
         "",
     ]
+    for failure in payload.get("cleanup_failures", []):
+        lines.append(f"- {failure['reason']}")
     for check in payload.get("selected_checks", []):
         if not isinstance(check, dict):
             continue
@@ -1338,6 +1351,8 @@ def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
         str(payload.get("note") or ""),
         "",
     ]
+    for failure in payload.get("cleanup_failures", []):
+        lines.append(f"- {failure['reason']}")
     for warning in payload.get("warnings", []):
         if isinstance(warning, dict):
             lines.append(f"- warning: `{warning.get('kind')}` {warning.get('script')}: {warning.get('message')}")

@@ -269,3 +269,60 @@ def test_smoke_suite_respects_disable_coverage_and_caller_compile_cache(
     assert probe[env_key] == value
     assert probe["NODE_COMPILE_CACHE"] == (value if expect_preserved else None)
     assert not list(scratch.glob("loopx-smoke-compile-cache-*"))
+
+
+@pytest.mark.parametrize("entry", ["smoke-suite", "catalog"])
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_cleanup_failure_preserves_completed_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str, exit_code: int,
+) -> None:
+    from loopx.canary import planner
+
+    repo = tmp_path / "repo"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    _clear_compile_cache_env(monkeypatch, scratch)
+    script = repo / "examples" / "probe-smoke.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "import sys\nprint('child stdout')\nprint('child stderr', file=sys.stderr)\n"
+        f"sys.exit({exit_code})\n",
+        encoding="utf-8",
+    )
+    real_remove = runner.remove_owned_tree
+
+    def remove(path: Path) -> None:
+        if path.name.startswith("loopx-smoke-compile-cache-"):
+            raise PermissionError("cache directory is read-only")
+        real_remove(path)
+
+    monkeypatch.setattr(runner, "remove_owned_tree", remove)
+    if entry == "smoke-suite":
+        result = runner.build_canary_smoke_suite_run(repo_root=repo)
+        render = runner.render_canary_smoke_suite_run_markdown
+    else:
+        catalog = repo / "catalog.md"
+        catalog.write_text("| Family |\n| --- |\n| Cache fixture |\n", encoding="utf-8")
+        monkeypatch.setitem(
+            planner.FAMILY_CHECKS, "Cache fixture", [{"command": "python3 examples/probe-smoke.py"}],
+        )
+        result = runner.build_catalog_canary_run(
+            repo_root=repo, catalog_path=catalog, families=["Cache fixture"], check_limit=1,
+        )
+        render = runner.render_catalog_canary_run_markdown
+
+    assert result["ok"] is False
+    assert result["executed_check_count"] == 1
+    assert result["failure_count"] == 1 + int(exit_code != 0)
+    check, = result["selected_checks"]
+    assert check["returncode"] == exit_code
+    assert check["ok"] is (exit_code == 0)
+    assert "child stdout" in check["stdout_tail"]
+    assert "child stderr" in check["stderr_tail"]
+    failure, = result["cleanup_failures"]
+    assert failure["ok"] is False
+    assert "cache directory is read-only" in failure["reason"]
+    assert "cache directory is read-only" in render(result)
+    if entry == "smoke-suite":
+        assert result["failures"] == ([check, failure] if exit_code else [failure])
+    assert runner._ACTIVE_NODE_COMPILE_CACHE.get() is None
