@@ -3,14 +3,14 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
-import {resolveTestPython} from "../../scripts/test-python.mjs";
+import {testPythonCommand} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {analysisReadback, startHistoryOwner} from "./research-history.mjs";
 
 // Public synthetic documents through the production history HTTP/SQLite owner.
 // No model, solver, scientific score or live Goal is involved.
 export function writeFindingReaderFixture(path) {
-  execFileSync(resolveTestPython(), ["-c", `
+  const python = testPythonCommand(`
 import json, sys
 from pathlib import Path
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
@@ -35,13 +35,33 @@ for index in range(20):
 events.append(build_explore_node_event(goal_id=goal,node_id='blocked',title='来源暂不可用的研究问题',status='blocked',blocked_reason='无法读取评测来源，当前结果未知。',recorded_at='2026-01-02T00:00:00Z'))
 events.append(build_explore_node_event(goal_id=goal,node_id='single',title='仅有一条结论的问题',recorded_at='2026-01-02T01:00:00Z'))
 events.append(build_explore_finding_event(goal_id=goal,node_id='single',finding_id='single-finding',title='原始观测',summary='一条完整的原始结论。',status='tentative',recorded_at='2026-01-02T01:00:00Z'))
-for index in range(4):
+candidate='sha256:'+'c'*64
+quality={**profile,'candidate_ref':candidate,'evidence_ref':'result:quality','value':70}
+latency={**quality,'metric':'latency','unit':'ms','higher_is_better':False,'evidence_ref':'result:latency','value':21.5}
+independent={**quality,'comparison_scope':'validation:independent','evaluation_ref':'evaluator:independent-v1',
+    'evidence_ref':'result:independent','value':63}
+unmeasured_memory={**quality,'metric':'memory','unit':'MiB','evidence_ref':'result:memory','value':None}
+unmeasured_disk={**unmeasured_memory,'metric':'disk','evidence_ref':'result:disk'}
+unmeasured_energy={**unmeasured_memory,'metric':'energy','unit':'J','evidence_ref':'result:energy'}
+measurements=[
+    [quality,latency],
+    [{**quality,'value':999}],
+    [{**latency,'higher_is_better':True},independent],
+    [independent,unmeasured_memory,unmeasured_energy],
+    [{**unmeasured_memory,'value':84}],
+    [{**unmeasured_disk,'value':96}],
+    [unmeasured_disk],
+]
+for index in range(len(measurements)):
     node=f'independent-{index}'
     events.append(build_explore_node_event(goal_id=goal,node_id=node,title='合成研究：质量、延迟和未知成本应如何一起判断？',recorded_at='2026-01-01T00:00:00Z'))
     events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'other-{index}',title='同名独立问题的记录',status='refuted',
-        summary='Input revision: synthetic Applicability: independent sample Observation: no valid comparison Interpretation: Outcome: stop stopped: - 当前样本无法支持比较结论',recorded_at=f'2026-01-01T00:{index+1:02}:00Z'))
+        summary='Input revision: synthetic Applicability: independent sample Observation: no valid comparison Interpretation: Outcome: stop stopped: - 当前样本无法支持比较结论',
+        evidence_refs=[row['evidence_ref'] for row in measurements[index]],measurements=measurements[index],
+        recorded_at=f'2026-01-01T00:{index+1:02}:00Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 结论阅读','events':events},ensure_ascii=False))
-`, path], {cwd: repoRoot});
+`);
+  execFileSync(python.command, [...python.args, path], {cwd: repoRoot});
 }
 
 export const researchFindingReaderScenario = {
@@ -189,7 +209,7 @@ export const researchFindingReaderScenario = {
       assert.equal(await questionGroups.nth(0).locator("h4").innerText(), await questionGroups.nth(1).locator("h4").innerText(),
         "Identical titles from different question IDs remain separate groups");
       await history.getByRole("button", {name: /显示更多问题/}).click();
-      assert.equal(await questionGroups.count(), 5, "Every independent question remains reachable");
+      assert.equal(await questionGroups.count(), 8, "Every independent question remains reachable");
       assert.match(await questionGroups.last().innerText(), /1 条决策记录.*已反驳 1.*停止/s);
       await history.getByRole("button", {name: /^中段 ·/}).click();
       assert.equal(await questionGroups.count(), 1, "Time filtering applies before grouping");
@@ -242,6 +262,39 @@ export const researchFindingReaderScenario = {
         await page.screenshot({path: resolve(outputDir, `research-finding-reader-scope-${width}.png`), animations: "disabled"});
       }
       assert.equal(analysisWrites, 0, "Reading and choosing the displayed scope cannot dispatch analysis");
+
+      await page.goto(url.replace("&research_node=question", ""));
+      const saved = page.locator(".research-saved-evidence");
+      await saved.locator(":scope > summary").click();
+      const findings = saved.locator(".goal-explore-results");
+      const findingPicker = findings.getByRole("combobox", {name: "Choose a finding", exact: true});
+      await findingPicker.selectOption("other-0");
+      const finding = findings.locator(".goal-team-result-reader");
+      const related = finding.locator(".explore-related-measurements");
+      await related.locator(":scope > summary").click();
+      const readings = await related.locator(".explore-measurement-reading strong").allTextContents();
+      assert.deepEqual(readings.sort(), ["63", "84", "96", "Not measured"],
+        "Measured readings survive same-direction unknown citations in both orders; independent unknowns and genuine conflicts keep their meaning");
+      assert.match(await related.innerText(), /Conflicting readings from the same result/);
+      const originalReadings = finding.locator(":scope > .explore-measurements .explore-measurement-reading strong");
+      assert.deepEqual(await originalReadings.allTextContents(), ["70", "21.5"]);
+      const order = await findingPicker.evaluate(element => Array.from(element.options, option => option.value));
+      assert.notEqual(order.indexOf("other-3") < order.indexOf("other-4"), order.indexOf("other-6") < order.indexOf("other-5"),
+        "The memory and disk groups encounter measured and unknown readings in opposite orders");
+
+      for (const [unknownId, measuredId, value] of [["other-3", "other-4", "84"], ["other-6", "other-5", "96"]]) {
+        await findingPicker.selectOption(unknownId);
+        assert((await originalReadings.allTextContents()).includes("Not measured"), "The selected original preserves its unknown reading");
+        await related.locator(":scope > summary").click();
+        const measuredSource = related.locator(":scope > section").filter({has: page.getByText(value, {exact: true})});
+        await measuredSource.locator(".explore-related-finding-source").click();
+        assert.equal(await findingPicker.inputValue(), measuredId);
+        assert.deepEqual(await originalReadings.allTextContents(), [value], "The associated result opens its measured source");
+      }
+
+      await findingPicker.selectOption("other-1");
+      assert.equal(await originalReadings.textContent(), "999", "Readers can still open the original finding with the disputed value");
+
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
       assert(readback.source_unchanged && readback.mutation_attempts === 0, "Reading, switching and recovery have no execution or source-write effect");
       return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "real-owner dense/small/unavailable finding selection, complete original, negative states and exact reload/Back focus"};

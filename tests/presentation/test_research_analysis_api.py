@@ -459,7 +459,15 @@ def test_http_rejects_other_owner_paths_free_configuration_and_wrong_origin(work
 @pytest.mark.parametrize("workspace", [False, True], indirect=True)
 def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(workspace):
     w = workspace
-    data = json.loads((w["tmp_path"] / "input.json").read_text())
+    input_path = w["tmp_path"] / "input.json"
+    data = json.loads(input_path.read_text())
+    facts = w["sources"] / "facts.txt"
+    example_lines = ["The second submission has no measurement.", "The third submission was measured and rejected."]
+    evidence = facts.read_bytes() + ("\n".join(example_lines) + "\n").encode()
+    facts.write_bytes(evidence)
+    data["sources"][0].update(artifact_sha256=hashlib.sha256(evidence).hexdigest(),
+                              text="\n".join(evidence.decode().splitlines()[1:]))
+    input_path.write_text(json.dumps(data))
     native = {"schema_version": "trajectory_native_outcomes_v1", "scope": data["scope"],
         "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:03:00Z", "complete": True,
         "metric": {"name": "error", "unit": "points", "higher_is_better": False},
@@ -467,15 +475,33 @@ def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(wor
             "result_id": "result-one", "candidate_ref": "candidate-one", "valid": True, "value": 0.000001,
             "submitted_at": "2026-01-01T00:01:00Z", "observed_at": "2026-01-01T00:02:00Z",
             "citation": {"source_id": "facts", "first_line": 2, "last_line": 2}}]}
-    (w["sources"] / "native.json").write_text(json.dumps(native))
+    native["samples"].extend({**native["samples"][0], "submission_index": index,
+        "result_id": f"result-{index}", "candidate_ref": f"candidate-{index}",
+        "valid": value is not None, "value": value,
+        "citation": {"source_id": "facts", "first_line": line, "last_line": line},
+    } for index, value, line in ((2, None, 3), (3, 2, 4), (4, 3, 2)))
+    native_path = w["sources"] / "native.json"
+    native_path.write_text(json.dumps(native))
     registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
         input_path=w["tmp_path"] / "input.json", source_root=w["sources"], title="Native capture", native_outcomes_json="native.json")
     snapshot = w["request"](pack_id=registered["pack_id"])
     assert snapshot["pack"]["native_outcomes"]["projection"]["retained"]["value"] == 0.000001
+    assert [sample["value"] for sample in snapshot["pack"]["native_outcomes"]["samples"]] == [0.000001, None, 2, 3]
+    assert "samples" not in registered["native_outcomes"]
+    assert all("samples" not in pack.get("native_outcomes", {}) for pack in snapshot["catalog"]["packs"])
     assert snapshot["pack"]["job"] is None
-    citation = w["request"](suffix="/citation", pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
-        source_id="facts", first_line=2, last_line=2)
-    assert citation["text"] == data["sources"][0]["text"]
+    scope = dict(suffix="/citation", pack_id=registered["pack_id"], analysis_key=registered["analysis_key"], source_id="facts")
+    assert w["request"](**scope, first_line=2, last_line=2)["text"] == data["sources"][0]["text"].splitlines()[0]
+    for line, expected in enumerate(example_lines, 3):
+        assert w["request"](**scope, first_line=line, last_line=line)["text"] == expected
+    native["samples"][2]["value"] = 9
+    native_path.write_text(json.dumps(native))
+    stale = w["request"](pack_id=registered["pack_id"])["pack"]["native_outcomes"]
+    assert stale["applicability"] == "historical" and "samples" not in stale
+    assert stale["projection"] == snapshot["pack"]["native_outcomes"]["projection"]
+    with pytest.raises(HTTPError) as denied:
+        w["request"](**scope, first_line=4, last_line=4)
+    assert denied.value.code == 409
     assert not w["count"].exists()
     with pytest.raises(HTTPError):
         w["request"](goal="other-owner", pack_id=registered["pack_id"])

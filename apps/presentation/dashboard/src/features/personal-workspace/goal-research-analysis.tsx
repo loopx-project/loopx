@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {ArrowLeft, ArrowUpRight, ChevronDown, CircleHelp, History, LoaderCircle, RefreshCw, Sparkles, TriangleAlert, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryAssessment, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
-import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
+import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchEvidenceOrigin, type ResearchProgressPack} from "./goal-research-progress";
 import type {TrajectoryUsageComparison} from "../../../../../../loopx/control_plane/capabilities/trajectory_usage_comparison.js";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
@@ -36,7 +36,7 @@ type EvidenceRead = {
   value?: Citation;
   failure?: {message: string; route: string; selection: Record<string, string>};
 };
-type EvidenceTrigger = {origin?: HTMLElement; bookmark?: CaseCitationBookmark};
+type EvidenceTrigger = {origin?: ResearchEvidenceOrigin; bookmark?: CaseCitationBookmark};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
   const query = new URLSearchParams(window.location.search);
@@ -292,7 +292,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
       });
     }
   };
-  const readCitation = (c: AssessmentCitation, origin?: HTMLElement, bookmark?: CaseCitationBookmark) => {
+  const readCitation = (c: AssessmentCitation, origin?: ResearchEvidenceOrigin, bookmark?: CaseCitationBookmark) => {
     const activeTrigger = sourceTrigger.current;
     // Coalesce browser navigation events only while this source panel is open.
     if (bookmark && activeTrigger && activeTrigger.scope === evidenceScope && activeTrigger.bookmark?.hash === bookmark.hash) return;
@@ -311,7 +311,11 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     }
     invalidateCitation();
     const closedAt = citeGeneration.current;
-    requestAnimationFrame(() => {if (closedAt === citeGeneration.current) origin?.focus();});
+    requestAnimationFrame(() => {
+      if (closedAt !== citeGeneration.current) return;
+      const target = typeof origin === "function" ? origin() : origin;
+      target?.focus();
+    });
   };
   return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, onCitationLocationChange, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     studyNavigation, close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string | null) => navigate(location.open, id, true)};

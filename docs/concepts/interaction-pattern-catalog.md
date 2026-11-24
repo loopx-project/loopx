@@ -1212,10 +1212,14 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 
 - a typed machine-configuration namespace is about to change; the built-in
   namespaces are `change_quality_qualification`, `codex_chat`, `context_delivery`,
-  `explore_harness`, `goal_storage`, `manager_runtime`, `periodic_report`, `pull_request_review`,
-  `steward_executor`, `steward_memory`, and `todo_replan_cadence`. The public catalog returned by
+  `explore_harness`, `goal_closeout`, `goal_storage`, `manager_runtime`,
+  `periodic_report`, `pull_request_review`, `steward_executor`, `steward_memory`,
+  and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
   complete rather than approximate;
+- `goal_closeout` configures an optional command for terminal Goal transitions.
+  The local operator sets the command through the machine-config CLI. The
+  Dashboard shows whether a command is configured and can adjust its timeout.
 - `goal_storage` carries the storage target a newly created Goal is fixed to
   (`new_goal_provider`, canonical `sqlite` with hard leases by default; explicit
   `file` and soft-claim creation choices remain available).

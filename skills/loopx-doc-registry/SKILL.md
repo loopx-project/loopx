@@ -54,6 +54,41 @@ loopx --registry .loopx/registry.json register-authority-source \
 Use `--dry-run` first when the source classification or target project is not
 obvious.
 
+## Find Registered Materials
+
+Before registering a duplicate, inspect the target project's existing material
+metadata through the same local registry:
+
+```bash
+loopx --registry .loopx/registry.json --format json authority-sources \
+  --goal-id <goal-id> --query "<topic or revision terms>" --limit 20
+```
+
+The query matches all whitespace-separated terms across source IDs, registered
+topics and metadata, ignoring case and Unicode compatibility differences. Add
+`--topic <exact-topic-key>` to restrict a query to a topic. Results are ordered by
+source ID; repeat the same filters with the returned `next_offset` as `--offset`
+to continue. `source_count`, `matched_count` and `returned_count` distinguish an
+empty inventory, no matches and a partial page. The page limit bounds returned
+rows, not registry scan cost or bytes; the complete local registry is read.
+
+This read does not open documents, check current access, refresh freshness or
+grant authority. It displays the stored revision, gate and freshness labels as
+metadata, including `needs_access` and historical material. Register/update the
+source through its existing workflow when those facts change. The command
+reads the explicitly selected registry snapshot; select the project's source
+registry rather than a global summary when looking for its complete inventory.
+Summary-only snapshots return `authority_source_details_unavailable` with the
+recorded summary count and an explicit project-registry recovery instruction,
+even when that count is zero; unavailable details are not an empty inventory.
+Topic lookup uses the material frontier's existing string, object and list
+reference interpretation for displayed topics, exact filters and text search.
+Registration retains only a source-reference kind and digest, not its original
+URL/path. Use the original DOC_REGISTRY or authorized connector to locate and
+check the document, then reuse its listed source ID with
+`register-authority-source` to update the recorded metadata. An inventory match
+is not evidence that the document was read or is still accessible.
+
 ## Stop Conditions
 
 Stop and write a project-local todo or blocker instead of registering when:

@@ -393,6 +393,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "handoff-mode",
         "heartbeat-prequota",
         "import-doc-registry-authority",
+        "authority-sources",
         "lark-inbox",
         "migrate-state",
         "native-child",

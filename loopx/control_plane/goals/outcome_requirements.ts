@@ -39,10 +39,14 @@ function text(value: unknown, label: string, max = 512): string {
   requireValue(typeof value === "string" && value === value.trim() && !!value && value.length <= max && !value.includes("\0"), `${label} must be bounded nonempty text`);
   return value;
 }
+export function isGoalOutcomeIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 128 && value === value.trim()
+    && /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(value);
+}
 function id(value: unknown, label: string): string {
   const result = text(value, label, 128);
   requireValue(
-    /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(result),
+    isGoalOutcomeIdentifier(result),
     `${label} must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`,
   );
   return result;

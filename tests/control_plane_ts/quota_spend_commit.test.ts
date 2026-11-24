@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
   symlink,
   unlink,
@@ -668,6 +669,48 @@ test("native replay validates legacy rows by goal and agent", async (t) => {
     assert.equal(rejected.payload.replay_found, true);
     assert.match(rejected.reason, /same valid agent identity/);
   }
+});
+
+test("read-only replay returns the digest of the index that supplied its record", async (t) => {
+  const root = await tempRuntime(t);
+  const runsDir = join(root, "goals", goalId, "runs");
+  await mkdir(runsDir, { recursive: true });
+  const index = join(runsDir, "index.jsonl");
+  const effect = "replayed-effect";
+  const revisions = ["first", "second"].map((revision) => {
+    const row = {
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      agent_id: "codex-main-control",
+      effect_ref: effect,
+      revision,
+    };
+    const content = JSON.stringify(row) + "\r\n";
+    const digest = "sha256:" + createHash("sha256").update(content).digest("hex");
+    return { revision, content, digest };
+  });
+  await writeFile(index, revisions[0].content);
+  const publish = async () => {
+    for (let i = 1; i <= 32; i++) {
+      await writeFile(index + ".next", revisions[i % 2].content);
+      await rename(index + ".next", index);
+    }
+  };
+  const replay = async () => {
+    for (let i = 0; i < 32; i++) {
+      const result = await evaluateQuotaSpendCommit({
+        ...replayRequest(root, effect), read_only: true,
+      });
+      assert.equal(result.status, "replayed");
+      const observed = revisions.find((entry) => entry.revision === result.record?.revision);
+      assert.ok(observed);
+      assert.equal(result.index_digest, observed.digest);
+    }
+  };
+  // Finish both filesystem users before the fixture is removed, even on failure.
+  const [writer, reader] = await Promise.allSettled([publish(), replay()]);
+  if (writer.status === "rejected") throw writer.reason;
+  if (reader.status === "rejected") throw reader.reason;
 });
 
 test("native replay rejects incomplete transaction metadata", async (t) => {

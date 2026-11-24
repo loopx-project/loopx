@@ -113,6 +113,7 @@ test("automatic proof takes precedence when timed successors are also generic bl
 
 test("a scheduled path cannot make an independent manual blocker automatic", () => {
   const request = scheduledFrontier({}, "blocked");
+  (request.acceptance_gaps as JsonObject[])[0].advancement_policy = "as_needed";
   const planning = request.resume_planning_request as JsonObject;
   const records = planning.records as JsonObject[];
   const manual = records[0];
@@ -122,4 +123,25 @@ test("a scheduled path cannot make an independent manual blocker automatic", () 
   const wait = projectGoalVisionWaitState(request)!;
   assert.equal(wait.reason_code, "current_agent_blocker");
   assert.equal(wait.automatic_resume, false);
+});
+
+test("an open-ended vision can reconsider a blocked task without a resume condition", () => {
+  const request = scheduledFrontier({}, "blocked");
+  const [gap] = request.acceptance_gaps as JsonObject[];
+  const planning = request.resume_planning_request as JsonObject;
+  const [manual] = planning.records as JsonObject[];
+  manual.resume = null;
+  (manual.payload as JsonObject).resume_when = null;
+  (manual.payload as JsonObject).resume_condition = null;
+
+  gap.advancement_policy = "as_needed";
+  const earlierWait = projectGoalVisionWaitState(request)!;
+  assert.equal(earlierWait.reason_code, "current_agent_blocker");
+
+  request.agent_todo_summary = {vision_wait_states: [earlierWait]};
+  delete gap.advancement_policy;
+  assert.equal(projectGoalVisionWaitState(request), null);
+
+  gap.advancement_policy = "repeat_until_closed";
+  assert.equal(projectGoalVisionWaitState(request), null);
 });
