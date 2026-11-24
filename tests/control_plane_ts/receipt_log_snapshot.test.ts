@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdtemp, open, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -255,5 +255,46 @@ test("eviction and concurrent cold readers affect cost, never evidence", async (
     const evicted = (await read(path))!;
     assert.deepEqual(evicted.records, a!.records);
     assert.notEqual(evicted.records, a!.records);
+  });
+});
+
+test("alternating large logs reuse verified records and still reread both sides of the cutoff", async () => {
+  await fixture(async (path) => {
+    const peer = path + ".peer";
+    const marker = '{"id":"start"}\n';
+    const paddingBlocks = 68;
+    const padding = Buffer.alloc(1024 * 1024, 32);
+    padding[padding.length - 1] = 10;
+    const log = await open(path, "w");
+    try {
+      await log.writeFile(marker);
+      for (let i = 0; i < paddingBlocks; i++) await log.writeFile(padding);
+      await log.writeFile('{"id":"last"}\n');
+    } finally {
+      await log.close();
+    }
+    await copyFile(path, peer);
+    await read(path);
+    await read(peer);
+    const first = (await read(path))!;
+    const second = (await read(peer))!;
+    const updated = await open(path, "r+");
+    try {
+      await updated.write('{"id":"edit"}\n', marker.length + paddingBlocks * padding.length, "utf8");
+    } finally {
+      await updated.close();
+    }
+    const changedTail = (await read(path))!;
+    assert.equal(changedTail.records[0], first.records[0]);
+    assert.deepEqual(changedTail.records.map(record => record.id), ["start", "edit"]);
+    assert.equal((await read(peer))!.records[0], second.records[0]);
+    const rewritten = await open(path, "r+");
+    try {
+      await rewritten.write('{"id":"other"}\n', 0, "utf8");
+    } finally {
+      await rewritten.close();
+    }
+    assert.deepEqual((await read(path))!.records.map(record => record.id), ["other", "edit"]);
+    assert.deepEqual(first.records.map(record => record.id), ["start", "last"]);
   });
 });
