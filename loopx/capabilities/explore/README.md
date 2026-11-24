@@ -702,9 +702,9 @@ canonical truncation.
 exploration goals that need to try several plausible next todos at once. It
 uses a CPU branch-prediction analogy plus a DSpark-inspired scheduler: rank
 open agent todos, estimate branch confidence and expected evidence units,
-choose a confidence-scheduled verification prefix, select one `primary` branch
-plus safe `speculative` branches, and reject branches whose declared write
-scopes overlap an already-selected branch.
+choose a confidence-scheduled verification prefix, and select one `primary`
+branch plus eligible `speculative` branches. Distinct Todos can appear in the same plan even when their declared
+write scopes overlap. Todos claimed by another agent stay out of the selection.
 
 Accuracy note on the DSpark citation (arXiv:2607.05147): real DSpark truncates
 a semi-autoregressive draft block at the first per-step confidence below a
@@ -768,14 +768,13 @@ coordination work by default, because many exploration tasks are read-only.
 Use `--no-allow-unscoped-parallel` when the controller wants unknown scopes to
 collapse back to single-branch execution.
 
-Scope conflicts are based only on mutable `required_write_scopes`. Do not put a
-shared base checkout or an already-built immutable input in that field merely
-because multiple experiments read it. Represent reusable inputs with existing
-public-safe capability labels such as `shared_implementation:<name>` or
-`shared_artifact:<name>`, then give each experiment its own variant or launch
-output scope. Those lanes may run in parallel. If the shared build itself is
-still mutable, keep its path in `required_write_scopes`; the planner will
-correctly serialize lanes that could write the same artifact.
+The plan is read-only. At execution time the [task lease](../../../docs/reference/canonical-lease-renew.md)
+protects Todo ownership and the physical checkout. Agents editing overlapping
+repository paths for different Todos can use separate worktrees. Record mutable
+outputs in `required_write_scopes` and describe shared, immutable inputs with
+`shared_implementation:<name>` or `shared_artifact:<name>`. For a build that
+writes to a shared location outside the worktrees, coordinate access to that
+location before launching either task.
 
 ## Optional Worker Branch Plan
 
@@ -827,10 +826,10 @@ The agent must still apply the goal's evidence, serving-cost, quota, claim, and
 lease gates before launch.
 
 When a higher-ranked candidate is rejected because its dependency is not in the
-selected wave, its write scope conflicts with an already selected branch, or it
-has another planner hazard, selection keeps scanning. A later safe candidate in
-the same resource lane can backfill the released predicted slot in the same
-call. `continuous_monitor` todos stay diagnostic-only and never consume a
+selected wave or it has another planner hazard, selection keeps scanning. The
+worker planner also checks for overlapping write scopes across worker lanes. A
+later safe candidate in the same resource lane can backfill the released
+predicted slot in the same call. `continuous_monitor` todos stay diagnostic-only and never consume a
 resource slot, even if they carry a resource-lane capability.
 
 Resource inputs are optional. With no `--resource-capacity`, unlaned and legacy

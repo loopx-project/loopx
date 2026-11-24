@@ -505,11 +505,13 @@ def stopped_watch(steward, tmp_path, monkeypatch, provider, audience):
     with monkeypatch.context() as stopped_worker:
         stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
         original_turn = pump_steward_monitors(runtime)[0]
-    interrupt_unstarted_watch(store, sid, original_turn)
+    assert (original_turn["session_id"] == sid) == (audience == "managed")
+    interrupt_unstarted_watch(store, original_turn)
     return sid, actor, todo_id, original_turn
 
 
-def interrupt_unstarted_watch(store, sid, turn):
+def interrupt_unstarted_watch(store, turn):
+    sid = turn["session_id"]
     store.update_turn(sid, turn["turn_id"], status="failed", error_code="server_restarted",
         error="The original host stopped before observation.", response=None, upstream_turn_id=None)
     store.append_event(sid, turn["turn_id"], kind="turn.failed", payload={"error_code": "server_restarted"})
@@ -729,7 +731,8 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(
 ):
     import json
     store, runtime, _, transport, _, capture, _ = steward
-    sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    _, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    sid = original_turn["session_id"]
     calls, writes = capture.read_bytes(), list(steward[2].writes)
     used = spent_slots(StewardMonitor(runtime), actor)
     if released_original_lease:
@@ -745,7 +748,7 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(
         with monkeypatch.context() as stopped_worker:
             stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
             first_recovery, = pump_steward_monitors(runtime)
-        interrupt_unstarted_watch(store, sid, first_recovery)
+        interrupt_unstarted_watch(store, first_recovery)
         stopped_recovery = store.load_turn(sid, first_recovery["turn_id"])
         assert local_watch_row(runtime, actor, todo_id) == watch
     runtime._steward_monitor_next_check.clear()
@@ -792,16 +795,18 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
     from loopx.control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
     from loopx.file_lock import exclusive_file_lock
     store, runtime, _, transport, _, capture, _ = steward
-    sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    foreground_sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    sid = original_turn["session_id"]
     request = original_turn["loopx_request"]
     root = runtime.coordination_runtime_root
     stopped_recovery = None
+    queued_request = None
     if fault == "recovery_native_started":
         runtime._steward_monitor_next_check.clear()
         with monkeypatch.context() as stopped_worker:
             stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
             first_recovery, = pump_steward_monitors(runtime)
-        interrupt_unstarted_watch(store, sid, first_recovery)
+        interrupt_unstarted_watch(store, first_recovery)
         stopped_recovery = store.update_turn(sid, first_recovery["turn_id"], upstream_turn_id="unknown-native-turn")
     if fault in {"unknown_error", "native_started", "delta"}:
         changes = {"unknown_error": {"error_code": "runtime_error"},
@@ -822,7 +827,8 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
         receipt.parent.mkdir(parents=True, exist_ok=True)
         receipt.write_text('{"status":"provider_pending"}')  # even incomplete evidence must hold
     elif fault == "queued":
-        store.create_queued_turn(sid, client_turn_id="new-user-work", message="Handle my current request first.", origin="web")
+        queued_request, _ = store.create_queued_turn(foreground_sid, client_turn_id="new-user-work",
+            message="Handle my current request first.", origin="web")
     elif fault == "active_lease":
         monitor = StewardMonitor(runtime)
         monitor._acquire(actor, local_watch_row(runtime, actor, todo_id), "independent-watch-owner")
@@ -837,14 +843,22 @@ def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_
         if fault == "worker_busy" else nullcontext())
     with guard:
         recovered = pump_steward_monitors(runtime)
-    if fault == "retry_fails":
+    background_recovered = fault == "queued" and audience == "steward"
+    if background_recovered:
+        assert len(recovered) == 1 and recovered[0]["session_id"] == sid
+        assert finish(runtime, recovered[0])["status"] == "completed"
+        assert local_watch_row(runtime, actor, todo_id)["next_due_at"] != watch["next_due_at"]
+    elif fault == "retry_fails":
         assert len(recovered) == 1 and finish(runtime, recovered[0])["status"] == "failed"
         runtime._steward_monitor_next_check.clear()
         assert not pump_steward_monitors(runtime)
     else:
         assert recovered == []
     assert store.load_turn(sid, original_turn["turn_id"]) == original
-    assert local_watch_row(runtime, actor, todo_id) == watch
+    if not background_recovered:
+        assert local_watch_row(runtime, actor, todo_id) == watch
+    if queued_request is not None:
+        assert [row["turn_id"] for row in store.queued_turns(foreground_sid)] == [queued_request["turn_id"]]
     if stopped_recovery is not None:
         assert store.load_turn(sid, stopped_recovery["turn_id"]) == stopped_recovery
     transport.reconcile()
@@ -857,7 +871,8 @@ def test_reopened_controller_recovers_only_the_persisted_untouched_watch(steward
     from loopx.chat_store import ChatSessionStore
     from loopx.chat_runtime import ChatRuntimeController
     store, runtime, _, _, _, capture, _ = steward
-    sid, actor, todo_id, original = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    _, actor, todo_id, original = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    sid = original["session_id"]
     before, retained = capture.read_bytes(), store.load_turn(sid, original["turn_id"])
     runtime.close()
     reopened = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,

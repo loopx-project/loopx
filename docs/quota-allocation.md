@@ -430,7 +430,11 @@ reports observed progress without offering a spend command.
 时读取回执并返回仍待执行的步骤。
 The raw Python refresh API returns `writeback_receipt_required` until its CLI
 caller appends the refresh receipt and rereads the chain; it must not offer a
-spend command before that point. Older guards without a persisted spend source
+spend command before that point. If the CLI stops in this interval, re-entering
+the same Todo-bound Turn returns receipt recovery even while the Todo is open
+and runnable. Replay the original delivery fields and sink options to finish
+the writeback receipt. The composed command can then settle that Turn.
+Older guards without a persisted spend source
 retain the existing heartbeat default.
 
 When a bound `quota spend-slot` returns `index_digest_conflict`, run the
@@ -1220,6 +1224,14 @@ Once `resume_ready=true`, the wait disappears and ordinary open-todo or
 deferred-successor selection runs again. Missing vision checkpoints, closed
 stage succession, unsupported conditions, and continuous-monitor-as-gate
 repairs remain fail-closed and are not hidden by this wait path.
+
+An ordinary blocked advancement Todo without a qualified resume condition
+holds its own execution. It does not satisfy an ongoing Vision's acceptance
+gap when the recorded policy is `repeat_until_closed` or unspecified. With no
+selectable work and no covering exact wait or declared blocker, the existing
+scoped Vision-gap replan lets the Agent review the actual blocker and find
+independent work. An explicit `as_needed` Vision can still wait on its blocked
+frontier. Background monitors keep their clocks and no-spend policy.
 
 For a single exact scheduled successor, the interaction contract allows a
 quiet no-op while the canonical `resume_at` condition has positive runtime-clock

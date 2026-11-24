@@ -12,8 +12,11 @@ test("record bookmarks retain filters, later-page expansion and unrelated resear
   const state = {open: true, query: "negative 原文", status: "refuted", expanded: ["node:question-57", "event:unlinked"], limit: 100};
   const scope = JSON.stringify(["goal-a", "original-goal", "/status.json?source_namespace=source-a"]);
   const search = new URLSearchParams("research_event=old-version&research_node=question-57");
-  const saved = writeResearchRecordsLocation(search, scope, state);
-  assert.deepEqual(readResearchRecordsLocation(new URLSearchParams(saved.toString()), scope), state);
+  const legacy = writeResearchRecordsLocation(search, scope, state);
+  assert.deepEqual(readResearchRecordsLocation(legacy, scope), state);
+  const focused = {...state, focused: "event:unlinked"};
+  const saved = writeResearchRecordsLocation(search, scope, focused);
+  assert.deepEqual(readResearchRecordsLocation(new URLSearchParams(saved.toString()), scope), focused);
   assert.equal(saved.get("research_event"), "old-version");
   assert.equal(search.has("research_records"), false, "Writing a bookmark must not mutate another reader's URL");
   for (const other of ["", scope.replace("goal-a", "goal-b"), scope.replace("source-a", "source-b")]) {

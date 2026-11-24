@@ -21,6 +21,7 @@ from ..agents.workspace_guard import (
     workspace_guard_missing_task_repository,
 )
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
+from ..goals.goal_vision_read_model import cli_vision_audit_view
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
     SettlementIdentity,
@@ -1616,30 +1617,6 @@ def _attach_interaction_post_writeback_actions(
     actions = _as_mapping(payload.get("goal_boundary")).get("post_writeback_actions")
     if isinstance(actions, list) and actions:
         cli_channel["post_writeback_actions"] = actions
-
-
-def cli_vision_audit_view(vision_continuation_audit: Mapping[str, object]) -> dict[str, object]:
-    """Return the CLI-owned view of the complete Vision audit."""
-    cli_audit: dict[str, object] = {
-        "required": True,
-        "required_before_closeout": vision_continuation_audit.get("required_before_closeout") or [],
-        "recommended_action": vision_continuation_audit.get("recommended_action"),
-    }
-    vision_gap_judge = _as_mapping(vision_continuation_audit.get("vision_gap_judge"))
-    if vision_gap_judge:
-        cli_audit["vision_gap_judge"] = {
-            **{
-                key: vision_gap_judge.get(key)
-                for key in (
-                    "done", "decision", "reason", "agent_judge_instruction",
-                    "evidence_read_instruction", "registry_read_instruction",
-                )
-            },
-            "done_only_when": vision_gap_judge.get("done_only_when") or [],
-            "continue_when": vision_gap_judge.get("continue_when") or [],
-            "otherwise": vision_gap_judge.get("otherwise"),
-        }
-    return cli_audit
 
 
 def _attach_interaction_vision_continuation_audit(

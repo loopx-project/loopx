@@ -208,23 +208,30 @@ def normalized_card_text(card: Mapping[str, Any]) -> str | None:
     title = title.get("content") if isinstance(title, Mapping) else None
     if not isinstance(title, str) or not elements:
         return None
-    first = elements[0]
-    first = first if isinstance(first, Mapping) else {}
-    text = first.get("text")
-    markdown = text.get("content") if isinstance(text, Mapping) else None
-    if not isinstance(markdown, str):
-        return None
+    paragraphs = elements
     footer = None
-    if len(elements) == 3 and elements[1] == {"tag": "hr"}:
-        note = elements[2]
-        note_elements = note.get("elements") if isinstance(note, Mapping) else None
-        if isinstance(note_elements, list) and len(note_elements) == 1:
-            note_text = note_elements[0]
-            footer = (
-                note_text.get("content") if isinstance(note_text, Mapping) else None
-            )
-    lines = [f'<card title="{title}">', markdown]
-    if isinstance(footer, str) and footer:
+    if len(elements) >= 3 and elements[-2] == {"tag": "hr"}:
+        note = elements[-1]
+        match note:
+            case {
+                "tag": "note",
+                "elements": [{"tag": "plain_text", "content": str(footer)}],
+            }:
+                paragraphs = elements[:-2]
+            case _:
+                return None
+
+    lines = [f'<card title="{title}">']
+    for paragraph in paragraphs:
+        match paragraph:
+            case {
+                "tag": "div",
+                "text": {"tag": "lark_md" | "plain_text", "content": str(text)},
+            } if len(paragraph) == 2:
+                lines.append(text)
+            case _:
+                return None
+    if footer:
         lines.extend(["---", f"📝 {footer}"])
     lines.append("</card>")
     return "\n".join(lines)

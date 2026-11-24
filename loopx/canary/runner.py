@@ -453,6 +453,7 @@ def _run_check(
         return result
 
     started = time.monotonic()
+    launch_error: OSError | None = None
     cleanup_error: str | None = None
     root = Path(tempfile.mkdtemp(prefix="loopx-smoke-"))
     try:
@@ -479,23 +480,28 @@ def _run_check(
                 ("OPENCODE_CONFIG_DIR", ".config/opencode"),
             ):
                 env[name] = str(home / directory)
-            with subprocess.Popen(
-                normalized["argv"], cwd=repo_root, env=env,
-                text=True, encoding="utf-8", errors="replace",
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=os.name == "posix",
-            ) as process:
-                try:
-                    stdout, stderr = process.communicate(timeout=timeout_seconds)
-                except BaseException:
-                    # Deadline/cancellation must stop the owned children
-                    # before deleting their fixture, even after leader exit.
-                    # Reuse OS transport; keep the caller's existing budget.
-                    terminate_process_tree(process, grace_seconds=0)
-                    raise
-                completed = subprocess.CompletedProcess(
-                    normalized["argv"], process.returncode, stdout, stderr,
+            try:
+                process = subprocess.Popen(
+                    normalized["argv"], cwd=repo_root, env=env,
+                    text=True, encoding="utf-8", errors="replace",
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    start_new_session=os.name == "posix",
                 )
+            except OSError as exc:
+                launch_error = exc
+            else:
+                with process:
+                    try:
+                        stdout, stderr = process.communicate(timeout=timeout_seconds)
+                    except BaseException:
+                        # Deadline/cancellation must stop the owned children
+                        # before deleting their fixture, even after leader exit.
+                        # Reuse OS transport; keep the caller's existing budget.
+                        terminate_process_tree(process, grace_seconds=0)
+                        raise
+                    completed = subprocess.CompletedProcess(
+                        normalized["argv"], process.returncode, stdout, stderr,
+                    )
         finally:
             try:
                 _remove_fixture_root(root)
@@ -517,6 +523,16 @@ def _run_check(
         )
         if cleanup_error:
             result["reason"] = cleanup_error
+        return result
+
+    if launch_error is not None:
+        reason = f"could not start smoke check: {launch_error}"
+        result.update(
+            status="failed", ok=False, returncode=None,
+            duration_seconds=round(time.monotonic() - started, 3),
+            stdout_tail="", stderr_tail="",
+            reason=f"{reason}; {cleanup_error}" if cleanup_error else reason,
+        )
         return result
 
     result.update(
@@ -1312,6 +1328,8 @@ def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
             )
         if check.get("returncode") is not None:
             lines.append(f"- returncode: `{check.get('returncode')}`")
+        elif status == "failed" and check.get("reason"):
+            lines.append(f"- reason: {check['reason']}")
         if check.get("duration_seconds") is not None:
             lines.append(f"- duration_seconds: `{check.get('duration_seconds')}`")
         if check.get("skip_reason"):

@@ -39,6 +39,7 @@ from ..control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
     project_replan_writeback_rejection,
 )
+from ..file_lock import lock_timeout_error_fields
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 from ..state_refresh import (
@@ -476,7 +477,7 @@ def handle_refresh_state_command(
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             code = getattr(exc, "code", None)
             payload = {"ok": False, "goal_id": args.goal_id, "appended": False, "error": str(exc),
-                       **({"error_code": code} if isinstance(code, str) else {})}
+                       **({"error_code": code} if isinstance(code, str) else {}), **lock_timeout_error_fields(exc)}
         print_payload(payload, fmt, render_state_refresh_markdown)
         return 0 if payload["ok"] is True else 1
     agent_vision_packet: dict[str, object] | None = None
@@ -514,6 +515,7 @@ def handle_refresh_state_command(
             "dry_run": bool(args.dry_run),
             "error": str(exc),
             **({"error_code": exc.code, **getattr(exc, "payload", {})} if isinstance(getattr(exc, "code", None), str) else {}),
+            **lock_timeout_error_fields(exc),
         }
         print_payload(payload, fmt, render_state_refresh_markdown)
         return 1
@@ -601,6 +603,7 @@ def handle_refresh_state_command(
             "dry_run": bool(args.dry_run),
             "error": str(exc),
             **({"error_code": exc.code, **getattr(exc, "payload", {})} if isinstance(getattr(exc, "code", None), str) else {}),
+            **lock_timeout_error_fields(exc),
         }
         attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
         if isinstance(exc, ReplanWritebackRejected):

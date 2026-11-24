@@ -307,12 +307,42 @@ def test_periodic_report_hook_does_not_break_cold_imports() -> None:
         assert completed.returncode == 0, completed.stderr
 
 
+def test_captured_vision_audit_read_does_not_load_the_work_scheduler() -> None:
+    # Exercise the first selected read in a fresh interpreter, as a native hook does.
+    script = """
+import sys
+from loopx.control_plane.turn_driver.decision_capture import (
+    COMPLETE_TURN_DECISION_VERSION, context_vision_audit_view,
+)
+
+reference = {"projection_ref": "$.vision_continuation_audit", "projection_view": "cli_channel", "required": True}
+capture = {
+    "schema_version": COMPLETE_TURN_DECISION_VERSION,
+    "interaction_contract": {"cli_channel": {"vision_continuation_audit": reference}},
+    "vision_continuation_audit": {
+        "schema_version": "vision_continuation_audit_v0", "required": True,
+        "recommended_action": "inspect", "required_before_closeout": ["read"],
+    },
+}
+restored = context_vision_audit_view(capture)
+assert restored["interaction_contract"]["cli_channel"]["vision_continuation_audit"] == {
+    "required": True, "recommended_action": "inspect", "required_before_closeout": ["read"],
+}
+assert "loopx.control_plane.quota.execution_preparation" not in sys.modules
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script], cwd=REPOSITORY_ROOT, capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
     # Run independently: an earlier test importing a writer must not hide an
     # accidental cold-start dependency of a read-only entrypoint.
     for module, unrelated in (
         ("loopx.control_plane.coordination.local_authority", "loopx.history"),
         ("loopx.cli_commands.status", "loopx.state_refresh"),
+        ("loopx.cli_commands.quota_registration", "loopx.control_plane.quota.effect_program"),
     ):
         completed = subprocess.run(
             [sys.executable, "-c", (

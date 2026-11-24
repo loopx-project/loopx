@@ -3,6 +3,7 @@ import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
 import {AlertTriangle, ChevronRight, RefreshCw} from "lucide-react";
 import {fetchExploreResults, readTodoRequest, type ExploreResultPage} from "../../data/chat";
+import type {ExploreMeasurement} from "../../../../../../loopx/control_plane/capabilities/explore_measurements.js";
 import {ENVELOPED_SHA256_PATTERN} from "../../../../../../loopx/control_plane/content_digest.js";
 import {parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {ExploreMeasurements} from "./explore-measurements";
@@ -12,24 +13,48 @@ import "./goal-explore-results.css";
 type Finding = ExploreResultPage["items"][number];
 
 function relatedCandidateMeasurements(findings: Finding[], selected?: Finding) {
-  const current = selected?.measurement_error ? [] : selected?.measurements ?? [];
+  const related = new Map<Finding, ExploreMeasurement[]>();
+  if (!selected || selected.measurement_error) return {related, hasConflicts: false};
   // Plain candidate labels identify a choice within its own measurement scope.
   // Across evaluations, only an exact content digest identifies the artifact.
-  const candidates = new Set(current.map(row => row.candidate_ref)
+  const candidates = new Set((selected.measurements ?? []).map(row => row.candidate_ref)
     .filter(ref => ENVELOPED_SHA256_PATTERN.test(ref)));
-  if (!candidates.size) return [];
-  const seen = new Set(current.map(row => JSON.stringify(row)));
-  return findings.flatMap(finding => {
-    if (finding === selected || finding.measurement_error) return [];
-    const measurements = (finding.measurements ?? []).filter(row => {
-      if (!candidates.has(row.candidate_ref)) return false;
-      const key = JSON.stringify(row);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return measurements.length ? [{finding, measurements}] : [];
-  });
+  if (!candidates.size) return {related, hasConflicts: false};
+  const byResult = new Map<string, {finding: Finding; measurement: ExploreMeasurement; conflict: boolean}>();
+  for (const finding of [selected, ...findings.filter(item => item !== selected)]) {
+    if (finding.measurement_error) continue;
+    for (const row of finding.measurements ?? []) {
+      if (!candidates.has(row.candidate_ref)) continue;
+      // Value and direction are claims about this result, so disagreement
+      // cannot turn a repeated citation into an independent evaluation.
+      const key = JSON.stringify([row.candidate_ref, row.metric, row.unit, row.comparison_scope,
+        row.input_revision, row.evaluation_ref, row.evidence_ref]);
+      const previous = byResult.get(key);
+      if (previous) {
+        const {value, higher_is_better} = previous.measurement;
+        previous.conflict ||= higher_is_better !== row.higher_is_better
+          || (value !== null && row.value !== null && value !== row.value);
+        if (value === null && row.value !== null) {
+          previous.finding = finding;
+          previous.measurement = row;
+        }
+      } else {
+        byResult.set(key, {finding, measurement: row, conflict: false});
+      }
+    }
+  }
+  let hasConflicts = false;
+  for (const {finding, measurement, conflict} of byResult.values()) {
+    if (conflict) {
+      hasConflicts = true;
+      continue;
+    }
+    if (finding === selected) continue;
+    const group = related.get(finding);
+    if (group) group.push(measurement);
+    else related.set(finding, [measurement]);
+  }
+  return {related, hasConflicts};
 }
 
 function LinkedFindingTask({goalId, todo, statuses, zh, readSourceUrl}: {
@@ -84,7 +109,7 @@ export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active 
     return () => {current = false;};
   }, [goalId, originalGoalId, cursor, revision, active, readSourceUrl]);
   const selected = page?.items.find(item => item.finding_id === selectedId);
-  const related = relatedCandidateMeasurements(page?.items ?? [], selected);
+  const {related, hasConflicts} = relatedCandidateMeasurements(page?.items ?? [], selected);
   const sections = selected ? parseExploreFindingSections(selected.summary) : null;
   const findingCopy = exploreFindingCopy(zh);
   const statuses: Record<string, string> = zh
@@ -155,9 +180,12 @@ export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active 
         </div> : <p className="explore-finding-raw">{selected.summary}</p>}
         {selected.execution_observation ? <ExecutionObservationReadback observation={selected.execution_observation} zh={zh}/> : null}
         {selected.work_yardstick ? <WorkYardstickReadback capture={selected.work_yardstick} zh={zh}/> : null}
-        {related.length ? <details className="explore-reader-details explore-related-measurements">
+        {related.size || hasConflicts ? <details className="explore-reader-details explore-related-measurements">
           <summary>{zh ? "同一候选的其他测量（本页）" : "Other measurements of this candidate (this page)"}</summary>
-          {related.map(({finding, measurements}) => <section key={finding.finding_id}>
+          {hasConflicts ? <p className="explore-measurement-warning" role="note">
+            {zh ? "同一结果的数值或方向冲突，已排除。" : "Conflicting readings from the same result were left out of this list."}
+          </p> : null}
+          {[...related].map(([finding, measurements]) => <section key={finding.finding_id}>
             <button className="explore-related-finding-source" type="button" onClick={() => selectFinding(finding.finding_id, true)}>
               {finding.question || finding.finding}
             </button>
