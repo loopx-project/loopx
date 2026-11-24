@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -236,7 +237,8 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     assert len(required_ctx.get("context_details", {}).get("unread_context_index", {}).get("pointers", [])) < 20
 
     step1 = decision["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
-    assert step1["vision_authoring"]["summary_only"] is True
+    assert len(step1["vision_authoring"]) == 11
+    assert "minimal_example" in step1["vision_authoring"]
     assert step1["optional_attachments"][0]["summary_only"] is True
     assert step1["optional_attachments"][0]["required"] is False
     assert "--settle-turn" in step1["command_template"]
@@ -247,15 +249,146 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     assert len(full_outcomes) == 33
     assert all("requirements" in row and "sources" in row for row in full_outcomes)
 
-    # 4. --include-detail vision on the same Turn delivers full vision_authoring & optional_attachments.
+    # 4. --include-detail vision on the same Turn delivers full optional_attachments alongside complete vision_authoring.
     _, detail = cli(
         "quota", "should-run", "--codex-app", "--context-delivery", "off", "--include-detail", "vision",
         "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
         "--turn-instance-id", "turn-routine",
     )
     detail_step1 = detail["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
-    assert "minimal_example" in detail_step1["vision_authoring"]
+    assert detail_step1["vision_authoring"] == step1["vision_authoring"]
+    assert len(detail_step1["vision_authoring"]) == 11
     assert "guidance" in detail_step1["optional_attachments"][0]
+
+    # 4b. Captured Turn retains complete 11-field vision_authoring at its canonical step pointer
+    #     and preserves full optional_attachments in deferred_settlement_details inside decision.json
+    #     while omitting deferred_settlement_details from required-context.json; initial first-read
+    #     keeps vision_authoring concise while immutable capture readback and explore cold-read succeed
+    #     verbatim on File & SQLite.
+    deferred = decision["deferred_settlement_details"]
+    assert deferred["optional_attachments"] == detail_step1["optional_attachments"]
+    assert "deferred_settlement_details" not in required_ctx
+
+    first_read = subprocess.run(
+        shlex.split(view["first_read_command"]),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert first_read.returncode == 0, first_read.stderr
+    first_page = json.loads(first_read.stdout)
+    assert first_page["ok"] is True
+    assert "minimal_example" not in first_page["content"]
+
+    ga_index = next(
+        i for i, s in enumerate(decision["interaction_contract"]["agent_channel"]["work_context"]["sources"])
+        if s.get("source") == "goal_acceptance"
+    )
+    recovery_read_cmd = (
+        view["recovery"]["command"]
+        + " --select /interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring"
+        + " --select /interaction_contract/cli_channel/settlement_plan/identity"
+        + f" --select /interaction_contract/agent_channel/work_context/sources/{ga_index}/content/goal_acceptance_contract"
+    )
+    captured_cold_read = subprocess.run(
+        shlex.split(recovery_read_cmd),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert captured_cold_read.returncode == 0, captured_cold_read.stdout + captured_cold_read.stderr
+    read_page = json.loads(captured_cold_read.stdout)
+    assert read_page["ok"] is True and read_page["eof"] is True
+    selected = json.loads(read_page["content"])
+    by_pointer = {row["pointer"]: row["value"] for row in selected["selections"]}
+    assert by_pointer["/interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring"] == detail_step1["vision_authoring"]
+    assert by_pointer["/interaction_contract/cli_channel/settlement_plan/identity"]["effect_id"] == decision["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]["effect_id"]
+    acceptance_ptrs = [ptr for ptr in by_pointer if ptr.endswith(("goal_acceptance_contract", "acceptance_contract"))]
+    assert acceptance_ptrs == [f"/interaction_contract/agent_channel/work_context/sources/{ga_index}/content/goal_acceptance_contract"]
+    assert by_pointer[acceptance_ptrs[0]]["outcome_requirements"]["outcomes"][0]["id"] == "outcome-current"
+
+    # Full decision capture reader (.reader.json) delivers deferred_settlement_details,
+    # 11-field vision_authoring, settlement identity, and scoped goal_acceptance verbatim.
+    decision_reader_cmd = [
+        sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-read",
+        "--reference-file", str(decision_path.with_suffix(".reader.json")),
+        "--select", "/interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring",
+        "--select", "/deferred_settlement_details/optional_attachments",
+        "--select", "/interaction_contract/cli_channel/settlement_plan/identity",
+        "--select", f"/interaction_contract/agent_channel/work_context/sources/{ga_index}/content/goal_acceptance_contract",
+        "--page-bytes", "64000", "--max-page-output-bytes", "64000",
+    ]
+    decision_read = subprocess.run(decision_reader_cmd, cwd=env["project"], capture_output=True, text=True)
+    assert decision_read.returncode == 0, decision_read.stdout + decision_read.stderr
+    decision_selected = {
+        row["pointer"]: row["value"]
+        for row in json.loads(json.loads(decision_read.stdout)["content"])["selections"]
+    }
+    assert decision_selected["/interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring"] == detail_step1["vision_authoring"]
+    assert decision_selected["/deferred_settlement_details/optional_attachments"] == detail_step1["optional_attachments"]
+    assert decision_selected["/interaction_contract/cli_channel/settlement_plan/identity"]["effect_id"] == decision["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]["effect_id"]
+    assert decision_selected[f"/interaction_contract/agent_channel/work_context/sources/{ga_index}/content/goal_acceptance_contract"] == wc_ga
+
+    # Explore cold_read_command inherits registry & runtime-root and executes verbatim.
+    explore_cold_read = subprocess.run(
+        shlex.split(step1["optional_attachments"][0]["cold_read_command"]),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert explore_cold_read.returncode == 0, explore_cold_read.stderr
+    explore_payload = json.loads(explore_cold_read.stdout)
+    assert explore_payload["ok"] is True
+
+    # Uncaptured --context-delivery off omits deferred_settlement_details, retains complete 11-field
+    # vision_authoring, and executes its verbatim explore cold_read_command cleanly.
+    _, uncaptured = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-routine",
+    )
+    assert "deferred_settlement_details" not in uncaptured
+    uncaptured_step1 = uncaptured["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
+    assert uncaptured_step1["vision_authoring"] == detail_step1["vision_authoring"]
+    uncaptured_explore_read = subprocess.run(
+        shlex.split(uncaptured_step1["optional_attachments"][0]["cold_read_command"]),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert uncaptured_explore_read.returncode == 0, uncaptured_explore_read.stderr
+    assert json.loads(uncaptured_explore_read.stdout)["ok"] is True
+
+    # 4c. --include-detail goal_acceptance returns all 33 full inline outcomes cleanly,
+    #     and unsupported or invalid --include-detail choices fail cleanly.
+    _, ga_detail = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off", "--include-detail", "goal_acceptance",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-routine",
+    )
+    ga_full = next(
+        s["content"]["goal_acceptance_contract"]
+        for s in ga_detail["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    ga_full_reqs = ga_full["outcome_requirements"]
+    assert "projection_mode" not in ga_full_reqs
+    assert len(ga_full_reqs["outcomes"]) == 33
+    assert all("requirements" in row and "sources" in row and "summary_only" not in row for row in ga_full_reqs["outcomes"])
+
+    bad_detail_rc, _ = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off", "--include-detail", "bogus",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-routine", check=False,
+    )
+    assert bad_detail_rc == 2
+    plan_detail_rc, plan_detail_err = cli(
+        "quota", "plan", "--include-detail", "goal_acceptance",
+        "--goal-id", goal_id, "--agent-id", agent_id, check=False,
+    )
+    assert plan_detail_rc == 1
+    assert plan_detail_err["error_code"] == "QUOTA_VALIDATION_FAILED"
+    assert "goal_acceptance" in json.dumps(plan_detail_err)
 
     # 5. End-to-end execution parity: refresh-state + spend-slot settles cleanly on File & SQLite.
     _, settled = cli(

@@ -16,18 +16,27 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
     """Compose Complete Turn sources before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
+    from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
     from ..control_plane.quota.turn_envelope import compose_turn_decision
     from .quota_request import quota_detail_sections_from_args
 
     detail_sections = quota_detail_sections_from_args(args)
+    capture_reference_file = (
+        str(capture_directory / "decision.reader.json")
+        if capture_directory is not None
+        else None
+    )
     try:
         return compose_turn_decision(
             payload,
             scheduler_execution_context=scheduler_context,
             composed_settlement=True,
             include_vision_detail="vision" in detail_sections,
+            include_goal_acceptance_detail="goal_acceptance" in detail_sections,
+            cli_argv=current_loopx_cli_argv(),
+            capture_reference_file=capture_reference_file,
         )
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         from .quota_capture import capture_decision

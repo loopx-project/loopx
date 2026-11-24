@@ -588,6 +588,12 @@ export function progressiveContextPlan(request: JsonObject,
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
+  if (at(payload, ["deferred_settlement_details"]) !== undefined) {
+    deferred.push({
+      path: ["deferred_settlement_details"],
+      read_instruction: "Complete optional settlement attachment details stay in the original capture; use optional_attachments[].cold_read_command when needed.",
+    });
+  }
   for (const scope of scopes) {
     deferred.push({path: scope.path, read_instruction: scope.instruction});
     if (scope.marker_path) instructions.push({path: scope.marker_path, value: pointer(scope.path)});

@@ -1034,6 +1034,14 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
+  const cliArgv = request.cli_argv === undefined ? ["loopx"] : executableCliArgs(request.cli_argv);
+  if (request.cli_argv !== undefined && cliArgv.length === 0) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_argv must be a non-empty list of strings");
+  }
+  const captureReferenceFile = request.capture_reference_file;
+  if (captureReferenceFile !== undefined && !isNonEmptyFilePath(captureReferenceFile)) {
+    throw new EffectRuntimeRequestError("Turn envelope capture_reference_file must be a non-empty file path");
+  }
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
     const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
@@ -1089,7 +1097,10 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     }
   }
   if (!includeVisionDetail) {
-    source = compactRoutineSettlementPlan(source);
+    source = compactRoutineSettlementPlan(source, {
+      cliArgv,
+      captureReferenceFile,
+    });
   }
   source = referenceGoalAcceptance(source, sourceIdentity);
   if (!includeGoalAcceptanceDetail) {

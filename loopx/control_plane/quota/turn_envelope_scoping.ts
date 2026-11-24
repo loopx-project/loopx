@@ -5,25 +5,25 @@
  * gaps, or ambiguous/fail-closed linkage) and represent remaining historical or
  * other-agent outcomes as compact index entries with an explicit cold-read
  * command (`loopx goal-acceptance inspect`). Routine `durable_writeback` steps
- * likewise replace non-triggered vision-authoring and optional explore prose
- * with compact cold-read hints while retaining every command template,
- * precondition, identity ref, and expected receipt.
+ * keep the canonical complete `vision_authoring` contract intact in the
+ * decision (trimmed only in progressive first-read opening groups) while
+ * compacting non-triggered optional explore attachment prose into explicit
+ * `cold_read_command` hints (`explore turn-context`) and preserving complete
+ * optional attachments inside `deferred_settlement_details` for captured turns.
  */
 import {isDeepStrictEqual} from "node:util";
 import {exploreResultWritebackAffordance} from "../capabilities/explore_context_delivery.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {jsonObject} from "../runtime_decode.ts";
 import {EffectiveAction} from "./effective_action.generated.ts";
-import {canonicalHash} from "./turn_envelope_codec.ts";
+import {canonicalHash, shellQuote} from "./turn_envelope_codec.ts";
 
 const object = (value: unknown): JsonObject => jsonObject(value) ?? {};
 
 export const SCOPED_OUTCOME_THRESHOLD = 6;
 export const SCOPED_OUTCOME_PROJECTION_MODE = "turn_scoped_v0";
 
-const POSIX_SAFE_TOKEN = /^[A-Za-z0-9_@%+=:,./-]+$/;
 const UNVERIFIED_OR_FAILING_STATUSES = new Set(["failed", "stale", "unverified"]);
 const EXPLORE_STATIC_GRAPH_KEYS = [
   ["result_attachment_template", "attachment_template"],
@@ -33,11 +33,6 @@ const EXPLORE_STATIC_GRAPH_KEYS = [
   ["optional_measurement_example", "optional_measurement_example"],
   ["optional_execution_observation_example", "optional_execution_observation_example"],
 ] as const;
-
-function shellQuote(value: string): string {
-  if (value.length > 0 && POSIX_SAFE_TOKEN.test(value)) return value;
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -53,14 +48,44 @@ function goalAcceptanceColdReadCommand(goalId: string): string {
   return `loopx goal-acceptance inspect --goal-id ${shellQuote(goalId)}`;
 }
 
-function visionColdReadCommand(goalId: string, agentId: string, todoId?: string): string {
-  const todo = todoId ? ` --todo-id ${shellQuote(todoId)}` : "";
-  return `loopx quota should-run --include-detail vision --goal-id ${shellQuote(goalId)} --agent-id ${shellQuote(agentId)}${todo}`;
+export type CompactSettlementOptions = {
+  cliArgv?: readonly string[];
+  captureReferenceFile?: string;
+};
+
+function cliPrefix(
+  cliArgv: readonly string[],
+  registry: unknown,
+  runtimeRoot: unknown,
+): string {
+  const argv = cliArgv.length > 0 ? cliArgv : ["loopx"];
+  const parts = argv.map(shellQuote);
+  const registryText = nonEmptyString(registry);
+  const runtimeRootText = nonEmptyString(runtimeRoot);
+  if (registryText) parts.push("--registry", shellQuote(registryText));
+  if (runtimeRootText) parts.push("--runtime-root", shellQuote(runtimeRootText));
+  parts.push("--format", "json");
+  return parts.join(" ");
 }
 
-function exploreColdReadCommand(goalId: string, agentId: string, todoId?: string): string {
-  const todo = todoId ? ` --todo-id ${shellQuote(todoId)}` : "";
-  return `loopx explore turn-context --goal-id ${shellQuote(goalId)} --agent-id ${shellQuote(agentId)}${todo}`;
+function exploreColdReadCommand(options: {
+  cliArgv: readonly string[];
+  registry: unknown;
+  runtimeRoot: unknown;
+  goalId: string;
+  agentId: string;
+  todoId: string | null;
+}): string {
+  const prefix = cliPrefix(options.cliArgv, options.registry, options.runtimeRoot);
+  const parts = [
+    prefix,
+    "explore",
+    "turn-context",
+    "--goal-id", shellQuote(options.goalId),
+    "--agent-id", shellQuote(options.agentId),
+    ...(options.todoId ? ["--todo-id", shellQuote(options.todoId)] : []),
+  ];
+  return parts.join(" ");
 }
 
 function isRoutineNormalRun(payload: JsonObject): boolean {
@@ -356,15 +381,6 @@ export function scopeTurnGoalAcceptance(payload: JsonObject): JsonObject {
   return replaceInlineOutcomeRequirements(payload, owner, scopedRequirements);
 }
 
-function knownVisionAuthoring(value: unknown): JsonObject | null {
-  const authoring = jsonObject(value);
-  if (!authoring) return null;
-  if ([false, true].some(replan => isDeepStrictEqual(authoring, visionAuthoringContract(replan)))) {
-    return authoring;
-  }
-  return null;
-}
-
 function compactExploreGraphBoilerplate(
   sources: unknown[],
   affordance: JsonObject,
@@ -397,7 +413,10 @@ function compactExploreGraphBoilerplate(
   return {sources: next, changed};
 }
 
-export function compactRoutineSettlementPlan(payload: JsonObject): JsonObject {
+export function compactRoutineSettlementPlan(
+  payload: JsonObject,
+  options: CompactSettlementOptions = {},
+): JsonObject {
   if (!isRoutineNormalRun(payload)) return payload;
   const frontier = object(payload.goal_frontier_projection);
   if (Array.isArray(frontier.acceptance_gaps) && frontier.acceptance_gaps.length > 0) return payload;
@@ -418,10 +437,18 @@ export function compactRoutineSettlementPlan(payload: JsonObject): JsonObject {
 
   const requiredCaps = new Set(stringList(object(payload.selected_todo).required_capabilities));
   const exploreEnabled = requiredCaps.has("explore");
-  const visionEnabled = requiredCaps.has("vision") || requiredCaps.has("replan");
   const knownExplore = exploreResultWritebackAffordance();
-  const exploreColdRead = exploreColdReadCommand(goalId, agentId, todoId ?? undefined);
-  const visionColdRead = visionColdReadCommand(goalId, agentId, todoId ?? undefined);
+  const cliArgv = options.cliArgv ?? ["loopx"];
+  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
+  const exploreColdRead = exploreColdReadCommand({
+    cliArgv,
+    registry: payload.registry,
+    runtimeRoot: payload.runtime_root,
+    goalId,
+    agentId,
+    todoId,
+  });
+  let deferredOptionalAttachments: unknown[] | null = null;
 
   let planChanged = false;
   let compactedExploreAttachment = false;
@@ -431,19 +458,6 @@ export function compactRoutineSettlementPlan(payload: JsonObject): JsonObject {
 
     let stepUpdated = false;
     let nextStep: JsonObject = {...step};
-
-    if (!visionEnabled && Object.hasOwn(step, "vision_authoring")) {
-      const authoring = knownVisionAuthoring(step.vision_authoring);
-      if (authoring !== null) {
-        nextStep.vision_authoring = {
-          schema_version: String(authoring.schema_version),
-          summary_only: true,
-          rule: authoring.rule,
-          cold_read_command: visionColdRead,
-        };
-        stepUpdated = true;
-      }
-    }
 
     if (!exploreEnabled && Array.isArray(step.optional_attachments)) {
       let attachmentsChanged = false;
@@ -465,6 +479,7 @@ export function compactRoutineSettlementPlan(payload: JsonObject): JsonObject {
         };
       });
       if (attachmentsChanged) {
+        deferredOptionalAttachments = step.optional_attachments;
         nextStep.optional_attachments = nextAttachments;
         stepUpdated = true;
       }
@@ -510,8 +525,14 @@ export function compactRoutineSettlementPlan(payload: JsonObject): JsonObject {
     }
   }
 
+  let deferredDetails: JsonObject | null = null;
+  if (captureReferenceFile && deferredOptionalAttachments !== null) {
+    deferredDetails = {optional_attachments: deferredOptionalAttachments};
+  }
+
   return {
     ...payload,
     interaction_contract: nextInteraction,
+    ...(deferredDetails !== null ? {deferred_settlement_details: deferredDetails} : {}),
   };
 }

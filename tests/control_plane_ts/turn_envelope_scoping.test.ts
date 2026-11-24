@@ -395,12 +395,8 @@ test("lean routine settlement_plan compacts static prose and preserves commands,
   assert.equal(step1.expected_receipt, "durable_writeback_receipt");
 
   const va = step1.vision_authoring as JsonObject;
-  assert.equal(va.summary_only, true);
-  assert.equal(va.schema_version, "goal_vision_replan_contract_v0");
-  assert.equal(va.rule, visionAuthoringContract(false).rule);
-  assert.match(String(va.cold_read_command), /quota should-run --include-detail vision/);
-  assert.equal(va.minimal_example, undefined);
-  assert.ok(Buffer.byteLength(JSON.stringify(va)) < 450);
+  assert.deepEqual(va, visionAuthoringContract(false));
+  assert.equal(Object.keys(va).length, 11);
 
   const att = (step1.optional_attachments as JsonObject[])[0];
   assert.equal(att.capability_id, "explore");
@@ -424,7 +420,7 @@ test("lean routine settlement_plan compacts static prose and preserves commands,
   const env = evaluateTurnEnvelope({operation: "build", payload: composed, scheduler_execution_args: ""});
   assert.equal((env.action_signature as JsonObject).matches, true);
 
-  // Triggered cases preserve full authoring and full attachment prose verbatim.
+  // Triggered cases preserve full attachment prose verbatim alongside complete vision_authoring.
   for (const [name, mutate] of [
     ["vision_continuation_audit", (p: JsonObject) => { p.vision_continuation_audit = {required: true}; }],
     ["vision_checkpoint_required", (p: JsonObject) => { p.vision_checkpoint = {required: true}; }],
@@ -433,28 +429,94 @@ test("lean routine settlement_plan compacts static prose and preserves commands,
       const steps = (((p.interaction_contract as JsonObject).cli_channel as JsonObject).settlement_plan as JsonObject).ordered_steps as JsonObject[];
       ((steps[1].optional_attachments as JsonObject[])[0] as JsonObject).required = true;
     }],
-    ["custom_authoring", (p: JsonObject) => {
-      const steps = (((p.interaction_contract as JsonObject).cli_channel as JsonObject).settlement_plan as JsonObject).ordered_steps as JsonObject[];
-      ((steps[1].vision_authoring as JsonObject).rule as string) += " Custom rule.";
-    }],
   ] as const) {
     const triggered = baseNormalPayload(4);
     mutate(triggered);
     const out = compactRoutineSettlementPlan(triggered);
     const outStep1 = ((((out.interaction_contract as JsonObject).cli_channel as JsonObject).settlement_plan as JsonObject).ordered_steps as JsonObject[])[1];
-    if (name === "explore_required_cap" || name === "required_attachment") {
-      assert.ok(typeof ((outStep1.optional_attachments as JsonObject[])[0]).guidance === "string", `${name} keeps guidance`);
-    } else if (name === "custom_authoring") {
-      assert.match(String((outStep1.vision_authoring as JsonObject).rule), /Custom rule/);
-      assert.ok(Object.hasOwn(outStep1.vision_authoring as JsonObject, "fields"));
-    } else {
-      assert.deepEqual(outStep1.vision_authoring, visionAuthoringContract(false), `${name} keeps full authoring`);
-      assert.ok(typeof ((outStep1.optional_attachments as JsonObject[])[0]).guidance === "string", `${name} keeps attachment`);
-    }
+    assert.deepEqual(outStep1.vision_authoring, visionAuthoringContract(false), `${name} keeps full authoring`);
+    assert.ok(typeof ((outStep1.optional_attachments as JsonObject[])[0]).guidance === "string", `${name} keeps attachment`);
   }
 
   // Tampered scoped capture is rejected fail-closed by complete_consumer.
   const tampered = structuredClone(composed);
   (tampered.contract_binding as JsonObject).content_hash = "sha256:" + "0".repeat(64);
   assert.throws(() => evaluateTurnEnvelope({operation: "complete_consumer", payload: tampered}));
+});
+
+test("compactRoutineSettlementPlan preserves immutable deferred attachment details and binds explore cold-reads", () => {
+  const source = baseNormalPayload(4);
+  source.registry = "state/registry.json";
+  source.runtime_root = "state/runtime";
+  source.goal_ref = {goal_id: "g1", goal_instance_id: "gi-1"};
+
+  // Captured mode keeps full 11-field vision_authoring at its canonical step location and stores
+  // full optional_attachments in decision.json under deferred_settlement_details, dropping them
+  // from progressive delivery while binding explore cold-reads to registry & runtime-root.
+  const captured = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: " --codex-app",
+    cli_argv: ["loopx"],
+    capture_reference_file: "state/captures/decision.reader.json",
+  });
+  const capturedCli = (captured.interaction_contract as JsonObject).cli_channel as JsonObject;
+  const capturedStep1 = ((capturedCli.settlement_plan as JsonObject).ordered_steps as JsonObject[])[1];
+  assert.deepEqual(capturedStep1.vision_authoring, visionAuthoringContract(false));
+  assert.equal(Object.keys(capturedStep1.vision_authoring as JsonObject).length, 11);
+  const capturedAtt = (capturedStep1.optional_attachments as JsonObject[])[0];
+  assert.equal(
+    capturedAtt.cold_read_command,
+    "loopx --registry state/registry.json --runtime-root state/runtime --format json explore turn-context --goal-id g1 --agent-id a1 --todo-id todo-current",
+  );
+  const deferred = captured.deferred_settlement_details as JsonObject;
+  assert.deepEqual(deferred.optional_attachments, [exploreResultWritebackAffordance()]);
+  assert.deepEqual(evaluateTurnEnvelope({operation: "complete_consumer", payload: captured}), {ok: true});
+  const capturedEnv = evaluateTurnEnvelope({operation: "build", payload: captured, scheduler_execution_args: " --codex-app"});
+  assert.equal((capturedEnv.action_signature as JsonObject).matches, true);
+
+  const stripped = structuredClone(captured);
+  delete stripped.schema_version;
+  delete stripped.contract_binding;
+  const plan = progressiveContextPlan({payload: stripped, surface: "quota_packet"});
+  assert.ok((plan.deferred as JsonObject[]).some(
+    entry => JSON.stringify(entry.path) === JSON.stringify(["deferred_settlement_details"]),
+  ));
+
+  const deliveryInput = {
+    operation: "progressive_context_delivery",
+    surface: "complete_turn",
+    context: captured,
+    native_projection: {path: "state/captures/decision.json", sha256: "a".repeat(64)},
+  };
+  const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>(
+    (row, key) => (row as Record<string | number, unknown>)[key],
+    root,
+  );
+  const delivered = structuredClone(deliveryInput);
+  for (const change of evaluateTurnEnvelope(deliveryInput).changes as JsonObject[]) {
+    const path = change.path as (string | number)[];
+    const parent = at(delivered, path.slice(0, -1)) as Record<string | number, unknown>;
+    const key = path.at(-1)!;
+    if (change.remove) delete parent[key];
+    else parent[key] = structuredClone(change.from ? at(deliveryInput, change.from as (string | number)[]) : change.value);
+  }
+  assert.equal((delivered.context as JsonObject).deferred_settlement_details, undefined);
+
+  // Uncaptured mode omits deferred_settlement_details while still inheriting registry & runtime-root
+  // in explore cold_read_command and retaining complete 11-field vision_authoring.
+  const uncaptured = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: " --codex-app",
+    cli_argv: ["loopx"],
+  });
+  assert.equal(uncaptured.deferred_settlement_details, undefined);
+  const uncapturedCli = (uncaptured.interaction_contract as JsonObject).cli_channel as JsonObject;
+  const uncapturedStep1 = ((uncapturedCli.settlement_plan as JsonObject).ordered_steps as JsonObject[])[1];
+  assert.deepEqual(uncapturedStep1.vision_authoring, visionAuthoringContract(false));
+  assert.equal(
+    ((uncapturedStep1.optional_attachments as JsonObject[])[0]).cold_read_command,
+    "loopx --registry state/registry.json --runtime-root state/runtime --format json explore turn-context --goal-id g1 --agent-id a1 --todo-id todo-current",
+  );
 });
