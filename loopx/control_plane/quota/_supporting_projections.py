@@ -418,11 +418,9 @@ def _attach_quota_supporting_projections(
     state_action_projection_warning: dict[str, Any] | None,
     next_action_warning: dict[str, Any] | None,
     replan_obligation: dict[str, Any] | None,
+    work_lane: Mapping[str, object] | None = None,
     notify_gate: bool = True,
 ) -> None:
-    work_lane = _dict_field(payload, "work_lane_contract")
-    if work_lane is None:
-        work_lane = _dict_field(payload, "work_lane")
     _attach_truthy_fields(
         payload,
         stale_latest_run_warning=_dict_field(item, "stale_latest_run_warning"),
@@ -441,7 +439,7 @@ def _attach_quota_supporting_projections(
             goal_id=goal_id,
             recommended_action=selected_recommended_action,
             selected_todo=_dict_field(payload, "selected_todo"),
-            work_lane=work_lane,
+            work_lane=work_lane if work_lane is not None else _dict_field(payload, "work_lane"),
             agent_identity=_dict_field(payload, "agent_identity"),
             agent_lane_next_action=_dict_field(payload, "agent_lane_next_action"),
             item=item,
