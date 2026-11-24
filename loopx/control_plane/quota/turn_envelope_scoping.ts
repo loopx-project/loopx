@@ -509,6 +509,8 @@ export function compactRoutineSettlementPlan(
   options: CompactSettlementOptions = {},
 ): JsonObject {
   if (!isRoutineNormalRun(payload)) return payload;
+  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
+  if (!captureReferenceFile) return payload;
   const frontier = object(payload.goal_frontier_projection);
   if (Array.isArray(frontier.acceptance_gaps) && frontier.acceptance_gaps.length > 0) return payload;
 
@@ -530,7 +532,6 @@ export function compactRoutineSettlementPlan(
   const exploreEnabled = requiredCaps.has("explore");
   const knownExplore = exploreResultWritebackAffordance();
   const cliArgv = options.cliArgv ?? ["loopx"];
-  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
   const exploreColdRead = exploreColdReadCommand({
     cliArgv,
     registry: options.registry ?? payload.registry,
@@ -616,14 +617,11 @@ export function compactRoutineSettlementPlan(
     }
   }
 
-  let deferredDetails: JsonObject | null = null;
-  if (captureReferenceFile && deferredOptionalAttachments !== null) {
-    deferredDetails = {optional_attachments: deferredOptionalAttachments};
-  }
-
   return {
     ...payload,
     interaction_contract: nextInteraction,
-    ...(deferredDetails !== null ? {deferred_settlement_details: deferredDetails} : {}),
+    ...(deferredOptionalAttachments !== null
+      ? {deferred_settlement_details: {optional_attachments: deferredOptionalAttachments}}
+      : {}),
   };
 }

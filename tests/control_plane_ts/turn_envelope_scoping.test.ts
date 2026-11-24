@@ -420,8 +420,19 @@ test("small Goals, uncaptured runs, replan turns, audit required, closeout, deta
 });
 
 test("lean routine settlement_plan compacts static prose and preserves commands, identity, and triggered turns", () => {
+  const captureOpts = {captureReferenceFile: "state/captures/decision.reader.json"};
   const source = baseNormalPayload(4);
-  const composed = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+
+  // Uncaptured compactRoutineSettlementPlan without captureReferenceFile preserves full attachments and graph prose.
+  assert.equal(compactRoutineSettlementPlan(source), source);
+  assert.equal(compactRoutineSettlementPlan(source, {}), source);
+
+  const composed = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: "",
+    capture_reference_file: captureOpts.captureReferenceFile,
+  });
   const cli = (composed.interaction_contract as JsonObject).cli_channel as JsonObject;
   const plan = cli.settlement_plan as JsonObject;
   const step1 = (plan.ordered_steps as JsonObject[])[1];
@@ -471,7 +482,7 @@ test("lean routine settlement_plan compacts static prose and preserves commands,
   ] as const) {
     const triggered = baseNormalPayload(4);
     mutate(triggered);
-    const out = compactRoutineSettlementPlan(triggered);
+    const out = compactRoutineSettlementPlan(triggered, captureOpts);
     const outStep1 = ((((out.interaction_contract as JsonObject).cli_channel as JsonObject).settlement_plan as JsonObject).ordered_steps as JsonObject[])[1];
     assert.deepEqual(outStep1.vision_authoring, visionAuthoringContract(false), `${name} keeps full authoring`);
     assert.ok(typeof ((outStep1.optional_attachments as JsonObject[])[0]).guidance === "string", `${name} keeps attachment`);
@@ -542,8 +553,8 @@ test("compactRoutineSettlementPlan preserves immutable deferred attachment detai
   }
   assert.equal((delivered.context as JsonObject).deferred_settlement_details, undefined);
 
-  // Uncaptured mode omits deferred_settlement_details while still inheriting registry & runtime-root
-  // in explore cold_read_command and retaining complete 11-field vision_authoring.
+  // Uncaptured mode omits deferred_settlement_details and preserves all 14 Explore attachment fields
+  // and explore graph guidance verbatim alongside complete 11-field vision_authoring.
   const uncaptured = evaluateTurnEnvelope({
     operation: "compose_complete",
     payload: source,
@@ -554,10 +565,11 @@ test("compactRoutineSettlementPlan preserves immutable deferred attachment detai
   const uncapturedCli = (uncaptured.interaction_contract as JsonObject).cli_channel as JsonObject;
   const uncapturedStep1 = ((uncapturedCli.settlement_plan as JsonObject).ordered_steps as JsonObject[])[1];
   assert.deepEqual(uncapturedStep1.vision_authoring, visionAuthoringContract(false));
-  assert.equal(
-    ((uncapturedStep1.optional_attachments as JsonObject[])[0]).cold_read_command,
-    "loopx --registry state/registry.json --runtime-root state/runtime --format json explore turn-context --goal-id g1 --agent-id a1 --todo-id todo-current",
-  );
+  assert.deepEqual(uncapturedStep1.optional_attachments, [exploreResultWritebackAffordance()]);
+  const uncapturedGraph = (((((uncaptured.interaction_contract as JsonObject).agent_channel as JsonObject)
+    .work_context as JsonObject).sources as JsonObject[])[0].content as JsonObject).graph as JsonObject;
+  assert.equal(uncapturedGraph.result_writeback_guidance_summary_only, undefined);
+  assert.match(String(uncapturedGraph.result_writeback_guidance_ref), /optional_attachments/);
 });
 
 test("scoped goal_acceptance cold_read_command binds original cli_argv, registry, and runtime_root across summary, rows, and first read", () => {
