@@ -33,12 +33,8 @@ assert module['validate_published_manifest'](published)=={**value, 'default_cont
 try:module['validate_manifest']({**published, 'default_contract':profile})
 except ValueError:pass
 else:raise AssertionError('ambiguous contract accepted by bootstrap')
-history = module['HISTORICAL_DEFAULT_CONTRACT']
-assert module['validate_manifest']({**value, 'default_contract':history})['default_contract']==history
-try:module['validate_default_contract'](history)
-except ValueError:pass
-else:raise AssertionError('reader compatibility promoted the historical contract as publication default')
-for invalid in [None, {}, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
+quota_packet = {'surface': 'quota_packet', 'schema_version': None, 'interaction_schema_version': 'loopx_interaction_contract_v0'}
+for invalid in [None, {}, quota_packet, {'surface':'complete_turn','schema_version':'loopx_turn_envelope_v1'}, {'surface':'unknown'}]:
     try:module['validate_manifest']({**value,'default_contract':invalid})
     except ValueError:pass
     else:raise AssertionError('unqualified contract accepted by bootstrap')
@@ -120,15 +116,28 @@ def test_unqualified_default_stops_before_download_or_activation(monkeypatch, pr
     assert calls == []
 
 
-def test_qualified_scope_and_historical_metadata_remain_readable():
-    historical = manifest(b"runtime", "https://publisher.invalid/runtime")
-    assert update.validate_manifest(historical) == historical
-    published = {**historical, "default_contract": dict(update.HISTORICAL_DEFAULT_CONTRACT)}
-    assert update.validate_manifest(published) == published
-    current = {**historical, "default_contract": dict(update.PUBLIC_DEFAULT_CONTRACT)}
+def test_archive_metadata_accepts_an_omitted_or_current_contract():
+    unannotated = manifest(b"runtime", "https://publisher.invalid/runtime")
+    assert update.validate_manifest(unannotated) == unannotated
+    current = {**unannotated, "default_contract": {
+        "surface": "complete_turn", "schema_version": "loopx_turn_envelope_v1",
+        "interaction_schema_version": "loopx_interaction_contract_v0",
+    }}
     assert update.validate_manifest(current) == current
-    with pytest.raises(ValueError, match="unqualified for public adoption"):
-        update.validate_default_contract(dict(update.HISTORICAL_DEFAULT_CONTRACT))
+
+
+@pytest.mark.parametrize("ref", ["main", "stable"])
+@pytest.mark.parametrize("previous_profile", [False, True])
+def test_public_channel_requires_the_publisher_attestation(monkeypatch, ref, previous_profile):
+    descriptor = {**manifest(b"runtime", "https://publisher.invalid/runtime"), "channel": ref}
+    if previous_profile:
+        descriptor[update.QUALIFIED_DEFAULT_CONTRACT_FIELD] = {
+            "surface": "quota_packet", "schema_version": None,
+            "interaction_schema_version": "loopx_interaction_contract_v0",
+        }
+    monkeypatch.setattr(update, "read_json", lambda _url: descriptor)
+    with pytest.raises(ValueError, match="requires a qualified|unqualified for public adoption"):
+        update.resolve_artifact("example/loopx", ref)
 
 
 @pytest.mark.parametrize("contract_field", ["default_contract", update.QUALIFIED_DEFAULT_CONTRACT_FIELD])
@@ -237,8 +246,10 @@ def test_pinned_metadata_does_not_fallback_from_invalid_or_unverified_sources(mo
 def test_channel_and_product_release_addresses_remain_unchanged(monkeypatch, ref, channel, suffix):
     descriptor = {**manifest(b"runtime", "https://publisher.invalid/runtime.tar.gz"), "channel": channel}
     calls = []
-    monkeypatch.setattr(update, "read_json", lambda url: calls.append(url) or descriptor)
-    assert update.resolve_artifact("example/loopx", ref) == descriptor
+    profile = dict(update.PUBLIC_DEFAULT_CONTRACT)
+    published = {**descriptor, update.QUALIFIED_DEFAULT_CONTRACT_FIELD: profile}
+    monkeypatch.setattr(update, "read_json", lambda url: calls.append(url) or published)
+    assert update.resolve_artifact("example/loopx", ref) == {**descriptor, "default_contract": profile}
     assert calls == ["https://github.com/example/loopx/releases/" + suffix]
 
 
@@ -350,6 +361,7 @@ def test_unsafe_archive_is_rejected_before_extraction(tmp_path, name, link):
 
 def test_resolution_pins_exact_artifact_and_never_falls_back_to_codeload(monkeypatch):
     descriptor = manifest(b"bytes", "https://example.com/runtime.tar.gz")
+    descriptor[update.QUALIFIED_DEFAULT_CONTRACT_FIELD] = dict(update.PUBLIC_DEFAULT_CONTRACT)
     calls = []
     monkeypatch.setattr(update, "read_json", lambda url: calls.append(url) or descriptor)
     assert update.resolve_artifact("loopx-project/loopx", "main")["source_revision"] == "a" * 40

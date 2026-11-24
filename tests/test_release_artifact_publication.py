@@ -9,9 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from loopx.cli_commands import update_artifact
 from loopx.cli_commands.update_artifact import (
-    HISTORICAL_DEFAULT_CONTRACT,
     PUBLIC_DEFAULT_CONTRACT,
     QUALIFIED_DEFAULT_CONTRACT_FIELD,
     RUNTIME_ARTIFACT_SCHEMA_VERSION,
@@ -63,7 +61,10 @@ def test_colocated_artifact_cli_never_initializes_the_candidate(tmp_path, isolat
 
 def stable_runtime(root, identity, *, current):
     revision = "a" * 40
-    profile = PUBLIC_DEFAULT_CONTRACT if current else HISTORICAL_DEFAULT_CONTRACT
+    profile = PUBLIC_DEFAULT_CONTRACT if current else {
+        "surface": "quota_packet", "schema_version": None,
+        "interaction_schema_version": "loopx_interaction_contract_v0",
+    }
     archive = root / "runtime" / f"loopx-runtime-{revision}.tar.gz"
     archive.write_bytes(b"qualified runtime bytes")
     manifest = {
@@ -129,20 +130,18 @@ def transport(files, *, mismatch=False, wrong_case=False, attestation_failure=Fa
     return calls, gh, download
 
 
-def test_engineering_qualified_c1_cannot_reach_unqualified_stable_release(bundle, monkeypatch):
+def test_quota_packet_runtime_cannot_reach_stable_release(bundle):
     root, identity = bundle
-    monkeypatch.setitem(update_artifact._ARTIFACT_DEFAULT_CONTRACTS, "public_channel", "historical")
+    stable_runtime(root, identity, current=False)
     calls, gh, download = transport([])
     with patch.object(owner, "gh", gh), patch.object(owner.subprocess, "run", download):
-        with pytest.raises(owner.ReleaseArtifactError, match="pending public channel qualification"):
+        with pytest.raises(owner.ReleaseArtifactError, match="requires a qualified default contract"):
             owner.upload_immutable(root, identity, "owner/repo")
     assert not calls
 
 
-def test_adoption_qualified_c1_can_publish_stable_runtime(bundle, monkeypatch):
+def test_qualified_complete_turn_can_publish_stable_runtime(bundle):
     root, identity = bundle
-    stable_runtime(root, identity, current=True)
-    monkeypatch.setitem(update_artifact._ARTIFACT_DEFAULT_CONTRACTS, "public_channel", "current")
     calls, gh, download = transport([])
     with patch.object(owner, "gh", gh), patch.object(owner.subprocess, "run", download):
         owner.upload_immutable(root, identity, "owner/repo")
@@ -187,11 +186,11 @@ def test_collision_or_changed_bytes_prevents_every_upload(bundle, wrong_case, mi
 
 
 
-@pytest.mark.parametrize("failure", ["policy-held", "missing", "changed", "draft", None])
-def test_named_release_preserves_old_latest_until_qualified_bundle_readback(bundle, failure, monkeypatch):
+@pytest.mark.parametrize("failure", ["quota-packet", "missing", "changed", "draft", None])
+def test_named_release_preserves_old_latest_until_qualified_bundle_readback(bundle, failure):
     root, identity = bundle
-    if failure == "policy-held":
-        monkeypatch.setitem(update_artifact._ARTIFACT_DEFAULT_CONTRACTS, "public_channel", "historical")
+    if failure == "quota-packet":
+        stable_runtime(root, identity, current=False)
     files = owner.publication_files(root, identity)
     asset_files = files[:-1] if failure == "missing" else files
     old = {"id": 41, "tag_name": "v1.2.2"}
