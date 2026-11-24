@@ -41,13 +41,16 @@ const metadata = {
 let repositorySearchObjects = searchObjects
 let maintainerSearchObjects = []
 let delayedRepoSearchAttemptsRemaining = 0
+const previousRegistrySnapshots = []
 const server = createServer((request, response) => {
   const url = new URL(request.url, registry)
   requested.add(url.pathname)
   if (url.pathname === `/${manifest.name}`) {
     response.setHeader('Content-Type', 'application/json')
-    response.end(JSON.stringify({ name: manifest.name, maintainers: [{ name: 'fixture-maintainer' }],
-      'dist-tags': distTags, versions: { [manifest.version]: metadata } }))
+    response.end(JSON.stringify(previousRegistrySnapshots.shift() ?? {
+      name: manifest.name, maintainers: [{ name: 'fixture-maintainer' }],
+      'dist-tags': distTags, versions: { [manifest.version]: metadata },
+    }))
   } else if (url.pathname === '/artifact.tgz') {
     response.end(bytes)
   } else if (url.pathname === '/-/v1/search') {
@@ -132,6 +135,14 @@ try {
   repositorySearchObjects = searchObjects
   await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
     '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '2000', '--search-poll-ms', '50'])
+  // A successful publish can become visible before its latest tag propagates.
+  previousRegistrySnapshots.push(
+    { 'dist-tags': { latest: '0.0.0' }, versions: {} },
+    { 'dist-tags': { latest: '0.0.0' }, versions: { [manifest.version]: metadata } },
+  )
+  await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry, '--registry-propagation-timeout-ms', '12000'])
+  assert.equal(previousRegistrySnapshots.length, 0)
   // Existing publication metadata cannot hide a wrong tag or discovery target.
   distTags.latest = '0.0.0'
   await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
