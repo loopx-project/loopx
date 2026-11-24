@@ -745,7 +745,7 @@ class StewardMonitor:
         try:
             lease = self._acquire(actor, followup, rearm_key)["lease"]
         except NativeStewardCommandError as exc:
-            if exc.payload.get("error_code") == "todo_lease_conflict":
+            if exc.payload.get("error_code") in {"todo_lease_conflict", "version_mismatch"}:
                 # The next due parent poll can re-arm after the current owner finishes.
                 return False
             raise

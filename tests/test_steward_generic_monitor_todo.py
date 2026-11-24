@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
+import pytest
+
 from loopx.capabilities.native_chat.steward_monitor import (
     StewardMonitor,
     pump_steward_monitors,
@@ -1495,8 +1497,9 @@ def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
     assert recorded_isolated_flags and all(flag is True for flag in recorded_isolated_flags)
 
 
+@pytest.mark.parametrize("race_after_inspect", [False, True])
 def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
-    steward, tmp_path, monkeypatch,
+    steward, tmp_path, monkeypatch, race_after_inspect,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     store, runtime, _, transport, binding, _, _ = steward
@@ -1665,7 +1668,21 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
     assert pump_steward_monitors(runtime) == []
 
     # The parent can commit a real poll while another operation owns its follow-up.
-    held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+    held = None
+    if race_after_inspect:
+        native = monitor_mod.native_command
+
+        def acquire_between_inspect_and_write(controller, argv):
+            nonlocal held
+            if argv[:2] == ["task-lease", "acquire"] and any(
+                arg.startswith("rearm-followup.") for arg in argv
+            ) and held is None:
+                held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+            return native(controller, argv)
+
+        monkeypatch.setattr(monitor_mod, "native_command", acquire_between_inspect_and_write)
+    else:
+        held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
     try:
         due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
         edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at", due)
@@ -1677,10 +1694,12 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
         assert len(evidence) == 1
         assert evidence[0]["payload"]["receipt"] == observed["response"]["native_loopx"]["receipt"]
         assert local_watch_row(runtime, actor, monitor_todo_id)["next_due_at"] != due
+        assert held is not None
         assert _current_followup().get("note") == adv_todo.get("note")
         assert pump_steward_monitors(runtime) == []
     finally:
-        monitor._release(actor, adv_todo, held)
+        if held is not None:
+            monitor._release(actor, adv_todo, held)
 
     # On the next due monitor poll, the exhausted zero-write follow-up is re-armed and executes cleanly.
     edit_local_watch(
