@@ -3,6 +3,7 @@ import Markdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Api, FolderEntry, FolderListing, TextFile, WritingStage } from '../api';
 import { countWords, highlightWritingSource, isArticleFile, rehypeArticleMarks } from '../article';
+import { MARKDOWN_REHYPE_PLUGINS, preserveNonHtmlTags } from '../markdown-html';
 import { copyText } from '../clipboard';
 import { collapseCrumbs, crumbsOf, escapeHtml, foldersTo, languageOf, parentDir, resolveRelative, sizeLabel, splitHighlighted } from '../files';
 import { pictureUrl, saveAs } from '../images';
@@ -14,6 +15,9 @@ import { Lightbox } from './Lightbox';
 import { Popover } from './Popover';
 import { IconChevron, IconClose, IconCopy, IconDownload, IconFile, IconFolder, IconFolders, IconMore, IconSearch, IconSidebar, IconWrap } from './icons';
 import { t } from '../i18n';
+
+const FILES_REMARK_PLUGINS = [remarkGfm, preserveNonHtmlTags];
+const ARTICLE_REHYPE_PLUGINS = [...MARKDOWN_REHYPE_PLUGINS, rehypeArticleMarks];
 
 /** What the panel is asked to show: a file (at a line), a folder in the tree, or with no path, the thread's folder. */
 export interface FilesTarget {
@@ -758,8 +762,8 @@ export function FilesPanel({ api, threadId, target, phone, revision, writingStag
       {shown?.state === 'text' && shown.file.text !== null && markdown && !source && (
         <div className={`files-markdown markdown${article ? ' article' : ''}`}>
           <Markdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={article ? [rehypeArticleMarks] : []}
+            remarkPlugins={FILES_REMARK_PLUGINS}
+            rehypePlugins={article ? ARTICLE_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS}
             components={markdownComponents}
           >
             {shown.file.text}

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { t } from '../i18n';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MARKDOWN_REHYPE_PLUGINS, preserveNonHtmlTags } from '../markdown-html';
 import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
 import { IconSend, IconStop } from './icons';
@@ -11,6 +12,8 @@ import {
   ManagerError, TRUSTED_OWNER_ENDPOINTS, type ManagerCapabilities, type ManagerEvent, type ManagerMessage, type ManagerTurn,
 } from '../loopx/manager';
 import type { LoopxStatusFailure } from '../loopx/status';
+
+const STEWARD_REMARK_PLUGINS = [remarkGfm, preserveNonHtmlTags];
 
 /** The questions the greeting offers: one tap starts the steward on them. */
 const GREETING_ASKS = () => [
@@ -329,13 +332,13 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
       {messages === null ? <p className="steward-hint">{t('common.loading')}</p>
         : messages.map(message => message.role === 'user'
           ? <div key={message.id} className="row user"><div className="bubble">{message.text}</div></div>
-          : <div key={message.id} className="row assistant"><div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown></div></div>)}
+          : <div key={message.id} className="row assistant"><div className="markdown"><Markdown remarkPlugins={STEWARD_REMARK_PLUGINS} rehypePlugins={MARKDOWN_REHYPE_PLUGINS}>{message.text}</Markdown></div></div>)}
       {turn ? <>
         {turn.steps.length ? <ul className="steward-steps" aria-label={t('loopx.stewardSteps')}>
           {turn.steps.map((step, index) => <li key={index}>{step}</li>)}
         </ul> : null}
         {turn.answer ? <div className={`row assistant${turn.state === 'streaming' ? ' streaming' : ''}`}>
-          <div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{turn.answer}</Markdown></div>
+          <div className="markdown"><Markdown remarkPlugins={STEWARD_REMARK_PLUGINS} rehypePlugins={MARKDOWN_REHYPE_PLUGINS}>{turn.answer}</Markdown></div>
         </div> : null}
         {turn.error ? <div className="row channel-note"><span role="alert">{turn.error}</span></div> : null}
       </> : null}

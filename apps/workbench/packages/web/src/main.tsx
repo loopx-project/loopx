@@ -6,6 +6,7 @@ import { loadToken, saveToken } from './api';
 import { loadHost, saveHost } from './hosts';
 import { localeTag } from './i18n';
 import './styles.css';
+import './markdown-html.css';
 
 // The language was settled when the i18n module loaded; the page says so for fonts, screen readers and spell check.
 document.documentElement.lang = localeTag();

@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Api, Thread } from '../api';
-import { historyPage, prependHistory, refreshHistoryPage, mergeHistory, mergeHistoryPage, watchHistory } from '../history';
+import { historyPage, peekCachedPage, prependHistory, refreshHistoryPage, mergeHistory, mergeHistoryPage, watchHistory } from '../history';
 import { useReadingPosition } from '../use-reading-position';
 import { buildTimeline, type StoredEvent } from '../timeline';
 import { restoreVideos } from '../videos';
 import { ActionSheet, type SheetTarget } from './ActionSheet';
-import { Composer } from './Composer';
+import { Composer, type DraftNote } from './Composer';
+import { ConversationSkeleton } from './ConversationSkeleton';
 import { ThreadView } from './ThreadView';
 import { IconClose, IconExternal } from './icons';
 import { t } from '../i18n';
 import { AgentPanelFrame } from './AgentPanelFrame';
 
 /** A conversation reader: overlay for the board, shared team panel beside the assistant. */
-export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpen, onChange, side = false }: {
+export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpen, onChange, side = false, noteSignal, onNoteConsumed, onNotesChange }: {
   api: Api; initial: Thread | string; side?: boolean; draftKey: string; returnFocus: HTMLElement | null;
   onClose: () => void; onOpen: () => void; onChange: (thread: Thread) => void;
+  noteSignal?: { draftKey: string; note: DraftNote & { nonce: number } } | null;
+  onNoteConsumed?: (id: string) => void;
+  onNotesChange?: (target: string, notes: DraftNote[]) => void;
 }) {
   const id = typeof initial === 'string' ? initial : initial.id;
   const [thread, setThread] = useState<Thread | null>(typeof initial === 'string' ? null : initial);
@@ -33,8 +37,10 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
   activeThread.current = id;
   const olderRequest = useRef<object | null>(null);
   const readingPosition = useReadingPosition(scroll, stick, id, events, String(retry), false);
-  const callbacks = useRef({ onClose, onChange });
-  callbacks.current = { onClose, onChange };
+  const callbacks = useRef({ onClose, onChange, onNotesChange });
+  callbacks.current = { onClose, onChange, onNotesChange };
+  const handlePeekNotes = useCallback((notes: DraftNote[]) => { callbacks.current.onNotesChange?.(draftKey, notes); }, [draftKey]);
+  useEffect(() => () => { callbacks.current.onNotesChange?.(draftKey, []); }, [draftKey]);
   const timeline = useMemo(() => buildTimeline(events), [events]);
   const waiting = useMemo(() => timeline.items.flatMap((item): SheetTarget[] =>
     item.kind === 'approval' && item.decision === null ? [{ kind: 'approval', item }]
@@ -59,7 +65,7 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
   }, [refresh]);
   useEffect(() => {
     const previous = returnFocus;
-    close.current?.focus({ preventScroll: true });
+    panel.current?.focus({ preventScroll: true });
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.isComposing && !document.querySelector('.pop-panel, [role=menu], [role=dialog][aria-modal=true]')) { event.preventDefault(); callbacks.current.onClose(); }
       if (side && event.key === 'Tab' && window.matchMedia('(max-width: 900px)').matches) {
@@ -74,11 +80,17 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
   useEffect(() => {
     const ctrl = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const cached = peekCachedPage(api, id)?.page ?? null;
     olderRequest.current = null;
     setLoadingOlder(false);
     setOlderError('');
     stick.current = true;
     setError('');
+    if (cached) {
+      setEvents(cached.events);
+      setCursor(cached.hasOlder ? cached.nextCursor : null);
+      setLoaded(true);
+    }
     void api.thread(id).then(value => {
       if (ctrl.signal.aborted) return;
       setThread(value); callbacks.current.onChange(value);
@@ -134,17 +146,17 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
     </header>
     {error && <p className="thread-peek-error" role="alert">{error} <button className="ghost" onClick={() => setRetry(value => value + 1)}>{t('common.retry')}</button></p>}
     {thread?.waiting && waiting.length === 0 && <button className="thread-peek-attention ghost" onClick={onOpen}>{t('threadPeek.needsAction')}</button>}
-    <div className={side ? "agent-panel-body" : "thread-peek-body"} ref={scroll} tabIndex={0} onScroll={() => {
+    <div className={side ? "agent-panel-body" : "thread-peek-body"} ref={scroll} tabIndex={0} data-note-target={draftKey} data-note-thread={id} onScroll={() => {
       const el = scroll.current;
       if (!el || readingPosition.didRestore()) return;
       stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
       readingPosition.capture();
     }}>
-      {!loaded || !thread ? (!error && <div className="loading-note">{t('common.loading')}</div>) : <ThreadView historyApi={api} historyThreadId={thread.id}
+      {!loaded || !thread ? (!error && <ConversationSkeleton compact />) : <ThreadView historyApi={api} historyThreadId={thread.id}
         items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={loadImage} loadFile={loadFile}
         hasOlder={cursor !== null} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} />}
     </div>
-    {thread && <Composer attachBlocked={null} restore={null} note={null} draftKey={draftKey} running={timeline.running || thread?.status === 'running'}
+    {thread && <Composer attachBlocked={null} restore={null} note={noteSignal?.draftKey === draftKey ? noteSignal.note : null} onNoteConsumed={onNoteConsumed} onNotesChange={onNotesChange ? handlePeekNotes : undefined} draftKey={draftKey} running={timeline.running || thread?.status === 'running'}
       placeholder={timeline.running ? t('sideChat.queuePlaceholder') : t('app.placeholder.continue')}
       onSend={async (text, images, _mentions, videos = []) => {
         await api.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })),
@@ -170,5 +182,5 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
       onRejectPlan={onOpen} onSkipPlan={onOpen} />}
   </>;
   return side ? <AgentPanelFrame detail panelRef={panel} label={title}>{content}</AgentPanelFrame>
-    : <aside className="thread-peek" role="complementary" aria-label={title}>{content}</aside>;
+    : <aside ref={panel} tabIndex={-1} className="thread-peek" role="complementary" aria-label={title}>{content}</aside>;
 }

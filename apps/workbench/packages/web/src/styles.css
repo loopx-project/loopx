@@ -7781,6 +7781,7 @@ div.file-card:hover { background: var(--surface); }
   gap: 12px;
   min-width: 0;
 }
+.term-head-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 
 .term-cwd {
   max-width: 240px;
@@ -8789,9 +8790,12 @@ div.file-card:hover { background: var(--surface); }
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100%;
-  border-left: 1px solid var(--border);
-  background: var(--bg);
+  margin: 8px 10px 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
   animation: side-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -8799,24 +8803,24 @@ div.file-card:hover { background: var(--surface); }
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -4px;
+  left: 0;
   z-index: 3;
-  width: 8px;
+  width: 7px;
   cursor: col-resize;
 }
 
 .files-resize:hover,
 .files-resize:active {
-  background: linear-gradient(to right, transparent 3px, var(--border-strong) 3px, var(--border-strong) 5px, transparent 5px);
+  background: linear-gradient(to right, var(--border-strong) 2px, transparent 2px);
 }
 
 .files-head {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 58px;
-  padding: 0 10px 0 14px;
+  gap: 6px;
+  height: 46px;
+  padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -8913,8 +8917,8 @@ div.file-card:hover { background: var(--surface); }
 }
 
 .files-panel .icon-btn {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-sm);
   color: var(--muted);
 }
@@ -9488,13 +9492,7 @@ div.file-card:hover { background: var(--surface); }
 }
 
 /* On a phone: a page of its own over everything, the tree one step back from the file. */
-.files-panel.phone {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  width: auto;
-  border-left: 0;
-}
+.files-panel.phone { position: fixed; inset: 0; z-index: 60; width: auto; margin: 0; border: 0; border-radius: initial; background: var(--bg); box-shadow: none; }
 
 .files-panel.phone .files-head {
   height: 54px;
@@ -10877,8 +10875,8 @@ div.file-card:hover { background: var(--surface); }
 /* A file edited more often than the daemon keeps references for says so at the foot, left of the
    actions: a header that counts every turn above a shorter list would otherwise read as a bug. */
 .change-diff-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12px; }
-.agent-panel { position: relative; width: var(--agent-panel-width, min(390px, 45vw)); flex: 0 0 auto; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); min-height: 0; overflow: hidden; }
-.agent-panel.detail { width: var(--agent-panel-width, min(600px, 50vw)); }
+.agent-panel { position: relative; width: var(--agent-panel-width, min(390px, 40%)); flex: 0 0 auto; display: flex; flex-direction: column; margin: 8px 10px 10px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); min-height: 0; overflow: hidden; outline: none; }
+.agent-panel.detail { width: var(--agent-panel-width, min(450px, 43%)); }
 .agent-panel-resize { position: absolute; top: 0; bottom: 0; left: 0; z-index: 3; width: 7px; cursor: col-resize; }
 .agent-panel-resize:hover, .agent-panel-resize:active { background: linear-gradient(to right, var(--border-strong) 2px, transparent 2px); }
 /* A member's model and thinking effort: a mark that stays out of the way until a choice gives it words. */
@@ -10896,9 +10894,11 @@ div.file-card:hover { background: var(--surface); }
 .member-model-empty { margin: 0; padding: 12px 14px; font-size: 13px; color: var(--muted); }
 .coord-default { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 0 2px 0 10px; }
 .coord-default-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.agent-panel-head { display: flex; align-items: center; gap: 8px; padding: 20px; border-bottom: 1px solid var(--border); }
-.agent-panel-heading { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 5px; }
-.agent-panel-heading strong { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-panel-head { display: flex; align-items: center; gap: 4px; min-height: 46px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--border); }
+.agent-panel-head .icon-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); color: var(--muted); }
+.agent-panel-head .icon-btn:hover:not(:disabled) { color: var(--text); }
+.agent-panel-heading { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.agent-panel-heading strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-panel-heading span, .coord-caption { font-size: 12px; color: var(--muted); }
 .agent-panel-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-panel-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px; }
@@ -11035,9 +11035,12 @@ div.file-card:hover { background: var(--surface); }
   .composer-box .coord-row textarea { font-size: 16px; }
 }
 @media (max-width: 900px) {
-  .agent-panel, .agent-panel.detail { position: absolute; inset: 0; width: 100%; z-index: 45; border-left: 0; }
+  .agent-panel, .agent-panel.detail { position: absolute; inset: 0; width: 100%; margin: 0; border: 0; border-radius: initial; background: var(--bg); box-shadow: none; z-index: 45; }
   .agent-panel-resize { display: none; }
-  .agent-panel-head { padding: 16px; }
+  .agent-panel-head { padding: 8px 12px; }
+  .main:has(.chat-home > .agent-panel) > .topbar { display: none; }
+  .chat-home > .agent-panel { padding-top: var(--safe-top); padding-bottom: var(--safe-bottom); }
+  .chat-home > .agent-panel > .agent-panel-head { padding: 8px 12px; }
 }
 
 /* The agents panel over a narrow window of the installed app covers the whole screen, so its head
@@ -13518,7 +13521,9 @@ button.trace-step-head:hover { background: var(--hover); }
 .scroller:has(> .chat-home) { display: flex; padding: 0; overflow: hidden; }
 .chat-home { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .chat-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.chat-top { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 18px 6px; }
+.chat-top { flex: none; display: flex; align-items: center; gap: 8px; height: var(--titlebar-row, calc(52px + env(safe-area-inset-top))); padding: env(safe-area-inset-top) 12px 0 18px; }
+.sidebar-hidden .chat-top { padding-left: calc(12px + var(--titlebar-left)); }
+@media (min-width: 901px) { .main:has(.chat-home.side-by-side) > .topbar { display: none; } }
 .chat-top > .sp { flex: 1; }
 .chat-brand { display: inline-flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; }
 .chat-ava { display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-2); color: var(--muted); }
@@ -13619,14 +13624,16 @@ button.trace-step-head:hover { background: var(--hover); }
 
 /* The drawer. Beside the talk when there is room — real width, nothing covered; over the
    page when there is not; the whole screen on a phone. Its content mounts only when asked. */
-.chat-drawer { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
-.chat-drawer.side { flex: none; width: min(460px, 42%); border-left: 1px solid var(--border); }
+.chat-drawer { display: flex; flex-direction: column; min-width: 0; background: var(--surface); }
+.chat-drawer.side { flex: none; width: min(450px, 43%); margin: 8px 10px 10px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); overflow: hidden; }
 .chat-drawer.over { position: fixed; top: var(--titlebar-row, calc(52px + env(safe-area-inset-top))); right: 0; bottom: 0; z-index: 48; width: min(460px, calc(100vw - 24px)); border: 1px solid var(--border); border-right: 0; border-radius: var(--radius-lg) 0 0 var(--radius-lg); box-shadow: var(--shadow-pop); animation: chat-drawer-in .28s cubic-bezier(.2,.8,.2,1); }
 @keyframes chat-drawer-in { from { transform: translateX(40px); opacity: 0; } }
 .chat-drawer-scrim { position: fixed; inset: 0; z-index: 47; background: var(--scrim); animation: chat-drawer-fade .2s; }
 @keyframes chat-drawer-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .chat-drawer.over { animation: none; } }
-.chat-drawer-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 13px 10px 11px 16px; border-bottom: 1px solid var(--border); }
+.chat-drawer-head { flex: none; display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); }
+.chat-drawer-head .icon-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); color: var(--muted); }
+.chat-drawer-head .icon-btn:hover:not(:disabled) { color: var(--text); }
 .chat-drawer-head b { font-size: 14px; font-weight: 600; }
 .chat-drawer-head .sp { flex: 1; }
 .chat-drawer-tabs { flex: none; display: flex; gap: 2px; padding: 10px 14px 0; }
@@ -14522,26 +14529,8 @@ button.pet-summon:hover { background: var(--surface-2); color: var(--text); }
 
 /* ---------- The thread's own trace panel ---------- */
 
-.trace-side {
-  position: relative;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  width: min(500px, 46vw);
-  height: 100%;
-  border-left: 1px solid var(--border);
-  background: var(--bg);
-  animation: side-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.trace-side.phone {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  width: auto;
-  border-left: 0;
-}
+.trace-side { position: relative; flex: none; display: flex; flex-direction: column; min-width: 0; width: min(480px, 44%); margin: 8px 10px 10px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); overflow: hidden; animation: side-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.trace-side.phone { position: fixed; inset: 0; z-index: 60; width: auto; margin: 0; border: 0; border-radius: initial; background: var(--bg); box-shadow: none; }
 
 .trace-phone-head {
   flex: none;
@@ -15284,8 +15273,10 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
 
 /* Keep the board's dimensions and scroll position while the selected conversation overlays it. */
 .extension-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.thread-peek { position: absolute; top: 0; right: 0; bottom: 0; width: var(--thread-peek-width); z-index: var(--z-thread-peek); display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); box-shadow: var(--shadow-pop); }
-.thread-peek-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex: none; }
+.thread-peek { position: absolute; top: 8px; right: 10px; bottom: 10px; width: min(450px, 43%); z-index: var(--z-thread-peek); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); overflow: hidden; outline: none; }
+.thread-peek-head { display: flex; align-items: center; gap: 4px; height: 46px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--border); flex: none; }
+.thread-peek-head .icon-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); color: var(--muted); }
+.thread-peek-head .icon-btn:hover:not(:disabled) { color: var(--text); }
 .thread-peek-head strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .thread-peek-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; overscroll-behavior: contain; }
 .thread-peek .composer { flex: none; width: auto; margin: 8px 12px 12px; }
@@ -15361,9 +15352,11 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
 }
 
 /* Git opens beside the conversation; file patches and history are loaded on demand. */
-.git-panel { width: 410px; max-width: 44vw; flex: none; min-width: 320px; height: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--surface); }
-.git-panel.phone { position: fixed; inset: 0; width: 100%; max-width: none; min-width: 0; z-index: 60; border-left: 0; padding-top: var(--safe-top); padding-bottom: var(--safe-bottom); }
-.git-head { display: flex; flex: none; align-items: center; gap: 6px; height: 60px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+.git-panel { width: 410px; max-width: 44%; flex: none; min-width: 320px; display: flex; flex-direction: column; margin: 8px 10px 10px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-card); overflow: hidden; }
+.git-panel.phone { position: fixed; inset: 0; width: 100%; max-width: none; min-width: 0; margin: 0; border: 0; border-radius: initial; background: var(--bg); box-shadow: none; z-index: 60; padding-top: var(--safe-top); padding-bottom: var(--safe-bottom); }
+.git-head { display: flex; flex: none; align-items: center; gap: 4px; height: 46px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--border); }
+.git-head .icon-btn { width: 30px; height: 30px; border-radius: var(--radius-sm); color: var(--muted); }
+.git-head .icon-btn:hover:not(:disabled) { color: var(--text); }
 .git-head strong { flex: 1; font-size: 14px; font-weight: 600; }
 .git-body { flex: 1; min-height: 0; overflow: auto; padding: 22px; overscroll-behavior: contain; }
 .git-body[hidden] { display: none; }
@@ -15669,7 +15662,8 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
 .agent-login-recovery .agent-login-panel { margin: 8px 0 0; }
 
 /* Referenced conversations share the member panel and keep their own scroll. */
-.agent-panel > .composer { flex: none; width: auto; margin: 8px 12px 12px; }
+.agent-panel > .composer { flex: none; width: auto; margin: 6px 10px 10px; }
+.agent-panel .composer-box, .thread-peek .composer-box { background: var(--surface-2); box-shadow: none; }
 .agent-panel .agent-panel-body { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .agent-panel .action-sheet { max-height: calc(100% - 76px); overflow-y: auto; }
 

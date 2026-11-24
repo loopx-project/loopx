@@ -14,7 +14,8 @@ import { GeneralSettingsDialog } from './components/GeneralSettingsDialog';
 import { AutoHandoverNotice, HandoverSettingsDialog } from './components/AutoHandover';
 import { useWorkSources, WorkSummary } from './extensions/work';
 import { HostIcon } from './extensions/ui';
-import { historyPage, mergeHistory, mergeHistoryPage, prependHistory, refreshHistoryPage, watchHistory } from './history';
+import { historyPage, mergeHistory, mergeHistoryPage, peekCachedPage, prependHistory, refreshHistoryPage, watchHistory } from './history';
+import { cachedRouterThreadId, rememberRouterThreadId } from './history-cache';
 import { useReadingPosition } from './use-reading-position';
 import type { WorkMode, WritingStage } from './api';
 import { forkBlocked, useThreadActions } from './components/ThreadActions';import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ComponentProps, type ReactNode } from 'react';
@@ -99,6 +100,7 @@ import { needsExplore, exploreSummary } from './personal-explore';
 import { PersonalSettingsDialog } from './components/PersonalSettingsDialog';
 import { SkillsPage } from './components/SkillsPage';
 import { SchedulesPage } from './components/SchedulesPage';
+import { ConversationSkeleton } from './components/ConversationSkeleton';
 import { AccessSettings } from './components/AccessSettings';
 import { PwaInstallPromotion, PwaInstallSettings } from './components/PwaInstall';
 import { LinkLoginNotice, useAuthKind } from './components/LinkLoginNotice';
@@ -998,6 +1000,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // Text quoted out of a message by selecting it.
   const composerDraftKey = hostId ? `host:${hostId}:${selectedId ?? (draftTeam ? `new:team:${draftTeam}` : 'new')}` : selectedId ?? (draftTeam ? `new:team:${draftTeam}` : 'new');
   const [noteSignal, setNoteSignal] = useState<{ draftKey: string; note: DraftNote & { nonce: number } } | null>(null);
+  const pendingNoteId = useRef<string | null>(null);
+  pendingNoteId.current = noteSignal?.note.id ?? null;
   const [messageReference, setMessageReference] = useState<{ draftKey: string; value: ContextReference; nonce: number } | null>(null);
   const [assistantMessage, setAssistantMessage] = useState<MessageSnapshot | null>(null);
   const messageAssistantApi = useMemo(() => hostId === null ? api : new Api(token), [api, hostId, token]);
@@ -1010,20 +1014,32 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, []);
   // Where each noted passage stands in the conversation, for as long as its note waits in the box.
   const noteRanges = useRef(new Map<string, Range>());
+  const notesByTarget = useRef(new Map<string, DraftNote[]>());
   const [noteMarks, setNoteMarks] = useState<NoteMark[]>([]);
   // Notes waiting in the box, and a tick each time one is picked out of the file panel — the phone's
   // full-screen page cannot show the box, so it counts them at its foot instead.
   const [noteCount, setNoteCount] = useState(0);
   const [filesNotePulse, setFilesNotePulse] = useState(0);
-  const onNotesChange = useCallback((notes: DraftNote[]) => {
-    const ranges = noteRanges.current;
-    for (const id of [...ranges.keys()]) if (!notes.some((n) => n.id === id)) ranges.delete(id);
-    setNoteCount(notes.length);
-    setNoteMarks(notes.flatMap((n, i) => {
-      const range = ranges.get(n.id);
-      return range ? [{ id: n.id, n: i + 1, range }] : [];
-    }));
+  const onNotesChangeFor = useCallback((target: string, notes: DraftNote[]) => {
+    if (notes.length) notesByTarget.current.set(target, notes);
+    else notesByTarget.current.delete(target);
+    const allIds = new Set<string>();
+    const marks: NoteMark[] = [];
+    let total = 0;
+    for (const list of notesByTarget.current.values()) {
+      total += list.length;
+      list.forEach((n, i) => {
+        allIds.add(n.id);
+        const range = noteRanges.current.get(n.id);
+        if (range) marks.push({ id: n.id, n: i + 1, range });
+      });
+    }
+    for (const id of [...noteRanges.current.keys()]) if (!allIds.has(id) && id !== pendingNoteId.current) noteRanges.current.delete(id);
+    setNoteCount(total);
+    setNoteMarks(marks);
   }, []);
+  const onNotesChange = useCallback((notes: DraftNote[]) => onNotesChangeFor(composerDraftKey, notes), [composerDraftKey, onNotesChangeFor]);
+  useEffect(() => () => onNotesChangeFor(composerDraftKey, []), [composerDraftKey, onNotesChangeFor]);
   // The passage a side chat was opened for, if one is open.
   const [sideAsk, setSideAsk] = useState<{ text: string; nonce: number; source?: Thread } | null>(null);
   // A message waiting for the user to confirm sending into a session the terminal also used.
@@ -1059,10 +1075,17 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const selected = threads.find((t) => t.id === selectedId) ?? null;
   const threadPending = !selected && (Boolean(threadLink) || (Boolean(selectedId) && !threadsKnown));
   // Her own conversation is told apart by the hub's answer, never by its agent or title.
-  const [routerThreadId, setRouterThreadId] = useState<string | null>(null);
+  const [routerThreadId, setRouterThreadId] = useState<string | null>(() => (api.demo ? null : cachedRouterThreadId(api.host)));
   useEffect(() => {
-    if (api.demo) return; let live = true;
-    void api.petRouter().then(router => { if (live) setRouterThreadId(router.threadId); }).catch(() => undefined);
+    if (api.demo) { setRouterThreadId(null); return; }
+    let live = true;
+    const cached = cachedRouterThreadId(api.host);
+    if (cached) setRouterThreadId(current => current ?? cached);
+    void api.petRouter().then(router => {
+      if (!live) return;
+      rememberRouterThreadId(api.host, router.threadId);
+      setRouterThreadId(router.threadId);
+    }).catch(() => undefined);
     return () => { live = false; };
   }, [api, threads.length]);
   const onRouterThread = Boolean(selected && routerThreadId === selected.id);
@@ -1550,13 +1573,20 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return () => { active = false; };
   }, [api, selectedId, historyEpoch]);
   useEffect(() => {
-    setEvents([]); setHistoryTurnIds([]); setHasOlder(false); setLoadingOlder(false); setHistoryReady(false);
-    setEventsLoading(Boolean(api && selectedId)); historyCursor.current = null; olderRequest.current = null;
+    const cached = api && selectedId && historyCutoff === undefined ? peekCachedPage(api, selectedId, undefined, undefined, mergedHandover)?.page ?? null : null;
+    if (cached) {
+      setEvents(cached.events); setHistoryTurnIds(cached.turnIds ?? []); setHasOlder(cached.hasOlder);
+      setLoadingOlder(false); setHistoryReady(true); setEventsLoading(false);
+      setHistoryRevision(cached.snapshotSeq); historyCursor.current = cached.nextCursor; olderRequest.current = null;
+    } else {
+      setEvents([]); setHistoryTurnIds([]); setHasOlder(false); setLoadingOlder(false); setHistoryReady(false);
+      setEventsLoading(Boolean(api && selectedId)); historyCursor.current = null; olderRequest.current = null;
+    }
     if (!api || !selectedId) return;
     const ctrl = new AbortController();
     stickToBottom.current = true; setAtBottom(true);
     const callbacks: Parameters<typeof watchHistory>[3] = {
-      chain: mergedHandover, maximumSeq: historyCutoff,
+      chain: mergedHandover, maximumSeq: historyCutoff, pinned: selectedId === routerThreadId,
       page: page => {
         setEvents(page.events); setHistoryTurnIds(page.turnIds ?? []); setEventsLoading(false); setHistoryReady(true);
         setHistoryRevision(page.snapshotSeq);
@@ -3459,9 +3489,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             <ActivityPage api={api} agents={agents} onOpenThread={pick} onError={handleError} />
           </div>
         ) : (
-        <div key="thread" className="scroller" ref={scrollerRef} onScroll={onScroll} {...gestureProps}>
+        <div key="thread" className="scroller" ref={scrollerRef} data-note-target={composerDraftKey} data-note-thread={selectedId ?? undefined} onScroll={onScroll} {...gestureProps}>
           {selected && <TurnRuler key={selected.id} threadId={selected.id} scrollerRef={scrollerRef} previews={turnPreviewMap} turnIds={rulerTurnIds} onJump={turnId => setJump({ threadId: selected.id, turnId })} />}
-          {selected && eventsLoading && <div className="loading-note">{t('common.loading')}</div>}
+          {selected && eventsLoading && <ConversationSkeleton />}
           {showcase && selected && !eventsLoading && !timeline.items.length && showcase.intro(selected.id)}
           {selected ? (
             <MergedHistory
@@ -3725,14 +3755,15 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
       {referenceId && <ThreadPeek key={`${hostId ?? 'local'}:${referenceId}`} side api={api} initial={referenceId}
         draftKey={hostId ? `host:${hostId}:${referenceId}` : referenceId} returnFocus={null}
+        noteSignal={noteSignal} onNoteConsumed={consumeNote} onNotesChange={onNotesChangeFor}
         onClose={() => setReferenceId(null)} onOpen={() => { setReferenceId(null); openThreadById(referenceId); }}
         onChange={() => { void refreshThreads(); }} />}
       {agentsOpen && coordination && <AgentPanel key={`${coordination.rootId}:${agentsStart ?? ''}`} start={agentsStart} api={api} memberApi={(id) => new Api(token ?? '', '', id)} team={coordination} agents={agents} memberModel={(thread, part) => {
         const a = agents.find((v) => v.id === thread.agent);
         return a ? <MemberModel part={part} agent={a} models={modelsByAgent[a.id] ?? []} value={{ model: thread.model ?? null, effort: thread.effort ?? null }} onNeed={needModels} onChange={({ model, effort }) => { void api.updateThread(thread.id, { model, effort }).then(() => refreshThreads()).catch(handleError); }}
           permission={a.capabilities.permissionModes.length ? thread.permissionMode : undefined} onPermission={(permissionMode) => { void api.updateThread(thread.id, { permissionMode }).then(() => refreshThreads()).catch(handleError); }} /> : null;
-      }} leadAgent={threads.find((t) => t.id === coordination.rootId)?.agent} phone={compact} onClose={() => setAgentsOpen(false)} onOpen={thread => { openThread(thread); setAgentsOpen(false); }} onAdjust={(name, draft) => { setAgentsOpen(false); setSelectedId(coordination.rootId); setRestore({ text: t('app.adjustTask', name) + draft, nonce: Date.now() }); }} onRefresh={() => { void refreshThreads(); }} onError={handleError} />}
-      {activeOverviewDetail && !compact && <DockPanel hidden={Boolean(preview || picture || (diffFile && diffFile.threadId === selected?.id))} label={t(activeOverviewDetail.section === 'all' ? 'overview.label' : `overview.${activeOverviewDetail.section}`)} onDismiss={closeOverviewDetail}>{overviewBody(closeOverviewDetail, true, activeOverviewDetail.section)}</DockPanel>}
+      }} leadAgent={threads.find((t) => t.id === coordination.rootId)?.agent} phone={compact} noteSignal={noteSignal} onNoteConsumed={consumeNote} onNotesChange={onNotesChangeFor} onClose={() => setAgentsOpen(false)} onOpen={thread => { openThread(thread); setAgentsOpen(false); }} onAdjust={(name, draft) => { setAgentsOpen(false); setSelectedId(coordination.rootId); setRestore({ text: t('app.adjustTask', name) + draft, nonce: Date.now() }); }} onRefresh={() => { void refreshThreads(); }} onError={handleError} />}
+      {activeOverviewDetail && !compact && <DockPanel hidden={Boolean(preview || picture || termOpen || (diffFile && diffFile.threadId === selected?.id))} label={t(activeOverviewDetail.section === 'all' ? 'overview.label' : `overview.${activeOverviewDetail.section}`)} onDismiss={closeOverviewDetail}>{overviewBody(closeOverviewDetail, true, activeOverviewDetail.section)}</DockPanel>}
       {picture && api && !compact && picture.threadId === selected?.id && <PictureDock key={`${hostId ?? ''}:${picture.threadId}:${picture.path}`} path={picture.path} name={picture.name} load={loadFile}
         onClose={() => { setPicture(null); setOverviewDetail(null); }} onBack={activeOverviewDetail ? () => setPicture(null) : undefined} />}
       {preview && api && <PreviewPanel key={`${hostId ?? ''}:${preview.threadId}:${preview.path}`} api={api} threadId={preview.threadId} path={preview.path}
@@ -3761,18 +3792,19 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onClose={() => setTraceOpen(false)}
         />
       )}
-      </div>
-      {desktop !== 'closed' && (
-        <DesktopPanel api={api} hidden={desktop === 'minimized'} onMinimize={() => setDesktop('minimized')} onClose={() => setDesktop('closed')} />
-      )}
       {termOpen && (
         <TerminalPanel
           api={terminalClient ?? api}
           cwd={selected?.cwd || draftCwd || workdirs[0] || ''}
           terminalId={terminalTarget}
+          docked={!compact}
           onClose={() => { setTermOpen(false); setTerminalTarget(null); setTerminalClient(null); }}
           onError={handleError}
         />
+      )}
+      </div>
+      {desktop !== 'closed' && (
+        <DesktopPanel api={api} hidden={desktop === 'minimized'} onMinimize={() => setDesktop('minimized')} onClose={() => setDesktop('closed')} />
       )}
       {statusOpen && (
         <StatusPanel
@@ -3909,9 +3941,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         onNote={(quote, comment, range, file) => {
           const id = `note-${Date.now()}`;
           if (range) noteRanges.current.set(id, range);
-          // Messages go to the chain's latest conversation; a passage from another one says where it is.
-          const source = noteSource(range, viewingEarlier ? latestSegment?.id : selectedId);
-          setNoteSignal({ draftKey: composerDraftKey, note: { id, quote, comment, nonce: Date.now(), ...(file ? { file } : {}), ...(source ? { source } : {}) } });
+          const container = range?.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range?.commonAncestorContainer?.parentElement;
+          const targetEl = container?.closest<HTMLElement>('[data-note-target]');
+          const targetDraftKey = targetEl?.dataset.noteTarget || composerDraftKey;
+          const targetThreadId = targetEl?.dataset.noteThread || (viewingEarlier ? latestSegment?.id : selectedId);
+          // Messages go to the panel the passage was selected in; a passage from another thread says where it is.
+          const source = noteSource(range, targetThreadId);
+          setNoteSignal({ draftKey: targetDraftKey, note: { id, quote, comment, nonce: Date.now(), ...(file ? { file } : {}), ...(source ? { source } : {}) } });
           if (file) setFilesNotePulse((v) => v + 1);
         }}
         onSideAsk={(text, threadId) => {
