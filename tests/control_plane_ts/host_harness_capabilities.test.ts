@@ -251,6 +251,37 @@ test("descriptor validation enforces schema, flags, hook invariants, and canonic
       /description exceeds 512 Unicode code points/,
     );
   }
+
+  for (const emptyTrimmed of ["\u0085", "\ufeff", "\u0085 \ufeff\u00a0\u3000"]) {
+    assert.throws(
+      () =>
+        validateHostHarnessCapabilities({
+          ...base,
+          description: emptyTrimmed,
+        }),
+      /description must be a non-empty string/,
+    );
+  }
+  for (const [raw, expected] of [
+    ["\u0085" + "a".repeat(512) + "\u0085", "a".repeat(512)],
+    ["\ufeff" + "a".repeat(512) + "\ufeff", "a".repeat(512)],
+    ["\u001c", "\u001c"],
+    ["\u0085\ufeff\u2003ok\u202f\ufeff\u0085", "ok"],
+  ] as const) {
+    const validated = validateHostHarnessCapabilities({
+      ...base,
+      description: raw,
+    });
+    assert.equal(validated.description, expected);
+  }
+  assert.throws(
+    () =>
+      validateHostHarnessCapabilities({
+        ...base,
+        description: "\u0085" + "a".repeat(513) + "\ufeff",
+      }),
+    /description exceeds 512 Unicode code points/,
+  );
 });
 
 test("registry rejects conflicting registrations unless replace=true and stays idempotent for equal descriptors", () => {

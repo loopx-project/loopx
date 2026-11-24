@@ -53,6 +53,14 @@ _MODULE_PATH_PATTERN = re.compile(
 _HOOK_EVENT_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 # Shared Python/TS contract bound measured in Unicode code points (len(str) / Array.from(str).length).
 _MAX_DESCRIPTION_CODE_POINTS = 512
+# Explicit cross-runtime edge-whitespace set matching TypeScript DESCRIPTION_EDGE_WHITESPACE_RE:
+# strips ASCII whitespace, U+0085 NEL, Unicode Zs/Zl/Zp separators, and U+FEFF BOM,
+# while deliberately NOT stripping ASCII separators U+001C..U+001F.
+_DESCRIPTION_WHITESPACE_CHARS = (
+    "\t\n\x0b\x0c\r \u0085\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
 
 _TIER_MAP: dict[str, HostIntegrationTier] = {
     tier: tier for tier in HOST_INTEGRATION_TIER_VALUES
@@ -173,9 +181,13 @@ def _require_bool(value: object, label: str) -> bool:
 
 
 def _validate_description(value: object) -> str:
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
         raise ValueError("description must be a non-empty string")
-    trimmed = value.strip()
+    # Strip with the explicit cross-runtime whitespace set instead of str.strip()
+    # so U+0085 NEL and U+FEFF BOM trim identically and U+001C..U+001F stay intact.
+    trimmed = value.strip(_DESCRIPTION_WHITESPACE_CHARS)
+    if not trimmed:
+        raise ValueError("description must be a non-empty string")
     if len(trimmed) > _MAX_DESCRIPTION_CODE_POINTS:
         raise ValueError(
             f"description exceeds {_MAX_DESCRIPTION_CODE_POINTS} Unicode code points"

@@ -362,6 +362,92 @@ def test_negative_cases_and_invariant_validation() -> None:
                 {**valid.to_dict(), "description": rejected}
             )
 
+    for empty_trimmed in ("\u0085", "\ufeff", "\u0085 \ufeff\u00a0\u3000"):
+        with pytest.raises(
+            ValueError, match="description must be a non-empty string"
+        ):
+            validate_host_harness_capabilities(
+                {**valid.to_dict(), "description": empty_trimmed}
+            )
+    for raw_desc, expected_desc in (
+        ("\u0085" + ("a" * 512) + "\u0085", "a" * 512),
+        ("\ufeff" + ("a" * 512) + "\ufeff", "a" * 512),
+        ("\u001c", "\u001c"),
+        ("\u0085\ufeff\u2003ok\u202f\ufeff\u0085", "ok"),
+    ):
+        validated = validate_host_harness_capabilities(
+            {**valid.to_dict(), "description": raw_desc}
+        )
+        assert validated.description == expected_desc
+        constructed = HostHarnessCapabilities(
+            host_id="sample_host",
+            integration_tier="in_tree_codesigned",
+            adapter_module="loopx.hosts.sample",
+            supported_capabilities=("native_context_budget", "quiet_turn"),
+            hook_events=(),
+            requires_utf8_stdio=True,
+            native_goal_primitive=False,
+            native_scheduler_primitive=False,
+            description=raw_desc,
+        )
+        assert constructed.description == expected_desc
+    with pytest.raises(
+        ValueError, match="description exceeds 512 Unicode code points"
+    ):
+        validate_host_harness_capabilities(
+            {**valid.to_dict(), "description": "\u0085" + ("a" * 513) + "\ufeff"}
+        )
+
+    ts_probe_cases = [
+        "\u0085",
+        "\ufeff",
+        "\u0085" + ("a" * 512) + "\u0085",
+        "\ufeff" + ("a" * 512) + "\ufeff",
+        "\u0085" + ("a" * 513) + "\ufeff",
+        "\u001c",
+        "😀" * 257,
+        "😀" * 513,
+    ]
+    ts_probe = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-strip-types",
+            "--input-type=module",
+            "-e",
+            (
+                "import { validateHostHarnessCapabilities } from "
+                "'./loopx/control_plane/hosts/host_harness_capabilities.ts';\n"
+                "const cases = JSON.parse(process.argv[1]);\n"
+                "const base = {schema_version: 'loopx_host_harness_capabilities_v0', "
+                "host_id: 'sample_host', integration_tier: 'in_tree_codesigned', "
+                "adapter_module: 'loopx.hosts.sample', supported_capabilities: [], "
+                "hook_events: [], requires_utf8_stdio: true, native_goal_primitive: false, "
+                "native_scheduler_primitive: false};\n"
+                "console.log(JSON.stringify(cases.map((description) => {\n"
+                "  try { return { ok: true, description: validateHostHarnessCapabilities({ ...base, description }).description }; }\n"
+                "  catch (err) { return { ok: false, message: err instanceof Error ? err.message : String(err) }; }\n"
+                "})));\n"
+            ),
+            json.dumps(ts_probe_cases, ensure_ascii=False),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ts_outcomes = json.loads(ts_probe.stdout)
+    py_outcomes: list[dict[str, object]] = []
+    for raw_case in ts_probe_cases:
+        try:
+            py_desc = validate_host_harness_capabilities(
+                {**valid.to_dict(), "supported_capabilities": (), "description": raw_case}
+            ).description
+            py_outcomes.append({"ok": True, "description": py_desc})
+        except ValueError as exc:
+            py_outcomes.append({"ok": False, "message": str(exc)})
+    assert py_outcomes == ts_outcomes
+
     register_host_capabilities(valid, registry=isolated)
     assert register_host_capabilities(valid, registry=isolated) == valid
     conflicting = HostHarnessCapabilities(

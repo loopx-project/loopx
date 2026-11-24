@@ -39,6 +39,15 @@ const MODULE_PATH_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)
 const HOOK_EVENT_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 // Shared TS/Python contract bound measured in Unicode code points (Array.from(str).length / len(str)).
 const MAX_DESCRIPTION_CODE_POINTS = 512;
+// Explicit cross-runtime edge-whitespace set matching Python _DESCRIPTION_WHITESPACE_CHARS:
+// trims ASCII whitespace, U+0085 NEL, Unicode Zs/Zl/Zp separators, and U+FEFF BOM,
+// while deliberately NOT stripping ASCII separators U+001C..U+001F.
+const DESCRIPTION_EDGE_WHITESPACE_CHARS =
+  "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
+const DESCRIPTION_EDGE_WHITESPACE_RE = new RegExp(
+  `^[${DESCRIPTION_EDGE_WHITESPACE_CHARS}]+|[${DESCRIPTION_EDGE_WHITESPACE_CHARS}]+$`,
+  "g",
+);
 
 const DESCRIPTOR_KEYS = new Set<string>([
   "schema_version",
@@ -245,7 +254,13 @@ export function validateHostHarnessCapabilities(
     record.native_scheduler_primitive,
     "native_scheduler_primitive",
   );
-  const description = requireNonEmptyString(record.description, "description").trim();
+  if (typeof record.description !== "string") {
+    throw new EffectRuntimeRequestError("description must be a non-empty string");
+  }
+  const description = record.description.replace(DESCRIPTION_EDGE_WHITESPACE_RE, "");
+  if (!description) {
+    throw new EffectRuntimeRequestError("description must be a non-empty string");
+  }
   if (Array.from(description).length > MAX_DESCRIPTION_CODE_POINTS) {
     throw new EffectRuntimeRequestError(
       `description exceeds ${MAX_DESCRIPTION_CODE_POINTS} Unicode code points`,
