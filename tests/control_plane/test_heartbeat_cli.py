@@ -139,5 +139,9 @@ for module in ("loopx.cli", "loopx.cli_commands.support_control", "loopx.chat_se
 if {mode!r} == "help":
     assert "loopx.cli_commands.support_control_heartbeat" not in sys.modules
 """
-    result = run_isolated_script(script, environment={"LOOPX_USAGE_PING": "0"})
+    # The no-evidence fixture must not inherit an authenticated host's
+    # auto-detected poll path. Capability memory tests cover that real path.
+    result = run_isolated_script(script, environment={
+        "LOOPX_USAGE_PING": "0", "LOOPX_AUTO_CAPABILITY_PROBE": "0",
+    })
     assert result.returncode == 0, result.stderr

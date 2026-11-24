@@ -208,7 +208,24 @@ def attach_settlement_progress(
     payload["settlement_progress"] = dict(progress)
     payload.pop("settlement_owed", None)
     identity = readback.identity.value
-    if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
+    if payload.get("ok") is not True or identity is None:
+        return
+    if progress.get("checkpoint_recovery_required") is True:
+        argv = [*loopx_cli_argv()]
+        if registry_path is not None:
+            argv.extend(["--registry", str(registry_path)])
+        if runtime_root is not None:
+            argv.extend(["--runtime-root", str(runtime_root)])
+        argv.extend([
+            "--format", "json", "checkpoint-context", "--goal-id", identity.goal_id,
+            "--agent-id", identity.agent_id, "--turn-instance-id", identity.turn_instance_id,
+            "--replan-obligation-id", str(identity.replan_obligation_id),
+        ])
+        if goal_ref is not None:
+            argv.extend(["--goal-instance-id", str(goal_ref["goal_instance_id"])])
+        payload["settlement_progress"]["checkpoint_context_command"] = render_owed_host_command(argv)
+        return
+    if progress.get("next_step") != "quota_spend":
         return
     route = loopx_cli_argv()
     prefix = shlex.join(route)
