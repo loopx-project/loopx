@@ -1114,3 +1114,98 @@ def test_product_multi_agent_peer_todos_block_initial_batch_across_all_routes(
         )
         all_goal_todos.extend(listed["todos"])
     assert [str(item["todo_id"]) for item in all_goal_todos] == [peer_todo_id]
+
+
+def test_product_cli_plan_batch_aligns_operation_id_schema_and_execution_tokens(
+    product_goal: dict[str, object],
+):
+    import re as _re
+
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Align advertised plan-batch operation_id pattern with canonical Todo preflight."
+
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+    schema_payload = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--text", task_text, "--schema",
+    )
+    op_pattern = str(schema_payload["fields"]["operation_id"]["pattern"])
+    opaque_pattern = str(schema_payload["fields"]["outcome_id"]["pattern"])
+    assert _re.fullmatch(op_pattern, "source@batch") is None
+    assert _re.fullmatch(op_pattern, "source-batch_01.v2:init") is not None
+    assert _re.fullmatch(opaque_pattern, "outcome@v1") is not None
+
+    pkt = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    initial_rev = str(pkt["goal_acceptance"]["provider_revision"])
+
+    bad_proposal = {
+        "input_digest": pkt["input_digest"],
+        "expected_provider_revision": initial_rev,
+        "outcome_id": "outcome@v1",
+        "operation_id": "source@batch",
+        "outcome": {
+            "objective": "Verify @ is rejected in operation_id upfront while allowed in opaque outcome IDs.",
+            "requirements": [{"id": "req@1", "description": "Match schema and runtime token rules."}],
+            "source": {"ref": "checkpoint@initial", "summary": "Token alignment regression."},
+        },
+        "todos": [
+            {"text": "[P0] Implement aligned operation token rules", "action_kind": "implement"},
+            {"text": "[P1] Validate File and SQLite execution", "action_kind": "validate"},
+        ],
+    }
+    bad_path = project / "bad-op-token.json"
+    bad_path.write_text(json.dumps(bad_proposal), encoding="utf-8")
+
+    for flag in ("--dry-run", "--execute"):
+        rejected = _run_cli(
+            *prefix, "todo", "plan-batch",
+            "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+            "--text", task_text, "--document", str(bad_path), flag,
+            expected_rc=1,
+        )
+        assert "operation_id" in str(rejected["error"])
+
+    valid_proposal = {**bad_proposal, "operation_id": "source-batch_01.v2:init"}
+    valid_path = project / "valid-op-token.json"
+    valid_path.write_text(json.dumps(valid_proposal), encoding="utf-8")
+
+    cli_flag_rejected = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(valid_path),
+        "--operation-id", "cli@override", "--execute",
+        expected_rc=1,
+    )
+    assert "operation_id" in str(cli_flag_rejected["error"])
+
+    unchanged = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert unchanged["goal_acceptance"]["provider_revision"] == initial_rev
+    assert unchanged["existing_todos"] == []
+
+    preview = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(valid_path), "--dry-run",
+    )
+    assert preview["status"] == "planned"
+    assert preview["operation_id"] == "source-batch_01.v2:init"
+
+    applied = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(valid_path), "--execute",
+    )
+    assert applied["status"] == "ready"
+    assert applied["operation_id"] == "source-batch_01.v2:init"
+    assert applied["outcome_id"] == "outcome@v1"
+    assert len(applied["todo_ids"]) == 2

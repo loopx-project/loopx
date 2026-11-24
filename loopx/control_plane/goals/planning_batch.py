@@ -31,6 +31,8 @@ TODO_PRIORITY_VALUES = ("P0", "P1", "P2", "P3", "P4")
 OPAQUE_ID_MAX_CHARS = 128
 OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]*$")
 OPAQUE_ID_HINT = "ASCII letters/digits and . _ : @ -, no '/' paths or spaces"
+OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+OPERATION_ID_HINT = "ASCII letters/digits and . _ : -, no '@', '/' paths, or spaces"
 OBJECTIVE_MAX_CHARS = 1024
 REQUIREMENT_DESCRIPTION_MAX_CHARS = 2000
 REQUIREMENTS_MAX_ITEMS = 32
@@ -209,8 +211,11 @@ def planning_batch_schema(
             "length_unit": "utf16_code_units",
             "min_utf16_code_units": 1,
             "max_utf16_code_units": OPAQUE_ID_MAX_CHARS,
-            "pattern": OPAQUE_ID_PATTERN.pattern,
-            "description": "Optional stable batch operation prefix for idempotent retries.",
+            "pattern": OPERATION_ID_PATTERN.pattern,
+            "description": (
+                "Optional stable batch operation prefix for idempotent retries "
+                "(public-safe token without '@', '/', or spaces)."
+            ),
         }
     example: dict[str, object] = {
         **({"input_digest": input_digest or "<packet.input_digest>"} if require_input_digest else {}),
@@ -299,9 +304,10 @@ def render_planning_batch_guidance(
         '"source": {"ref": "<opaque-id>", "summary": "<str <=512 UTF-16 code units>"}}, '
         '"todos": [{"text": "<str>", "action_kind": "<lowercase token>", "target_key": "<optional str>"}]}. '
         "Constraint: bounded string limits are measured in UTF-16 code units (non-BMP emoji count as 2); "
-        "outcome.source.ref and requirements[*].id must be opaque ASCII IDs "
+        "outcome.source.ref, requirements[*].id, and optional outcome_id must be opaque ASCII IDs "
         f"(1..{OPAQUE_ID_MAX_CHARS} UTF-16 code units matching {OPAQUE_ID_PATTERN.pattern}, NO '/' paths or spaces, "
-        'e.g. "checkpoint:initial"); todos[*].action_kind must match ^[a-z][a-z0-9_-]{0,63}$ '
+        'e.g. "checkpoint:initial"); optional operation_id must match '
+        f"{OPERATION_ID_PATTERN.pattern} (no '@'); todos[*].action_kind must match ^[a-z][a-z0-9_-]{{0,63}}$ "
         "(e.g. implement, validate, investigate, submit); inspect full schema with "
         f"`{effective_schema_cmd}`. "
         f"Run {command} {proposal_arg_template} and return the successful planning result JSON directly "
@@ -362,6 +368,23 @@ def _opaque_id(value: object, *, path: str) -> str:
         if invalid_chars:
             reasons.append(f"must match {OPAQUE_ID_PATTERN.pattern} ({OPAQUE_ID_HINT})")
         raise ValueError(f"Planning proposal field {path} must be an opaque identifier ({'; '.join(reasons)})")
+    return text
+
+
+def _operation_id(value: object, *, path: str = "operation_id") -> str:
+    text = _text(value, path=path)
+    units = utf16_code_unit_len(text)
+    too_long = units > OPAQUE_ID_MAX_CHARS
+    invalid_chars = not OPERATION_ID_PATTERN.match(text)
+    if too_long or invalid_chars:
+        reasons = []
+        if too_long:
+            reasons.append(f"got {units} UTF-16 code units, max {OPAQUE_ID_MAX_CHARS}")
+        if invalid_chars:
+            reasons.append(f"must match {OPERATION_ID_PATTERN.pattern} ({OPERATION_ID_HINT})")
+        raise ValueError(
+            f"Planning proposal field {path} must be a public-safe operation token ({'; '.join(reasons)})"
+        )
     return text
 
 
@@ -467,7 +490,7 @@ def validate_planning_batch_proposal(
     if "outcome_id" in root:
         normalized["outcome_id"] = _opaque_id(root["outcome_id"], path="outcome_id")
     if "operation_id" in root:
-        normalized["operation_id"] = _opaque_id(root["operation_id"], path="operation_id")
+        normalized["operation_id"] = _operation_id(root["operation_id"], path="operation_id")
     return normalized
 
 
@@ -800,15 +823,16 @@ def apply_planning_batch(
     if snapshot["goal_waiting_on"] or snapshot["blocking_todo_ids"]:
         raise ValueError("Use the ordinary planning path for a Goal wait or blocker")
 
-    explicit_op = _opaque_id(operation_id, path="operation_id") if operation_id is not None else None
+    safe_prefix = _operation_id(id_prefix, path="id_prefix")
+    explicit_op = _operation_id(operation_id, path="operation_id") if operation_id is not None else None
     proposal_hash = _digest(validated)
     outcome_id = str(
-        validated.get("outcome_id") or f"{id_prefix}-{proposal_hash[:32]}"
+        validated.get("outcome_id") or f"{safe_prefix}-{proposal_hash[:32]}"
     )
     effective_operation = str(
         explicit_op
         or validated.get("operation_id")
-        or (f"{id_prefix}:{expected_digest}" if expected_digest else f"{id_prefix}:{proposal_hash[:32]}")
+        or (f"{safe_prefix}:{expected_digest}" if expected_digest else f"{safe_prefix}:{proposal_hash[:32]}")
     )
     # When outcome_id is explicit, bind the declaration receipt to the complete
     # normalized proposal digest (ordered Todos + revision + input binding) so
