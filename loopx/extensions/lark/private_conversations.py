@@ -476,6 +476,7 @@ class LarkPrivateConversations(
             record["history_answer_hold"] = admitted.get("history_answer_hold", "original_reservation_unavailable")
             _atomic_write_json(path, record)
             return {"status": "history_answer_held"}
+        record_event_timing(profile, message_id, "core_admission_returned")
         return self._record_admission(path, record, admitted)
 
     @effect_runtime_request_scope()
@@ -596,11 +597,9 @@ class LarkPrivateConversations(
                 if record.get("capture_origin") == "provider_history":
                     if message_type != "text" or command is not None or attachments:
                         return {"status": "history_answer_held"}
-                    history_result = self._admit_history_answer(
+                    return self._admit_history_answer(
                         path, record, binding, source, request, selected, source_message, text,
                     )
-                    record_event_timing(profile, message_id, "core_admission_returned")
-                    return history_result
                 preflight = (
                     steward_source_preflight(_mapping(selected["binding"]), source_message,
                         lambda fresh: self._source_message(record, selected=fresh))

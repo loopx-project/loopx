@@ -989,3 +989,121 @@ def test_reconcile_request_recovery_and_terminal_delivery_equivalence(tmp_path: 
     assert baseline["wait_rc"] == 0 and baseline["wait_no_io"] is True
     assert baseline["done_rc"] == 1 and baseline["done_status"] == "delivered"
     assert baseline["fail_rc"] == 1 and baseline["fail_status"] == "delivered" and baseline["fail_text_kept"] is True
+
+
+@pytest.mark.parametrize("timing_enabled", [False, True], ids=["timing_disabled", "timing_enabled"])
+def test_held_history_answer_secondary_read_timing_equivalence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    timing_enabled: bool,
+) -> None:
+    import hashlib
+
+    if timing_enabled:
+        monkeypatch.setenv("LOOPX_LARK_EVENT_TIMING", "1")
+    else:
+        monkeypatch.delenv("LOOPX_LARK_EVENT_TIMING", raising=False)
+
+    outputs = []
+    for label, mod in _variants():
+        base_dir = tmp_path / label.replace("/", "_")
+        _, _, provider, transport, _ = _build_env(
+            mod, base_dir, audience="owner", context_kind="steward"
+        )
+        provider.add_message("om_hist_sec_fail", "Explain previous result")
+        provider.add_message("om_hist_prepared", "Explain prepared hold")
+        original_runner = transport.runner
+        api_get_calls = 0
+
+        def failing_secondary_runner(
+            args: list[str], cwd: Path | None = None, timeout: float | None = None
+        ) -> dict[str, Any]:
+            nonlocal api_get_calls
+            if (
+                "api" in args
+                and "GET" in args
+                and any("om_hist_sec_fail" in str(item) for item in args)
+            ):
+                api_get_calls += 1
+                if api_get_calls >= 2:
+                    return {"returncode": 1, "stdout": "", "stderr": "secondary envelope read failed"}
+            return dict(original_runner(args, cwd, timeout))
+
+        monkeypatch.setattr(transport, "runner", failing_secondary_runner)
+        admission_calls = 0
+        original_admit_history = transport.core.admit_history_answer
+
+        def counting_admit_history(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            nonlocal admission_calls
+            admission_calls += 1
+            return dict(original_admit_history(*args, **kwargs))
+
+        monkeypatch.setattr(transport.core, "admit_history_answer", counting_admit_history)
+        capsys.readouterr()
+
+        held_sec = transport.admit(
+            provider.profile,
+            provider.event("om_hist_sec_fail", "Explain previous result"),
+            history_review=True,
+        )
+        sec_calls = admission_calls
+        sec_out = capsys.readouterr().out
+        sec_ref = hashlib.sha256(
+            json.dumps([provider.profile, "om_hist_sec_fail"]).encode()
+        ).hexdigest()
+        sec_stages = [
+            row["stage"]
+            for line in sec_out.splitlines()
+            if (row := json.loads(line)).get("schema_version") == "loopx_lark_event_timing_v0"
+            and row.get("event_ref") == sec_ref
+        ]
+
+        admission_calls = 0
+        held_prep = transport.admit(
+            provider.profile,
+            provider.event("om_hist_prepared", "Explain prepared hold"),
+            history_review=True,
+        )
+        prep_calls = admission_calls
+        prep_out = capsys.readouterr().out
+        prep_ref = hashlib.sha256(
+            json.dumps([provider.profile, "om_hist_prepared"]).encode()
+        ).hexdigest()
+        prep_stages = [
+            row["stage"]
+            for line in prep_out.splitlines()
+            if (row := json.loads(line)).get("schema_version") == "loopx_lark_event_timing_v0"
+            and row.get("event_ref") == prep_ref
+        ]
+
+        outputs.append(
+            {
+                "held_sec": held_sec,
+                "sec_calls": sec_calls,
+                "sec_stages": sec_stages,
+                "held_prep": held_prep,
+                "prep_calls": prep_calls,
+                "prep_stages": prep_stages,
+            }
+        )
+
+    baseline = _assert_paired_equal(outputs)
+    assert baseline["held_sec"] == {"status": "history_answer_held"}
+    assert baseline["sec_calls"] == 0
+    assert baseline["held_prep"] == {"status": "history_answer_held"}
+    assert baseline["prep_calls"] == 1
+    if timing_enabled:
+        expected_stages = [
+            "admission_started",
+            "binding_hint_ready",
+            "capture_lock_acquired",
+            "core_admission_started",
+        ]
+        assert baseline["sec_stages"] == expected_stages
+        assert baseline["prep_stages"] == expected_stages
+        assert "core_admission_returned" not in baseline["sec_stages"]
+        assert "core_admission_returned" not in baseline["prep_stages"]
+    else:
+        assert baseline["sec_stages"] == []
+        assert baseline["prep_stages"] == []
