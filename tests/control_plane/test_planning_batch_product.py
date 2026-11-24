@@ -1209,3 +1209,198 @@ def test_product_cli_plan_batch_aligns_operation_id_schema_and_execution_tokens(
     assert applied["operation_id"] == "source-batch_01.v2:init"
     assert applied["outcome_id"] == "outcome@v1"
     assert len(applied["todo_ids"]) == 2
+    assert applied["runnable_todo_ids"] == applied["todo_ids"]
+    assert applied["all_todos_runnable"] is True
+
+
+def test_product_cli_plan_batch_replays_bound_receipt_after_todo_completion(
+    product_goal: dict[str, object],
+):
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Replay committed planning batch after linked Todo progression."
+
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+    before = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    proposal = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": before["goal_acceptance"]["provider_revision"],
+        "outcome_id": "replay-after-complete",
+        "operation_id": "replay-complete-op",
+        "outcome": {
+            "objective": "Preserve committed batch evidence across Todo progression.",
+            "requirements": [{"id": "req-replay", "description": "Replay returns original Todo IDs and current runnability."}],
+            "source": {"ref": "checkpoint:replay", "summary": "Post-completion replay regression."},
+        },
+        "todos": [
+            {"text": "[P0] Complete first step", "action_kind": "implement"},
+            {"text": "[P1] Keep second step open", "action_kind": "validate"},
+        ],
+    }
+    doc_path = project / "replay-after-complete.json"
+    doc_path.write_text(json.dumps(proposal), encoding="utf-8")
+
+    applied = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(doc_path), "--execute",
+    )
+    todo_ids = list(applied["todo_ids"])
+    assert len(todo_ids) == 2
+    assert applied["runnable_todo_ids"] == todo_ids
+    assert applied["all_todos_runnable"] is True
+    assert applied["idempotent_replay"] is False
+
+    # Complete the first Todo via real CLI; verify one done, one open.
+    _run_cli(
+        *prefix, "todo", "complete",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", todo_ids[0],
+        "--no-follow-up", "--note", "Completed first planned step",
+    )
+    mid_pkt = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    statuses = {row["todo_id"]: row["status"] for row in mid_pkt["existing_todos"]}
+    assert statuses[todo_ids[0]] == "done"
+    assert statuses[todo_ids[1]] == "open"
+    mid_rev = mid_pkt["goal_acceptance"]["provider_revision"]
+
+    # Replaying with wrong operation_id or mutated Todo still fails closed without writes.
+    _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(doc_path),
+        "--operation-id", "wrong-replay-op", "--execute",
+        expected_rc=1,
+    )
+    mutated_path = project / "mutated-after-complete.json"
+    mutated_path.write_text(json.dumps({
+        **proposal,
+        "todos": [proposal["todos"][0], {"text": "[P1] Changed second step", "action_kind": "validate"}],
+    }), encoding="utf-8")
+    _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(mutated_path), "--execute",
+        expected_rc=1,
+    )
+
+    # Exact replay succeeds, returns original todo_ids, and separately projects current runnability.
+    replayed = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(doc_path), "--execute",
+    )
+    assert replayed["status"] == "ready"
+    assert replayed["changed"] is False
+    assert replayed["idempotent_replay"] is True
+    assert replayed["outcome_id"] == "replay-after-complete"
+    assert replayed["operation_id"] == "replay-complete-op"
+    assert replayed["todo_ids"] == todo_ids
+    assert replayed["runnable_todo_ids"] == [todo_ids[1]]
+    assert replayed["all_todos_runnable"] is False
+    assert replayed["provider_revision"] == mid_rev
+
+    md_out = io.StringIO()
+    with contextlib.redirect_stdout(md_out):
+        md_rc = main([
+            "--format", "markdown", "--registry", str(registry), "--runtime-root", str(runtime_root),
+            "todo", "plan-batch", "--goal-id", goal_id, "--agent-id", agent_id,
+            "--project", str(project), "--text", task_text, "--document", str(doc_path), "--execute",
+        ])
+    assert md_rc == 0
+    assert f"- todo_ids: {todo_ids[0]}, {todo_ids[1]}" in md_out.getvalue()
+    assert f"- runnable_todo_ids: {todo_ids[1]}" in md_out.getvalue()
+
+    # Complete the second Todo as well; replay projects runnable_todo_ids == [] ("none" in markdown).
+    _run_cli(
+        *prefix, "todo", "complete",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", todo_ids[1],
+        "--no-follow-up", "--note", "Completed second planned step",
+    )
+    replayed_all_done = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(doc_path), "--execute",
+    )
+    assert replayed_all_done["idempotent_replay"] is True
+    assert replayed_all_done["todo_ids"] == todo_ids
+    assert replayed_all_done["runnable_todo_ids"] == []
+    assert replayed_all_done["all_todos_runnable"] is False
+
+
+def test_product_cli_plan_batch_initial_binding_still_rejects_completed_unbound_todo(
+    product_goal: dict[str, object],
+):
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Initial unbound batch must still require runnable Todos."
+
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+    before = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    initial_rev = str(before["goal_acceptance"]["provider_revision"])
+    proposal = {
+        "input_digest": before["input_digest"],
+        "expected_provider_revision": initial_rev,
+        "outcome_id": "unbound-complete-guard",
+        "operation_id": "unbound-complete-op",
+        "outcome": {
+            "objective": "Keep runnability check on initial Outcome-Todo binding.",
+            "requirements": [{"id": "req-unbound", "description": "Unbound batch checks runnable_todo_ids."}],
+            "source": {"ref": "checkpoint:unbound", "summary": "Initial binding guard."},
+        },
+        "todos": [
+            {"text": "[P0] Unbound first step", "action_kind": "implement"},
+            {"text": "[P1] Unbound second step", "action_kind": "validate"},
+        ],
+    }
+    from loopx.control_plane.goals.planning_batch import validate_planning_batch_proposal
+    import hashlib
+
+    validated = validate_planning_batch_proposal(proposal, require_input_digest=True, allow_product_identities=True)
+    proposal_hash = hashlib.sha256(json.dumps(validated, sort_keys=True).encode()).hexdigest()
+    backend = DirectPlanningBatchBackend(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, project=project, text=task_text,
+    )
+    backend.inspect_state()
+    backend.refine_outcome(
+        {**validated["outcome"], "outcome_id": "unbound-complete-guard", "owner_agent_id": agent_id},
+        initial_rev, f"unbound-complete-op:declare:{proposal_hash[:32]}", execute=True,
+    )
+    w0 = backend.add_todo(validated["todos"][0], "unbound-complete-op:todo:0", execute=True)
+    backend.add_todo(validated["todos"][1], "unbound-complete-op:todo:1", execute=True)
+
+    # Complete todo:0 BEFORE initial Outcome-Todo binding occurs.
+    _run_cli(
+        *prefix, "todo", "complete",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", str(w0["todo_id"]),
+        "--no-follow-up", "--note", "Premature completion before binding",
+    )
+    doc_path = project / "unbound-proposal.json"
+    doc_path.write_text(json.dumps(proposal), encoding="utf-8")
+    rejected = _run_cli(
+        *prefix, "todo", "plan-batch",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+        "--text", task_text, "--document", str(doc_path), "--execute",
+        expected_rc=1,
+    )
+    assert "no longer runnable" in str(rejected["error"])
+    after_pkt = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert after_pkt["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == []

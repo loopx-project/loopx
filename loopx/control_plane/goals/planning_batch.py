@@ -820,8 +820,6 @@ def apply_planning_batch(
 
     revision = str(validated["expected_provider_revision"])
     acceptance = snapshot["goal_acceptance"]
-    if snapshot["goal_waiting_on"] or snapshot["blocking_todo_ids"]:
-        raise ValueError("Use the ordinary planning path for a Goal wait or blocker")
 
     safe_prefix = _operation_id(id_prefix, path="id_prefix")
     explicit_op = _operation_id(operation_id, path="operation_id") if operation_id is not None else None
@@ -849,7 +847,10 @@ def apply_planning_batch(
         "owner_agent_id": snapshot["agent_id"],
     }
     current_rev = str(acceptance["provider_revision"])
+    initial_linked_ids: list[str] = []
     if current_rev == revision:
+        if snapshot["goal_waiting_on"] or snapshot["blocking_todo_ids"]:
+            raise ValueError("Use the ordinary planning path for a Goal wait or blocker")
         if (
             snapshot["existing_todos"]
             or snapshot.get("goal_has_existing_todos")
@@ -857,7 +858,17 @@ def apply_planning_batch(
         ):
             raise ValueError("Use the ordinary planning path for existing work or requirements")
     else:
-        _declared_outcome(acceptance, declaration)
+        initial_row = _declared_outcome(acceptance, declaration)
+        raw_initial_linked = initial_row.get("todo_ids")
+        initial_linked_ids = (
+            [str(x) for x in raw_initial_linked]
+            if isinstance(raw_initial_linked, list)
+            else []
+        )
+        if not initial_linked_ids and (
+            snapshot["goal_waiting_on"] or snapshot["blocking_todo_ids"]
+        ):
+            raise ValueError("Use the ordinary planning path for a Goal wait or blocker")
 
     todos = cast(list[dict[str, str]], validated["todos"])
     if not execute or current_rev == revision:
@@ -898,18 +909,19 @@ def apply_planning_batch(
     current_snapshot = backend.inspect_state()
     if expected_digest is not None and current_snapshot.get("input_digest") != expected_digest:
         raise ValueError("Planning input changed before binding")
-    if not set(ids).issubset(current_snapshot["runnable_todo_ids"]):
-        raise ValueError("Planning Todos are no longer runnable by this agent")
-    if current_snapshot["goal_waiting_on"] or current_snapshot["blocking_todo_ids"]:
-        raise ValueError("Planning encountered a new Goal wait or blocker")
     current_acceptance = current_snapshot["goal_acceptance"]
     declared_row = _declared_outcome(current_acceptance, declaration)
     linked = declared_row.get("todo_ids")
     linked_ids = [str(x) for x in linked] if isinstance(linked, list) else []
-    final_acceptance = current_acceptance
     if linked_ids and linked_ids != ids:
         raise ValueError("Planning work links changed; inspect the current Goal")
-    if not linked_ids:
+    already_bound = current_rev != revision and linked_ids == ids
+    final_acceptance = current_acceptance
+    if not already_bound:
+        if not set(ids).issubset(current_snapshot["runnable_todo_ids"]):
+            raise ValueError("Planning Todos are no longer runnable by this agent")
+        if current_snapshot["goal_waiting_on"] or current_snapshot["blocking_todo_ids"]:
+            raise ValueError("Planning encountered a new Goal wait or blocker")
         basis = str(current_acceptance["provider_revision"])
         final_acceptance = backend.refine_outcome(
             {"outcome_id": outcome_id, "todo_ids": ids},
@@ -918,19 +930,23 @@ def apply_planning_batch(
             execute=True,
         )
 
+    runnable_set = set(current_snapshot["runnable_todo_ids"])
+    batch_runnable_ids = [tid for tid in ids if tid in runnable_set]
     final_rev = str(final_acceptance.get("provider_revision") or current_acceptance["provider_revision"])
     return {
         "ok": True,
         "command": "plan-batch",
         "status": "ready",
         "dry_run": False,
-        "changed": current_rev == revision or not linked_ids,
-        "idempotent_replay": current_rev != revision and bool(linked_ids),
+        "changed": not already_bound,
+        "idempotent_replay": already_bound,
         "goal_id": snapshot["goal_id"],
         "agent_id": snapshot["agent_id"],
         "outcome_id": outcome_id,
         "operation_id": effective_operation,
         "todo_ids": ids,
+        "runnable_todo_ids": batch_runnable_ids,
+        "all_todos_runnable": len(batch_runnable_ids) == len(ids),
         "provider_revision": final_rev,
         "state_readback_verified": True,
         "execution_owner": "caller",
@@ -958,6 +974,10 @@ def render_planning_batch_markdown(payload: Mapping[str, object]) -> str:
     todo_ids = payload.get("todo_ids")
     if isinstance(todo_ids, list) and todo_ids:
         lines.append(f"- todo_ids: {', '.join(str(item) for item in todo_ids)}")
+        runnable_ids = payload.get("runnable_todo_ids")
+        if isinstance(runnable_ids, list):
+            rendered_runnable = ", ".join(str(item) for item in runnable_ids) if runnable_ids else "none"
+            lines.append(f"- runnable_todo_ids: {rendered_runnable}")
     elif payload.get("planned_todo_count") is not None:
         lines.append(f"- planned_todo_count: {payload['planned_todo_count']}")
     return "\n".join(lines)
