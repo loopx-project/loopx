@@ -38,6 +38,8 @@ PREFIX = "LOOPX_PYTEST_TIMING "
 DEADLINE_PREFIX = "LOOPX_PYTEST_DEADLINE "
 _DEADLINE_WORKER_EXIT_TIMEOUT = 1.0
 _STACK_FD = pytest.StashKey[int]()
+_CMDLINE_WRAPPER = pytest.StashKey[bool]()
+_OBSERVER_KEY = pytest.StashKey["TimingObserver"]()
 # Tests may replace public subprocess helpers. The observer owns this transport;
 # subprocess.run would still resolve a test's replacement Popen at call time.
 _STACK_POPEN = subprocess.Popen
@@ -138,7 +140,7 @@ def _flush_partial_junit(config: pytest.Config) -> bool:
     return True
 
 
-def _bound_xdist_teardown(config: pytest.Config) -> None:
+def _bound_xdist_teardown(config: pytest.Config, *, terminate: bool = False) -> None:
     """Signal active local xdist workers to unwind and cap teardown grace on deadline."""
     dsession = config.pluginmanager.get_plugin("dsession")
     if dsession is None:
@@ -150,14 +152,38 @@ def _bound_xdist_teardown(config: pytest.Config) -> None:
     if isinstance(current_timeout, (int, float)):
         nodemanager.EXIT_TIMEOUT = min(float(current_timeout), _DEADLINE_WORKER_EXIT_TIMEOUT)
     group = getattr(nodemanager, "group", None)
-    if group is None or os.name == "nt":
+    popens: list[Any] = []
+    if group is not None:
+        for gw in list(group):
+            popen = getattr(getattr(gw, "_io", None), "popen", None)
+            if popen is not None:
+                popens.append(popen)
+                if os.name != "nt" and popen.poll() is None:
+                    try:
+                        popen.send_signal(signal.SIGINT)
+                    except OSError:
+                        pass
+    if not terminate:
         return
-    for gw in list(group):
-        popen = getattr(getattr(gw, "_io", None), "popen", None)
-        if popen is not None and popen.poll() is None:
+    teardown_nodes = getattr(nodemanager, "teardown_nodes", None)
+    if callable(teardown_nodes):
+        try:
+            teardown_nodes()
+        except Exception:
+            pass
+    elif group is not None:
+        terminate_group = getattr(group, "terminate", None)
+        if callable(terminate_group):
             try:
-                popen.send_signal(signal.SIGINT)
-            except OSError:
+                terminate_group(_DEADLINE_WORKER_EXIT_TIMEOUT)
+            except Exception:
+                pass
+    for popen in popens:
+        if popen.poll() is None:
+            try:
+                popen.kill()
+                popen.wait(timeout=1.0)
+            except Exception:
                 pass
 
 
@@ -342,6 +368,65 @@ def pytest_runtest_makereport(item: pytest.Item, call: Any) -> Generator[None, A
     return report
 
 
+def _get_observer(config: pytest.Config) -> TimingObserver | None:
+    stash = getattr(config, "stash", None)
+    if stash is not None:
+        observer = stash.get(_OBSERVER_KEY, None)
+        if isinstance(observer, TimingObserver):
+            return observer
+    plugin = config.pluginmanager.get_plugin("loopx-ci-timing-observer")
+    return plugin if isinstance(plugin, TimingObserver) else None
+
+
+def _suspend_capture_safely(config: pytest.Config) -> None:
+    capman = config.pluginmanager.get_plugin("capturemanager")
+    if capman is not None and hasattr(capman, "suspend_global_capture"):
+        try:
+            capman.suspend_global_capture(in_=True)
+        except Exception:
+            pass
+
+
+def _ensure_unconfigure_safely(config: pytest.Config) -> None:
+    ensure_unconfigure = getattr(config, "_ensure_unconfigure", None)
+    if callable(ensure_unconfigure):
+        try:
+            ensure_unconfigure()
+        except Exception:
+            pass
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> Generator[None, object, object]:
+    if hasattr(config, "workerinput"):
+        return (yield)
+    stash = getattr(config, "stash", None)
+    if stash is not None:
+        stash[_CMDLINE_WRAPPER] = True
+    try:
+        result = yield
+    except KeyboardInterrupt:
+        observer = _get_observer(config)
+        if observer is not None:
+            if not observer.deadline_exceeded:
+                observer.disarm_deadline()
+                raise
+            _suspend_capture_safely(config)
+            exit_code = observer.finalize_interrupted_session()
+            _ensure_unconfigure_safely(config)
+            return exit_code
+        raise
+    except BaseException:
+        observer = _get_observer(config)
+        if observer is not None:
+            observer.disarm_deadline()
+        raise
+    observer = _get_observer(config)
+    if observer is not None:
+        return observer.finalize_completed_session(result)
+    return result
+
+
 def pytest_configure(config: pytest.Config) -> None:
     delay = config.getoption("ci_stall_after")
     if not math.isfinite(delay) or delay < 0:
@@ -367,6 +452,9 @@ def pytest_configure(config: pytest.Config) -> None:
     # reports and can be lost when a worker is killed.
     if not hasattr(config, "workerinput"):
         observer = TimingObserver(config)
+        stash = getattr(config, "stash", None)
+        if stash is not None:
+            stash[_OBSERVER_KEY] = observer
         config.pluginmanager.register(observer, "loopx-ci-timing-observer")
         if observer.deadline_seconds > 0:
             config.pluginmanager.register(_DeadlineSessionHook(observer), "loopx-ci-deadline-shutdown")
@@ -396,7 +484,11 @@ class TimingObserver:
         self._deadline_teardown_prepared = False
         self._collection_active = False
         self._loop_active = False
-        self._runtestloop_finished = False
+        self._post_loop_active = False
+        self._final_emitted = False
+        stash = getattr(config, "stash", None)
+        self._cmdline_wrapper_active = bool(stash.get(_CMDLINE_WRAPPER, False)) if stash is not None else False
+        self._session: pytest.Session | None = None
         self._deadline_timer: threading.Timer | None = None
         self.deadline_exceeded = False
         self.deadline_elapsed_seconds: float | None = None
@@ -525,25 +617,30 @@ class TimingObserver:
                 pass
         _thread.interrupt_main()
 
-    def prepare_deadline_sessionfinish(self) -> None:
+    def prepare_deadline_sessionfinish(self, *, terminate_workers: bool = False) -> None:
         with self._lock:
-            self._finished = True
             self._collection_active = False
             self._loop_active = False
-            if not self.deadline_exceeded or self._deadline_teardown_prepared:
+            self._post_loop_active = True
+            if not self.deadline_exceeded:
                 return
-            self._deadline_teardown_prepared = True
-        _flush_partial_junit(self.config)
-        _bound_xdist_teardown(self.config)
+            already_prepared = self._deadline_teardown_prepared
+            if not already_prepared:
+                self._deadline_teardown_prepared = True
+        if not already_prepared:
+            _flush_partial_junit(self.config)
+            _bound_xdist_teardown(self.config, terminate=terminate_workers)
+        elif terminate_workers:
+            _bound_xdist_teardown(self.config, terminate=True)
 
     def _record_deadline(self, session: pytest.Session, *, interrupt: bool) -> None:
         with self._lock:
-            if self._finished or self._runtestloop_finished or self.deadline_exceeded:
+            if self._finished or self.deadline_exceeded:
                 return
         children = _collect_descendant_processes(os.getpid(), limit=16)
         reason = f"CI session deadline exceeded ({self.deadline_seconds:g}s)"
         with self._lock:
-            if self._finished or self._runtestloop_finished or self.deadline_exceeded:
+            if self._finished or self.deadline_exceeded:
                 return
             now_elapsed = self._elapsed()
             self.deadline_exceeded = True
@@ -557,8 +654,8 @@ class TimingObserver:
         self._write_diagnostics(execution_complete=False, exit_code=None, children=children, kind="deadline")
         if interrupt:
             with self._lock:
-                if not self._finished and (self._collection_active or self._loop_active):
-                    # Wake collection or pytest_runtestloop immediately even when blocked in IO/sleep.
+                if not self._finished and (self._collection_active or self._loop_active or self._post_loop_active):
+                    # Wake collection, pytest_runtestloop, or stalled controller pytest_sessionfinish immediately.
                     self._interrupt_main_locked()
 
     def _on_deadline(self, session: pytest.Session) -> None:
@@ -594,6 +691,7 @@ class TimingObserver:
 
     @pytest.hookimpl(trylast=True)
     def pytest_sessionstart(self, session: pytest.Session) -> None:
+        self._session = session
         self.emit(event="start", version=1)
         if self.deadline_seconds > 0:
             remaining = max(0.0, self.deadline_seconds - self._elapsed())
@@ -623,16 +721,12 @@ class TimingObserver:
         self._abort_if_deadline_exceeded(session)
         with self._lock:
             self._loop_active = True
-        completed_normally = False
         try:
-            result = yield
-            completed_normally = True
-            return result
+            return (yield)
         finally:
             with self._lock:
                 self._loop_active = False
-                if completed_normally and not self.deadline_exceeded:
-                    self._runtestloop_finished = True
+                self._post_loop_active = True
 
     @pytest.hookimpl(wrapper=True, tryfirst=True)
     def pytest_runtest_protocol(self, item: pytest.Item) -> Generator[None, object, object]:
@@ -735,21 +829,29 @@ class TimingObserver:
         if should_flush_diag:
             self._write_diagnostics(execution_complete=False, exit_code=None)
 
-    @pytest.hookimpl(trylast=True)
-    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+    def disarm_deadline(self) -> None:
         timer: threading.Timer | None = None
         with self._lock:
             self._finished = True
             self._collection_active = False
             self._loop_active = False
+            self._post_loop_active = False
             timer = self._deadline_timer
             self._deadline_timer = None
         if timer is not None:
             timer.cancel()
             timer.join()
 
+    def _finalize_reporting(self, *, exit_code: int) -> int:
+        self.disarm_deadline()
+        with self._lock:
+            if self._final_emitted:
+                return int(pytest.ExitCode.INTERRUPTED) if self.deadline_exceeded else int(exit_code)
+            self._final_emitted = True
         if self.deadline_exceeded:
-            session.exitstatus = pytest.ExitCode.INTERRUPTED
+            final_exit = int(pytest.ExitCode.INTERRUPTED)
+            if self._session is not None:
+                self._session.exitstatus = pytest.ExitCode.INTERRUPTED
             self.emit(
                 _prefix=DEADLINE_PREFIX,
                 version=1,
@@ -760,8 +862,8 @@ class TimingObserver:
                 in_flight_cases=self.deadline_in_flight,
                 active_child_processes=self.deadline_children,
             )
-
-        final_exit = int(session.exitstatus)
+        else:
+            final_exit = int(exit_code)
         selected = len(self.collection) if self.collection is not None else None
         complete = (
             not self.deadline_exceeded
@@ -773,3 +875,32 @@ class TimingObserver:
         )
         self.emit(event="end", exit_code=final_exit)
         self._write_diagnostics(execution_complete=complete, exit_code=final_exit, kind="final")
+        return final_exit
+
+    def finalize_completed_session(self, result: object) -> int | pytest.ExitCode:
+        if isinstance(result, int):
+            exit_code = int(result)
+        elif self._session is not None:
+            exit_code = int(self._session.exitstatus)
+        else:
+            exit_code = 0
+        final_exit = self._finalize_reporting(exit_code=exit_code)
+        if self.deadline_exceeded:
+            return pytest.ExitCode.INTERRUPTED
+        return result if isinstance(result, pytest.ExitCode) else final_exit
+
+    def finalize_interrupted_session(self) -> int:
+        self.disarm_deadline()
+        self.prepare_deadline_sessionfinish(terminate_workers=True)
+        return self._finalize_reporting(exit_code=int(pytest.ExitCode.INTERRUPTED))
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
+        self._session = session
+        if self._cmdline_wrapper_active:
+            # Keep the single session deadline armed across outer pytest_sessionfinish
+            # wrappers; pytest_cmdline_main disarms and emits once wrap_session completes.
+            if self.deadline_exceeded:
+                session.exitstatus = pytest.ExitCode.INTERRUPTED
+            return
+        self._finalize_reporting(exit_code=int(session.exitstatus))

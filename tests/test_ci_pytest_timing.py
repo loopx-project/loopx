@@ -1244,3 +1244,104 @@ def test_shard_budget_preserves_reserve_across_fast_and_slow_prep(tmp_path: Path
     tight_payload = json.loads(tight_diag.read_text(encoding="utf-8"))
     assert tight_payload["deadline_exceeded"] is True
     assert tight_payload["deadline_seconds"] < 2.6
+
+
+@pytest.mark.parametrize("stall_phase", ["none", "before_yield", "after_yield"])
+def test_shard_budget_enforces_deadline_during_stalled_controller_sessionfinish(
+    tmp_path: Path,
+    stall_phase: str,
+) -> None:
+    case_dir = tmp_path / stall_phase
+    case_dir.mkdir()
+    (case_dir / "conftest.py").write_text(
+        "import os, time\n"
+        "import pytest\n\n"
+        "@pytest.hookimpl(wrapper=True)\n"
+        "def pytest_sessionfinish(session):\n"
+        "    if not hasattr(session.config, 'workerinput'):\n"
+        "        before = float(os.environ.get('LOOPX_TEST_STALL_BEFORE', '0'))\n"
+        "        after = float(os.environ.get('LOOPX_TEST_STALL_AFTER', '0'))\n"
+        "        if before > 0:\n"
+        "            time.sleep(before)\n"
+        "        result = yield\n"
+        "        if after > 0:\n"
+        "            time.sleep(after)\n"
+        "        return result\n"
+        "    return (yield)\n",
+        encoding="utf-8",
+    )
+    (case_dir / "test_subject.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_pass() -> None:\n"
+        "    Path('passed.ok').touch()\n",
+        encoding="utf-8",
+    )
+    diag_path = case_dir / "ci-shard-diagnostics.json"
+    junit_path = case_dir / "junit.xml"
+    log_path = case_dir / "job.log"
+    job_budget = 6.0 if stall_phase == "after_yield" else 10.0
+    upload_reserve = 3.0
+    t0_mono = time.monotonic()
+    t0_epoch = time.time()
+    env = environment()
+    env["LOOPX_SHARD_JOB_START_EPOCH"] = f"{t0_epoch:.6f}"
+    env["GITHUB_ACTIONS"] = "true"
+    if stall_phase == "before_yield":
+        env["LOOPX_TEST_STALL_BEFORE"] = "20.0"
+    elif stall_phase == "after_yield":
+        env["LOOPX_TEST_STALL_AFTER"] = "20.0"
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "scripts.ci.shard_budget",
+            "--job-budget-seconds", str(job_budget),
+            "--upload-reserve-seconds", str(upload_reserve),
+            "--min-session-seconds", "0.5",
+            "--diagnostics-file", str(diag_path),
+            "--",
+            "-v", "-n", "2",
+            "-p", "scripts.ci.pytest_timing",
+            "--ci-diagnostics-file", str(diag_path),
+            f"--junitxml={junit_path}",
+        ],
+        cwd=case_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=job_budget,
+        check=False,
+    )
+    elapsed = time.monotonic() - t0_mono
+    log_path.write_text(result.stdout, encoding="utf-8")
+    combined = result.stdout + "\n" + result.stderr
+
+    assert (case_dir / "passed.ok").is_file(), combined
+    assert elapsed < job_budget - 0.5, (
+        f"phase={stall_phase} must finish before {job_budget}s outer budget, took {elapsed:.2f}s:\n{combined}"
+    )
+    assert junit_path.is_file(), combined
+    testcase_names = [
+        case.attrib.get("name")
+        for case in ET.parse(junit_path).findall(".//testcase")
+    ]
+    assert testcase_names == ["test_pass"], f"Expected 1 testcase, got {testcase_names}:\n{combined}"
+
+    diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    summary = read_log(log_path)
+    if stall_phase == "none":
+        assert result.returncode == 0, combined
+        assert diag["deadline_exceeded"] is False
+        assert diag["execution_complete"] is True
+        assert diag["pytest_exit_code"] == 0
+        assert summary["execution_complete"] is True
+        assert summary["pytest_exit_code"] == 0
+        assert summary["finished_cases"] == 1
+    else:
+        assert result.returncode == 2, combined
+        assert "LOOPX_PYTEST_DEADLINE " in result.stdout, combined
+        assert diag["deadline_exceeded"] is True
+        assert diag["execution_complete"] is False
+        assert diag["pytest_exit_code"] == 2
+        assert summary["execution_complete"] is False
+        assert summary["pytest_exit_code"] == 2
+        assert summary["finished_cases"] == 1
