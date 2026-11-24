@@ -68,6 +68,9 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         "goal_id": "fixture",
         "agent_id": "agent",
         "todo_id": "todo_fixture",
+        "claim_workspace": {
+            "path": str(tmp_path.resolve()), "device": tmp_path.stat().st_dev, "inode": tmp_path.stat().st_ino,
+        },
         "claim_args": [
             *payload["execution_preparation"]["claim"]["cli_args"],
             "--claim-operation-id",
