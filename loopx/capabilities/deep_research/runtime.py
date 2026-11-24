@@ -9,6 +9,7 @@ nothing else may mutate `.loopx/deepresearch/` state.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -113,7 +114,18 @@ def _next_id(items: list[dict[str, Any]], prefix: str) -> str:
 
 
 def _normalize_source_ref(ref: str) -> str:
-    return ref.strip().rstrip("/").lower()
+    ref = ref.strip()
+    url = re.fullmatch(r"(https?://)([^/?#]+)(.*)", ref, flags=re.IGNORECASE | re.DOTALL)
+    if url is None:
+        # Preserve the existing comparison contract for local and opaque refs.
+        return ref.rstrip("/").lower()
+    scheme, authority, suffix = url.groups()
+    userinfo, separator, host = authority.rpartition("@")
+    # RFC 3986: scheme and host are case-insensitive, unlike the remaining URL.
+    # Keep the raw suffix, including empty query/fragment markers and slashes.
+    if not suffix or suffix.startswith(("?", "#")):
+        suffix = "/" + suffix
+    return scheme.lower() + userinfo + separator + host.lower() + suffix
 
 
 def archive_root(project: Path) -> Path:
