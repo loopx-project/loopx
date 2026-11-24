@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..command_invocation import loopx_cli_argv
+from .host_runtime import AGY_HOST_CAPABILITIES as AGY_HOST_CAPABILITIES
 
 AGY_INSTALL_SURFACE = "agy"
 ANTIGRAVITY_APP_INSTALL_SURFACE = "antigravity-app"
