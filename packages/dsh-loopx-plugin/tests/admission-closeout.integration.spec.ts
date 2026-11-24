@@ -8,10 +8,12 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { describe, expect, it, onTestFinished } from 'vitest'
 
-import { LoopXCliError, runFile } from '../src/cli.ts'
+import { coreRouteBin, LoopXCliError, runFile, runJsonCommand } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
 import { LoopXContinuationDriver } from '../src/driver.ts'
-import { pluginPythonCandidates } from '../src/managed-runtime.ts'
+import {
+  MANAGED_LAUNCHER_NAME, pluginPythonCandidates, resolvePluginLoopXCommand,
+} from '../src/managed-runtime.ts'
 import { GoalBarCoordinator } from '../src/goalbar/events.ts'
 import { createGoalBarService } from '../src/goalbar/service.ts'
 
@@ -298,6 +300,77 @@ function executablePlanArgs(
 }
 
 describe('DSH admission-to-closeout integration', () => {
+  it.skipIf(process.platform === 'win32')('keeps managed Core across a different agent PATH', async () => {
+    const f = await fixture()
+    const managed = join(f.runtime, "managed 'runtime")
+    const otherPath = join(f.runtime, 'other-bin')
+    const invocations = join(f.runtime, 'managed-invocations')
+    await mkdir(managed, { recursive: true })
+    await mkdir(otherPath)
+    await writeFile(join(otherPath, 'loopx'), '#!/bin/sh\nexit 73\n', { mode: 0o700 })
+    await writeFile(join(managed, MANAGED_LAUNCHER_NAME), [
+      'import sys',
+      `sys.path.insert(0, ${JSON.stringify(repoRoot)})`,
+      `with open(${JSON.stringify(invocations)}, "a") as log:`,
+      '    print(" ".join(sys.argv[1:]), file=log)',
+      'if sys.argv[1:] == ["--version"]:',
+      '    from loopx import __version__',
+      '    print("loopx", __version__)',
+      '    raise SystemExit(0)',
+      'from loopx.cli import main',
+      'raise SystemExit(main(sys.argv[1:]))',
+    ].join('\n'))
+    const env = {
+      ...process.env,
+      LOOPX_BIN: '',
+      LOOPX_USAGE_PING: '0',
+      LOOPX_CONTEXT_DELIVERY: 'off',
+      LOOPX_TURN: turnInstanceId,
+      PATH: `${otherPath}:${process.env.PATH ?? ''}`,
+    }
+    expect((await runFile('loopx', ['--version'], { env })).exitCode).toBe(73)
+    const options = { env, runtimeDir: managed, pythonBin: await integrationPython }
+    const command = await resolvePluginLoopXCommand(options)
+    expect(command.candidate).toBe('managed-launcher')
+    const cliBin = coreRouteBin(command)
+    if (cliBin === undefined) throw new Error('The managed command has no continuation launcher')
+    expect(coreRouteBin(await resolvePluginLoopXCommand(options))).toBe(cliBin)
+
+    const claimed = await runCli(f, [
+      'todo', 'claim', '--goal-id', goalId, '--todo-id', todoId,
+      '--agent-id', agentId, '--claimed-by', agentId,
+    ])
+    expect(claimed.payload.ok).toBe(true)
+    const route = ['--cli-bin', cliBin]
+    const heartbeat = await runJsonCommand(command, [
+      '--registry', f.registry, '--runtime-root', f.runtime, '--format', 'json', ...route,
+      'heartbeat-prompt', '--thin', ...route, '--goal-id', goalId, '--agent-id', agentId,
+      '--runtime-profile', 'generic_cli', '--turn-instance-id', turnInstanceId,
+    ], { cwd: f.project, env })
+    const guardCommand = String(heartbeat.task_body).split('\n')
+      .find(line => line.includes(' quota should-run '))
+    if (guardCommand === undefined) throw new Error('The heartbeat has no quota guard')
+    const guard = await runFile('/bin/sh', ['-c', `${guardCommand} --todo-id ${todoId}`], {
+      cwd: otherPath, env,
+    })
+    expect(guard.exitCode, guard.stderr || guard.stdout).toBe(0)
+    const channel = record(record(JSON.parse(guard.stdout).interaction_contract).cli_channel)
+    const steps = array(record(channel.settlement_plan).ordered_steps).map(record)
+    const template = String(steps.find(step => step.kind === 'durable_writeback')?.command_template)
+    const writebackCommand = template
+      .replace('<validated_progress>', 'managed_route_validated')
+      .replace('<scale>', 'single_surface')
+      .replace('<outcome>', 'outcome_progress')
+    const writeback = await runFile('/bin/sh', [
+      '-c', `${writebackCommand} --no-global-sync --suppress-external-sinks`,
+    ], { cwd: f.project, env })
+    expect(writeback.exitCode, writeback.stderr || writeback.stdout).toBe(0)
+    expect(receiptEffectIds(record(JSON.parse(writeback.stdout)))).toHaveLength(3)
+    expect(await readFile(invocations, 'utf8')).toMatch(
+      /heartbeat-prompt[\s\S]+quota should-run[\s\S]+refresh-state/u,
+    )
+  }, 30_000)
+
   it.skipIf(process.platform === 'win32').each(['file', 'sqlite'] as const)(
     'fences an escaped old Pause after a newer Start on real %s authority', async provider => {
       const f = await fixture(provider)

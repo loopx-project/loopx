@@ -1543,11 +1543,7 @@ export class LoopXContinuationDriver {
     if (!signal.aborted) {
       this.command = resolved
       if (coreRouteBin(resolved) === undefined) {
-        // Interpreter-prefixed routes (managed launcher, python -m) cannot be
-        // one Core `--cli-bin` executable, and a name the resolver could not
-        // bind has no safe absolute route; continuation text keeps Core's
-        // bare `loopx` fallback. Disclose once instead of pinning a wrong
-        // or relative binary.
+        // Without a bound executable, Core renders the bare `loopx` fallback.
         this.warn(
           `dsh-loopx-driver: cli_route_unpinned candidate=${resolved.candidate ?? 'unknown'}`
           + ' hint=point LOOPX_BIN at one absolute loopx executable to pin continuation commands',

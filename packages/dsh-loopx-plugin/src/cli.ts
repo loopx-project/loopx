@@ -486,7 +486,7 @@ export function supportedLoopXVersion(
   return !parsed[4] && (!parsed[6] || parsed[5]) ? value : undefined
 }
 
-function shellWord(value: string): string {
+export function shellWord(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/u.test(value)
     ? value
     : `'${value.replaceAll("'", `'"'"'`)}'`
@@ -580,14 +580,14 @@ export async function resolveLoopXCommand(
   const managedCandidates: Array<Omit<LoopXCommand, 'version'>> = configured
     || managedLauncher === undefined
     ? []
-    : [...new Set(managedLauncher.pythonBins)].map(pythonBin => ({
-        file: pythonBin,
-        prefix: [managedLauncher.path],
-        skillCommand: [
-          shellWord(pythonBin),
-          shellWord(managedLauncher.path),
-        ].join(' '),
-      }))
+    : [...new Set(managedLauncher.pythonBins)].map(pythonBin => {
+        const file = discoverExecutablePath(pythonBin, probeEnv) ?? pythonBin
+        return {
+          file,
+          prefix: [managedLauncher.path],
+          skillCommand: [shellWord(file), shellWord(managedLauncher.path)].join(' '),
+        }
+      })
   const candidates: Array<{
     readonly spec: Omit<LoopXCommand, 'version'>
     readonly label: LoopXCliDiagnostics['candidate']
