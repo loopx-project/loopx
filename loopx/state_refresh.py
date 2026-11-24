@@ -104,6 +104,7 @@ from .history import (
 )
 from .control_plane.runtime.local_state_write_correctness import build_local_state_write_correctness_dry_run_packet
 from .paths import resolve_runtime_root
+from .presentation.markdown import append_operator_action_markdown
 from .control_plane.goals.vision_checkpoint import (
     build_vision_checkpoint,
     prepare_vision_refresh,
@@ -562,6 +563,7 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- error: {payload.get('error')}")
         if payload.get("error_detail"):
             lines.append(f"- detail: {payload['error_detail']}")
+        append_operator_action_markdown(lines, payload)
         return "\n".join(lines)
 
     repair_delta = (
