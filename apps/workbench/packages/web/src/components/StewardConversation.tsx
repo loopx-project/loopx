@@ -5,13 +5,20 @@ import remarkGfm from 'remark-gfm';
 import { MARKDOWN_REHYPE_PLUGINS, preserveNonHtmlTags } from '../markdown-html';
 import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
-import { IconSend, IconStop } from './icons';
+import { IconChevron, IconChevronRight, IconSend, IconStop } from './icons';
 import {
   applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerCapabilities, readManagerHistory,
   restoreTrustedOwnerProfile, sendManagerTurn, streamManagerEvents, switchManagerAgent,
   ManagerError, TRUSTED_OWNER_ENDPOINTS, type ManagerCapabilities, type ManagerEvent, type ManagerMessage, type ManagerTurn,
 } from '../loopx/manager';
 import type { LoopxStatusFailure } from '../loopx/status';
+
+export interface StewardWaitingItem {
+  goalId: string;
+  title: string;
+  summary: string | null;
+  threadId: string | null;
+}
 
 const STEWARD_REMARK_PLUGINS = [remarkGfm, preserveNonHtmlTags];
 
@@ -28,7 +35,23 @@ const GREETING_ASKS = () => [
  * answers as assistant rows in the thread's markdown, the composer as the app's composer shell with
  * its send and stop buttons. An empty history opens on a centered question with one-tap asks.
  */
-export function StewardConversation({ token, failure, deferSessionOpen = false }: { token: string | undefined; failure: LoopxStatusFailure | null; deferSessionOpen?: boolean }) {
+export function StewardConversation({
+  token,
+  failure,
+  deferSessionOpen = false,
+  waitingGoals = [],
+  onOpenGoal,
+  onOpenThread,
+  onOpenGoalsOverview,
+}: {
+  token: string | undefined;
+  failure: LoopxStatusFailure | null;
+  deferSessionOpen?: boolean;
+  waitingGoals?: StewardWaitingItem[];
+  onOpenGoal?: (goalId: string) => void;
+  onOpenThread?: (threadId: string) => void;
+  onOpenGoalsOverview?: () => void;
+}) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ManagerMessage[] | null>(() => deferSessionOpen ? [] : null);
   const [error, setError] = useState<string | null>(null);
@@ -36,12 +59,34 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
   const [switchingAgent, setSwitchingAgent] = useState<string | null>(null);
   const [turn, setTurn] = useState<ManagerTurn | null>(null);
   const [draft, setDraft] = useState('');
+  const [trayOpen, setTrayOpen] = useState(false);
   const [sessionOpening, setSessionOpening] = useState(false);
   const openingSession = useRef<AbortController | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     setSessionOpening(false);
     return () => { openingSession.current?.abort(); openingSession.current = null; };
   }, [token]);
+  useEffect(() => {
+    if (waitingGoals.length === 0) setTrayOpen(false);
+  }, [waitingGoals.length]);
+  useEffect(() => {
+    if (!trayOpen || typeof document === 'undefined') return;
+    const onEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.isComposing && !event.defaultPrevented && !document.querySelector('.pop-panel, [role=menu], [role=dialog][aria-modal=true]')) {
+        event.preventDefault();
+        setTrayOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onEsc);
+    return () => document.removeEventListener('keydown', onEsc);
+  }, [trayOpen]);
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || !el.style) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight || 24, 180)}px`;
+  }, [draft]);
   const sessionRef = useRef<string | null>(null);
   const selectedAgentRef = useRef<string | undefined>(undefined);
   const turnRef = useRef<ManagerTurn | null>(null);
@@ -345,38 +390,84 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
       {error && sessionId ? <div className="row channel-note"><span role="alert">{error}</span></div> : null}
       <div ref={scrollAnchor} />
     </div>
-    {/* The app's composer shell, carrying only what a manager conversation has: words, send, stop. */}
-    <form className="composer steward-composer" onSubmit={event => { event.preventDefault(); void send(draft); }}>
-      <div className="composer-anchor">
-        <div
-          className="composer-box"
-          onPointerMove={(e) => {
-            if (e.pointerType !== 'mouse') return;
-            const r = e.currentTarget.getBoundingClientRect();
-            e.currentTarget.style.setProperty('--lg-mx', `${e.clientX - r.left}px`);
-            e.currentTarget.style.setProperty('--lg-my', `${e.clientY - r.top}px`);
-          }}
-        >
-          <span className="composer-sheen" aria-hidden="true" />
-          <textarea
-            rows={1}
-            value={draft}
-            placeholder={t('loopx.stewardAskInput')}
-            disabled={busy || messages === null}
-            aria-label={t('composer.message')}
-            onChange={event => setDraft(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(draft); }
-            }}
-          />
-          <div className="composer-bar">
-            <div className="spacer" />
-            {stoppable ? <button type="button" className="send-btn stop" onClick={stop} disabled={turn?.state === 'stopping'} aria-label={t('composer.stop')} title={t('composer.stopTurn')}><IconStop size={16} /></button> : null}
-            {!stoppable ? <button type="submit" className="send-btn" disabled={busy || !draft.trim() || messages === null} aria-label={t('common.send')}><IconSend size={16} /></button> : null}
+    {/* The app's floating composer shell, with pending Goal items tucked in a quiet right-edge orb chip above it. */}
+    <div className="steward-composer-slot">
+      <div className="steward-composer-inner">
+        {waitingGoals.length > 0 && (
+          <div className="steward-asks" aria-label={t('loopx.needsYou')}>
+            {trayOpen && (
+              <section className="steward-tray">
+                <ul className="steward-tray-list">
+                  {waitingGoals.slice(0, 5).map(item => (
+                    <li key={item.goalId} className="steward-tray-item">
+                      <button
+                        type="button"
+                        className="steward-tray-row"
+                        onClick={() => {
+                          setTrayOpen(false);
+                          if (item.threadId && onOpenThread) onOpenThread(item.threadId);
+                          else onOpenGoal?.(item.goalId);
+                        }}
+                      >
+                        <span className="steward-tray-title">{item.title}</span>
+                        {item.summary && <span className="steward-tray-sub">{item.summary}</span>}
+                      </button>
+                    </li>
+                  ))}
+                  {waitingGoals.length > 5 && onOpenGoalsOverview && (
+                    <li className="steward-tray-item">
+                      <button type="button" className="steward-tray-more" onClick={() => { setTrayOpen(false); onOpenGoalsOverview(); }}>
+                        <span>{t('overview.viewAll')}</span>
+                        <IconChevronRight size={12} />
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              </section>
+            )}
+            <div className="steward-ask-orb-row">
+              <button type="button" className="steward-ask-orb" aria-expanded={trayOpen} onClick={() => setTrayOpen(open => !open)}>
+                <span className="steward-ask-dot" aria-hidden="true" />
+                <span>{t('loopx.needsYouCount', waitingGoals.length)}</span>
+                <IconChevron size={13} open={trayOpen} />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
+        <form className="composer steward-composer" onSubmit={event => { event.preventDefault(); void send(draft); }}>
+          <div className="composer-anchor">
+            <div
+              className="composer-box"
+              onPointerMove={(e) => {
+                if (e.pointerType !== 'mouse') return;
+                const r = e.currentTarget.getBoundingClientRect();
+                e.currentTarget.style.setProperty('--lg-mx', `${e.clientX - r.left}px`);
+                e.currentTarget.style.setProperty('--lg-my', `${e.clientY - r.top}px`);
+              }}
+            >
+              <span className="composer-sheen" aria-hidden="true" />
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={draft}
+                placeholder={t('loopx.stewardAskInput')}
+                disabled={busy || messages === null}
+                aria-label={t('composer.message')}
+                onChange={event => setDraft(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(draft); }
+                }}
+              />
+              <div className="composer-bar">
+                <div className="spacer" />
+                {stoppable ? <button type="button" className="send-btn stop" onClick={stop} disabled={turn?.state === 'stopping'} aria-label={t('composer.stop')} title={t('composer.stopTurn')}><IconStop size={16} /></button> : null}
+                {!stoppable ? <button type="submit" className="send-btn" disabled={busy || !draft.trim() || messages === null} aria-label={t('common.send')}><IconSend size={16} /></button> : null}
+              </div>
+            </div>
+          </div>
+        </form>
       </div>
-    </form>
+    </div>
   </div>;
 }
 

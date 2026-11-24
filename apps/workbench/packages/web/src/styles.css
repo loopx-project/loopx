@@ -15496,6 +15496,7 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
 
 /* The steward page is the chat: it owns the viewport height the scroller gives it. */
 .steward-page.is-chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -15503,7 +15504,131 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
   margin: 0 auto;
   padding: 0;
 }
-.steward-page .steward-composer { width: 100%; max-width: calc(var(--content-w) + 32px); margin-inline: auto; }
+.steward-composer-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  pointer-events: none;
+  padding: 0 16px calc(12px + var(--safe-bottom));
+}
+.steward-composer-inner {
+  position: relative;
+  width: min(var(--content-w), 100%);
+  margin: 0 auto;
+  pointer-events: none;
+}
+.steward-page .steward-composer {
+  width: 100%;
+  max-width: none;
+  margin-inline: auto;
+  padding: 0;
+  pointer-events: auto;
+}
+.steward-composer textarea {
+  max-height: 180px;
+}
+/* Pending Goals float as a quiet frosted thumb chip above the steward composer until tapped. */
+.steward-asks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  pointer-events: none;
+}
+.steward-asks > * { pointer-events: auto; }
+.steward-ask-orb-row { display: flex; justify-content: flex-end; pointer-events: none; }
+.steward-ask-orb {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 540;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.steward-ask-orb svg { flex: none; color: var(--muted); }
+.steward-ask-dot { width: 5px; height: 5px; border-radius: var(--radius-pill); background: var(--warn); flex: none; }
+.steward-tray {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.steward-tray-list {
+  max-height: min(46vh, 360px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  overscroll-behavior: contain;
+}
+.steward-tray-item + .steward-tray-item { border-top: 1px solid var(--border); }
+.steward-tray-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 13px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.steward-tray-row:hover { background: var(--hover); }
+.steward-tray-title {
+  max-width: 100%;
+  font-size: 12.5px;
+  font-weight: 560;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.steward-tray-sub {
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.steward-tray-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 13px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.steward-tray-more:hover { background: var(--hover); color: var(--text); }
+.steward-entry-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
+}
 .goal-directory-picker .dialog-scrim { z-index: 90; }
 @media (min-width: 1240px) {
   .main.overview-room .steward-page.is-chat { width: calc(100% - 364px); margin: 0 364px 0 0; }
@@ -15512,25 +15637,29 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
 .goal-empty { margin: 6px 0; color: var(--faint); font-size: 13px; }
 .goal-failure { margin: 8px 0; font-size: 13px; }
 
-/* The steward shares the conversation overview; only its growing inventory scrolls. */
+/* The steward shares the conversation overview; quiet hairline rows instead of noisy card walls. */
 .steward-overview { max-height: min(var(--pop-height, calc(100dvh - 96px)), calc(100dvh - 96px)); }
 .steward-overview > .overview-content { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .steward-overview .overview-empty { white-space: normal; overflow-wrap: break-word; }
 .steward-overview .needs-you .overview-head-icon, .steward-overview .needs-you .overview-summary { color: var(--warn); }
-.overview-goal { padding: 6px 7px 6px; min-width: 0; }
+.overview-goal { padding: 9px 8px; min-width: 0; }
 .overview-goal + .overview-goal { border-top: 1px solid var(--border); }
 .overview-goal-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.overview-goal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.overview-goal-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; line-height: 1.45; }
-.overview-goal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 0 -6px; min-width: 0; }
+.overview-goal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 560; }
+.overview-goal-summary { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.overview-goal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 0 -6px; min-width: 0; }
 .overview-goal-actions .overview-more,
 .overview-goal-actions .goal-lifecycle { min-height: 26px; padding: 3px 6px; gap: 3px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); font-size: 12px; line-height: 1.2; }
-.overview-goal-actions .overview-more { margin: 0; }
+.overview-goal-actions .overview-more:hover,
 .overview-goal-actions .goal-lifecycle:hover { background: var(--hover); color: var(--text); }
+.overview-goal-actions .overview-more { margin: 0; }
 .goal-lifecycle-error { flex-basis: 100%; padding-left: 6px; color: var(--warn); font-size: 12px; }
 @media (max-width: 640px) {
   .overview-goal-actions .overview-more,
   .overview-goal-actions .goal-lifecycle { min-height: 32px; }
+  .steward-composer-slot { padding: 0 12px calc(8px + var(--safe-bottom)); }
+  .steward-ask-orb { min-height: 36px; }
+  .steward-tray-row, .steward-tray-more { min-height: 42px; }
 }
 
 .steward-hint { margin: 0 0 8px; color: var(--faint); font-size: 13px; }
@@ -15539,11 +15668,11 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
 /* ── Batch B: the steward conversation, the Goal tabs, lifecycle and todo rows ── */
 
 .steward-chat {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   padding: 0;
 }
 
@@ -15554,9 +15683,9 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 0 20px;
+  padding: 64px 20px 32px;
 }
-.steward-chat-failure p { margin: 0; font-size: 13px; text-align: center; }
+.steward-chat-failure p { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
 .steward-chat-failure-actions {
   display: flex;
   flex-wrap: wrap;
@@ -15564,44 +15693,53 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
   gap: 8px;
 }
 
-/* The greeting an empty conversation opens on: one question, a few one-tap asks. */
+/* The greeting an empty conversation opens on: calm title and quiet prompt pills. */
 .steward-greeting {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 12px 0 24px;
+  gap: 10px;
+  width: min(560px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 64px 0 calc(116px + 6vh);
   text-align: center;
 }
-.steward-greeting-mark { font-size: 0; line-height: 0; }
+.steward-greeting-mark { font-size: 0; line-height: 0; opacity: 0.92; margin-bottom: 2px; }
 .steward-greeting-mark .loo-dark { display: none; }
 [data-theme='dark'] .steward-greeting-mark .loo-light { display: none; }
 [data-theme='dark'] .steward-greeting-mark .loo-dark { display: inline; }
-.steward-greeting h2 { margin: 0; font-size: 19px; font-weight: 700; }
-.steward-greeting-asks { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.steward-greeting h2 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
+.steward-greeting-asks { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
 .steward-ask {
-  padding: 7px 14px;
-  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
-  border-radius: 999px;
-  background: var(--bg);
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
   cursor: pointer;
 }
-.steward-ask:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
+.steward-ask:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); color: var(--text); }
 
 .steward-messages {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* The column is centred by padding, not by narrowing the box, so the scrollbar is the pane's own. */
-  padding: 12px max(16px, calc((100% - var(--content-w)) / 2)) 8px;
+  overscroll-behavior: contain;
+  /* The column is centred by padding, not by narrowing the box, so the scrollbar is the pane's own.
+     Top & bottom clearances let messages sit cleanly below the floating glass topbar and above the composer. */
+  padding: calc(70px + var(--safe-top, 0px)) max(16px, calc((100% - var(--content-w)) / 2)) calc(136px + var(--safe-bottom, 0px));
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--border-strong) transparent;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 /* The greeting replaces the pane; flex above would otherwise out-shout [hidden]. */

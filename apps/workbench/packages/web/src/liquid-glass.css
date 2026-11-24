@@ -426,23 +426,91 @@
   }
 }
 
-/* Quiet glass starter pills on the Steward greeting screen */
-.steward-ask {
+/* Steward top-right chrome: two independent quiet Liquid Glass circles (Goals drawer + Settings). */
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions {
+  gap: 8px;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .icon-btn,
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .pop > .icon-btn {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+}
+
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .icon-btn.on,
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .icon-btn:hover,
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .pop > .icon-btn:hover {
+  background: var(--lg-sheen), color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text);
+}
+
+/* Steward floats its topbar cleanly over the chat scroller just like normal conversations. */
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 8;
+  background: transparent;
+  border-bottom: 0;
+  pointer-events: none;
+}
+
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar > * {
+  pointer-events: auto;
+}
+
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-heading {
+  pointer-events: none;
+}
+
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-title-pill {
+  pointer-events: auto;
+}
+
+/* Quiet glass starter pills, floating attention orb chip, and frosted tray on Steward */
+.steward-ask,
+.steward-ask-orb {
   border: 0;
   background: var(--lg-sheen), var(--lg-fill);
   box-shadow: var(--lg-rim);
   -webkit-backdrop-filter: var(--lg-filter);
   backdrop-filter: var(--lg-filter);
+  transition: transform 0.16s cubic-bezier(0.22, 1.12, 0.36, 1), background 0.16s ease, color 0.16s ease;
+}
+
+.steward-ask {
+  color: var(--muted);
+}
+
+.steward-ask:hover,
+.steward-ask-orb:hover {
+  background: var(--lg-sheen), color-mix(in srgb, var(--surface) 88%, transparent);
   color: var(--text);
-  transition: transform 0.16s cubic-bezier(0.22, 1.12, 0.36, 1), background 0.16s ease;
 }
 
-.steward-ask:hover {
-  background: var(--lg-sheen), color-mix(in srgb, var(--surface) 84%, transparent);
-}
-
-.steward-ask:active {
+.steward-ask:active,
+.steward-ask-orb:active {
   transform: scale(0.97);
+}
+
+.steward-tray {
+  border: 0;
+  background: var(--lg-sheen), var(--lg-pop-fill);
+  box-shadow: var(--lg-pop-rim);
+  -webkit-backdrop-filter: var(--lg-pop-filter);
+  backdrop-filter: var(--lg-pop-filter);
 }
 
 /* Embedded side panels keep their quiet card composer */
@@ -645,7 +713,9 @@ button.pet-summon:hover,
   .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill,
   .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip,
   .main:has(> .composer-slot) > .composer-slot .composer-box,
-  .steward-composer .composer-box, .steward-ask,
+  .steward-composer .composer-box, .steward-ask, .steward-ask-orb, .steward-tray,
+  .app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .icon-btn,
+  .app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .pop > .icon-btn,
   .round-btn, .jump-btn, .pet-summon, .chat-entry, .chat-ask-orb, .quick-switch-handle,
   .menu-panel, .pop-panel.anchored-pop, .selection-menu, .command-menu, .coord-mention-menu,
   .action-sheet-card, .quick-switch-panel, .chat-tray, .chat-composer .composer-box,
@@ -668,7 +738,9 @@ button.pet-summon:hover,
   .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill,
   .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip,
   .main:has(> .composer-slot) > .composer-slot .composer-box,
-  .steward-composer .composer-box, .steward-ask,
+  .steward-composer .composer-box, .steward-ask, .steward-ask-orb, .steward-tray,
+  .app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .icon-btn,
+  .app:not(.in-titlebar) .main:has(.steward-page) > .topbar .topbar-actions.steward-actions > .pop > .icon-btn,
   .round-btn, .jump-btn, .pet-summon, .chat-entry, .chat-ask-orb, .quick-switch-handle,
   .menu-panel, .pop-panel.anchored-pop, .selection-menu, .command-menu, .coord-mention-menu,
   .action-sheet-card, .quick-switch-panel, .chat-tray, .chat-composer .composer-box,
@@ -690,6 +762,7 @@ button.pet-summon:hover,
   .main:has(> .composer-slot) > .composer-slot .composer-box,
   .steward-composer .composer-box,
   .steward-ask,
+  .steward-ask-orb,
   .composer-sheen,
   .round-btn, .jump-btn, .pet-summon, .chat-entry, .chat-ask-orb, .quick-switch-handle,
   .settings-topbar > .icon-btn,

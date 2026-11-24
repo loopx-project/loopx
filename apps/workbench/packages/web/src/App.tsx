@@ -83,7 +83,7 @@ import { QuotaNavigation, quotaPushed } from './quota-reading';
 import { noteSource, SelectionMenu } from './components/SelectionMenu';
 import { AgentPanel } from './components/AgentPanel';
 import { memberProgress, ThreadOverview, type OverviewSection } from './components/ThreadOverview';
-import { goalDestination, goalOverviewHash, goalOverviewRequest, goalsBoardTarget, type GoalSection } from './loopx/goal-navigation';
+import { goalConversation, goalDestination, goalOverviewHash, goalOverviewRequest, goalsBoardTarget, type GoalSection } from './loopx/goal-navigation';
 import { extensionStorage } from './extensions/host';
 import { prepareOverview } from './overview-reading';
 import { ChangeDiffDialog } from './components/ChangeDiffDialog';
@@ -1851,9 +1851,13 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useEffect(() => { setFiles(null); setFilesThreadId(null); setTraceOpen(false); }, [selectedId]);
 
   // The overview: a popover on narrow screens and the pages, a standing panel beside the
-  // conversation on a wide one. Its switch is remembered here, and starts open.
+  // conversation on a wide one. Ordinary threads remember their switch and start open; the steward
+  // stays calm and chat-first until opened on demand or targeted by a Goal deep link.
   const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && (!onPage || onSteward);
   const [overviewOpen, setOverviewOpen] = useStoredFlag(OVERVIEW_OPEN_KEY, true);
+  const [stewardOverviewOpen, setStewardOverviewOpen] = useState(() => Boolean(goalRequest));
+  const activeOverviewOpen = onSteward ? stewardOverviewOpen : overviewOpen;
+  const setActiveOverviewOpen = onSteward ? setStewardOverviewOpen : setOverviewOpen;
   const [overviewDetail, setOverviewDetail] = useState<{ api: Api; threadId: string; section: OverviewSection; returnToPreview: boolean } | null>(null);
   const [overviewSignal, setOverviewSignal] = useState(0);
   const [goalDetailsExpanded, setGoalDetailsExpanded] = useState<{ threadId: string; expanded: boolean } | null>(null);
@@ -1861,8 +1865,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     setGoalDetailsExpanded(current => current?.threadId === threadId && current.expanded === expanded ? current : { threadId, expanded });
   }, []);
   useEffect(() => {
+    if (onSteward && (goalRequest || (goalDetailFocus?.api === api && goalDetailFocus.threadId === null))) setStewardOverviewOpen(true);
     if (goalDetailFocus?.api === api && (goalDetailFocus.threadId === null ? onSteward : goalDetailFocus.threadId === selectedId && !onPage)) setOverviewSignal(signal => signal + 1);
-  }, [goalDetailFocus, api, selectedId, onPage, onSteward]);
+  }, [goalRequest, goalDetailFocus, api, selectedId, onPage, onSteward]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const activeOverviewDetail = overviewDetail?.api === api && overviewDetail?.threadId === selectedId && !onPage ? overviewDetail : null;
   useLayoutEffect(() => { setOverviewDetail(d => d && d.api === api && d.threadId === selectedId && !onPage ? d : null); setOverviewSignal(0); }, [api, selectedId, onPage]);
@@ -1892,10 +1897,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     wasSide.current = sideKeys; wasDock.current = dockOpen;
   }, [sideKeys, dockOpen]);
   const sideOpen = sideKeys || dockOpen;
-  const overviewRoom = overviewDock && overviewOpen && !sideOpen && !activeOverviewDetail && (onSteward || (Boolean(selected || threadPending) && hostUp));
+  const overviewRoom = overviewDock && activeOverviewOpen && !sideOpen && !activeOverviewDetail && (onSteward || (Boolean(selected || threadPending) && hostUp));
   const overviewShown = overviewRoom && Boolean(selected || onSteward);
   /** Only the person turns the standing panel off; the switch above remembers it. */
-  const closeOverview = useCallback(() => { if (overviewDock) setOverviewOpen(false); }, [overviewDock, setOverviewOpen]);
+  const closeOverview = useCallback(() => { if (overviewDock) setActiveOverviewOpen(false); }, [overviewDock, setActiveOverviewOpen]);
   // A page the agent wrote, rendered in a sandboxed iframe.
   const openFileLink = useCallback(
     async (raw: string) => {
@@ -2281,10 +2286,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const target = goalDestination(goalId, threads);
     navigate(() => {
       setThreadLink(null);
-      if (target.threadId) openThread(threads.find(thread => thread.id === target.threadId)!);
-      else { setSelectedId(null); setView('steward'); setDrawer(false); }
+      if (target.threadId) {
+        openThread(threads.find(thread => thread.id === target.threadId)!);
+        setOverviewOpen(true);
+      } else {
+        setSelectedId(null); setView('steward'); setDrawer(false);
+        setStewardOverviewOpen(true);
+      }
       setGoalDetailFocus({ api, threadId: target.threadId, goalId, section });
-      setOverviewOpen(true);
     });
   };
   openGoalRef.current = openGoal;
@@ -3172,9 +3181,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             </div>
           </div>
           {(selected || onSteward) && (
-            <div className="topbar-actions">
+            <div className={`topbar-actions${onSteward ? ' steward-actions' : ''}`}>
               {/* The thread at a glance: one panel for the team, the plan, the changes, the pictures
-                  and the files. The badge is only ever what needs the person. */}
+                  and the files. On the steward, quiet glass circles keep the chat unobstructed. */}
               {(onSteward || api && hostUp) && (overviewDock ? (
                 <button
                   type="button"
@@ -3198,14 +3207,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                       setTermOpen(false);
                       setTerminalTarget(null);
                       setTerminalClient(null);
-                      setOverviewOpen(true);
+                      setActiveOverviewOpen(true);
                     } else {
-                      setOverviewOpen(!overviewOpen);
+                      setActiveOverviewOpen(!activeOverviewOpen);
                     }
                   }}
                 >
                   <IconOverview />
-                  {overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}
+                  {overviewNeeds > 0 && (onSteward ? <span className="steward-entry-dot" aria-hidden="true" /> : <span className="topbar-badge">{overviewNeeds}</span>)}
                 </button>
               ) : (
                 <Popover
@@ -3221,11 +3230,22 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                   placement="below"
                   panelClassName="overview-panel"
                   suspendDismissal={onSteward && Boolean(goalDirAsk)}
-                  trigger={<><IconOverview />{overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}</>}
+                  trigger={<><IconOverview />{overviewNeeds > 0 && (onSteward ? <span className="steward-entry-dot" aria-hidden="true" /> : <span className="topbar-badge">{overviewNeeds}</span>)}</>}
                 >
                   {(close) => overviewBody(close, false)}
                 </Popover>
               ))}
+              {onSteward && !showcase && (
+                <button
+                  type="button"
+                  className="icon-btn topbar-steward-settings"
+                  aria-label={t('desk.entrySettings')}
+                  title={t('desk.entrySettings')}
+                  onClick={() => openSettings()}
+                >
+                  <IconSettings size={17} />
+                </button>
+              )}
               {/* A phone keeps its plan button: it has no margin card, and the lead's list of what
                   leaves the bar was the desktop's. The overview has the plan too, one tap away. */}
               {compact && topPlan && !onPage && <PlanButton item={topPlan} />}
@@ -3410,7 +3430,25 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           </div>
         ) : onSteward ? (
           <div key="steward" className="scroller">
-            <StewardPage token={token} failure={loopxRead.failure} deferSessionOpen={Boolean(goalRequest || goalDetailFocus?.api === api && goalDetailFocus.threadId === null)} />
+            <StewardPage
+              token={token}
+              failure={loopxRead.failure}
+              deferSessionOpen={Boolean(goalRequest || goalDetailFocus?.api === api && goalDetailFocus.threadId === null)}
+              waitingGoals={overviewShown ? [] : (loopxStatus?.goals ?? [])
+                .filter(goal => goal.activationState !== 'stopped' && loopxNeedsYou.has(goal.goalId))
+                .map(goal => {
+                  const att = loopxStatus?.attention.find(item => item.goalId === goal.goalId);
+                  return {
+                    goalId: goal.goalId,
+                    title: goal.title,
+                    summary: att?.topTodo?.text ?? att?.recommendedAction ?? att?.nextAction ?? null,
+                    threadId: goalConversation(goal.goalId, threads)?.id ?? null,
+                  };
+                })}
+              onOpenGoal={(goalId) => openGoal(goalId)}
+              onOpenThread={pick}
+              onOpenGoalsOverview={() => { if (overviewDock) setStewardOverviewOpen(true); else setOverviewSignal(signal => signal + 1); }}
+            />
           </div>
         ) : onActivity ? (
           // The same document shape: days from the top, each conversation's asks under its name.
