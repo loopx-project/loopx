@@ -1568,6 +1568,8 @@ def collect_effect_runtime_readiness(*, deep: bool = False) -> dict[str, object]
             locator_after_probe=_locator_projection_after_probe,
             rpc_result=effect_runtime_result,
             serving_identity=_serving_runtime_identity,
+            node_probe_remediation=lambda code: node_probe_remediation(code),
+            runtime_identity_from_info=lambda info: runtime_identity_from_info(info),
         ),
         deep=deep,
     )

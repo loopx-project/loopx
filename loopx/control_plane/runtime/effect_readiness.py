@@ -13,7 +13,6 @@ from .effect_client_errors import (
 from .node_probe import (
     MINIMUM_NODE_VERSION_TEXT,
     NodeProbe,
-    node_probe_remediation,
 )
 
 EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
@@ -46,6 +45,10 @@ class EffectReadinessHooks:
     ]
     rpc_result: Callable[[str, Mapping[str, object]], object]
     serving_identity: Callable[[], dict[str, object] | None]
+    node_probe_remediation: Callable[[str], str | None]
+    runtime_identity_from_info: Callable[
+        [Mapping[str, object] | None], dict[str, object] | None
+    ]
 
 
 def runtime_identity_from_info(
@@ -196,7 +199,7 @@ def collect_effect_runtime_readiness(
     if ready:
         runtime_state = "running" if stdio_live or locator_info is not None else "stopped"
         runtime_identity = (
-            stdio_identity if stdio_live else runtime_identity_from_info(locator_info)
+            stdio_identity if stdio_live else hooks.runtime_identity_from_info(locator_info)
         )
     runtime_lifecycle: dict[str, object] = {
         "schema_version": EFFECT_RUNTIME_LIFECYCLE_SCHEMA_VERSION,
@@ -275,7 +278,7 @@ def collect_effect_runtime_readiness(
         failure_action = (
             probe_error.recommended_action
             if isinstance(probe_error, EffectRuntimeHostPermissionError)
-            else node_probe_remediation(diagnostic_code)
+            else hooks.node_probe_remediation(diagnostic_code)
             or "Run `loopx doctor --deep` again after any concurrent startup "
             "finishes. If the same diagnostic code remains, reinstall LoopX "
             "and verify Node.js before retrying."
@@ -309,7 +312,7 @@ def collect_effect_runtime_readiness(
     # The probe just started the runtime, so its identity is only readable now;
     # report the Node/SQLite pair that will serve the following requests.
     serving_identity = (
-        runtime_identity_from_info(ping) if use_stdio else hooks.serving_identity()
+        hooks.runtime_identity_from_info(ping) if use_stdio else hooks.serving_identity()
     ) or runtime_identity
     return {
         **result,

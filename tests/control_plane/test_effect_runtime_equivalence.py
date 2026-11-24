@@ -525,3 +525,74 @@ def test_sidecar_startup_diagnostic_stop_and_readiness_equivalence(
 
     base_out, head_out = _run_paired(monkeypatch, run_cases)
     assert head_out == base_out
+
+
+def test_readiness_preserves_module_hooks_over_isolated_tcp_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run_cases(mod: types.ModuleType, ctx: pytest.MonkeyPatch) -> dict[str, object]:
+        def custom_identity(info: object) -> dict[str, object] | None:
+            if not isinstance(info, dict):
+                return None
+            return {
+                "schema_version": "custom_identity_v0",
+                "node_version": "v99.0.0-custom",
+                "sqlite_available": True,
+                "sqlite_version": "3.99.0",
+                "sqlite_source_id": "custom",
+                "synchronous_statement_finalization": False,
+                "sqlite_authority_qualified": False,
+                "unavailable_reason": None,
+                "custom_marker": "from-module-hook",
+            }
+
+        def custom_remediation(diagnostic_code: str) -> str | None:
+            return f"custom-remediation:{diagnostic_code}"
+
+        ctx.setenv("LOOPX_EFFECT_RUNTIME_TRANSPORT", "tcp")
+        ctx.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "60000")
+        ctx.setattr(mod, "runtime_identity_from_info", custom_identity)
+        ctx.setattr(mod, "node_probe_remediation", custom_remediation)
+
+        live_dir = tmp_path / mod.__name__ / "live-tcp"
+        ctx.setattr(mod, "_runtime_dir", lambda: live_dir)
+        try:
+            deep_ready = mod.collect_effect_runtime_readiness(deep=True)
+            shallow_ready = mod.collect_effect_runtime_readiness(deep=False)
+        finally:
+            mod.restart_effect_runtime(wait_for_exit=True)
+
+        bad_dir = tmp_path / mod.__name__ / "bad-idle-tcp"
+        ctx.setattr(mod, "_runtime_dir", lambda: bad_dir)
+        ctx.setenv("LOOPX_EFFECT_RUNTIME_IDLE_MS", "0")
+        try:
+            bad_idle = mod.collect_effect_runtime_readiness(deep=True)
+        finally:
+            mod.restart_effect_runtime(wait_for_exit=True)
+
+        assert deep_ready["ready"] is True
+        assert deep_ready["semantic_probe"] == "passed"
+        deep_ident = deep_ready["runtime_identity"]
+        assert isinstance(deep_ident, dict) and deep_ident["custom_marker"] == "from-module-hook"
+        assert "v99.0.0-custom" in str(deep_ready["recommended_action"])
+
+        assert shallow_ready["ready"] is True
+        assert shallow_ready["semantic_probe"] == "not_requested"
+        shallow_ident = shallow_ready["runtime_identity"]
+        assert isinstance(shallow_ident, dict) and shallow_ident["custom_marker"] == "from-module-hook"
+        assert "v99.0.0-custom" in str(shallow_ready["recommended_action"])
+
+        assert bad_idle["ready"] is False
+        assert bad_idle["semantic_probe"] == "failed"
+        lifecycle = bad_idle["runtime_lifecycle"]
+        assert isinstance(lifecycle, dict) and lifecycle["diagnostic_code"] == "invalid_idle_timeout"
+        assert bad_idle["recommended_action"] == "custom-remediation:invalid_idle_timeout"
+        return {
+            "deep": deep_ready,
+            "shallow": shallow_ready,
+            "bad_idle": bad_idle,
+        }
+
+    base_out, head_out = _run_paired(monkeypatch, run_cases)
+    assert head_out == base_out
