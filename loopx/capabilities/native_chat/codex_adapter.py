@@ -24,7 +24,7 @@ from ...chat_agent import (
     CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError,
     _retry_error_details, _routing_discovery_timeout, _event_thread_id, _event_turn_id, _terminal_turn_error,
 )
-from ...chat_codex_goal import CodexGoalDriver
+from ...chat.codex_goal import CodexGoalDriver
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
@@ -283,7 +283,7 @@ class NativeHistoryRestoration:
 
     def manager_migration(self, *, refresh: bool) -> bool:
         from ...chat_manager import MANAGER_CONTEXT_VERSION, is_manager_channel
-        from ...chat_codex_goal import UPSTREAM_MODE
+        from ...chat.codex_goal import UPSTREAM_MODE
         return bool(is_manager_channel(self.session.get("channel_id")) and self.session.get("upstream_mode") != UPSTREAM_MODE
             and (self.session.get("manager_context_version") != MANAGER_CONTEXT_VERSION or refresh or self.session.get("answer_review") is True))
 
@@ -296,7 +296,7 @@ class NativeHistoryRestoration:
             and any(session.get(key) != value for key, value in manager_runtime_session_fields(manager_runtime).items()))
 
     def provider_migration(self, stored: list[dict[str, Any]]) -> bool:
-        from ...chat_codex_goal import UPSTREAM_MODE
+        from ...chat.codex_goal import UPSTREAM_MODE
         return bool(self.session.get("agent_id") == "codex" and self.session.get("upstream_mode") not in {"chat", UPSTREAM_MODE}
             or self.session.get("agent_id") == "claude-code" and (self.session.get("last_error_code") == "provider_unavailable"
                 or bool(stored and stored[-1].get("role") == "error")))

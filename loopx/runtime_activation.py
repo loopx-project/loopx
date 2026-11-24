@@ -128,7 +128,7 @@ def managed_chat_activation_guard(
     an empty Session summary is not sufficient evidence of an idle service.
     The caller must still verify its loaded service/PID before stopping it.
     """
-    from .chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
+    from .chat.ingress import chat_runtime_activation_lock, chat_runtime_activation_state
 
     labels = [plist.stem for plist in plists]
     roots = sorted({_chat_runtime_root(plist) for plist in plists})
@@ -170,7 +170,7 @@ def replace_managed_loopx_chat(
     SIGTERM and port release. An unresolved manager or store leaves it running.
     """
     from .chat_server import is_loopback_host
-    from .chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
+    from .chat.ingress import chat_runtime_activation_lock, chat_runtime_activation_state
     from .dashboard_launcher import (
         _is_same_user_loopx_chat_process, _listener_pids, _probe_existing_chat,
     )

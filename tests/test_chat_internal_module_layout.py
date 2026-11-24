@@ -9,10 +9,13 @@ import loopx.chat as public_chat
 from loopx.chat.acp import ACPStdioAdapter
 from loopx.chat.attachments import normalize_chat_attachments
 from loopx.chat.automation_cadence_api import AutomationCadenceRequestMixin
+from loopx.chat.codex_goal import CodexGoalDriver
 from loopx.chat.dsh import DshChatAdapter
 from loopx.chat.endpoints import AgentEndpointRegistry
 from loopx.chat.event_cache import ChatEventCache
 from loopx.chat.goal_configuration_api import GoalConfigurationRequestMixin
+from loopx.chat.ingress import ChatIngressStore
+from loopx.chat.lark_api import LarkChatRequestMixin
 from loopx.chat.machine_configuration_api import MachineConfigurationRequestMixin
 from loopx.chat.monitor_actions import ChatMonitorActionMixin
 from loopx.chat.operator_provider_api import OperatorProviderRequestMixin
@@ -35,10 +38,13 @@ def test_chat_internal_helpers_load_below_the_public_chat_namespace() -> None:
         AutomationCadenceRequestMixin.__module__
         == "loopx.chat.automation_cadence_api"
     )
+    assert CodexGoalDriver.__module__ == "loopx.chat.codex_goal"
     assert DshChatAdapter.__module__ == "loopx.chat.dsh"
     assert AgentEndpointRegistry.__module__ == "loopx.chat.endpoints"
     assert ChatEventCache.__module__ == "loopx.chat.event_cache"
     assert GoalConfigurationRequestMixin.__module__ == "loopx.chat.goal_configuration_api"
+    assert ChatIngressStore.__module__ == "loopx.chat.ingress"
+    assert LarkChatRequestMixin.__module__ == "loopx.chat.lark_api"
     assert (
         MachineConfigurationRequestMixin.__module__
         == "loopx.chat.machine_configuration_api"
@@ -58,8 +64,11 @@ def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
     for old_module in (
         "loopx.chat_acp",
         "loopx.chat_attachments",
+        "loopx.chat_codex_goal",
         "loopx.chat_dsh",
         "loopx.chat_endpoints",
+        "loopx.chat_ingress",
+        "loopx.chat_lark_api",
         "loopx.chat_operator_provider_api",
         "loopx.chat_providers",
         "loopx.chat_status_api",

@@ -42,7 +42,7 @@ from .capabilities.manager_context.team_plan import (
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
 from .chat_agent import CodexChatAgentError as CodexChatAgentError
 from .chat_agent import CodexChatTimeoutError
-from .chat_codex_goal import (
+from .chat.codex_goal import (
     CodexGoalDriver,
     UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE,
     parse_native_goal_command,
