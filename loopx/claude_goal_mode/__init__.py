@@ -25,10 +25,10 @@ from __future__ import annotations
 
 from ..hosts.capabilities import (
     HostHarnessCapabilities,
-    register_host_capabilities,
+    _register_builtin_host_capabilities,
 )
 
-CLAUDE_HOST_CAPABILITIES: HostHarnessCapabilities = register_host_capabilities(
+CLAUDE_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
     HostHarnessCapabilities(
         host_id="claude",
         integration_tier="boundary_cli",

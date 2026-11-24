@@ -450,14 +450,12 @@ class HostCapabilitiesRegistry:
                 with self._lock:
                     self._loading_threads.pop(host_id, None)
 
-    def register(
+    def _write_entry_locked(
         self,
-        descriptor: HostHarnessCapabilities | Mapping[str, object],
+        validated: HostHarnessCapabilities,
         *,
-        replace: bool = False,
+        replace: bool,
     ) -> HostHarnessCapabilities:
-        validated = validate_host_harness_capabilities(descriptor)
-        self._ensure_builtin_loaded(validated.host_id)
         with self._lock:
             existing = self._entries.get(validated.host_id)
             if existing is not None and not replace:
@@ -468,6 +466,28 @@ class HostCapabilitiesRegistry:
                 )
             self._entries[validated.host_id] = validated
             return validated
+
+    def _register_builtin(
+        self,
+        descriptor: HostHarnessCapabilities,
+    ) -> HostHarnessCapabilities:
+        """Register an authoritative built-in descriptor during adapter import.
+
+        Avoids re-entering _ensure_builtin_loaded/_builtin_locks while Python's
+        per-module import lock is already held by the importing thread.
+        """
+        validated = validate_host_harness_capabilities(descriptor)
+        return self._write_entry_locked(validated, replace=False)
+
+    def register(
+        self,
+        descriptor: HostHarnessCapabilities | Mapping[str, object],
+        *,
+        replace: bool = False,
+    ) -> HostHarnessCapabilities:
+        validated = validate_host_harness_capabilities(descriptor)
+        self._ensure_builtin_loaded(validated.host_id)
+        return self._write_entry_locked(validated, replace=replace)
 
     def get(self, host_id: str) -> HostHarnessCapabilities | None:
         normalized = _validate_host_id(host_id)
@@ -520,6 +540,15 @@ class HostCapabilitiesRegistry:
 DEFAULT_HOST_CAPABILITIES_REGISTRY = HostCapabilitiesRegistry(
     builtin_modules=BUILTIN_HOST_ADAPTER_MODULES,
 )
+
+
+def _register_builtin_host_capabilities(
+    descriptor: HostHarnessCapabilities,
+    *,
+    registry: HostCapabilitiesRegistry | None = None,
+) -> HostHarnessCapabilities:
+    target = DEFAULT_HOST_CAPABILITIES_REGISTRY if registry is None else registry
+    return target._register_builtin(descriptor)
 
 
 def register_host_capabilities(

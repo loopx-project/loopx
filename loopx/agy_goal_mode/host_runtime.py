@@ -31,10 +31,10 @@ from .launchd_watchdog import (
 )
 from ..hosts.capabilities import (
     HostHarnessCapabilities,
-    register_host_capabilities,
+    _register_builtin_host_capabilities,
 )
 
-AGY_HOST_CAPABILITIES: HostHarnessCapabilities = register_host_capabilities(
+AGY_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
     HostHarnessCapabilities(
         host_id="agy",
         integration_tier="orchestrated_app",

@@ -374,6 +374,131 @@ def test_concurrent_first_builtin_load_blocks_conflict_without_blocking_other_bu
     assert registry.get("claude") == builtin_claude
 
 
+def test_real_direct_module_import_and_concurrent_lookup_register_avoid_abba_deadlock() -> None:
+    script = """
+import importlib
+import importlib.abc
+import importlib.machinery
+import sys
+import threading
+import time
+
+from loopx.hosts.capabilities import (
+    HostHarnessCapabilities,
+    get_host_capabilities,
+    register_host_capabilities,
+)
+
+entered_barrier = threading.Event()
+release_barrier = threading.Event()
+t2_started = threading.Event()
+t3_started = threading.Event()
+
+class _PauseBeforeDshRegistrationLoader(importlib.abc.Loader):
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def create_module(self, spec):
+        if hasattr(self._wrapped, "create_module"):
+            return self._wrapped.create_module(spec)
+        return None
+
+    def exec_module(self, module):
+        self._wrapped.exec_module(module)
+        entered_barrier.set()
+        assert release_barrier.wait(timeout=5.0), "import barrier timed out"
+
+class _PauseFailureMapFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname != "loopx.dsh_goal_mode.host_failure_map":
+            return None
+        sys.meta_path.remove(self)
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        assert spec is not None and spec.loader is not None
+        spec.loader = _PauseBeforeDshRegistrationLoader(spec.loader)
+        return spec
+
+sys.meta_path.insert(0, _PauseFailureMapFinder())
+
+conflicting_dsh = HostHarnessCapabilities(
+    host_id="dsh",
+    integration_tier="in_tree_codesigned",
+    adapter_module="loopx.dsh_goal_mode",
+    supported_capabilities=("native_context_budget",),
+    hook_events=(),
+    requires_utf8_stdio=True,
+    native_goal_primitive=False,
+    native_scheduler_primitive=False,
+    description="Concurrent conflicting dsh override during direct import.",
+)
+
+t1_error = None
+t2_result = None
+t2_error = None
+t3_error = None
+
+def run_direct_import() -> None:
+    global t1_error
+    try:
+        importlib.import_module("loopx.dsh_goal_mode.turn_host_adapter")
+    except BaseException as exc:  # pragma: no cover
+        t1_error = exc
+
+def run_concurrent_lookup() -> None:
+    global t2_result, t2_error
+    t2_started.set()
+    try:
+        t2_result = get_host_capabilities("dsh")
+    except BaseException as exc:  # pragma: no cover
+        t2_error = exc
+
+def run_concurrent_conflict_register() -> None:
+    global t3_error
+    t3_started.set()
+    try:
+        register_host_capabilities(conflicting_dsh, replace=False)
+    except BaseException as exc:
+        t3_error = exc
+
+t1 = threading.Thread(target=run_direct_import, daemon=True)
+t2 = threading.Thread(target=run_concurrent_lookup, daemon=True)
+t3 = threading.Thread(target=run_concurrent_conflict_register, daemon=True)
+
+t1.start()
+assert entered_barrier.wait(timeout=5.0), "direct import did not reach barrier"
+t2.start()
+t3.start()
+assert t2_started.wait(timeout=5.0)
+assert t3_started.wait(timeout=5.0)
+time.sleep(0.05)
+release_barrier.set()
+
+t1.join(timeout=5.0)
+t2.join(timeout=5.0)
+t3.join(timeout=5.0)
+assert not t1.is_alive() and not t2.is_alive() and not t3.is_alive(), "ABBA deadlock detected"
+assert t1_error is None, repr(t1_error)
+assert t2_error is None, repr(t2_error)
+
+import loopx.dsh_goal_mode.turn_host_adapter as turn_adapter
+assert t2_result == turn_adapter.DSH_HOST_CAPABILITIES
+assert get_host_capabilities("dsh") == turn_adapter.DSH_HOST_CAPABILITIES
+assert isinstance(t3_error, ValueError), repr(t3_error)
+assert "conflicting host capabilities registration for dsh" in str(t3_error)
+assert "loopx.agy_goal_mode.host_runtime" not in sys.modules
+assert "loopx.claude_goal_mode" not in sys.modules
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_list_ascii_host_id_ordering_matches_typescript() -> None:
     input_ids = ["az", "a_b", "a-b", "a0b", "ab"]
     descriptors = [

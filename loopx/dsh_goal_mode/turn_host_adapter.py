@@ -63,12 +63,12 @@ from ..control_plane.turn_driver.host_failure import BuiltInHostError
 from ..entrypoint import pin_utf8_stdio
 from ..hosts.capabilities import (
     HostHarnessCapabilities,
-    register_host_capabilities,
+    _register_builtin_host_capabilities,
 )
 
 from .host_failure_map import classify_dsh_failure, classify_dsh_terminal_reason
 
-DSH_HOST_CAPABILITIES: HostHarnessCapabilities = register_host_capabilities(
+DSH_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
     HostHarnessCapabilities(
         host_id="dsh",
         integration_tier="in_tree_codesigned",
