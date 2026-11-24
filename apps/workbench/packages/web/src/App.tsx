@@ -32,11 +32,14 @@ import {
   type ModelOption,
   type Section,
   type SlashCommand,
+  type StewardLedgerItem,
+  type StewardLedgerSnapshot,
   type Thread,
   type Todo,
   type Schedule,
   type WorkdirsConfig,
 } from './api';
+import { StewardExternalPeek, type ExternalPeekTarget } from './components/StewardExternalPeek';
 import type { HubAction } from './commands';
 import { buildProjectOptions } from './projects';
 import { rootRows, withWorkdirs } from './workdirs';
@@ -1900,14 +1903,23 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [traceOpen, setTraceOpen] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
   const [referenceId, setReferenceId] = useState<string | null>(null);
+  const [externalPeek, setExternalPeek] = useState<ExternalPeekTarget | null>(null);
   const referenceOrigin = useRef<{ focus: HTMLElement | null; top: number; offset: number } | null>(null);
   const referenceOverlay = !useMinWidth(901);
   const openReference = (id: string) => {
     const focus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     referenceOrigin.current ??= { focus, top: scrollerRef.current?.scrollTop ?? 0, offset: focus?.getBoundingClientRect().top ?? 0 };
     stickToBottom.current = false;
-    setFiles(null); setTraceOpen(false); setGitOpen(false); setAgentsOpen(false); setOverviewDetail(null);
+    setFiles(null); setTraceOpen(false); setGitOpen(false); setAgentsOpen(false); setOverviewDetail(null); setExternalPeek(null);
     setReferenceId(id);
+  };
+  const peekStewardSession = (target: StewardLedgerItem['jumpTarget'], title?: string) => {
+    if (target.kind === 'thread') {
+      openReference(target.threadId);
+    } else {
+      setFiles(null); setTraceOpen(false); setGitOpen(false); setAgentsOpen(false); setOverviewDetail(null); setReferenceId(null);
+      setExternalPeek({ agent: target.agent, sessionId: target.sessionId, cwd: target.cwd, title });
+    }
   };
   useLayoutEffect(() => {
     const origin = referenceOrigin.current;
@@ -1923,20 +1935,21 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [referenceId]);
   useLayoutEffect(() => {
     const main = mainRef.current;
-    if (!referenceId || !referenceOverlay || !main) return;
+    if ((!referenceId && !externalPeek) || !referenceOverlay || !main) return;
     main.inert = true;
     return () => { main.inert = false; };
-  }, [referenceId, referenceOverlay]);
-  useLayoutEffect(() => { setReferenceId(null); referenceOrigin.current = null; }, [api, selectedId, onPage]);
-  useEffect(() => { if (files || traceOpen || agentsOpen || gitOpen) setReferenceId(null); }, [files, traceOpen, agentsOpen, gitOpen]);
+  }, [referenceId, externalPeek, referenceOverlay]);
+  useLayoutEffect(() => { setReferenceId(null); setExternalPeek(null); referenceOrigin.current = null; }, [api, selectedId, onPage]);
+  useEffect(() => { if (!onSteward) setExternalPeek(null); }, [onSteward]);
+  useEffect(() => { if (files || traceOpen || agentsOpen || gitOpen) { setReferenceId(null); setExternalPeek(null); } }, [files, traceOpen, agentsOpen, gitOpen]);
   useLayoutEffect(() => { setGitOpen(false); }, [selectedId, api]);
   useEffect(() => { if (files || traceOpen || agentsOpen) setGitOpen(false); }, [files, traceOpen, agentsOpen]);
   const filesSeq = useRef(0);
   useEffect(() => { setFiles(null); setFilesThreadId(null); setTraceOpen(false); }, [selectedId]);
 
-  // The overview: a popover on narrow screens and the pages, a standing panel beside the
-  // conversation on a wide one. Its switch is remembered here, and starts open.
-  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && (!onPage || onSteward);
+  // The overview: a popover on narrow screens, on Steward, and on pages; a standing panel beside an
+  // ordinary conversation on a wide screen. Steward stays calm and chat-first until opened on demand.
+  const overviewDock = useMinWidth(OVERVIEW_DOCK_MIN_WIDTH) && !onPage;
   const [overviewOpen, setOverviewOpen] = useStoredFlag(OVERVIEW_OPEN_KEY, true);
   const [overviewDetail, setOverviewDetail] = useState<{ api: Api; threadId: string; section: OverviewSection; returnToPreview: boolean } | null>(null);
   const [overviewSignal, setOverviewSignal] = useState(0);
@@ -1967,12 +1980,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [selectedId, onPage]);
   useLayoutEffect(() => { setPreview(null); setDiffFile(null); setPicture(null); }, [api]);
   const dockOpen = !compact && Boolean(activeOverviewDetail || preview || diffFile || picture);
-  const sideKeys = Boolean(referenceId) || Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
+  const sideKeys = Boolean(referenceId) || Boolean(externalPeek) || Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
   const wasSide = useRef(false);
   const wasDock = useRef(false);
   useEffect(() => {
     if (sideKeys && !wasSide.current) { setPreview(null); setDiffFile(null); setPicture(null); setOverviewDetail(null); }
-    if (dockOpen && !wasDock.current) { setFiles(null); setTraceOpen(false); setAgentsOpen(false); setGitOpen(false); setReferenceId(null); }
+    if (dockOpen && !wasDock.current) { setFiles(null); setTraceOpen(false); setAgentsOpen(false); setGitOpen(false); setReferenceId(null); setExternalPeek(null); }
     wasSide.current = sideKeys; wasDock.current = dockOpen;
   }, [sideKeys, dockOpen]);
   const sideOpen = sideKeys || dockOpen;
@@ -2298,6 +2311,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // steps as the top-left button, one at a time. Nothing left to undo hands the swipe to the browser.
   appBack.current = () => {
     if (referenceId) { setReferenceId(null); return true; }
+    if (externalPeek) { setExternalPeek(null); return true; }
     if (listOpen) { setDrawer(false); return true; }
     if (!compact && diffFile) { setDiffFile(null); return true; }
     if (!compact && preview) { setPreview(null); return true; }
@@ -2876,11 +2890,26 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // person. The team it opens is the lead's own (a member's thread has none to show).
   const overviewTeam = teamShown && coordination?.rootId === selected?.id ? coordination : null;
   const teamNeeds = overviewTeam?.members.filter((member) => memberProgress(member) === 'need').length ?? 0;
+  const [stewardLedger, setStewardLedger] = useState<StewardLedgerSnapshot | null>(null);
+  const reloadStewardLedger = useCallback(() => {
+    if (api.demo || !token) {
+      setStewardLedger(null);
+      return;
+    }
+    void api.stewardLedger({ limit: 40 }).then(setStewardLedger).catch(() => undefined);
+  }, [api, token]);
+  useEffect(() => {
+    reloadStewardLedger();
+  }, [reloadStewardLedger, threads.length, externalSessions.length, externalNonce, onSteward]);
+
   const waitingOnUser = loopxStatus?.attention.filter(item => loopxNeedsYou.has(item.goalId)) ?? [];
+  const stewardLocalNeeds = stewardLedger?.ledgerCapture === false
+    ? 0
+    : (stewardLedger?.items ?? []).filter(item => !item.goalId && item.phase === 'needs_user').length;
   const goalNeeds = selected?.loopxInfo && !selected.loopxInfo.missing && loopxNeedsYou.has(selected.loopxInfo.goalId) ? 1 : 0;
-  const overviewNeeds = onSteward ? waitingOnUser.length : teamNeeds + goalNeeds;
+  const overviewNeeds = onSteward ? waitingOnUser.length + stewardLocalNeeds : teamNeeds + goalNeeds;
   const overviewBusy = onSteward ? loopxRead.loading : overviewLoading;
-  const goalsChanged = () => { loopxRead.reload(); void refreshThreads(); };
+  const goalsChanged = () => { loopxRead.reload(); reloadStewardLedger(); void refreshThreads(); };
   // The conversation's turns, for naming the section each change belongs to in the diff dialog.
   const turnOrder = useMemo(() => {
     const seen = new Set<string>();
@@ -2995,8 +3024,10 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   })() : undefined;
   const overviewBody = (close: () => void, persistent: boolean, detail?: OverviewSection) => onSteward ? (
     <StewardOverview focusedGoal={goalDetailFocus?.api === api && goalDetailFocus.threadId === null ? goalDetailFocus : undefined} token={token} goals={loopxStatus?.goals ?? []} attention={loopxStatus?.attention ?? []}
-      failure={loopxRead.failure} loading={loopxRead.loading} onChanged={goalsChanged} onRetry={loopxRead.reload}
+      failure={loopxRead.failure} loading={loopxRead.loading} onChanged={goalsChanged} onRetry={() => { loopxRead.reload(); reloadStewardLedger(); }}
       threads={threads} defaultAgent={goalCaps.find(cap => cap.agent === draftAgent && cap.available)?.agent ?? goalCaps.find(cap => cap.available)?.agent ?? ''} pickDirectory={pickGoalDir}
+      ledger={stewardLedger}
+      onPeekSession={(target, title) => { if (!persistent) close(); peekStewardSession(target, title); }}
       onOpenThread={id => { if (!persistent) close(); openThreadById(id); }}
       onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
       onOpenAll={showcase ? undefined : () => { if (!persistent) close(); openGoalsBoard(); }} />
@@ -3446,7 +3477,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           </div>
         ) : onSteward ? (
           <div key="steward" className="scroller">
-            <StewardPage token={token} failure={loopxRead.failure} deferSessionOpen={Boolean(goalRequest || goalDetailFocus?.api === api && goalDetailFocus.threadId === null)} />
+            <StewardPage
+              token={token}
+              failure={loopxRead.failure}
+              deferSessionOpen={Boolean(goalRequest || goalDetailFocus?.api === api && goalDetailFocus.threadId === null)}
+              api={api}
+              ledgerCapture={stewardLedger ? stewardLedger.ledgerCapture : startupSettings?.ledgerCapture !== false}
+              onPeekSession={peekStewardSession}
+            />
           </div>
         ) : onActivity ? (
           // The same document shape: days from the top, each conversation's asks under its name.
@@ -3722,6 +3760,19 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         draftKey={hostId ? `host:${hostId}:${referenceId}` : referenceId} returnFocus={null}
         onClose={() => setReferenceId(null)} onOpen={() => { setReferenceId(null); openThreadById(referenceId); }}
         onChange={() => { void refreshThreads(); }} />}
+      {externalPeek && <StewardExternalPeek
+        key={`${externalPeek.agent}:${externalPeek.sessionId}`}
+        api={api}
+        target={externalPeek}
+        importing={importingExternal === `${externalPeek.agent}:${externalPeek.sessionId}`}
+        onClose={() => setExternalPeek(null)}
+        onImport={() => {
+          const target = externalPeek;
+          setExternalPeek(null);
+          importExternal({ agent: target.agent, sessionId: target.sessionId, cwd: target.cwd, title: target.title ?? target.sessionId, updatedAt: null });
+          setView('thread');
+        }}
+      />}
       {agentsOpen && coordination && <AgentPanel key={`${coordination.rootId}:${agentsStart ?? ''}`} start={agentsStart} api={api} memberApi={(id) => new Api(token ?? '', '', id)} team={coordination} agents={agents} memberModel={(thread, part) => {
         const a = agents.find((v) => v.id === thread.agent);
         return a ? <MemberModel part={part} agent={a} models={modelsByAgent[a.id] ?? []} value={{ model: thread.model ?? null, effort: thread.effort ?? null }} onNeed={needModels} onChange={({ model, effort }) => { void api.updateThread(thread.id, { model, effort }).then(() => refreshThreads()).catch(handleError); }}

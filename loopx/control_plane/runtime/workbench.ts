@@ -77,7 +77,7 @@ export function launchEnvironment(config: NodeJS.ProcessEnv, state: string, app:
   env.LOOCHAT_DATA_DIR = resolve(app, 'packages/daemon', config.LOOCHAT_DATA_DIR || join(state, 'data'));
   env.LOOCHAT_WORKDIRS = config.LOOCHAT_WORKDIRS || dirname(dirname(app));
   for (const path of [env.LOOCHAT_LIFECYCLE_SOCKET, env.LOOCHAT_SOCKET,
-    ...['personal', 'coordination', 'tools'].map(name => join(env.LOOCHAT_DATA_DIR!, name, 'calli.sock'))]) {
+    ...['personal', 'coordination', 'tools', 'steward'].map(name => join(env.LOOCHAT_DATA_DIR!, name, 'calli.sock'))]) {
     if (Buffer.byteLength(path!) > 103)
       throw new Error('Workbench Unix socket path is too long; use a shorter --state-dir or LOOCHAT_DATA_DIR.');
   }

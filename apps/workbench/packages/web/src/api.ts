@@ -12,6 +12,94 @@ export interface GeneralSettings {
   autoArchiveDays: AutoArchiveDays;
   /** List every conversation the agents on this machine already have; off: only LoopX Goal conversations. */
   autoImportLocal: boolean;
+  /** Let Steward read and search local Workbench and CLI sessions on demand (read-only). Defaults to true. */
+  ledgerCapture?: boolean;
+}
+
+export type StewardLedgerPhase = 'running' | 'needs_user' | 'blocked' | 'idle_open' | 'done_recent';
+
+export interface StewardSourceHealthEntry {
+  status: 'ok' | 'stale' | 'unavailable';
+  reason?: string;
+  scannedAt?: string | null;
+  itemCount?: number;
+}
+
+export interface StewardLedgerItem {
+  id: string;
+  kind: 'workbench_thread' | 'local_session';
+  phase: StewardLedgerPhase;
+  title: string;
+  agent: string;
+  cwd: string;
+  updatedAt: string | null;
+  goalId: string | null;
+  goalTitle: string | null;
+  summary: string | null;
+  chainIds: string[];
+  jumpTarget:
+    | { kind: 'thread'; threadId: string }
+    | { kind: 'local_session'; agent: string; sessionId: string; cwd: string };
+}
+
+export interface StewardLedgerSnapshot {
+  revision: string;
+  generatedAt: string;
+  ledgerCapture: boolean;
+  sourceHealth: {
+    workbenchThreads: StewardSourceHealthEntry;
+    localSessions: StewardSourceHealthEntry;
+  };
+  coverage: {
+    workbenchThreads: 'complete' | 'unavailable';
+    localSessions: 'complete' | 'unavailable';
+  };
+  counts: Record<StewardLedgerPhase, number>;
+  items: StewardLedgerItem[];
+  nextCursor: string | null;
+}
+
+export interface StewardSessionFindHit {
+  id: string;
+  kind: 'workbench_thread' | 'local_session';
+  title: string;
+  agent: string;
+  cwd: string;
+  updatedAt: string | null;
+  phase: StewardLedgerPhase;
+  goalId: string | null;
+  snippet: string;
+  jumpTarget:
+    | { kind: 'thread'; threadId: string }
+    | { kind: 'local_session'; agent: string; sessionId: string; cwd: string };
+}
+
+export interface StewardSessionsFindResult {
+  query: string;
+  revision: string;
+  indexStatus: 'ready' | 'rebuilding';
+  sourceHealth: StewardLedgerSnapshot['sourceHealth'];
+  hits: StewardSessionFindHit[];
+}
+
+export interface StewardSessionReadChunk {
+  index: number;
+  role: 'user' | 'assistant' | 'tool' | 'summary';
+  ts: string | null;
+  text: string;
+}
+
+export interface StewardSessionReadResult {
+  id: string;
+  kind: 'workbench_thread' | 'local_session';
+  title: string;
+  agent: string;
+  cwd: string;
+  updatedAt: string | null;
+  imported: boolean;
+  mode: 'outline' | 'recent_turns' | 'turn_range';
+  chunks: StewardSessionReadChunk[];
+  nextCursor: string | null;
 }
 import type { DraftModelPreference, ModelPreferencePatch } from '../../daemon/src/model-preferences';
 export type { DraftModelPreference } from '../../daemon/src/model-preferences';
@@ -1315,6 +1403,34 @@ export class Api {
 
   generalSettings(): Promise<GeneralSettings> { return this.request('GET', '/api/general-settings'); }
   saveGeneralSettings(value: GeneralSettings): Promise<GeneralSettings> { return this.request('PUT', '/api/general-settings', value); }
+  stewardLedger(opts: { cursor?: string | null; limit?: number; includeDoneSince?: string } = {}, signal?: AbortSignal): Promise<StewardLedgerSnapshot> {
+    const q = new URLSearchParams();
+    if (opts.cursor) q.set('cursor', opts.cursor);
+    if (opts.limit !== undefined) q.set('limit', String(opts.limit));
+    if (opts.includeDoneSince) q.set('includeDoneSince', opts.includeDoneSince);
+    const suffix = q.toString();
+    return this.request('GET', `/api/steward/ledger${suffix ? `?${suffix}` : ''}`, undefined, { signal });
+  }
+  stewardFindSessions(query: string, opts: { repo?: string; agent?: string; limit?: number } = {}, signal?: AbortSignal): Promise<StewardSessionsFindResult> {
+    const q = new URLSearchParams({ q: query });
+    if (opts.repo) q.set('repo', opts.repo);
+    if (opts.agent) q.set('agent', opts.agent);
+    if (opts.limit !== undefined) q.set('limit', String(opts.limit));
+    return this.request('GET', `/api/steward/sessions/find?${q}`, undefined, { signal });
+  }
+  stewardReadSession(
+    kind: 'workbench_thread' | 'local_session',
+    id: string,
+    opts: { agent?: string; mode?: 'outline' | 'recent_turns' | 'turn_range'; cursor?: string; maxChars?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<StewardSessionReadResult> {
+    const q = new URLSearchParams({ kind, id });
+    if (opts.agent) q.set('agent', opts.agent);
+    if (opts.mode) q.set('mode', opts.mode);
+    if (opts.cursor) q.set('cursor', opts.cursor);
+    if (opts.maxChars !== undefined) q.set('maxChars', String(opts.maxChars));
+    return this.request('GET', `/api/steward/sessions/read?${q}`, undefined, { signal });
+  }
   exploreSources(): Promise<ExploreSource[]> { return this.request('GET', '/api/personal/explore/sources'); }
   startExplore(sources: ExploreSourceId[]): Promise<{ id: string }> { return this.request('POST', '/api/personal/explore', { sources }); }
   exploreStatus(): Promise<ExploreStatus | null> { return this.request('GET', '/api/personal/explore'); }

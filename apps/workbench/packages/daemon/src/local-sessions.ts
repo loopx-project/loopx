@@ -99,6 +99,18 @@ export class LocalSessions {
     this.enabled = opts.enabled !== false;
   }
 
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  lastScannedAt(): string | null {
+    let newest: number | null = null;
+    for (const { at } of this.cache.values()) {
+      if (newest === null || at > newest) newest = at;
+    }
+    return newest === null ? null : new Date(newest).toISOString();
+  }
+
   /** The one scan after startup; there is no timer — requests keep the list fresh. */
   start(): void {
     if (!this.enabled) return;

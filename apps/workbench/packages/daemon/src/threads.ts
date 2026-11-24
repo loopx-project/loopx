@@ -83,6 +83,8 @@ export interface GeneralSettings {
   autoArchiveDays: AutoArchiveDays;
   /** List every conversation the agents on this machine already have. Off: only LoopX Goal conversations. */
   autoImportLocal: boolean;
+  /** Include non-Goal Workbench threads and local sessions in the Steward read-only open-work ledger. */
+  ledgerCapture: boolean;
 }
 
 function storedAutoArchiveDays(value: unknown): AutoArchiveDays {
@@ -1235,6 +1237,7 @@ export class ThreadManager {
       startupPage: value?.startupPage === 'recent-thread' ? 'recent-thread' : 'new-thread',
       autoArchiveDays: storedAutoArchiveDays(value?.autoArchiveDays),
       autoImportLocal: value?.autoImportLocal !== false,
+      ledgerCapture: value?.ledgerCapture !== false,
     };
   }
 
@@ -1247,7 +1250,9 @@ export class ThreadManager {
     const autoArchiveDays = Object.hasOwn(raw, 'autoArchiveDays') ? parseAutoArchiveDays(raw.autoArchiveDays) : current.autoArchiveDays;
     if (Object.hasOwn(raw, 'autoImportLocal') && typeof raw.autoImportLocal !== 'boolean') throw new HttpError(400, 'invalid auto-import setting');
     const autoImportLocal = Object.hasOwn(raw, 'autoImportLocal') ? raw.autoImportLocal === true : current.autoImportLocal;
-    const value: GeneralSettings = { startupPage, autoArchiveDays, autoImportLocal };
+    if (Object.hasOwn(raw, 'ledgerCapture') && typeof raw.ledgerCapture !== 'boolean') throw new HttpError(400, 'invalid ledger-capture setting');
+    const ledgerCapture = Object.hasOwn(raw, 'ledgerCapture') ? raw.ledgerCapture === true : current.ledgerCapture;
+    const value: GeneralSettings = { startupPage, autoArchiveDays, autoImportLocal, ledgerCapture };
     this.store.saveHubSetting('general.settings', value);
     return value;
   }

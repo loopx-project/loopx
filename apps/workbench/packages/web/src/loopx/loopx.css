@@ -121,3 +121,188 @@
 .goal-task-details dt { flex: none; width: 52px; color: var(--muted); }
 .goal-task-details dd { margin: 0; overflow-wrap: anywhere; }
 .goal-task-empty, .goal-task-more { margin: 4px 4px; color: var(--muted); font-size: 13px; }
+
+/* Steward S1 unified entry: calm Calli/Alma 2-row composer, @ session popover, and frameless local rows. */
+.steward-composer .composer-anchor { position: relative; }
+.steward-composer .composer-box { border-radius: 22px; }
+.steward-mention-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.steward-mention-btn:hover:not(:disabled),
+.steward-mention-btn[aria-expanded='true'] {
+  background: var(--hover, rgba(31, 30, 28, 0.06));
+  color: var(--text);
+}
+.steward-mention-btn:disabled { opacity: 0.45; cursor: default; }
+.steward-mention-at { font-weight: 600; font-size: 13px; line-height: 1; }
+
+.steward-mention-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  max-height: min(320px, 50vh);
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 14px;
+  z-index: 30;
+  overflow: hidden;
+}
+.steward-mention-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px 7px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+}
+.steward-mention-caption {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.steward-mention-filter,
+.steward-mention-filter:focus,
+.steward-mention-filter:focus-visible {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.steward-mention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.steward-mention-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.steward-mention-row:hover,
+.steward-mention-row.active {
+  background: var(--hover, rgba(31, 30, 28, 0.06));
+}
+.steward-mention-row-top,
+.steward-local-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.steward-mention-title,
+.steward-local-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.steward-mention-sub,
+.steward-local-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.steward-mention-empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.steward-phase-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(31, 30, 28, 0.06));
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.steward-phase-tag.is-needs_user,
+.steward-phase-tag.is-blocked {
+  background: color-mix(in srgb, var(--warn, #b76e18) 14%, transparent);
+  color: var(--text);
+}
+.steward-phase-tag.is-running {
+  background: var(--loopx-blue-soft);
+  color: var(--loopx-blue);
+}
+
+.steward-local-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.steward-local-row:hover {
+  background: var(--hover, rgba(31, 30, 28, 0.06));
+}
+.steward-scan-gap {
+  padding-top: 6px;
+  font-size: 12px;
+}
+
+.steward-external-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.steward-external-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}

@@ -169,6 +169,38 @@ export function route(data: DemoData, method: string, url: string, body?: unknow
       return { days: data.activity };
     case 'machine-usage':
       return demoMachineUsage(q);
+    case 'steward/ledger':
+      return {
+        revision: 'demo',
+        generatedAt: new Date().toISOString(),
+        ledgerCapture: true,
+        sourceHealth: { workbenchThreads: { status: 'ok', itemCount: data.threads.length }, localSessions: { status: 'unavailable', reason: 'demo' } },
+        coverage: { workbenchThreads: 'complete', localSessions: 'unavailable' },
+        counts: { running: 0, needs_user: 0, blocked: 0, idle_open: data.threads.length, done_recent: 0 },
+        items: data.threads.map(th => ({
+          id: `thread:${th.id}`, kind: 'workbench_thread' as const, phase: 'idle_open' as const,
+          title: th.title, agent: th.agent, cwd: th.cwd, updatedAt: th.updatedAt,
+          goalId: null, goalTitle: null, summary: null, chainIds: [th.id],
+          jumpTarget: { kind: 'thread' as const, threadId: th.id },
+        })),
+        nextCursor: null,
+      };
+    case 'steward/sessions/find': {
+      const needle = (q.get('q') ?? '').trim().toLowerCase();
+      return {
+        query: q.get('q') ?? '',
+        revision: 'demo',
+        indexStatus: 'ready',
+        sourceHealth: { workbenchThreads: { status: 'ok', itemCount: data.threads.length }, localSessions: { status: 'unavailable', reason: 'demo' } },
+        hits: data.threads
+          .filter(th => !needle || th.title.toLowerCase().includes(needle) || th.cwd.toLowerCase().includes(needle))
+          .map(th => ({
+            id: `thread:${th.id}`, kind: 'workbench_thread' as const, title: th.title, agent: th.agent, cwd: th.cwd,
+            updatedAt: th.updatedAt, phase: 'idle_open' as const, goalId: null, snippet: th.title,
+            jumpTarget: { kind: 'thread' as const, threadId: th.id },
+          })),
+      };
+    }
   }
 
   if (parts[0] === 'agents' && parts.length === 3) {

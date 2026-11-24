@@ -99,6 +99,81 @@ CONTEXT_READ_TOOL = {**deepcopy(READ_TOOL), "name": CONTEXT_TOOL_NAME,
     "Paginate with next_offset. " + _TODO_DETAIL_GUIDANCE +
     "No cross-Goal access, shell, writes or execution authority."}
 
+STEWARD_LEDGER_READ_TOOL_NAME = "steward_ledger_read"
+STEWARD_SESSIONS_FIND_TOOL_NAME = "steward_sessions_find"
+STEWARD_SESSION_READ_TOOL_NAME = "steward_session_read"
+
+STEWARD_LEDGER_READ_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": STEWARD_LEDGER_READ_TOOL_NAME,
+    "description": (
+        "Read the local Workbench open-work ledger on demand: running, waiting-on-user, "
+        "blocked, idle-open and recently completed Workbench threads and local CLI/App "
+        "sessions, folded across handover chains with typed sourceHealth and coverage. "
+        "Read-only: never imports sessions or mutates Core Goals."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "cursor": {"type": "string", "minLength": 1},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "include_done_since": {"type": "string", "minLength": 1},
+        },
+    },
+}
+
+STEWARD_SESSIONS_FIND_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": STEWARD_SESSIONS_FIND_TOOL_NAME,
+    "description": (
+        "Search local Workbench threads and local CLI/App sessions by CJK/ASCII substring "
+        "query across titles, workspaces, and stored transcripts, using Workbench's "
+        "content-verified exclusion index. Read-only: never imports or resumes a session."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "query": {"type": "string", "maxLength": 200},
+            "repo": {"type": "string", "minLength": 1},
+            "agent": {"type": "string", "minLength": 1},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        },
+        "required": ["query"],
+    },
+}
+
+STEWARD_SESSION_READ_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": STEWARD_SESSION_READ_TOOL_NAME,
+    "description": (
+        "Read bounded transcript or outline chunks of one local Workbench thread or "
+        "discovered external local session without importing it into Workbench."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "kind": {"type": "string", "enum": ["workbench_thread", "local_session"]},
+            "id": {"type": "string", "minLength": 1},
+            "agent": {"type": "string", "minLength": 1},
+            "mode": {"type": "string", "enum": ["outline", "recent_turns", "turn_range"]},
+            "cursor": {"type": "string", "minLength": 1},
+            "max_chars": {"type": "integer", "minimum": 200, "maximum": 24000},
+        },
+        "required": ["kind", "id"],
+    },
+}
+
+STEWARD_LEDGER_TOOLS = [
+    STEWARD_LEDGER_READ_TOOL,
+    STEWARD_SESSIONS_FIND_TOOL,
+    STEWARD_SESSION_READ_TOOL,
+]
+STEWARD_LEDGER_TOOL_BY_NAME = {tool["name"]: tool for tool in STEWARD_LEDGER_TOOLS}
+STEWARD_LEDGER_TOOL_NAMES = frozenset(STEWARD_LEDGER_TOOL_BY_NAME)
+
 
 # The published tool schema is the contract the caller sees, so the reader takes
 # its allowlist and ranges from there instead of restating them in prose that can
@@ -231,6 +306,39 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
                 rejected.append(f"{name}:report_source_uses_complete_authorized_local_portfolio")
         if not {"window_start", "window_end"} <= arguments.keys():
             rejected.append("report_source:requires_window_start_and_window_end")
+    return rejected
+
+
+def rejected_steward_ledger_arguments(tool: str, arguments: dict[str, Any]) -> list[str]:
+    schema = STEWARD_LEDGER_TOOL_BY_NAME[tool]["inputSchema"]
+    props = schema["properties"]
+    required = schema.get("required", [])
+    rejected = [
+        f"unknown_argument:{name}"
+        for name in sorted(set(arguments) - set(props))
+    ]
+    for req in required:
+        if req not in arguments or arguments[req] is None:
+            rejected.append(f"{req}:required")
+    for name, spec in props.items():
+        if name not in arguments or arguments[name] is None:
+            continue
+        val = arguments[name]
+        if spec["type"] == "string":
+            if not isinstance(val, str):
+                rejected.append(f"{name}:must_be_a_string")
+            else:
+                if "enum" in spec and val not in spec["enum"]:
+                    rejected.append(f"{name}:must_be_one_of_" + ",".join(spec["enum"]))
+                if "minLength" in spec and len(val.strip()) < spec["minLength"]:
+                    rejected.append(f"{name}:must_be_a_nonempty_string")
+                if "maxLength" in spec and len(val) > spec["maxLength"]:
+                    rejected.append(f"{name}:must_be_at_most_{spec['maxLength']}_characters")
+        elif spec["type"] == "integer":
+            if type(val) is not int or not (spec["minimum"] <= val <= spec["maximum"]):
+                rejected.append(
+                    f"{name}:must_be_an_integer_between_{spec['minimum']}_and_{spec['maximum']}"
+                )
     return rejected
 
 
@@ -639,7 +747,69 @@ class ManagerInspection:
                 "initial_snapshot_id": self.context.get("snapshot_id"),
                 "source_id": "local", "source_host": "local"}
 
+    def _read_steward_ledger(self, tool: str, arguments: Any) -> dict[str, Any]:
+        if not isinstance(arguments, dict):
+            return {"ok": False, "error": "unsupported_read_tool"}
+        allowed = list(STEWARD_LEDGER_TOOL_BY_NAME[tool]["inputSchema"]["properties"])
+        rejected = rejected_steward_ledger_arguments(tool, arguments)
+        if rejected:
+            return {
+                "ok": False,
+                "error": "invalid_arguments",
+                "rejected_arguments": rejected,
+                "allowed_arguments": allowed,
+                "detail": (
+                    f"resend {tool} with only the allowed arguments; each rejected "
+                    "entry names the argument and what it must be"
+                ),
+            }
+        if not self.scope_valid():
+            return {"ok": False, "error": "authorization_changed"}
+        if not self.owner_scope or self.context.get("scope") == "owner_goal":
+            return {"ok": False, "error": "workbench_sessions_require_private_owner_scope"}
+        from .workbench_ledger import call_workbench_steward_rpc
+
+        if tool == STEWARD_LEDGER_READ_TOOL_NAME:
+            params: dict[str, Any] = {}
+            if "cursor" in arguments:
+                params["cursor"] = arguments["cursor"]
+            if "limit" in arguments:
+                params["limit"] = arguments["limit"]
+            if "include_done_since" in arguments:
+                params["includeDoneSince"] = arguments["include_done_since"]
+            view_name = "workbench_ledger"
+        elif tool == STEWARD_SESSIONS_FIND_TOOL_NAME:
+            params = {"query": arguments["query"]}
+            for key in ("repo", "agent", "limit"):
+                if key in arguments:
+                    params[key] = arguments[key]
+            view_name = "sessions_find"
+        else:
+            params = {"kind": arguments["kind"], "id": arguments["id"]}
+            if "agent" in arguments:
+                params["agent"] = arguments["agent"]
+            if "mode" in arguments:
+                params["mode"] = arguments["mode"]
+            if "cursor" in arguments:
+                params["cursor"] = arguments["cursor"]
+            if "max_chars" in arguments:
+                params["maxChars"] = arguments["max_chars"]
+            view_name = "session_read"
+
+        result = call_workbench_steward_rpc(
+            tool,
+            params,
+            view_name=view_name,
+            runtime_root=self.runtime_root,
+        )
+        if not self.scope_valid():
+            return {"ok": False, "error": "authorization_changed"}
+        self.record(result)
+        return result
+
     def read(self, tool: str, arguments: Any) -> dict[str, Any]:
+        if tool in STEWARD_LEDGER_TOOL_NAMES:
+            return self._read_steward_ledger(tool, arguments)
         if tool not in {TOOL_NAME, CONTEXT_TOOL_NAME} or not isinstance(arguments, dict):
             return {"ok": False, "error": "unsupported_read_tool"}
         rejected = rejected_read_arguments(arguments)

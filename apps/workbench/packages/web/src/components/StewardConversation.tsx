@@ -4,6 +4,8 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import brandIconLight from '../assets/loo-icon-paper.svg';
 import brandIconDark from '../assets/loo-icon-dark.svg';
+import type { Api, StewardLedgerItem, StewardLedgerPhase, StewardSessionFindHit } from '../api';
+import { mentionAt } from '../mentions';
 import { IconSend, IconStop } from './icons';
 import {
   applyManagerEvent, interruptManagerTurn, openManagerSession, readManagerCapabilities, readManagerHistory,
@@ -19,13 +21,48 @@ const GREETING_ASKS = () => [
   t('loopx.stewardAsk.push'),
 ];
 
+function folderTail(cwd: string): string {
+  const clean = cwd.replace(/[\\/]+$/, '');
+  const parts = clean.split(/[\\/]/).filter(Boolean);
+  return parts.slice(-2).join('/') || cwd;
+}
+
+function phaseLabel(phase: StewardLedgerPhase): string {
+  switch (phase) {
+    case 'running':
+      return t('loopx.stewardMentionPhase.running');
+    case 'needs_user':
+      return t('loopx.stewardMentionPhase.needs_user');
+    case 'blocked':
+      return t('loopx.stewardMentionPhase.blocked');
+    case 'done_recent':
+      return t('loopx.stewardMentionPhase.done_recent');
+    default:
+      return t('loopx.stewardMentionPhase.idle_open');
+  }
+}
+
 /**
  * The steward conversation: the Python manager's own session, spoken to through the proxy. The page
  * is the chat, drawn with the thread's own parts — the person's words as user rows, the steward's
  * answers as assistant rows in the thread's markdown, the composer as the app's composer shell with
  * its send and stop buttons. An empty history opens on a centered question with one-tap asks.
  */
-export function StewardConversation({ token, failure, deferSessionOpen = false }: { token: string | undefined; failure: LoopxStatusFailure | null; deferSessionOpen?: boolean }) {
+export function StewardConversation({
+  token,
+  failure,
+  deferSessionOpen = false,
+  api,
+  ledgerCapture = true,
+  onPeekSession,
+}: {
+  token: string | undefined;
+  failure: LoopxStatusFailure | null;
+  deferSessionOpen?: boolean;
+  api?: Api;
+  ledgerCapture?: boolean;
+  onPeekSession?: (target: StewardLedgerItem['jumpTarget'], title?: string) => void;
+}) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ManagerMessage[] | null>(() => deferSessionOpen ? [] : null);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +70,14 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
   const [switchingAgent, setSwitchingAgent] = useState<string | null>(null);
   const [turn, setTurn] = useState<ManagerTurn | null>(null);
   const [draft, setDraft] = useState('');
+  const [mentionRange, setMentionRange] = useState<{ start: number; end: number; query: string } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState('');
+  const [mentionHits, setMentionHits] = useState<StewardSessionFindHit[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const composerAnchorRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [sessionOpening, setSessionOpening] = useState(false);
   const openingSession = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -117,6 +162,67 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
     sendAbort.current?.abort();
     streamAbort.current?.abort();
   }, []);
+
+  const canLookupSessions = Boolean(api && ledgerCapture !== false);
+  const mentionActive = canLookupSessions && (mentionRange !== null || pickerOpen);
+  const activeMentionQuery = mentionRange ? mentionRange.query : pickerQuery;
+
+  useEffect(() => {
+    if (!canLookupSessions) {
+      setMentionRange(null);
+      setPickerOpen(false);
+      setMentionHits([]);
+    }
+  }, [canLookupSessions]);
+
+  useEffect(() => {
+    if (!mentionActive || !api) {
+      setMentionLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setMentionLoading(true);
+    api
+      .stewardFindSessions(activeMentionQuery, { limit: 8 }, controller.signal)
+      .then(res => {
+        if (controller.signal.aborted) return;
+        setMentionHits(res.hits);
+        setMentionIndex(0);
+        setMentionLoading(false);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setMentionHits([]);
+          setMentionLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [api, mentionActive, activeMentionQuery]);
+
+  useEffect(() => {
+    if (!mentionActive || typeof document === 'undefined') return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (composerAnchorRef.current && event.target instanceof Node && !composerAnchorRef.current.contains(event.target)) {
+        setMentionRange(null);
+        setPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [mentionActive]);
+
+  const selectMentionHit = (hit: StewardSessionFindHit) => {
+    if (mentionRange) {
+      const before = draft.slice(0, mentionRange.start);
+      const after = draft.slice(mentionRange.end);
+      const nextDraft = (before.endsWith(' ') && after.startsWith(' ')) ? `${before}${after.slice(1)}` : `${before}${after}`;
+      setDraft(nextDraft.replace(/^\s+/, ''));
+    }
+    setMentionRange(null);
+    setPickerOpen(false);
+    setPickerQuery('');
+    onPeekSession?.(hit.jumpTarget, hit.title);
+  };
 
   const finishTurn = (ended: ManagerTurn | null, id: string, attempt: number) => {
     if (!ended || attemptRef.current !== attempt || sessionRef.current !== id) return;
@@ -342,22 +448,140 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
       {error && sessionId ? <div className="row channel-note"><span role="alert">{error}</span></div> : null}
       <div ref={scrollAnchor} />
     </div>
-    {/* The app's composer shell, carrying only what a manager conversation has: words, send, stop. */}
+    {/* The app's composer shell, carrying words, optional @ session locator, send, stop. */}
     <form className="composer steward-composer" onSubmit={event => { event.preventDefault(); void send(draft); }}>
-      <div className="composer-anchor">
+      <div className="composer-anchor" ref={composerAnchorRef}>
+        {mentionActive ? (
+          <div className="pop-panel steward-mention-popover" role="listbox" aria-label={t('loopx.stewardMentionTitle')}>
+            <div className="steward-mention-head">
+              <span className="steward-mention-caption">{t('loopx.stewardMentionTitle')}</span>
+              {pickerOpen && !mentionRange ? (
+                <input
+                  type="search"
+                  className="steward-mention-filter"
+                  value={pickerQuery}
+                  placeholder={t('loopx.stewardMentionPlaceholder')}
+                  aria-label={t('loopx.stewardMentionTitle')}
+                  autoFocus
+                  onChange={ev => setPickerQuery(ev.target.value)}
+                  onKeyDown={ev => {
+                    if (ev.key === 'Escape') {
+                      ev.preventDefault();
+                      setPickerOpen(false);
+                      textareaRef.current?.focus();
+                    } else if (ev.key === 'ArrowDown' && mentionHits.length > 0) {
+                      ev.preventDefault();
+                      setMentionIndex(idx => (idx + 1) % mentionHits.length);
+                    } else if (ev.key === 'ArrowUp' && mentionHits.length > 0) {
+                      ev.preventDefault();
+                      setMentionIndex(idx => (idx - 1 + mentionHits.length) % mentionHits.length);
+                    } else if (ev.key === 'Enter' && mentionHits[mentionIndex]) {
+                      ev.preventDefault();
+                      selectMentionHit(mentionHits[mentionIndex]);
+                    }
+                  }}
+                />
+              ) : null}
+            </div>
+            <div className="steward-mention-list">
+              {mentionHits.length > 0 ? (
+                mentionHits.map((hit, idx) => (
+                  <button
+                    key={hit.id}
+                    type="button"
+                    role="option"
+                    aria-selected={idx === mentionIndex}
+                    className={`steward-mention-row${idx === mentionIndex ? ' active' : ''}`}
+                    onMouseEnter={() => setMentionIndex(idx)}
+                    onClick={() => selectMentionHit(hit)}
+                  >
+                    <span className="steward-mention-row-top">
+                      <span className="steward-mention-title">{hit.title}</span>
+                      <span className={`steward-phase-tag is-${hit.phase}`}>{phaseLabel(hit.phase)}</span>
+                    </span>
+                    <span className="steward-mention-sub">
+                      {hit.agent}
+                      {hit.cwd ? ` · ${folderTail(hit.cwd)}` : ''}
+                      {hit.snippet && hit.snippet !== hit.title ? ` · ${hit.snippet}` : ''}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="steward-mention-empty">
+                  {mentionLoading ? t('common.loading') : t('loopx.stewardMentionEmpty')}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
         <div className="composer-box">
           <textarea
+            ref={textareaRef}
             rows={1}
             value={draft}
             placeholder={t('loopx.stewardAskInput')}
             disabled={busy || messages === null}
             aria-label={t('composer.message')}
-            onChange={event => setDraft(event.target.value)}
+            onChange={event => {
+              const nextValue = event.target.value;
+              setDraft(nextValue);
+              if (canLookupSessions) {
+                const start = typeof event.target.selectionStart === 'number' ? event.target.selectionStart : nextValue.length;
+                const end = typeof event.target.selectionEnd === 'number' ? event.target.selectionEnd : start;
+                const found = mentionAt(nextValue, start, end);
+                setMentionRange(found);
+                if (found) setPickerOpen(false);
+              }
+            }}
             onKeyDown={event => {
+              if (mentionActive) {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setMentionRange(null);
+                  setPickerOpen(false);
+                  return;
+                }
+                if (event.key === 'ArrowDown' && mentionHits.length > 0) {
+                  event.preventDefault();
+                  setMentionIndex(idx => (idx + 1) % mentionHits.length);
+                  return;
+                }
+                if (event.key === 'ArrowUp' && mentionHits.length > 0) {
+                  event.preventDefault();
+                  setMentionIndex(idx => (idx - 1 + mentionHits.length) % mentionHits.length);
+                  return;
+                }
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && mentionHits[mentionIndex]) {
+                  event.preventDefault();
+                  selectMentionHit(mentionHits[mentionIndex]);
+                  return;
+                }
+              }
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(draft); }
             }}
           />
           <div className="composer-bar">
+            {canLookupSessions ? (
+              <button
+                type="button"
+                className="steward-mention-btn"
+                disabled={busy || messages === null}
+                aria-expanded={mentionActive}
+                aria-label={t('loopx.stewardMentionTitle')}
+                onClick={() => {
+                  if (mentionActive) {
+                    setMentionRange(null);
+                    setPickerOpen(false);
+                  } else {
+                    setPickerQuery('');
+                    setPickerOpen(true);
+                  }
+                }}
+              >
+                <span className="steward-mention-at" aria-hidden="true">@</span>
+                <span>{t('loopx.stewardMentionButton')}</span>
+              </button>
+            ) : null}
             <div className="spacer" />
             {stoppable ? <button type="button" className="send-btn stop" onClick={stop} disabled={turn?.state === 'stopping'} aria-label={t('composer.stop')} title={t('composer.stopTurn')}><IconStop size={16} /></button> : null}
             {!stoppable ? <button type="submit" className="send-btn" disabled={busy || !draft.trim() || messages === null} aria-label={t('common.send')}><IconSend size={16} /></button> : null}
