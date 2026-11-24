@@ -598,7 +598,11 @@ loopx register-agent \
 Registration is all-or-nothing: an id outside the public token shape (a lowercase
 first letter, then letters, digits, `.`, `_`, `:`, `@` or `-`) fails the preview
 or execute with `error_kind=agent_identity_invalid` and the raw
-`rejected_agents` before either the source or the global registry changes.
+`rejected_agents` before either the source or the global registry changes. A
+request that parses to no usable id (only empty or delimiter-only values) fails
+with `error_kind=agent_identity_empty` before any write, including on a Goal that
+has no existing roster. Clearing a roster remains `configure-goal`'s explicit
+replacement, not an empty registration.
 
 Then claim through the dedicated command. `--claimed-by` records the durable
 owner, while `--agent-id` attributes the peer performing this mutation. For a

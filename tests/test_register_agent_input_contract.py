@@ -15,7 +15,7 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _fixture(tmp_path: Path, *, legacy: bool = False) -> tuple[Path, Path, Path]:
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
     source_registry = project / ".loopx" / "registry.json"
@@ -29,15 +29,16 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         "repo": str(project),
         "state_file": f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
         "adapter": {"kind": "fixture", "status": "connected-read-only"},
-        "coordination": {
+        "source_registry": str(source_registry),
+    }
+    if not legacy:
+        goal["coordination"] = {
             "write_scope": [],
             "claim_ttl_minutes": 30,
             "requires_parent_approval": ["write", "publish", "production-action"],
             "registered_agents": ["codex-existing"],
             "agent_model": "peer_v1",
-        },
-        "source_registry": str(source_registry),
-    }
+        }
     payload: dict[str, object] = {
         "schema_version": "0.1",
         "common_runtime_root": str(runtime_root),
@@ -130,6 +131,90 @@ def test_empty_delimiters_are_skipped_but_never_registered(tmp_path: Path) -> No
     assert result["ok"] is True, result
     assert result["requested_agents"] == ["peer-one"]
     assert _registered_agents(source_registry) == ["codex-existing", "peer-one"]
+
+
+def test_empty_request_is_rejected_before_any_write(tmp_path: Path) -> None:
+    runtime_root, source_registry, global_registry = _fixture(tmp_path)
+    source_before = source_registry.read_bytes()
+    global_before = global_registry.read_bytes()
+
+    for execute in (False, True):
+        result = registry_admin.register_agent_via_source_registry(
+            runtime_root_arg=str(runtime_root),
+            goal_id=GOAL_ID,
+            agent_ids=[",", "   "],
+            require_new=True,
+            execute=execute,
+        )
+
+        assert result["ok"] is False, (execute, result)
+        assert result["error_kind"] == "agent_identity_empty"
+        assert result["requested_agents"] == []
+        assert result["rejected_agents"] == []
+        assert result["changed"] is False
+        assert result["written"] is False
+
+    assert _registered_agents(source_registry) == ["codex-existing"]
+    assert _registered_agents(global_registry) == ["codex-existing"]
+    assert source_registry.read_bytes() == source_before
+    assert global_registry.read_bytes() == global_before
+
+
+def test_empty_request_on_a_legacy_goal_writes_nothing(tmp_path: Path) -> None:
+    runtime_root, source_registry, global_registry = _fixture(tmp_path, legacy=True)
+    source_before = source_registry.read_bytes()
+    global_before = global_registry.read_bytes()
+
+    for execute in (False, True):
+        result = registry_admin.register_agent_via_source_registry(
+            runtime_root_arg=str(runtime_root),
+            goal_id=GOAL_ID,
+            agent_ids=[","],
+            require_new=True,
+            execute=execute,
+        )
+
+        assert result["ok"] is False, (execute, result)
+        assert result["error_kind"] == "agent_identity_empty"
+        assert result["changed"] is False
+        assert result["written"] is False
+
+    for path in (source_registry, global_registry):
+        goal = json.loads(path.read_text(encoding="utf-8"))["goals"][0]
+        assert "coordination" not in goal
+    assert source_registry.read_bytes() == source_before
+    assert global_registry.read_bytes() == global_before
+
+
+def test_cli_rejects_a_delimiter_only_request_and_exits_nonzero(
+    tmp_path: Path,
+) -> None:
+    runtime_root, source_registry, global_registry = _fixture(tmp_path, legacy=True)
+
+    result = run_source_cli(
+        [
+            "--runtime-root", str(runtime_root),
+            "--registry", str(source_registry),
+            "--format", "json",
+            "register-agent",
+            "--goal-id", GOAL_ID,
+            "--agent-id", ",",
+            "--require-new",
+            "--execute",
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error_kind"] == "agent_identity_empty"
+    assert payload["requested_agents"] == []
+    assert payload["changed"] is False
+    assert payload["written"] is False
+    for path in (source_registry, global_registry):
+        goal = json.loads(path.read_text(encoding="utf-8"))["goals"][0]
+        assert "coordination" not in goal
 
 
 def test_cli_reports_the_rejected_id_and_exits_nonzero(tmp_path: Path) -> None:
