@@ -1917,8 +1917,8 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
     assert res_corrupt.swept is True and res_corrupt.deleted == 0
     checkpoint_path.unlink()
 
-    # Unsupported v1/v2 checkpoints fail closed even with safe 0600 permissions.
-    for old_ver in (1, 2):
+    # Unsupported v1/v2/v3 checkpoints fail closed even with safe 0600 permissions.
+    for old_ver in (1, 2, 3):
         checkpoint_path.write_text(json.dumps({"version": old_ver}), encoding="utf-8")
         os.chmod(checkpoint_path, 0o600)
         res_old = maybe_prune_context_delivery_root(
@@ -1927,7 +1927,7 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
         assert res_old.swept is True and res_old.deleted == 0
         checkpoint_path.unlink()
 
-    # Valid v3 structure with overlapping BFS waves / referrers / targets fails closed even at 0600.
+    # Valid v4 structure with overlapping BFS waves / referrers / targets fails closed even at 0600.
     empty_summary = {
         "data_digests": [],
         "reader_digests": [],
@@ -1936,8 +1936,8 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
         "referenced_digests": [],
         "byte_size": 0,
     }
-    valid_v3 = {
-        "version": 3,
+    valid_v4 = {
+        "version": 4,
         "target_cohort": [
             {
                 "name": "decision-small-016",
@@ -1947,7 +1947,6 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
             }
         ],
         "protected_names": [],
-        "active_digests": [],
         "seen_frontiers": [],
         "active_frontier": ["decision-small-016"],
         "next_frontier": [],
@@ -1966,7 +1965,7 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
         {"referrer_witnesses": {"decision-small-017": [1, 0, 0, 1]}},
         {"completed_witnesses": {"decision-small-017": [1, 0, 0, 1]}},
     ):
-        bad_payload = {**valid_v3, **bad_override}
+        bad_payload = {**valid_v4, **bad_override}
         checkpoint_path.write_text(json.dumps(bad_payload), encoding="utf-8")
         os.chmod(checkpoint_path, 0o600)
         res_bad = maybe_prune_context_delivery_root(
@@ -1975,8 +1974,8 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
         assert res_bad.swept is True and res_bad.deleted == 0
         checkpoint_path.unlink()
 
-    # Otherwise valid v3 payload with loose group/world permissions must also fail closed.
-    checkpoint_path.write_text(json.dumps(valid_v3), encoding="utf-8")
+    # Otherwise valid v4 payload with loose group/world permissions must also fail closed.
+    checkpoint_path.write_text(json.dumps(valid_v4), encoding="utf-8")
     os.chmod(checkpoint_path, 0o644)
     res_perm = maybe_prune_context_delivery_root(
         root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 4.0
@@ -2059,7 +2058,7 @@ def test_sqlite_540_backlog_resumable_checkpoint_and_tamper_protection(
     assert checkpoint_path.is_file()
     assert (checkpoint_path.lstat().st_mode & 0o077) == 0
     ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert ckpt_payload["version"] == 3
+    assert ckpt_payload["version"] == 4
     assert ckpt_payload["seen_frontiers"] == []
     assert ckpt_payload["completed_witnesses"] == {}
     assert ckpt_payload["referrer_summaries"] == {}
@@ -2254,7 +2253,7 @@ def test_sqlite_540_backlog_with_expired_referrer_reclaims_across_5_sweeps(
         counts_after_sweep.append(remaining_seeded())
         if checkpoint_path.is_file():
             payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            assert payload["version"] == 3
+            assert payload["version"] == 4
             if payload["seen_frontiers"]:
                 seen_round2_checkpoint = True
                 assert payload["active_frontier"] == ["decision-backlog-020"]
@@ -2709,7 +2708,7 @@ def test_sqlite_5x50mib_referrers_plus_16mib_capture_reclaims_without_stall(
         names.append("decision-aged-zlate")
         return names
 
-    # 1. Single-sweep unit verification: Sweep 1 saves v3 checkpoint with 5 referrers,
+    # 1. Single-sweep unit verification: Sweep 1 saves v4 checkpoint with 5 referrers,
     #    Sweep 2 verifies referrers in O(stat) with 0 scan-bytes deducted -> deletes t0 & t1 (8 -> 6).
     unit_rt = tmp_path / "unit-rt"
     unit_rt.mkdir(mode=0o700)
@@ -2724,7 +2723,7 @@ def test_sqlite_5x50mib_referrers_plus_16mib_capture_reclaims_without_stall(
     assert res1.swept is True and res1.deleted == 0
     ckpt_unit = unit_root / RETENTION_REFSCAN_CHECKPOINT_NAME
     ckpt_data = json.loads(ckpt_unit.read_text(encoding="utf-8"))
-    assert ckpt_data["version"] == 3
+    assert ckpt_data["version"] == 4
     assert len(ckpt_data["referrer_witnesses"]) == 5
     assert len(ckpt_data["referrer_summaries"]) == 5
     assert all(
@@ -2807,3 +2806,496 @@ def test_sqlite_5x50mib_referrers_plus_16mib_capture_reclaims_without_stall(
 
     assert run_paired_cli_5_sweeps(label="cli-ctrl", link_referrers=False) == 6
     assert run_paired_cli_5_sweeps(label="cli-exp", link_referrers=True) == 6
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="Native continuity uses POSIX private directories and locks",
+)
+def test_native_session_rotating_active_digests_reclaims_across_file_and_sqlite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    """Real native SessionStart + PostToolUse turns rotating session.json digests keep reclaiming."""
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    now = time.time()
+    old_mtime = now - 200_000.0
+
+    def extract_session_digests(path: Path) -> tuple[str, ...]:
+        found: set[str] = set()
+        stack: list[object] = [json.loads(path.read_text(encoding="utf-8"))]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, dict):
+                sha = item.get("sha256")
+                if isinstance(sha, str) and len(sha) == 64:
+                    found.add(sha)
+                stack.extend(item.values())
+            elif isinstance(item, list):
+                stack.extend(item)
+        return tuple(sorted(found))
+
+    def run_five_native_turns(*, label: str, rotate_journal: bool) -> dict[str, object]:
+        sub = tmp_path / label
+        sub.mkdir()
+        thread_id = f"native-rotating-{provider}-{label}"
+        monkeypatch.setenv("CODEX_THREAD_ID", thread_id)
+        monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
+
+        project, runtime, registry = _write_fixture(sub, provider=provider)
+        managed_root = runtime.expanduser().resolve() / "context-delivery"
+        managed_root.mkdir(parents=True, mode=0o700)
+
+        code_cfg, setup = _run_cli(
+            registry,
+            runtime,
+            "quota",
+            "context-config",
+            "--codex-app",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            cwd=project,
+        )
+        assert code_cfg == 0, setup
+        hook = setup["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        session_event = {
+            "session_id": thread_id,
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+        }
+        subprocess.run(
+            shlex.split(hook),
+            input=json.dumps(session_event),
+            text=True,
+            cwd=project,
+            capture_output=True,
+            check=True,
+        )
+
+        sibling_note = managed_root / "unrelated-note" / "keep.txt"
+        sibling_note.parent.mkdir(mode=0o700)
+        sibling_note.write_text("do not prune unrelated dir\n", encoding="utf-8")
+
+        seeded_names = [f"decision-aged-{idx:03d}" for idx in range(540)]
+        for idx, name in enumerate(seeded_names):
+            _make_512kib_dir(managed_root, name, mtime=old_mtime + idx)
+
+        counts: list[int] = []
+        digest_snapshots: list[tuple[str, ...]] = []
+        turn_refs: list[str] = []
+
+        for turn_idx in range(5):
+            if not rotate_journal and turn_idx == 1:
+                monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+            turn_id = f"native-turn-{turn_idx if turn_idx < 4 else 3}"
+            code_run, wire = _run_cli(
+                registry,
+                runtime,
+                "quota",
+                "should-run",
+                "--codex-app",
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                AGENT_ID,
+                "--todo-id",
+                TODO_ID,
+                "--turn-instance-id",
+                turn_id,
+                cwd=project,
+                raw_guard=False,
+            )
+            assert code_run == 0, wire
+            ref_file = str(wire["reference_file"])
+            turn_refs.append(ref_file)
+            nav = read_context_read_reference(ref_file)[1]["navigation"]
+            observed_bytes = 0
+            while True:
+                rc_pg, page = _run_cli(
+                    registry,
+                    runtime,
+                    "quota",
+                    "context-read",
+                    "--capture-file",
+                    str(nav["path"]),
+                    "--capture-sha256",
+                    str(nav["sha256"]),
+                    "--offset",
+                    str(observed_bytes),
+                    "--page-bytes",
+                    "8192",
+                    cwd=project,
+                )
+                assert rc_pg == 0 and page["ok"] is True, page
+                observed_bytes += len(str(page["content"]).encode("utf-8"))
+                if rotate_journal or turn_idx == 0:
+                    subprocess.run(
+                        shlex.split(hook),
+                        input=json.dumps(
+                            {
+                                **session_event,
+                                "hook_event_name": "PostToolUse",
+                                "tool_response": json.dumps(page),
+                            }
+                        ),
+                        text=True,
+                        cwd=project,
+                        capture_output=True,
+                        check=True,
+                    )
+                if page["eof"]:
+                    break
+
+            session_files = [p for p in managed_root.glob("*/session.json") if p.is_file()]
+            assert len(session_files) == 1
+            digest_snapshots.append(extract_session_digests(session_files[0]))
+            counts.append(sum(1 for name in seeded_names if (managed_root / name).exists()))
+
+        assert sibling_note.read_text(encoding="utf-8") == "do not prune unrelated dir\n"
+        rc_turn0, read_turn0 = _run_cli(
+            registry, runtime, "quota", "context-read", "--reference-file", turn_refs[0], cwd=project
+        )
+        assert rc_turn0 == 0 and read_turn0["ok"] is True, read_turn0
+        rc_turn4, read_turn4 = _run_cli(
+            registry, runtime, "quota", "context-read", "--reference-file", turn_refs[-1], cwd=project
+        )
+        assert rc_turn4 == 0 and read_turn4["ok"] is True, read_turn4
+        return {
+            "counts": counts,
+            "remaining": counts[-1],
+            "unique_digest_states": len(set(digest_snapshots)),
+        }
+
+    fixed = run_five_native_turns(label="fixed-journal", rotate_journal=False)
+    rotating = run_five_native_turns(label="rotating-journal", rotate_journal=True)
+
+    assert fixed["unique_digest_states"] == 1
+    assert rotating["unique_digest_states"] == 5
+    rotating_counts = cast("list[int]", rotating["counts"])
+    assert rotating_counts[0] == 540
+    assert rotating_counts[-1] <= 495
+    assert all(
+        curr <= prev for prev, curr in zip(rotating_counts, rotating_counts[1:])
+    )
+    assert rotating["remaining"] < rotating_counts[0]
+    assert rotating["remaining"] == fixed["remaining"]
+
+
+@pytest.mark.parametrize("digest_target", ["target", "referrer"])
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="Native continuity uses POSIX private directories and locks",
+)
+def test_mid_checkpoint_rotating_digest_only_and_new_capture_protection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    digest_target: str,
+) -> None:
+    """Mid-checkpoint session digest rotation protects target/referrer + new capture without stall."""
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    sub = tmp_path / digest_target
+    sub.mkdir()
+    thread_id = f"mid-checkpoint-{digest_target}"
+    monkeypatch.setenv("CODEX_THREAD_ID", thread_id)
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
+
+    project, runtime, registry = _write_fixture(sub, provider="sqlite")
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+
+    rc_cfg, setup = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "context-config",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        cwd=project,
+    )
+    assert rc_cfg == 0, setup
+    hook = setup["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    session_event = {
+        "session_id": thread_id,
+        "cwd": str(project),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    }
+    subprocess.run(
+        shlex.split(hook),
+        input=json.dumps(session_event),
+        text=True,
+        cwd=project,
+        capture_output=True,
+        check=True,
+    )
+
+    rc_orig, wire_orig = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "mid-orig-turn",
+        cwd=project,
+        raw_guard=False,
+    )
+    assert rc_orig == 0, wire_orig
+    orig_ref = str(wire_orig["reference_file"])
+    orig_nav = read_context_read_reference(orig_ref)[1]["navigation"]
+    orig_offset = 0
+    while True:
+        rc_pg, page = _run_cli(
+            registry,
+            runtime,
+            "quota",
+            "context-read",
+            "--capture-file",
+            str(orig_nav["path"]),
+            "--capture-sha256",
+            str(orig_nav["sha256"]),
+            "--offset",
+            str(orig_offset),
+            "--page-bytes",
+            "8192",
+            cwd=project,
+        )
+        assert rc_pg == 0 and page["ok"] is True, page
+        orig_offset += len(str(page["content"]).encode("utf-8"))
+        subprocess.run(
+            shlex.split(hook),
+            input=json.dumps(
+                {
+                    **session_event,
+                    "hook_event_name": "PostToolUse",
+                    "tool_response": json.dumps(page),
+                }
+            ),
+            text=True,
+            cwd=project,
+            capture_output=True,
+            check=True,
+        )
+        if page["eof"]:
+            break
+
+    session_files = [p for p in managed_root.glob("*/session.json") if p.is_file()]
+    assert len(session_files) == 1
+    session_json_path = session_files[0]
+
+    now = time.time()
+    old_mtime = now - 200_000.0
+    seeded_names = [f"decision-aged-{idx:03d}" for idx in range(540)]
+    for idx, name in enumerate(seeded_names):
+        _make_512kib_dir(managed_root, name, mtime=old_mtime + idx)
+
+    for idx in (0, 1):
+        unique_dir = managed_root / f"decision-aged-{idx:03d}"
+        unique_target = unique_dir / "decision.json"
+        unique_digest = _write_owned_json(
+            unique_target,
+            {
+                "ok": True,
+                "decision": "wait",
+                "seed_id": f"unique-target-{idx}",
+                "blob": "x" * (512 * 1024),
+            },
+            mtime=old_mtime + idx,
+        )
+        _write_owned_json(
+            unique_dir / "decision.reader.json",
+            {
+                "schema_version": "context_capture_read_reference_v1",
+                "path": str(unique_target),
+                "sha256": unique_digest,
+            },
+            mtime=old_mtime + idx,
+        )
+        os.utime(unique_dir, (old_mtime + idx, old_mtime + idx))
+
+    t0_digest = json.loads(
+        (managed_root / "decision-aged-000" / "decision.reader.json").read_text(encoding="utf-8")
+    )["sha256"]
+    r1_dir = managed_root / "decision-aged-020"
+    r1_digest = ""
+    if digest_target == "referrer":
+        r1_target = r1_dir / "decision.json"
+        r1_digest = _write_owned_json(
+            r1_target,
+            {
+                "ok": True,
+                "decision": "wait",
+                "decision_capture_path": str(managed_root / "decision-aged-000" / "decision.json"),
+                "blob": "r" * (512 * 1024),
+            },
+            mtime=old_mtime + 20,
+        )
+        _write_owned_json(
+            r1_dir / "decision.reader.json",
+            {
+                "schema_version": "context_capture_read_reference_v1",
+                "path": str(r1_target),
+                "sha256": r1_digest,
+            },
+            mtime=old_mtime + 20,
+        )
+        os.utime(r1_dir, (old_mtime + 20, old_mtime + 20))
+
+    # Sweep 1: hits default 256 MiB cap (~511 dirs scanned), saves v4 checkpoint, deletes 0.
+    rc_s1, sweep1_wire = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "mid-sweep-1",
+        cwd=project,
+        raw_guard=False,
+    )
+    assert rc_s1 == 0, sweep1_wire
+    ckpt_path = managed_root / RETENTION_REFSCAN_CHECKPOINT_NAME
+    assert ckpt_path.is_file()
+    ckpt_payload = json.loads(ckpt_path.read_text(encoding="utf-8"))
+    assert ckpt_payload["version"] == 4
+    assert ckpt_payload["seen_frontiers"] == []
+    assert len(ckpt_payload["round_witnesses"]) >= 500
+    cohort_names = [entry["name"] for entry in ckpt_payload["target_cohort"]]
+    assert "decision-aged-000" in cohort_names and "decision-aged-001" in cohort_names
+    assert len(cohort_names) >= 8
+    if digest_target == "referrer":
+        assert "decision-aged-020" in ckpt_payload["referrer_witnesses"]
+        assert "decision-aged-020" in ckpt_payload["referrer_summaries"]
+    assert sum(1 for name in seeded_names if (managed_root / name).exists()) == 540
+
+    # Between Sweep 1 and Sweep 2:
+    # Keep Sweep 2 from overwriting session_json_path so only our rotated digest-only write persists.
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    # (a) Rotate session.json to add a digest-only (no path) reference to t0 (or saved referrer R1 -> t0).
+    rotated_digest = t0_digest if digest_target == "target" else r1_digest
+    _write_owned_json(
+        session_json_path,
+        {
+            "schema_version": "codex_context_continuity_session_v1",
+            "session_id": thread_id,
+            "recovery": {"sha256": rotated_digest},
+        },
+        mtime=time.time(),
+    )
+    os.chmod(session_json_path, 0o600)
+
+    # (b) Add a new active Turn capture dir referencing t1 (decision-aged-001).
+    new_turn_dir = managed_root / "decision-new-mid-turn"
+    new_turn_dir.mkdir(mode=0o700)
+    new_turn_target = new_turn_dir / "decision.json"
+    new_turn_digest = _write_owned_json(
+        new_turn_target,
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": GOAL_ID,
+            "runtime_root": str(runtime),
+            "heartbeat_receipt": {"turn_instance_id": "turn-mid-active", "event_id": "evt-mid-active"},
+            "decision_capture_path": str(managed_root / "decision-aged-001" / "decision.json"),
+        },
+        mtime=time.time(),
+    )
+    _write_owned_json(
+        new_turn_dir / "decision.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(new_turn_target),
+            "sha256": new_turn_digest,
+        },
+        mtime=time.time(),
+    )
+
+    # Sweep 2 resumes clean witnesses without discarding them, protects t0 (+R1) and t1,
+    # and reclaims the remaining unreferenced cohort dirs in the same sweep.
+    rc_s2, sweep2_wire = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "mid-sweep-2",
+        cwd=project,
+        raw_guard=False,
+    )
+    assert rc_s2 == 0, sweep2_wire
+    assert not ckpt_path.exists()
+    assert (managed_root / "decision-aged-000").is_dir()
+    assert (managed_root / "decision-aged-001").is_dir()
+    assert new_turn_dir.is_dir()
+    if digest_target == "referrer":
+        assert r1_dir.is_dir()
+    for name in cohort_names:
+        if name not in ("decision-aged-000", "decision-aged-001"):
+            assert not (managed_root / name).exists()
+    assert sum(1 for name in seeded_names if (managed_root / name).exists()) == (
+        540 - (len(cohort_names) - 2)
+    )
+    assert (
+        sha256((managed_root / "decision-aged-000" / "decision.json").read_bytes()).hexdigest()
+        == t0_digest
+    )
+    rc_read_orig, read_orig = _run_cli(
+        registry, runtime, "quota", "context-read", "--reference-file", orig_ref, cwd=project
+    )
+    assert rc_read_orig == 0 and read_orig["ok"] is True, read_orig

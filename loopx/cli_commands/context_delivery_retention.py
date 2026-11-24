@@ -364,15 +364,8 @@ def _select_fresh_cohort(
     return preliminary_reclaimable, uninspected_aged, invalid_aged
 
 
-def _build_ref_needles(
-    frontier_names: set[str],
-    *,
-    active_digests: set[str] | None = None,
-) -> tuple[bytes, ...]:
-    needle_bytes = [name.encode("utf-8") for name in frontier_names]
-    if active_digests:
-        needle_bytes.extend(digest.encode("ascii") for digest in active_digests)
-    return tuple(sorted(set(needle_bytes)))
+def _build_ref_needles(frontier_names: set[str]) -> tuple[bytes, ...]:
+    return tuple(sorted({name.encode("utf-8") for name in frontier_names}))
 
 
 def _resume_checkpoint_cohort(
@@ -391,14 +384,12 @@ def _resume_checkpoint_cohort(
     max_inspect_per_sweep: int,
     max_inspect_bytes_per_sweep: int,
     ref_scan_remaining: int,
-    max_ref_scan_bytes_per_sweep: int,
     inspected_by_name: dict[str, _CandidateDirectory],
     settlement_cache: dict[tuple[str, str, str, str], bool],
     read_json: _JsonObjectReader,
 ) -> _ResumedCheckpointState | None:
     if (
-        checkpoint.active_digests != frozenset(active_digests)
-        or len(checkpoint.target_cohort) > max_delete_per_sweep
+        len(checkpoint.target_cohort) > max_delete_per_sweep
         or len(checkpoint.target_cohort) > max_inspect_per_sweep
     ):
         return None
@@ -515,17 +506,10 @@ def _verify_targets_via_ref_scan(
         round_frontier = set(frontier)
         tamper_recheck_pending = False
         round_needles: tuple[bytes, ...] | None = (
-            _build_ref_needles(
-                round_frontier,
-                active_digests=None if seen_frontiers else active_digests,
-            )
-            if round_frontier
-            else None
+            _build_ref_needles(round_frontier) if round_frontier else None
         )
         full_needles = (
-            _build_ref_needles(
-                seen_frontiers | round_frontier, active_digests=active_digests
-            )
+            _build_ref_needles(seen_frontiers | round_frontier)
             if seen_frontiers
             else (round_needles or ())
         )
@@ -596,7 +580,7 @@ def _verify_targets_via_ref_scan(
                 _persist_paused_refscan(
                     root=root, uid=uid, remaining_targets=remaining_targets,
                     inspected_by_name=inspected_by_name,
-                    protected=protected, active_digests=active_digests,
+                    protected=protected,
                     seen_frontiers=seen_frontiers, round_frontier=round_frontier,
                     next_frontier=next_frontier, referrer_witnesses=referrer_witnesses,
                     completed_witnesses=completed_witnesses,
@@ -736,7 +720,6 @@ def _select_prune_targets(
             max_inspect_per_sweep=max_inspect_per_sweep,
             max_inspect_bytes_per_sweep=max_inspect_bytes_per_sweep,
             ref_scan_remaining=ref_scan_remaining,
-            max_ref_scan_bytes_per_sweep=max_ref_scan_bytes_per_sweep,
             inspected_by_name=inspected_by_name,
             settlement_cache=settlement_cache, read_json=active_reader,
         )

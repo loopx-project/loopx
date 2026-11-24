@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     )
 
 RETENTION_REFSCAN_CHECKPOINT_NAME = ".retention-refscan.json"
-REFSCAN_CHECKPOINT_VERSION = 3
+REFSCAN_CHECKPOINT_VERSION = 4
 
 _ADMISSION_KEYS: frozenset[str] = frozenset(
     {
@@ -55,7 +55,6 @@ class _ReferrerSummary:
 class _RefScanCheckpoint:
     target_cohort: tuple[_TargetCohortIdentity, ...]
     protected_names: frozenset[str]
-    active_digests: frozenset[str]
     seen_frontiers: frozenset[str]
     active_frontier: frozenset[str]
     next_frontier: frozenset[str]
@@ -222,11 +221,8 @@ def _load_refscan_checkpoint(
     uid: int | None,
     read_json: _JsonObjectReader | None = None,
 ) -> tuple[_RefScanCheckpoint | None, bool]:
-    """Load v3 ``.retention-refscan.json``; return ``(None, True)`` to fail closed."""
-    from .context_delivery_retention_scan import (
-        _read_regular_json_object,
-        _valid_sha256_tuple,
-    )
+    """Load v4 ``.retention-refscan.json``; return ``(None, True)`` to fail closed."""
+    from .context_delivery_retention_scan import _read_regular_json_object
 
     active_reader = read_json or _read_regular_json_object
     checkpoint_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
@@ -252,7 +248,6 @@ def _load_refscan_checkpoint(
 
     cohort = _valid_cohort_list(parsed.get("target_cohort"))
     protected_names = _valid_name_set(parsed.get("protected_names"))
-    active_digests = _valid_sha256_tuple(parsed.get("active_digests"))
     seen_frontiers = _valid_name_set(parsed.get("seen_frontiers"))
     active_frontier = _valid_name_set(parsed.get("active_frontier"))
     next_frontier = _valid_name_set(parsed.get("next_frontier"))
@@ -263,7 +258,6 @@ def _load_refscan_checkpoint(
     if (
         cohort is None
         or protected_names is None
-        or active_digests is None
         or seen_frontiers is None
         or active_frontier is None
         or next_frontier is None
@@ -297,7 +291,6 @@ def _load_refscan_checkpoint(
         _RefScanCheckpoint(
             target_cohort=cohort,
             protected_names=protected_names,
-            active_digests=active_digests,
             seen_frontiers=seen_frontiers,
             active_frontier=active_frontier,
             next_frontier=next_frontier,
@@ -341,7 +334,6 @@ def _save_refscan_checkpoint(
             for item in checkpoint.target_cohort
         ],
         "protected_names": sorted(checkpoint.protected_names),
-        "active_digests": sorted(checkpoint.active_digests),
         "seen_frontiers": sorted(checkpoint.seen_frontiers),
         "active_frontier": sorted(checkpoint.active_frontier),
         "next_frontier": sorted(checkpoint.next_frontier),
@@ -454,7 +446,6 @@ def _persist_paused_refscan(
     remaining_targets: list[_CandidateDirectory],
     inspected_by_name: Mapping[str, _CandidateDirectory],
     protected: set[str],
-    active_digests: set[str],
     seen_frontiers: set[str],
     round_frontier: set[str],
     next_frontier: set[str],
@@ -513,7 +504,6 @@ def _persist_paused_refscan(
         checkpoint=_RefScanCheckpoint(
             target_cohort=cohort_snapshot,
             protected_names=frozenset(protected),
-            active_digests=frozenset(active_digests),
             seen_frontiers=save_seen,
             active_frontier=save_active,
             next_frontier=save_next,
