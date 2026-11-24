@@ -583,15 +583,31 @@ Self-service:
    interrupted repair leaves only the backup, and `rm -f` accepts that.
 
    ```bash
-   newest=$(ls -td ~/.local/bin/node.before-loopx.* | head -1) &&
-   rm -f ~/.local/bin/node &&
-   if [ -L "$newest/node" ]; then
-     ln -s "$(readlink "$newest/node")" ~/.local/bin/node
+   newest=$(ls -td ~/.local/bin/node.before-loopx.* 2>/dev/null | head -1) &&
+   [ -n "$newest" ] &&
+   staged=~/.local/bin/node.restored."$(date +%Y%m%d-%H%M%S)" &&
+   if [ -d "$newest" ]; then src="$newest/node"; else src="$newest"; fi &&
+   if [ -L "$src" ]; then
+     ln -s "$(readlink "$src")" "$staged"
    else
-     cp "$newest/node" ~/.local/bin/node
+     cp "$src" "$staged"
    fi &&
+   "$staged" --version &&
+   rm -f ~/.local/bin/node &&
+   mv "$staged" ~/.local/bin/node &&
    shasum ~/.local/bin/node
    ```
+
+   The restore builds the restored entry beside the launcher first, so a
+   backup symlink's raw value is recreated where the original launcher lived
+   and a relative link resolves exactly as it did before the repair; the
+   `--version` line then qualifies that entry where it will live. Only after
+   that does the sequence remove the current launcher and move the staged
+   entry into place. If no backup exists, the newest one is empty — an
+   interrupted repair leaves exactly that — or its entry cannot run, the
+   chain stops with the working launcher still in place and a `node.restored-*`
+   scratch entry to delete. If the newest backup is unusable but an older one
+   is complete, restore that older one by naming it instead of `newest`.
 
    The backup keeps the launcher's own entry type and raw link value: a
    symlink is recreated with its original target string at the original
