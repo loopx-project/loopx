@@ -1297,7 +1297,11 @@ def collect_doctor(
             "exists": bool(project_skill.get("exists")),
             "delivery_hints": bool(project_skill.get("required_phrases")),
             "route_conflict": bool(project_skill.get("route_conflict")),
-            "candidate_paths": list(project_skill.get("candidate_paths") or []),
+            "candidate_paths": (
+                list(candidate_paths)
+                if isinstance((candidate_paths := project_skill.get("candidate_paths")), (list, tuple))
+                else []
+            ),
         },
         "skill_delivery": skill_delivery,
         "skills": skills,

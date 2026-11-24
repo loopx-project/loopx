@@ -7,7 +7,7 @@ read-only native control client. Chat retains its own execution fence.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
@@ -695,47 +695,31 @@ class StewardTurnHost:
 
     @contextmanager
     def _task_execution_lease(self, request: Mapping[str, Any], turn_id: str, *, recovery: bool = False,
-                              admission_retry: bool = False, claim_args: list[str] | None = None):
+                              admission_retry: bool = False, claim_args: list[str] | None = None,
+                              retain_for_retry: Callable[[], bool] | None = None):
         """Both generation and cached validation use the original Todo owner."""
-        from .steward_commands import native_command
+        from .steward_commands import acquire_steward_task_lease, native_command
+
         actor = request["actor"]
-        if claim_args is not None:
-            operation_id = f"todo-claim:native-turn:{turn_id}"
-            claim = native_command(self.controller, [*claim_args, "--claim-operation-id", operation_id])
-            if claim.get("claim_operation_id") != operation_id:
-                raise ValueError("native task preparation did not return its original claim")
-            receipts = native_command(self.controller, ["todo", "receipt", "--goal-id", actor["goal_id"],
-                "--operation-id", operation_id])["receipts"]
-            lease = receipts[0]["result"].get("lease") if len(receipts) == 1 else None
-            if not isinstance(lease, dict):
-                raise ValueError("native task preparation could not read back its original lease")
-        else:
-            retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"]]).get("lease")
-            version = retained["version"] if retained else 0
-            suffix = (".validation-recovery." + str(version) if recovery else
-                ".admission-retry." + turn_id if admission_retry else
-                ".admission-retry" if request.get("resume_turn_key") else "")
-            lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
-                "--expected-version", str(version)])["lease"]
+        lease = acquire_steward_task_lease(self.controller, request, turn_id,
+            recovery=recovery, admission_retry=admission_retry, claim_args=claim_args)
         try:
             yield lease
         finally:
-            # Completion retires this lease. Never release a later owner's.
-            try:
-                retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                    "--todo-id", request["todo_id"]]).get("lease")
-                if retained and retained.get("status") == "active":
-                    proof = self._task_lease_proof(request, lease)
-                    native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
-                        "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                        "--idempotency-key", proof["task_lease_idempotency_key"],
-                        "--expected-version", str(proof["task_lease_expected_version"])])
-            except (OSError, ValueError, RuntimeError):
-                self.store.append_event(actor["session_id"], turn_id, kind="native_loopx.task_lease_release_unconfirmed",
-                    payload={"todo_id": request["todo_id"], "lease_epoch": lease["lease_epoch"]})
+            if retain_for_retry is None or not retain_for_retry():
+                # Completion retires this lease. Never release a later owner's.
+                try:
+                    retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+                        "--todo-id", request["todo_id"]]).get("lease")
+                    if retained and retained.get("status") == "active":
+                        proof = self._task_lease_proof(request, lease)
+                        native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
+                            "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                            "--idempotency-key", proof["task_lease_idempotency_key"],
+                            "--expected-version", str(proof["task_lease_expected_version"])])
+                except (OSError, ValueError, RuntimeError):
+                    self.store.append_event(actor["session_id"], turn_id, kind="native_loopx.task_lease_release_unconfirmed",
+                        payload={"todo_id": request["todo_id"], "lease_epoch": lease["lease_epoch"]})
 
     def _frozen_report_contract_recovery(
         self,
@@ -1565,6 +1549,7 @@ class StewardTurnHost:
         reports, report_owner_key = report_service(self.controller, actor) if report_work else (None, None)
         report_context = ""
         governance_work = False
+        report_launch_rejected = False
         managed_answer = ""
         managed_lease, managed_lease_request = None, None
         preparation_status = None
@@ -1696,6 +1681,7 @@ class StewardTurnHost:
 
             @contextmanager
             def launch():
+                nonlocal report_launch_rejected
                 # The existing app-server request owner holds this fence only
                 # through turn/start publication, never through model waiting.
                 observed = self._observe(actor)
@@ -1713,6 +1699,8 @@ class StewardTurnHost:
                         # Only guard entry is before publication. Let the
                         # existing native executor durably record its typed
                         # failure; exceptions after yield remain unknown.
+                        if not local_session and not governance_work and original and original["turn_id"] == turn_id:
+                            report_launch_rejected = True
                         from ...control_plane.turn_driver.host_failure import BuiltInHostError
                         raise BuiltInHostError(str(exc), failure_kind="contract_rejected") from exc
                     yield
@@ -1804,8 +1792,14 @@ class StewardTurnHost:
         # The kernel records the actual app-server host and independent profile.
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
+
+        def retain_report_lease() -> bool:
+            failure = result.get("host_failure") or {}
+            return report_launch_rejected and failure.get("kind") == "contract_rejected" and failure.get("attempt") == 1
+
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
-                admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
+                admission_retry=bool(selection_recovery), retain_for_retry=retain_report_lease)
+                if report_work else nullcontext(None)) as report_lease:
             if not report_work and request.get("todo_id") and not request.get("resume_turn_key"):
                 # The selected Task's existing lease must precede the kernel's
                 # delivery guard. Taking it in the model callback is too late:

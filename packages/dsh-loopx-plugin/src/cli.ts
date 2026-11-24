@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 // 2.4.0 adds the original-Turn receipt reader used by selection recovery.
@@ -99,6 +100,17 @@ export interface LoopXCommand {
   readonly prefix: readonly string[]
   readonly skillCommand: string
   readonly version: string
+  /**
+   * The absolute executable bound at discovery and passed to Core as
+   * `--cli-bin`, pinning rendered continuation text (heartbeat task bodies,
+   * settlement command templates) to the same binary this adapter probes and
+   * spawns. Relative PATH entries are normalized against the discovery
+   * working directory. Undefined when no one executable can be bound — an
+   * interpreter plus module or managed-launcher prefix, or a name the probe
+   * environment cannot locate — leaving Core's bare `loopx` fallback route
+   * and the driver's unbound disclosure.
+   */
+  readonly cliBin?: string | undefined
   readonly candidate?: LoopXCliDiagnostics['candidate']
 }
 
@@ -474,10 +486,79 @@ export function supportedLoopXVersion(
   return !parsed[4] && (!parsed[6] || parsed[5]) ? value : undefined
 }
 
-function shellWord(value: string): string {
+export function shellWord(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/u.test(value)
     ? value
     : `'${value.replaceAll("'", `'"'"'`)}'`
+}
+
+function probeExecutableFile(directory: string, name: string): string | undefined {
+  // Mirror the spawn adapter's bare-name discovery: CreateProcess appends
+  // `.exe` on Windows, while POSIX keeps one exact executable spelling.
+  const spellings = process.platform === 'win32' && !/\.(exe|com)$/iu.test(name)
+    ? [name, `${name}.exe`]
+    : [name]
+  // Normalize relative PATH entries against this process's working directory
+  // at discovery time. A relative route would re-resolve on every later
+  // spawn's cwd, letting the version probe, driver admission, and rendered
+  // Core commands select different installations of the same name.
+  for (const spelling of spellings) {
+    const candidate = join(resolve(directory), spelling)
+    try {
+      if (statSync(candidate, { throwIfNoEntry: false })?.isFile() !== true) continue
+      accessSync(candidate, constants.X_OK)
+    } catch {
+      continue
+    }
+    return candidate
+  }
+  return undefined
+}
+
+/**
+ * Bind one probeable command name to the absolute executable the spawn
+ * environment would run: explicit paths normalize against the current working
+ * directory, and bare names resolve to the exact PATH file, with relative PATH
+ * entries made absolute at discovery. Returns undefined when no single
+ * executable can be bound — an illegal `--cli-bin` value, or a name the probe
+ * environment cannot locate — so callers keep the bare fallback route and
+ * disclose the unbound state instead of pinning a wrong or relative path.
+ */
+function discoverExecutablePath(
+  name: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  if (name === '' || name.startsWith('-') || /[\u0000-\u001f]/u.test(name)) {
+    return undefined
+  }
+  if (name.includes('/') || name.includes('\\')) return resolve(name)
+  const searchPath = env.PATH ?? env.Path
+  for (const directory of searchPath?.split(delimiter) ?? []) {
+    const discovered = probeExecutableFile(directory, name)
+    if (discovered !== undefined) return discovered
+  }
+  return undefined
+}
+
+/**
+ * The one absolute executable Core may embed as `--cli-bin`, if any.
+ *
+ * Resolver-produced commands bind `cliBin` at discovery. A host-injected
+ * command may predate that field: when it names one absolute executable with
+ * no interpreter prefix, that file is exactly what the Driver spawns, so it
+ * passes through unchanged and is never re-resolved. Anything else — a bare
+ * or relative name, which depends on the caller's PATH or working directory,
+ * an interpreter-prefixed route, or a value Core's parser would reject — is
+ * unbound, so Core keeps its bare `loopx` fallback and the Driver discloses it.
+ */
+export function coreRouteBin(command: LoopXCommand): string | undefined {
+  const route = command.cliBin
+    ?? (command.prefix.length === 0 && isAbsolute(command.file) ? command.file : undefined)
+  if (route === undefined || route === '' || route.startsWith('-')
+    || /[\u0000-\u001f]/u.test(route)) {
+    return undefined
+  }
+  return route
 }
 
 /** Resolve the console script first, then the stable Python module fallback. */
@@ -494,34 +575,62 @@ export async function resolveLoopXCommand(
     ? ['python3', 'python']
     : [configuredPython]
   const managedLauncher = options.managedLauncher
+  const probeEnv = options.env ?? process.env
+  // Bind single-executable routes before probing so the version probe, every
+  // later business spawn, and Core's rendered `--cli-bin` text all run one
+  // absolute file. Unbound candidates keep bare probe semantics and surface
+  // the unbound state through the driver's typed warning.
+  const configuredRoute = configured
+    ? discoverExecutablePath(configured, probeEnv)
+    : undefined
+  const pathLoopxRoute = configured ? undefined : discoverExecutablePath('loopx', probeEnv)
   const managedCandidates: Array<Omit<LoopXCommand, 'version'>> = configured
     || managedLauncher === undefined
     ? []
-    : [...new Set(managedLauncher.pythonBins)].map(pythonBin => ({
-        file: pythonBin,
-        prefix: [managedLauncher.path],
-        skillCommand: [
-          shellWord(pythonBin),
-          shellWord(managedLauncher.path),
-        ].join(' '),
-      }))
-  const candidates: Array<Omit<LoopXCommand, 'version'>> = configured
-    ? [{ file: configured, prefix: [], skillCommand: '"$LOOPX_BIN"' }]
+    : [...new Set(managedLauncher.pythonBins)].map(pythonBin => {
+        const file = discoverExecutablePath(pythonBin, probeEnv) ?? pythonBin
+        return {
+          file,
+          prefix: [managedLauncher.path],
+          skillCommand: [shellWord(file), shellWord(managedLauncher.path)].join(' '),
+        }
+      })
+  const candidates: Array<{
+    readonly spec: Omit<LoopXCommand, 'version'>
+    readonly label: LoopXCliDiagnostics['candidate']
+  }> = configured
+    ? [{
+        spec: {
+          file: configuredRoute ?? configured,
+          prefix: [],
+          skillCommand: '"$LOOPX_BIN"',
+          ...(configuredRoute === undefined ? {} : { cliBin: configuredRoute }),
+        },
+        label: 'configured-command',
+      }]
     : [
-        ...managedCandidates,
-        { file: 'loopx', prefix: [], skillCommand: 'loopx' },
+        ...managedCandidates.map(spec => ({ spec, label: 'managed-launcher' as const })),
+        {
+          spec: {
+            file: pathLoopxRoute ?? 'loopx',
+            prefix: [],
+            skillCommand: 'loopx',
+            ...(pathLoopxRoute === undefined ? {} : { cliBin: pathLoopxRoute }),
+          },
+          label: 'path-loopx',
+        },
         ...pythonNames.map(pythonName => ({
-          file: pythonName,
-          prefix: ['-m', 'loopx.cli'],
-          skillCommand: `${shellWord(pythonName)} -m loopx.cli`,
+          spec: {
+            file: pythonName,
+            prefix: ['-m', 'loopx.cli'],
+            skillCommand: `${shellWord(pythonName)} -m loopx.cli`,
+          },
+          label: 'python-module' as const,
         })),
       ]
 
   const probes: LoopXCliError[] = []
-  for (const candidate of candidates) {
-    const label = configured ? 'configured-command'
-      : managedCandidates.includes(candidate) ? 'managed-launcher'
-        : candidate.file === 'loopx' ? 'path-loopx' : 'python-module'
+  for (const { spec: candidate, label } of candidates) {
     const cwdExists = spawnCwdExists()
     try {
       const result = await runner(
