@@ -49,6 +49,7 @@ def create_canonical_todo_if_promoted(
     expected_provider_revision: str | None = None,
     expected_registry_sha256: str | None = None,
     routing_registry_witness: dict[str, str] | None = None,
+    expected_store_identity: str | None = None,
 ) -> dict[str, Any]:
     # The native writer guard selects the route under the same maintenance
     # lock as provider open and commit. A separate source read grants nothing.
@@ -56,6 +57,8 @@ def create_canonical_todo_if_promoted(
         raise ValueError("operation_id must be a non-empty public-safe token")
     if expected_registry_sha256 is not None and expected_provider_revision is None:
         raise ValueError("A reviewed Todo create requires a canonical provider revision and registry digest")
+    if expected_store_identity is not None and expected_registry_sha256 is None:
+        raise ValueError("A reviewed Todo store requires a registry digest")
     operation_id = operation_id if operation_id is not None else f"todo-create:{uuid4().hex}"
     # Identity is independent of current Todo count: exact retries still address
     # the original operation after other creates, edits, completion or archive.
@@ -112,6 +115,8 @@ def create_canonical_todo_if_promoted(
                     if expected_provider_revision is not None else {}),
                 **({"expected_registry_sha256": expected_registry_sha256}
                    if expected_registry_sha256 is not None else {}),
+                **({"expected_store_identity": expected_store_identity}
+                    if expected_store_identity is not None else {}),
                 "runtime_root": str(runtime_root.resolve()),
                 "goal_id": goal_id,
                 "todo": todo,

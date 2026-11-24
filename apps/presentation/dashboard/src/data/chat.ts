@@ -477,6 +477,7 @@ export const typedActionProposalSchema = z.object({
   gate: z.record(z.string(), z.unknown()).nullable().optional(),
   error: z.record(z.string(), z.unknown()).nullable().optional(),
   checkpoint: z.record(z.string(), z.unknown()).nullable().optional(),
+  creation_retry_available: z.literal(true).optional(),
   failure: z.record(z.string(), z.unknown()).nullable().optional(),
   canonical_update_basis: actionSourceBasisSchema.optional(),
   // The workspace a Goal creation resolved to, named for the owner's review.

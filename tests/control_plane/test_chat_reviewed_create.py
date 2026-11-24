@@ -124,13 +124,17 @@ def test_http_create_uses_goal_runtime(tmp_path, monkeypatch, provider, route, k
                 return add_goal_todo(**kwargs)
 
             with monkeypatch.context() as fault:
-                fault.setattr("loopx.chat_actions.add_goal_todo", retarget_at_write)
+                fault.setattr("loopx.chat.todo_creation.add_goal_todo", retarget_at_write)
                 code, refused = request("POST", apply_path, confirmation)
             assert code == 409 and refused["proposal"]["status"] == "stale", refused
             assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
             assert read_canonical_todos_if_promoted(runtime_root=decoy_root, goal_id="goal-a") == decoy
             registry.write_text(original_registration)
-            code, preview = request("POST", f"{action_path}/regenerate", {})
+            assert request("POST", f"{action_path}/regenerate", {})[0] == 409
+            code, preview = request("POST", "/api/actions/preview", {
+                "action_kind": kind, "summary": text, "normalized_parameters": parameters,
+                "context": {"kind": "goal", "goal_id": "goal-a"}, "idempotency_key": "new-reviewed-index",
+            })
             assert code == 201, preview
             apply_path = f"/api/actions/{preview['proposal']['proposal_id']}/apply"
 
@@ -311,8 +315,8 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
     connection = HTTPConnection(*server.server_address, timeout=40)
     checkpoint = store.save_checkpoint
 
-    def write_checkpoint(proposal_id, *, step, receipt):
-        saved = checkpoint(proposal_id, step=step, receipt=receipt)
+    def write_checkpoint(proposal_id, *, step, receipt, **kwargs):
+        saved = checkpoint(proposal_id, step=step, receipt=receipt, **kwargs)
         if step == "todo_created":
             raise OSError("Interrupted after creating the Todo and before assigning it")
         return saved
@@ -397,6 +401,18 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
                 assert read(original_root) == edited
             return
         if change == "saved_assignment":
+            from loopx.control_plane.todos import provider_projection
+
+            def display_unavailable(**kwargs):
+                raise OSError("synthetic display outage")
+
+            with monkeypatch.context() as fault:
+                fault.setattr(provider_projection, "project_current_canonical_todos", display_unavailable)
+                _, result = post(path, {})
+                failure = result["proposal"]["failure"]
+                assert failure["error_code"] == "canonical_create_projection_pending"
+                assert failure["details"]["operation_id"] == f"chat-todo:{created['canonical_receipt']['preview_id']}"
+                assert read(original_root) == original
             code, refused = post(f"/api/actions/{proposal_id}/regenerate", {})
             assert code == 409 and refused["error_code"] == "action_conflict", refused
             assert read(original_root) == original
@@ -438,7 +454,10 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
                 saved_root.rename(original_root)
             assert read(original_root) == original and read(replacement_root) == replacement
             saved_steps = store.load(proposal_id)["checkpoint"]["steps"]
-            assert set(saved_steps) == ({"todo_created", "todo_assigned"} if legacy_saved else {"todo_created"})
+            expected_steps = {"todo_created"} if legacy else {"todo_create_prepared", "todo_created"}
+            if legacy_saved:
+                expected_steps.add("todo_assigned")
+            assert set(saved_steps) == expected_steps
             assert saved_steps["todo_created"] == created
             directory.write_text(original_directory)
             original_registry.write_text(original_registration)
@@ -478,10 +497,10 @@ def test_interrupted_assignment_keeps_the_created_todo_source(tmp_path, monkeypa
             original = read(original_root)
             unrelated_todo = next(row for row in original["todos"] if row["todo_id"] == added["todo_id"])
         if not legacy and change == "lost_assignment_checkpoint":
-            def lose_assignment_checkpoint(proposal_id, *, step, receipt):
+            def lose_assignment_checkpoint(proposal_id, *, step, receipt, **kwargs):
                 if step == "todo_assigned":
                     raise OSError("Interrupted after assigning the original Todo")
-                return checkpoint(proposal_id, step=step, receipt=receipt)
+                return checkpoint(proposal_id, step=step, receipt=receipt, **kwargs)
 
             with monkeypatch.context() as fault:
                 fault.setattr(store, "save_checkpoint", lose_assignment_checkpoint)

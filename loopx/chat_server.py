@@ -1186,7 +1186,7 @@ class ChatRequestHandler(
     def _action_list(self) -> None:
         query = parse_qs(urlparse(self.path).query)
         try:
-            proposals = self.server.action_store.list(
+            proposals = self.server.action_service.list_proposals(
                 goal_id=_query_text(query, "goal_id", limit=200),
                 context_kind=_query_text(query, "context_kind", limit=200),
                 status=_query_text(query, "status", limit=80),
@@ -1206,11 +1206,11 @@ class ChatRequestHandler(
         if self._read_json():
             raise ValueError(f"action {action_name} request must be empty")
 
-    def _mark_action_failed(self, proposal_id: str, error_code: str, message: str) -> None:
+    def _mark_action_failed(self, proposal_id: str, error_code: str, message: str) -> dict[str, object] | None:
         try:
-            self.server.action_store.mark_failed(proposal_id, error_code=error_code, message=message)
-        except (ActionConflictError, KeyError, ValueError):
-            pass
+            return self.server.action_store.mark_failed(proposal_id, error_code=error_code, message=message)
+        except (ActionConflictError, KeyError, ValueError, OSError):
+            return None
 
     def _run_action_mutation(
         self,
@@ -1297,16 +1297,18 @@ class ChatRequestHandler(
             self._send_error(str(exc), status=400, error_code="invalid_action_apply")
             return
         except Exception:
-            self._mark_action_failed(
-                proposal_id,
-                "canonical_action_failed",
-                "Canonical LoopX service did not complete the transition.",
-            )
-            self._send_error(
-                "Typed action could not be applied through its canonical LoopX service.",
-                status=424,
-                error_code="canonical_action_failed",
-            )
+            proposal = self._mark_action_failed(proposal_id, "canonical_action_failed",
+                "Canonical LoopX service did not complete the transition.")
+            payload: dict[str, object] = {
+                "ok": False,
+                "error": "Typed action could not be applied through its canonical LoopX service.",
+                "error_code": "canonical_action_failed",
+            }
+            if proposal and proposal.get("action_kind") in {"todo.create", "monitor.create"}:
+                # Present the original confirmation's durable facts, including
+                # when the first write succeeded and this acknowledgement failed.
+                payload["proposal"] = proposal
+            self._send_json(payload, status=424)
             return
         proposal = result["proposal"]
         if proposal.get("status") == "stale":
