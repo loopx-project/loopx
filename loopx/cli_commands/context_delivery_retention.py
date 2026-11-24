@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 import errno
@@ -63,6 +63,77 @@ _DECISION_OWNERSHIP_KEYS: tuple[str, ...] = (
     "goal_id",
 )
 _MAX_CAPTURE_JSON_BYTES = 64 * 1024 * 1024
+_CAPTURE_REFERENCE_LEAF_KEYS: frozenset[str] = frozenset(
+    {
+        "path",
+        "capture_path",
+        "capture_file",
+        "decision_capture_path",
+        "decision_file",
+        "reference_file",
+        "source_path",
+        "baseline_path",
+        "recovery_path",
+        "replan_read_path",
+        "captured_decision_path",
+        "context_path",
+        "delivery_path",
+        "result_path",
+        "command",
+        "first_read_command",
+        "remaining_read_command",
+        "index_command",
+        "select_command",
+        "read_command",
+        "recovery_command",
+        "next_command",
+        "command_template",
+        "selection_command_args_template",
+        "command_args_template",
+        "ready_context_command_template",
+        "full_decision",
+        "full_packet",
+        "sha256",
+        "capture_sha256",
+        "source_sha256",
+        "claim_source_sha256",
+        "digest",
+        "capture_digest",
+        "selection_sha256",
+        "baseline_sha256",
+    }
+)
+_CAPTURE_REFERENCE_CONTAINER_KEYS: frozenset[str] = frozenset(
+    {
+        "baseline",
+        "baseline_reference",
+        "candidate",
+        "capture",
+        "captured_decision",
+        "captured_recovery",
+        "cli_channel",
+        "comparison_base",
+        "context_details",
+        "context_recovery",
+        "detail_ref",
+        "execution_preparation",
+        "first_read",
+        "host_execution_preparation",
+        "interaction_contract",
+        "navigation",
+        "observed_first_read",
+        "pending",
+        "ready_capture",
+        "recovery",
+        "references",
+        "required",
+        "result_details",
+        "selection",
+        "selection_command",
+        "session",
+        "source_recovery",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,12 +148,21 @@ class ContextDeliveryPruneResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _ShallowDirectory:
+    mtime: float
+    name: str
+    path: Path
+    prefix: str
+
+
+@dataclass(frozen=True, slots=True)
 class _CandidateDirectory:
     mtime: float
     name: str
     path: Path
     prefix: str
     data_payloads: dict[str, dict[str, object]]
+    data_digests: dict[str, str]
     reader_payloads: dict[str, dict[str, object]]
 
 
@@ -356,6 +436,20 @@ def _is_reader_filename(name: str) -> bool:
     )
 
 
+def _expand_user_safe(raw_or_path: str | Path) -> Path | None:
+    """Resolve leading ``~`` home references only, avoiding ``getpwnam`` on prose."""
+    raw = str(raw_or_path)
+    if not raw:
+        return None
+    try:
+        path = raw_or_path if isinstance(raw_or_path, Path) else Path(raw)
+        if raw == "~" or raw.startswith(("~/", "~\\")):
+            path = path.expanduser()
+        return path.absolute()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
 def _reader_reference_is_valid(
     reader_payload: Mapping[str, object],
     *,
@@ -370,8 +464,10 @@ def _reader_reference_is_valid(
     raw_target = reader_payload.get("path")
     if not isinstance(raw_target, str) or not raw_target.strip():
         return False
+    target = _expand_user_safe(raw_target)
+    if target is None:
+        return False
     try:
-        target = Path(raw_target).expanduser().absolute()
         if target.is_symlink():
             return False
         resolved_target = target.resolve(strict=True)
@@ -437,6 +533,7 @@ def _inspect_owned_capture_dir(
     except (OSError, RuntimeError):
         return None
     data_payloads: dict[str, dict[str, object]] = {}
+    data_digests: dict[str, str] = {}
     reader_payloads: dict[str, dict[str, object]] = {}
     try:
         with os.scandir(candidate_path) as entries:
@@ -461,11 +558,12 @@ def _inspect_owned_capture_dir(
                 loaded = _read_regular_json_object(Path(entry.path), uid=uid)
                 if loaded is None:
                     return None
-                parsed, _ = loaded
+                parsed, raw = loaded
                 if is_reader:
                     reader_payloads[entry_name] = parsed
                 else:
                     data_payloads[entry_name] = parsed
+                    data_digests[entry_name] = hashlib.sha256(raw).hexdigest()
     except OSError:
         return None
 
@@ -491,15 +589,16 @@ def _inspect_owned_capture_dir(
         path=candidate_path,
         prefix=prefix,
         data_payloads=data_payloads,
+        data_digests=data_digests,
         reader_payloads=reader_payloads,
     )
 
 
 def _resolved_variants(root: Path) -> tuple[Path, Path]:
-    absolute = root.expanduser().absolute()
+    absolute = _expand_user_safe(root) or root.absolute()
     try:
-        resolved = root.expanduser().resolve(strict=True)
-    except (OSError, RuntimeError):
+        resolved = absolute.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
         resolved = absolute
     return absolute, resolved
 
@@ -512,14 +611,14 @@ def _extract_dir_name_from_path_token(
 ) -> str | None:
     if not token:
         return None
-    candidate_bases = (Path(token).expanduser().absolute(),)
-    resolved_targets: list[Path] = []
-    for base in candidate_bases:
-        resolved_targets.append(base)
-        try:
-            resolved_targets.append(base.resolve(strict=False))
-        except (OSError, RuntimeError):
-            pass
+    base = _expand_user_safe(token)
+    if base is None:
+        return None
+    resolved_targets: list[Path] = [base]
+    try:
+        resolved_targets.append(base.resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        pass
     for target in resolved_targets:
         for base_root in (resolved_root, abs_root):
             try:
@@ -531,48 +630,97 @@ def _extract_dir_name_from_path_token(
     return None
 
 
+def _extract_from_leaf_string(
+    raw: str,
+    *,
+    names: set[str],
+    digests: set[str],
+    abs_root: Path,
+    resolved_root: Path,
+) -> None:
+    text = raw.strip()
+    if not text:
+        return
+    if BARE_SHA256_PATTERN.fullmatch(text) is not None:
+        digests.add(text)
+        return
+    direct = _extract_dir_name_from_path_token(
+        text, abs_root=abs_root, resolved_root=resolved_root
+    )
+    if direct is not None:
+        names.add(direct)
+    if any(sep in text for sep in (" ", "\t", "\n")):
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = text.split()
+        for token in tokens:
+            if BARE_SHA256_PATTERN.fullmatch(token) is not None:
+                digests.add(token)
+                continue
+            found = _extract_dir_name_from_path_token(
+                token, abs_root=abs_root, resolved_root=resolved_root
+            )
+            if found is not None:
+                names.add(found)
+
+
 def _extract_capture_names_and_digests(
     value: object,
     *,
     abs_root: Path,
     resolved_root: Path,
 ) -> tuple[set[str], set[str]]:
-    """Extract capture directory names and SHA-256 digests referenced in JSON values."""
+    """Extract capture directory names and digests from reference/path/command fields."""
     names: set[str] = set()
     digests: set[str] = set()
-    stack: list[object] = [value]
+    if not isinstance(value, Mapping):
+        return names, digests
+    stack: list[tuple[Mapping[object, object], bool]] = [(value, False)]
     while stack:
-        current = stack.pop()
-        if isinstance(current, Mapping):
-            stack.extend(current.values())
-            continue
-        if isinstance(current, (list, tuple)):
-            stack.extend(current)
-            continue
-        if not isinstance(current, str):
-            continue
-        text = current.strip()
-        if not text:
-            continue
-        if BARE_SHA256_PATTERN.fullmatch(text) is not None:
-            digests.add(text)
-            continue
-        direct = _extract_dir_name_from_path_token(
-            text, abs_root=abs_root, resolved_root=resolved_root
-        )
-        if direct is not None:
-            names.add(direct)
-        if any(sep in text for sep in (" ", "\t", "\n")):
-            try:
-                tokens = shlex.split(text)
-            except ValueError:
-                tokens = text.split()
-            for token in tokens:
-                found = _extract_dir_name_from_path_token(
-                    token, abs_root=abs_root, resolved_root=resolved_root
-                )
-                if found is not None:
-                    names.add(found)
+        current, in_detail_replan = stack.pop()
+        for key, child in current.items():
+            if not isinstance(key, str):
+                continue
+            is_leaf = key in _CAPTURE_REFERENCE_LEAF_KEYS or (
+                in_detail_replan and key in ("review", "writeback")
+            )
+            if is_leaf:
+                if isinstance(child, str):
+                    _extract_from_leaf_string(
+                        child,
+                        names=names,
+                        digests=digests,
+                        abs_root=abs_root,
+                        resolved_root=resolved_root,
+                    )
+                elif isinstance(child, (list, tuple)):
+                    for item in child:
+                        if isinstance(item, str):
+                            _extract_from_leaf_string(
+                                item,
+                                names=names,
+                                digests=digests,
+                                abs_root=abs_root,
+                                resolved_root=resolved_root,
+                            )
+                if not in_detail_replan:
+                    continue
+            is_detail_ref = key == "detail_ref"
+            in_container = key in _CAPTURE_REFERENCE_CONTAINER_KEYS or (
+                in_detail_replan and key in ("replan_action_packet", "review", "writeback")
+            )
+            if not in_container:
+                continue
+            next_detail_replan = is_detail_ref or (
+                in_detail_replan and key in ("replan_action_packet", "review", "writeback")
+            )
+            if isinstance(child, Mapping):
+                stack.append((child, next_detail_replan))
+            elif isinstance(child, (list, tuple)):
+                for item in child:
+                    if isinstance(item, Mapping):
+                        stack.append((item, next_detail_replan))
     return names, digests
 
 
@@ -580,13 +728,12 @@ def _collect_root_entries(
     root: Path,
     *,
     uid: int | None,
-) -> tuple[dict[str, list[_CandidateDirectory]], dict[str, _CandidateDirectory], list[Path], int] | None:
-    by_prefix: dict[str, list[_CandidateDirectory]] = {
+) -> tuple[dict[str, list[_ShallowDirectory]], list[Path], int] | None:
+    by_prefix: dict[str, list[_ShallowDirectory]] = {
         prefix: [] for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES
     }
-    owned_by_name: dict[str, _CandidateDirectory] = {}
     non_ephemeral_dirs: list[Path] = []
-    scanned = 0
+    ephemeral_count = 0
     try:
         with os.scandir(root) as entries:
             for entry in entries:
@@ -607,31 +754,27 @@ def _collect_root_entries(
                 if prefix is None:
                     non_ephemeral_dirs.append(Path(entry.path))
                     continue
-                owned = _inspect_owned_capture_dir(
-                    Path(entry.path),
-                    name=name,
-                    prefix=prefix,
-                    mtime=entry_stat.st_mtime,
-                    uid=uid,
+                ephemeral_count += 1
+                by_prefix[prefix].append(
+                    _ShallowDirectory(
+                        mtime=entry_stat.st_mtime,
+                        name=name,
+                        path=Path(entry.path),
+                        prefix=prefix,
+                    )
                 )
-                if owned is None:
-                    continue
-                scanned += 1
-                by_prefix[prefix].append(owned)
-                owned_by_name[name] = owned
     except OSError:
         return None
-    return by_prefix, owned_by_name, non_ephemeral_dirs, scanned
+    return by_prefix, non_ephemeral_dirs, ephemeral_count
 
 
 def _collect_active_continuity_references(
     non_ephemeral_dirs: list[Path],
     *,
-    owned_by_name: Mapping[str, _CandidateDirectory],
     uid: int | None,
     abs_root: Path,
     resolved_root: Path,
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     protected: set[str] = set()
     active_digests: set[str] = set()
     for subdir in non_ephemeral_dirs:
@@ -645,27 +788,24 @@ def _collect_active_continuity_references(
             )
             protected.update(found_names)
             active_digests.update(found_digests)
+    return protected, active_digests
 
-    if active_digests:
-        for candidate in owned_by_name.values():
-            if candidate.name in protected:
-                continue
-            if any(
-                isinstance(reader.get("sha256"), str)
-                and reader["sha256"] in active_digests
-                for reader in candidate.reader_payloads.values()
-            ):
-                protected.add(candidate.name)
-                continue
-            for filename in candidate.data_payloads:
-                loaded = _read_regular_json_object(candidate.path / filename, uid=uid)
-                if loaded is None:
-                    continue
-                _, raw = loaded
-                if hashlib.sha256(raw).hexdigest() in active_digests:
-                    protected.add(candidate.name)
-                    break
-    return protected
+
+def _match_active_digests(
+    candidates: Iterable[_CandidateDirectory],
+    active_digests: set[str],
+) -> set[str]:
+    matched: set[str] = set()
+    if not active_digests:
+        return matched
+    for candidate in candidates:
+        if any(
+            isinstance(reader.get("sha256"), str)
+            and reader["sha256"] in active_digests
+            for reader in candidate.reader_payloads.values()
+        ) or any(digest in active_digests for digest in candidate.data_digests.values()):
+            matched.add(candidate.name)
+    return matched
 
 
 def _expand_protected_closure(
@@ -726,13 +866,18 @@ def _is_turn_settled(
     raw_runtime = _non_empty_str(payload.get("runtime_root"))
     if raw_runtime is None:
         return False
+    payload_runtime = _expand_user_safe(raw_runtime)
+    target_runtime = _expand_user_safe(runtime_root)
+    if payload_runtime is None or target_runtime is None:
+        return False
     try:
-        payload_runtime = Path(raw_runtime).expanduser().resolve()
-        target_runtime = runtime_root.expanduser().resolve()
+        resolved_payload = payload_runtime.resolve()
+        resolved_target = target_runtime.resolve()
     except (OSError, RuntimeError, ValueError):
         return False
-    if payload_runtime != target_runtime:
+    if resolved_payload != resolved_target:
         return False
+    target_runtime = resolved_target
 
     settlement_identity = receipt.get("settlement_identity")
     identity_map = settlement_identity if isinstance(settlement_identity, Mapping) else {}
@@ -825,26 +970,167 @@ def _candidate_has_unsettled_admission(
     return False
 
 
-def _select_prune_targets(
-    by_prefix: dict[str, list[_CandidateDirectory]],
+def _partition_shallow_candidates(
+    shallow_by_prefix: Mapping[str, list[_ShallowDirectory]],
     *,
-    owned_by_name: Mapping[str, _CandidateDirectory],
-    protected_names: set[str],
-    runtime_root: Path | None,
+    protected_names: frozenset[str],
+    current_now: float,
+    min_age_seconds: float,
+    keep_recent_per_prefix: int,
+) -> tuple[list[_ShallowDirectory], list[_ShallowDirectory]]:
+    cutoff = current_now - min_age_seconds
+    aged_shallow: list[_ShallowDirectory] = []
+    kept_shallow: list[_ShallowDirectory] = []
+    for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES:
+        kept_shallow.extend(
+            item
+            for item in shallow_by_prefix[prefix]
+            if item.name in protected_names
+        )
+        group = [
+            item
+            for item in shallow_by_prefix[prefix]
+            if item.name not in protected_names
+        ]
+        if not group:
+            continue
+        group.sort(key=lambda item: (item.mtime, item.name))
+        excess = len(group) - keep_recent_per_prefix
+        if excess <= 0:
+            kept_shallow.extend(group)
+            continue
+        for candidate in group[:excess]:
+            if candidate.mtime <= cutoff:
+                aged_shallow.append(candidate)
+            else:
+                kept_shallow.append(candidate)
+        kept_shallow.extend(group[excess:])
+    return aged_shallow, kept_shallow
+
+
+def _inspect_shallow_group(
+    items: Iterable[_ShallowDirectory],
+    *,
+    uid: int | None,
+) -> tuple[dict[str, _CandidateDirectory], int]:
+    owned_by_name: dict[str, _CandidateDirectory] = {}
+    invalid_count = 0
+    for item in items:
+        owned = _inspect_owned_capture_dir(
+            item.path,
+            name=item.name,
+            prefix=item.prefix,
+            mtime=item.mtime,
+            uid=uid,
+        )
+        if owned is None:
+            invalid_count += 1
+            continue
+        owned_by_name[item.name] = owned
+    return owned_by_name, invalid_count
+
+
+def _candidate_references_any(
+    candidate: _CandidateDirectory,
+    *,
+    target_names: set[str],
     abs_root: Path,
     resolved_root: Path,
+) -> bool:
+    if not target_names:
+        return False
+    for payload in (*candidate.data_payloads.values(), *candidate.reader_payloads.values()):
+        found_refs, _ = _extract_capture_names_and_digests(
+            payload, abs_root=abs_root, resolved_root=resolved_root
+        )
+        if found_refs & target_names:
+            return True
+    return False
+
+
+def _select_prune_targets(
+    shallow_by_prefix: dict[str, list[_ShallowDirectory]],
+    *,
+    non_ephemeral_dirs: list[Path],
+    caller_protected_names: frozenset[str],
+    runtime_root: Path | None,
+    root: Path,
+    uid: int | None,
     current_now: float,
     min_age_seconds: float,
     keep_recent_per_prefix: int,
     max_delete_per_sweep: int,
-) -> list[_CandidateDirectory]:
+) -> tuple[list[_CandidateDirectory], int]:
     if max_delete_per_sweep <= 0:
-        return []
+        return [], 0
+    aged_shallow, kept_shallow = _partition_shallow_candidates(
+        shallow_by_prefix,
+        protected_names=caller_protected_names,
+        current_now=current_now,
+        min_age_seconds=min_age_seconds,
+        keep_recent_per_prefix=keep_recent_per_prefix,
+    )
+    if not aged_shallow:
+        return [], 0
+
+    aged_by_name, invalid_aged = _inspect_shallow_group(aged_shallow, uid=uid)
+    if not aged_by_name:
+        return [], invalid_aged
+
+    abs_root, resolved_root = _resolved_variants(root)
+    active_refs, active_digests = _collect_active_continuity_references(
+        non_ephemeral_dirs,
+        uid=uid,
+        abs_root=abs_root,
+        resolved_root=resolved_root,
+    )
+    preliminary_seeds = (
+        set(caller_protected_names)
+        | active_refs
+        | _match_active_digests(aged_by_name.values(), active_digests)
+    )
+    settlement_cache: dict[tuple[str, str, str, str], bool] = {}
+    for candidate in aged_by_name.values():
+        if candidate.name not in preliminary_seeds and _candidate_has_unsettled_admission(
+            candidate,
+            runtime_root=runtime_root,
+            settlement_cache=settlement_cache,
+        ):
+            preliminary_seeds.add(candidate.name)
+    preliminary_protected = _expand_protected_closure(
+        preliminary_seeds,
+        owned_by_name=aged_by_name,
+        abs_root=abs_root,
+        resolved_root=resolved_root,
+    )
+    if all(name in preliminary_protected for name in aged_by_name):
+        return [], invalid_aged
+
+    kept_by_name, invalid_kept = _inspect_shallow_group(kept_shallow, uid=uid)
+    invalid_total = invalid_aged + invalid_kept
+    all_owned_by_name = {**aged_by_name, **kept_by_name}
+    initial_protected = _expand_protected_closure(
+        set(caller_protected_names)
+        | active_refs
+        | _match_active_digests(all_owned_by_name.values(), active_digests),
+        owned_by_name=all_owned_by_name,
+        abs_root=abs_root,
+        resolved_root=resolved_root,
+    )
+
+    by_prefix: dict[str, list[_CandidateDirectory]] = {
+        prefix: [] for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES
+    }
+    for candidate in all_owned_by_name.values():
+        by_prefix[candidate.prefix].append(candidate)
+
     cutoff = current_now - min_age_seconds
     aged_excess: list[_CandidateDirectory] = []
     kept_candidates: list[_CandidateDirectory] = []
     for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES:
-        group = [item for item in by_prefix[prefix] if item.name not in protected_names]
+        group = [
+            item for item in by_prefix[prefix] if item.name not in initial_protected
+        ]
         if not group:
             continue
         group.sort(key=lambda item: (item.mtime, item.name))
@@ -860,22 +1146,18 @@ def _select_prune_targets(
         kept_candidates.extend(group[excess:])
 
     if not aged_excess:
-        return []
+        return [], invalid_total
     aged_excess.sort(key=lambda item: (item.mtime, item.name))
     excess_names = {item.name for item in aged_excess}
-    settlement_cache: dict[tuple[str, str, str, str], bool] = {}
 
-    # Kept captures (within keep_recent or < min_age) referencing any aged candidate
-    # also protect that dependency whenever their own Turn remains unsettled.
     unsettled_seeds: set[str] = set()
     for kept in kept_candidates:
-        refs: set[str] = set()
-        for payload in (*kept.data_payloads.values(), *kept.reader_payloads.values()):
-            found_refs, _ = _extract_capture_names_and_digests(
-                payload, abs_root=abs_root, resolved_root=resolved_root
-            )
-            refs.update(found_refs)
-        if refs & excess_names and _candidate_has_unsettled_admission(
+        if _candidate_references_any(
+            kept,
+            target_names=excess_names,
+            abs_root=abs_root,
+            resolved_root=resolved_root,
+        ) and _candidate_has_unsettled_admission(
             kept,
             runtime_root=runtime_root,
             settlement_cache=settlement_cache,
@@ -894,47 +1176,32 @@ def _select_prune_targets(
         reclaimable.append(candidate)
 
     if unsettled_seeds:
-        protected_names.update(
+        initial_protected.update(
             _expand_protected_closure(
                 unsettled_seeds,
-                owned_by_name=owned_by_name,
+                owned_by_name=all_owned_by_name,
                 abs_root=abs_root,
                 resolved_root=resolved_root,
             )
         )
 
     final_targets = [
-        item for item in reclaimable if item.name not in protected_names
+        item for item in reclaimable if item.name not in initial_protected
     ]
-    return final_targets[:max_delete_per_sweep]
+    return final_targets[:max_delete_per_sweep], invalid_total
 
 
-def maybe_prune_context_delivery_root(
+def _run_prune_sweep(
     root: Path,
     *,
-    runtime_root: Path | None = None,
-    min_age_seconds: float | None = None,
-    keep_recent_per_prefix: int | None = None,
-    max_delete_per_sweep: int | None = None,
-    min_sweep_interval_seconds: float | None = None,
-    now: float | None = None,
-    protected_names: frozenset[str] = frozenset(),
+    runtime_root: Path | None,
+    effective_min_age: float,
+    effective_keep_recent: int,
+    effective_max_delete: int,
+    effective_interval: float,
+    current_now: float,
+    protected_names: frozenset[str],
 ) -> ContextDeliveryPruneResult:
-    """Opportunistically prune expired, settled LoopX capture dirs under ``root``.
-
-    Throttled via a lightweight ``.retention-sweep`` timestamp marker so hot
-    capture calls skip in sub-millisecond time. Fails closed on symlinks,
-    non-LoopX/unexpected directories, active ``session.json``/``claim-source.json``
-    references and their dependencies, or turns whose admission receipts are
-    missing/unsettled.
-    """
-    effective_min_age = _resolve_min_age_seconds(min_age_seconds)
-    effective_keep_recent = _resolve_keep_recent_per_prefix(keep_recent_per_prefix)
-    effective_max_delete = _resolve_max_delete_per_sweep(max_delete_per_sweep)
-    effective_interval = _resolve_min_sweep_interval_seconds(
-        min_sweep_interval_seconds
-    )
-    current_now = _resolve_now(now)
     uid = _current_uid()
 
     try:
@@ -1005,33 +1272,20 @@ def maybe_prune_context_delivery_root(
                 deleted=0,
                 failed=1,
             )
-        by_prefix, owned_by_name, non_ephemeral_dirs, scanned = collected
-        abs_root, resolved_root = _resolved_variants(root)
-        active_refs = _collect_active_continuity_references(
-            non_ephemeral_dirs,
-            owned_by_name=owned_by_name,
-            uid=uid,
-            abs_root=abs_root,
-            resolved_root=resolved_root,
-        )
-        protected_set = _expand_protected_closure(
-            set(protected_names) | active_refs,
-            owned_by_name=owned_by_name,
-            abs_root=abs_root,
-            resolved_root=resolved_root,
-        )
-        targets = _select_prune_targets(
-            by_prefix,
-            owned_by_name=owned_by_name,
-            protected_names=protected_set,
+        shallow_by_prefix, non_ephemeral_dirs, scanned = collected
+        targets, invalid_inspected = _select_prune_targets(
+            shallow_by_prefix,
+            non_ephemeral_dirs=non_ephemeral_dirs,
+            caller_protected_names=protected_names,
             runtime_root=runtime_root,
-            abs_root=abs_root,
-            resolved_root=resolved_root,
+            root=root,
+            uid=uid,
             current_now=current_now,
             min_age_seconds=effective_min_age,
             keep_recent_per_prefix=effective_keep_recent,
             max_delete_per_sweep=effective_max_delete,
         )
+        scanned = max(0, scanned - invalid_inspected)
 
         deleted = 0
         failed = 0
@@ -1057,4 +1311,52 @@ def maybe_prune_context_delivery_root(
             scanned=scanned,
             deleted=deleted,
             failed=failed,
+        )
+
+
+def maybe_prune_context_delivery_root(
+    root: Path,
+    *,
+    runtime_root: Path | None = None,
+    min_age_seconds: float | None = None,
+    keep_recent_per_prefix: int | None = None,
+    max_delete_per_sweep: int | None = None,
+    min_sweep_interval_seconds: float | None = None,
+    now: float | None = None,
+    protected_names: frozenset[str] = frozenset(),
+) -> ContextDeliveryPruneResult:
+    """Opportunistically prune expired, settled LoopX capture dirs under ``root``.
+
+    Throttled via a lightweight ``.retention-sweep`` timestamp marker so hot
+    capture calls skip in sub-millisecond time. Fails closed on symlinks,
+    non-LoopX/unexpected directories, active ``session.json``/``claim-source.json``
+    references and their dependencies, or turns whose admission receipts are
+    missing/unsettled.
+    """
+    effective_min_age = _resolve_min_age_seconds(min_age_seconds)
+    effective_keep_recent = _resolve_keep_recent_per_prefix(keep_recent_per_prefix)
+    effective_max_delete = _resolve_max_delete_per_sweep(max_delete_per_sweep)
+    effective_interval = _resolve_min_sweep_interval_seconds(
+        min_sweep_interval_seconds
+    )
+    current_now = _resolve_now(now)
+
+    try:
+        return _run_prune_sweep(
+            root,
+            runtime_root=runtime_root,
+            effective_min_age=effective_min_age,
+            effective_keep_recent=effective_keep_recent,
+            effective_max_delete=effective_max_delete,
+            effective_interval=effective_interval,
+            current_now=current_now,
+            protected_names=protected_names,
+        )
+    except Exception:  # noqa: BLE001 - best-effort sweep fails safely after arg validation.
+        return ContextDeliveryPruneResult(
+            swept=False,
+            skipped_reason="sweep_failed",
+            scanned=0,
+            deleted=0,
+            failed=1,
         )

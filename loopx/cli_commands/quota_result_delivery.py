@@ -50,33 +50,36 @@ def _prune_ephemeral_context_delivery(
     context: QuotaCommandContext | None,
     capture_directory: Path | None,
 ) -> None:
-    if getattr(args, "dry_run", False) is True:
+    try:
+        if getattr(args, "dry_run", False) is True:
+            return
+        runtime_root = (
+            context.runtime_root
+            if context is not None
+            else getattr(args, "_progressive_context_runtime", None)
+        )
+        if not isinstance(runtime_root, (str, Path)):
+            return
+        resolved_runtime = Path(runtime_root).expanduser().resolve()
+        managed_root = resolved_runtime / "context-delivery"
+        capture_parent: Path | None = None
+        if isinstance(capture_directory, Path):
+            try:
+                capture_parent = capture_directory.expanduser().resolve().parent
+            except OSError:
+                capture_parent = capture_directory.expanduser().absolute().parent
+        protected = (
+            frozenset({capture_directory.name})
+            if capture_directory is not None and capture_parent == managed_root
+            else frozenset()
+        )
+        maybe_prune_context_delivery_root(
+            managed_root,
+            runtime_root=resolved_runtime,
+            protected_names=protected,
+        )
+    except Exception:  # noqa: BLE001 - best-effort retention pruning never blocks emission.
         return
-    runtime_root = (
-        context.runtime_root
-        if context is not None
-        else getattr(args, "_progressive_context_runtime", None)
-    )
-    if not isinstance(runtime_root, (str, Path)):
-        return
-    resolved_runtime = Path(runtime_root).expanduser().resolve()
-    managed_root = resolved_runtime / "context-delivery"
-    capture_parent: Path | None = None
-    if isinstance(capture_directory, Path):
-        try:
-            capture_parent = capture_directory.expanduser().resolve().parent
-        except OSError:
-            capture_parent = capture_directory.expanduser().absolute().parent
-    protected = (
-        frozenset({capture_directory.name})
-        if capture_directory is not None and capture_parent == managed_root
-        else frozenset()
-    )
-    maybe_prune_context_delivery_root(
-        managed_root,
-        runtime_root=resolved_runtime,
-        protected_names=protected,
-    )
 
 
 def _emit_and_prune_result(
@@ -90,11 +93,14 @@ def _emit_and_prune_result(
     exit_code: int,
 ) -> int:
     print_payload(payload, args.format, renderer)
-    _prune_ephemeral_context_delivery(
-        args,
-        context=context,
-        capture_directory=capture_directory,
-    )
+    try:
+        _prune_ephemeral_context_delivery(
+            args,
+            context=context,
+            capture_directory=capture_directory,
+        )
+    except Exception:  # noqa: BLE001 - stdout already emitted; never emit a second error payload.
+        pass
     return exit_code
 
 

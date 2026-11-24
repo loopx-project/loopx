@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -1284,3 +1285,332 @@ def test_default_cli_unsettled_capture_protected_then_pruned_on_turn3_across_fil
     assert turn3_dir.is_dir()
     assert failure_unowned.is_dir()
     assert mixed_notes.read_text(encoding="utf-8") == "default-cli mixed note\n"
+
+
+def test_prose_tilde_tokens_ignored_and_best_effort_prune_errors_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import loopx.cli_commands.context_delivery_retention as retention_mod
+    import loopx.cli_commands.quota_capture as quota_capture_mod
+    import loopx.cli_commands.quota_result_delivery as quota_delivery_mod
+
+    root = tmp_path / "context-delivery"
+    root.mkdir(mode=0o700)
+    abs_root, resolved_root = retention_mod._resolved_variants(root)
+
+    # Hardened path-token helper never expands ~<user> prose such as ~20% or ~nonexistentuser/x.
+    for token in ("~20%", "~nonexistentuser/x", "\x00bad"):
+        assert (
+            retention_mod._extract_dir_name_from_path_token(
+                token, abs_root=abs_root, resolved_root=resolved_root
+            )
+            is None
+        )
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(Path, "expanduser", lambda _self: (_ for _ in ()).throw(RuntimeError("no home")))
+    assert (
+        retention_mod._extract_dir_name_from_path_token(
+            "~/inside/decision-1/decision.json",
+            abs_root=abs_root,
+            resolved_root=resolved_root,
+        )
+        is None
+    )
+    monkeypatch.undo()
+
+    # Goal/user prose fields must never be walked, while known ref fields are honored.
+    prose_decoy = root / "context-prose-decoy" / "projection.json"
+    real_ref_target = root / "recovery-real-ref" / "required-context.json"
+    command_ref_target = root / "settlement-cmd-ref" / "result.json"
+    names, digests = retention_mod._extract_capture_names_and_digests(
+        {
+            "title": f"~20% smaller render bundle. {prose_decoy}",
+            "goal_title": f"~nonexistentuser/x {prose_decoy}",
+            "objective": str(prose_decoy),
+            "summary": f"{'a' * 64} {prose_decoy}",
+            "description": str(prose_decoy),
+            "reason": str(prose_decoy),
+            "instruction": str(prose_decoy),
+            "prompt": str(prose_decoy),
+            "selected_todo": {"title": f"~20% todo {prose_decoy}"},
+            "replan_action_packet": {"reason": f"~20% replan {prose_decoy}"},
+            "recovery": {"path": str(real_ref_target), "sha256": "b" * 64},
+            "detail_ref": {
+                "first_read_command": (
+                    f"loopx quota context-read --capture-file {command_ref_target}"
+                )
+            },
+        },
+        abs_root=abs_root,
+        resolved_root=resolved_root,
+    )
+    assert "context-prose-decoy" not in names
+    assert "a" * 64 not in digests
+    assert names == {"recovery-real-ref", "settlement-cmd-ref"}
+    assert "b" * 64 in digests
+
+    # Internal sweep failures are isolated cleanly across retention and quota capture/emission.
+    monkeypatch.setattr(
+        retention_mod,
+        "_collect_root_entries",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("unexpected sweep failure")),
+    )
+    failed_sweep = maybe_prune_context_delivery_root(
+        root, min_age_seconds=0.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0
+    )
+    assert failed_sweep.swept is False
+    assert failed_sweep.skipped_reason == "sweep_failed"
+    assert failed_sweep.failed == 1
+
+    monkeypatch.setattr(
+        quota_delivery_mod,
+        "maybe_prune_context_delivery_root",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("post-emit boom")),
+    )
+    monkeypatch.setattr(
+        quota_capture_mod,
+        "maybe_prune_context_delivery_root",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("pre-alloc boom")),
+    )
+
+    emitted: list[dict[str, object]] = []
+    ctx = cast(
+        "QuotaCommandContext",
+        SimpleNamespace(runtime_root=tmp_path / "rt", status_payload={}, scheduler_context=None),
+    )
+    exit_code = quota_delivery_mod._emit_and_prune_result(
+        {"ok": True, "decision": "wait"},
+        argparse.Namespace(quota_command="should-run", format="json", dry_run=False),
+        renderer=lambda _p: "",
+        print_payload=lambda payload, _fmt, _ren: emitted.append(payload),
+        context=ctx,
+        capture_directory=None,
+        exit_code=0,
+    )
+    assert exit_code == 0
+    assert emitted == [{"ok": True, "decision": "wait"}]
+
+    view = progressive_context_capture_view(
+        {"ok": True, "goal_id": "g", "summary": "hello"},
+        argparse.Namespace(
+            quota_command="should-run",
+            format="json",
+            context_delivery="auto",
+            delta_delivery="auto",
+        ),
+        runtime_root=tmp_path / "rt-prog",
+        directory=None,
+        reader_argv=["loopx"],
+    )
+    assert view["ok"] is True
+
+    settle_runtime = tmp_path / "rt-settle"
+    (settle_runtime / "context-delivery").mkdir(parents=True, mode=0o700)
+    bounded = budgeted_settlement_result(
+        {"ok": True, "before": {"blob": "x" * 2500}, "after": {"blob": "y" * 2500}},
+        runtime_root=settle_runtime,
+        output_bytes=2000,
+        reader_argv=["loopx"],
+    )
+    assert bounded["ok"] is True
+
+
+def test_unexpired_captures_fast_skip_without_reading_candidate_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import loopx.cli_commands.context_delivery_retention as retention_mod
+
+    root = tmp_path / "context-delivery"
+    root.mkdir(mode=0o700)
+    now = 10_000_000.0
+    recent = now - 30.0
+
+    for index in range(64):
+        _make_dir(root, f"decision-fresh-{index:03d}", mtime=recent + (index * 0.1))
+
+    continuity = root / "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    continuity.mkdir(mode=0o700)
+    _write_owned_json(continuity / "session.json", {"session_id": "s"}, mtime=recent)
+
+    opened_json_paths: list[Path] = []
+    real_reader = retention_mod._read_regular_json_object
+
+    def spy_reader(
+        path: Path, *, uid: int | None, max_bytes: int = retention_mod._MAX_CAPTURE_JSON_BYTES
+    ) -> tuple[dict[str, object], bytes] | None:
+        opened_json_paths.append(path)
+        return real_reader(path, uid=uid, max_bytes=max_bytes)
+
+    monkeypatch.setattr(retention_mod, "_read_regular_json_object", spy_reader)
+
+    res_64 = maybe_prune_context_delivery_root(
+        root,
+        min_age_seconds=86400.0,
+        keep_recent_per_prefix=0,
+        min_sweep_interval_seconds=0.0,
+        now=now,
+    )
+    assert res_64.swept is True
+    assert res_64.deleted == 0
+    assert opened_json_paths == []
+
+    # 512 unexpired captures across all 4 prefixes must also read 0 JSON files.
+    for index in range(128):
+        for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES:
+            name = f"{prefix}batch-{index:03d}"
+            if not (root / name).exists():
+                _make_dir(root, name, mtime=recent + (index * 0.05))
+
+    res_512 = maybe_prune_context_delivery_root(
+        root,
+        min_age_seconds=86400.0,
+        keep_recent_per_prefix=64,
+        min_sweep_interval_seconds=0.0,
+        now=now + 1.0,
+    )
+    assert res_512.swept is True
+    assert res_512.deleted == 0
+    assert opened_json_paths == []
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_tilde_prose_goal_begin_turn_single_json_and_post_settlement_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _initialize_fixture_authority,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    project, runtime, registry = _write_fixture(tmp_path, provider=None)
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        "---\n"
+        "status: active-read-only\n"
+        "owner_mode: goal\n"
+        'objective: "~20% smaller render bundle. ~nonexistentuser/x"\n'
+        "updated_at: 2026-01-01T00:00:00+00:00\n"
+        "---\n\n"
+        "# ~20% smaller render bundle.\n\n"
+        "## Objective\n\n"
+        "~20% smaller render bundle. Also inspect ~nonexistentuser/x safely.\n\n"
+        "## Next Action\n\n"
+        "- Deliver ~20% smaller render bundle.\n\n"
+        "## Agent Todo\n\n"
+        "- [ ] [P1] ~20% smaller render bundle. (~nonexistentuser/x)\n"
+        f"  <!-- loopx:todo todo_id={TODO_ID} status=open "
+        f"claimed_by={AGENT_ID} "
+        "task_class=advancement_task action_kind=validate -->\n",
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime, provider=provider)
+
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MIN_AGE_SECONDS", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_KEEP_RECENT", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MAX_DELETE", "128")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
+
+    def run_begin_turn() -> dict[str, object]:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.entrypoint",
+                "--registry",
+                str(registry),
+                "--runtime-root",
+                str(runtime),
+                "--format",
+                "json",
+                "quota",
+                "should-run",
+                "--codex-app",
+                "--goal-id",
+                GOAL_ID,
+                "--agent-id",
+                AGENT_ID,
+                "--todo-id",
+                TODO_ID,
+                "--begin-turn",
+            ],
+            cwd=project,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(ROOT)},
+        )
+        assert proc.returncode == 0, proc.stderr or proc.stdout
+        decoder = json.JSONDecoder()
+        stripped = proc.stdout.lstrip()
+        payload, end_idx = decoder.raw_decode(stripped)
+        assert not stripped[end_idx:].strip(), f"unexpected extra stdout: {stripped[end_idx:]}"
+        assert isinstance(payload, dict) and payload.get("ok") is True, payload
+        return payload
+
+    guard1 = run_begin_turn()
+    turn1_ref = Path(str(guard1["reference_file"]))
+    turn1_dir = turn1_ref.parent
+    assert turn1_dir.parent == managed_root
+    decision1 = json.loads((turn1_dir / "decision.json").read_text(encoding="utf-8"))
+    turn1_id = str(decision1["heartbeat_receipt"]["turn_instance_id"])
+
+    # Turn 2 sweeps Turn 1's live unsettled capture containing "~20%" and "~nonexistentuser/x":
+    # stdout must remain a single valid JSON object and Turn 1 stays protected & readable.
+    guard2 = run_begin_turn()
+    turn2_dir = Path(str(guard2["reference_file"])).parent
+    assert turn1_dir.is_dir()
+    assert turn2_dir.is_dir()
+
+    rc_read1, read1 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "context-read",
+        "--reference-file",
+        str(turn1_ref),
+    )
+    assert rc_read1 == 0 and read1["ok"] is True, read1
+
+    # Settle Turn 1 via real CLI and confirm Turn 3 prunes Turn 1 cleanly.
+    code_settle, settled = _run_cli(
+        registry,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn1_id,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        "--settle-turn",
+        "--settlement-receipt",
+        cwd=project,
+    )
+    assert code_settle == 0 and settled["settlement_progress"]["state"] == "settled", settled
+
+    guard3 = run_begin_turn()
+    turn3_dir = Path(str(guard3["reference_file"])).parent
+    assert not turn1_dir.exists()
+    assert turn2_dir.is_dir()
+    assert turn3_dir.is_dir()

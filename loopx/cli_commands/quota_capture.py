@@ -380,10 +380,13 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         and "vision" not in quota_detail_sections_from_args(args))
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
-        maybe_prune_context_delivery_root(
-            root,
-            runtime_root=runtime_root.expanduser().resolve(),
-        )
+        try:
+            maybe_prune_context_delivery_root(
+                root,
+                runtime_root=runtime_root.expanduser().resolve(),
+            )
+        except Exception:  # noqa: BLE001 - best-effort pre-allocation pruning is non-blocking.
+            pass
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
     if payload.get("schema_version") == "loopx_turn_envelope_v1":
         surface = "complete_turn"
@@ -587,7 +590,10 @@ def budgeted_settlement_result(
         if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
                 or metadata.st_mode & 0o077):
             raise ValueError("result capture requires a private physical directory owned by this user")
-        maybe_prune_context_delivery_root(root, runtime_root=resolved_runtime)
+        try:
+            maybe_prune_context_delivery_root(root, runtime_root=resolved_runtime)
+        except Exception:  # noqa: BLE001 - best-effort pre-allocation pruning is non-blocking.
+            pass
         directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
         saved = directory / "result.json"
         digest = write_decision_capture(saved, payload)
