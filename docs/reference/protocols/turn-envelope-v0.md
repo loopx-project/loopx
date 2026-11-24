@@ -193,12 +193,23 @@ the source-bound reader even when native context delta transport is disabled.
 Uncaptured consumers keep the inline path. This changes presentation timing,
 not the Goal requirements or which work is authorized.
 
+When native first read presents an inline Vision replan, it includes the
+existing Vision writeback contract, the required stride fields and bound
+example, and the current CLI actions. The same capture carries the complete
+stride guidance for focused reads when the decision needs it. Review the
+current evidence before authoring, use the original Turn's writeback, then
+verify its settlement.
+
 中文：必读 review 统一交付本次捕获的 Goal 与规划范围，CLI 入口和分段 Host
 呈现不再重复这两份正文。入口保留准入、已选工作、必读项、权限与停止规则，
 CLI 也保留供显式选项使用的当前 action portfolio。执行器签名包和完整 capture
 不变；每个 Turn 决策前须读取自己的 review。依赖或优先级变化会改变绑定源摘要的
 读取命令，关闭原生差分时也生效。未捕获的调用保留原内联路径。这调整交付时序，
 不改变目标要求或授权工作范围。
+
+原生首读呈现内联 Vision 重规划时，提供既有 Vision 写回契约、步幅必填项和绑定
+示例，以及本轮 CLI 动作。需要更完整的步幅依据时，可从同一捕获定向读取。先核对
+当前证据，再使用原 Turn 的写回命令，并读回结算。
 
 Captured reads retain the caller's explicit `--cli-bin` route, including later
 acceptance and Explore reads; an ambient executable cannot silently replace it.
