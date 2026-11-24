@@ -564,16 +564,39 @@ Self-service:
    node=<supported node binary> &&
    "$node" --version &&
    "$node" -e "const [maj,min,pat]=process.versions.node.split('.').map(Number);process.exit(maj>22||(maj===22&&(min>22||(min===22&&pat>=3)))?0:1)" &&
-   mv ~/.local/bin/node ~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
+   backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
+   [ ! -e "$backup" ] && [ ! -L "$backup" ] &&
+   mv ~/.local/bin/node "$backup" &&
    ln -s "$node" ~/.local/bin/node
    ```
 
-   The backup name is timestamped, so a retry keeps every earlier backup
-   instead of overwriting one; restore by copying the newest
-   `node.before-loopx-*` back over `~/.local/bin/node`. `node_found` of `true`
-   with no `node_version` means the App found a `node` it could not read a
-   version from: inspect that entry with `ls -l` and the same `--version` call
-   before replacing it the same way.
+   If the backup name already exists — two repairs within the same second —
+   the test stops the chain before anything is moved and the original stays in
+   place; run the block again a second later.
+
+   To restore a backup, replace the launcher directory entry instead of
+   copying through the link, or `cp` would follow the link and overwrite the
+   supported Node binary that other tools share:
+
+   ```bash
+   newest=$(ls -t ~/.local/bin/node.before-loopx.* | head -1) &&
+   shasum "$newest" &&
+   rm ~/.local/bin/node &&
+   cp "$newest" ~/.local/bin/node &&
+   shasum "$newest" ~/.local/bin/node
+   ```
+
+   The two `shasum` lines must match: the first reads the backup, the second
+   reads the restored launcher. Removing the link entry before `cp` is what
+   keeps the supported Node binary safe — the copy creates a fresh regular
+   file instead of following the link into a binary other tools share.
+
+   The `shasum` lines bracket the copy: the first is the backup you are
+   restoring, the second must match it after the copy, proving the candidate
+   binary behind the removed link kept its original bytes. `node_found` of
+   `true` with no `node_version` means the App found a `node` it could not
+   read a version from: inspect that entry with `ls -l` and the same
+   `--version` call before replacing it the same way.
 4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
    environment reading refreshes every 30 seconds, or reopen the App.
    `node --version` in a terminal only verifies the interactive shell, which
