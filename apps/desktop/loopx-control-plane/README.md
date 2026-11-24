@@ -518,27 +518,47 @@ diagnose this Mac App's local bootstrap; only the App's own diagnostics do.
 The App's automatic runtime installation can also fail with
 `runtime_install_exit_1` when no usable Node.js is reachable: the candidate's
 `doctor --deep --installation-only` validation treats the managed TypeScript
-Effect runtime as required, and it fails closed while `node` is missing. The
-App does not bundle Node; Node.js 22.22.3 or newer is required and 24 LTS is
-recommended, matching the CLI installation guide.
+Effect runtime as required, and it fails closed while `node` is missing or
+older than the required minimum. The App does not bundle Node; Node.js 22.22.3
+or newer is required and 24 LTS is recommended, matching the CLI installation
+guide.
 
-The installer and the owned services resolve `node` through the same bounded
-search path (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, the
-Homebrew keg-only `node@24`/`node@22` prefixes, then the inherited process
-PATH). Finder does not load the interactive shell profile, so Node installed
-through nvm/fnm/volta stays invisible to the App even though it works in a
-terminal.
+The installer and the owned services resolve `node` through one bounded search
+path, in this order: `~/.local/bin`, an `NVM_BIN` the inherited PATH still
+selects, `/opt/homebrew/bin`, `/usr/local/bin`, the Homebrew keg-only
+`node@24` and `node@22` prefixes, the inherited process PATH, and last the nvm
+installations found on disk. Finder does not load the interactive shell
+profile, so a Node that only fnm or volta puts on the shell PATH stays
+invisible to the App even though it works in a terminal.
 
 Self-service:
 
 1. Check the boot screen error code or Recovery & updates → Diagnostics
-   (`error_code: runtime_install_exit_1`, `environment.node_found` /
-   `node_version` confirm the missing runtime).
-2. Install Node.js 22.22.3+ — for example `brew install node` (the keg-only
-   `brew install node@24` is also covered by the search path) or via the
-   official nodejs.org installer. An nvm/fnm/volta installation needs a plain
-   installation or a `~/.local/bin` symlink the App can resolve.
-3. Press **Repair this version** (or reopen the App); the environment probe
+   (`error_code: runtime_install_exit_1`, then `environment.node_found` and
+   `node_version`). The boot screen names the missing Node.js only when
+   `node_found` is `false`, so read the version from Diagnostics.
+2. `node_found` is `false`: no `node` is reachable. Install Node.js 22.22.3+,
+   for example `brew install node` (the keg-only `brew install node@24` is
+   also covered by the search path) or via the official nodejs.org installer.
+   An fnm/volta installation needs a plain installation or a `~/.local/bin`
+   symlink the App can resolve.
+3. `node_found` is `true` with a `node_version` older than 22.22.3: the App
+   reaches a Node that is too old, and Core reports the same
+   `node_unavailable`. Installing another version does not fix this by itself.
+   The App runs the `node` from the first search path entry that holds one,
+   for example a `~/.local/bin/node` ahead of every Homebrew location, and
+   Diagnostics report the version but not the path. Check that order, then
+   update the winning entry: upgrade it in place, or point it at the supported
+   installation with
+   `ln -sf /opt/homebrew/opt/node@24/bin/node ~/.local/bin/node`
+   (`/usr/local/opt/node@24/bin/node` with Intel Homebrew). `node_found` of
+   `true` with no `node_version` means the App found a `node` it could not read
+   a version from; replace it with a supported release the same way.
+4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
+   environment reading refreshes every 30 seconds, or reopen the App.
+   `node --version` in a terminal only verifies the interactive shell, which
+   can select a Node the App does not.
+5. Press **Repair this version** (or reopen the App); the environment probe
    refreshes and the live supervisor reconnects the same window without a
    second App restart.
 
