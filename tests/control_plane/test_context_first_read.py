@@ -1475,6 +1475,13 @@ def test_native_ready_opening_bounds_suggested_outcomes(
             outcome["requirements"][0].pop("future_required_fact")
         if large:
             outcome["requirements"][0]["description"] *= 160
+    peer = outcomes[1]
+    peer["declaration_owner_agent_id"] = "previous-owner"
+    peer["requirements"][0]["agent_review"] = {
+        "id": "tail", "recorded_for_agent_id": "previous-reviewer", "conclusion": "unmet",
+        "basis_current": False, "independently_verified": False,
+        "note": "The dependency was still missing.", "evidence_refs": ["original-check"],
+    }
     short_opening = large and ready and known_source and max_page_output_bytes is None
     directory = tmp_path / "capture"
     directory.mkdir(mode=0o700)
@@ -1508,7 +1515,14 @@ def test_native_ready_opening_bounds_suggested_outcomes(
     for index, original in enumerate(outcomes[:2]):
         outcome = f"{outcomes_path}/{index}"
         _, detail = read_selection(view["recovery"]["command"] + " --select " + outcome)
-        assert detail[outcome]["requirements"] == original["requirements"]
+        expected_requirements = json.loads(json.dumps(original["requirements"]))
+        if index == 1:
+            assert detail[outcome]["owner_agent_id"] == "peer"
+            assert detail[outcome]["declaration_owner_agent_id"] == "previous-owner"
+            if known_source:
+                review = expected_requirements[0]["agent_review"]
+                del review["note"], review["evidence_refs"]
+        assert detail[outcome]["requirements"] == expected_requirements
         if short_opening:
             assert outcome not in opening
             assert opening[outcome + "/id"] == original["id"]
@@ -1548,8 +1562,8 @@ def test_native_ready_opening_bounds_suggested_outcomes(
         source_command = opening["/context_details/command_template"]
         for index, original in enumerate(outcomes[:2]):
             address = f"{outcomes_path}/{index}"
-            _, evidence = read_selection(source_command.replace("<pointer>", address + "/sources"))
-            assert evidence[address + "/sources"] == original["sources"]
+            _, evidence = read_selection(source_command.replace("<pointer>", address))
+            assert evidence[address] == original
     elif "/context_details/instruction" in opening:
         assert "This view retains complete requirements" in opening["/context_details/instruction"]
 
