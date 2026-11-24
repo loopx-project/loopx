@@ -18,6 +18,15 @@ from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from .effective_action import EffectiveAction
 from .effect_program import SettlementBindingKind, SettlementIdentity
 from .error_codes import HeartbeatReceiptIdentityConflictError
+from .semantic_replan_guard_merge import (
+    SEMANTIC_REPLAN_REVIEW_FIELDS,
+    append_repaired_identity_upgrade_receipt,
+    is_repairable_orphaned_identity_upgrade_receipt,
+    merge_semantic_replan_guard_details,
+    repair_orphaned_identity_upgrade_heartbeat_receipt as repair_orphaned_identity_upgrade_heartbeat_receipt,  # noqa: F401
+    repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent as repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent,  # noqa: F401
+    strip_semantic_replan_companions,
+)
 from .settlement_workspace_causality import (
     delivery_workspace_causality_from_event_details,
 )
@@ -25,83 +34,12 @@ from .spend_sources import TURN_SCOPED_SLOT_SPEND_SOURCES
 
 HEARTBEAT_RECEIPT_SCHEMA_VERSION = "heartbeat_quota_receipt_v0"
 
-_SEMANTIC_REPLAN_REVIEW_FIELDS = (
-    "semantic_replan_review_kind",
-    "semantic_replan_review_stop_condition",
-    "semantic_replan_review_stop_condition_sha256",
-    "semantic_replan_review_stop_contract_id",
-)
-_SEMANTIC_REPLAN_CAPABILITY_FIELDS = (
-    "semantic_replan_capability_id",
-    "semantic_replan_gap_id",
-    "semantic_replan_frontier_revision",
-)
-_SEMANTIC_REPLAN_COMPANION_FIELDS = (
-    _SEMANTIC_REPLAN_REVIEW_FIELDS + _SEMANTIC_REPLAN_CAPABILITY_FIELDS
-)
 
-
-def _merge_semantic_replan_guard_details(
-    effective_details: Mapping[str, object],
-    incoming_details: Mapping[str, object],
-) -> dict[str, object]:
-    """Merge receipt details without leaving orphaned replan companion fields."""
-
-    corrected_details = dict(effective_details)
-    touches_semantic_guard = "semantic_replan_obligation_id" in incoming_details or any(
-        field in incoming_details for field in _SEMANTIC_REPLAN_COMPANION_FIELDS
-    )
-    if not touches_semantic_guard:
-        corrected_details.update(incoming_details)
-        return corrected_details
-
-    existing_obligation = normalize_todo_replan_obligation_id(
-        effective_details.get("semantic_replan_obligation_id")
-    )
-    if "semantic_replan_obligation_id" in incoming_details:
-        raw_incoming = incoming_details.get("semantic_replan_obligation_id")
-        incoming_obligation = normalize_todo_replan_obligation_id(raw_incoming)
-        if raw_incoming not in (None, "") and incoming_obligation is None:
-            raise HeartbeatReceiptIdentityConflictError(
-                "heartbeat receipt semantic replan guard is malformed"
-            )
-    else:
-        incoming_obligation = existing_obligation
-
-    incoming_has_review = any(
-        field in incoming_details for field in _SEMANTIC_REPLAN_REVIEW_FIELDS
-    )
-    incoming_has_capability = any(
-        field in incoming_details for field in _SEMANTIC_REPLAN_CAPABILITY_FIELDS
-    )
-    if incoming_has_review and incoming_has_capability:
-        raise HeartbeatReceiptIdentityConflictError(
-            "a review source cannot replace a capability guard"
-        )
-    if (incoming_has_review or incoming_has_capability) and incoming_obligation is None:
-        raise HeartbeatReceiptIdentityConflictError(
-            "heartbeat receipt semantic replan guard requires a selected obligation"
-        )
-
-    if (
-        incoming_obligation is None
-        or incoming_obligation != existing_obligation
-        or incoming_has_review
-        or incoming_has_capability
-    ):
-        for field in _SEMANTIC_REPLAN_COMPANION_FIELDS:
-            corrected_details.pop(field, None)
-
-    corrected_details.update(incoming_details)
-    return corrected_details
-
-
-def _heartbeat_receipt_events(
+def _agent_heartbeat_receipt_events(
     events: list[dict[str, object]],
     *,
     goal_id: str,
     agent_id: str,
-    turn_instance_id: str,
     goal_ref: Mapping[str, object] | None,
 ) -> list[dict[str, object]]:
     from ..goals.source_session_registry_state import exact_goal_ref
@@ -122,12 +60,28 @@ def _heartbeat_receipt_events(
         if event.get("event_kind") == "quota_should_run"
         and str(event.get("goal_id") or "") == goal_id
         and str(event.get("agent_id") or "") == agent_id
-        and str(event.get("run_id") or "") == turn_instance_id
         and (
             event.get("goal_ref") == expected_goal_ref
             if expected_goal_ref is not None
             else "goal_ref" not in event
         )
+    ]
+
+
+def _heartbeat_receipt_events(
+    events: list[dict[str, object]],
+    *,
+    goal_id: str,
+    agent_id: str,
+    turn_instance_id: str,
+    goal_ref: Mapping[str, object] | None,
+) -> list[dict[str, object]]:
+    return [
+        event
+        for event in _agent_heartbeat_receipt_events(
+            events, goal_id=goal_id, agent_id=agent_id, goal_ref=goal_ref,
+        )
+        if str(event.get("run_id") or "") == turn_instance_id
     ]
 
 
@@ -434,7 +388,7 @@ def ensure_turn_heartbeat_settlement_receipt(
                 details.pop("prepared_lease_epoch", None)
         if semantic_replan_guard_scoped:
             if semantic_replan_capability_guard is not None and any(
-                field in details for field in _SEMANTIC_REPLAN_REVIEW_FIELDS
+                field in details for field in SEMANTIC_REPLAN_REVIEW_FIELDS
             ):
                 raise HeartbeatReceiptIdentityConflictError(
                     "Turn heartbeat receipt belongs to a review guard"
@@ -447,8 +401,7 @@ def ensure_turn_heartbeat_settlement_receipt(
                 details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
                 details["semantic_replan_frontier_revision"] = semantic_replan_capability_guard["frontier_revision"]
             elif normalized_semantic_replan_obligation_id is None:
-                for field in _SEMANTIC_REPLAN_COMPANION_FIELDS:
-                    details.pop(field, None)
+                details = strip_semantic_replan_companions(details)
         if (source := previous_source or quota_spend_source) is not None:
             details["quota_spend_source"] = source
         source_event_id = (
@@ -700,13 +653,25 @@ def upgrade_identityless_heartbeat_receipt(
                 else {}
             )
             if str(existing_details.get("settlement_effect_id") or "").strip():
+                if is_repairable_orphaned_identity_upgrade_receipt(
+                    effective, matching
+                ):
+                    repaired = append_repaired_identity_upgrade_receipt(
+                        log_path,
+                        goal_id=goal_id,
+                        agent_id=agent_id,
+                        turn_instance_id=turn_instance_id,
+                        effective=effective,
+                        goal_ref=goal_ref,
+                    )
+                    return repaired, True
                 return effective, False
 
         # The effective receipt was read while holding the rollout lock. Keep
         # non-conflicting fields appended by a concurrent same-Turn revision,
         # while stripping orphaned semantic replan companion metadata whenever
         # the guard selection clears, rotates, or changes kind.
-        corrected_details = _merge_semantic_replan_guard_details(
+        corrected_details = merge_semantic_replan_guard_details(
             effective_details,
             details,
         )
