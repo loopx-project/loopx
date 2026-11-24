@@ -17,14 +17,17 @@ from canonical_authority_fixture import initialize_canonical_source_fixture
 from loopx.bootstrap_command_pack import build_start_goal_guided_packet
 from loopx.cli import main
 from loopx.control_plane.goals.planning_batch import (
+    CliPlanningBatchBackend,
     DirectPlanningBatchBackend,
     PLANNING_BATCH_SCHEMA_VERSION,
+    apply_planning_batch,
     planning_batch_schema,
 )
 from loopx.control_plane.goals.task_planning import (
     build_task_planning_packet,
     validate_task_plan_readback,
 )
+from loopx.control_plane.todos.list_readback import list_goal_todos
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -998,3 +1001,116 @@ def test_product_task_plan_and_start_goal_user_todo_only_omit_batch_commands(
     start_step = next(s for s in start_pkt["guided_transaction"]["ordered_steps"] if s["id"] == "write_ordered_todos")
     assert "batch_command_template" not in start_step
     assert "batch_schema_command" not in start_step
+
+
+@pytest.mark.parametrize("peer_kind", ["agent", "user"])
+def test_product_multi_agent_peer_todos_block_initial_batch_across_all_routes(
+    product_goal: dict[str, object],
+    peer_kind: str,
+) -> None:
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    peer_id = "peer"
+    task_text = f"Plan as {agent_id} when {peer_id} already owns a {peer_kind} Todo."
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+
+    dot_loopx = project / ".loopx"
+    dot_loopx.mkdir(exist_ok=True)
+    (dot_loopx / "registry.json").write_text(registry.read_text(encoding="utf-8"), encoding="utf-8")
+
+    if peer_kind == "agent":
+        created = _run_cli(
+            *prefix, "todo", "add", "--goal-id", goal_id, "--project", str(project),
+            "--role", "agent", "--claimed-by", peer_id,
+            "--task-class", "advancement_task", "--action-kind", "implement",
+            "--text", "[P1] Peer-owned advancement work",
+        )
+    else:
+        created = _run_cli(
+            *prefix, "todo", "add", "--goal-id", goal_id, "--project", str(project),
+            "--role", "user", "--task-class", "user_action", "--bound-agent", peer_id,
+            "--text", "[P1] Peer-bound manual confirmation",
+        )
+    assert created["ok"] is True
+    peer_todo_id = str(created["todo_id"])
+
+    start_pkt = build_start_goal_guided_packet(
+        project=project, goal_id=goal_id, agent_id=agent_id,
+        cli_bin="loopx", host_surface="codex-app", goal_text=task_text,
+        runtime_root_arg=str(runtime_root),
+    )
+    start_step = next(s for s in start_pkt["guided_transaction"]["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "batch_command_template" not in start_step
+    assert "batch_schema_command" not in start_step
+
+    pkt = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert pkt["existing_todos"] == []
+    assert pkt["planning_batch"]["goal_has_existing_todos"] is True
+    assert pkt["planning_batch"]["applicable"] is False
+    write_step = next(s for s in pkt["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "batch_command_template" not in write_step
+    assert "batch_schema_command" not in write_step
+    assert "batch_command_template" not in write_step["purpose"]
+
+    expected_rev = str(pkt["goal_acceptance"]["provider_revision"])
+    proposal = {
+        "input_digest": pkt["input_digest"],
+        "expected_provider_revision": expected_rev,
+        "outcome_id": f"peer-blocked-{peer_kind}",
+        "operation_id": f"peer-blocked-op-{peer_kind}",
+        "outcome": {
+            "objective": "Should not overwrite a Goal that already has peer work.",
+            "requirements": [{"id": "req-1", "description": "Verify initial batch stays closed."}],
+            "source": {"ref": "checkpoint:peer", "summary": "Multi-agent peer-Todo check."},
+        },
+        "todos": [
+            {"text": "[P0] Unwanted first batch task", "action_kind": "implement"},
+            {"text": "[P1] Unwanted second batch task", "action_kind": "validate"},
+        ],
+    }
+    proposal_path = project / f"peer-blocked-{peer_kind}.json"
+    proposal_path.write_text(json.dumps(proposal), encoding="utf-8")
+
+    for flag in ("--dry-run", "--execute"):
+        rejected = _run_cli(
+            *prefix, "todo", "plan-batch",
+            "--goal-id", goal_id, "--agent-id", agent_id, "--project", str(project),
+            "--text", task_text, "--document", str(proposal_path), flag,
+            expected_rc=1,
+        )
+        assert "ordinary planning path" in str(rejected["error"])
+
+    backend = CliPlanningBatchBackend(
+        cli=["python3"],
+        cwd=project,
+        env={},
+        packet_reader=lambda: pkt,
+        project=str(project),
+    )
+    with pytest.raises(ValueError, match="ordinary planning path"):
+        apply_planning_batch(
+            proposal=proposal,
+            backend=backend,
+            execute=False,
+            require_input_digest=True,
+        )
+
+    after = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert after["goal_acceptance"]["provider_revision"] == expected_rev
+    all_goal_todos = []
+    for role in ("agent", "user"):
+        listed = list_goal_todos(
+            registry_path=registry, goal_id=goal_id, role=role,
+            project=project, runtime_root_arg=str(runtime_root),
+        )
+        all_goal_todos.extend(listed["todos"])
+    assert [str(item["todo_id"]) for item in all_goal_todos] == [peer_todo_id]

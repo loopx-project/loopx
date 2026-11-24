@@ -10,7 +10,7 @@ unconditional planning contract — fail-closed.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +113,45 @@ def existing_runnable_agent_frontier(
     return runnable or None
 
 
+def canonical_goal_has_any_todos(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    parsed_todo_fields: Mapping[str, Any] | None = None,
+) -> bool:
+    """Whether the whole Goal currently has any canonical Agent or User Todos."""
+    parsed = (
+        parsed_todo_fields
+        if parsed_todo_fields is not None
+        else read_canonical_todo_fields_if_promoted(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+        )
+    )
+    for role_key in ("agent_todos", "user_todos"):
+        summary = parsed.get(role_key) if isinstance(parsed, Mapping) else None
+        items = summary.get("items", []) if isinstance(summary, Mapping) else []
+        if items:
+            return True
+    return False
+
+
+def goal_initial_batch_applicable(
+    *,
+    has_any_todos: bool,
+    outcomes: Sequence[Any],
+    goal_waiting_on: Any,
+    blocking_todo_ids: Sequence[Any] = (),
+) -> bool:
+    """Whole-Goal eligibility shared across start-goal, todo plan, and plan-batch."""
+    return (
+        not has_any_todos
+        and not outcomes
+        and not goal_waiting_on
+        and not blocking_todo_ids
+    )
+
+
 def start_goal_initial_batch_applicable(
     inspection: Mapping[str, Any],
     *,
@@ -133,13 +172,12 @@ def start_goal_initial_batch_applicable(
     if connected is None:
         return False
     registry_path, registry_goal, resolved_runtime_root, parsed = connected
-    if registry_goal.get("waiting_on"):
+    if canonical_goal_has_any_todos(
+        runtime_root=resolved_runtime_root,
+        goal_id=resolved_goal_id,
+        parsed_todo_fields=parsed,
+    ):
         return False
-    for role_key in ("agent_todos", "user_todos"):
-        summary = parsed.get(role_key) if isinstance(parsed, dict) else None
-        items = summary.get("items", []) if isinstance(summary, dict) else []
-        if items:
-            return False
     acceptance = inspect_goal_acceptance(
         registry_path=registry_path,
         goal_id=resolved_goal_id,
@@ -151,7 +189,11 @@ def start_goal_initial_batch_applicable(
         .get("outcome_requirements", {})
         .get("outcomes", [])
     )
-    return not outcomes
+    return goal_initial_batch_applicable(
+        has_any_todos=False,
+        outcomes=outcomes,
+        goal_waiting_on=registry_goal.get("waiting_on"),
+    )
 
 
 def _todo_add_command_template(

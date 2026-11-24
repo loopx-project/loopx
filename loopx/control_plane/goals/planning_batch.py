@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from typing import Protocol, TypedDict, cast
+from typing import NotRequired, Protocol, TypedDict, cast
 
 from ...agent_registry import require_registered_agent_id
 from ..todos.contract import (
@@ -56,6 +56,7 @@ class PlanningFrontierSnapshot(TypedDict):
     agent_id: str
     input_digest: str | None
     existing_todos: list[dict[str, object]]
+    goal_has_existing_todos: NotRequired[bool]
     runnable_todo_ids: list[str]
     blocking_todo_ids: list[str]
     goal_waiting_on: object
@@ -556,6 +557,7 @@ class DirectPlanningBatchBackend:
             "agent_id": canonical_agent_id,
             "input_digest": input_digest,
             "existing_todos": cast(list[dict[str, object]], frontier["existing_todos"]),
+            "goal_has_existing_todos": bool(frontier["goal_has_existing_todos"]),
             "runnable_todo_ids": cast(list[str], frontier["runnable_todo_ids"]),
             "blocking_todo_ids": cast(list[str], frontier["blocking_todo_ids"]),
             "goal_waiting_on": frontier["goal_waiting_on"],
@@ -656,11 +658,19 @@ class CliPlanningBatchBackend:
         self._goal_id = str(packet["goal_id"])
         self._agent_id = str(packet["agent_id"])
         raw_digest = packet.get("input_digest")
+        batch_meta = packet.get("planning_batch")
+        existing_todos = cast(list[dict[str, object]], packet.get("existing_todos") or [])
+        goal_has_existing_todos = (
+            bool(batch_meta["goal_has_existing_todos"])
+            if isinstance(batch_meta, Mapping) and "goal_has_existing_todos" in batch_meta
+            else bool(existing_todos)
+        )
         return {
             "goal_id": self._goal_id,
             "agent_id": self._agent_id,
             "input_digest": str(raw_digest) if isinstance(raw_digest, str) else None,
-            "existing_todos": cast(list[dict[str, object]], packet.get("existing_todos") or []),
+            "existing_todos": existing_todos,
+            "goal_has_existing_todos": goal_has_existing_todos,
             "runnable_todo_ids": cast(list[str], packet.get("runnable_todo_ids") or []),
             "blocking_todo_ids": cast(list[str], packet.get("blocking_todo_ids") or []),
             "goal_waiting_on": packet.get("goal_waiting_on"),
@@ -816,7 +826,11 @@ def apply_planning_batch(
     }
     current_rev = str(acceptance["provider_revision"])
     if current_rev == revision:
-        if snapshot["existing_todos"] or _outcomes(acceptance):
+        if (
+            snapshot["existing_todos"]
+            or snapshot.get("goal_has_existing_todos")
+            or _outcomes(acceptance)
+        ):
             raise ValueError("Use the ordinary planning path for existing work or requirements")
     else:
         _declared_outcome(acceptance, declaration)

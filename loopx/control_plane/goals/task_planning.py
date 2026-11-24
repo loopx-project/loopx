@@ -21,9 +21,14 @@ from ..todos.contract import (
     TODO_TASK_CLASS_BLOCKER,
     TODO_TASK_CLASS_USER_GATE,
 )
+from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from .start_contract import goal_planner_contract
 from .acceptance import inspect_goal_acceptance
-from .start_goal_todo_delta import todo_authoring_steps
+from .start_goal_todo_delta import (
+    canonical_goal_has_any_todos,
+    goal_initial_batch_applicable,
+    todo_authoring_steps,
+)
 
 
 TASK_PLAN_SCHEMA = "loopx_task_planning_v0"
@@ -88,10 +93,20 @@ def inspect_goal_planning_frontier(
         runtime_root=runtime_root_arg,
         include_work_details=False,
     )
+    source_route = resolve_goal_source_runtime_route(
+        registry_path=registry_path,
+        goal_id=goal_id,
+        runtime_root_override=runtime_root_arg,
+    )
+    goal_has_existing_todos = bool(todos) or canonical_goal_has_any_todos(
+        runtime_root=Path(source_route["source_runtime_root"]),
+        goal_id=goal_id,
+    )
     return {
         "agent_id": agent_id,
         "goal": goal,
         "existing_todos": todos,
+        "goal_has_existing_todos": goal_has_existing_todos,
         "runnable": runnable,
         "runnable_todo_ids": [
             t["todo_id"] for t in runnable if t.get("claimed_by") == agent_id
@@ -188,6 +203,7 @@ def build_task_planning_packet(
     agent_id = str(frontier["agent_id"])
     goal = frontier["goal"]
     todos = frontier["existing_todos"]
+    goal_has_existing_todos = bool(frontier.get("goal_has_existing_todos", bool(todos)))
     runnable = frontier["runnable"]
     goal_acceptance = frontier["goal_acceptance"]
     outcomes = (
@@ -195,11 +211,11 @@ def build_task_planning_packet(
         .get("outcome_requirements", {})
         .get("outcomes", [])
     )
-    batch_applicable = (
-        not todos
-        and not outcomes
-        and not frontier["goal_waiting_on"]
-        and not frontier["blocking_todo_ids"]
+    batch_applicable = goal_initial_batch_applicable(
+        has_any_todos=goal_has_existing_todos,
+        outcomes=outcomes,
+        goal_waiting_on=frontier["goal_waiting_on"],
+        blocking_todo_ids=frontier["blocking_todo_ids"],
     )
     fine = execution_profile_is_fine_grained(goal.get("execution_profile"))
     prefix = ["loopx", "--format", "json", "--registry", str(registry_path)]
@@ -249,6 +265,7 @@ def build_task_planning_packet(
         "planning_batch": {
             "schema_version": "loopx_planning_batch_proposal_v1",
             "applicable": batch_applicable,
+            "goal_has_existing_todos": goal_has_existing_todos,
             "schema_command": f"{batch_route} --schema",
             "preview_command_template": f"{batch_route} --document '<proposal.json>' --dry-run",
             "apply_command_template": f"{batch_route} --document '<proposal.json>' --execute",
