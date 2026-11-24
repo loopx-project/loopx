@@ -303,7 +303,7 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 
 ## 可选 Todo 分支规划
 
-`loopx explore todo-branch-plan` 是面向探索目标的窄 opt-in harness：一次尝试多个看起来都合理的下一个 todo。它使用 CPU 分支预测类比 + DSpark 启发调度器：对 open agent todos 排序，估计分支置信度与预期证据单位，选择置信度调度的验证前缀，选一个 `primary` 分支加安全的 `speculative` 分支，拒绝声明写作用域与已选分支重叠的分支。
+`loopx explore todo-branch-plan` 是面向探索目标的窄 opt-in harness：一次尝试多个看起来都合理的下一个 todo。它使用 CPU 分支预测类比 + DSpark 启发调度器：对 open agent todos 排序，估计分支置信度与预期证据单位，选择置信度调度的验证前缀，选择一个 `primary` 分支及符合条件的 `speculative` 分支。不同 Todo 即使声明的写入范围重叠，也可以同时入选。已被其他 Agent 认领的 Todo 会排除在外。
 
 关于 DSpark 引文（arXiv:2607.05147）的准确性说明：真实 DSpark 会在每个 per-step 置信度低于固定阈值的第一个位置截断半自回归 draft 块，并且只把 per-step 置信度累乘作为校准诊断。这里的 prefix-survival theta 模型（survival product × throughput 曲线）是 LoopX 特有的、面向**串行依赖** todo 链的扩展。绝不能用它来衡量独立并行 worker lanes 的规模——早期校准运行曾因此把 treatment arm 截到 5/10 lanes；worker 规划现在使用 `schedule_independent_lanes` 代替。
 
@@ -326,7 +326,7 @@ loopx todo add --goal-id <id> --role agent --text "Evaluate the rejected route" 
 
 没有声明写作用域的 todo 默认视为投机性读取或协调工作，因为许多探索任务只读。当控制器希望未知作用域折叠回单分支执行时，使用 `--no-allow-unscoped-parallel`。
 
-作用域冲突只看可变 `required_write_scopes`。不要把共享基础 checkout 或已构建的不可变输入放进该字段，仅仅因为多个实验都会读它。用现有 public-safe 能力标签表达可复用输入，如 `shared_implementation:<name>` 或 `shared_artifact:<name>`，然后给每个实验自己的变体或 launch 输出作用域。这些 lane 可以并行。如果共享构建本身仍是可变的，把它的路径留在 `required_write_scopes` 中；planner 会正确串行化可能写入同一工件的 lane。
+规划是只读操作。执行时，[任务租约](../../../docs/reference/canonical-lease-renew.md)保护 Todo 归属和实际检出目录。不同 Agent 可以在各自的 worktree 中为不同 Todo 修改同一路径。在 `required_write_scopes` 中声明可变输出，用 `shared_implementation:<name>` 或 `shared_artifact:<name>` 标识共享的不可变输入。如果构建会写入 worktree 之外的共享位置，应在启动任务前协调该位置的写入。
 
 ## 可选 Worker 分支规划
 
@@ -350,7 +350,7 @@ loopx explore worker-branch-plan --goal-id <id> --worker-width 5 \
 
 声明资源容量是显式 portfolio-fill 模式：请求的整体宽度成为选择上限；现有分数、hazards 与 typed evidence 保持不变。可用槽位只说明候选有资格进入分析 packet。agent 仍必须在 launch 前应用 goal 的 evidence、serving-cost、quota、claim 与 lease 门。
 
-当高排名候选因其依赖不在选中波内、写作用域与已选分支冲突或存在其他 planner hazard 而被拒绝时，选择继续扫描。同一资源 lane 中更靠后的安全候选可在同一次调用中回填被释放的预测槽位。`continuous_monitor` todos 保持仅诊断，即使携带 resource-lane 能力也不消耗资源槽。
+当高排名候选因其依赖不在选中波内或存在其他规划风险而被拒绝时，规划器会继续扫描。worker 规划器还会检查不同 worker lane 之间的写入范围是否重叠。同一资源 lane 中更靠后的安全候选可在同一次调用中回填被释放的预测槽位。`continuous_monitor` todos 保持仅诊断，即使携带 resource-lane 能力也不消耗资源槽。
 
 资源输入可选。没有 `--resource-capacity` 时，无 lane 与 legacy todos 保留现有 width/scheduler 行为。资源感知模式下，无 tag todos 保持原来的无约束行为；带 tag lane 必须有匹配的声明容量。使用没有匹配容量的 usage 会 fail closed，以捕捉拼错的 lane key。
 

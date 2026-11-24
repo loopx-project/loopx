@@ -753,7 +753,7 @@ def check_todo_branch_prediction_contract() -> None:
             "required_write_scopes": ["examples/**"],
         },
         {
-            "todo_id": "todo_conflict",
+            "todo_id": "todo_overlapping_scope",
             "index": 3,
             "status": "open",
             "text": "[P1] Edit alternate topology predictor",
@@ -789,10 +789,10 @@ def check_todo_branch_prediction_contract() -> None:
     assert plan["ab_result"]["baseline_serial_theta"] > 0, plan
     assert plan["ab_result"]["estimated_speedup_vs_baseline"] > 0, plan
     selected_ids = [item["todo_id"] for item in plan["selected_branches"]]
-    assert selected_ids[:2] == ["todo_primary", "todo_parallel"], plan
+    assert selected_ids[0] == "todo_primary", selected_ids
+    assert set(selected_ids) == {"todo_primary", "todo_parallel", "todo_overlapping_scope"}, selected_ids
     assert all("expected_evidence_units" in item for item in plan["selected_branches"]), plan
     rejected = {item["todo_id"]: item for item in plan["rejected_candidates"]}
-    assert rejected["todo_conflict"]["selection_status"] == "rejected_hazard", plan
     assert rejected["todo_other"]["selection_status"] == "blocked_claimed_by_other", plan
     assert not any("task-lease" in command for command in plan["selected_branches"][0]["suggested_commands"]), plan
 
@@ -1149,7 +1149,7 @@ def check_cli_surface() -> None:
             "- [ ] [P0] Continue CLI topology experiment.\n"
             "  <!-- loopx:todo todo_id=todo_cli_primary status=open task_class=advancement_task claimed_by=codex-main-control required_write_scopes=loopx/capabilities/explore/** required_capabilities=resource_lane:long_pool -->\n"
             "- [ ] [P1] Add CLI branch prediction smoke.\n"
-            "  <!-- loopx:todo todo_id=todo_cli_parallel status=open task_class=advancement_task required_write_scopes=examples/** required_capabilities=resource_lane:short_pool -->\n",
+            "  <!-- loopx:todo todo_id=todo_cli_parallel status=open task_class=advancement_task required_write_scopes=loopx/capabilities/explore/result_log.py required_capabilities=resource_lane:short_pool -->\n",
             encoding="utf-8",
         )
         registry.parent.mkdir(parents=True, exist_ok=True)
@@ -1292,6 +1292,7 @@ def check_cli_surface() -> None:
             goal_id,
             "--agent-id",
             "codex-main-control",
+            "--no-allow-unscoped-parallel",
             "--width",
             "2",
         )
