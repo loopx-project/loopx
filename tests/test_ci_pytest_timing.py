@@ -1046,3 +1046,198 @@ def test_concurrent_progress_and_deadline_diagnostics_never_corrupt_or_regress(
     after = json.loads(unit_diag.read_text(encoding="utf-8"))
     assert after["deadline_exceeded"] is True
     assert after["deadline_elapsed_seconds"] is not None
+
+
+def test_shard_budget_computation_and_fail_closed_validation(tmp_path: Path) -> None:
+    from scripts.ci.shard_budget import (
+        build_pre_shard_budget_diagnostics,
+        compute_shard_budget,
+        main as shard_budget_main,
+        parse_job_start_epoch,
+    )
+
+    admitted = compute_shard_budget(
+        job_budget_seconds=3600.0,
+        upload_reserve_seconds=300.0,
+        min_session_seconds=300.0,
+        job_start_epoch=1000.0,
+        now_epoch=1200.0,
+    )
+    assert admitted.admitted is True
+    assert admitted.elapsed_prep_seconds == 200.0
+    assert admitted.remaining_session_seconds == 3100.0
+    assert admitted.reason is None
+
+    # Exact minimum viable boundary is admitted; anything below fails fast.
+    boundary = compute_shard_budget(
+        job_budget_seconds=3600.0,
+        upload_reserve_seconds=300.0,
+        min_session_seconds=300.0,
+        job_start_epoch=1000.0,
+        now_epoch=4000.0,
+    )
+    assert boundary.admitted is True
+    assert boundary.remaining_session_seconds == 300.0
+
+    exhausted = compute_shard_budget(
+        job_budget_seconds=3600.0,
+        upload_reserve_seconds=300.0,
+        min_session_seconds=300.0,
+        job_start_epoch=1000.0,
+        now_epoch=4000.5,
+    )
+    assert exhausted.admitted is False
+    assert exhausted.remaining_session_seconds == 299.5
+    assert exhausted.reason is not None and "299.50s remaining < 300.00s" in exhausted.reason
+    diag = build_pre_shard_budget_diagnostics(exhausted)
+    assert diag["schema_version"] == "loopx_ci_pytest_diagnostics_v1"
+    assert diag["deadline_exceeded"] is True
+    assert diag["pre_shard_budget_exhausted"] is True
+    assert diag["execution_complete"] is False
+
+    # Future clock skew clamps elapsed prep to 0 instead of inflating budget.
+    skewed = compute_shard_budget(
+        job_budget_seconds=3600.0,
+        upload_reserve_seconds=300.0,
+        min_session_seconds=300.0,
+        job_start_epoch=2000.0,
+        now_epoch=1995.0,
+    )
+    assert skewed.elapsed_prep_seconds == 0.0
+    assert skewed.remaining_session_seconds == 3300.0
+
+    assert parse_job_start_epoch(None, required=False) is None
+    for bad in (None, "", " ", "abc", "-1", "0", "nan", "inf"):
+        with pytest.raises(ValueError):
+            parse_job_start_epoch(bad, required=True)
+    with pytest.raises(ValueError):
+        compute_shard_budget(
+            job_budget_seconds=0.0,
+            upload_reserve_seconds=300.0,
+            min_session_seconds=300.0,
+            job_start_epoch=None,
+            now_epoch=1000.0,
+        )
+    with pytest.raises(ValueError):
+        compute_shard_budget(
+            job_budget_seconds=3600.0,
+            upload_reserve_seconds=-1.0,
+            min_session_seconds=300.0,
+            job_start_epoch=None,
+            now_epoch=1000.0,
+        )
+    assert shard_budget_main(["--job-budget-seconds", "10", "-q"]) == 4
+    assert shard_budget_main(["--job-budget-seconds", "10", "--", "--ci-session-deadline", "5"]) == 4
+
+    env = environment()
+    env["GITHUB_ACTIONS"] = "true"
+    env.pop("LOOPX_SHARD_JOB_START_EPOCH", None)
+    (tmp_path / "test_subject.py").write_text(
+        "from pathlib import Path\ndef test_unreachable(): Path('ran').touch()\n",
+        encoding="utf-8",
+    )
+    missing_ci = subprocess.run(
+        [sys.executable, "-m", "scripts.ci.shard_budget", "--job-budget-seconds", "10", "--", "-q"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert missing_ci.returncode == 4
+    assert "LOOPX_SHARD_JOB_START_EPOCH" in missing_ci.stderr
+    assert not (tmp_path / "ran").exists()
+
+
+def test_shard_budget_preserves_reserve_across_fast_and_slow_prep(tmp_path: Path) -> None:
+    def run_case(name: str, *, prep_seconds: float, job_budget: float, upload_reserve: float) -> tuple[subprocess.CompletedProcess[str], float, Path, Path, Path]:
+        case_dir = tmp_path / name
+        case_dir.mkdir()
+        (case_dir / "test_subject.py").write_text(
+            "import time\nfrom pathlib import Path\n"
+            "def test_fast():\n"
+            "    Path('fast.done').touch()\n"
+            "def test_blocked():\n"
+            "    waited = 0.0\n"
+            "    while not Path('fast.done').exists() and waited < 5.0:\n"
+            "        time.sleep(0.02)\n"
+            "        waited += 0.02\n"
+            "    Path('blocked.entered').touch()\n"
+            "    time.sleep(10.0)\n",
+            encoding="utf-8",
+        )
+        diag_path = case_dir / "ci-shard-diagnostics.json"
+        junit_path = case_dir / "junit.xml"
+        t0_mono = time.monotonic()
+        t0_epoch = time.time()
+        time.sleep(prep_seconds)
+        remaining_outer = max(0.2, job_budget - (time.monotonic() - t0_mono))
+        env = environment()
+        env["LOOPX_SHARD_JOB_START_EPOCH"] = f"{t0_epoch:.6f}"
+        env["GITHUB_ACTIONS"] = "true"
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "scripts.ci.shard_budget",
+                "--job-budget-seconds", str(job_budget),
+                "--upload-reserve-seconds", str(upload_reserve),
+                "--min-session-seconds", "0.5",
+                "--diagnostics-file", str(diag_path),
+                "--",
+                "-v", "-n", "2",
+                "-p", "scripts.ci.pytest_timing",
+                "--ci-diagnostics-file", str(diag_path),
+                f"--junitxml={junit_path}",
+            ],
+            cwd=case_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=remaining_outer,
+            check=False,
+        )
+        total_elapsed = time.monotonic() - t0_mono
+        return result, total_elapsed, case_dir, junit_path, diag_path
+
+    # 1. Fast prep (0.2s out of 5.0s outer budget, 2.6s reserve -> ~2.2s deadline):
+    # exits 2 well before 5.0s outer limit and flushes partial JUnit + diagnostics.
+    fast_res, fast_elapsed, _, fast_junit, fast_diag = run_case(
+        "fast-prep", prep_seconds=0.2, job_budget=5.0, upload_reserve=2.6,
+    )
+    assert fast_res.returncode == 2, fast_res.stdout + fast_res.stderr
+    assert fast_elapsed < 4.5, f"Fast prep should finish well before 5.0s outer limit, took {fast_elapsed:.2f}s"
+    assert fast_junit.is_file()
+    fast_cases = {
+        name for case in ET.parse(fast_junit).findall(".//testcase") if (name := case.attrib.get("name"))
+    }
+    assert "test_fast" in fast_cases
+    fast_payload = json.loads(fast_diag.read_text(encoding="utf-8"))
+    assert fast_payload["deadline_exceeded"] is True
+    assert fast_payload["pytest_exit_code"] == 2
+
+    # 2. Slow prep (3.6s out of 5.0s outer budget, same entrypoint & parameters):
+    # fails fast before launching shards (no 5.0s outer kill, clear budget error, diagnostics written).
+    slow_res, slow_elapsed, slow_dir, slow_junit, slow_diag = run_case(
+        "slow-prep-fail-fast", prep_seconds=3.6, job_budget=5.0, upload_reserve=2.6,
+    )
+    assert slow_res.returncode == 2, slow_res.stdout + slow_res.stderr
+    assert slow_elapsed < 4.5, f"Slow prep should fail fast before 5.0s outer limit, took {slow_elapsed:.2f}s"
+    assert "insufficient remaining job budget" in slow_res.stderr.lower()
+    assert "elapsed_prep=" in slow_res.stderr and "upload_reserve=2.60s" in slow_res.stderr
+    assert not (slow_dir / "fast.done").exists()
+    assert not slow_junit.exists()
+    slow_payload = json.loads(slow_diag.read_text(encoding="utf-8"))
+    assert slow_payload["deadline_exceeded"] is True
+    assert slow_payload["pre_shard_budget_exhausted"] is True
+    assert slow_payload["execution_complete"] is False
+
+    # 3. Tight but viable prep (3.6s out of 9.0s outer budget, 3.0s reserve -> ~2.4s deadline):
+    # shortens inner pytest deadline dynamically so full reserve survives before 9.0s outer limit.
+    tight_res, tight_elapsed, _, tight_junit, tight_diag = run_case(
+        "slow-prep-viable", prep_seconds=3.6, job_budget=9.0, upload_reserve=3.0,
+    )
+    assert tight_res.returncode == 2, tight_res.stdout + tight_res.stderr
+    assert tight_elapsed < 7.5, f"Tight budget should preserve upload reserve before 9.0s, took {tight_elapsed:.2f}s"
+    assert tight_junit.is_file()
+    tight_cases = {
+        name for case in ET.parse(tight_junit).findall(".//testcase") if (name := case.attrib.get("name"))
+    }
+    assert "test_fast" in tight_cases
+    tight_payload = json.loads(tight_diag.read_text(encoding="utf-8"))
+    assert tight_payload["deadline_exceeded"] is True
+    assert tight_payload["deadline_seconds"] < 2.6

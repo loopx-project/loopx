@@ -404,6 +404,7 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
     env = {
         key: value for key, value in os.environ.items()
         if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))
+        and key not in ("LOOPX_SHARD_JOB_START_EPOCH", "GITHUB_ACTIONS")
     }
     env["PYTHONPATH"] = str(WORKFLOW_ROOT)
     seen: list[set[str]] = []
@@ -514,8 +515,11 @@ def test_shard_names_failed_cases_before_the_remaining_tests_finish(tmp_path: Pa
         "    while not Path('release').exists():\n        time.sleep(0.01)\n"
         "    assert value(case) >= 4\n",
     )
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))}
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))
+        and key not in ("LOOPX_SHARD_JOB_START_EPOCH", "GITHUB_ACTIONS")
+    }
     env["PYTHONPATH"] = str(WORKFLOW_ROOT)
     log = tmp_path / "progress.log"
     with log.open("w") as output:
@@ -549,12 +553,30 @@ def test_python_shards_preserve_two_workers_and_deadline_diagnostics() -> None:
     shard_job = yaml.safe_load(WORKFLOW)["jobs"]["test-shard"]
     assert shard_job["timeout-minutes"] == 60
     steps = {step.get("name", f"idx-{idx}"): step for idx, step in enumerate(shard_job["steps"])}
+    start_step = shard_job["steps"][0]
+    assert start_step["name"] == "Record job start time"
+    assert "LOOPX_SHARD_JOB_START_EPOCH=" in start_step["run"]
+    assert "GITHUB_ENV" in start_step["run"]
     isolation = steps["Prepare native shell isolation"]["run"]
     assert "if ! command -v bwrap >/dev/null 2>&1; then" in isolation
     run_args = shlex.split(steps["Run test shard"]["run"])
-    assert run_args[run_args.index("-n") + 1] == "2"
-    assert run_args[run_args.index("--ci-session-deadline") + 1] == "3300"
-    assert run_args[run_args.index("--ci-diagnostics-file") + 1] == "ci-shard-diagnostics.json"
+    sep_index = run_args.index("--")
+    wrapper_args, pytest_args = run_args[:sep_index], run_args[sep_index + 1 :]
+    assert wrapper_args[:3] == ["python", "-m", "scripts.ci.shard_budget"]
+    assert wrapper_args[wrapper_args.index("--job-budget-seconds") + 1] == "3600"
+    assert wrapper_args[wrapper_args.index("--upload-reserve-seconds") + 1] == "300"
+    assert wrapper_args[wrapper_args.index("--min-session-seconds") + 1] == "300"
+    assert wrapper_args[wrapper_args.index("--diagnostics-file") + 1] == "ci-shard-diagnostics.json"
+    assert "--ci-session-deadline" not in " ".join(pytest_args)
+    assert pytest_args[pytest_args.index("-n") + 1] == "2"
+    assert pytest_args[pytest_args.index("-p") + 1] == "scripts.ci.pytest_timing"
+    assert pytest_args[pytest_args.index("--ci-stall-after") + 1] == "120"
+    assert pytest_args[pytest_args.index("--ci-diagnostics-file") + 1] == "ci-shard-diagnostics.json"
+    assert pytest_args[pytest_args.index("--splits") + 1] == "6"
+    group_idx = pytest_args.index("--group")
+    assert pytest_args[group_idx + 1 : group_idx + 4] == ["${{", "matrix.shard", "}}"]
+    assert "--junitxml=junit.xml" in pytest_args
+    assert "--cov=loopx" in pytest_args
     junit_upload = steps["Upload full-shard outcomes for selection audit"]
     assert junit_upload["if"] == "${{ !cancelled() }}"
     assert junit_upload["with"]["path"] == "junit.xml"

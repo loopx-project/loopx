@@ -615,15 +615,17 @@ jobs:
       cancel-in-progress: false
     # All shards were still progressing at 83-94% when the 45m job
     # deadline cancelled run 37916979857. Reserve setup/reporting headroom
-    # without changing test-level deadlines, collection or worker count; an inner
-    # 55m cooperative session deadline preserves partial JUnit and diagnostics
-    # before the 60m runner limit terminates the job.
+    # without changing test-level deadlines, collection or worker count; compute
+    # the remaining cooperative session deadline from the actual job start epoch
+    # while reserving 5m for partial JUnit/diagnostics flush and artifact upload.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
     steps:
+      - name: Record job start time
+        run: echo "LOOPX_SHARD_JOB_START_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -668,12 +670,18 @@ jobs:
         # Split the whole collection, not a hand-maintained list of directories.
         # Without timing history least_duration alternates equal-weight tests.
         # Each runner retains the measured two-worker pool; cooperative stacks
-        # and the 55m inner deadline diagnose slow/blocked cases without masking failures.
+        # and the dynamic job-budget deadline diagnose slow/blocked cases and
+        # preserve the upload reserve even when setup steps overrun.
         run: >-
-          python -m pytest -v -n 2 -m "not stage2c_e2e"
+          python -m scripts.ci.shard_budget
+          --job-budget-seconds 3600
+          --upload-reserve-seconds 300
+          --min-session-seconds 300
+          --diagnostics-file ci-shard-diagnostics.json
+          --
+          -v -n 2 -m "not stage2c_e2e"
           -p scripts.ci.pytest_timing
           --ci-stall-after 120
-          --ci-session-deadline 3300
           --ci-diagnostics-file ci-shard-diagnostics.json
           --splits 6 --group ${{ matrix.shard }}
           --splitting-algorithm least_duration

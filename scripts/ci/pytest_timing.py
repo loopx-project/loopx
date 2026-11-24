@@ -15,7 +15,6 @@ import platform
 import re
 import signal
 import subprocess
-import tempfile
 import time
 import sys
 import threading
@@ -29,6 +28,10 @@ from _pytest.subtests import SubtestReport
 
 from scripts.ci.pytest_failure_context import PREFIX as FAILURE_PREFIX
 from scripts.ci.pytest_failure_context import exception_type_name, failure_context
+from scripts.ci.shard_budget import (
+    DIAGNOSTICS_SCHEMA_VERSION,
+    atomic_write_text as _atomic_write_text,
+)
 
 
 PREFIX = "LOOPX_PYTEST_TIMING "
@@ -45,31 +48,6 @@ _STACK_WRITE_PROGRAM = (
     "deadline.daemon=True;deadline.start();"
     "os.write(2,sys.stdin.buffer.read())"
 )
-
-
-def _atomic_write_text(path: str, content: str) -> None:
-    """Atomically write UTF-8 text via a unique same-directory temporary file."""
-    abs_path = os.path.abspath(path)
-    parent = os.path.dirname(abs_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp_path: str | None = None
-    try:
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=f"{os.path.basename(abs_path)}.",
-            suffix=".tmp",
-            dir=parent or ".",
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.replace(tmp_path, abs_path)
-        tmp_path = None
-    finally:
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 def _render_junit_xml(xml: Any) -> str | None:
@@ -481,7 +459,7 @@ class TimingObserver:
         )
         active_children = children if children is not None else self.deadline_children
         return {
-            "schema_version": "loopx_ci_pytest_diagnostics_v1",
+            "schema_version": DIAGNOSTICS_SCHEMA_VERSION,
             "execution_complete": execution_complete,
             "deadline_exceeded": self.deadline_exceeded,
             "deadline_seconds": self.deadline_seconds,
