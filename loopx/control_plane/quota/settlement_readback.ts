@@ -1600,7 +1600,13 @@ function readQuotaSettlementFromRequest(
   // still owed, the Turn is settlement_pending regardless of optional boundary
   // or checkpoint flags; completed spends without those proofs remain open.
   const spendPendingAfterWriteback = writeback.failure === null && spend.failure !== null;
-  const replayPhase = monitorPhase === "settled" ? "settled" : receiptBoundReplayPhase({
+  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
+    receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  // The Run can commit before the CLI records its refresh event. Its original
+  // Todo still owes receipt repair even when the Todo itself remains open.
+  const pendingTodoReceipt = identity.binding_kind === "todo" && progress.state === "writeback_receipt_required";
+  const replayPhase = monitorPhase === "settled" ? "settled"
+    : pendingTodoReceipt ? "settlement_pending" : receiptBoundReplayPhase({
     binding_kind: identity.binding_kind,
     writeback_completes_binding: todoBoundReplan || noSpendKind !== null || progressWriteback ||
       replanWriteback || spendPendingAfterWriteback,
@@ -1636,8 +1642,6 @@ function readQuotaSettlementFromRequest(
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
 
-  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-    receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
   // The combined caller consumes controls and receipts after verification.
   // Keep original bodies by default and throughout any pending recovery,
   // including the same Runs carried by the four result bundles. Identity,
