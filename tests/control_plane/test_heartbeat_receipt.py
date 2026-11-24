@@ -458,3 +458,480 @@ def test_cli_reentry_distinguishes_admission_timer_from_later_wait(
     assert replay["effective_action"] == "heartbeat_settled_skip"
     assert replay["heartbeat_receipt"]["settlement_identity"] == identity
     assert rows() == before
+
+
+def _digest_review_details(obligation_id: str) -> dict[str, object]:
+    import hashlib
+    from loopx.control_plane.work_items.autonomous_replan_obligation import (
+        AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+        AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+        AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    )
+
+    return {
+        "semantic_replan_obligation_id": obligation_id,
+        "semantic_replan_review_kind": "periodic_review_due",
+        "semantic_replan_review_stop_condition": AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+        "semantic_replan_review_stop_condition_sha256": hashlib.sha256(
+            AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION.encode("utf-8")
+        ).hexdigest(),
+        "semantic_replan_review_stop_contract_id": AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+    }
+
+
+def _capability_guard_details(obligation_id: str) -> dict[str, object]:
+    return {
+        "semantic_replan_obligation_id": obligation_id,
+        "semantic_replan_capability_id": "explore",
+        "semantic_replan_gap_id": "research-composition-0123456789abcdef",
+        "semantic_replan_frontier_revision": "research-composition-v0:0123456789abcdef",
+    }
+
+
+def test_identity_upgrade_clearing_semantic_replan_strips_stale_review_fields(
+    tmp_path: Path,
+) -> None:
+    append_rollout_event(
+        rollout_event_log_path(tmp_path, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=TURN_ID,
+            status="normal_run",
+            details={
+                "stall_observation": "not_applicable",
+                **_digest_review_details("replan-1111111111111111"),
+            },
+        ),
+    )
+
+    upgraded, appended = upgrade_identityless_heartbeat_receipt(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        todo_id=TODO_ID,
+        settlement_effect_id=EFFECT_ID,
+        status="normal_run",
+        summary="heartbeat quota receipt upgraded after periodic review cleared",
+        details={
+            "stall_observation": "not_applicable",
+            "todo_id": TODO_ID,
+            "semantic_replan_obligation_id": "",
+        },
+    )
+
+    assert appended is True
+    for field in (
+        "semantic_replan_review_kind",
+        "semantic_replan_review_stop_condition",
+        "semantic_replan_review_stop_condition_sha256",
+        "semantic_replan_review_stop_contract_id",
+    ):
+        assert field not in upgraded["details"]
+
+    readback = read_heartbeat_settlement(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+    )
+    assert readback is not None
+    assert readback.identity.failure is None
+    assert readback.semantic_replan_guard == {
+        "schema_version": "semantic_replan_guard_v0",
+        "scope": "turn_guard",
+        "selected_obligation_id": None,
+    }
+
+
+def test_identity_upgrade_clearing_semantic_replan_strips_stale_capability_fields(
+    tmp_path: Path,
+) -> None:
+    append_rollout_event(
+        rollout_event_log_path(tmp_path, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=TURN_ID,
+            status="normal_run",
+            details={
+                "stall_observation": "not_applicable",
+                **_capability_guard_details("replan-1111111111111111"),
+            },
+        ),
+    )
+
+    upgraded, appended = upgrade_identityless_heartbeat_receipt(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        todo_id=TODO_ID,
+        settlement_effect_id=EFFECT_ID,
+        status="normal_run",
+        summary="heartbeat quota receipt upgraded after capability guard cleared",
+        details={
+            "stall_observation": "not_applicable",
+            "todo_id": TODO_ID,
+            "semantic_replan_obligation_id": "",
+        },
+    )
+
+    assert appended is True
+    for field in (
+        "semantic_replan_capability_id",
+        "semantic_replan_gap_id",
+        "semantic_replan_frontier_revision",
+    ):
+        assert field not in upgraded["details"]
+
+    readback = read_heartbeat_settlement(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+    )
+    assert readback is not None
+    assert readback.identity.failure is None
+    assert readback.semantic_replan_guard == {
+        "schema_version": "semantic_replan_guard_v0",
+        "scope": "turn_guard",
+        "selected_obligation_id": None,
+    }
+
+
+def test_identity_upgrade_replan_guard_rotation_and_review_kind_switch(
+    tmp_path: Path,
+) -> None:
+    cap_to_review = tmp_path / "cap-to-review"
+    append_rollout_event(
+        rollout_event_log_path(cap_to_review, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=TURN_ID,
+            status="normal_run",
+            details={
+                "stall_observation": "not_applicable",
+                **_capability_guard_details("replan-1111111111111111"),
+            },
+        ),
+    )
+    switched, appended = upgrade_identityless_heartbeat_receipt(
+        cap_to_review,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        todo_id=TODO_ID,
+        settlement_effect_id=EFFECT_ID,
+        status="normal_run",
+        summary="capability guard replaced by review guard",
+        details={
+            "stall_observation": "not_applicable",
+            "todo_id": TODO_ID,
+            "semantic_replan_obligation_id": "replan-2222222222222222",
+            "semantic_replan_review_kind": "goal_outcome_uncovered",
+            "semantic_replan_review_stop_condition": "Stop at owner-only decisions.",
+        },
+    )
+    assert appended is True
+    for field in (
+        "semantic_replan_capability_id",
+        "semantic_replan_gap_id",
+        "semantic_replan_frontier_revision",
+    ):
+        assert field not in switched["details"]
+    readback_cap = read_heartbeat_settlement(
+        cap_to_review,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+    )
+    assert readback_cap is not None
+    assert readback_cap.semantic_replan_guard == {
+        "schema_version": "semantic_replan_guard_v0",
+        "scope": "turn_guard",
+        "selected_obligation_id": "replan-2222222222222222",
+        "selected_review_source": {
+            "kind": "goal_outcome_uncovered",
+            "stop_condition": "Stop at owner-only decisions.",
+        },
+    }
+
+    digest_to_inline = tmp_path / "digest-to-inline"
+    append_rollout_event(
+        rollout_event_log_path(digest_to_inline, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=TURN_ID,
+            status="normal_run",
+            details={
+                "stall_observation": "not_applicable",
+                **_digest_review_details("replan-1111111111111111"),
+            },
+        ),
+    )
+    inline, appended_inline = upgrade_identityless_heartbeat_receipt(
+        digest_to_inline,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        todo_id=TODO_ID,
+        settlement_effect_id=EFFECT_ID,
+        status="normal_run",
+        summary="digest review guard replaced by short inline review guard",
+        details={
+            "stall_observation": "not_applicable",
+            "todo_id": TODO_ID,
+            "semantic_replan_obligation_id": "replan-2222222222222222",
+            "semantic_replan_review_kind": "goal_outcome_uncovered",
+            "semantic_replan_review_stop_condition": "Stop at owner-only decisions.",
+        },
+    )
+    assert appended_inline is True
+    assert "semantic_replan_review_stop_condition_sha256" not in inline["details"]
+    assert "semantic_replan_review_stop_contract_id" not in inline["details"]
+    readback_inline = read_heartbeat_settlement(
+        digest_to_inline,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=TODO_ID,
+        turn_instance_id=TURN_ID,
+    )
+    assert readback_inline is not None
+    assert readback_inline.semantic_replan_guard == {
+        "schema_version": "semantic_replan_guard_v0",
+        "scope": "turn_guard",
+        "selected_obligation_id": "replan-2222222222222222",
+        "selected_review_source": {
+            "kind": "goal_outcome_uncovered",
+            "stop_condition": "Stop at owner-only decisions.",
+        },
+    }
+
+
+def test_replan_binding_preserves_existing_review_guard_when_details_empty(
+    tmp_path: Path,
+) -> None:
+    obligation_id = "replan-2222222222222222"
+    review_details = _digest_review_details(obligation_id)
+    append_rollout_event(
+        rollout_event_log_path(tmp_path, GOAL_ID),
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=TURN_ID,
+            status="autonomous_replan_required",
+            summary="identity-less autonomous replan receipt with review source",
+            details={
+                "interaction_mode": "autonomous_replan",
+                "ok": True,
+                "should_run": True,
+                "must_attempt_work": True,
+                "delivery_allowed": False,
+                "quiet_noop_allowed": False,
+                **review_details,
+            },
+        ),
+    )
+
+    bound, appended = bind_replan_successor_heartbeat_receipt(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID,
+        replan_obligation_id=obligation_id,
+    )
+
+    assert appended is True
+    for key, value in review_details.items():
+        assert bound["details"][key] == value
+
+    readback = read_heartbeat_settlement(
+        tmp_path,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=None,
+        turn_instance_id=TURN_ID,
+        replan_obligation_id=obligation_id,
+    )
+    assert readback is not None
+    assert readback.identity.failure is None
+    assert readback.semantic_replan_guard is not None
+    assert readback.semantic_replan_guard["selected_obligation_id"] == obligation_id
+    assert readback.semantic_replan_guard["selected_review_source"] == {
+        "kind": "periodic_review_due",
+        "stop_condition": review_details["semantic_replan_review_stop_condition"],
+        "stop_condition_sha256": review_details["semantic_replan_review_stop_condition_sha256"],
+        "stop_contract_id": review_details["semantic_replan_review_stop_contract_id"],
+    }
+
+
+def test_identity_upgrade_rejects_contradictory_semantic_replan_details_without_appending(
+    tmp_path: Path,
+) -> None:
+    log_path = rollout_event_log_path(tmp_path, GOAL_ID)
+    append_rollout_event(
+        log_path,
+        build_rollout_event(
+            goal_id=GOAL_ID,
+            event_kind="quota_should_run",
+            agent_id=AGENT_ID,
+            run_id=TURN_ID,
+            status="normal_run",
+            details={
+                "stall_observation": "not_applicable",
+                "semantic_replan_obligation_id": "replan-1111111111111111",
+            },
+        ),
+    )
+    before = log_path.read_bytes()
+
+    with pytest.raises(HeartbeatReceiptIdentityConflictError, match="selected obligation"):
+        upgrade_identityless_heartbeat_receipt(
+            tmp_path,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            turn_instance_id=TURN_ID,
+            todo_id=TODO_ID,
+            settlement_effect_id=EFFECT_ID,
+            status="normal_run",
+            summary="invalid empty obligation with review field",
+            details={
+                "semantic_replan_obligation_id": "",
+                "semantic_replan_review_kind": "periodic_review_due",
+            },
+        )
+    with pytest.raises(HeartbeatReceiptIdentityConflictError, match="capability guard"):
+        upgrade_identityless_heartbeat_receipt(
+            tmp_path,
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            turn_instance_id=TURN_ID,
+            todo_id=TODO_ID,
+            settlement_effect_id=EFFECT_ID,
+            status="normal_run",
+            summary="invalid simultaneous review and capability fields",
+            details={
+                "semantic_replan_obligation_id": "replan-1111111111111111",
+                "semantic_replan_review_kind": "periodic_review_due",
+                "semantic_replan_capability_id": "explore",
+            },
+        )
+
+    assert log_path.read_bytes() == before
+
+
+def test_quota_rollout_details_capability_guard_fallback_boundaries() -> None:
+    from argparse import Namespace
+    from loopx.control_plane.quota.settlement_cli import quota_rollout_details
+
+    cap_guard = {
+        "schema_version": "semantic_replan_capability_guard_v0",
+        "capability_id": "explore",
+        "gap_id": "research-composition-0123456789abcdef",
+        "frontier_revision": "research-composition-v0:0123456789abcdef",
+    }
+    args = Namespace(quota_command="should-run", agent_id=AGENT_ID)
+    stale_receipt = {
+        "semantic_replan_obligation_id": "replan-1111111111111111",
+        "semantic_replan_capability_guard": cap_guard,
+    }
+
+    # 1. Packet has no obligation -> stale capability guard must NOT be copied.
+    cleared = quota_rollout_details(
+        {"heartbeat_receipt": stale_receipt, "replan_action_packet": None},
+        args,
+        todo_id=TODO_ID,
+    )
+    assert cleared["semantic_replan_obligation_id"] == ""
+    assert "semantic_replan_capability_id" not in cleared
+
+    # 2. Packet rotates to a different obligation -> stale capability guard must NOT be copied.
+    rotated = quota_rollout_details(
+        {
+            "heartbeat_receipt": stale_receipt,
+            "replan_action_packet": {"obligation_id": "replan-2222222222222222"},
+        },
+        args,
+        todo_id=None,
+        replan_obligation_id="replan-2222222222222222",
+    )
+    assert "semantic_replan_capability_id" not in rotated
+
+    # 3. Same obligation populates a review kind -> capability guard must NOT mix with review fields.
+    review_same = quota_rollout_details(
+        {
+            "heartbeat_receipt": stale_receipt,
+            "replan_action_packet": {"obligation_id": "replan-1111111111111111"},
+            "autonomous_replan_obligation": {
+                "schema_version": "autonomous_replan_obligation_v0",
+                "required": True,
+                "agent_id": AGENT_ID,
+                "obligation_id": "replan-1111111111111111",
+                "trigger_count": 1,
+                "triggers": [{"kind": "periodic_review_due"}],
+                "stop_condition": "Stop at owner-only decisions.",
+            },
+        },
+        args,
+        todo_id=None,
+        replan_obligation_id="replan-1111111111111111",
+    )
+    assert review_same["semantic_replan_review_kind"] == "periodic_review_due"
+    assert "semantic_replan_capability_id" not in review_same
+
+    # 4. Matching non-review obligation without inline capability_guard -> preserve receipt fallback.
+    preserved = quota_rollout_details(
+        {
+            "heartbeat_receipt": stale_receipt,
+            "replan_action_packet": {"obligation_id": "replan-1111111111111111"},
+        },
+        args,
+        todo_id=None,
+        replan_obligation_id="replan-1111111111111111",
+    )
+    assert preserved["semantic_replan_capability_id"] == "explore"
+    assert preserved["semantic_replan_gap_id"] == cap_guard["gap_id"]
+    assert preserved["semantic_replan_frontier_revision"] == cap_guard["frontier_revision"]
+
+
+def test_turn_guard_rejects_capability_guard_without_obligation_before_lock_and_before_bind(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.quota.effect_program import SettlementIdentity
+    from loopx.control_plane.quota.heartbeat_receipt import (
+        ensure_turn_heartbeat_settlement_receipt,
+    )
+
+    called: list[bool] = []
+    identity = SettlementIdentity(GOAL_ID, AGENT_ID, TODO_ID, TURN_ID)
+    cap_guard = {
+        "schema_version": "semantic_replan_capability_guard_v0",
+        "capability_id": "explore",
+        "gap_id": "research-composition-0123456789abcdef",
+        "frontier_revision": "research-composition-v0:0123456789abcdef",
+    }
+
+    with pytest.raises(ValueError, match="selected obligation"):
+        ensure_turn_heartbeat_settlement_receipt(
+            tmp_path,
+            identity,
+            semantic_replan_guard_scoped=True,
+            semantic_replan_obligation_id=None,
+            semantic_replan_capability_guard=cap_guard,
+            before_bind=lambda: called.append(True),
+        )
+
+    assert called == []
+    assert not rollout_event_log_path(tmp_path, GOAL_ID).exists()

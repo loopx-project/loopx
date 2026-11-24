@@ -25,6 +25,76 @@ from .spend_sources import TURN_SCOPED_SLOT_SPEND_SOURCES
 
 HEARTBEAT_RECEIPT_SCHEMA_VERSION = "heartbeat_quota_receipt_v0"
 
+_SEMANTIC_REPLAN_REVIEW_FIELDS = (
+    "semantic_replan_review_kind",
+    "semantic_replan_review_stop_condition",
+    "semantic_replan_review_stop_condition_sha256",
+    "semantic_replan_review_stop_contract_id",
+)
+_SEMANTIC_REPLAN_CAPABILITY_FIELDS = (
+    "semantic_replan_capability_id",
+    "semantic_replan_gap_id",
+    "semantic_replan_frontier_revision",
+)
+_SEMANTIC_REPLAN_COMPANION_FIELDS = (
+    _SEMANTIC_REPLAN_REVIEW_FIELDS + _SEMANTIC_REPLAN_CAPABILITY_FIELDS
+)
+
+
+def _merge_semantic_replan_guard_details(
+    effective_details: Mapping[str, object],
+    incoming_details: Mapping[str, object],
+) -> dict[str, object]:
+    """Merge receipt details without leaving orphaned replan companion fields."""
+
+    corrected_details = dict(effective_details)
+    touches_semantic_guard = "semantic_replan_obligation_id" in incoming_details or any(
+        field in incoming_details for field in _SEMANTIC_REPLAN_COMPANION_FIELDS
+    )
+    if not touches_semantic_guard:
+        corrected_details.update(incoming_details)
+        return corrected_details
+
+    existing_obligation = normalize_todo_replan_obligation_id(
+        effective_details.get("semantic_replan_obligation_id")
+    )
+    if "semantic_replan_obligation_id" in incoming_details:
+        raw_incoming = incoming_details.get("semantic_replan_obligation_id")
+        incoming_obligation = normalize_todo_replan_obligation_id(raw_incoming)
+        if raw_incoming not in (None, "") and incoming_obligation is None:
+            raise HeartbeatReceiptIdentityConflictError(
+                "heartbeat receipt semantic replan guard is malformed"
+            )
+    else:
+        incoming_obligation = existing_obligation
+
+    incoming_has_review = any(
+        field in incoming_details for field in _SEMANTIC_REPLAN_REVIEW_FIELDS
+    )
+    incoming_has_capability = any(
+        field in incoming_details for field in _SEMANTIC_REPLAN_CAPABILITY_FIELDS
+    )
+    if incoming_has_review and incoming_has_capability:
+        raise HeartbeatReceiptIdentityConflictError(
+            "a review source cannot replace a capability guard"
+        )
+    if (incoming_has_review or incoming_has_capability) and incoming_obligation is None:
+        raise HeartbeatReceiptIdentityConflictError(
+            "heartbeat receipt semantic replan guard requires a selected obligation"
+        )
+
+    if (
+        incoming_obligation is None
+        or incoming_obligation != existing_obligation
+        or incoming_has_review
+        or incoming_has_capability
+    ):
+        for field in _SEMANTIC_REPLAN_COMPANION_FIELDS:
+            corrected_details.pop(field, None)
+
+    corrected_details.update(incoming_details)
+    return corrected_details
+
 
 def _heartbeat_receipt_events(
     events: list[dict[str, object]],
@@ -241,6 +311,14 @@ def ensure_turn_heartbeat_settlement_receipt(
         and normalized_semantic_replan_obligation_id is None
     ):
         raise ValueError("Turn semantic replan obligation id is malformed")
+    if (
+        semantic_replan_guard_scoped
+        and semantic_replan_capability_guard is not None
+        and normalized_semantic_replan_obligation_id is None
+    ):
+        raise ValueError(
+            "Turn semantic replan capability guard requires a selected obligation"
+        )
 
     if quota_spend_source is not None and quota_spend_source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
         raise ValueError("Turn quota spend source must be heartbeat or visible-goal")
@@ -355,6 +433,12 @@ def ensure_turn_heartbeat_settlement_receipt(
             if task_lease_epoch is None:
                 details.pop("prepared_lease_epoch", None)
         if semantic_replan_guard_scoped:
+            if semantic_replan_capability_guard is not None and any(
+                field in details for field in _SEMANTIC_REPLAN_REVIEW_FIELDS
+            ):
+                raise HeartbeatReceiptIdentityConflictError(
+                    "Turn heartbeat receipt belongs to a review guard"
+                )
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
             )
@@ -362,6 +446,9 @@ def ensure_turn_heartbeat_settlement_receipt(
                 details["semantic_replan_capability_id"] = semantic_replan_capability_guard["capability_id"]
                 details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
                 details["semantic_replan_frontier_revision"] = semantic_replan_capability_guard["frontier_revision"]
+            elif normalized_semantic_replan_obligation_id is None:
+                for field in _SEMANTIC_REPLAN_COMPANION_FIELDS:
+                    details.pop(field, None)
         if (source := previous_source or quota_spend_source) is not None:
             details["quota_spend_source"] = source
         source_event_id = (
@@ -616,10 +703,13 @@ def upgrade_identityless_heartbeat_receipt(
                 return effective, False
 
         # The effective receipt was read while holding the rollout lock. Keep
-        # fields appended by a concurrent same-Turn revision unless this
-        # correction explicitly replaces them.
-        corrected_details = dict(effective_details)
-        corrected_details.update(details)
+        # non-conflicting fields appended by a concurrent same-Turn revision,
+        # while stripping orphaned semantic replan companion metadata whenever
+        # the guard selection clears, rotates, or changes kind.
+        corrected_details = _merge_semantic_replan_guard_details(
+            effective_details,
+            details,
+        )
         corrected_details.update(
             {
                 "turn_instance_id": turn_instance_id,
