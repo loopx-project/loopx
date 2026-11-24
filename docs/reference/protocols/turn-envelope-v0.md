@@ -287,6 +287,16 @@ planning choices, while original priorities, constraints, budgets and stops
 remain binding. Old captures retain their original text. This is an intentional
 change to advisory prompting, not a lossless claim about model behavior.
 
+When an admitted Todo lifecycle is already closed and its Turn still owes a
+Vision checkpoint, the recovered action packet carries the exact lifecycle
+context and `stride_control`. Use that basis to author an evidence-linked path
+and stride decision, then finish the original writeback and quota settlement.
+Independent new work remains eligible for its own Turn.
+
+已准入 Todo 的生命周期收尾后，若原 Turn 仍欠 Vision 检查点，恢复包会提供该
+生命周期对应的上下文和 `stride_control`。模型据此写入关联证据的路径与步幅决策，
+随后完成原写回与额度结算。独立的新工作由自己的 Turn 处理。
+
 The benchmark checkpoint preflight uses the same CLI decision capture with
 TurnEnvelope off. It retains the complete captured source for checkpoint
 selection and verification, and sends the projected CLI view to the model.
