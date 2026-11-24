@@ -97,7 +97,7 @@ from .file_lock import exclusive_file_lock
 from .global_registry import sync_project_registry_to_global
 from .history import (
     append_run_index_record,
-    load_index,
+    load_index_snapshot,
     load_registry,
     reserve_unique_run_paths,
     unique_run_paths,
@@ -1066,9 +1066,12 @@ def refresh_state_run(
         autonomous_replan_frontier_identity: str | None = None
         newest_first_runs: list[dict[str, Any]] = []
         if normalized_agent_id:
-            existing_runs, _ = load_index(
-                runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl"
-            )
+            # Vision, recommendation and replan decisions use the indexed records.
+            # Checking each historical artifact here holds up other writers.
+            existing_runs = load_index_snapshot(
+                runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl",
+                include_artifact_status=False,
+            ).records
             newest_first_runs = [
                 run
                 for _, run in sorted(
