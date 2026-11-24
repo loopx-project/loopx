@@ -1410,6 +1410,7 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
             False,
         ),
         ("runtime_error", "disk I/O error", False),
+        ("runtime_error", "the portfolio scope changed after observation", False),
         (
             "runtime_unavailable",
             "The Agent runtime could not be prepared. Check the runtime installation and configuration, then retry.",
