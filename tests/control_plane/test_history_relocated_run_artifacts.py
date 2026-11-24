@@ -17,7 +17,7 @@ from loopx.control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_CLASSIFICATION,
     PROMOTION_READINESS_RUNTIME_INDEX,
 )
-from loopx.doctor import latest_promotion_readiness_event
+from loopx.doctor import collect_doctor, latest_promotion_readiness_event
 from loopx.history import collect_history, inspect_index_duplicates, load_index
 from loopx.status import goal_attention
 
@@ -307,3 +307,93 @@ def test_relocated_observation_rejects_unrelated_substitutes(tmp_path: Path) -> 
     loose, _raw_count = load_index(loose_index)
     assert loose[0]["json_exists"] is False
     assert loose[0]["markdown_exists"] is False
+
+
+def test_unexpandable_account_path_stays_missing_and_doctor_continues(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    runs = runtime / "goals" / GOAL_ID / "runs"
+    copied_name = "copied-readiness"
+    _write(runs / f"{copied_name}.json", "{}\n")
+    _write(runs / f"{copied_name}.md", "# Copied\n")
+    _write(runs / "old-readiness.json", "{}\n")
+    _write(runs / "old-readiness.md", "# Old name only\n")
+    stale_json = Path(
+        f"~nosuchuser_loopx/goals/{GOAL_ID}/runs/old-readiness.json"
+    )
+    stale_markdown = Path(
+        f"~nosuchuser_loopx/goals/{GOAL_ID}/runs/old-readiness.md"
+    )
+    stored_json = tmp_path / "runtime-a" / "goals" / GOAL_ID / "runs" / f"{copied_name}.json"
+    stored_markdown = stored_json.with_suffix(".md")
+    relative_json = Path("artifacts/missing.json")
+    relative_markdown = Path("artifacts/missing.md")
+    stale = _row(
+        stale_json,
+        stale_markdown,
+        generated_at="2026-03-01T10:00:00+00:00",
+    )
+    copied = _row(
+        stored_json,
+        stored_markdown,
+        generated_at="2026-03-01T12:00:00+00:00",
+    )
+    relative = _row(
+        relative_json,
+        relative_markdown,
+        generated_at="2026-03-01T11:00:00+00:00",
+    )
+    index_path = _write_index(runs, [stale, relative, copied])
+    index_bytes = index_path.read_bytes()
+
+    history = _history(tmp_path, runtime)
+    by_time = {run["generated_at"]: run for run in history["goals"][0]["latest_runs"]}
+    assert by_time[stale["generated_at"]]["json_exists"] is False
+    assert by_time[stale["generated_at"]]["markdown_exists"] is False
+    assert by_time[relative["generated_at"]]["json_exists"] is False
+    assert by_time[relative["generated_at"]]["markdown_exists"] is False
+    assert by_time[copied["generated_at"]]["json_exists"] is True
+    assert by_time[copied["generated_at"]]["markdown_exists"] is True
+    attention = goal_attention(history["goals"][0])
+    assert attention is not None
+    assert attention["status"] == "state_refreshed"
+    assert index_path.read_bytes() == index_bytes
+
+    release_stale = {
+        **stale,
+        "classification": PROMOTION_READINESS_CLASSIFICATION,
+    }
+    release_copied = {
+        **copied,
+        "classification": PROMOTION_READINESS_CLASSIFICATION,
+        "recommended_action": "Readiness evidence is in the copied artifacts.",
+    }
+    release_index = runtime / PROMOTION_READINESS_RUNTIME_INDEX
+    _write(
+        release_index,
+        "".join(json.dumps(row) + "\n" for row in (release_stale, release_copied)),
+    )
+    release_bytes = release_index.read_bytes()
+    event = latest_promotion_readiness_event(runtime)
+    assert event["source"] == "runtime_release_ledger"
+    assert event["generated_at"] == release_copied["generated_at"]
+    assert event["json_exists"] is True
+    assert event["markdown_exists"] is True
+
+    release_index.write_text(json.dumps(release_stale) + "\n", encoding="utf-8")
+    stale_only = latest_promotion_readiness_event(runtime)
+    assert stale_only["generated_at"] == release_stale["generated_at"]
+    assert stale_only["json_exists"] is False
+    assert stale_only["markdown_exists"] is False
+    assert index_path.read_bytes() == index_bytes
+
+    release_index.write_bytes(release_bytes)
+    payload = collect_doctor(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=str(runtime),
+    )
+    readiness = payload["release_provenance"]["promotion_readiness"]
+    assert readiness["json_exists"] is True
+    assert readiness["markdown_exists"] is True
+    assert release_index.read_bytes() == release_bytes

@@ -93,6 +93,19 @@ def _slot_count(value: Any) -> int | None:
     return None
 
 
+def _expanded_stored_path(stored_path: str) -> Path | None:
+    """Expand ``~`` when that account can be resolved.
+
+    An unknown ``~user`` raises ``RuntimeError``. The path is then not a
+    copied run file, and callers keep the stored-path observation.
+    """
+
+    try:
+        return Path(stored_path).expanduser()
+    except (OSError, RuntimeError):
+        return None
+
+
 def _lexical_absolute(path: Path) -> Path:
     """Collapse ``.`` and ``..`` without resolving symlinks.
 
@@ -113,8 +126,8 @@ def _copied_goal_run_file_name(stored_path: str, goal_id: str, extension: str) -
 
     if not goal_id:
         return None
-    raw = Path(stored_path).expanduser()
-    if not raw.is_absolute():
+    raw = _expanded_stored_path(stored_path)
+    if raw is None or not raw.is_absolute():
         return None
     normalized = _lexical_absolute(raw)
     file_name = normalized.name
@@ -138,9 +151,12 @@ def _stays_inside_runs_dir(runs_dir: Path, stored_path: str) -> bool:
 
     try:
         runs_real = Path(runs_dir).expanduser().resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError):
         return False
-    resolved = _lexical_absolute(Path(stored_path).expanduser())
+    expanded = _expanded_stored_path(stored_path)
+    if expanded is None:
+        return False
+    resolved = _lexical_absolute(expanded)
     relative = os.path.relpath(resolved, runs_real)
     return bool(
         relative
@@ -168,7 +184,7 @@ def _relocated_run_artifact_path(
         return None
     try:
         runs_real = Path(runs_dir).expanduser().resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     if not runs_real.is_dir():
         return None

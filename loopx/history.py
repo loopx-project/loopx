@@ -387,7 +387,12 @@ def _indexed_artifact_exists(
     text = str(value or "").strip()
     if not text:
         return False
-    path = Path(text).expanduser()
+    try:
+        path = Path(text).expanduser()
+    except (OSError, RuntimeError):
+        # An unknown ``~user`` cannot be observed. Keep the run and report
+        # the artifact missing instead of aborting the history read.
+        return False
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
     try:
