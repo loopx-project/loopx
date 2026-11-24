@@ -287,77 +287,31 @@ Measure outcome quality rather than message volume:
 ## Current Delivery Checkpoint
 
 Task [#5198](https://github.com/loopx-project/loopx/issues/5198) tracks composition.
-The first proposed implementation stage is the
-[canonical room-work Agent CLI](../../reference/goal-channel-room-work.md): compact
-actor-scoped orientation, revision-guarded claim, historical acceptance plus
-current ownership, scoped IM claim-button offers/callbacks and existing verified
-Goal Channel delivery/readback. It
-reuses promoted File/SQLite authority and the typed Todo owner; it does not
-replace the shared-service or provisioning owners.
+A first implementation stage proposed a canonical room-work Agent CLI with
+scoped IM claim-button offers, callbacks, result recovery and a private
+reconnect composition. Following the maintainer scope review of 2026-11-20,
+that channel workflow is **deferred**: current main already owns delegation,
+candidate selection, ordinary claiming, execution preparation, result return
+and scoped Turn Recall, and no principal-limited in-room claim interaction is
+requested this round. The deferred implementation remains recoverable in the
+proposal branch history; reviving it must re-derive its deadline and
+source-witness needs onto current main's reviewed managed-claim basis rather
+than re-aliasing the v3 wire.
 
-The claim callback retains its original offer binding witness through member
-and card reads into the existing locked claim check. Retargeting during either
-provider read rejects before canonical ownership or an acceptance receipt changes.
-Its original broker/source registry witnesses now also survive those reads and
-the native claim handoff. The existing cross-runtime source guards serialize
-registry administration with the canonical commit. Real File/SQLite regressions
-check unchanged full state and exact receipts after pre-commit route replacement;
-these bounded checks do not qualify independent hosts or native provider IO.
+What this proposal currently ships on the shared owner is narrower: the
+canonical Todo claim transaction rejects two previously silently-accepted
+unauthorized inputs for every caller, with the Lark room surface absent:
 
-The callback's original offer deadline is also enforced by the existing typed
-Todo owner. Claim request v4 retains the v3 source guards and carries
-`admit_before`; the owner checks its current clock after reads, immediately
-before dispatching the new claim CAS. Expiry at that admission point refuses
-ownership and receipt creation without changing the offer or room message;
-persistence may finish later. Historical receipt recovery and untimed direct
-claims retain their existing semantics. This is a bounded local admission
-repair, not installed, independent-host or live-provider qualification.
+- a Todo explicitly bound to another Agent (`bound_agent`) cannot be claimed
+  by a different Agent; the bound Agent claims normally;
+- an explicit `goal_ref` on any claim wire is a machine-checked protocol
+  failure instead of being silently dropped or implying unimplemented
+  lifetime binding.
 
-A packaged workspace companion for manual claiming was proposed earlier in this
-PR and is withdrawn from the current delivery scope: steward-led automatic
-delegation remains the default collaboration route, the Agent CLI and the
-scoped IM claim-button offer carry steward-published, Agent-claimed work, and
-a manual claim frontend requires its own later proposal and qualification.
-
-The private `work resume` path composes existing scoped Turn Recall with fresh
-channel identity, canonical projection and quota observations. It skips memory
-ingest, rechecks scope and state after retrieval, discards context on changes,
-and carries only explicitly requested scoped record-artifact references covered
-by current verified recall receipts. It does not send private context to a room
-or accept/renew work. Source-session exact-instance profiles and arbitrary
-external artifact targets remain outside this local qualification stage.
-
-The local continuation retains the native persisted Todo/Turn binding across
-discovery, `upgraded` and `replayed` guard outcomes. Current capability input is
-re-evaluated instead of inherited from a saved quota packet. Room orientation
-uses the existing projection envelope owner for registry, connection and
-canonical-source read facts; its CLI consumers disclose old,
-unreadable or incomplete scope before presenting current ownership. A claim
-replay rereads those sources without renewing the historical receipt. These
-local owner integrations still require exact-head installation and regression
-qualification; they do not close the live or independent-host acceptance.
-
-Validation uses synthetic Lark transport with disposable real local stores.
-Independent source CLI processes with separate TS runtimes compete for one
-File/SQLite claim; a fresh process replays its exact receipt, and direct CLI
-readback verifies current ownership. These local clients use trusted registered
-Agent identities; independently authenticated remote hosts remain unqualified.
-Real non-production room qualification, independent hosts,
-daemon reconnect, native callback qualification, external artifact-target access and scoped live
-OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
-synthetic checks do not close those requirements or authorize promotion.
-
-The legacy-profile local stage can be qualified without enabling source-session
-business effects. Here, legacy-profile describes Goal identity compatibility;
-it does not restore retired ownership modes or unpromoted Markdown writers.
-Normal claims retain the canonical owner's current policy and admission, and
-this facade neither migrates that policy nor supplies execution lease proof.
-Exact GoalRef support must first qualify the existing shared
-authority head/receipt owner, retirement and caller/writer fences under the
-[Goal-instance contract](goal-instance-identity-and-orphan-recovery-v0.md).
-That later profile boundary does not expand this composition stage into a
-parallel authority migration. Existing claim wires reject explicit unqualified
-GoalRef intent before provider or historical-receipt access.
+Both are disclosed shared-contract tightenings validated by owner-level
+File/SQLite regressions; ordinary unclaimed self-claims and same-key replay
+keep their existing semantics. This checkpoint does not claim any
+room-channel, multi-host, daemon or live-provider acceptance.
 
 ## Open Questions
 
