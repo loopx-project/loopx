@@ -116,3 +116,18 @@ test("date bookmarks stay scoped and preserve reversed bounds for visible correc
   assert.deepEqual(readResearchRecordsLocation(url, "source-goal"), state);
   assert.deepEqual(readResearchRecordsLocation(url, "other-source"), defaultResearchRecordsLocation);
 });
+
+test("recorded instants require a real source calendar and clock before UTC conversion", () => {
+  const invalid = ["1900-02-29T16:00:00Z", "2026-02-30T16:00:00Z", "2025-02-29T23:00:00-01:00", "2026-04-31T12:00:00Z",
+    "2026-03-01T24:00:00Z", "2026-03-02T12:60:00Z", "2026-03-02T12:00:60Z",
+    "2026-03-02T12:00:00+24:00", "2026-03-02T12:00:00+02:60", "March 2, 2026 12:00:00 GMTZ"];
+  const rows = invalid.map((recorded_at, index) => record({event_id: `invalid-${index}`, recorded_at}));
+  const valid = record({event_id: "offset", recorded_at: "2026-03-03T01:00:00+02:00"});
+  assert.deepEqual(searchResearchRecords([...rows, valid], "", "", undefined, {from: "1900-01-01", to: "2026-12-31"}), [valid]);
+  assert.deepEqual(searchResearchRecords([...rows, valid], ""), [...rows, valid], "Unfiltered reading retains original malformed records");
+  const centuryLeap = record({recorded_at: "2000-02-29T12:00:00Z"});
+  assert.deepEqual(searchResearchRecords([centuryLeap], "", "", undefined, {from: "2000-02-29", to: "2000-02-29"}), [centuryLeap]);
+  const leap = record({recorded_at: "2024-02-29T23:30:00-01:00"});
+  assert.deepEqual(searchResearchRecords([leap], "", "", undefined, {from: "2024-03-01", to: "2024-03-01"}), [leap]);
+  assert.deepEqual(searchResearchRecords([leap], "", "", undefined, {to: "2024-02-29"}), []);
+});

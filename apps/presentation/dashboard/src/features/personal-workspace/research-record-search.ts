@@ -75,6 +75,16 @@ export function validResearchDateRange({from, to}: ResearchDateRange): boolean {
   return validResearchDate(from ?? "") && validResearchDate(to ?? "") && !(from && to && from > to);
 }
 
+/** Validate the source wall-clock fields before Date.parse can normalize them.
+ * A malformed or timezone-less timestamp remains readable without a date filter. */
+function recordedResearchTime(value: string): number {
+  const parts = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!parts || !validResearchDate(parts[1]) || Number(parts[2]) > 23
+      || Number(parts[3]) > 59 || Number(parts[4]) > 59
+      || (parts[5] && (Number(parts[6]) > 23 || Number(parts[7]) > 59))) return NaN;
+  return Date.parse(value);
+}
+
 /** Search source records, including superseded revisions, before display paging.
  * Optional display text broadens matching; results remain the original records.
  * Tokens are literal, case-insensitive AND terms; no inferred evidence or status. */
@@ -86,8 +96,7 @@ export function searchResearchRecords(events: readonly ExploreHistoryEvent[], qu
   return events.filter(event => {
     if (status && event.status !== status) return false;
     if (range.from || range.to) {
-      // An offset-free wall clock cannot identify a UTC day reliably.
-      const recorded = /(?:Z|[+-]\d{2}:\d{2})$/i.test(event.recorded_at) ? Date.parse(event.recorded_at) : NaN;
+      const recorded = recordedResearchTime(event.recorded_at);
       if (!Number.isFinite(recorded) || recorded < from || recorded >= until) return false;
     }
     if (!terms.length) return true;

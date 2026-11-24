@@ -40,9 +40,11 @@ from loopx.capabilities.explore.result_log import build_explore_node_event, buil
 goal='synthetic-record-search'
 events=[build_explore_node_event(goal_id=goal,node_id='question',title='Synthetic candidate comparison',recorded_at='2026-01-01T00:00:00Z')]
 for index in range(75):
+    recorded_at={73:'2026-02-30T16:00:00Z',74:'2026-03-03T01:00:00+02:00'}.get(index,'2026-01-01T01:00:00Z')
+    refs={73:['synthetic:invalid-calendar'],74:['synthetic:valid-offset']}.get(index,[])
     events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
         title=f'Candidate {index} — '+('研究问题与完整原始结论 / original question and retained evidence. '*3)+'END OF ORIGINAL TITLE',summary='Original observation; complete costs remain unknown.',
-        status='tentative',recorded_at='2026-01-01T01:00:00Z'))
+        status='tentative',recorded_at=recorded_at,evidence_refs=refs))
 measurement=dict(metric='Synthetic score', unit='points', higher_is_better=True, comparison_scope='synthetic:fixed', input_revision='input:v1', evaluation_ref='method:v1', candidate_ref='candidate:amber', evidence_ref='result:amber')
 events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id='retained-finding',
     title='Earlier negative observation',summary='质量下降 — original negative evidence for candidate amber.',
@@ -168,11 +170,29 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert(await downloadButton.isDisabled());
       await results.getByRole("button", {name: "Clear filters", exact: true}).click();
       await page.setViewportSize({width: 1440, height: 900});
+      // Validate original calendar fields before converting offsets: February
+      // 30 must not be silently read as March 2 in the drawer or either export.
+      await results.getByLabel("Recorded from (UTC)").fill("2026-03-02");
+      await results.getByLabel("Recorded through (UTC)").fill("2026-03-02");
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
+      const strictDates = await download();
+      assert.equal(strictDates.records.length, 1);
+      assert.equal(strictDates.records[0].recorded_at, "2026-03-03T01:00:00+02:00");
+      assert.deepEqual(strictDates.records[0].evidence_refs, ["synthetic:valid-offset"]);
+      const strictReport = await report();
+      assert.equal((strictReport.match(/^## \d+\./gm) ?? []).length, 1);
+      assert.match(strictReport, /synthetic:valid-offset/);
+      assert.doesNotMatch(strictReport, /synthetic:invalid-calendar|2026-02-30/);
+      await results.getByRole("button", {name: "Clear filters", exact: true}).click();
+      const unfilteredDates = await download();
+      assert(unfilteredDates.records.some(row => row.recorded_at === "2026-02-30T16:00:00Z"));
       const fullReport = await report();
       assert.equal((fullReport.match(/^## \d+\./gm) ?? []).length, 79);
       assert.match(fullReport, /\*\*Value:\*\* Unknown/);
       assert.match(fullReport, /\*\*Value:\*\* 0/);
       assert.match(fullReport, /candidate:amber-v3/);
+      assert.match(fullReport.replaceAll("\\", ""), /2026-02-30T16:00:00Z/);
+      assert.match(fullReport, /synthetic:invalid-calendar/);
       await results.getByLabel("Recorded from (UTC)").fill("2026-01-02");
       await results.getByLabel("Recorded through (UTC)").fill("2026-01-03");
       await search.fill("AMBER-V1 run:old");
