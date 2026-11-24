@@ -3,6 +3,8 @@ import { appendFile, mkdtemp, rename, rm, stat, utimes, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 
 import { readReceiptLogSnapshot as read } from "../../loopx/control_plane/runtime/receipt_log_snapshot.ts";
 
@@ -11,6 +13,57 @@ async function fixture(run: (path: string) => Promise<void>): Promise<void> {
   try { await run(join(root, "history.jsonl")); }
   finally { await rm(root, {recursive: true, force: true}); }
 }
+
+test("overlapping reads share only identical bytes and decoding rules", { timeout: 15000 }, async (t) => {
+  const originalRead = fs.readFile;
+  for (const scenario of ["identical", "rewritten tail", "different schema"]) {
+    await fixture(async (path) => {
+      // A complete row large enough to yield during decoding, then a torn tail.
+      const prefix = JSON.stringify({ schema_version: "v0", pad: "x".repeat(1024 * 1024) }) + "\n";
+      const tail = (id: string) => JSON.stringify({ schema_version: "v0", id });
+      await writeFile(path, prefix + tail("a"));
+      const firstRead = Promise.withResolvers<void>();
+      const bothRead = Promise.withResolvers<void>();
+      let reads = 0;
+      // Real file reads, released together so both snapshots have captured
+      // their own bytes before either decode can install a completed prefix.
+      const hook = t.mock.method(fs, "readFile", async (file: string) => {
+        const current = await originalRead(file);
+        if (++reads === 1) firstRead.resolve();
+        else bothRead.resolve();
+        await bothRead.promise;
+        return current;
+      });
+      syncBuiltinESMExports();
+      try {
+        const a = read(path, "v0");
+        await firstRead.promise;
+        if (scenario === "rewritten tail") await writeFile(path, prefix + tail("b"));
+        const b = read(path, scenario === "different schema" ? "v1" : "v0");
+        const [first, second] = await Promise.all([a, b]);
+        assert.equal(reads, 2);
+        assert.equal(first!.records[1].id, "a");
+        assert.equal(first!.unterminatedRecordLine, 2);
+        if (scenario === "identical") {
+          assert.equal(first!.records[1], second!.records[1]);
+          const later = (await read(path, "v0"))!;
+          assert.notEqual(later.records[1], first!.records[1]);
+          assert.deepEqual(later.records[1], first!.records[1]);
+        } else if (scenario === "rewritten tail") {
+          assert.equal(second!.records[1].id, "b");
+          assert.equal(second!.unterminatedRecordLine, 2);
+        } else {
+          assert.deepEqual(second!.records, []);
+          assert.equal(second!.firstErrorLine, 1);
+        }
+      } finally {
+        bothRead.resolve();
+        hook.mock.restore();
+        syncBuiltinESMExports();
+      }
+    });
+  }
+});
 
 test("fresh disk bytes own reuse: append retains old records without changing old snapshots", async () => {
   await fixture(async (path) => {
