@@ -380,7 +380,10 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         and "vision" not in quota_detail_sections_from_args(args))
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
-        maybe_prune_context_delivery_root(root)
+        maybe_prune_context_delivery_root(
+            root,
+            runtime_root=runtime_root.expanduser().resolve(),
+        )
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
     if payload.get("schema_version") == "loopx_turn_envelope_v1":
         surface = "complete_turn"
@@ -478,7 +481,6 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
             parent = Path(root).expanduser().absolute()
             if parent.is_symlink() or not parent.is_dir():
                 raise OSError("capture root must be an existing directory, not a symlink")
-            maybe_prune_context_delivery_root(parent)
             return Path(tempfile.mkdtemp(prefix="decision-", dir=parent))
         assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
@@ -578,13 +580,14 @@ def budgeted_settlement_result(
         return payload
     try:
         uid = private_capture_uid()
-        root = runtime_root.expanduser().resolve() / "context-delivery"
+        resolved_runtime = runtime_root.expanduser().resolve()
+        root = resolved_runtime / "context-delivery"
         root.mkdir(mode=0o700, exist_ok=True)
         metadata = root.lstat()
         if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
                 or metadata.st_mode & 0o077):
             raise ValueError("result capture requires a private physical directory owned by this user")
-        maybe_prune_context_delivery_root(root)
+        maybe_prune_context_delivery_root(root, runtime_root=resolved_runtime)
         directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
         saved = directory / "result.json"
         digest = write_decision_capture(saved, payload)

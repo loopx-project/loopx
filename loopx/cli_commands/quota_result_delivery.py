@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -53,34 +52,31 @@ def _prune_ephemeral_context_delivery(
 ) -> None:
     if getattr(args, "dry_run", False) is True:
         return
-    candidates: list[Path] = []
     runtime_root = (
         context.runtime_root
         if context is not None
         else getattr(args, "_progressive_context_runtime", None)
     )
-    if isinstance(runtime_root, (str, Path)):
-        candidates.append(Path(runtime_root).expanduser().absolute() / "context-delivery")
-    output_root = getattr(args, "decision_output_root", None)
-    if isinstance(output_root, (str, Path)):
-        candidates.append(Path(output_root).expanduser().absolute())
-    seen: set[str] = set()
-    capture_parent = (
-        os.path.normpath(str(capture_directory.parent))
-        if isinstance(capture_directory, Path)
-        else None
+    if not isinstance(runtime_root, (str, Path)):
+        return
+    resolved_runtime = Path(runtime_root).expanduser().resolve()
+    managed_root = resolved_runtime / "context-delivery"
+    capture_parent: Path | None = None
+    if isinstance(capture_directory, Path):
+        try:
+            capture_parent = capture_directory.expanduser().resolve().parent
+        except OSError:
+            capture_parent = capture_directory.expanduser().absolute().parent
+    protected = (
+        frozenset({capture_directory.name})
+        if capture_directory is not None and capture_parent == managed_root
+        else frozenset()
     )
-    for root in candidates:
-        norm_root = os.path.normpath(str(root))
-        if norm_root in seen:
-            continue
-        seen.add(norm_root)
-        protected = (
-            frozenset({capture_directory.name})
-            if capture_directory is not None and capture_parent == norm_root
-            else frozenset()
-        )
-        maybe_prune_context_delivery_root(Path(norm_root), protected_names=protected)
+    maybe_prune_context_delivery_root(
+        managed_root,
+        runtime_root=resolved_runtime,
+        protected_names=protected,
+    )
 
 
 def _emit_and_prune_result(

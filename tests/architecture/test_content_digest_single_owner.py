@@ -183,6 +183,7 @@ CONSUMER_MODULES = (
     "loopx.chat.result_files_api",
     "loopx.chat.action_normalization",
     "loopx.capabilities.manager_context.chat_history",
+    "loopx.cli_commands.context_delivery_retention",
     "loopx.cli_commands.quota_capture",
     "loopx.cli_commands.quota_context_reader",
     "loopx.cli_commands.update_artifact",

@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
+import json
+import os
 from pathlib import Path
+import shlex
 import shutil
 import sys
 import time
@@ -35,14 +40,64 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _write_owned_json(
+    path: Path, payload: dict[str, object], *, mtime: float
+) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    path.write_bytes(raw)
+    os.utime(path, (mtime, mtime))
+    return sha256(raw).hexdigest()
+
+
 def _make_dir(parent: Path, name: str, *, mtime: float) -> Path:
     path = parent / name
     path.mkdir(parents=True, exist_ok=True)
-    payload = path / "payload.json"
-    payload.write_text('{"ok":true}\n', encoding="utf-8")
-    import os
-
-    os.utime(payload, (mtime, mtime))
+    if name.startswith("decision-"):
+        target = path / "decision.json"
+        digest = _write_owned_json(target, {"ok": True, "decision": "wait"}, mtime=mtime)
+        _write_owned_json(
+            path / "decision.reader.json",
+            {
+                "schema_version": "context_capture_read_reference_v1",
+                "path": str(target),
+                "sha256": digest,
+            },
+            mtime=mtime,
+        )
+    elif name.startswith("recovery-"):
+        _write_owned_json(
+            path / "required-context.json",
+            {"ok": True, "summary": "recovery"},
+            mtime=mtime,
+        )
+    elif name.startswith("settlement-"):
+        target = path / "result.json"
+        digest = _write_owned_json(
+            target, {"ok": True, "summary": "settled"}, mtime=mtime
+        )
+        _write_owned_json(
+            path / "result.reader.json",
+            {
+                "schema_version": "context_capture_read_reference_v1",
+                "path": str(target),
+                "sha256": digest,
+            },
+            mtime=mtime,
+        )
+    else:
+        target = path / "projection.json"
+        digest = _write_owned_json(
+            target, {"ok": True, "summary": "context"}, mtime=mtime
+        )
+        _write_owned_json(
+            path / "projection.reader.json",
+            {
+                "schema_version": "context_capture_read_reference_v1",
+                "path": str(target),
+                "sha256": digest,
+            },
+            mtime=mtime,
+        )
     os.utime(path, (mtime, mtime))
     return path
 
@@ -200,12 +255,41 @@ def test_symlinks_hash_dirs_and_unexpected_files_are_untouched(tmp_path: Path) -
     file_symlink = root / "context-symlink-file"
     file_symlink.symlink_to(outside_keep)
 
-    # Real expired dir containing a nested symlink must delete only the ephemeral dir, not outside_dir.
+    # Unowned directories with prefix names (unexpected files, empty dir, foreign reader ref, nested symlink)
+    # must fail closed and stay untouched; only valid owned LoopX captures are deleted.
+    unowned_notes = root / "context-notes"
+    unowned_notes.mkdir(mode=0o700)
+    (unowned_notes / "notes.md").write_text("personal notes\n", encoding="utf-8")
+    os.utime(unowned_notes, (very_old, very_old))
+
+    unowned_payload = root / "decision-unowned-payload"
+    unowned_payload.mkdir(mode=0o700)
+    (unowned_payload / "payload.json").write_text('{"ok":true}\n', encoding="utf-8")
+    os.utime(unowned_payload, (very_old, very_old))
+
+    empty_context = root / "context-empty"
+    empty_context.mkdir(mode=0o700)
+    os.utime(empty_context, (very_old, very_old))
+
+    foreign_reader = root / "settlement-foreign-reader"
+    foreign_reader.mkdir(mode=0o700)
+    _write_owned_json(foreign_reader / "result.json", {"ok": True}, mtime=very_old)
+    _write_owned_json(
+        foreign_reader / "result.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(outside_keep),
+            "sha256": "0" * 64,
+        },
+        mtime=very_old,
+    )
+    os.utime(foreign_reader, (very_old, very_old))
+
     nested_link_dir = _make_dir(root, "recovery-with-nested-symlink", mtime=very_old)
     (nested_link_dir / "nested-link").symlink_to(outside_dir, target_is_directory=True)
-    import os
-
     os.utime(nested_link_dir, (very_old, very_old))
+
+    valid_expired = _make_dir(root, "recovery-expired-owned", mtime=very_old)
 
     result = maybe_prune_context_delivery_root(
         root,
@@ -214,9 +298,15 @@ def test_symlinks_hash_dirs_and_unexpected_files_are_untouched(tmp_path: Path) -
         now=now,
     )
     assert result.swept is True
+    assert result.scanned == 1
     assert result.deleted == 1
     assert result.failed == 0
-    assert not nested_link_dir.exists()
+    assert not valid_expired.exists()
+    assert nested_link_dir.exists()
+    assert unowned_notes.exists() and (unowned_notes / "notes.md").exists()
+    assert unowned_payload.exists()
+    assert empty_context.exists()
+    assert foreign_reader.exists()
     assert outside_keep.read_text(encoding="utf-8") == "preserved\n"
     assert hash_dir.is_dir()
     assert other_dir.is_dir()
@@ -256,11 +346,7 @@ def test_throttled_fast_skip_under_2ms_on_1000_dir_root_and_env_overrides(
 
     for index in range(1000):
         prefix = CONTEXT_DELIVERY_EPHEMERAL_PREFIXES[index % 4]
-        path = root / f"{prefix}{index:04d}"
-        path.mkdir()
-        import os
-
-        os.utime(path, (old_base + index, old_base + index))
+        _make_dir(root, f"{prefix}{index:04d}", mtime=old_base + index)
 
     initial = maybe_prune_context_delivery_root(root, now=now)
     assert initial.swept is True
@@ -403,7 +489,7 @@ def test_callsite_integration_and_dry_run_preservation(
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
 
     old_mtime = time.time() - 3600.0
-    # 1. prepare_decision_capture prunes expired excess decision-* dirs cleanly.
+    # 1. prepare_decision_capture does NOT prune caller-supplied --decision-output-root.
     capture_root = tmp_path / "decision-root"
     capture_root.mkdir(mode=0o700)
     old_d0 = _make_dir(capture_root, "decision-old-0", mtime=old_mtime - 10)
@@ -422,8 +508,9 @@ def test_callsite_integration_and_dry_run_preservation(
     )
     created = prepare_decision_capture(prep_args)
     assert created is not None and created.is_dir()
-    assert not old_d0.exists()
+    assert old_d0.exists()
     assert old_d1.exists()
+    assert not (capture_root / RETENTION_SWEEP_MARKER_NAME).exists()
 
     # 2. progressive_context_capture_view prunes expired context-* under runtime/context-delivery.
     runtime_a = tmp_path / "runtime-a"
@@ -534,3 +621,429 @@ def test_callsite_integration_and_dry_run_preservation(
     assert rc_live == 0
     assert not stale_dir.exists()
     assert active_dir.exists()
+
+
+def _extract_capture_dir_from_command(command: str) -> Path:
+    tokens = shlex.split(command)
+    for flag in ("--capture-file", "--reference-file"):
+        if flag in tokens:
+            return Path(tokens[tokens.index(flag) + 1]).parent
+    raise AssertionError(f"missing capture path flag in command: {command}")
+
+
+def test_shared_decision_output_root_preserves_unrelated_notes_and_both_goals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    _, runtime1, registry1 = _write_fixture(tmp_path / "goal1", provider="file")
+    _, runtime2, registry2 = _write_fixture(tmp_path / "goal2", provider="file")
+    shared_root = tmp_path / "shared-output-root"
+    shared_root.mkdir(mode=0o700)
+    notes_file = shared_root / "context-notes" / "notes.md"
+    notes_file.parent.mkdir(mode=0o700)
+    notes_file.write_text("owner project notes\n", encoding="utf-8")
+
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MIN_AGE_SECONDS", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_KEEP_RECENT", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MAX_DELETE", "128")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
+
+    code1, guard1 = _run_cli(
+        registry1,
+        runtime1,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--begin-turn",
+        "--decision-output-root",
+        str(shared_root),
+    )
+    assert code1 == 0 and guard1["ok"] is True, guard1
+    capture1_dir = _extract_capture_dir_from_command(
+        guard1["detail_ref"]["full_decision"]
+    )
+    assert capture1_dir.parent.resolve() == shared_root.resolve()
+    saved1 = capture1_dir / "decision.json"
+    digest1 = sha256(saved1.read_bytes()).hexdigest()
+    ptr = "/heartbeat_receipt/settlement_identity"
+    rc_before, read_before = _run_cli(
+        registry1,
+        runtime1,
+        "quota",
+        "context-read",
+        "--capture-file",
+        str(saved1),
+        "--capture-sha256",
+        digest1,
+        "--select",
+        ptr,
+    )
+    assert rc_before == 0 and read_before["ok"] is True, read_before
+
+    code2, guard2 = _run_cli(
+        registry2,
+        runtime2,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--begin-turn",
+        "--decision-output-root",
+        str(shared_root),
+    )
+    assert code2 == 0 and guard2["ok"] is True, guard2
+    capture2_dir = _extract_capture_dir_from_command(
+        guard2["detail_ref"]["full_decision"]
+    )
+
+    assert notes_file.read_text(encoding="utf-8") == "owner project notes\n"
+    assert not (shared_root / RETENTION_SWEEP_MARKER_NAME).exists()
+    assert capture1_dir.is_dir()
+    assert capture2_dir.is_dir()
+    rc_after, read_after = _run_cli(
+        registry1,
+        runtime1,
+        "quota",
+        "context-read",
+        "--capture-file",
+        str(saved1),
+        "--capture-sha256",
+        digest1,
+        "--select",
+        ptr,
+    )
+    assert rc_after == 0 and read_after["content"] == read_before["content"]
+
+
+def test_managed_root_mixed_non_loopx_dirs_and_unowned_capture_shapes(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    managed_root = runtime / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+    now = 8_000_000.0
+    very_old = now - 500_000.0
+
+    mixed_notes = managed_root / "context-notes" / "readme.txt"
+    mixed_notes.parent.mkdir(mode=0o700)
+    mixed_notes.write_text("mixed manual note\n", encoding="utf-8")
+    os.utime(mixed_notes.parent, (very_old, very_old))
+
+    # Mismatched or absent runtime_root admission receipts must fail closed and stay protected.
+    missing_rr = managed_root / "decision-missing-runtime-root"
+    missing_rr.mkdir(mode=0o700)
+    _write_owned_json(
+        missing_rr / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "g-1",
+            "heartbeat_receipt": {"turn_instance_id": "t-1", "event_id": "evt-1"},
+        },
+        mtime=very_old,
+    )
+    os.utime(missing_rr, (very_old, very_old))
+
+    wrong_rr = managed_root / "decision-wrong-runtime-root"
+    wrong_rr.mkdir(mode=0o700)
+    _write_owned_json(
+        wrong_rr / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "g-1",
+            "runtime_root": str(tmp_path / "other-runtime"),
+            "heartbeat_receipt": {"turn_instance_id": "t-2", "event_id": "evt-2"},
+        },
+        mtime=very_old,
+    )
+    os.utime(wrong_rr, (very_old, very_old))
+
+    disposable = _make_dir(managed_root, "recovery-disposable", mtime=very_old)
+
+    res = maybe_prune_context_delivery_root(
+        managed_root,
+        runtime_root=runtime,
+        min_age_seconds=0.0,
+        keep_recent_per_prefix=0,
+        min_sweep_interval_seconds=0.0,
+        now=now,
+    )
+    assert res.swept is True
+    assert res.deleted == 1
+    assert not disposable.exists()
+    assert mixed_notes.read_text(encoding="utf-8") == "mixed manual note\n"
+    assert missing_rr.exists()
+    assert wrong_rr.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unsettled_turn_capture_protected_until_settled_across_file_and_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+    mixed_notes = managed_root / "context-notes" / "readme.txt"
+    mixed_notes.parent.mkdir(mode=0o700)
+    mixed_notes.write_text("mixed runtime note\n", encoding="utf-8")
+
+    # Turn 1 admission capture inside <runtime_root>/context-delivery.
+    code1, guard1 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-retention-1",
+        "--decision-output-root",
+        str(managed_root),
+        cwd=project,
+    )
+    assert code1 == 0 and guard1["ok"] is True, guard1
+    turn1_dir = _extract_capture_dir_from_command(
+        guard1["detail_ref"]["full_decision"]
+    )
+    turn1_file = turn1_dir / "decision.json"
+    turn1_sha = sha256(turn1_file.read_bytes()).hexdigest()
+    ptr = "/heartbeat_receipt/settlement_identity"
+    rc_before, read_before = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "context-read",
+        "--capture-file",
+        str(turn1_file),
+        "--capture-sha256",
+        turn1_sha,
+        "--select",
+        ptr,
+    )
+    assert rc_before == 0 and read_before["ok"] is True, read_before
+
+    # Turn 2 runs with aggressive retention settings: Turn 1's unsettled capture must survive.
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MIN_AGE_SECONDS", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_KEEP_RECENT", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MAX_DELETE", "128")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
+
+    code2, guard2 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-retention-2",
+        "--decision-output-root",
+        str(managed_root),
+        cwd=project,
+    )
+    turn2_dir = _extract_capture_dir_from_command(
+        guard2["detail_ref"]["full_decision"]
+    )
+    assert code2 == 0 and guard2["ok"] is True, guard2
+    assert turn1_dir.is_dir()
+    assert mixed_notes.read_text(encoding="utf-8") == "mixed runtime note\n"
+
+    # Explicit aggressive sweep while Turn 1 is still unsettled must still keep Turn 1 intact.
+    unsettled_sweep = maybe_prune_context_delivery_root(
+        managed_root,
+        runtime_root=runtime,
+        min_age_seconds=0.0,
+        keep_recent_per_prefix=0,
+        min_sweep_interval_seconds=0.0,
+    )
+    assert unsettled_sweep.swept is True
+    assert unsettled_sweep.deleted == 0
+    assert turn1_dir.is_dir()
+
+    rc_still, read_still = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "context-read",
+        "--capture-file",
+        str(turn1_file),
+        "--capture-sha256",
+        turn1_sha,
+        "--select",
+        ptr,
+    )
+    assert rc_still == 0 and read_still["content"] == read_before["content"]
+
+    # Settle Turn 1 via real CLI refresh-state --settle-turn --settlement-receipt.
+    code_settle, settled = _run_cli(
+        registry,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-retention-1",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        "--settle-turn",
+        "--settlement-receipt",
+        cwd=project,
+    )
+    assert code_settle == 0 and settled["settlement_progress"]["state"] == "settled", settled
+
+    # Subsequent sweep prunes the now-settled Turn 1 capture while leaving unsettled Turn 2 and mixed notes intact.
+    settled_sweep = maybe_prune_context_delivery_root(
+        managed_root,
+        runtime_root=runtime,
+        min_age_seconds=0.0,
+        keep_recent_per_prefix=0,
+        min_sweep_interval_seconds=0.0,
+    )
+    assert settled_sweep.swept is True
+    assert settled_sweep.deleted >= 1
+    assert not turn1_dir.exists()
+    assert turn2_dir.is_dir()
+    assert mixed_notes.read_text(encoding="utf-8") == "mixed runtime note\n"
+
+
+def test_active_session_references_and_transitive_dependencies_preserved(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    root = runtime / "context-delivery"
+    root.mkdir(parents=True, mode=0o700)
+    now = 9_000_000.0
+    very_old = now - 500_000.0
+
+    # Transitive dependency referenced by an active session capture must survive even when older.
+    transitive_dep = _make_dir(root, "context-transitive-dep", mtime=very_old - 100)
+    session_capture = root / "decision-session-ref"
+    session_capture.mkdir(mode=0o700)
+    session_decision = session_capture / "decision.json"
+    _write_owned_json(
+        session_decision,
+        {
+            "ok": True,
+            "decision": "wait",
+            "detail_ref": {
+                "full_decision": (
+                    f"loopx quota context-read --capture-file {transitive_dep / 'projection.json'}"
+                )
+            },
+        },
+        mtime=very_old,
+    )
+    os.utime(session_capture, (very_old, very_old))
+
+    # Digest-only claim-source.json reference protects its owned capture directory.
+    claim_capture = root / "decision-claim-ref"
+    claim_capture.mkdir(mode=0o700)
+    claim_digest = _write_owned_json(
+        claim_capture / "decision.json",
+        {"ok": True, "decision": "proceed"},
+        mtime=very_old,
+    )
+    os.utime(claim_capture, (very_old, very_old))
+
+    # Unsettled admission capture with a transitive dependency inside root must protect both.
+    unsettled_dep = _make_dir(root, "context-unsettled-dep", mtime=very_old - 200)
+    unsettled_capture = root / "decision-unsettled"
+    unsettled_capture.mkdir(mode=0o700)
+    _write_owned_json(
+        unsettled_capture / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "g-unsettled",
+            "heartbeat_receipt": {"turn_instance_id": "t-unsettled", "event_id": "evt-u"},
+            "decision_capture_path": str(unsettled_dep / "projection.json"),
+        },
+        mtime=very_old,
+    )
+    os.utime(unsettled_capture, (very_old, very_old))
+
+    continuity_dir = root / "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    continuity_dir.mkdir(mode=0o700)
+    _write_owned_json(
+        continuity_dir / "session.json",
+        {
+            "session_id": "sess-1",
+            "recovery": {"path": str(session_decision), "sha256": "a" * 64},
+        },
+        mtime=very_old,
+    )
+    _write_owned_json(
+        continuity_dir / "claim-source.json",
+        {"session_id": "sess-1", "sha256": claim_digest},
+        mtime=very_old,
+    )
+
+    disposable = _make_dir(root, "recovery-disposable", mtime=very_old)
+
+    res = maybe_prune_context_delivery_root(
+        root,
+        runtime_root=runtime,
+        min_age_seconds=0.0,
+        keep_recent_per_prefix=0,
+        min_sweep_interval_seconds=0.0,
+        now=now,
+    )
+    assert res.swept is True
+    assert res.deleted == 1
+    assert not disposable.exists()
+    assert session_capture.exists()
+    assert transitive_dep.exists()
+    assert claim_capture.exists()
+    assert unsettled_capture.exists()
+    assert unsettled_dep.exists()
