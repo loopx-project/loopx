@@ -97,6 +97,9 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
         )
         assert acceptance == delivered["content"]["goal_acceptance_contract"]
         assert inspect() == before, "review admission does not rewrite acceptance"
+        stride = envelope["replan_action_packet"]["stride_control"]["minimal_example"]
+        assert stride["reference_obligation_id"] == obligation["obligation_id"]
+        assert stride["reference_context_id"] == envelope["autonomous_replan_obligation"]["replan_context"]["context_id"]
 
         # Script an actual correction in the same Todo against the delivered
         # requirements; model adoption is not tested by this control-path case.
@@ -107,6 +110,7 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
         subprocess.run([sys.executable, str(checker)], cwd=fixture["project"], check=True)
         vision = tmp_path / "vision.json"
         vision.write_text(json.dumps({"state": "vision_patch_proposed",
+            "stride_decision": stride,
             "vision_patch": {"acceptance_summary": "Preserve the introduction and include the appendix"},
             "path_delta": {"outcome": "replan", "prior_assumption": "Repeat local validation",
                 "observed_reality": "The complete artifact was missing its required appendix",
