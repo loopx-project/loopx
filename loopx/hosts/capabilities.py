@@ -51,7 +51,8 @@ _MODULE_PATH_PATTERN = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
 )
 _HOOK_EVENT_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-_MAX_DESCRIPTION_CHARS = 512
+# Shared Python/TS contract bound measured in Unicode code points (len(str) / Array.from(str).length).
+_MAX_DESCRIPTION_CODE_POINTS = 512
 
 _TIER_MAP: dict[str, HostIntegrationTier] = {
     tier: tier for tier in HOST_INTEGRATION_TIER_VALUES
@@ -175,9 +176,9 @@ def _validate_description(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("description must be a non-empty string")
     trimmed = value.strip()
-    if len(trimmed) > _MAX_DESCRIPTION_CHARS:
+    if len(trimmed) > _MAX_DESCRIPTION_CODE_POINTS:
         raise ValueError(
-            f"description exceeds {_MAX_DESCRIPTION_CHARS} characters"
+            f"description exceeds {_MAX_DESCRIPTION_CODE_POINTS} Unicode code points"
         )
     return trimmed
 
@@ -398,20 +399,33 @@ class HostCapabilitiesRegistry:
         self._builtin_modules: dict[str, str] = (
             dict(builtin_modules) if builtin_modules is not None else {}
         )
+        self._loading_builtins: set[str] = set()
         for item in initial:
             self.register(item)
 
     def _ensure_builtin_loaded(self, host_id: str | None = None) -> None:
         if host_id is not None:
-            if host_id in self._entries:
+            if host_id in self._entries or host_id in self._loading_builtins:
                 return
             module_name = self._builtin_modules.get(host_id)
-            if module_name is not None:
+            if module_name is None:
+                return
+            self._loading_builtins.add(host_id)
+            try:
                 importlib.import_module(module_name)
+            finally:
+                self._loading_builtins.discard(host_id)
             return
         for builtin_id, module_name in self._builtin_modules.items():
-            if builtin_id not in self._entries:
-                importlib.import_module(module_name)
+            if (
+                builtin_id not in self._entries
+                and builtin_id not in self._loading_builtins
+            ):
+                self._loading_builtins.add(builtin_id)
+                try:
+                    importlib.import_module(module_name)
+                finally:
+                    self._loading_builtins.discard(builtin_id)
 
     def register(
         self,
@@ -420,6 +434,7 @@ class HostCapabilitiesRegistry:
         replace: bool = False,
     ) -> HostHarnessCapabilities:
         validated = validate_host_harness_capabilities(descriptor)
+        self._ensure_builtin_loaded(validated.host_id)
         existing = self._entries.get(validated.host_id)
         if existing is not None and not replace:
             if existing == validated:

@@ -37,7 +37,8 @@ export type HostHarnessCapabilityFlag =
 const HOST_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODULE_PATH_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const HOOK_EVENT_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
-const MAX_DESCRIPTION_CHARS = 512;
+// Shared TS/Python contract bound measured in Unicode code points (Array.from(str).length / len(str)).
+const MAX_DESCRIPTION_CODE_POINTS = 512;
 
 const DESCRIPTOR_KEYS = new Set<string>([
   "schema_version",
@@ -245,9 +246,9 @@ export function validateHostHarnessCapabilities(
     "native_scheduler_primitive",
   );
   const description = requireNonEmptyString(record.description, "description").trim();
-  if (description.length > MAX_DESCRIPTION_CHARS) {
+  if (Array.from(description).length > MAX_DESCRIPTION_CODE_POINTS) {
     throw new EffectRuntimeRequestError(
-      `description exceeds ${MAX_DESCRIPTION_CHARS} characters`,
+      `description exceeds ${MAX_DESCRIPTION_CODE_POINTS} Unicode code points`,
     );
   }
 

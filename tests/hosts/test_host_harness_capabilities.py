@@ -174,6 +174,112 @@ assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
     assert completed.returncode == 0, completed.stderr
 
 
+def test_default_registry_enforces_builtin_conflict_in_both_orders_preserving_laziness() -> None:
+    cold_conflict_script = """
+import sys
+import pytest
+from loopx.hosts.capabilities import (
+    HostHarnessCapabilities,
+    get_host_capabilities,
+    register_host_capabilities,
+)
+
+conflicting_claude = HostHarnessCapabilities(
+    host_id='claude',
+    integration_tier='boundary_cli',
+    adapter_module='loopx.claude_goal_mode',
+    supported_capabilities=('verifier_hook',),
+    hook_events=('PreToolUse',),
+    requires_utf8_stdio=True,
+    native_goal_primitive=False,
+    native_scheduler_primitive=True,
+    description='Unauthorized description overwrite while cold.',
+)
+with pytest.raises(ValueError, match='conflicting host capabilities registration for claude'):
+    register_host_capabilities(conflicting_claude)
+
+assert 'loopx.claude_goal_mode' in sys.modules
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+
+import loopx.claude_goal_mode as claude_mod
+assert get_host_capabilities('claude') == claude_mod.CLAUDE_HOST_CAPABILITIES
+assert register_host_capabilities(claude_mod.CLAUDE_HOST_CAPABILITIES) == claude_mod.CLAUDE_HOST_CAPABILITIES
+"""
+    cold_replace_script = """
+import sys
+from loopx.hosts.capabilities import (
+    HostHarnessCapabilities,
+    get_host_capabilities,
+    register_host_capabilities,
+)
+
+override_claude = HostHarnessCapabilities(
+    host_id='claude',
+    integration_tier='boundary_cli',
+    adapter_module='loopx.claude_goal_mode',
+    supported_capabilities=('verifier_hook',),
+    hook_events=('PreToolUse',),
+    requires_utf8_stdio=True,
+    native_goal_primitive=False,
+    native_scheduler_primitive=True,
+    description='Explicit cold override.',
+)
+registered = register_host_capabilities(override_claude, replace=True)
+assert registered == override_claude
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+
+import loopx.claude_goal_mode as claude_mod
+assert claude_mod.CLAUDE_HOST_CAPABILITIES != override_claude
+assert get_host_capabilities('claude') == override_claude
+"""
+    lookup_then_register_script = """
+import sys
+import pytest
+from loopx.hosts.capabilities import (
+    HostHarnessCapabilities,
+    get_host_capabilities,
+    register_host_capabilities,
+)
+
+authoritative = get_host_capabilities('claude')
+assert authoritative is not None
+conflicting_claude = HostHarnessCapabilities(
+    host_id='claude',
+    integration_tier='boundary_cli',
+    adapter_module='loopx.claude_goal_mode',
+    supported_capabilities=('verifier_hook',),
+    hook_events=('PreToolUse',),
+    requires_utf8_stdio=True,
+    native_goal_primitive=False,
+    native_scheduler_primitive=True,
+    description='Unauthorized overwrite after lookup.',
+)
+with pytest.raises(ValueError, match='conflicting host capabilities registration for claude'):
+    register_host_capabilities(conflicting_claude)
+assert get_host_capabilities('claude') == authoritative
+assert register_host_capabilities(authoritative) == authoritative
+replaced = register_host_capabilities(conflicting_claude, replace=True)
+assert get_host_capabilities('claude') == replaced
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+"""
+    for script in (
+        cold_conflict_script,
+        cold_replace_script,
+        lookup_then_register_script,
+    ):
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+
 def test_negative_cases_and_invariant_validation() -> None:
     assert get_host_capabilities("nonexistent_host") is None
     assert host_supports_capability("nonexistent_host", "quiet_turn") is False
@@ -242,6 +348,19 @@ def test_negative_cases_and_invariant_validation() -> None:
     missing.pop("description")
     with pytest.raises(ValueError, match="missing host harness capabilities fields"):
         validate_host_harness_capabilities(missing)
+
+    for accepted in ("a" * 512, "😀" * 256, "😀" * 257, "😀" * 512):
+        validated = validate_host_harness_capabilities(
+            {**valid.to_dict(), "description": accepted}
+        )
+        assert validated.description == accepted
+    for rejected in ("a" * 513, "😀" * 513):
+        with pytest.raises(
+            ValueError, match="description exceeds 512 Unicode code points"
+        ):
+            validate_host_harness_capabilities(
+                {**valid.to_dict(), "description": rejected}
+            )
 
     register_host_capabilities(valid, registry=isolated)
     assert register_host_capabilities(valid, registry=isolated) == valid

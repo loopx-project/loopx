@@ -228,6 +228,29 @@ test("descriptor validation enforces schema, flags, hook invariants, and canonic
       }),
     /description/,
   );
+
+  for (const accepted of [
+    "a".repeat(512),
+    "😀".repeat(256),
+    "😀".repeat(257),
+    "😀".repeat(512),
+  ]) {
+    const validated = validateHostHarnessCapabilities({
+      ...base,
+      description: accepted,
+    });
+    assert.equal(validated.description, accepted);
+  }
+  for (const rejected of ["a".repeat(513), "😀".repeat(513)]) {
+    assert.throws(
+      () =>
+        validateHostHarnessCapabilities({
+          ...base,
+          description: rejected,
+        }),
+      /description exceeds 512 Unicode code points/,
+    );
+  }
 });
 
 test("registry rejects conflicting registrations unless replace=true and stays idempotent for equal descriptors", () => {
