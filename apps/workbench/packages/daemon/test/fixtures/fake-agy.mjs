@@ -86,6 +86,14 @@ if (promptIndex >= 0 && args[promptIndex + 1] !== undefined) {
 }
 
 if (args[0] !== 'acp') throw new Error('expected agy acp');
+if (process.env.FAKE_AGY_ENV_FILE) {
+  writeFileSync(process.env.FAKE_AGY_ENV_FILE, JSON.stringify({
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    GH_CONFIG_DIR: process.env.GH_CONFIG_DIR,
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+  }));
+}
 let conversation = 'agy-conv-1', model = 'default', effort, mode = 'default';
 let fullAccess = false, pending, waiting = false;
 let stepIndex = 0;
@@ -315,6 +323,24 @@ createInterface({ input: process.stdin }).on('line', async line => {
         reply(msg.id, { stopReason: 'end_turn' }); break;
       }
       if (text === 'usage-drop') { update({ sessionUpdate: 'usage_update', used: 10, size: 1048576 }); reply(msg.id, { stopReason: 'end_turn' }); break; }
+      if (text === 'background-notice') {
+        reply(msg.id, { stopReason: 'end_turn' });
+        setTimeout(() => {
+          update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Individual quota reached.' } });
+        }, 15);
+        break;
+      }
+      if (text === 'background-tool') {
+        reply(msg.id, { stopReason: 'end_turn' });
+        setTimeout(() => {
+          update({ sessionUpdate: 'tool_call', toolCallId: 'bg-tool-1', title: 'Background check', kind: 'execute', status: 'in_progress' });
+        }, 15);
+        setTimeout(() => {
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 'bg-tool-1', status: 'completed', rawOutput: 'ok' });
+          update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'background work done' } });
+        }, 135);
+        break;
+      }
       if (text.includes('run a command')) {
         const id = ++approvalId;
         const answer = new Promise(resolve => approvals.set(id, resolve));

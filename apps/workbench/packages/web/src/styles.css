@@ -2057,6 +2057,7 @@ html.list-open body {
   align-items: center;
   gap: 6px;
   align-self: flex-start;
+  max-width: 100%;
   min-height: 28px;
   padding: 0;
   border: 0;
@@ -2068,17 +2069,11 @@ html.list-open body {
 
 /* The whole line is one colour, the step count included. Only a pointer that can hover darkens it:
    on a touch screen a tap would leave it dark. */
-.work-toggle .muted {
-  color: inherit;
-}
-
-@media (hover: hover) {
-  .work-toggle:hover {
-    color: var(--text);
-  }
-}
-
+.work-toggle .muted { color: inherit; flex: none; }
+.work-toggle svg, .work-label { flex: none; }
+@media (hover: hover) { .work-toggle:hover { color: var(--text); } }
 .work-label { font-variant-numeric: tabular-nums; }
+.work-active { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 
 .work-body {
   display: flex;

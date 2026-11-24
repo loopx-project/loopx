@@ -2446,6 +2446,7 @@ export const ja: Messages = {
   'view.workedFor': (time: string) => `所要時間 ${time}`,
   'view.processed': '処理済み',
   'view.steps': (n: number) => `${n} ステップ`,
+  'view.runningSteps': (n: number, title: string) => n > 1 ? `実行中 (${n})：${title}` : `実行中：${title}`,
   'view.thinking': '思考中',
   'view.thought': (time: string) => `思考 · ${time}`,
   'view.succeeded': '成功',

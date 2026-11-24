@@ -235,9 +235,27 @@ function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+const FOLLOWUP_CONTEXT_PREFIX = '[Loochat interrupted-turn context]';
+const FOLLOWUP_CONTEXT_LIMIT = 12_000;
+
 /** A turn's identity for matching hub turns against the agent's history. */
 function turnKey(text: string): string {
-  return text.trim().slice(0, 200);
+  const key = text.trim();
+  // Follow-ups share a long context header; the complete prompt distinguishes their requests.
+  return key.startsWith(FOLLOWUP_CONTEXT_PREFIX) ? key : key.slice(0, 200);
+}
+
+function interruptedFollowupPrompt(previous: string, current: string): string {
+  return [
+    FOLLOWUP_CONTEXT_PREFIX,
+    'The previous user request below was interrupted before completion. The current message may be a short follow-up to that request. Use the interrupted request as context when interpreting the current message. If the current message is unrelated, answer the current message.',
+    '',
+    'Interrupted user request:',
+    previous,
+    '',
+    'Current user message:',
+    current,
+  ].join('\n');
 }
 
 /**
@@ -2661,6 +2679,9 @@ export class ThreadManager {
     rawText = this.coordination?.mentionText(threadId, reference.text, mentions) ?? reference.text;
     // Slash commands have their own argument grammar; hidden instructions become unwanted arguments.
     const slashCommand = /^\/\S+/.test(rawText);
+    // Internal callers may attach protocol context. Only the person's words (or a channel
+    // summary) belong in the conversation, its queue, and later replay/continuation views.
+    const displayText = delivery?.displayText ?? input.displayText ?? originalText.split('\n\n[指定协作对象]')[0];
     // A collaboration member spoken to by the person directly answers the person, not the lead.
     const fromUser = Boolean(input.fromUser && !delivery && this.coordination?.isMember(threadId));
     // A resent prompt (a retry, a handover) carries its blocks already: they are not attached twice.
@@ -2668,11 +2689,19 @@ export class ThreadManager {
     const coordinated = slashCommand ? rawText : rawText ? (this.coordination?.instructions(input.handoverFrom ?? threadId, rawText, fromUser, gate) ?? rawText) : '';
     // A background question goes as asked: no hints, tools or progress request around it.
     const bare = this.backgroundThreads.has(threadId);
+    const interruptedContext = !bare && !slashCommand && Boolean(rawText) && !input.voiceSummary && !input.handover
+      && !input.autoContinuation && !input.scheduled && !input.review && !input.proactive && !delivery
+      && input.displayText === undefined
+      ? this.interruptedFollowupContext(threadId)
+      : null;
     const discoverable = slashCommand || !rawText || bare ? coordinated : this.personal.instructions(threadId, this.borrowing?.instructions(threadId, coordinated, gate) ?? coordinated, gate);
     // With the board's consent, the agent is asked to say where the work stands; read back at the end.
     // Writing mode's way of working for its stage; an edit the person made is mentioned once.
     const writing = !slashCommand && rawText ? thread.writing : null;
     const written = writing ? writingInstructions(discoverable, writing) : discoverable;
+    const followupContextText = interruptedContext
+      ? [interruptedContext, displayText].filter(Boolean).join('\n\n').slice(-FOLLOWUP_CONTEXT_LIMIT)
+      : null;
     const askProgress = !bare && !slashCommand && Boolean(rawText) && this.progressWanted();
     const text = askProgress ? progressInstructions(written, gate) : written;
 
@@ -2688,10 +2717,8 @@ export class ThreadManager {
       && !delivery && !input.scheduled && !input.review && !input.proactive && !input.autoContinuation;
     const context = personalHuman && !slashCommand ? await this.personal.router.context(threadId) : null;
     const goalContext = !slashCommand && rawText && !bare ? await this.loopx?.context(threadId) ?? '' : '';
-    const promptText = (context?.text ?? '') + goalContext + text + this.attachments.videoNote(threadId, storedVideos);
-    // Internal callers may attach protocol context. Only the person's words (or a channel
-    // summary) belong in the conversation, its queue, and later replay/continuation views.
-    const displayText = delivery?.displayText ?? input.displayText ?? originalText.split('\n\n[指定协作对象]')[0];
+    const promptBody = (context?.text ?? '') + goalContext + text + this.attachments.videoNote(threadId, storedVideos);
+    const promptText = interruptedContext ? interruptedFollowupPrompt(interruptedContext, promptBody) : promptBody;
 
     const turnId = delivery?.turnId ?? reservedTurnId ?? randomUUID();
     if (askProgress) this.reportTurns.add(turnId);
@@ -2729,6 +2756,7 @@ export class ThreadManager {
           ...(personalHuman ? { personalOrigin: 'person' } : {}),
           ...(personalControl ? { assistantSay: personalControl.assistantSay } : {}),
           ...(promptText !== displayText ? { displayText } : {}),
+          ...(followupContextText ? { followupContextText } : {}),
           ...(stored.length ? { images: stored } : {}),
           ...(storedVideos.length ? { videos: storedVideos } : {}),
           ...(typeof input.handover === 'string' && input.handover ? { handover: input.handover, handoverLabel: this.adapters.get(input.handover)?.label ?? input.handover } : {}),
@@ -2823,14 +2851,56 @@ export class ThreadManager {
   recordHandoverModel(id: string, model: string, previous: string | undefined, reason: string): void {
     this.emitThreadEvent(id, null, 'handover.model', { model, previous, reason });
   }
+  /** Recovers only user request text from the latest interrupted turn, never tool output. */
+  private interruptedFollowupContext(threadId: string): string | null {
+    const last = this.store.listTurns(threadId).at(-1);
+    if (!last) return null;
+    const events = this.store.listTurnEvents(threadId, last.turnId);
+    const start = events.find(e => e.type === 'turn.started');
+    const end = [...events].reverse().find(e => e.type === 'turn.done' || e.type === 'turn.error');
+    if (!start || !end) return null;
+    const cancelled = end.type === 'turn.done' && end.data.stopReason === 'cancelled';
+    const interrupted = end.type === 'turn.error' && end.data.code === 'interrupted';
+    if (!cancelled && !interrupted) return null;
+    if (start.data.handover || start.data.coordination || start.data.control || start.data.imported
+      || start.data.fromTerminal || start.data.source === 'background' || start.data.background
+      || start.data.hiddenPrompt || start.data.proactive || start.data.voiceSummary
+      || start.data.scheduled || start.data.review) return null;
+    const text = typeof start.data.followupContextText === 'string'
+      ? start.data.followupContextText
+      : typeof start.data.displayText === 'string'
+        ? start.data.displayText
+        : typeof start.data.text === 'string'
+          ? start.data.text
+          : '';
+    return text.trim().slice(-FOLLOWUP_CONTEXT_LIMIT) || null;
+  }
+
   async cancelHandoverSummary(id: string): Promise<void> {
     const run = this.running.get(id);
     if (run && this.store.listTurnEvents(id, run.turnId).some(e => e.type === 'turn.started' && e.data.handover)) await this.stopTurn(id).catch(() => undefined);
+  }
+  /** Cancels an autonomous background turn on this thread so automatic handover can proceed without colliding with it. */
+  async stopBackgroundTurn(threadId: string): Promise<void> {
+    const run = this.running.get(threadId);
+    const nativeTurns = this.nativeTurns.get(threadId);
+    if (!run || !nativeTurns || ![...nativeTurns.values()].includes(run.turnId)) return;
+    if (!this.store.listTurnEvents(threadId, run.turnId).some(e => e.type === 'turn.started' && e.data.source === 'background')) return;
+    await this.stopTurn(threadId).catch(() => undefined);
+    if (this.running.get(threadId)?.turnId === run.turnId) {
+      await new Promise<void>((resolve) => {
+        const finish = () => { clearTimeout(timer); off(); resolve(); };
+        const off = this.subscribe(e => { if (e.threadId === threadId && e.type === 'thread.updated' && !this.running.has(threadId)) finish(); });
+        const timer = setTimeout(finish, 2000);
+        if (!this.running.has(threadId)) finish();
+      });
+    }
   }
   async autoHandoverSummary(id: string, target: string, exhausted: boolean): Promise<string> {
     let summaryTurn: string | null = null;
     if (!exhausted) {
       try {
+        await this.stopBackgroundTurn(id);
         const started = await this.startHandover(id, target, true);
         summaryTurn = started.turnId;
         await new Promise<void>((resolve) => {
@@ -2852,6 +2922,7 @@ export class ThreadManager {
     throw new HttpError(409, 'handover summary unavailable');
   }
   async retryAutoHandoverTurn(id: string, failedTurn: string): Promise<void> {
+    await this.stopBackgroundTurn(id);
     const failed = this.store.listTurnEvents(id, failedTurn).find(e => e.type === 'turn.started');
     if (!failed) throw new HttpError(409, 'failed turn not found');
     const images = ((failed.data.images ?? []) as Array<{ id: string }>).map(img => {
@@ -3038,6 +3109,9 @@ export class ThreadManager {
     if (!chosen) throw new HttpError(404, 'no such waiting message');
     delete chosen.error;
     this.setQueue(threadId, [chosen, ...queue.filter((q) => q !== chosen)]);
+    const handover = this.autoHandover.view(threadId);
+    // Send now lets the user continue after a stopped or failed automatic handover notice.
+    if (handover.state === 'stopped' || handover.state === 'failed') this.autoHandover.clearNotice(threadId);
     if (this.running.has(threadId)) await this.cancelTurn(threadId, { keepQueue: true });
     else this.startNextQueued(threadId);
   }

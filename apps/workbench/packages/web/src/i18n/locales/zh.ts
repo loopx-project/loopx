@@ -2448,6 +2448,7 @@ export const zh = {
   'view.workedFor': (time: string) => `用时 ${time}`,
   'view.processed': '已处理',
   'view.steps': (n: number) => `${n} 步`,
+  'view.runningSteps': (n: number, title: string) => n > 1 ? `运行中 (${n})：${title}` : `运行中：${title}`,
   'view.thinking': '思考中',
   'view.thought': (time: string) => `思考 · ${time}`,
   'view.succeeded': '成功',

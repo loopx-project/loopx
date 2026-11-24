@@ -1417,12 +1417,16 @@ function WorkGroup({ item, roots }: { item: Extract<Item, { kind: 'work' }>; roo
   const local = useMemo(() => liveWorkFromEvents(item), [item]);
   const loaded = useMemo(() => resource.value ? buildTimeline(hydrateWork(resource.value.events, item.liveEvents ?? [], resource.value.version)).items.find((i): i is Extract<Item, { kind: 'work' }> => i.kind === 'work') : undefined, [resource.value, item.liveEvents]);
   const count = item.count ?? item.steps.length;
-  const sections = workSections(loaded?.entries ?? local?.entries ?? item.entries);
+  const entries = loaded?.entries ?? local?.entries ?? item.entries;
+  const sections = workSections(entries);
+  const activeSteps = running ? entries.flatMap((e) => (e.kind === 'step' && stepActive(e.step) ? [e.step] : [])) : [];
+  const activeTitle = activeSteps.length ? (stepCommand(activeSteps[0]) || activeSteps[0].title || t('step.running')) : '';
   return (
     <div className="row work">
       <button className="work-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <WorkLabel item={item} />
         {count > 0 && <span className="muted">· {t('view.steps', count)}</span>}
+        {!open && activeSteps.length > 0 && <span className="work-active" title={activeTitle}>· {t('view.runningSteps', activeSteps.length, activeTitle)}</span>}
         <IconChevron size={14} open={open} />
       </button>
       {open && (
@@ -1437,8 +1441,8 @@ function WorkGroup({ item, roots }: { item: Extract<Item, { kind: 'work' }>; roo
                 <span>{compactionLabel(section)}</span>
               </div>
             ) : (
-              // Only the stretch at the end of a running turn is still going on.
-              <StepRun key={section.key} run={section} live={!item.done && i === sections.length - 1} roots={roots} fold={!item.stopped} openThoughts={!!item.stopped} />
+              // Only the trailing thought stretch is live; any still-running tool stays visible across sections.
+              <StepRun key={section.key} run={section} live={!item.done && i === sections.length - 1} running={running} roots={roots} fold={!item.stopped} openThoughts={!!item.stopped} />
             ),
           )}
           {!running && <ResourceMore resource={resource} />}
@@ -1532,12 +1536,12 @@ const RUN_FOLD_MIN = 2;
  * the calls themselves. In a run that is still going on, what is in flight stays on screen as
  * itself; only what is over is folded.
  */
-function StepRun({ run, live, roots, fold, openThoughts = false }: { run: Extract<WorkSection, { kind: 'run' }>; live: boolean; roots: string[]; fold: boolean; openThoughts?: boolean }) {
+function StepRun({ run, live, running = live, roots, fold, openThoughts = false }: { run: Extract<WorkSection, { kind: 'run' }>; live: boolean; running?: boolean; roots: string[]; fold: boolean; openThoughts?: boolean }) {
   const [open, setOpen] = useState(false);
   const last = run.entries.length - 1;
   const inFlight = (i: number) => {
     const entry = run.entries[i];
-    return live && (entry.kind === 'step' ? stepActive(entry.step) : i === last);
+    return entry.kind === 'step' ? running && stepActive(entry.step) : live && i === last;
   };
   const row = (i: number) => {
     const entry = run.entries[i];

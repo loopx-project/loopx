@@ -2450,6 +2450,7 @@ export const en: Messages = {
   'view.workedFor': (time: string) => `Worked for ${time}`,
   'view.processed': 'Done',
   'view.steps': (n: number) => `${n} ${n === 1 ? 'step' : 'steps'}`,
+  'view.runningSteps': (n: number, title: string) => n > 1 ? `Running (${n}): ${title}` : `Running: ${title}`,
   'view.thinking': 'Thinking',
   'view.thought': (time: string) => `Thought · ${time}`,
   'view.succeeded': 'Succeeded',
