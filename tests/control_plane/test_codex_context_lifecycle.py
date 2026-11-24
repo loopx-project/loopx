@@ -191,9 +191,12 @@ def test_native_configuration_cli_is_read_only_and_usable_without_registry(tmp_p
     assert "ROLLOUT_TRACE" not in json.dumps(payload)
     assert "--codex-context-root" in native["developer_instructions"]
     assert "context-read" in native["developer_instructions"]
-    assert native["config_overrides"] == {
+    expected_overrides = {
         "tool_output_token_limit": 20000,
         "shell_environment_policy.set.LOOPX_CONTEXT_PAGE_OUTPUT_BYTES": "64000"}
+    if os.name == "posix":
+        expected_overrides["shell_environment_policy.set.LOOPX_EFFECT_RUNTIME_TRANSPORT"] = "stdio"
+    assert native["config_overrides"] == expected_overrides
     assert "--max-page-output-bytes 64000" in native["developer_instructions"]
     assert "max_output_tokens=22000" in native["developer_instructions"]
     assert "max_output_tokens=24000" in native["developer_instructions"]

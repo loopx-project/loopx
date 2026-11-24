@@ -56,6 +56,7 @@ class GoalAcceptanceRequestMixin:
     def _goal_acceptance_update(self) -> None:
         from .acceptance import (
             configure_goal_acceptance,
+            handoff_goal_outcomes,
             refine_goal_outcome,
             public_goal_acceptance,
             verify_goal_acceptance, goal_acceptance_route,
@@ -88,7 +89,15 @@ class GoalAcceptanceRequestMixin:
                                         str(self.server.runtime_root)),
                 "execute": True,
             }
-            if action == "refine":
+            if action in {"preview-handoff", "handoff"}:
+                if set(body) != {"goal_id", "action", "document", "expected_provider_revision", "operation_id"}:
+                    raise ValueError("unexpected handoff fields")
+                if not isinstance(body["document"], dict) or not isinstance(body["operation_id"], str) or not body["operation_id"]:
+                    raise ValueError("handoff requires a selection document and stable operation id")
+                common["execute"] = action == "handoff"
+                result = public_goal_acceptance(handoff_goal_outcomes(**common, document=body["document"],
+                    operation_id=body["operation_id"], expected_provider_revision=revision))
+            elif action == "refine":
                 if set(body) != {"goal_id", "action", "refinement", "expected_provider_revision", "operation_id"}:
                     raise ValueError("refine requires an exact outcome request")
                 if not isinstance(body["refinement"], dict) or not isinstance(body["operation_id"], str) or not body["operation_id"]:

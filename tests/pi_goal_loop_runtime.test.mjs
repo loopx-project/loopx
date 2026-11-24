@@ -1506,13 +1506,13 @@ test("inspect is read-only and preserves a compact typed receipt", async () => {
 })
 
 
-test("non-zero write-scope and CAS failures stay typed and omit private paths", async () => {
+test("non-zero workspace-lease and CAS failures stay typed and omit private paths", async () => {
   const conflict = {
     ok: false,
     schema_version: "task_lease_v0",
     action: "acquire",
-    error: "write scope overlaps another active task lease",
-    error_code: "write_scope_conflict",
+    error: "write workspace collides with another active task lease",
+    error_code: "workspace_lease_conflict",
     conflicts: [{
       todo_id: "todo_beta",
       owner: "agent-other",
@@ -1537,7 +1537,7 @@ test("non-zero write-scope and CAS failures stay typed and omit private paths", 
     async () => ({ stdout: JSON.stringify(conflict), returncode: 1 }),
     taskLeaseAuthority(),
   )
-  assert.equal(second.error_code, "write_scope_conflict")
+  assert.equal(second.error_code, "workspace_lease_conflict")
   assert.deepEqual(second.conflicts, [{ todo_id: "todo_beta", owner: "agent-other", write_scopes: ["src/**"] }])
   assert.equal(JSON.stringify(second).includes("lease_path"), false)
 

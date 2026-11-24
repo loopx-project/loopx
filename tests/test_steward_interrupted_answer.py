@@ -209,6 +209,7 @@ def test_original_native_code_action_result_survives_later_timeout_without_repla
     store, runtime, provider, transport, binding, _, _ = steward
     binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
         executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.idle_timeout_sec = 300.0
     runtime.hard_timeout_sec = None
     user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
             "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
@@ -326,7 +327,7 @@ def test_native_timeout_reports_its_clock_without_extending_native_retry(
     _native_clock(monkeypatch, language_server, frames)
     events = []
     with pytest.raises(CodexChatAgentError) as raised:
-        adapter_for(tmp_path, hard_timeout_sec=hard_limit).start_turn(
+        adapter_for(tmp_path, idle_timeout_sec=300.0, hard_timeout_sec=hard_limit).start_turn(
             "Original task", lambda kind, data: events.append((kind, data)))
     assert raised.value.error_code == "response_timeout"
     diagnostic = next(data["timeout"] for kind, data in events
@@ -355,6 +356,7 @@ def test_original_steward_observes_native_work_at_idle_deadline_and_replies_once
     _, runtime, provider, transport, binding, _, _ = steward
     binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
         executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.idle_timeout_sec = 300.0
     runtime.hard_timeout_sec = None
 
     user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
@@ -418,6 +420,7 @@ def test_original_lark_timeout_keeps_typed_reason_and_never_replays(
         monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
         binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
             executor_endpoint_id="antigravity", context_kind="steward")
+        runtime.idle_timeout_sec = 300.0
         runtime.hard_timeout_sec = 150.0 if kind == "hard" else None
         frames = _native_frames(stagnant=True)
         for index, frame in enumerate(frames):
@@ -461,6 +464,17 @@ def test_timeout_presentation_does_not_trust_unknown_diagnostic_text(info):
         phase_events=[{"kind": "agent.phase", "payload": {"method": "native/timeout", "timeout": info}}])
     assert code == "processing_failed" and "超时" in text and "不会自动重放" in text
     assert "NATIVE_PRIVATE_SENTINEL" not in text and "期间原生助手记录了调用错误" not in text
+
+
+def test_worker_exit_reply_distinguishes_lost_execution_from_unknown_errors():
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+
+    code, text = manager_failure_reply({"error_code": "execution_worker_exited", "error": "NATIVE_PRIVATE_SENTINEL"})
+    assert code == "execution_worker_exited"
+    assert "执行任务" in text and "原请求和会话已保留" in text and "不会自动重跑" in text
+    unknown, generic = manager_failure_reply({"error_code": "runtime_error", "error": "execution worker exited"})
+    assert unknown == "processing_failed" and "执行任务" not in generic
+    assert "NATIVE_PRIVATE_SENTINEL" not in text
 
 
 @pytest.mark.parametrize("source_code", ["response_timeout", "antigravity_step_error", "unknown"])
@@ -638,7 +652,7 @@ def test_cleared_native_error_does_not_extend_deadline(
         return rpc_post(url, token, method, args, **kwargs)
 
     monkeypatch.setattr(antigravity_adapter, "_rpc_post", bounded_read)
-    adapter = adapter_for(tmp_path, hard_timeout_sec=hard_limit)
+    adapter = adapter_for(tmp_path, idle_timeout_sec=300.0, hard_timeout_sec=hard_limit)
     events = []
     with pytest.raises(CodexChatAgentError) as raised:
         adapter.start_turn("Complete this original request", lambda kind, data: events.append((kind, data)))
@@ -1210,6 +1224,10 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LOOPX_CHAT_CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     fixture = steward.__wrapped__(tmp_path)
     store, runtime, provider, transport, binding, capture, workspace = next(fixture)
     try:

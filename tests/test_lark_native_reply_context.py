@@ -165,7 +165,10 @@ def test_unquoted_provider_root_keeps_plain_input_and_no_parent_read(ordinary): 
         assert native_request(transport, event)["message"] == event["content"]
         calls = provider.calls[before:]
         assert sum("+messages-mget" in args for args in calls) == 1
-        assert not any("api" in args for args in calls)
+        api_calls = [args[args.index("api"):] for args in calls if "api" in args]
+        assert api_calls == [
+            ["api", "GET", f"/open-apis/im/v1/messages/{event['message_id']}", "--as", "bot"]
+        ]
     finally:
         runtime.close()
 

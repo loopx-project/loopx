@@ -39,12 +39,6 @@ from ..control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
     project_replan_writeback_rejection,
 )
-from ..extensions.lark.goal_channel_lifecycle import (
-    goal_channel_gate_sync_failure,
-    sync_human_gate_after_refresh,
-    blocked_notice_sync_failure,
-    sync_blocked_notice_after_refresh,
-)
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 from ..state_refresh import (
@@ -69,6 +63,7 @@ from .project_lifecycle_inputs import (
 from .project_lifecycle_sinks import (
     apply_external_sink_postcondition,
     lark_explore_graph_syncer,
+    sync_goal_channel_notifications_after_refresh,
 )
 from .quota_reward_memory import (
     attach_reward_memory_ingest_after_spend,
@@ -205,6 +200,10 @@ def register_refresh_state_command(
         ),
     )
     refresh_state_parser.add_argument("--goal-instance-id", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
+    refresh_state_parser.add_argument("--execution-loss-closeout", action="store_true",
+        help="Close an original prepared Turn after its execution generation is lost, without debit.")
     refresh_state_parser.add_argument("--completion-todo-id", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument("--completion-turn-key", help=argparse.SUPPRESS)
     refresh_state_parser.add_argument(
@@ -452,6 +451,34 @@ def handle_refresh_state_command(
     if args.command != "refresh-state":
         return None
     fmt = output_format(args)
+    if args.execution_loss_closeout:
+        from ..control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+        from ..control_plane.quota.execution_preparation import commit_execution_loss_closeout
+        from .project_lifecycle_inputs import inline_progress_observation
+
+        try:
+            ref = (exact_goal_ref(args.goal_id, args.goal_instance_id) if args.goal_instance_id
+                   else capture_first_party_host_goal_ref(registry_path=registry_path, goal_id=args.goal_id))
+            # The launcher override only controls how subsequent commands are rendered.
+            requested_effects = vars(args).copy()
+            requested_effects.pop("control_cli_bin", None)
+            payload = commit_execution_loss_closeout(
+                registry_path=registry_path, runtime_root_override=args.runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id or "", todo_id=args.todo_id or "",
+                turn_instance_id=args.turn_instance_id or "", goal_ref=ref,
+                requested_proof={"idempotency_key": args.task_lease_idempotency_key,
+                                 "expected_version": args.task_lease_expected_version},
+                progress_observation=inline_progress_observation(args),
+                delivery_outcome=args.delivery_outcome, delivery_boundary=args.delivery_boundary,
+                requested_effects=requested_effects, dry_run=args.dry_run,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            code = getattr(exc, "code", None)
+            payload = {"ok": False, "goal_id": args.goal_id, "appended": False, "error": str(exc),
+                       **({"error_code": code} if isinstance(code, str) else {})}
+        print_payload(payload, fmt, render_state_refresh_markdown)
+        return 0 if payload["ok"] is True else 1
     agent_vision_packet: dict[str, object] | None = None
     progress_observation: dict[str, object] | None = None
     merge_agent_vision_patch = False
@@ -459,7 +486,14 @@ def handle_refresh_state_command(
     outcome_update = None
     outcome_update_result = None
     goal_acceptance_preview = None
+    task_lease_proof = None
     try:
+        key = getattr(args, "task_lease_idempotency_key", None)
+        version = getattr(args, "task_lease_expected_version", None)
+        if key is not None or version is not None:
+            if key is None or not key or version is None or version < 1:
+                raise ValueError("First writeback requires the task lease key and positive version together.")
+            task_lease_proof = {"idempotency_key": key, "expected_version": version}
         inputs = parse_refresh_state_inputs(args, fmt=fmt, registry_path=registry_path)
         outcome_update = inputs.outcome_update
         agent_vision_packet = inputs.agent_vision_packet
@@ -546,6 +580,13 @@ def handle_refresh_state_command(
             dry_run=bool(args.dry_run),
             sync_global=not bool(args.no_global_sync),
             goal_ref=goal_ref,
+            task_lease_proof=task_lease_proof,
+            allow_same_generation_lease_renewal=(
+                getattr(args, "settle_turn", False)
+                and task_lease_proof is not None
+                and bool(getattr(args, "todo_id", None))
+                and bool(getattr(args, "turn_instance_id", None))
+            ),
             **({"goal_acceptance_preview": goal_acceptance_preview}
                if goal_acceptance_preview is not None else {}),
         )
@@ -610,6 +651,23 @@ def handle_refresh_state_command(
         )
         and not payload.get("dry_run")
     )
+    if material_refresh_ready and args.available_capabilities and args.agent_id:
+        from ..control_plane.agents.capability_memory import (
+            record_verified_agent_capability_observation,
+        )
+
+        record_verified_agent_capability_observation(
+            registry_path=registry_path,
+            runtime_root=resolve_runtime_root(
+                load_registry(registry_path),
+                args.runtime_root,
+                registry_path=registry_path,
+            ),
+            goal_id=args.goal_id,
+            agent_id=str(args.agent_id),
+            available=args.available_capabilities,
+            preserve_unavailable=False,
+        )
     if material_refresh_ready and reward_memory_reflection_json:
         validation_workspace_text = str(
             getattr(args, "delivery_workspace_path", None)
@@ -838,54 +896,12 @@ def handle_refresh_state_command(
                 "refresh; retry it before delivery"
             ),
         )
-        try:
-            gate_sync = sync_human_gate_after_refresh(
-                registry_path=registry_path,
-                runtime_root_override=args.runtime_root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                external_sink_delivery_authorized=payload["external_sink_delivery_authorized"] is True,
-            )
-        except Exception as error:
-            gate_sync = goal_channel_gate_sync_failure(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                exception=error,
-            )
-        try:
-            blocked_sync = sync_blocked_notice_after_refresh(
-                registry_path=registry_path,
-                runtime_root_override=args.runtime_root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                external_sink_delivery_authorized=payload[
-                    "external_sink_delivery_authorized"
-                ]
-                is True,
-            )
-        except Exception as error:
-            blocked_sync = blocked_notice_sync_failure(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                exception=error,
-            )
-        payload["goal_channel_blocked_notice_sync"] = blocked_sync
-        payload["goal_channel_gate_sync"] = gate_sync
-        apply_external_sink_postcondition(
+        sync_goal_channel_notifications_after_refresh(
             payload,
-            sink_result=gate_sync,
-            warning=(
-                "enabled Goal Channel human-gate delivery postcondition is "
-                "unsatisfied; the notification remains retryable"
-            ),
-            error=(
-                "enabled Goal Channel human-gate notification/readback failed "
-                "after the refresh; retry it before delivery"
-                + (
-                    "; " + gate_sync["failure_summary"]
-                    if gate_sync.get("failure_summary") else ""
-                )
-            ),
+            registry_path=registry_path,
+            runtime_root_arg=args.runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
         )
     settle_requested_refresh(payload, args, registry_path, goal_ref)
     attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)

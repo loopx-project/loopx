@@ -43,9 +43,8 @@ def test_prepared_reference_rejects_incompatible_delivery_before_guard(tmp_path,
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
-@pytest.mark.parametrize("alias", [None, "--turn-envelope", "--complete-turn"])
-def test_prepared_capture_verifies_the_same_complete_turn_with_compatibility_aliases(
-    tmp_path, monkeypatch, provider, context_delivery, alias,
+def test_prepared_capture_verifies_the_same_complete_turn(
+    tmp_path, monkeypatch, provider, context_delivery,
 ):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.test_quota_settlement_cli import _spend_run_count
@@ -62,7 +61,7 @@ def test_prepared_capture_verifies_the_same_complete_turn_with_compatibility_ali
     code, prepared = _run_cli(
         registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID, "--codex-app",
-        "--context-delivery", context_delivery, *context_args, *([alias] if alias else []),
+        "--context-delivery", context_delivery, *context_args,
         "--decision-output-dir", str(capture_dir), "--prepared-capture-reference",
     )
     assert code == 0, prepared
@@ -284,8 +283,7 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('alias', [None, '--turn-envelope', '--complete-turn'])
-def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monkeypatch, provider, alias):
+def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monkeypatch, provider):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
@@ -319,7 +317,7 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'boundary-decision'
-    code, envelope = _run_cli(registry, runtime, *args, *([alias] if alias else []),
+    code, envelope = _run_cli(registry, runtime, *args,
                               '--decision-output-dir', str(capture))
     assert code == 0, envelope
     saved = capture / 'decision.json'
@@ -379,7 +377,7 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
+    code, envelope = _run_cli(registry, runtime, *args,
                               '--decision-output-dir', str(capture))
     assert code == 0, envelope
     assert envelope['schema_version'] == 'loopx_turn_envelope_v1'
@@ -439,7 +437,7 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert json.loads(saved.read_text()) == full
     # A deliberate fresh invocation within the Turn has its own immutable capture.
     second = tmp_path / 'guard-2'
-    code, fresh = _run_cli(registry, runtime, *args, '--turn-envelope', '--decision-output-dir', str(second))
+    code, fresh = _run_cli(registry, runtime, *args, '--decision-output-dir', str(second))
     assert code == 0, fresh
     assert json.loads((second / 'decision.json').read_text())['heartbeat_receipt']['status'] == 'replayed'
     assert json.loads(saved.read_text()) == full
@@ -648,7 +646,7 @@ def test_saved_selection_transport_preserves_identity_and_rebinds_once(tmp_path,
     selection = {"command_args_template": shlex.join(words)}
     payload = {"interaction_contract": {"cli_channel": {"selection_command": selection}}}
     args = request(None, decision_output_root=explicit if root_source == "explicit" else None,
-        context_delivery="on", codex_context_dir=str(native), turn_envelope=True,
+        context_delivery="on", codex_context_dir=str(native),
         max_page_output_bytes=output_limit)
     bind_capture_selection_transport(payload, args, capture_root=fallback)
     first = selection["command_args_template"]
@@ -660,10 +658,10 @@ def test_saved_selection_transport_preserves_identity_and_rebinds_once(tmp_path,
         "goal", "agent", "{todo_id}", "original-turn")
     assert parsed.decision_output_root == str({"saved": saved, "explicit": explicit, "fallback": fallback}[root_source])
     assert parsed.context_delivery == "on" and parsed.codex_context_dir == str(native)
-    assert parsed.codex_context_root is None and parsed.turn_envelope
+    assert parsed.codex_context_root is None and "--turn-envelope" not in argv
     assert parsed.max_page_output_bytes == (output_limit or 64000)
     assert all(argv.count(option) == 1 for option in
-        ("--decision-output-root", "--context-delivery", "--codex-context-dir", "--turn-envelope",
+        ("--decision-output-root", "--context-delivery", "--codex-context-dir",
          "--max-page-output-bytes"))
     assert not list(tmp_path.iterdir())
 
@@ -795,7 +793,7 @@ def _replan_selection_hop(tmp_path, host):
             thread.start()
             code, selected = _run_cli(
                 registry, runtime, 'quota', 'should-run', *common,
-                '--todo-id', SELECTED_REPLAN_TODO_ID, '--turn-envelope',
+                '--todo-id', SELECTED_REPLAN_TODO_ID,
                 '--decision-output-root', str(capture_root),
                 '--decision-handoff-socket', str(endpoint), cwd=project)
             thread.join(10)
@@ -854,10 +852,25 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
     assert _heartbeat_receipt_count(runtime, TURN_ID) >= 1
 
 
+def test_composed_guard_refusal_keeps_turn_envelope_markdown():
+    from loopx.cli_commands.quota_presentation import _quota_renderer
+
+    payload = {
+        "schema_version": "loopx_turn_envelope_v1",
+        "ok": False,
+        "should_run": False,
+        "interaction_contract": {"cli_channel": {"spend_allowed_now": False}},
+    }
+    render = _quota_renderer(argparse.Namespace(quota_command="should-run"), failure=True)
+    output = render(payload)
+    assert output.startswith("# LoopX Turn Envelope\n")
+    assert json.loads(output.split("```json\n", 1)[1].rsplit("\n```", 1)[0]) == payload
+
+
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('delivery', ['off', 'on'])
+@pytest.mark.parametrize(('delivery', 'output_format'), [('off', 'json'), ('off', 'markdown'), ('on', 'json')])
 def test_failed_complete_composition_captures_only_recovery_evidence(
-    tmp_path, monkeypatch, capsys, provider, delivery,
+    tmp_path, monkeypatch, capsys, provider, delivery, output_format,
 ):
     from loopx.cli import main
     from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
@@ -897,9 +910,13 @@ def test_failed_complete_composition_captures_only_recovery_evidence(
 
     with monkeypatch.context() as fault:
         fault.setattr(turn_envelope, '_turn_envelope_result', interrupt_compose)
-        code = main(['--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json',
+        code = main(['--registry', str(registry), '--runtime-root', str(runtime), '--format', output_format,
             'quota', 'should-run', *binding, '--todo-id', TODO_ID, *delivery_args, '--decision-output-dir', str(capture)])
-    failure = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr().out
+    if output_format == 'markdown':
+        assert output.startswith('# LoopX Quota Should Run\n')
+        output = output.split('```json\n', 1)[1].rsplit('\n```', 1)[0]
+    failure = json.loads(output)
     assert code == 1 and failure['ok'] is False
     assert failure['error_code'] == 'quota_decision_transport_failed'
     assert len(captured) == 1 and captured[0]['ok'] is True
@@ -936,9 +953,8 @@ def test_failed_complete_composition_captures_only_recovery_evidence(
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('turn_envelope', [False, True])
 def test_native_recovery_failure_keeps_original_receipt_and_capture(
-    tmp_path, monkeypatch, capsys, provider, turn_envelope,
+    tmp_path, monkeypatch, capsys, provider,
 ):
     from loopx.cli import main
     from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
@@ -971,8 +987,6 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
         '--available-capability', 'shell', '--available-capability', 'filesystem_read',
         '--context-delivery', 'on', '--codex-context-dir', str(context),
         '--decision-output-root', str(captures)]
-    if turn_envelope:
-        args.append('--turn-envelope')
     code = main(args)
     failure = json.loads(capsys.readouterr().out)
     assert code == 1 and failure['ok'] is False

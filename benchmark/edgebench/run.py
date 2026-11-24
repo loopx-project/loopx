@@ -30,9 +30,8 @@ from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from benchmark.runtime.codex import TASK_ENTRIES
 from loopx.reasoning_effort import REASONING_EFFORTS
-from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker, profile_execution,
 )
@@ -124,11 +123,6 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--managed-run-json", type=Path,
                         help="Opt-in private binding for native terminal proof, consumed by the controller")
-    turn_view = parser.add_mutually_exclusive_group()
-    turn_view.add_argument("--turn-envelope", action="store_true",
-                        help="Historical Short envelope treatment; the worker requires a verified v0 quota response")
-    turn_view.add_argument("--complete-turn", action="store_true",
-                        help="Explicit complete v1 Turn contract with shared exact-Turn settlement; heartbeat workers only")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
@@ -165,8 +159,6 @@ def main(argv=None):
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--planning-horizon-goal", action=argparse.BooleanOptionalAction, default=None,
                         help="Heartbeat workers include the original Goal before selection by default; --no-planning-horizon-goal opts out")
-    parser.add_argument("--stride-strategy", choices=stride_strategy_options(),
-                        help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
     parser.add_argument("--checkpoint-controller-file", type=Path,
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-export-root", type=Path,
@@ -213,8 +205,7 @@ def main(argv=None):
     try:
         execution = profile_execution(
             args.worker, task_entry=args.task_entry,
-            context_delivery=args.context_delivery, turn_envelope=args.turn_envelope,
-            complete_turn=args.complete_turn, validation_command=args.validation_command_json,
+            context_delivery=args.context_delivery, validation_command=args.validation_command_json,
             native_child_limit=args.native_child_limit,
         )
     except ValueError as error:
@@ -271,8 +262,6 @@ def main(argv=None):
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
             ) and not execution.uses_loopx:
         parser.error("Replan cadence requires a heartbeat worker or turn-resume")
-    if args.stride_strategy is not None and not execution.uses_loopx:
-        parser.error("--stride-strategy requires a heartbeat worker or turn-resume")
     if args.planning_horizon_goal is not None and not execution.uses_loopx:
         parser.error("--planning-horizon-goal requires a heartbeat worker or turn-resume")
     checkpoint_request = None
@@ -462,8 +451,6 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          validation_command=execution.validation_command,
-                         turn_envelope=args.turn_envelope,
-                         **({"complete_turn": True} if args.complete_turn else {}),
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
                             if args.execution_observation is not None else {}),
@@ -476,8 +463,6 @@ def main(argv=None):
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          planning_horizon_goal=args.planning_horizon_goal,
-                         **({"stride_strategy": args.stride_strategy}
-                            if args.stride_strategy is not None else {}),
                          **({"checkpoint_request": checkpoint_request}
                             if checkpoint_request is not None else {}))
     if args.api_proxy_url:
@@ -548,7 +533,6 @@ def main(argv=None):
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": sforge_source if native_result_scope is not None else active_source_receipt(),
         "local_docker_images": local_docker_images,
-        **turn_envelope_receipt(explicit=args.turn_envelope, complete=args.complete_turn),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
            if args.execution_observation is not None else {}),
@@ -579,8 +563,8 @@ def main(argv=None):
            if agent.replan_after_todos is not None else {}),
         **({"planning_horizon_goal": agent.planning_horizon_goal}
            if agent.planning_horizon_goal is not None else {}),
-        **({"stride_strategy": args.stride_strategy}
-           if args.stride_strategy is not None else {}),
+        **({"stride_strategy": agent.stride_strategy}
+           if agent.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
         **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),

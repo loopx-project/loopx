@@ -41,7 +41,7 @@ def test_refresh_and_spend_survive_an_unrelated_invalid_review_receipt(tmp_path,
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path, provider=provider)
     rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
-        "--execution-stride-strategy", "off", "--execution-replan-after-turns", "6", "--execute")
+        "--execution-replan-after-turns", "6", "--execute")
     assert rc == 0, configured
     turn = "peer-isolation-turn"
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -125,20 +125,18 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
             runtime_root=runtime, registry=machine_registry, configuration=configuration,
             execute=True, expected_plan_revision=preview["plan_revision"],
         )
-    rc, configured = _run_cli(
-        registry,
-        runtime,
-        "configure-goal",
-        "--goal-id",
-        GOAL_ID,
-        # This matrix isolates cadence and typed-delta authority from the
-        # optional structured Stride decision. Inherited-on behavior is
-        # covered by machine-default and actual Stride followthrough tests.
-        "--execution-stride-strategy", "off", "--execute",
-        *(["--execution-replan-after-turns", str(threshold_override)]
-          if threshold_override else []),
-    )
-    assert rc == 0, configured
+    if threshold_override:
+        rc, configured = _run_cli(
+            registry,
+            runtime,
+            "configure-goal",
+            "--goal-id",
+            GOAL_ID,
+            "--execution-replan-after-turns",
+            str(threshold_override),
+            "--execute",
+        )
+        assert rc == 0, configured
     goal = json.loads(registry.read_text())["goals"][0]
     if threshold_override:
         assert goal["execution_profile"]["replan_after_effective_turns"] == threshold_override
@@ -333,14 +331,15 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     assert authoring["schema_version"] == "goal_vision_replan_contract_v0"
     if threshold_override is None and device_count is None:
         rc, envelope = _run_cli(
-            registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
+            registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", "effective-turn-next",
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
-        assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
-        assert envelope["writeback"]["settlement_plan"] == plan
+        env_contract = envelope["replan_action_packet"]["writeback_contract"]
+        assert env_contract["vision_authoring_ref"] == contract["vision_authoring_ref"]
+        assert envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     vision_path = tmp_path / "periodic-vision.json"
     vision = json.loads(json.dumps(authoring["minimal_example"]))
     vision["vision_patch"] = {"acceptance_summary": "Original acceptance remains open."}
@@ -348,6 +347,9 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
                        "prior_assumption": "The existing method remains viable.",
                        "observed_reality": "Current validation supports continuing it.",
                        "retained": ["Existing method and open Todo"], "evidence_refs": []}
+    vision["stride_decision"] = json.loads(
+        json.dumps(selected["replan_action_packet"]["stride_control"]["minimal_example"])
+    )
     command = shlex.split(selected["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
     command = command[command.index("refresh-state"):]
     command[command.index("--agent-vision-json") + 1] = str(vision_path)
@@ -355,7 +357,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     vision_path.write_text(json.dumps(vision))
     rc, rejected = _run_cli(registry, runtime, *command)
     assert rc == 1 and rejected["appended"] is False, rejected
-    assert "typed semantic delta" in rejected["error"], rejected
+    assert "evidence" in rejected["error"].lower(), rejected
     vision["path_delta"]["evidence_refs"] = ["evidence:method-validation"]
     vision_path.write_text(json.dumps(vision))
     rc, accepted = _run_cli(registry, runtime, *command)
@@ -416,8 +418,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         assert code == expected_code, json.dumps(result, indent=2)
         return result
 
-    call("configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2",
-         "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    call("configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2", "--execute")
     for index in range(2):
         turn = f"stride-cadence-{index}"
         guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -768,7 +769,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     context = project_replan_context(goal_id=GOAL_ID, agent_id=AGENT_ID,
         runs=load_index_snapshot(runtime / "goals" / GOAL_ID / "runs/index.jsonl",
                                  include_artifact_status=False).records,
-        history_newest_first=False, stride_strategy="evidence_conditioned_v1")
+        history_newest_first=False)
     assert any(row["coverage_ref"] == status_run["progress_observation"]["fingerprint"]
                for row in context["decision_followthrough"]["observations"])
     pending = context["decision_followthrough"]["work_result_use"]

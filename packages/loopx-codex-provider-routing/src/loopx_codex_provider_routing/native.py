@@ -246,25 +246,31 @@ class NativeAccounts:
         return (revision, slot) if isinstance(revision, str) and revision and isinstance(slot, str) and slot else None
 
     def steward_route(self, *, codex_home: Path, primary: str, pool: list[str], current: str,
-                      primary_capacity: dict | None, blocked_primary: dict | None = None, model: str | None = None) -> dict:
+                      primary_capacity: dict | None, fallback_capacity: dict | None = None,
+                      blocked_primary: dict | None = None, model: str | None = None) -> dict:
         """Observe the existing account owner; never start a second watcher."""
         state = self._load()
         adapter = state.get("adapter")
         if adapter and Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve():
             return {"endpoint": None, "blocked_primary": blocked_primary}
-        api_ready = bool(self.api_keys().candidates(model or "")) if state["policy"].get("steward_api_role") == "primary" else False
-        if api_ready:
+        policy_cfg = state.get("policy") or {}
+        role = policy_cfg.get("steward_api_role")
+        api_enabled = role == "primary" or (role != "disabled" and policy_cfg.get("api_fallback") is True)
+        api_ready = bool(self.api_keys().candidates(model or "")) if api_enabled else False
+        if role == "primary" and api_ready:
             return policy({"operation": "steward-route", "now": self.clock(), "primary": primary,
                 "pool": pool, "current": current, "native": self._projection(state), "api_ready": True,
-                "primary_capacity": primary_capacity, "blocked_primary": blocked_primary})
-        if primary_capacity is None:
+                "primary_capacity": primary_capacity, "fallback_capacity": fallback_capacity,
+                "blocked_primary": blocked_primary})
+        if primary == "antigravity" and primary_capacity is None:
             return {"endpoint": None, "blocked_primary": blocked_primary}
-        if state["policy"].get("enabled") is not True or not adapter:
+        if policy_cfg.get("enabled") is not True or not adapter:
             return {"endpoint": None, "blocked_primary": blocked_primary}
         native = self.transport(adapter, "status")
         return policy({"operation": "steward-route", "now": self.clock(),
             "primary": primary, "pool": pool, "current": current,
-            "native": self._projection(state, native), "primary_capacity": primary_capacity,
+            "native": self._projection(state, native), "api_ready": api_ready,
+            "primary_capacity": primary_capacity, "fallback_capacity": fallback_capacity,
             "blocked_primary": blocked_primary})
 
     def model_transport(self, *, codex_home: Path, consumer: str, model: str | None = None) -> dict | None:

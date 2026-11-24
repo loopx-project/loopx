@@ -6,7 +6,11 @@ import logging
 import pytest
 
 from loopx.capabilities.native_chat.steward_monitor import pump_steward_monitors
-from loopx.capabilities.native_chat.steward_turn import StewardTurnHost, _same_report_validator_command
+from loopx.capabilities.native_chat.steward_turn import (
+    StewardTurnHost,
+    _same_report_validator_command,
+    native_steward_client_id,
+)
 from loopx.capabilities.periodic_report import cadence_runtime
 from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
 from loopx.capabilities.periodic_report.incremental import read_periodic_report_publication_cursor
@@ -171,3 +175,431 @@ def test_owner_cancel_retires_mid_turn_failed_report_without_editorial_response_
     assert transport.steward_reports.reconcile() == 1
     cursor = read_periodic_report_publication_cursor(runtime_root=reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"])
     assert cursor["covered_until"] == old["window"]["next_due_at"]
+
+
+def test_selection_recovery_admission_resume_tolerates_validator_python_upgrade(
+    steward, tmp_path, monkeypatch, caplog,
+):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.configure_goal import configure_goal
+    from test_native_steward_reports import _REPORT_MODEL_SOURCE
+
+    store, runtime, _, transport, binding, _, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    bad_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {"vision_summary": "Keep reporting.", "acceptance_summary": "Validate full report."},
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["fixture:evidence"],
+        },
+    }
+    bad_outcome = {
+        "result_kind": "replan_required",
+        "classification": "outcome_gap_without_blocked_fields",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_gap",
+        "work_evidence": ["Observed gap"],
+        "validation_evidence": ["Validated check"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(bad_vision),
+        "summary": "Missing blocked fields trigger host_result_contract validation failure.",
+        "next_action": "Clear replan before resuming report.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(bad_outcome)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    probe = finish(runtime, pump_steward_monitors(runtime)[0])
+
+    # Simulate host Python interpreter path upgrade on both the original refused turn and probe turn.
+    for row_id in (rejected["turn_id"], probe["turn_id"]):
+        row = store.load_turn(sid, row_id)
+        assert row is not None
+        req = json.loads(json.dumps(row["loopx_request"]))
+        req["validation_command"][0] = "/tmp/previous-release/bin/python"
+        row["loopx_request"] = req
+        store._turn_path(sid, row_id).write_text(json.dumps(row))
+
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    runtime._steward_monitor_next_check.clear()
+    with caplog.at_level(logging.WARNING):
+        resumed = pump_steward_monitors(runtime)
+    assert "An original steward report is unavailable" not in caplog.text
+    assert len(resumed) == 1
+    expected_client_id = native_steward_client_id(
+        actor,
+        rejected["loopx_request"]["turn_instance_id"] + ".admission-resume",
+    )
+    assert resumed[0]["client_turn_id"] == expected_client_id
+    done = finish(runtime, resumed[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"]
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == done["loopx_request"]["todo_id"])
+    assert task["status"] == "done"
+
+
+def test_steward_report_normalizes_profile_minimum_scale_shorthand(steward, tmp_path, monkeypatch):
+    _, runtime, _, transport, binding, _, _ = steward
+    sid, _, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    install_model(steward, tmp_path, sid)
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        helper.read_text(encoding="utf-8").replace(
+            '"delivery_batch_scale": "single_surface"',
+            '"delivery_batch_scale": "multi_surface_or_implementation"',
+        ),
+        encoding="utf-8",
+    )
+
+    done = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"]
+
+
+def test_frozen_report_recovers_host_result_contract_failure_without_model_call(
+    steward, tmp_path, monkeypatch, caplog,
+):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    import loopx.capabilities.native_chat.steward_turn as steward_turn_mod
+    from loopx.configure_goal import configure_goal
+
+    _, runtime, _, transport, binding, _, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        helper.read_text(encoding="utf-8").replace(
+            '"delivery_batch_scale": "single_surface"',
+            '"delivery_batch_scale": "multi_surface_or_implementation"',
+        ),
+        encoding="utf-8",
+    )
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    runtime._steward_monitor_next_check.clear()
+    with monkeypatch.context() as unnormalized:
+        unnormalized.setattr(
+            steward_turn_mod,
+            "_normalize_report_kernel_candidate",
+            lambda candidate: {k: v for k, v in candidate.items() if k != "editorial_response"} | {
+                "result_kind": "validated_completion",
+            },
+        )
+        resumed = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = resumed["response"]["native_loopx"]
+    assert native["status"] == "failed"
+    assert native["result_kind"] == "validation_failed"
+    assert native["validation_stage"] == "host_result_contract"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    assert (attempt_directory(reports.root, window) / "private-generation.json").is_file()
+
+    model_calls = steward[5].read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    with caplog.at_level(logging.WARNING):
+        assert not pump_steward_monitors(runtime)
+    assert "An original steward report is unavailable" not in caplog.text
+    assert steward[5].read_bytes() == model_calls
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"]
+    task = next(
+        row for row in StewardMonitor(runtime).todos(actor)
+        if row["todo_id"] == resumed["loopx_request"]["todo_id"]
+    )
+    assert task["status"] == "done"
+
+
+def test_steward_antigravity_report_timeout_recovers_once_in_isolated_cascade_without_codex_spawn(
+    steward, tmp_path, monkeypatch, caplog,
+):
+    import contextlib
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import logging
+    import re
+    import threading
+    from typing import Any
+    from test_chat_manager_model_adoption import configure
+    from test_native_steward_private import finish
+    from test_native_steward_reports import configured, fake_report_model
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor, pump_steward_monitors
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.chat_manager import steward_machine_defaults
+
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    store, runtime, _, transport, binding, capture, _ = steward
+    owner = binding["binding_id"]
+    configure(runtime.coordination_runtime_root, model="gpt-6.2-sol", effort="xhigh", endpoint="codex", policy="flexible")
+    defaults = steward_machine_defaults(runtime)
+    session = store.load_session(sid)
+    orig_thread = session["upstream_thread_id"]
+    turn_switch, _ = store.create_turn(sid, client_turn_id="agy-switch", message="Switch steward to Antigravity")
+    store.update_turn(sid, turn_switch["turn_id"], status="queued")
+    store.update_session(sid, status="ready", active_turn_id=turn_switch["turn_id"], agent_model_id="gpt-6.2-sol")
+    session = store.load_session(sid)
+    allocation = {
+        "schema_version": "manager_executor_allocation_v0",
+        "selection_policy": "flexible",
+        "allocation_reason": "flexible_availability_fallback",
+        "executor_endpoint": "antigravity",
+        "executor_endpoint_source": "flexible_pool",
+        "executor_endpoint_default_reason": "",
+        "configured_endpoint": "codex",
+        "eligible_endpoints": ["codex", "antigravity"],
+        "configuration_revision": defaults["configuration_revision"],
+        "available": True,
+        "model": "gemini-4-carbon-high",
+        "model_source": "vendor_default",
+        "reasoning_effort": "high",
+        "configured_model": "gpt-6.2-sol",
+        "configured_reasoning_effort": "xhigh",
+    }
+    store.update_session(
+        sid,
+        status="ready",
+        active_turn_id=turn_switch["turn_id"],
+        expected_upstream_thread_id=orig_thread,
+        agent_id="antigravity",
+        executor_endpoint_id="antigravity",
+        adapter_kind="antigravity_ls",
+        upstream_mode="default",
+        upstream_thread_id="ag-cascade-1",
+        agent_model_id="gemini-4-carbon-high",
+        agent_reasoning_effort="high",
+        manager_executor_allocation=allocation,
+        upstream_context_history=[
+            *(session.get("upstream_context_history") or []),
+            {
+                "thread_id": orig_thread,
+                "manager_context_version": session.get("manager_context_version"),
+                "agent_id": "codex",
+                "agent_model_id": "gpt-6.2-sol",
+            },
+        ],
+    )
+    store.update_turn(sid, turn_switch["turn_id"], status="completed")
+    store.update_session(sid, active_turn_id=None)
+    if sid in runtime.adapters:
+        runtime.adapters.pop(sid).close_session()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            method = self.path.rsplit("/", 1)[-1]
+            if method == "GetCascadeModelConfigData":
+                resp = {
+                    "clientModelConfigs": [{
+                        "modelId": "gemini-4-carbon-high",
+                        "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                        "quotaInfo": {"remainingFraction": 0.9},
+                    }]
+                }
+            elif method == "GetUserStatus":
+                resp = {
+                    "userStatus": {
+                        "email": "synthetic@invalid.example",
+                        "cascadeModelConfigData": {
+                            "clientModelConfigs": [{
+                                "modelId": "gemini-4-carbon-high",
+                                "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M427"},
+                                "quotaInfo": {
+                                    "remainingFraction": 0.9,
+                                    "resetTime": "2030-01-01T00:00:00Z",
+                                },
+                            }]
+                        },
+                    }
+                }
+            elif method == "GetCascadeTrajectory":
+                resp = {
+                    "trajectory": {"cascadeId": body["cascadeId"]},
+                    "status": "CASCADE_RUN_STATUS_IDLE",
+                    "numTotalSteps": 4,
+                }
+            else:
+                raise AssertionError(method)
+            payload = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "synthetic-csrf-token")
+
+    def forbid_codex(*_args, **_kwargs):
+        raise AssertionError("CodexAppServerAdapter must not be called for agy_turn_* recovery")
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(forbid_codex))
+
+    def fake_start(cls, *, work_dir, objective, resume_thread_id=None, history=None,
+                   runtime_profile="restricted", team_plan_context=None, executor_model=None,
+                   env=None, idle_timeout_sec=None, hard_timeout_sec=None):
+        return cls(
+            work_dir=work_dir,
+            objective=objective,
+            cascade_id=resume_thread_id or "ag-cascade-1",
+            ls_url=f"http://127.0.0.1:{server.server_port}",
+            csrf_token="synthetic-csrf-token",
+            model_id=(executor_model or {}).get("model") or "gemini-4-carbon-high",
+            model_placeholder="MODEL_PLACEHOLDER_M427",
+            reasoning_effort="high",
+            runtime_profile=runtime_profile,
+            idle_timeout_sec=idle_timeout_sec,
+            hard_timeout_sec=hard_timeout_sec,
+        )
+
+    turns_seen: list[dict[str, Any]] = []
+
+    def fake_turn(self, message, event_sink=None, **kwargs):
+        with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
+            turns_seen.append({
+                "isolated_cascade": kwargs.get("isolated_cascade"),
+                "idle_timeout_sec": kwargs.get("idle_timeout_sec"),
+                "message": message,
+            })
+            if len(turns_seen) == 1:
+                if event_sink is not None:
+                    event_sink("turn.started", {
+                        "threadId": "ag-cascade-1",
+                        "upstream_turn_id": "agy_turn_timeout_1",
+                    })
+                    event_sink("agent.phase", {
+                        "method": "native/timeout",
+                        "phase": "waiting_model_output",
+                        "summary": "Antigravity produced no output for 300s",
+                    })
+                raise CodexChatAgentError(
+                    "Antigravity produced no output for 300s",
+                    gate=None,
+                    error_code="response_timeout",
+                )
+            match = re.search(r'"editorial_request_path":\s*"([^"\n]+)"', message)
+            assert match is not None
+            if event_sink is not None:
+                event_sink("turn.started", {
+                    "threadId": "ag-isolated-2",
+                    "upstream_turn_id": "agy_turn_isolated_2",
+                })
+                event_sink("turn.native_result", {
+                    "thread_id": "ag-isolated-2",
+                    "upstream_turn_id": "agy_turn_isolated_2",
+                    "text": "isolated report ok",
+                })
+            body = fake_report_model({"input": [{"text": message}]})
+            return {"message": body}
+
+    monkeypatch.setattr(AntigravityAdapter, "start", classmethod(fake_start))
+    monkeypatch.setattr(AntigravityAdapter, "start_turn", fake_turn)
+
+    try:
+        before_codex = capture.read_bytes()
+        original = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert original["status"] == "completed"
+        assert original["response"]["native_loopx"]["result_kind"] == "host_failure"
+        assert original["upstream_turn_id"] == "agy_turn_timeout_1"
+        assert not reports.health(owner)["publication_verified"]
+
+        runtime._steward_monitor_next_check.clear()
+        with caplog.at_level(logging.WARNING):
+            dispatched = pump_steward_monitors(runtime)
+        assert "An original steward report is unavailable" not in caplog.text
+        assert len(dispatched) == 1
+        resumed = finish(runtime, dispatched[0])
+        assert resumed["status"] == "completed", resumed
+        assert resumed["loopx_request"]["turn_instance_id"].endswith(".timeout-recovery")
+        assert resumed["response"]["native_loopx"].get("status") == "committed", resumed
+        assert turns_seen[0]["isolated_cascade"] is True
+        assert turns_seen[1]["isolated_cascade"] is True
+        assert turns_seen[0]["idle_timeout_sec"] == 300.0
+        assert turns_seen[1]["idle_timeout_sec"] == 300.0
+        assert capture.read_bytes() == before_codex
+        assert transport.steward_reports.reconcile() == 1
+        assert reports.health(owner)["publication_verified"]
+
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        task = next(
+            row for row in StewardMonitor(runtime).todos(actor)
+            if row["todo_id"] == resumed["loopx_request"]["todo_id"]
+        )
+        assert task["status"] == "done"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

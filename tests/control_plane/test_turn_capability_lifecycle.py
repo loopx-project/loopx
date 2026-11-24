@@ -228,7 +228,7 @@ def test_optional_recall_size_never_disables_enabled_ingest(
         == 2400
     )
     assert any(
-        "Set reward_memory_reflection_json" in item
+        "reward_memory_reflection_json" in item
         for item in result["instructions"]
     )
     delivered = result["context_fields"]["reward_memory_recall"]

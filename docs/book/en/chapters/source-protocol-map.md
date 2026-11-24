@@ -474,7 +474,7 @@ Before entering the source, confirm these hold on their own:
 1. **The owner of a rule is the module that decides legal transitions, not the module that first prints words about it.** If you cannot name the protected invariant, the change is not yet located.
 2. **A PR description carries one complete causal chain: source, invariant, decision, projection or effect, receipt, validation.** A slice that can only list function names cannot be reviewed.
 3. **Documents describe responsibility ownership; code describes current behavior.** When they conflict, pick the authority by conflict type and make this PR update the other side.
-4. Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
+4. **Code under `loopx/capabilities/<name>/` does not prove the Capability is shipped.** Registration plus a real caller contract is the release test; verify with `loopx capability list --format json`.
 5. **Placement precedes implementation.** The capability id, provider id, and built-in or extension-delivered choice come with a written reason before the first line of code.
 6. **Tasks come from public entrypoints.** Public Contributor Tasks, Issues, and fixtures are the only source of work you can participate in; live active state and maintainer-local judgment are not.
 

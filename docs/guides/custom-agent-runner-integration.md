@@ -81,7 +81,8 @@ CLI health and workflow delivery are separate checks. The custom host must
 deliver `loopx-project`, `loopx-pr-program`, `loopx-pr-review`,
 `loopx-doc-registry`, `loopx-benchmark`, and `loopx-self-repair` from the same
 LoopX revision through its own skill manifest or equivalent prompt injection.
-`loopx-benchmark` is task-triggered for LoopX-managed experiments; When the current goal enables
+`loopx-benchmark` is task-triggered for LoopX-managed experiments; loading it
+does not grant benchmark runner or private-evidence authority. When the current goal enables
 `change_quality_qualification`, the onboarding packet also lists
 `loopx-change-quality` as an active project skill; deliver that workflow or its
 equivalent self-contained prepare-packet instructions. Then read back the
@@ -92,7 +93,7 @@ skill does not activate it; the current goal policy controls activation.
 If the host has no skill system, inject the equivalent `SKILL.md` instructions
 and keep one short re-entry instruction that tells the Agent to:
 
-1. read a fresh JSON quota packet for the current goal and Agent;
+1. read a fresh JSON Complete Turn for the current goal and Agent;
 2. follow `interaction_contract`, `goal_boundary`, and the selected todo;
 3. perform one bounded action and validate the real postcondition;
 4. write the result through LoopX; and
@@ -103,7 +104,9 @@ todo list, cadence, or project policy.
 
 ## Run One Self-Driven Tick
 
-Use JSON for the machine path:
+The current JSON entry point defaults to Complete Turn v1. The published
+`v2.4.0` tag delivers the historical quota packet. Read the current work
+instructions from `interaction_contract` in either version.
 
 ```bash
 loopx --format json \
@@ -163,8 +166,8 @@ cat ./guard-001/decision.json
 
 The parent directory must exist; LoopX creates the private capture directory.
 Check command success, `ok`, and Goal/Agent/Turn identity before consuming the
-saved decision. Read all required hooks, admission and settlement instructions;
-capture does not require `--turn-envelope` or change the displayed contract.
+saved decision. Current JSON guards deliver `loopx_turn_envelope_v1` by default.
+Read all required hooks, admission and settlement instructions in that decision.
 Selection or lease revalidation still needs a fresh guard and a new directory.
 After a late capture failure, inspect the existing Turn receipt before retrying.
 See the [capture contract](../reference/protocols/turn-envelope-v0.md).

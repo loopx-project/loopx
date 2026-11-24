@@ -75,7 +75,7 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
                 f"- status: `{lease.get('status')}`",
                 f"- expires_at: `{lease.get('expires_at')}`",
                 f"- write_scopes: `{', '.join(lease.get('write_scopes') or [])}`",
-                f"- write_repository: `{lease.get('write_repository') or 'unknown (conservative overlap)'}`",
+                f"- write_repository: `{lease.get('write_repository') or 'unknown'}`",
             ]
         )
     advisories = payload.get("integration_overlap_advisories")

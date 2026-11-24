@@ -18,7 +18,7 @@ from ...agent_registry import registered_agent_ids_from_registry
 from ...command_invocation import loopx_cli_argv
 from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
-from ..runtime.time import now_local_iso as now_local
+from ..runtime.time import now_local_iso
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     EffectRuntimeResponseAmbiguous,
@@ -37,9 +37,6 @@ LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS = 15.0
 LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = (
     "loopx_local_coordination_todo_claim_request_v1"
 )
-LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2"
-LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v3"
-LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v4"
 LOCAL_COORDINATION_TODO_CLAIM_METHOD = "coordination.local_authority.todo_claim"
 
 
@@ -192,17 +189,30 @@ def claim_canonical_todo_if_promoted(
     actor_agent_id: str | None,
     dry_run: bool,
     operation_id: str | None = None,
-    expected_provider_revision: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    ttl_seconds: int | None = None,
     manage_execution: bool = False,
+    expected_provider_revision: str | None = None,
+    expected_registry_sha256: str | None = None,
+    routing_registry_witness: dict[str, str] | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
-    registry_sources: list[dict[str, str]] | None = None,
-    admit_before: str | None = None,
 ) -> dict[str, Any]:
     """Route a claim to the canonical TypeScript transaction owner."""
-    with authority_registry_source(registry_path) as registry_source:
+    reviewed = expected_provider_revision is not None or expected_registry_sha256 is not None
+    if reviewed and not (manage_execution and expected_provider_revision and expected_registry_sha256):
+        raise ValueError("A reviewed managed claim requires both canonical revision and registry digest")
+    if ttl_seconds is not None and (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, int)
+        or ttl_seconds <= 0
+        or ttl_seconds > 86400
+    ):
+        raise ValueError("ttl seconds must be between 1 and 86400")
+    if ttl_seconds is not None and task_lease_idempotency_key is None and not manage_execution:
+        raise ValueError("ttl_seconds requires managed execution or task_lease_idempotency_key")
+    with authority_registry_source(registry_path, routing_registry_witness=routing_registry_witness) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     # This is only a candidate location. The lease owner observes physical
     # isolation and the current canonical scopes before granting execution.
@@ -211,10 +221,9 @@ def claim_canonical_todo_if_promoted(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
             "schema_version": (
-                LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA if admit_before is not None else
-                LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA if manage_execution else
-                LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
-                if registry_sources is None else LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA
+                "loopx_local_coordination_todo_claim_request_v3" if reviewed
+                else "loopx_local_coordination_todo_claim_request_v2" if manage_execution
+                else LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
             ),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
@@ -224,27 +233,33 @@ def claim_canonical_todo_if_promoted(
             "actor_agent_id": actor_agent_id,
             "registered_agents": registered,
             "registry_source": registry_source,
-            **({"registry_sources": registry_sources} if registry_sources is not None else {}),
-            **({"admit_before": admit_before} if admit_before is not None else {}),
             "operation_id": (
                 operation_id
                 if operation_id is not None
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
             **({"manage_execution": True} if manage_execution else {}),
+            **(
+                {"ttl_seconds": ttl_seconds}
+                if task_lease_idempotency_key is None and ttl_seconds is not None
+                else {}
+            ),
+            **(
+                {"expected_provider_revision": expected_provider_revision,
+                 "expected_registry_sha256": expected_registry_sha256}
+                if reviewed else {}
+            ),
             **({"write_worktree": str(worktree)} if worktree is not None else {}),
-            **({"expected_provider_revision": expected_provider_revision}
-               if expected_provider_revision is not None else {}),
             "lease_request": (
                 {
                     "idempotency_key": task_lease_idempotency_key,
                     "expected_version": task_lease_expected_version,
-                    "ttl_seconds": None,
+                    "ttl_seconds": ttl_seconds,
                 }
                 if task_lease_idempotency_key is not None
                 else None
             ),
-            "observed_at": now_local(),
+            "observed_at": now_local_iso(timespec="milliseconds"),
             "dry_run": dry_run,
         },
         timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,

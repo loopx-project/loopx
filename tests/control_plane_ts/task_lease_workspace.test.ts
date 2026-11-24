@@ -145,34 +145,34 @@ function request(other: unknown = {...workspace, worktree: "4".repeat(64)}) {
     other_leases: [{todo_id: "todo_b", active: true, effective: true, write_repository: repo as string | null, write_scopes: ["src/**"], write_workspace: other}],
     command: {owner: "agent-a", idempotency_key: "work-a", ttl_seconds: 60, expected_version: 0, write_scopes: ["src/main.ts"], write_workspace: workspace}};
 }
-test("verified code-edit worktrees treat file overlaps as integration advisories", () => {
+test("verified code-edit worktrees enforce same-checkout exclusivity and admit separate worktrees", () => {
   const result = evaluateTaskLeaseAcquireDecision(request());
   assert.equal(result.outcome, "apply");
-  assert.deepEqual(result.overlap_advisory_indexes, [0]);
+  assert.equal(result.overlap_advisory_indexes, undefined);
   assert.deepEqual(result.next_lease?.write_workspace, workspace);
   for (const other of [null, {...workspace, host: "5".repeat(64)},
     {...workspace, common_directory: "6".repeat(64), worktree: "7".repeat(64)}]) {
     const input = request(other);
     if (other === null) input.other_leases[0].write_repository = null;
-    const advisory = evaluateTaskLeaseAcquireDecision(input);
-    assert.equal(advisory.outcome, "apply");
-    assert.deepEqual(advisory.overlap_advisory_indexes, [0]);
+    const separate = evaluateTaskLeaseAcquireDecision(input);
+    assert.equal(separate.outcome, "apply");
+    assert.equal(separate.overlap_advisory_indexes, undefined);
     assert.deepEqual(input.other_leases[0].write_workspace, other);
   }
   for (const other of [workspace, {...workspace, common_directory: "6".repeat(64)}]) {
-    assert.equal(evaluateTaskLeaseAcquireDecision(request(other)).code, "write_scope_conflict");
+    assert.equal(evaluateTaskLeaseAcquireDecision(request(other)).code, "workspace_lease_conflict");
     assert.equal(sameLeaseCheckout(workspace, other), true);
   }
 });
-test("ordinary exclusive grants retain overlap rejection without worktree mode", () => {
+test("unrelated Todos without a shared physical checkout are not blocked on write_scopes", () => {
   for (const other of [null, workspace]) {
     const input = request(other);
     const exclusive = {...input, command: {...input.command, write_workspace: null}};
-    assert.equal(evaluateTaskLeaseAcquireDecision(exclusive).code, "write_scope_conflict");
+    assert.equal(evaluateTaskLeaseAcquireDecision(exclusive).outcome, "apply");
   }
 });
 
-test("lexical scope aliases cannot bypass an ordinary exclusive lease", () => {
+test("lexical scope aliases do not block separate Todo leases while keeping stored spellings", () => {
   const now = new Date("2030-01-01T00:00:00Z");
   const projection = indexCoordinationProjection({
     goal_id: "goal-a",
@@ -207,12 +207,12 @@ test("lexical scope aliases cannot bypass an ordinary exclusive lease", () => {
     },
   });
 
-  assert.equal(decision.code, "write_scope_conflict");
+  assert.equal(decision.code, "lease_acquire");
   assert.deepEqual(facts.other_leases[0].write_scopes, ["src/main.ts"]);
   assert.deepEqual(projection.leases.get("todo_holder")?.write_scopes, ["src/./main.ts"]);
 });
 
-test("malformed retained scopes conservatively conflict without rewriting history", () => {
+test("malformed retained scopes stay readable without blocking distinct Todos", () => {
   for (const holderScope of ["../legacy", "src\\legacy"]) {
     const now = new Date("2030-01-01T00:00:00Z");
     const projection = indexCoordinationProjection({
@@ -248,7 +248,7 @@ test("malformed retained scopes conservatively conflict without rewriting histor
       },
     });
 
-    assert.equal(decision.code, "write_scope_conflict");
+    assert.equal(decision.code, "lease_acquire");
     assert.deepEqual(facts.other_leases[0].write_scopes, ["**"]);
     assert.deepEqual(projection.leases.get("todo_holder")?.write_scopes, [holderScope]);
   }
@@ -386,7 +386,7 @@ test("a known same-checkout collision wins over changed repository metadata", ()
   const other = {...workspace, repository: "git:github.com/example/other"};
   const input = request(other);
   input.other_leases[0].write_repository = other.repository;
-  assert.equal(evaluateTaskLeaseAcquireDecision(input).code, "write_scope_conflict");
+  assert.equal(evaluateTaskLeaseAcquireDecision(input).code, "workspace_lease_conflict");
 });
 test("worktree identity cannot weaken Todo ownership or repository identity", () => {
   const input = request();
@@ -424,7 +424,7 @@ test("PostgreSQL retains worktree identity and overlap receipts across reload", 
     assert.equal(legacy.status, "applied");
     const first = await executeCanonicalTaskLeaseAcquire(store, command);
     assert.equal(first.status, "applied");
-    assert.equal((first.integration_overlap_advisories as unknown[]).length, 1);
+    assert.equal(first.integration_overlap_advisories, undefined);
     const reopened = new PostgreSqlAuthorityStore(database, options);
     const replay = await executeCanonicalTaskLeaseAcquire(reopened, command);
     assert.deepEqual(replay.original_receipt, first.original_receipt);
@@ -432,7 +432,7 @@ test("PostgreSQL retains worktree identity and overlap receipts across reload", 
     const second = await executeCanonicalTaskLeaseAcquire(reopened, {...command, todo_id: "todo_beta", idempotency_key: "beta",
       write_workspace: {...workspace, worktree: "4".repeat(64)}});
     assert.equal(second.status, "applied");
-    assert.equal((second.integration_overlap_advisories as unknown[]).length, 2);
+    assert.equal(second.integration_overlap_advisories, undefined);
     const retained = await executeCanonicalTaskLeaseAcquire(reopened, legacyCommand);
     assert.deepEqual(retained.original_receipt, legacy.original_receipt);
     assert.deepEqual(retained.lease, legacy.lease);

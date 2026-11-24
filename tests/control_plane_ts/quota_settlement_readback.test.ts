@@ -1944,7 +1944,10 @@ test(`${kind} no-spend closeout retains exact receipt identity and historical de
     const debited = await readQuotaSettlement(request(spent));
     assert.equal((debited.spend as any).payload.ok, true);
     assert.equal((debited.progress as any).closeout_kind, undefined);
-    assert.equal((await readQuotaSettlement(request(malformed))).replay_phase, "open");
+    const rejected = await readQuotaSettlement(request(malformed));
+    assert.equal((rejected.progress as any).state, "spend_required");
+    assert.equal((rejected.progress as any).closeout_kind, undefined);
+    assert.equal(rejected.replay_phase, "settlement_pending");
   } finally {
     await Promise.all([missing, missingWriteback, spent, malformed].map(path =>
       rm(path, { recursive: true, force: true })));
@@ -2638,4 +2641,137 @@ test("history retry qualification preserves its original aware clock and exact e
     assert.deepEqual((await read([bounded], "2026-01-01T00:00:30Z")).active_retry_indexes, expected);
   }
   await assert.rejects(read([run], 123), /observation clock/);
+});
+
+
+test("pending closeout with explicit turn and todo still names an owed prior Turn", async () => {
+  const runtimeRoot = await owedPriorTurnFixture();
+  try {
+    const pending = await readQuotaSettlement(
+      request(runtimeRoot, {pending_closeout: true, turn_instance_id: turnId, todo_id: todoId}),
+    );
+    const failure = (pending.identity as any).result.failure;
+    assert.equal(failure.kind, "receipt_unbound");
+    assert.match(failure.reason, /carries no settlement binding yet/);
+    assert.match(
+      failure.reason,
+      new RegExp(`earlier Turn owes its closeout \\(turn_instance_id ${priorTurnId}, todo ${todoId}`),
+    );
+    assert.doesNotMatch(failure.reason, new RegExp(`--turn-instance-id ${turnId} --todo-id`));
+
+    const originalOnly = await readQuotaSettlement(
+      request(runtimeRoot, {resolve_original_binding: true, todo_id: null}),
+    );
+    assert.equal(
+      (originalOnly.identity as any).result.failure.reason,
+      "the original Turn guard has no settlement binding",
+    );
+  } finally {
+    await rm(runtimeRoot, {recursive: true, force: true});
+  }
+});
+
+test("readback exposes matching supersede_event when records are included", async () => {
+  const runtimeRoot = await fixture();
+  try {
+    const eventsPath = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+    const existing = await readFile(eventsPath, "utf8");
+    const supersede = {
+      schema_version: "loopx_rollout_event_v0",
+      event_id: "event-supersede-1",
+      goal_id: goalId,
+      agent_id: agentId,
+      todo_id: todoId,
+      run_id: turnId,
+      event_kind: "todo_supersede",
+      status: "done",
+      recorded_at: "2026-06-01T00:05:00.000Z",
+      details: {
+        goal_id: goalId,
+        agent_id: agentId,
+        todo_id: todoId,
+        turn_instance_id: turnId,
+        settlement_effect_id: settlementIdentityPayload(identity).effect_id,
+      },
+    };
+    await writeFile(eventsPath, existing + JSON.stringify(supersede) + "\n", "utf8");
+    const readback = await readQuotaSettlement(
+      request(runtimeRoot, {include_record_bodies: true}),
+    );
+    assert.equal((readback.supersede_event as any)?.event_kind, "todo_supersede");
+    assert.equal((readback.supersede_event as any)?.run_id, turnId);
+    assert.equal((readback.supersede_event as any)?.todo_id, todoId);
+  } finally {
+    await rm(runtimeRoot, {recursive: true, force: true});
+  }
+});
+
+test("default verified writeback without boundary or completion enters settlement_pending until spend settles", async t => {
+  const missingRequiredCheckpoint = {
+    schema_version: "vision_checkpoint_v0",
+    agent_id: agentId,
+    decision: "missing_required",
+    satisfied: false,
+    delivery_boundary: "semantic_closeout",
+    triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_progress"}],
+  };
+  const cases: {
+    name: string;
+    options: Parameters<typeof fixture>[0];
+    removeEvent?: string;
+    expectedProgress: string;
+    expectedReplayPhase: string;
+  }[] = [
+    {
+      name: "default writeback without checkpoint stays settlement_pending",
+      options: {writeback: true, spend: false},
+      expectedProgress: "spend_required",
+      expectedReplayPhase: "settlement_pending",
+    },
+    {
+      name: "default writeback with missing_required semantic checkpoint stays settlement_pending",
+      options: {writeback: true, spend: false, visionCheckpoint: missingRequiredCheckpoint},
+      expectedProgress: "spend_required",
+      expectedReplayPhase: "settlement_pending",
+    },
+    {
+      name: "spend run without quota_spend receipt stays settlement_pending",
+      options: {writeback: true, spend: true, visionCheckpoint: missingRequiredCheckpoint},
+      removeEvent: "quota_spend",
+      expectedProgress: "spend_receipt_required",
+      expectedReplayPhase: "settlement_pending",
+    },
+    {
+      name: "completed spend without completion or accepted checkpoint stays open",
+      options: {writeback: true, spend: true, visionCheckpoint: missingRequiredCheckpoint},
+      expectedProgress: "settled",
+      expectedReplayPhase: "open",
+    },
+    {
+      name: "monitor poll precedence remains settled even when writeback exists without spend",
+      options: {monitor: true, writeback: true, spend: false},
+      expectedProgress: "spend_required",
+      expectedReplayPhase: "settled",
+    },
+  ];
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      const runtimeRoot = await fixture(entry.options);
+      try {
+        if (entry.removeEvent) {
+          const log = join(runtimeRoot, "goals", goalId, "rollout-event-log.jsonl");
+          const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+          await writeFile(
+            log,
+            rows.filter(row => row.event_kind !== entry.removeEvent).map(row => JSON.stringify(row)).join("\n") + "\n",
+          );
+        }
+        const readback = await readQuotaSettlement(request(runtimeRoot));
+        assert.equal((readback.progress as any)?.state, entry.expectedProgress);
+        assert.equal(readback.replay_phase, entry.expectedReplayPhase);
+      } finally {
+        await rm(runtimeRoot, {recursive: true, force: true});
+      }
+    });
+  }
 });

@@ -3,7 +3,7 @@ name: loopx-manager
 description: Inspect authorized LoopX Goals, Todos and deliveries to explain progress, identify owner decisions and delegate intent to the right worker.
 ---
 
-<!-- loopx-managed-manager-skill:v6 -->
+<!-- loopx-managed-manager-skill:v7 -->
 
 # LoopX manager
 
@@ -50,8 +50,10 @@ describe that as a new selection rather than proven historical ownership.
 Resolve shorthand against the requested subject, project, purpose and destination.
 Local and authorized remote sources are peers: use source-neutral discovery
 when the subject is unresolved, without waiting for the owner to mention SSH.
+A matching date, PR number or local topic is not proof of the intended requirement.
 Agent search covers registrations, not task text; a zero match calls for browsing
 responsibilities and reading relevant source-qualified Todos, not guessing.
+A role alias or matching Agent id is a discovery lead, not a selected recipient.
 Compare plausible recipients using the permitted directory and relevant current
 work; when the user means recent research, inspect relevant recent deliveries
 as well. Directory order, a generic profile, a delivery target or an available
@@ -75,13 +77,14 @@ path, finish that response before separate repair and report the repair as
 unfinished. Do not promise an unsupported background continuation. Distinguish
 submission, delivery, receiver decision and actual completion throughout.
 
+A previous handoff proves where a request was sent, not who owns its subject.
 When feedback challenges the recipient or corrects the subject, verify that
 route before preserving an alleged established owner. Do not turn an earlier
 routing mistake into an ownership commitment. Keep the complete original
 request, accepted corrections, purpose, destination and original return audience
 in the existing collaboration brief.
 
-Check the original
+A corrected handoff does not retract a delivered misroute. Check the original
 and correction receipts. Reuse a correction already delivered to the right
 recipient; absent read/adoption records do not justify another send. If the old
 recipient still has uncorrected intent, carry a bounded ownership correction
@@ -102,6 +105,21 @@ after the useful result as a bounded limitation; do not let a disclaimer replace
 the answer. Do not require `结论`, `里程碑/基线`, `依据` and `缺口` on every reply, and
 do not reduce a substantive result to an inventory of IDs. Keep model output
 to ordinary Markdown text; never offer executable HTML as answer content.
+Format every verified public repository PR, Issue, Release, commit or workflow
+run as a complete clickable Markdown link (such as
+`[#123](https://github.com/example-org/example-repo/pull/123)`) rather than a
+bare `#123` or `#123@deadbeef`; under bounded structured report fields (such as
+`periodic-report` `360`-character `summary`/`detail.text` limits), split
+multi-PR lists across several `details` entries instead of stripping URLs. Do
+not mechanically append English `Remaining work` or `Continue when` labels to
+Chinese prose.
+
+When the owner asks for a report (such as “汇报” or a date-, project-, or
+decision-scoped variant), read and follow `REPORTING.md` in the manager
+workspace within existing source and action authority; it defines a one-time
+report and installs no schedule. Read `FOLLOWTHROUGH.md` in the manager
+workspace when resolving multi-turn amendments, recipient shortlisting or
+handoff-before-repair ordering.
 
 Choose reads according to the user's question. The initial Goal directory is
 an index, not a completed investigation. For prioritization, planning or a
@@ -198,7 +216,8 @@ exact task link or report the gap; never treat unknown as archived. If a host me
 authorized, verify the selected task through that host, record the stable
 `manager-inbox request --require-host-route`, then send its content-free
 `host_delivery.message` to the selected task. Treat its `not_attempted` state
-as unsent until the host returns a submission receipt. Receiver
+as unsent until the host returns a submission receipt. An unavailable route
+does not authorize replacing the named peer with a temporary child. Receiver
 read, adoption and result return still need their own evidence.
 
 `manager-inbox request` is only for Agents registered to the same Goal. When an

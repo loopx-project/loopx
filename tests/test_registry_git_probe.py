@@ -180,6 +180,9 @@ def test_registry_git_probe_retires_the_process_tree_on_timeout(
     fake_git.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "fake.git"))
+    # Under heavy parallel test contention, spawning /bin/sh and writing the
+    # grandchild PID can exceed the default 1.5s probe deadline before line 3 runs.
+    monkeypatch.setattr(registry_module, "_GIT_PROBE_TIMEOUT_SECONDS", 4.0)
 
     observed = registry_module._registry_git_probe(probe / "registry.json")
     assert observed["probe_status"] == "git_unavailable"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {admitStewardManagedTurn, bindStewardManagedActor, planStewardManagedMode,
+import {admitStewardManagedTurn, bindStewardManagedActor, observeStewardNativeExecutor, planStewardManagedMode,
   planStewardMonitor, observeStewardPortfolio,
   observeStewardSignalMonitor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
@@ -79,6 +79,45 @@ test("identity-refused watches need independent collector evidence and retain cu
   for (const changed of [{queued_turn_count: 1}, {goal_active: false},
     {monitor_todo: {...monitor, status: "blocked"}}, {observation: {...params.observation, verified: false}}]) {
     assert.throws(() => admitStewardManagedTurn({...input, ...changed}));
+  }
+});
+
+test("signal-unavailable custom monitors admit exactly one zero-effect recovery after manager_context", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.signal", todo_id: "todo_signal_watch", validation_command: null,
+    monitor_deadline: "2026-11-19T13:21:54Z", monitor_lease_version: 0};
+  const original = {turn_id: "2".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_error",
+    error: "steward monitor external signal source temporarily unavailable",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, loopx_request: prior};
+  const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true};
+  const monitor = {todo_id: "todo_signal_watch", task_class: "continuous_monitor",
+    target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const changed of [
+    {contexts: []},
+    {contexts: [{schema_version: "wrong_schema"}]},
+    {contexts: [...basis.contexts, ...basis.contexts]},
+    {phases: [{phase: "model_start"}]},
+    {event_kinds: ["turn.queued", "agent.phase", "turn.failed"]},
+    {poll_absent: false},
+    {lease_available: false},
+    {original: {...original, error: "other transient failure"}},
+    {original: {...original, upstream_turn_id: "model-started"}},
+    {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "3".repeat(32)}}}},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...changed}}));
   }
 });
 
@@ -285,4 +324,983 @@ test("custom steward signal monitors admit model-free probes while excluding loc
   assert.equal(unavailable.observation_incomplete, true);
   assert.equal(unavailable.material_change, false);
   assert.equal(unavailable.result_hash, first.result_hash);
+});
+
+test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallback while rejecting unallocated antigravity", () => {
+  const {params} = fixture();
+  assert.equal(observeStewardNativeExecutor(params).execution_available, true);
+  const pureAntigravity = {
+    binding: {...params.binding, executor_endpoint_id: "antigravity"},
+    session: {...params.session, agent_id: "antigravity", executor_endpoint_id: "antigravity"},
+  };
+  assert.deepEqual(observeStewardNativeExecutor(pureAntigravity), {
+    execution_available: false,
+    execution_error_code: "unsupported_executor",
+  });
+  const qualifiedFallback = {
+    binding: params.binding,
+    session: {
+      ...params.session,
+      agent_id: "antigravity",
+      executor_endpoint_id: "antigravity",
+      upstream_context_history: [{agent_id: "codex", thread_id: params.session.upstream_thread_id}],
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "codex",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_availability_fallback",
+        configuration_revision: "rev-1",
+        eligible_endpoints: ["codex", "antigravity"],
+      },
+    },
+  };
+  assert.equal(observeStewardNativeExecutor(qualifiedFallback).execution_available, true);
+  assert.equal(observeStewardNativeExecutor({
+    ...qualifiedFallback,
+    session: {...qualifiedFallback.session, upstream_context_history: []},
+  }).execution_available, false);
+  const flexiblePrimaryMigrated = {
+    binding: params.binding,
+    session: {
+      ...qualifiedFallback.session,
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "antigravity",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_primary_available",
+        configuration_revision: "rev-2",
+        eligible_endpoints: ["antigravity", "codex"],
+      },
+    },
+  };
+  assert.equal(observeStewardNativeExecutor(flexiblePrimaryMigrated).execution_available, true);
+});
+
+test("zero-effect worker exit, storage I/O, and runtime unavailability monitors admit one bounded recovery", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.transient", todo_id: "todo_transient_watch", validation_command: null,
+    monitor_deadline: "2026-11-20T07:44:39Z", monitor_lease_version: 0};
+  const monitor = {todo_id: "todo_transient_watch", task_class: "continuous_monitor",
+    target_key: "steward-portfolio-watch", watch_only: true, claimed_by: "steward", status: "open",
+    next_due_at: prior.monitor_deadline};
+  const workerExitedError =
+    "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+  for (const scenario of [
+    {
+      error_code: "runtime_error",
+      error: workerExitedError,
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_error",
+      error: "disk I/O error",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_unavailable",
+      error: "The Agent runtime could not be prepared.",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "turn.failed", "agent.phase", "manager.context"],
+    },
+  ]) {
+    const original = {turn_id: "4".repeat(32), session_id: params.session.session_id,
+      status: "failed", error_code: scenario.error_code, error: scenario.error,
+      origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+      delta_count: 0, loopx_request: prior};
+    const basis = {original, contexts: scenario.contexts, phases: [{phase: "manager_context"}],
+      event_kinds: scenario.event_kinds, poll_absent: true, old_worker_excluded: true, lease_available: true};
+    const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+      request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+      monitor_todo: monitor, monitor_restart_basis: basis};
+    assert.equal(admitStewardManagedTurn(input).observation_only, true);
+    for (const bad of [
+      {contexts: []},
+      {phases: []},
+      {contexts: [{schema_version: "wrong"}]},
+      {contexts: [{schema_version: "manager_turn_context_v1"}, {schema_version: "manager_turn_context_v1"}]},
+      {poll_absent: false},
+      {old_worker_excluded: false},
+      {lease_available: false},
+      {original: {...original, upstream_turn_id: "started-upstream"}},
+      {original: {...original, loopx_request: {...prior, monitor_restart_recovery: {original_turn_id: "5".repeat(32)}}}},
+    ]) {
+      assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...bad}}));
+    }
+  }
+});
+
+test("chained post-context transient watch carriers recover only after cooldown while scope and identity refusals remain one-shot", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const baseRequest = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.chained", todo_id: "todo_chained_watch", validation_command: null,
+    monitor_deadline: "2026-11-20T07:45:00Z", monitor_lease_version: 0};
+  const completedAt = "2026-11-20T07:45:00Z";
+  const completedSec = Date.parse(completedAt) / 1000;
+  const monitor = {todo_id: "todo_chained_watch", task_class: "continuous_monitor",
+    target_key: "steward-portfolio-watch", watch_only: true, claimed_by: "steward", status: "open",
+    next_due_at: baseRequest.monitor_deadline};
+  const carrier = {turn_id: "6".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_unavailable",
+    error: "The Agent runtime could not be prepared.",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, completed_at: completedAt,
+    loopx_request: {...baseRequest, monitor_restart_recovery: {original_turn_id: "5".repeat(32)}}};
+  const basis = {original: carrier, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+    phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+
+  for (const badBasis of [
+    {observed_at: completedSec + 299},
+    {observed_at: undefined},
+    {original: {...carrier, completed_at: undefined}},
+    {original: {...carrier, error_code: "runtime_error", error: "the portfolio observation omitted authorized Goals",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [], warnings: ["external_authorization_changed"],
+        coverage: {discovered: null, verified: 0, complete: false}}]}, observed_at: completedSec + 600},
+    {original: {...carrier, error_code: "runtime_error", error: "the selected App identity could not be verified"},
+      contexts: [], event_kinds: ["turn.queued", "agent.phase", "turn.failed"], observed_at: completedSec + 600},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...badBasis}}));
+  }
+});
+
+test("observeStewardSignalMonitor preserves feature-off parity and isolates scoped PR monitor hashes", () => {
+  const sampleRepo = {
+    status: "ok",
+    repository: "acme/widgets",
+    items: [
+      {
+        number: 101,
+        title: "Mergeable GPT-approved PR",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "alice"},
+        updatedAt: "2026-11-20T09:00:00Z",
+        review_summary: {
+          effective_verdict: "APPROVE",
+          has_review_conflict: false,
+          exact_head_reviews: [
+            {author_login: "bob", reviewer_declaration: "GPT-5.4", verdict: "APPROVE", valid_verdict_review: true, state: "APPROVED"},
+          ],
+        },
+      },
+      {
+        number: 102,
+        title: "Dismissed GPT review then author-owned fallback only",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "alice"},
+        updatedAt: "2026-11-18T00:00:00Z",
+        review_summary: {
+          effective_verdict: "APPROVE",
+          has_review_conflict: false,
+          exact_head_reviews: [
+            {author_login: "bob", reviewer_declaration: "GPT-5.4", verdict: "APPROVE", valid_verdict_review: true, state: "APPROVED"},
+            {author_login: "bob", reviewer_declaration: "GPT-5.4", verdict: null, valid_verdict_review: false, state: "DISMISSED"},
+            {author_login: "alice", reviewer_declaration: "Codex Author Fallback", verdict: "APPROVE", valid_verdict_review: true, state: "COMMENTED", author_owned_fallback: true},
+          ],
+        },
+      },
+      {
+        number: 103,
+        title: "External stalled PR",
+        isDraft: false,
+        mergeable: "CONFLICTING",
+        author: {login: "ext-contributor"},
+        updatedAt: "2026-11-19T08:00:00Z",
+        review_summary: {effective_verdict: "CHANGES_REQUESTED", has_review_conflict: false, exact_head_reviews: []},
+      },
+      {
+        number: 104,
+        title: "Draft PR excluded",
+        isDraft: true,
+        mergeable: "MERGEABLE",
+        author: {login: "alice"},
+        updatedAt: "2026-11-18T00:00:00Z",
+        review_summary: {effective_verdict: "APPROVE", has_review_conflict: false, exact_head_reviews: []},
+      },
+    ],
+  };
+
+  // Feature-off parity: null and undefined signal_scope behave identically and omit scoped_repository_items.
+  const legacyUndef = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "p1"},
+    inbox_items: [{request_id: "r1"}],
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  const legacyNull = observeStewardSignalMonitor({
+    signal_scope: null,
+    portfolio_observation: {result_hash: "p1"},
+    inbox_items: [{request_id: "r1"}],
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  assert.equal(legacyUndef.result_hash, legacyNull.result_hash);
+  assert.equal("scoped_repository_items" in legacyUndef, false);
+
+  const mergeableScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      exclude_conflicting: true,
+      effective_verdicts: ["APPROVE"],
+      required_approver_declarations: ["gpt", "openai"],
+    },
+  };
+  const internalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      author_mode: "include",
+      authors: ["Alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const externalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+
+  // Mergeable monitor matches only PR #101 (PR #102's GPT review was DISMISSED).
+  const mergeableObs = observeStewardSignalMonitor({
+    signal_scope: mergeableScope,
+    portfolio_observation: {result_hash: "p1"},
+    inbox_items: [{request_id: "r1"}],
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  assert.deepEqual(mergeableObs.scoped_repository_items.map((row: {number: number}) => row.number), [101]);
+
+  // Changing portfolio_observation and inbox_items is ignored when include_portfolio/include_inbox are false.
+  const mergeableObsPortfolioMutated = observeStewardSignalMonitor({
+    signal_scope: mergeableScope,
+    previous_hash: mergeableObs.result_hash,
+    portfolio_observation: {result_hash: "p2-changed"},
+    inbox_items: [{request_id: "r1"}, {request_id: "r2"}],
+    repository_snapshot: {
+      ...sampleRepo,
+      items: [
+        sampleRepo.items[0],
+        sampleRepo.items[1],
+        {...sampleRepo.items[2], title: "Unrelated external update"},
+        sampleRepo.items[3],
+      ],
+    },
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  assert.equal(mergeableObsPortfolioMutated.result_hash, mergeableObs.result_hash);
+  assert.equal(mergeableObsPortfolioMutated.material_change, false);
+
+  // Stalled threshold flips once at >= 24h and stays stable at 25h / 48h.
+  // PR #101 updatedAt is 2026-11-20T09:00:00Z; #102 is 2026-11-18T00:00:00Z.
+  const at23h = observeStewardSignalMonitor({
+    signal_scope: internalStalledScope,
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T08:00:00Z", // #101 is 23h old -> only #102 matches
+  });
+  assert.deepEqual(at23h.scoped_repository_items.map((row: {number: number}) => row.number), [102]);
+  assert.equal(at23h.scoped_repository_items[0].stalled_threshold_met, true);
+
+  const at24h = observeStewardSignalMonitor({
+    signal_scope: internalStalledScope,
+    previous_hash: at23h.result_hash,
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T09:00:00Z", // #101 reaches 24h -> flips once
+  });
+  assert.deepEqual(at24h.scoped_repository_items.map((row: {number: number}) => row.number), [101, 102]);
+  assert.equal(at24h.material_change, true);
+
+  const at25h = observeStewardSignalMonitor({
+    signal_scope: internalStalledScope,
+    previous_hash: at24h.result_hash,
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T10:00:00Z", // 25h -> stable hash, no re-wake
+  });
+  assert.equal(at25h.result_hash, at24h.result_hash);
+  assert.equal(at25h.material_change, false);
+
+  const externalObs = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: sampleRepo,
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  assert.deepEqual(externalObs.scoped_repository_items.map((row: {number: number}) => row.number), [103]);
+  assert.notEqual(mergeableObs.result_hash, at24h.result_hash);
+  assert.notEqual(at24h.result_hash, externalObs.result_hash);
+
+  // Domain-neutral filter rejects legacy vendor-specific field and empty declaration lists.
+  assert.throws(() => observeStewardSignalMonitor({
+    signal_scope: {
+      schema_version: "steward_signal_monitor_scope_v0",
+      pr_filter: {require_independent_gpt_approve: true},
+    },
+    repository_snapshot: sampleRepo,
+  }));
+  assert.throws(() => observeStewardSignalMonitor({
+    signal_scope: {
+      schema_version: "steward_signal_monitor_scope_v0",
+      pr_filter: {required_approver_declarations: []},
+    },
+    repository_snapshot: sampleRepo,
+  }));
+  assert.throws(() => observeStewardSignalMonitor({
+    signal_scope: internalStalledScope,
+    repository_snapshot: sampleRepo,
+  }));
+});
+
+test("observeStewardSignalMonitor uses stalled_since, author-reply bypass, and stalled_bucket wakeups", () => {
+  const stalledInternalScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const stalledExternalScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+
+  const makeRepo = (botUpdatedAt: string) => ({
+    status: "ok",
+    repository: "acme/widgets",
+    items: [
+      {
+        number: 201,
+        title: "Internal RC with Mergify bot ping",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "alice"},
+        updatedAt: botUpdatedAt,
+        stalled_since: "2026-11-20T09:00:00Z",
+        author_replied_after_request_changes: false,
+        review_summary: {
+          effective_verdict: "REQUEST_CHANGES",
+          has_review_conflict: false,
+          latest_request_changes_review_id: "PRR_201",
+          stalled_since: "2026-11-20T09:00:00Z",
+          author_replied_after_request_changes: false,
+          exact_head_reviews: [],
+        },
+      },
+      {
+        number: 202,
+        title: "External author replied right after RC",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "ext-user"},
+        updatedAt: "2026-11-21T08:30:00Z",
+        stalled_since: "2026-11-21T07:00:00Z",
+        author_replied_after_request_changes: true,
+        review_summary: {
+          effective_verdict: "REQUEST_CHANGES",
+          has_review_conflict: false,
+          latest_request_changes_review_id: "PRR_202",
+          stalled_since: "2026-11-21T07:00:00Z",
+          author_replied_after_request_changes: true,
+          exact_head_reviews: [],
+        },
+      },
+      {
+        number: 203,
+        title: "Stale RC on previous commit after new head push",
+        isDraft: false,
+        mergeable: "MERGEABLE",
+        author: {login: "ext-user"},
+        updatedAt: "2026-11-18T00:00:00Z",
+        stalled_since: null,
+        author_replied_after_request_changes: false,
+        review_summary: {
+          effective_verdict: "REQUEST_CHANGES",
+          has_review_conflict: false,
+          latest_request_changes_review_id: null,
+          stalled_since: null,
+          author_replied_after_request_changes: false,
+          exact_head_reviews: [],
+        },
+      },
+    ],
+  });
+
+  // At 23h since stalled_since (2026-11-20T09:00 -> 2026-11-21T08:00), PR #201 is excluded even with newer updatedAt.
+  const before24h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T08:00:00Z",
+  });
+  assert.deepEqual(before24h.scoped_repository_items, []);
+
+  // At 24h exact (2026-11-21T09:00), PR #201 enters 24h_to_72h bucket.
+  const at24h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: before24h.result_hash,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.equal(at24h.material_change, true);
+  assert.equal(at24h.scoped_repository_items[0].number, 201);
+  assert.equal(at24h.scoped_repository_items[0].stalled_threshold_met, true);
+  assert.equal(at24h.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
+
+  // Bot comment bumping updatedAt at 71h produces zero hash change in the same bucket.
+  const at71hBotBump = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at24h.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-23T08:00:00Z",
+  });
+  assert.equal(at71hBotBump.result_hash, at24h.result_hash);
+  assert.equal(at71hBotBump.material_change, false);
+
+  // Crossing into 72h_plus and 7d_plus wakes the monitor exactly at bucket boundaries.
+  const at72h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at71hBotBump.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-23T09:00:00Z",
+  });
+  assert.equal(at72h.material_change, true);
+  assert.equal(at72h.scoped_repository_items[0].stalled_bucket, "72h_plus");
+
+  const at73h = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at72h.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-23T10:00:00Z",
+  });
+  assert.equal(at73h.material_change, false);
+
+  const at7d = observeStewardSignalMonitor({
+    signal_scope: stalledInternalScope,
+    previous_hash: at73h.result_hash,
+    repository_snapshot: makeRepo("2026-11-23T07:55:00Z"),
+    observed_at: "2026-11-27T09:00:00Z",
+  });
+  assert.equal(at7d.material_change, true);
+  assert.equal(at7d.scoped_repository_items[0].stalled_bucket, "7d_plus");
+
+  // External monitor prioritizes awaiting_maintainer_reply immediately (<24h) and drops stale-commit RC (#203).
+  const externalObs = observeStewardSignalMonitor({
+    signal_scope: stalledExternalScope,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.deepEqual(externalObs.scoped_repository_items.map((row: {number: number}) => row.number), [202]);
+  assert.equal(externalObs.scoped_repository_items[0].stalled_threshold_met, false);
+  assert.equal(externalObs.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+
+  // Scoped monitor WITHOUT min_stalled_hours retains updatedAt sensitivity even when items carry stalled_since.
+  const noAgeScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+    },
+  };
+  const noAgeInitial = observeStewardSignalMonitor({
+    signal_scope: noAgeScope,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  const noAgeUpdated = observeStewardSignalMonitor({
+    signal_scope: noAgeScope,
+    previous_hash: noAgeInitial.result_hash,
+    repository_snapshot: makeRepo("2026-11-21T08:45:00Z"),
+    observed_at: "2026-11-21T09:15:00Z",
+  });
+  assert.equal(noAgeUpdated.material_change, true);
+
+  // Scoped monitor with sub-24h min_stalled_hours (e.g. 6h) emits under_24h at 7h and transitions to 24h_to_72h at 24h.
+  const sixHourScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+      min_stalled_hours: 6,
+    },
+  };
+  const at7h = observeStewardSignalMonitor({
+    signal_scope: sixHourScope,
+    repository_snapshot: makeRepo("2026-11-20T15:00:00Z"),
+    observed_at: "2026-11-20T16:00:00Z",
+  });
+  assert.equal(at7h.scoped_repository_items.length, 1);
+  assert.equal(at7h.scoped_repository_items[0].stalled_threshold_met, true);
+  assert.equal(at7h.scoped_repository_items[0].stalled_bucket, "under_24h");
+  const at24hFromSixHour = observeStewardSignalMonitor({
+    signal_scope: sixHourScope,
+    previous_hash: at7h.result_hash,
+    repository_snapshot: makeRepo("2026-11-21T08:30:00Z"),
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.equal(at24hFromSixHour.material_change, true);
+  assert.equal(at24hFromSixHour.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
+});
+
+test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete only for matching stalled-age PRs", () => {
+  const externalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const internalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "include",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+  const noAgeScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+    },
+  };
+
+  const makeExternalPr = (overrides: Record<string, unknown> = {}) => ({
+    number: 302,
+    title: "External RC awaiting maintainer reply",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    author: {login: "ext-user"},
+    updatedAt: "2026-11-21T08:30:00Z",
+    stalled_since: "2026-11-21T07:00:00Z",
+    author_replied_after_request_changes: true,
+    comments_coverage_incomplete: false,
+    review_summary: {
+      effective_verdict: "REQUEST_CHANGES",
+      has_review_conflict: false,
+      latest_request_changes_review_id: "PRR_302",
+      stalled_since: "2026-11-21T07:00:00Z",
+      author_replied_after_request_changes: true,
+      comments_coverage_incomplete: false,
+      exact_head_reviews: [],
+    },
+    ...overrides,
+  });
+
+  const baseline = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [makeExternalPr()]},
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  assert.equal(baseline.observation_incomplete, false);
+  assert.equal(baseline.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+
+  // Truncated comment suffix (<24h and >=24h) fails closed and preserves previous_hash,
+  // whether comments_coverage_incomplete is surfaced at top-level or inside review_summary.
+  for (const [observedAt, truncatedItem] of [
+    [
+      "2026-11-21T10:00:00Z",
+      makeExternalPr({
+        updatedAt: "2026-11-21T09:50:00Z",
+        author_replied_after_request_changes: false,
+        comments_coverage_incomplete: true,
+        review_summary: {
+          ...makeExternalPr().review_summary,
+          author_replied_after_request_changes: false,
+          comments_coverage_incomplete: true,
+        },
+      }),
+    ],
+    [
+      "2026-11-22T09:00:00Z",
+      makeExternalPr({
+        updatedAt: "2026-11-22T08:30:00Z",
+        author_replied_after_request_changes: false,
+        comments_coverage_incomplete: false,
+        review_summary: {
+          ...makeExternalPr().review_summary,
+          author_replied_after_request_changes: false,
+          comments_coverage_incomplete: true,
+        },
+      }),
+    ],
+  ] as const) {
+    const truncated = observeStewardSignalMonitor({
+      signal_scope: externalStalledScope,
+      previous_hash: baseline.result_hash,
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [truncatedItem]},
+      observed_at: observedAt,
+    });
+    assert.deepEqual(truncated, {
+      result_hash: baseline.result_hash,
+      material_change: false,
+      observation_incomplete: true,
+      own_monitor_bookkeeping_excluded: true,
+    });
+  }
+
+  // Recovered complete coverage with bumped updatedAt yields identical hash and material_change=false.
+  const recovered = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    previous_hash: baseline.result_hash,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [makeExternalPr({updatedAt: "2026-11-21T10:30:00Z"})],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(recovered.result_hash, baseline.result_hash);
+  assert.equal(recovered.material_change, false);
+  assert.equal(recovered.observation_incomplete, false);
+
+  // Maintainer reply with complete coverage exits awaiting_maintainer_reply.
+  const maintainerCleared = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    previous_hash: baseline.result_hash,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        makeExternalPr({
+          author_replied_after_request_changes: false,
+          review_summary: {
+            ...makeExternalPr().review_summary,
+            author_replied_after_request_changes: false,
+          },
+        }),
+      ],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(maintainerCleared.material_change, true);
+  assert.equal(maintainerCleared.observation_incomplete, false);
+  assert.deepEqual(maintainerCleared.scoped_repository_items, []);
+
+  // Non-age-filtered scopes and non-matching items are unaffected by comments_coverage_incomplete.
+  const truncatedExternal = makeExternalPr({
+    author_replied_after_request_changes: false,
+    comments_coverage_incomplete: true,
+    review_summary: {
+      ...makeExternalPr().review_summary,
+      author_replied_after_request_changes: false,
+      comments_coverage_incomplete: true,
+    },
+  });
+  const noAgeObs = observeStewardSignalMonitor({
+    signal_scope: noAgeScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [truncatedExternal]},
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(noAgeObs.observation_incomplete, false);
+  assert.equal(noAgeObs.scoped_repository_items.length, 1);
+
+  const internalObs = observeStewardSignalMonitor({
+    signal_scope: internalStalledScope,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        truncatedExternal,
+        makeExternalPr({number: 303, isDraft: true, comments_coverage_incomplete: true}),
+      ],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(internalObs.observation_incomplete, false);
+  assert.deepEqual(internalObs.scoped_repository_items, []);
+
+  const externalIgnoringDraftOrApprove = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        makeExternalPr({number: 304, isDraft: true, comments_coverage_incomplete: true}),
+        makeExternalPr({
+          number: 305,
+          comments_coverage_incomplete: true,
+          review_summary: {
+            effective_verdict: "APPROVE",
+            has_review_conflict: false,
+            comments_coverage_incomplete: true,
+            exact_head_reviews: [],
+          },
+        }),
+      ],
+    },
+    observed_at: "2026-11-21T11:00:00Z",
+  });
+  assert.equal(externalIgnoringDraftOrApprove.observation_incomplete, false);
+  assert.deepEqual(externalIgnoringDraftOrApprove.scoped_repository_items, []);
+});
+
+test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {
+  const noAgeScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+    },
+  };
+  const mergeableScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      exclude_conflicting: true,
+      effective_verdicts: ["APPROVE"],
+      required_approver_declarations: ["gpt"],
+    },
+  };
+  const externalStalledScope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+    pr_filter: {
+      exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"],
+      author_mode: "exclude",
+      authors: ["alice"],
+      min_stalled_hours: 24,
+    },
+  };
+
+  const pre9207RcPr = {
+    number: 410,
+    title: "External PR with RC",
+    url: "https://github.com/acme/widgets/pull/410",
+    headRefOid: "head410",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    author: {login: "ext-user"},
+    updatedAt: "2026-11-21T08:30:00Z",
+    checks_summary: {total: 1, pass_count: 1, fail_count: 0, pending_count: 0},
+    bypassed_gates: [],
+    review_summary: {
+      effective_verdict: "REQUEST_CHANGES",
+      has_review_conflict: false,
+      stale_review_count: 0,
+      exact_head_reviews: [],
+    },
+  };
+  const upgradedCompleteRcPr = {
+    ...pre9207RcPr,
+    stalled_since: "2026-11-21T07:00:00Z",
+    author_replied_after_request_changes: true,
+    comments_coverage_incomplete: false,
+    stalled_threshold_met: false,
+    stalled_bucket: "awaiting_maintainer_reply",
+    review_summary: {
+      ...pre9207RcPr.review_summary,
+      latest_request_changes_review_id: "PRR_410",
+      stalled_since: "2026-11-21T07:00:00Z",
+      author_replied_after_request_changes: true,
+      comments_coverage_incomplete: false,
+    },
+  };
+  const simulatedBackfillFailureRcPr = {
+    ...upgradedCompleteRcPr,
+    author_replied_after_request_changes: false,
+    comments_coverage_incomplete: true,
+    stalled_bucket: "under_24h",
+    review_summary: {
+      ...upgradedCompleteRcPr.review_summary,
+      author_replied_after_request_changes: false,
+      comments_coverage_incomplete: true,
+    },
+  };
+
+  for (const scope of [null, noAgeScope]) {
+    const legacy = observeStewardSignalMonitor({
+      signal_scope: scope,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [pre9207RcPr]},
+      observed_at: "2026-11-21T09:00:00Z",
+    });
+    const upgraded = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: legacy.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [upgradedCompleteRcPr]},
+      observed_at: "2026-11-21T09:05:00Z",
+    });
+    assert.equal(upgraded.result_hash, legacy.result_hash);
+    assert.equal(upgraded.material_change, false);
+    assert.equal(upgraded.observation_incomplete, false);
+
+    // Simulated backfill failure -> recovery on monitors without an age filter yields no false wakeup.
+    const failedBackfill = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: legacy.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [simulatedBackfillFailureRcPr]},
+      observed_at: "2026-11-21T09:10:00Z",
+    });
+    assert.equal(failedBackfill.result_hash, legacy.result_hash);
+    assert.equal(failedBackfill.material_change, false);
+    assert.equal(failedBackfill.observation_incomplete, false);
+
+    const recoveredBackfill = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: failedBackfill.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {status: "ok", repository: "acme/widgets", items: [upgradedCompleteRcPr]},
+      observed_at: "2026-11-21T09:15:00Z",
+    });
+    assert.equal(recoveredBackfill.result_hash, legacy.result_hash);
+    assert.equal(recoveredBackfill.material_change, false);
+    assert.equal(recoveredBackfill.observation_incomplete, false);
+
+    // Real updatedAt change still triggers material_change=true when !usesStalledAgeFilter.
+    const bumpedUpdatedAt = observeStewardSignalMonitor({
+      signal_scope: scope,
+      previous_hash: legacy.result_hash,
+      portfolio_observation: {result_hash: "p1"},
+      inbox_items: [{request_id: "req_1"}],
+      repository_snapshot: {
+        status: "ok",
+        repository: "acme/widgets",
+        items: [{...upgradedCompleteRcPr, updatedAt: "2026-11-21T09:20:00Z"}],
+      },
+      observed_at: "2026-11-21T09:25:00Z",
+    });
+    assert.equal(bumpedUpdatedAt.material_change, true);
+    assert.equal(bumpedUpdatedAt.observation_incomplete, false);
+    assert.notEqual(bumpedUpdatedAt.result_hash, legacy.result_hash);
+  }
+
+  // Mergeable non-age scope also retains 100% pre-#9207 hash parity.
+  const pre9207Approved = {
+    number: 411,
+    title: "Approved PR",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    author: {login: "alice"},
+    updatedAt: "2026-11-21T08:00:00Z",
+    review_summary: {
+      effective_verdict: "APPROVE",
+      has_review_conflict: false,
+      exact_head_reviews: [
+        {author_login: "bob", reviewer_declaration: "GPT-5.4", verdict: "APPROVE", valid_verdict_review: true, state: "APPROVED"},
+      ],
+    },
+  };
+  const upgradedApproved = {
+    ...pre9207Approved,
+    stalled_since: null,
+    author_replied_after_request_changes: false,
+    comments_coverage_incomplete: false,
+    review_summary: {
+      ...pre9207Approved.review_summary,
+      latest_request_changes_review_id: null,
+      stalled_since: null,
+      author_replied_after_request_changes: false,
+      comments_coverage_incomplete: false,
+    },
+  };
+  const legacyMergeable = observeStewardSignalMonitor({
+    signal_scope: mergeableScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [pre9207Approved]},
+    observed_at: "2026-11-21T09:00:00Z",
+  });
+  const upgradedMergeable = observeStewardSignalMonitor({
+    signal_scope: mergeableScope,
+    previous_hash: legacyMergeable.result_hash,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [upgradedApproved]},
+    observed_at: "2026-11-21T09:05:00Z",
+  });
+  assert.equal(upgradedMergeable.result_hash, legacyMergeable.result_hash);
+  assert.equal(upgradedMergeable.material_change, false);
+
+  // Even under an age filter, comments_coverage_incomplete metadata never enters result_hash.
+  const withoutPaginationField = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    repository_snapshot: {status: "ok", repository: "acme/widgets", items: [pre9207RcPr]},
+    observed_at: "2026-11-22T10:00:00Z",
+  });
+  const withPaginationFieldFalse = observeStewardSignalMonitor({
+    signal_scope: externalStalledScope,
+    previous_hash: withoutPaginationField.result_hash,
+    repository_snapshot: {
+      status: "ok",
+      repository: "acme/widgets",
+      items: [
+        {
+          ...pre9207RcPr,
+          comments_coverage_incomplete: false,
+          review_summary: {
+            ...pre9207RcPr.review_summary,
+            comments_coverage_incomplete: false,
+          },
+        },
+      ],
+    },
+    observed_at: "2026-11-22T10:05:00Z",
+  });
+  assert.equal(withPaginationFieldFalse.result_hash, withoutPaginationField.result_hash);
+  assert.equal(withPaginationFieldFalse.material_change, false);
 });

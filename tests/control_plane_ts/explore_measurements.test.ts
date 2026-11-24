@@ -287,7 +287,9 @@ test("history and next-turn feedback use append order across tied and backfilled
       finding_id: row.result_id, recorded_order})).reverse()};
     const context = projectExploreTurnContext({goal_id: "research", agent_id: "worker", route: ["loopx"],
       graph_enabled: true, harness_gate: {enabled: false}, projection, plan: {}});
-    assert.deepEqual((context.graph as any).measurement_feedback[0], feedback);
+    const {candidate_leaders, ...sharedFeedback} = feedback;
+    assert.deepEqual(candidate_leaders?.leaders.map(point => point.finding_id), ["finding-1"]);
+    assert.deepEqual((context.graph as any).measurement_feedback[0], sharedFeedback);
   }
   assert.throws(() => projectExploreMeasurementFeedback([
     {...finding("first", 8), recorded_order: 0}, {...finding("next", 9), recorded_order: 0},
@@ -339,4 +341,22 @@ test("base-produced mixed history remains auditable but only the correction ente
   assert.equal(current.measurementFeedback?.[0].measured_count, 1);
   const raw = {...finding("legacy", 99), execution_observation: events[1].execution_observation};
   assert.deepEqual(projectExploreMeasurementFeedback([raw]), []);
+});
+
+test("history reader distinguishes the best recorded candidates within each evaluation", () => {
+  const rows = [
+    finding("unknown", null),
+    finding("second-run", 1, {candidate_ref: "candidate:b"}),
+    finding("b", 3), finding("a", 3), finding("earliest", 2),
+  ];
+  const read = (items: typeof rows) => projectExploreMeasurementFeedback(items, undefined, {includeCandidateLeaders: true})[0]!;
+  const leaders = read(rows).candidate_leaders!;
+  assert.equal(leaders.measured_candidates, 3);
+  assert.deepEqual(leaders.leaders.map(point => [point.candidate_ref, point.evidence_ref]),
+    [["candidate:a", "result:a"], ["candidate:b", "result:b"]]);
+  assert.deepEqual(read([finding("c", 4), ...rows]).candidate_leaders!.leaders.map(p => p.candidate_ref), ["candidate:c"]);
+  const lower = read(rows.map(row => ({...row, measurements: row.measurements.map(m => ({...m, higher_is_better: false}))})));
+  assert.deepEqual(lower.candidate_leaders!.leaders.map(p => [p.candidate_ref, p.value]), [["candidate:b", 1]]);
+  assert.equal(read([finding("unknown", null)]).best, null);
+  assert.equal(projectExploreMeasurementFeedback(rows)[0]!.candidate_leaders, undefined);
 });

@@ -12,6 +12,8 @@ import { PiRpcAdapter, PI_METADATA } from './adapters/pi.js';
 import { TraexAcpAdapter, TRAEX_METADATA } from './adapters/traex.js';
 import type { AgentAdapter, DiscoveredAccount, LoginSession } from './adapters/types.js';
 import { HttpError } from './errors.js';
+import { OAR_AGENTS, OarAdapter, isOarAgent, type OarAgentId } from './adapters/oar.js';
+import { isWorkbenchDependency } from './adapters/session-location.js';
 
 /**
  * One configured agent instance: an adapter (how to talk to it) plus everything that makes this
@@ -21,7 +23,7 @@ import { HttpError } from './errors.js';
 export interface AgentInstance {
   /** What threads store; also the key in the adapter map. */
   id: string;
-  adapter: 'claude' | 'pi' | 'agy' | 'traex' | 'codex' | 'zcode' | 'dsh';
+  adapter: 'claude' | 'pi' | 'agy' | 'traex' | 'codex' | 'zcode' | 'dsh' | OarAgentId;
   label?: string;
   /** Hidden from the new-thread picker; threads and settings keep working. */
   hidden?: boolean;
@@ -57,6 +59,7 @@ const ADAPTER_LABELS: Record<AgentInstance['adapter'], string> = {
   codex: 'Codex',
   zcode: 'ZCode',
   dsh: 'DeepSeek Harness',
+  ...Object.fromEntries(OAR_AGENTS.map(agent => [agent.adapter, agent.label])) as Record<OarAgentId, string>,
 };
 
 /** How each adapter is built. One line per protocol; instances differ only in command and env. */
@@ -68,7 +71,8 @@ function buildAdapter(
   const command = instance.command ?? defaults.get(instance.adapter) ?? [];
   const env = instance.env ?? {};
   let adapter: AgentAdapter;
-  switch (instance.adapter) {
+  if (isOarAgent(instance.adapter)) adapter = new OarAdapter(instance.adapter, command, env);
+  else switch (instance.adapter) {
     case 'claude':
       adapter = new ClaudeAcpAdapter(command, env);
       break;
@@ -122,6 +126,7 @@ export interface SupportedAgent {
   label: string;
   icon?: string;
   installGuide?: string;
+  installUrl?: string;
   capabilities?: { createAccount: boolean; streamBridge?: AgentAdapter['capabilities']['streamBridge'] };
 }
 
@@ -133,6 +138,7 @@ export const SUPPORTED_AGENTS: SupportedAgent[] = [
   TRAEX_METADATA,
   ZCODE_METADATA,
   DSH_METADATA,
+  ...OAR_AGENTS.map(({ binary: _binary, ...meta }) => meta),
 ];
 
 /** An executable on PATH that looks like another copy of a known agent CLI. */
@@ -141,7 +147,7 @@ export interface DiscoveredAgent {
   id: string;
   adapter: AgentInstance['adapter'];
   /** The absolute path found on PATH. */
-  command: string;
+  command?: string;
   label?: string;
   icon?: string;
 }
@@ -164,6 +170,7 @@ export interface AccountToLink {
  * does not turn another tool into a copy.
  */
 const KNOWN_PREFIXES: Array<[AgentInstance['adapter'], RegExp]> = [
+  ...OAR_AGENTS.flatMap(agent => agent.binary ? [[agent.adapter, copyOf(agent.binary)] as [OarAgentId, RegExp]] : []),
   ['claude', copyOf('claude')],
   ['pi', copyOf('pi')],
   ['agy', copyOf('agy')],
@@ -188,6 +195,7 @@ const PREFERRED_NAMES: Record<AgentInstance['adapter'], string[]> = {
   codex: ['codex'],
   zcode: ['zcode'],
   dsh: ['dsh'],
+  ...Object.fromEntries(OAR_AGENTS.map(agent => [agent.adapter, agent.binary ? [agent.binary] : []])) as Record<OarAgentId, string[]>,
 };
 
 /**
@@ -207,7 +215,7 @@ export class AgentRegistry {
   private creating: Promise<unknown> = Promise.resolve();
   private writing: Promise<unknown> = Promise.resolve();
 
-  /** Entries of agents.json whose adapter this version does not have: kept, never started. */
+  /** Inactive agents.json entries (unsupported adapters or installer backups): kept, never started. */
   private readonly retired: AgentInstance[] = [];
 
   constructor(
@@ -223,7 +231,16 @@ export class AgentRegistry {
     // left out, so an old agents.json neither stops the hub nor loses the entry on the next save.
     const known = new Set<string>(SUPPORTED_AGENTS.map(meta => meta.adapter));
     instances = instances.filter(instance => {
-      if (known.has(instance?.adapter)) return true;
+      // Keep mistakenly auto-discovered backup executables on disk, outside the active registry.
+      if (known.has(instance?.adapter)) {
+        const name = basenameOf(instance.command);
+        if (!instance.account && !Object.keys(instance.env ?? {}).length && instance.id === name &&
+            isCliBackup(name) && KNOWN_PREFIXES.some(([adapter, re]) => adapter === instance.adapter && re.test(name))) {
+          this.retired.push(instance);
+          return false;
+        }
+        return true;
+      }
       this.retired.push(instance);
       console.warn(`warning: agents.json entry ${JSON.stringify(instance?.id ?? null)} uses ${JSON.stringify(instance?.adapter ?? null)}, which this version no longer supports; it is kept in the file and not started`);
       return false;
@@ -411,6 +428,15 @@ export class AgentRegistry {
     return login.session;
   }
 
+  /** Returns the in-progress login session for an agent, so any client can resume entering its code. */
+  activeLogin(agent: string): ({ id: string } & ReturnType<LoginSession['state']>) | undefined {
+    const entry = this.logins.get(agent);
+    if (!entry) return undefined;
+    const state = entry.session.state();
+    if (!['starting', 'waiting', 'submitting'].includes(state.status)) return undefined;
+    return { id: entry.id, ...state };
+  }
+
   dispose(): void {
     if (this.autoJoinTimer) clearInterval(this.autoJoinTimer);
     this.autoJoinTimer = null;
@@ -451,7 +477,7 @@ export class AgentRegistry {
       const claimed = (account: DiscoveredAccount) =>
         instances.some(
           (i) =>
-            Object.entries(i.env ?? {}).some(([k, v]) => account.env[k] === v) ||
+            Object.entries(i.env ?? {}).some(([k, v]) => sameEnvValue(account.env[k], v)) ||
             (!i.env || Object.keys(i.env).length === 0) && account.isDefault === true,
         );
       for (const account of await adapter.discoverAccounts(home)) {
@@ -562,7 +588,7 @@ export class AgentRegistry {
    * to the same executable are listed once, and an executable an instance already runs (including
    * through a path argument such as Claude's ACP bridge) is not offered again.
    */
-  async discover(): Promise<DiscoveredAgent[]> {
+  async discover(includeBundled = true): Promise<DiscoveredAgent[]> {
     const dirs = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
     const taken = new Set(this.instances.keys());
     const takenPaths = new Set<string>();
@@ -588,7 +614,7 @@ export class AgentRegistry {
         continue; // unreadable or gone
       }
       for (const name of names) {
-        if (taken.has(name) || seen.has(name)) continue;
+        if (taken.has(name) || seen.has(name) || isCliBackup(name)) continue;
         const adapter = KNOWN_PREFIXES.find(([, re]) => re.test(name))?.[0];
         if (!adapter) continue;
         const full = join(dir, name);
@@ -600,7 +626,7 @@ export class AgentRegistry {
           continue;
         }
         seen.add(name);
-        if (takenPaths.has(realPath)) continue;
+        if (takenPaths.has(realPath) || isWorkbenchDependency(realPath)) continue;
         const meta = SUPPORTED_AGENTS.find((s) => s.adapter === adapter);
         const candidate: DiscoveredAgent = {
           id: name,
@@ -614,6 +640,14 @@ export class AgentRegistry {
           found.set(realPath, candidate);
         }
       }
+    }
+    // SDK runtimes and vendor installations outside PATH use the same add flow.
+    for (const meta of OAR_AGENTS) {
+      if ((!includeBundled && !meta.binary) || this.instances.has(meta.adapter) || [...found.values()].some(item => item.adapter === meta.adapter)) continue;
+      const installed = await new OarAdapter(meta.adapter).discoverInstallation();
+      if (installed?.command && takenPaths.has(realPathOf(installed.command))) continue;
+      if (!meta.binary && [...this.instances.values()].some(instance => instance.adapter === meta.adapter)) continue;
+      if (installed) found.set(`oar:${meta.adapter}`, { id: meta.adapter, adapter: meta.adapter, label: meta.label, ...installed });
     }
     return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
@@ -630,17 +664,18 @@ export class AgentRegistry {
   async autoJoin(): Promise<AgentInstance[]> {
     if (!this.file) return [];
     const added: AgentInstance[] = [];
-    for (const found of await this.discover()) {
-      if (this.removed.paths.includes(realPathOf(found.command))) continue;
+    for (const found of await this.discover(false)) {
+      if (found.command && this.removed.paths.includes(realPathOf(found.command))) continue;
       try {
-        added.push(await this.add({ id: this.freeId(found.id), adapter: found.adapter, command: [found.command] }));
+        added.push(await this.add({ id: this.freeId(found.id), adapter: found.adapter, ...(found.command ? { command: [found.command] } : {}) }));
       } catch (error) {
         console.warn(`warning: could not auto-join ${found.id}: ${error instanceof Error ? error.message : error}`);
       }
     }
     for (const account of await this.discoverAccounts()) {
       // Any env entry matching a removed one names the same account the person put away.
-      if (Object.entries(account.env).some(([k, v]) => this.removed.envs.includes(`${k}=${v}`))) continue;
+      const removedEnvs = new Set(this.removed.envs.map(canonicalEnvEntry));
+      if (Object.entries(account.env).some(([k, v]) => removedEnvs.has(canonicalEnvEntry(`${k}=${v}`)))) continue;
       try {
         added.push(await this.add({
           id: this.freeId(account.id),
@@ -768,4 +803,23 @@ function realPathOf(path: string): string {
   } catch {
     return resolve(path);
   }
+}
+
+/** Whether two env values name the same thing: equal, or the same path reached through a
+ *  symlink (`/home/me/.claude-2` and `/data00/home/me/.claude-2` are one account directory). */
+function sameEnvValue(a: string | undefined, b: string | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  return a === b || (isAbsolute(a) && isAbsolute(b) && realPathOf(a) === realPathOf(b));
+}
+
+/** A `KEY=value` entry with a path value resolved, so a removed account is recognised under any spelling of its directory. */
+function canonicalEnvEntry(entry: string): string {
+  const at = entry.indexOf('=');
+  const value = entry.slice(at + 1);
+  return at < 0 || !isAbsolute(value) ? entry : `${entry.slice(0, at)}=${realPathOf(value)}`;
+}
+
+/** Installer backups are files, not additional CLI accounts. */
+function isCliBackup(name: string): boolean {
+  return /(?:\.(?:old|bak|backup|orig|tmp)|~)$/i.test(name);
 }

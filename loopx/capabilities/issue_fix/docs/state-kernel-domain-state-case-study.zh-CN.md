@@ -146,7 +146,7 @@ Issue-Fix 向 Kernel 返回有限几种 transition：
 | newer repair commit 已覆盖反馈且 threads 全 resolved | `monitor_continuation` | 等待 re-review，不重复生成 patch |
 | PR `MERGED` 或 `CLOSED` | `no_followup` / terminal transition | 完成 monitor，恢复显式 successor 或记录 no-follow-up |
 
-它只是生成 typed proposal；
+Domain transition 只生成 typed proposal；
 todo writer、gate scope、quota、authority 与 scheduler 仍会再次检查。
 
 ## 五、以一次 OpenViking Issue-Fix 运行为例
@@ -309,8 +309,8 @@ idempotency key 和 exact row/result-id readback，失败则保留 retry/success
 6. **如何幂等？** 定义 stable key、observation fingerprint、unchanged 规则和 crash-safe upsert。
 7. **如何精确回读？** 外部写入必须有 provider receipt、remote readback 和失败 successor。
 8. **capability 与 provider 如何分层？** 产品结果进入 capability；可选 I/O 实现进入 extension；
-
-9. 加 projection contract、negative tests，并验证关闭 provider 后
+   领域状态不是因为“可扩展”就自动成为 extension。
+9. **如何证明不是第二事实源？** 加 projection contract、negative tests，并验证关闭 provider 后
    Kernel 与核心 capability 仍能工作。
 
 最小代码形态通常是：

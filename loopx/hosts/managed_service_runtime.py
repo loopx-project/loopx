@@ -31,6 +31,7 @@ from .. import runtime_activation as activation
 _OBSERVER_LABEL = "com.loopx.codex-native-accounts"
 _OBSERVER_MODULE = "loopx_codex_provider_routing.native"
 _RUNTIME_BINDING = {"schema_version": "loopx_managed_runtime_binding_v1"}
+_SERVICE_READINESS_TIMEOUT_SECONDS = 90.0
 
 
 def _literal_arguments(command: str) -> list[str]:
@@ -339,13 +340,18 @@ def _start_order(paths):
     return sorted(paths, key=lambda path: path.stem != _OBSERVER_LABEL)
 
 
-def _verify_services(services: dict[Path, int], identity: dict) -> None:
+def _verify_services(
+    services: dict[Path, int],
+    identity: dict,
+    *,
+    timeout_seconds: float = _SERVICE_READINESS_TIMEOUT_SECONDS,
+) -> None:
     #  Read back the
     # exact HTTP runtime before committing the handoff; a failed start restores
     # the original manager configuration instead of leaving the App spinning.
     pending = dict(services)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + timeout_seconds
     while pending and time.monotonic() < deadline:
         for path, port in list(pending.items()):
             status = path.stem.endswith(".status")
@@ -437,19 +443,26 @@ def _recover_alignment(journal: Path) -> None:
     with _alignment_guard([chat] if chat.exists() else [], observer_root) as owner:
         domain = f"gui/{os.getuid()}"
         loaded = []
+        chat_pid: int | None = None
+        observer_state: tuple[Path, bool | None, bool | None, int | None] | None = None
         for path in originals:
             old, old_pid = activation._managed_service_state(path, payload=plistlib.loads(originals[path]))
             new, new_pid = activation._managed_service_state(path, payload=plistlib.loads(candidates[path]))
             if old is False and new is False:
                 raise ValueError("service_runtime_route_unverified")
+            if path == chat:
+                chat_pid = old_pid or new_pid
             if path.stem == _OBSERVER_LABEL:
-                pid = old_pid or new_pid
-                if ((old or new) and not pid) or _observer_lock_pid(owner) != pid:
-                    raise ValueError("native_observer_owner_unverified")
-                if not pid:
-                    _wait_unloaded(f"{domain}/{path.stem}")
+                observer_state = (path, old, new, old_pid or new_pid)
             if old or new:
                 loaded.append(path)
+        if observer_state is not None:
+            path, old, new, pid = observer_state
+            allowed_lock_pids = {pid} | ({chat_pid} if chat_pid and chat in loaded else set())
+            if ((old or new) and not pid) or _observer_lock_pid(owner) not in allowed_lock_pids:
+                raise ValueError("native_observer_owner_unverified")
+            if not pid:
+                _wait_unloaded(f"{domain}/{path.stem}")
         try:
             for path in loaded:
                 _launchctl("bootout", f"{domain}/{path.stem}")
@@ -556,16 +569,22 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
             if (plist.read_bytes() != originals[plist]
                     or activation._managed_service_state(plist) != (True, pids[plist])):
                 raise ValueError("service_runtime_route_unverified")
+        observer_handed_off_from_chat = False
         if observer_root is not None:
             loaded, pid = activation._managed_service_state(observer)
-            if (not loaded or not pid or _observer_lock_pid(owner) != pid
+            chat_pid = pids.get(chat[0]) if chat[0] in updates else None
+            allowed_lock_pids = {pid} | ({chat_pid} if chat_pid else set())
+            lock_pid = _observer_lock_pid(owner)
+            if (not loaded or not pid or lock_pid not in allowed_lock_pids
                     or _chat_account_root(plistlib.loads(chat[0].read_bytes())) != observer_root.resolve()):
                 raise ValueError("native_observer_owner_unverified")
+            observer_handed_off_from_chat = lock_pid != pid
         write_json_atomic(journal, {"schema_version": "loopx_managed_runtime_handoff_v1",
             "services": {p.stem: {"original": base64.b64encode(originals[p]).decode(),
                 "candidate": base64.b64encode(updates[p]).decode()} for p in updates}},
             mode=0o600, fsync_directory=True)
         try:
+            handoff_started = time.time()
             for plist in updates:
                 _launchctl("bootout", f"{domain}/{plist.stem}")
                 stopped.append(plist)
@@ -576,6 +595,9 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
                 write_bytes_atomic(plist, content, preserve_mode=True, fsync_directory=True)
                 written.append(plist)
             observer_after = time.time() - 480
+            if observer_handed_off_from_chat and observer not in updates:
+                observer_after = handoff_started
+                _verify_observer(observer, owner, observer_after, expected_observer)
             for plist in _start_order(updates):
                 if plist == observer:
                     _wait_observer_released(owner)

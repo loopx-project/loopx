@@ -116,27 +116,31 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     }
   });
   test(`${provider} managed execution: terminal advice does not replace explicit proof or bypass task blockers`, async t => {
-    for (const scenario of ["explicit-proof", "foreign-holder", "excluded", "blocked", "overlapping-work"]) {
+    for (const scenario of ["explicit-proof", "foreign-holder", "excluded", "blocked", "independent-todo"]) {
       const {store, request} = await setup(t);
       let original = {...completion(request), claim_operation_id: undefined} as Parameters<typeof complete>[1];
       if (scenario === "explicit-proof") original = {...original, lease_idempotency_key: "unproven-key"};
       if (scenario === "foreign-holder") {
         assert.equal((await claim(store, {...request, actor_agent_id: "agent-b", claimed_by: "agent-b"})).status, "applied");
       }
-      if (["excluded", "blocked", "overlapping-work"].includes(scenario)) {
+      if (["excluded", "blocked", "independent-todo"].includes(scenario)) {
         const head = await loaded(store); const todo = (head.head.todos as JsonObject[])[0]!;
         const change = scenario === "excluded" ? {...todo, excluded_agents: ["agent-a"]}
           : scenario === "blocked" ? {...todo, status: "blocked"}
-          : {...todo, todo_id: "todo_other", text: "Independent work occupying the same scope"};
+          : {...todo, todo_id: "todo_other", text: "Independent work without hard write_scope conflict"};
         assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
           operation_id: "prepare-blocker", expected_provider_revision: head.provider_revision, projection: head.head,
           mutations: [{kind: "todo_upsert", todo: change}]}))).status, "applied");
-        if (scenario === "overlapping-work") assert.equal((await claim(store, {...request, todo_id: "todo_other",
+        if (scenario === "independent-todo") assert.equal((await claim(store, {...request, todo_id: "todo_other",
           actor_agent_id: "agent-b", claimed_by: "agent-b", operation_id: "occupy-scope"})).status, "applied");
       }
       const before = await loaded(store); const result = await complete(store, original);
       assert.equal(result.status, "failed", scenario);
-      assert.notEqual((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      if (scenario === "independent-todo") {
+        assert.equal((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      } else {
+        assert.notEqual((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      }
       if (scenario === "explicit-proof") assert.equal(result.recovery, undefined);
       assert.deepEqual(await loaded(store), before, scenario);
     }
@@ -175,7 +179,7 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     const accepted = await claim(store, request);
     assert.equal(accepted.status, "applied", JSON.stringify(accepted));
     const original = accepted.lease as JsonObject;
-    assert.deepEqual(original.write_scopes, ["src/**"]);
+    assert.deepEqual(original.write_scopes, []);
     assert.equal(original.expires_at, "2026-09-13T10:45:00Z");
     assert.equal(accepted.claim_operation_id, "claim-a");
     assert.equal((await update(store, progress)).status, "applied");
@@ -248,6 +252,45 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
         "a fresh grant never makes the expired reference valid");
       assert.equal((await execute({...original, claim_operation_id: String(prepared.claim_operation_id)})).status, "applied");
     }
+  });
+  test(`${provider} managed execution: explicit ttl_seconds controls expiry, final-third renewal, bounds and replay identity`, async t => {
+    const {store, request, progress} = await setup(t);
+    const before = await loaded(store);
+    for (const invalid of [0, 86401]) {
+      const rejected = await claim(store, {...request, operation_id: `bad-ttl-${invalid}`, ttl_seconds: invalid});
+      assert.equal(rejected.status, "failed");
+      assert.equal(rejected.reason_code, "invalid_coordination_todo_claim");
+      assert.match(String(rejected.reason), /ttl seconds must be between 1 and 86400/);
+      assert.deepEqual(await loaded(store), before);
+    }
+    const longClaim = await claim(store, {...request, operation_id: "claim-long-ttl", ttl_seconds: 7200});
+    assert.equal(longClaim.status, "applied", JSON.stringify(longClaim));
+    const lease = longClaim.lease as JsonObject;
+    assert.equal(lease.acquire_ttl_seconds, 7200);
+    assert.equal(lease.expires_at, "2026-09-13T12:00:00Z");
+    const unchangedReplay = await claim(store, {
+      ...request, operation_id: "claim-long-ttl", ttl_seconds: 7200, now: new Date("2026-09-13T10:30:00Z"),
+    });
+    assert.equal(unchangedReplay.status, "replayed");
+    assert.equal((unchangedReplay.lease as JsonObject).acquire_ttl_seconds, 7200);
+    const mismatchedReplay = await claim(store, {
+      ...request, operation_id: "claim-long-ttl", ttl_seconds: 3600, now: new Date("2026-09-13T10:30:00Z"),
+    });
+    assert.equal(mismatchedReplay.status, "failed");
+    assert.equal(mismatchedReplay.reason_code, "coordination_operation_identity_mismatch");
+    // 10:31 is outside the final third of a 7200s lease (only 4440s left, > 2400s), so early update never renews;
+    // 11:25 (only 2100s <= 2400s left) renews with the same 7200s TTL.
+    assert.equal((await update(store, {...progress, claim_operation_id: "claim-long-ttl",
+      operation_id: "early-long-progress", now: new Date("2026-09-13T10:31:00Z")})).status, "applied");
+    let current = await loaded(store);
+    assert.equal((current.head.leases as JsonObject[])[0]!.version, 1);
+    assert.equal((await update(store, {...progress, claim_operation_id: "claim-long-ttl",
+      operation_id: "late-long-progress", now: new Date("2026-09-13T11:25:00Z")})).status, "applied");
+    current = await loaded(store);
+    const renewed = (current.head.leases as JsonObject[])[0]!;
+    assert.equal(renewed.version, 2);
+    assert.equal(renewed.acquire_ttl_seconds, 7200);
+    assert.equal(renewed.expires_at, "2026-09-13T13:25:00Z");
   });
   test(`${provider} managed execution: changed identity requires reconciliation instead of claim adoption`, async t => {
     for (const change of [{owner: "agent-b"}, {lease_epoch: 2, version: 2},
@@ -436,6 +479,22 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     assert.equal((await claim(store, {...legacy, manage_execution: true, expected_role: null})).reason_code,
       "coordination_operation_identity_mismatch", "other changed intent remains rejected");
     assert.deepEqual(await loaded(store), before);
+  });
+  test(`${provider} managed execution: reviewed replay preserves the original unreviewed claim`, async t => {
+    const {store, request} = await setup(t);
+    const reviewed = {...request, expected_provider_revision: (await loaded(store)).provider_revision};
+    const accepted = await claim(store, request);
+    assert.equal(accepted.status, "applied");
+    const before = await loaded(store);
+    const replay = await claim(store, reviewed);
+    assert.equal(replay.status, "replayed");
+    assert.deepEqual(replay.lease, accepted.lease);
+    assert.deepEqual(replay.original_receipt, accepted.original_receipt);
+    assert.equal((await claim(store, {...reviewed, claimed_by: "agent-b", actor_agent_id: "agent-b"})).reason_code,
+      "coordination_operation_identity_mismatch");
+    assert.equal((await claim(store, reviewed, async () => false)).reason_code, "authority_source_changed");
+    assert.equal((await claim(store, {...reviewed, now: new Date("2026-09-13T12:00:00Z")})).status, "failed");
+    assert.deepEqual(await loaded(store), before, "historical replay never renews the lease or writes a new claim");
   });
   test(`${provider} managed execution: completion releases once and the original Turn closes without new execution`, async t => {
     const {store, request} = await setup(t);

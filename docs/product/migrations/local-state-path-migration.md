@@ -141,7 +141,8 @@ not accept an unrecorded newline rewrite as its own completed write.
 
 If recovery reports new content, a second directory, a redirected route or a
 damaged backup, it refuses to overwrite anything. Preserve the backup and both
-observed routes for diagnosis; This is explicit offline process-interruption recovery,
+observed routes for diagnosis; an interrupted operation does not authorize
+discarding later work. This is explicit offline process-interruption recovery,
 not an online writer fence or a guarantee against filesystem/power-loss damage.
 An interrupted backup before the recovery receipt is written has moved no
 authoritative state; retain the partial backup and choose a new backup directory

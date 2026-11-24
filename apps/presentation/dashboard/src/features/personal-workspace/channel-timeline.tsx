@@ -21,7 +21,7 @@ import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
 import { conversationOrder } from "./conversation-order";
 import { ConversationFind, conversationMessageKey } from "./conversation-find";
-import type { WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
+import type { PersonalWorkspaceCallbacks, WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string, turnId?: string) {
   const url = new URL(window.location.href);
@@ -68,7 +68,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   onApplyGoalDraft,
   goalDraftPreparationContext,
   onSuggestReply,
-  onOpenGoalEvidence,
+  onOpenGoalChat,
   onInterruptTurn,
   onAdjustTurn,
   onCancelPreparation,
@@ -96,7 +96,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   onApplyGoalDraft?: (proposal: WorkspaceActionPreview) => Promise<WorkspaceActionPreview>;
   goalDraftPreparationContext?: string;
   onSuggestReply?: (text: string) => void;
-  onOpenGoalEvidence?: (goalId: string) => void;
+  onOpenGoalChat?: PersonalWorkspaceCallbacks["onOpenGoal"];
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onAdjustTurn?: (turnId: string) => void;
 }) {
@@ -251,16 +251,16 @@ export const ChannelTimeline = memo(function ChannelTimeline({
       return (
         <Fragment key={item.id}><button className={`personal-proposal-row is-${item.proposal.status}`} data-action-kind={item.proposal.actionKind} onClick={() => onSelect({ item: item.proposal, kind: "proposal" })} type="button">
           <span><Sparkles size={17} /></span>
-          <span><small>{pendingOperation ? t(`proposal.kind.${item.proposal.actionKind}`)
+          <span><small>{pendingOperation || item.proposal.reviewPlan?.reason === "todo_creation_retry" ? t(`proposal.kind.${item.proposal.actionKind}`)
             : taskReceipt ? t("drawer.taskLaunchReceipt")
             : appliedTeamPlan ? (locale === "zh-CN" ? "团队分配 · 已记录" : "Team assignment · Recorded")
             : `${t(`proposal.kind.${item.proposal.actionKind}`)} · ${t(`proposal.status.${item.proposal.status}`)}`}</small><strong>{item.proposal.title}</strong>{item.proposal.impact ? <p>{item.proposal.impact}</p> : null}</span>
           <b>{taskReceipt ? t("feedback.taskStartRequested")
             : item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review")
             : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
-        </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan
+        </button>{showManagerTeamResults && onOpenGoalChat && appliedTeamPlan
           && item.proposal.goalId && item.proposal.teamPlanTodoIds?.length
-          ? <ManagerTeamResult goalId={item.proposal.goalId} todoIds={item.proposal.teamPlanTodoIds} zh={locale === "zh-CN"} onOpenGoalEvidence={onOpenGoalEvidence}/>
+          ? <ManagerTeamResult goalId={item.proposal.goalId} todoIds={item.proposal.teamPlanTodoIds} zh={locale === "zh-CN"} onOpenGoalEvidence={onOpenGoalChat}/>
           : null}</Fragment>
       );
     }
@@ -295,7 +295,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
             : null}
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
-            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} preparationContext={goalDraftPreparationContext} draft={item.message.goalDraft} onReview={onReviewGoalDraft ? reviewDraft : undefined} onApply={onApplyGoalDraft} onSuggest={onSuggestReply}/> : null}
+            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} preparationContext={goalDraftPreparationContext} draft={item.message.goalDraft} onReview={onReviewGoalDraft ? reviewDraft : undefined} onApply={onApplyGoalDraft} onOpenGoalChat={onOpenGoalChat} onSuggest={onSuggestReply}/> : null}
           <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
         </div>
       </article>

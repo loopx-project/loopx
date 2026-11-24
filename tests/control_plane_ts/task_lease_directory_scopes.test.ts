@@ -70,7 +70,7 @@ test("directory matching retains stored spelling and existing authority boundari
       ttl_seconds: 60, write_scopes: ["src/components/*.ts"]},
   };
   const original = structuredClone(request);
-  assert.equal(evaluateTaskLeaseAcquireDecision(request).code, "write_scope_conflict");
+  assert.equal(evaluateTaskLeaseAcquireDecision(request).outcome, "apply");
   const differentRepository = structuredClone(request);
   differentRepository.todo.task_repository = "git:github.com/example/other";
   assert.equal(evaluateTaskLeaseAcquireDecision(differentRepository).outcome, "apply");
@@ -78,12 +78,12 @@ test("directory matching retains stored spelling and existing authority boundari
   inactive.other_leases[0].active = false;
   assert.equal(evaluateTaskLeaseAcquireDecision(inactive).outcome, "apply");
   const sameCheckout = {...request, command: {...request.command, write_workspace: workspace}};
-  assert.equal(evaluateTaskLeaseAcquireDecision(sameCheckout).code, "write_scope_conflict");
+  assert.equal(evaluateTaskLeaseAcquireDecision(sameCheckout).code, "workspace_lease_conflict");
   const independent = {...request, command: {...request.command,
     write_workspace: {...workspace, worktree: "4".repeat(64)}}};
-  const advisory = evaluateTaskLeaseAcquireDecision(independent);
-  assert.equal(advisory.outcome, "apply");
-  assert.deepEqual(advisory.overlap_advisory_indexes, [0]);
+  const separate = evaluateTaskLeaseAcquireDecision(independent);
+  assert.equal(separate.outcome, "apply");
+  assert.equal(separate.overlap_advisory_indexes, undefined);
   assert.deepEqual(request, original);
   assert.deepEqual(comparisonWriteScopes(["src/"]), ["src/"]);
 });

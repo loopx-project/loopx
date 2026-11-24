@@ -230,3 +230,10 @@
 .ext-board-narrow .ext-board-action > span { display: none; }
 .ext-board-action.is-busy svg { animation: ext-board-breathe 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .ext-board-action.is-busy svg { animation: none; } }
+
+/* The Goal shares the tag row; its full name remains available on hover. */
+.ext-board-goal { display: flex; flex: 1; max-width: 100%; }
+.ext-board-goal-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-board-goal-status { flex-shrink: 0; }
+.ext-board-filters { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.ext-board-filters::-webkit-scrollbar { display: none; }

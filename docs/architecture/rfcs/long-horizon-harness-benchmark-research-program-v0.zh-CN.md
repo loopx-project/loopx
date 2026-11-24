@@ -568,6 +568,21 @@ goal-mode baseline。benchmark-reference scaffold reproduction 是额外 fidelit
 
 内部 control score 可以诊断行为，但不得加到原生 task score 上，也不能把失败任务变成成功。
 
+### 5.5 四层漏斗验证协议
+
+完整原生全预算长跑（例如 EdgeBench 等长程标量研究的 `18h–20h` 单元）的时钟与算力成本过高，不应作为排查基础设施缺陷、未命中 KV-cache 开销或局部代理指标反序的第一道过滤器。每项新控制机制、运行时优化及 benchmark 实验均按研究适用的匹配预算，顺序通过闭环阻塞**四层漏斗验证协议**的**适用阶段**推进。对官方 benchmark 或 leaderboard 可比较单元（cell），基准声明的原生时长仍是强制可比性合同；它不是内部 promotion probe 的研究时长上限。
+
+研究可以预先声明**扩展预算晋升探针（extended-budget promotion probe）**——例如让 `LHTB 2.0` 或 `FrontierCS-2` 运行超过 `10h`——以检验 LoopX 机制是否产生长程优势。这仅在以下条件同时满足时成立：除已注册的 treatment 差异外，每个 arm 使用相同的固定任务、benchmark 环境与 verifier、模型、反馈机会、控制权限上限、停止规则、run profile 和扩展预算；且 runner 能延长执行而不改变 benchmark 的任务或 outcome 语义。若 runner 硬锁时长，必须提供显式、带版本的 run-profile 扩展及其资格验证；不得把较短运行改名成扩展预算证据。
+
+报告必须把 `native-budget` 与 `extended-budget` cell 分开。两者都须在适用时包含匹配的 `Raw-Artifact Reset Baseline`（§5.2）、完整 token、时间、provider、控制与评测成本（§6.2）、完整性审计（§6.5）及不确定性。扩展预算结果可以支撑限定在该预算下的 C2 主张；它既不是官方原生预算结果，也不是 leaderboard-eligible 结果，不能证明原生时长下的等预算帕累托占优，也不得与原生预算 cell 汇总。`N >= 5` 按实际 promotion-condition cell 计算。当任务族或分支具备已证明的 checkpoint 恢复接缝（§8.7）时，在 Tier 3 之前执行有界 Tier 2 checkpoint 分叉；当**不存在已证明的 checkpoint 恢复接缝**时，Tier 2 属于不适用而非伪造分叉——研究保留 Tier 0 与 Tier 1 门禁，改走 **§8.7 从起点匹配（`from-scratch matched-budget`）对照路线**直达 Tier 3，如实报告实际消耗预算，且不得将全新注册运行记为 checkpoint fork 或同状态反事实（$\tau_B(s; a, a_0, \pi)$）：
+
+| 层级 | 典型范围与时长 | 必需证据与核心指标 | 门禁与不可替代边界 |
+|---|---|---|---|
+| **Tier 0 · 离线不变量与标尺校准** | 零在线模型开销：单测与回归套件、确定性重放与 checkpoint 恢复夹具、`WarmStart` 与评测器 `/context` 预检、容器/认证/网络隔离审计，以及 [`benchmark/proxy_order.py`](../../../benchmark/proxy_order.py) 离线共同面板诊断 | 确定性通过/失败契约、精确产物与源码 digest 绑定、零隐藏评测泄漏，以及共同面板 Kendall $\tau_b$ 与尾部断崖刻画 | 任一项失败即阻止实跑消耗 token；静态与重放验证仅证明 E0 基础就绪度（E1 与 E2 仍须按 §11.2 给出实 runner 实跑回执与重复转换恢复证据） |
+| **Tier 1 · 快速效率对齐门** | 低于研究适用预算（原生或预声明扩展预算）的短周期匹配实验（如 `12h–20h` 长程赛道上采用 `--timeout 18000` 的 `5h` 对照，或 `3h–5h` 与 `10h+` 赛道上的等比例更短窗口），按 §5.1–§5.3 对比 `Raw-Artifact Reset Baseline`、静默单会话执行与 `Controller–Worker` + `EpochReset` 相对于锚定基线的表现 | 原生 `score` 对齐度、`time-to-threshold`、轮间协议延迟缺口压缩（如训练结束至下次提交的等待窗口）、`cached_prefix_tokens` 与 `uncached_input_tokens` 稳定性，以及总 token/耗时比上限 | 尽早拦截协议税膨胀或执行退化；短周期效率对齐不能替代完整预算净收益或证明长程无熵增漂移 |
+| **Tier 2 · 有界反事实标定（仅在已证明恢复接缝可用时适用）** | 仅当研究已证明所需 checkpoint 恢复接缝（§8.7）时适用：处于研究预算内的短窗口匹配分叉（如剩余上限 `~1h–3h`），从同一静止封存的 `research-checkpoint`（$s_0$）发起，严格固定源码、评测条件（`/context`）与提交冷却；**当没有已证明的恢复接缝时**，不启用 Tier 2、不伪造分叉，直接按 §8.7 从起点匹配比较进入 Tier 3 | 决策邻域 Kendall $\tau_b(s; a, a_0, \pi)$、相对原生 incumbent 的代理假提升率、前沿断崖（`Yardstick`）检出，以及计入完整边际控制/评测成本后的条件净收益 $\Delta J(B \mid s_0)$（checkpoint 研究在准入配对前仍须完成恢复接缝验证） | 在启动全周期多臂组前隔离后期决策与局部标尺保真度；结果以起点 $s_0$ 为条件，不替代从冷启动到终局的全周期对照，且从起点比较不得记为同状态反事实 |
+| **Tier 3 · 全周期复现与晋升实验** | 在基准声明的原生时长，或预声明的扩展预算晋升探针下做复现实验（如 `LHTB 2.0` 原生 `3h`、`FrontierCS-2` 原生 `5h`，也可将任一者作为独立的 `10h+` 内部探针；EdgeBench `18h–20h`；`N >= 5` 按实际 promotion-condition cell 计算），既可承接自 Tier 2，也可在缺乏已证明恢复接缝时直接承接 §8.7 从起点匹配路线；含 episode 型 RSI / 标量赛道必配的 `Raw-Artifact Reset Baseline`（§5.2）、完整成本核算（§6.2）及独立完整性审计（§6.5） | 在锚定研究上于所选原生或扩展预算与匹配对照下达成含不确定性界限的 benchmark 原生收益提升或成本归一化帕累托占优（若主张 C3 则还需跨族复现） | Tier 3 单研究在原生或扩展预算下的复现支撑限定于该预算的 C2，跨族复现支撑 C3，C4 产品晋升仍按 §4 单独把关。原生预算 cell 仍是官方可比性路径；扩展预算证据不得报告为原生预算或 leaderboard 结果，也不得与原生 cell 汇总。缺乏恢复接缝而走 §8.7 从起点比较时，上述证据判据均不放松，checkpoint 分叉研究本身的恢复门槛亦保持严格；Tier 0–2 出现退化时须停止归因与重设计，严禁靠堆砌全矩阵掩盖 |
+
 ## 6. 测量模型
 
 ### 6.1 原生结果
@@ -1503,6 +1518,7 @@ promotion 或修改 LoopX default。
 | 2026-08-25 | 把 StartupBench、LoopsBench 与 WideSearch 加入 benchmark primer 与集成计划，作为第二组互补 trio；每个 benchmark 必须在原生 metric space 报告，且 benchmark 材料不得进入可复用的 LoopX state。 |
 | 2026-10-16 | 将[反馈优先观察](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md)归入历史报告；运行器源码子集与配置投影修复仍属 E0/E1，混合处理、中断和进行中的观察不关闭 E2/E3，也不分离单一规划效应。通用 guard 重入放宽待受影响调用方独立验证。 |
 | 2026-11-15 | 确立 Bitter-Lesson 边界与五类受治理控制面失败机制（§2.2），要求 episode 型 RSI / 标量优化赛道的 C2/C3 主张纳入匹配且保留完整成本记账的 Raw-Artifact Reset Baseline（新实跑或合格历史复用，§5.2），并采纳 2026-11 Benchmark 组合优先级排序（§3.8）：**P0**（`EdgeBench`、`FrontierCS-2`、`LHTB / LHTB 2.0`、`LoopsBench`）、**P1**（`SWE-Marathon`、`PaperBenchX` 优先于 `PaperBench`、`ALE` 区别于 `ALE-Bench`、`WideSearch`、`KernelBench` / `AlgoTune`）、**P2**（`ALE-Bench`、`StartupBench`、`MLE-bench`、`tb-science` 仅保留单次迁移样本——因 CI 锁定 `28800s` 预算与 100% 二值 `reward.txt` 排除出 RSI），以及 **仅作对照 / 降级**（`DeepSWE`、`SWE-bench Pro`、`CORE-Bench`、`ScienceAgentBench`、`BixBench`、`FrontierScience`、已废弃 `RE-Bench`）；多臂扩展以统一 `benchmark/runtime/` + Stop-hook E0–E2 就绪及 Linux x86\_64 / GPU 宿主机为前置门槛。 |
+| 2026-11-22 | 确立闭环阻塞的**四层漏斗验证协议**（§5.5：Tier 0 离线不变量与 `benchmark/proxy_order.py` 校准仅证 E0 -> Tier 1 低于适用预算的快速效率对齐门 -> 在 §8.7 恢复接缝已证明时启用 Tier 2 静止检查点反事实标定，不存在已证明恢复接缝时保留 §8.7 从起点匹配比较路线而不伪造 checkpoint 分叉、亦不放松恢复验证 -> Tier 3 在原生 benchmark 时长或独立的预声明扩展预算探针下复现晋升，如 LHTB 2.0 原生 `3h`、FrontierCS-2 原生 `5h`、二者任一 `10h+` 扩展探针、EdgeBench `18h–20h`，区分单研究 `C2` 与跨族 `C3`）。原生预算是官方可比性与 leaderboard 合同，不是内部研究时长上限；扩展探针必须匹配所有 arm，只能报告限定于所选预算的 C2，且不得汇总或改名成原生 cell。这样既不降低 §4 C2–C4 主张门槛与 §11.2 就绪门禁，也能提前剪枝运行时与协议退化，并诚实检验长程优势。 |
 
 ## 18. 参考资料
 

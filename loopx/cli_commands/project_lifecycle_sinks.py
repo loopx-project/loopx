@@ -4,6 +4,12 @@ from collections.abc import Callable, Mapping
 from importlib import import_module
 from pathlib import Path
 
+from ..extensions.lark.goal_channel_lifecycle import (
+    blocked_notice_sync_failure,
+    goal_channel_gate_sync_failure,
+    sync_blocked_notice_after_refresh,
+    sync_human_gate_after_refresh,
+)
 from ..extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
@@ -70,3 +76,62 @@ def apply_external_sink_postcondition(
     if postcondition.get("blocks_delivery"):
         payload["ok"] = False
         payload["error"] = error
+
+
+def sync_goal_channel_notifications_after_refresh(
+    payload: dict[str, object],
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+    goal_id: str,
+    agent_id: str | None,
+) -> None:
+    try:
+        gate_sync = sync_human_gate_after_refresh(
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_arg,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            external_sink_delivery_authorized=payload["external_sink_delivery_authorized"] is True,
+        )
+    except Exception as error:
+        gate_sync = goal_channel_gate_sync_failure(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            exception=error,
+        )
+    try:
+        blocked_sync = sync_blocked_notice_after_refresh(
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_arg,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            external_sink_delivery_authorized=payload[
+                "external_sink_delivery_authorized"
+            ]
+            is True,
+        )
+    except Exception as error:
+        blocked_sync = blocked_notice_sync_failure(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            exception=error,
+        )
+    payload["goal_channel_blocked_notice_sync"] = blocked_sync
+    payload["goal_channel_gate_sync"] = gate_sync
+    apply_external_sink_postcondition(
+        payload,
+        sink_result=gate_sync,
+        warning=(
+            "enabled Goal Channel human-gate delivery postcondition is "
+            "unsatisfied; the notification remains retryable"
+        ),
+        error=(
+            "enabled Goal Channel human-gate notification/readback failed "
+            "after the refresh; retry it before delivery"
+            + (
+                "; " + gate_sync["failure_summary"]
+                if gate_sync.get("failure_summary") else ""
+            )
+        ),
+    )

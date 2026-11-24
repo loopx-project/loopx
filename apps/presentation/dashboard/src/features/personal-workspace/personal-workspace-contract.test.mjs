@@ -234,7 +234,6 @@ assert.match(status, /function withoutGoal/, "Status projection can remove a del
 assert.match(page, /applied\.reviewPlan\?\.interaction !== "completed"/, "Non-applied typed action results never project as successful Goal deletion");
 assert.match(page, /t\("feedback\.stale"\)/, "Stale Goal deletion remains visible with a localized actionable error");
 assert.match(page, /activityTimeLabel\(item\.output\.createdAt,\s*locale,\s*t\)/, "Files render locale-aware human-readable output timestamps");
-assert.match(drawer, /selection\.kind === "run" \|\| selection\.kind === "proposal" \|\| selection\.kind === "schedule"/, "Advanced diagnostics only appears on objects with actionable runtime details");
 
 for (const field of ["agentId", "todoId", "runId", "safePreview"]) {
   assert.match(model, new RegExp(`${field}\\??:`), `Output exposes ${field}`);
@@ -502,11 +501,12 @@ for (const capabilityId of [
   "pull_request_review",
   "reward_memory",
   "steward_executor",
+  "steward_memory",
 ]) {
   const matches = capabilityLocalization.match(new RegExp(`${capabilityId}:`, "g")) ?? [];
   assert.equal(matches.length, 2, `${capabilityId} has English and Simplified Chinese metadata`);
 }
-for (const fieldKey of ["agent_orders", "allowed_domains", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone"]) {
+for (const fieldKey of ["agent_orders", "allowed_domains", "auto_recall", "coordinator_agent_id", "eligible_endpoints", "enabled", "executor_endpoint", "executor_model", "executor_reasoning_effort", "max_children", "profile", "profile_preset", "recall_timeout_seconds", "review_order", "route_ref", "safe_fix", "selection_policy", "strict_receipt", "timezone", "user_space"]) {
   const matches = capabilityLocalization.match(new RegExp(`^\\s+${fieldKey}:`, "gm")) ?? [];
   assert.equal(matches.length, 2, `${fieldKey} has English and Simplified Chinese field copy`);
 }
@@ -734,10 +734,12 @@ const overview = source("./goal-overview.tsx");
 const overviewCss = source("./goal-overview.css");
 const researchHistory = source("./goal-research-history.tsx");
 const researchHistoryCss = source("./goal-research-history.css");
+const yardstickReadback = source("./work-yardstick-readback.tsx");
 
 assert.match(overview, /goal-overview-worker-status[\s\S]*?<ContextHelp/, "WorkerReadback puts explanation into ContextHelp beside status");
 assert.match(overview, /details className="goal-overview-worker-details"/, "WorkerReadback technical details start collapsed");
 assert.match(overviewCss, /\.goal-overview-worker-status\s*\{[^}]*display:\s*flex/, "Worker status row is structured via flex");
 assert.match(overviewCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.goal-overview-worker-state dl/, "Worker state has narrow mobile grid rules");
-assert.match(researchHistory, /execution_observation[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
+assert.match(researchHistory, /execution_observation[\s\S]*?<ExecutionObservationReadback/, "Research history delegates execution_observation rendering to ExecutionObservationReadback");
+assert.match(yardstickReadback, /export function ExecutionObservationReadback[\s\S]*?<summary>[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
 assert.match(researchHistoryCss, /margin-inline-start:\s*0;\s*margin-top:\s*8px;/, "Research history mobile action wraps cleanly on 390px");

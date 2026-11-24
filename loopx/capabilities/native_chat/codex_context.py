@@ -10,7 +10,10 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from ...control_plane.turn_driver.codex_worker_identity import CodexWorkerIdentity
 
 
 def codex_home(base_home: Path, policy: Mapping[str, Any] | None) -> Path:
@@ -99,8 +102,10 @@ def require_session_home(base_home: Path, session: Mapping[str, Any]) -> None:
 
 
 def process_environment(home: Path, *, isolated: bool) -> dict[str, str]:
+    from ..steward_memory.runtime import scrub_openviking_environment
+
     if not isolated:
-        return {**os.environ, "CODEX_HOME": str(home)}
+        return {**scrub_openviking_environment(os.environ), "CODEX_HOME": str(home)}
     host_home = home.parent
     host_home.mkdir(parents=True, exist_ok=True, mode=0o700)
     home.mkdir(exist_ok=True, mode=0o700)
@@ -111,6 +116,16 @@ def process_environment(home: Path, *, isolated: bool) -> dict[str, str]:
         env.update({key: os.environ[key] for key in ("SystemRoot", "WINDIR") if key in os.environ})
         env["USERPROFILE"] = str(host_home)
     return env
+
+
+def process_profile(configured_home: Path | None, policy: Mapping[str, Any] | None,
+                    isolated: bool, worker: CodexWorkerIdentity | None) -> tuple[Path, Path, dict[str, str]]:
+    """Resolve the host store and environment without preparing Worker-owned paths as Core."""
+    if worker is not None:
+        return worker.codex_home, worker.codex_home, worker.environment
+    base = (configured_home or Path(os.environ.get("CODEX_HOME") or "~/.codex")).expanduser().resolve()
+    home = codex_home(base, policy)
+    return base, home, process_environment(home, isolated=isolated)
 
 
 def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapping[str, Any], *,

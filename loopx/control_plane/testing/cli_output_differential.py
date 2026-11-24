@@ -744,8 +744,10 @@ def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, 
     }
     scenario, output_format = base.get("scenario"), base.get("format")
     variant = base.get("variant_id")
-    legacy = variant in aliases
-    allowed_variant = variant in variants or (legacy and output_format in aliases[variant])
+    alias_variant = isinstance(variant, str) and variant in aliases and output_format in aliases[variant]
+    source_schema = (base.get("quota_controls") or {}).get("source_schema")
+    legacy = alias_variant and source_schema == "loopx_turn_envelope_v0"
+    allowed_variant = variant in variants or alias_variant
     policy = "explicit_opt_in_cold_path" if variant else "absolute_hot_path"
     row = (f"variant/{variant}/{scenario}/{output_format}" if variant
            else f"surface/quota_should_run/{scenario}/{output_format}")
@@ -767,7 +769,7 @@ def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, 
         and candidate.get("markdown_anchor") == "# LoopX Turn Envelope"
         and _matching_quota_controls(base, candidate)):
         return False
-    return (base["quota_controls"].get("source_schema") == ("loopx_turn_envelope_v0" if legacy else None)
+    return (source_schema == ("loopx_turn_envelope_v0" if legacy else None)
             and candidate["quota_controls"].get("source_schema") == "loopx_turn_envelope_v1")
 
 

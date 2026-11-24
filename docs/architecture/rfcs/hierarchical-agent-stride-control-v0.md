@@ -638,6 +638,195 @@ decision through the same `previous_review` requirement. Feature-off context
 and legacy decision references remain unchanged. This repairs feedback
 delivery; execution quality and goal benefit still require separate evidence.
 
+<a id="work-meta-goal"></a>
+
+#### Meta-goals and single-Todo acceptance (proposal)
+
+A **meta-goal** is a planning objective for pursuing one or more existing goals.
+It specifies what should be true of a plan, a choice among candidate plans, or
+the relationship between plans, and how to tell when that condition is met.
+A decision question identifies an uncertainty that could change the choice.
+The same meta-goal can span Turns as questions and actions change.
+[Wilensky, §2.2](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1980/Archive/ERL-m-80-33.pdf)
+
+| Meta-goal | Example and success condition | Possible Stride action |
+|---|---|---|
+| Resolve a conflict between goals | Two Goals may need the same limited test window. Find an order or alternative route that meets both sets of acceptance criteria and deadlines. If the commitments cannot both be met, the authorized Goal owners decide the trade-off. | `verify` whether the windows overlap, or `switch` to test a mechanism that can run independently. |
+| Combine overlapping plans | Two plans require equivalent validation against the same input revision. Run it once with coverage for both sets of criteria, and let each acceptance decision reference the shared result. | `verify` coverage if it is uncertain. Confirmed coverage can support `grow` on the shared route within its validated scope. |
+| Choose the highest-value feasible continuation | Compare expected goal value within the same acceptance, deadline, authority and resource constraints. When expected outcomes, risks and later options are equivalent, prefer the lower full cost. | Compare `grow` on a supported route with a `switch` experiment. Use `verify` when the evidence could improve that choice enough to justify the probe. |
+
+Stride chooses the next action in pursuit of the meta-goal. `verify` gathers
+evidence that can change the choice at a justified cost. `grow` expands work on
+a supported route. `switch` tests a materially different mechanism. The same
+meta-goal can call for different actions as evidence arrives. Plan changes
+such as reordering work or sharing a dependency use the existing Todo paths.
+Goal commitments, acceptance, budget and authority remain with their owners.
+
+**Value of a continuation.** Compare the incremental utility delivered by the
+current slice and the expected additional utility from later choices. One
+Bellman-style expression for this comparison is
+
+$$
+Q(s,b,a)=\mathbb E\!\left[\Delta U_{\mathrm{now}}+
+D(\Delta t)V_{\mathrm{future}}(S',b-K)\mid s,b,a\right].
+$$
+
+Here `s` and `b` are the current state and remaining resources. An action
+uses resources `K` and leads to state `S'` with updated results and evidence.
+`D(Δt)` discounts utility over the time until the next decision. Use one when
+time is governed solely by the deadline. Define utility from the Goal's
+acceptance criteria. The future term counts the additional utility available
+from feasible choices after the current slice.
+
+Information has value through better later choices. Estimate that value by
+comparing the later decision with and without the new observation at the same
+time and resource point. Count it once in the evidence-conditioned future
+term. An action can deliver utility and informative evidence together.
+When comparing a probe with acting directly, include the probe's resource
+use and delay. Terminal-outcome objectives and stopping follow the existing
+[budgeted planning model](target-yardstick-stride-decisions-v0.md#budgeted-planning).
+
+**First acceptance trial.** Use one Todo to deliver a faster scheduler under
+its existing correctness and budget constraints. The meta-goal is to select
+the optimization route that warrants further investment. The decision
+question is whether the candidate's gains carry over to peak load. Compare
+tuning immediately with spending part of the same budget on a peak-load
+probe that could change which route to scale. State the objective and choice
+in the existing Stride plan and reasons. For the probe path, choose `verify`
+and use `next_probe` to compare the candidate and incumbent under matched peak
+conditions, with a prediction, minimum evidence, adoption criterion and cost bound.
+
+**Worked scheduler example.** Give the Todo 10 budget units and a hard
+deadline, with $D=1$. In this example, a 10% accepted peak-throughput gain
+over the incumbent is worth 10 utility points. The prior probability that
+the current mechanism's gain transfers to peak load is $P(T)=0.60$.
+At remaining budget $r$, `grow` earns $r$ points if $T$ holds and retains the
+incumbent at 0 points otherwise. `switch` earns $r/2$ points in either state.
+Both payoffs assume $r$ covers implementation, any switch, and final
+validation under the same acceptance criteria.
+
+The probe costs 1 unit, leaves 9 for either route, and delivers 0 immediate
+throughput points. Assume the matched peak comparison passes its correctness
+checks and returns one of two valid results. A $+$ means the candidate reaches
+at least the declared 5% gain, and a $-$ means it falls below it. Assume
+symmetric sensitivity and specificity $P(+\mid T)=P(-\mid \neg T)=q=0.90$.
+Let $p$ be the transfer probability given the evidence so far. At any
+positive remaining budget $r$, `grow` beats `switch` when $p>0.50$, since
+their expected values are $rp$ and $r/2$.
+
+| Valid probe result | Probability | Transfer probability after the result | Next choice |
+|---|---:|---:|---|
+| $+$ | 0.58 | $0.54/0.58 \approx 93.1\%$ | `grow` |
+| $-$ | 0.42 | $0.06/0.42 \approx 14.3\%$ | `switch` |
+
+| Continuation | Total budget | Expected accepted gain (points) |
+|---|---:|---:|
+| Direct `grow` | 10 | $0.60\times10=6.00$ |
+| Direct `switch` | 10 | $10/2=5.00$ |
+| `verify`, then choose | $1+9=10$ | $0.54\times9+0.42\times4.5=6.75$ |
+
+In the last row, 0.54 is the joint probability of transfer and a positive
+signal. The alternative earns 4.5 points in either state after a negative
+signal. Using prior evidence with the same 9 units gives
+$\max(0.60\times9,4.5)=5.40$. The information is worth $6.75-5.40=1.35$
+points, the budget it consumes costs $6.00-5.40=0.60$ in foregone utility,
+and the net gain over direct `grow` is 0.75 points.
+
+For symmetric accuracy $0.50\le q\le0.60$, `grow` remains optimal after
+either result, giving the information zero decision value. When $q>0.60$,
+the results fall on opposite sides of the 50% decision threshold.
+For probe cost $k$, the probabilities $P(T,+)=0.60q$ and $P(-)=0.60-0.20q$
+give expected value $(10-k)[0.60q+(0.60-0.20q)/2]=(10-k)(0.30+0.50q)$.
+With feasible follow-up work, probe when this exceeds 6.00. At $q=0.90$,
+this requires $k<2$ units. At $k=1$, it requires $q>11/15$ (about 73.3%).
+Equality gives the same expected value as direct `grow`. If a probe can
+return an inconclusive result, include that outcome's probability and its
+continuation value at the remaining budget in the comparison.
+
+**Estimate the inputs before choosing.** Fix the incumbent, peak workload
+and scale, evaluation horizon, and acceptance criteria for the comparison.
+In the actual Todo, $T$ means the current mechanism meets the declared useful
+peak gain at that scale under the existing correctness constraints.
+
+- **Transfer prior.** Use the closest comparable independent evaluations
+  available before the probe, matched by mechanism, workload, scale and
+  acceptance. Report verified transfers over resolved cases, alongside
+  missing labels and uncertainty. Repeated timings can refine a case's
+  noise estimate and share one transfer label.
+- **Probe accuracy.** Use cases with a quick result and an independent
+  reference verdict for the same candidate revision and workload scope.
+  Within each reference state ($T$ or $\neg T$), divide positive, negative
+  and inconclusive counts by the paired-case count to estimate the
+  likelihoods of each result. The two error rates can differ. A state
+  without pairs remains unknown. Report which probe results obtained
+  reference labels and scope the estimates to that coverage. Where useful
+  within budget, check some probe-negative cases for missed transfers.
+- **Route utility.** For `grow` and `switch`, use comparable runs to estimate
+  the possible accepted gains over the same incumbent at the same remaining
+  budget and horizon. Weight the outcomes by their likelihood, including
+  fallback after failure. Include implementation, switching, recovery and
+  final verification in the resource estimates. Use ranges supported by
+  comparable runs or the mechanism's limits, and retain unknowns for
+  quantities those sources cannot bound.
+
+Before results arrive, use the existing Stride plan and probe to record or
+reference the estimates, scope, evidence and what observation could change
+the choice.
+
+**Choose with sparse evidence.** Compare feasible choices across plausible
+ranges for the prior, probe likelihoods, gains and costs. Use the preferred
+route if the ordering is stable. If it can flip, identify the assumption
+that changes the choice. Favor a bounded probe when the expected improvement
+justifies its cost and delay and leaves time and resources for final
+confirmation. Otherwise favor a supported, reversible next slice, or retain
+the incumbent and record the question as unresolved through the existing
+stop or wait conditions.
+
+In a later authorized Turn, use `decision_followthrough` and `previous_review`
+to tie the next choice to the exact candidate, workload and observed result.
+Read back all three outcomes across the trial cases.
+
+- The evidence favors expanding the current route and shows useful headroom.
+  Choose `grow` and execute a larger coherent slice within the remaining budget.
+- The evidence favors testing a different mechanism. Choose `switch` and run a
+  bounded test of that mechanism.
+- The cost bound is reached with insufficient evidence. Record the choice as
+  unresolved and handle settlement or waiting through the existing owner.
+
+Use the existing Todo, Turn admission and settlement paths. Independently
+verify the action taken. For executed follow-up work, check whether it
+followed the decision and how its result compares with the original acceptance
+criteria. Record complete costs, including inconclusive probes, in all three cases.
+
+**Calibrate from verified outcomes.** Link the original forecast to the
+observed probe result, the route actually executed, the independent verdict
+and full observed cost. Update transfer counts with resolved reference
+labels, probe likelihoods with paired results and labels, and route payoff
+estimates with the executed route's verified outcomes and cost. For example,
+a negative probe followed by an accepted `switch` outcome updates the
+`switch` estimate. The original mechanism's transfer and the probe's
+classification error remain unknown until independently checked.
+
+Keep the original forecast and the evidence for the update. Report unresolved
+labels and unchosen outcomes as unknown. As comparable cases accumulate,
+compare prior and posterior forecasts against verified frequencies separately,
+and check gain and cost ranges against realized results. Keep comparisons
+scoped to the mechanism, workload, horizon, and probe and reference versions.
+Check revised estimates on later comparable cases.
+
+**Follow-up work.** For cross-Todo planning, start with two Todos within one
+Goal. Check that shared validation covers each Todo's acceptance criteria and
+read back both consumers' use. Cross-Goal changes follow the authority of the
+affected Goals.
+
+For cross-task strategy evolution, use verified decision episodes to propose a
+bounded, versioned Stride strategy change through its owner. An independent
+evaluator compares it with the current version on held-out tasks under the same
+model, starting conditions and budget. Read back actual adoption and outcomes
+in later authorized work. Use those observations and the evaluation verdict to
+decide whether to revise, retain or withdraw the candidate and what to try next.
+[Capability evolution research](frontier-science-research-program-v0.md#t07-diversity-preserving-capability-evolution)
+
 #### An iterative strategy and engineering boundary
 
 The first strategy is **model-guided, evidence-conditioned work planning**.
@@ -704,7 +893,7 @@ times separately. Check whether later work implemented the proposed mechanism;
 a decision record, saved snapshot or new identifier alone does not establish
 adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
-the inherited capability default enables the strategy; explicit off and saved legacy configurations retain their meaning. Identify the remaining authoritative goal gap, its limiting
+the strategy applies to live reviews. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with plausible alternatives that change the limiting assumption or
 mechanism, including complete cost. A stalled route calls for a discriminating
@@ -866,22 +1055,20 @@ benchmark-specific additions are not installed as Core defaults or checkpoint
 requirements. This provider treatment must be revision-pinned in comparisons;
 it does not establish initial-quality parity or long-horizon research gain.
 
-The activation vocabulary and existing Goal/device editor stay unchanged; no
-second selectable strategy or policy database is added. Off retains ordinary
-projection/review semantics. Both historical v1 decision shapes retain read
-compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
+Evidence-conditioned stride governs every live review. The Goal/device editor
+configures cadence and planning preferences. Both historical v1 decision shapes
+remain readable. Fresh reviews use v2 proposals. Frozen workers retain
 their exact source. Pin implementation revisions for comparisons; do not
 reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
-For an enabled periodic review or an existing observed-stall review
+For a periodic review or an existing observed-stall review
 (`typed_progress_repeat`, `no_progress_streak`, `repeated_action_loop`,
 `external_progress_review_drift`), every settlement path requires a current,
 source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. An evidenced path decision can retain unfinished useful
 work without a fabricated new progress identifier or Todo. Explicit acceptance
-and capability outcome restrictions still apply; explicit off, saved legacy
-cadence-only configurations and other sources
-retain their prior exit policies. No new detector, threshold or action is added.
+and capability outcome restrictions still apply. Other sources use their
+existing exit policies.
 
 The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
 reports 902 completed native turns and no submissions over one post-hoc selected
@@ -909,13 +1096,13 @@ Keep dependencies, acceptance, risk, authority and per-Turn settlement boundarie
 The next review must distinguish declared scope from actual execution, outcome
 quality and full cost; preserving a plan is not adoption or benefit.
 
-Evidence-conditioned stride is the capability default for inherited configuration.
-Explicit off, saved legacy cadence-only configurations and historical records
-retain their semantics. Clear overrides to inherit, or select off to roll back;
-no installed configuration, frozen worker or historical receipt is rewritten.
-The codec's missing historical strategy remains off. Review questions and syntax
-examples remain together; no extra decision fields, strategy versions or
-machine-enforced semantic classifier are added. Matched continuation must still
+Evidence-conditioned stride applies to reviews with inherited or explicitly
+configured cadence. After upgrading, pending writebacks use the current policy.
+A pending writeback for a qualifying review needs a current stride decision.
+Historical records and frozen workers keep their original interpretation.
+Device v2 files retain their stored strategy field for earlier runtimes to read
+after rollback. Review questions and syntax examples remain together.
+Matched continuation must still
 qualify target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical

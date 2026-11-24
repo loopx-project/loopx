@@ -725,7 +725,13 @@ def test_core_deadline_during_retry_backoff_does_not_launch_again(tmp_path, monk
 
 
 @pytest.mark.parametrize("stdout,returncode", [(b'{"ok":true}', 0), (b'{"ok":false}', 1),
-                                               (b'{"ok":true,"session":', 0), (b'{}', 0)])
+    (b'{"ok":true,"session":', 0), (b'{}', 0),
+    pytest.param(b'{"ok":true,"session":{"binding_scope":"agent","session_id":"session-b"}}',
+        0, id="foreign-success"),
+    pytest.param(json.dumps({"ok": False, "session": {"binding_scope": "agent", "session_id": "session-b"},
+        "host_failure": {"schema_version": "loopx_turn_host_failure_v0", "kind": "provider_capacity",
+            "attempt": 1, "retryable": True, "retry": {"strategy": "same_configuration",
+                "max_attempts": 3, "backoff_seconds": 30}}}).encode(), 1, id="foreign-capacity")])
 def test_unconfirmed_receipt_never_clears_original_session(tmp_path, monkeypatch, stdout, returncode):
     from loopx.extensions.process_runtime import CappedProcessResult
     args, count = _guarded_host(tmp_path, kind="provider_capacity")
@@ -1101,3 +1107,47 @@ def test_success_committed_before_lock_supersedes_contender_observation(tmp_path
     assert worker.run_worker(args) == 0
     assert ordinary.exists() and calls.read_text() == "1"
     assert json.loads(witness.read_text()) == {"pending": False}
+
+
+def test_external_worker_disables_core_dumps_and_logs_wake_stderr_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    if os.name == "posix":
+        import resource
+
+        recorded: list[tuple[int, int]] = []
+        monkeypatch.setattr(resource, "getrlimit", lambda kind: (1024, 2048))
+        monkeypatch.setattr(resource, "setrlimit", lambda kind, limits: recorded.append(limits))
+        worker._disable_core_dumps()
+        assert recorded == [(0, 2048)]
+
+    registry = tmp_path / "registry.json"
+    registry.write_text("{}")
+    args = argparse.Namespace(
+        cli_bin="loopx",
+        registry=str(registry),
+        runtime_root=str(tmp_path / "runtime"),
+        runtime_profile="generic_cli",
+        goal_id="goal-1",
+        agent_id="agent-1",
+        state_file=str(tmp_path / "state.json"),
+        wake_cmd="false",
+        wake_host_failure=False,
+        wake_stop_exit_code=None,
+        once=True,
+        error_backoff_seconds=5.0,
+        quota_timeout_seconds=10.0,
+        wake_timeout_seconds=10.0,
+    )
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    from loopx.extensions.process_runtime import CappedProcessResult
+
+    monkeypatch.setattr(
+        worker,
+        "_run_wake",
+        lambda *a, **kw: CappedProcessResult(1, b"", None, b"line 1\nTraceback: runtime node failed\n"),
+    )
+    rc = worker.run_worker(args)
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "wake_failed" in out and "stderr_tail=" in out and "Traceback: runtime node failed" in out

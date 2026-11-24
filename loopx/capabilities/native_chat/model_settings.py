@@ -106,7 +106,7 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
     The temporary upstream session is closed before returning.
     """
     from ...chat_agent import CodexChatAgentError, agent_endpoint_error
-    from ... import chat_providers as providers
+    from ...chat import providers
     from .machine_defaults import codex_profile_home, load_codex_chat_defaults
     capability = next((row for row in controller.capabilities() if row["agent_id"] == agent_id), None)
     if capability is None or not capability.get("available"):
@@ -133,14 +133,16 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
             },
         }
     if agent_id == "antigravity":
-        from .antigravity_adapter import ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_MODEL_OPTIONS
+        from .antigravity_adapter import ANTIGRAVITY_DEFAULT_MODEL, offered_antigravity_model_options
+        options = offered_antigravity_model_options()
         return {
             "agent_id": agent_id,
             "supported": True,
             "model": {
                 "id": "model",
                 "label": "Model",
-                "selected": ANTIGRAVITY_DEFAULT_MODEL,
+                "selected": (ANTIGRAVITY_DEFAULT_MODEL
+                             if any(item["id"] == ANTIGRAVITY_DEFAULT_MODEL for item in options) else None),
                 "options": [
                     {
                         "value": str(item["id"]),
@@ -154,7 +156,7 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
                             if isinstance(effort, dict) and effort.get("reasoning_effort")
                         ],
                     }
-                    for item in ANTIGRAVITY_MODEL_OPTIONS
+                    for item in options
                 ],
             },
         }
@@ -182,7 +184,7 @@ def configure_session_model(controller: ChatRuntimeController, session_id: str, 
     owner confirms the requested settings on the same upstream thread.
     """
     from ...chat_agent import CodexChatAgentError
-    from ... import chat_providers as providers
+    from ...chat import providers
     from . import codex_context
     model = normalize_agent_model_id(model)
     if effort is not None:
@@ -217,7 +219,7 @@ def configure_session_model(controller: ChatRuntimeController, session_id: str, 
 
 def observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str | None = None,
                              requested_model: str | None = None) -> dict[str, Any]:
-    from ...chat_acp import ACPStdioAdapter
+    from ...chat.acp import ACPStdioAdapter
     from .antigravity_adapter import AntigravityAdapter
     from .codex_adapter import CodexAppServerAdapter
     from ...chat_agent import CodexChatAgentError

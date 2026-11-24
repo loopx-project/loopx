@@ -122,6 +122,44 @@ def test_runtime_protocol_attests_only_official_stop_hook(profile, monkeypatch):
     assert protocol["stop_hook_enabled"] is (profile == "official")
 
 
+@pytest.mark.parametrize("profile,expected", [
+    ("official", None), ("single", None), ("native-goal", None),
+    ("heartbeat-resume", "evidence_conditioned_v1"),
+    ("heartbeat-explore", "evidence_conditioned_v1"),
+])
+def test_worker_profile_records_live_stride_only_for_loopx(tmp_path, monkeypatch, profile, expected):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+
+    async def installed(self, environment):
+        pass
+
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                          profile=profile, cwd="/task")
+    assert worker.stride_strategy == expected
+    if expected is not None:
+        worker.install_stop_hook(None, None, tmp_path, None)
+        recorded = json.loads((tmp_path / "worker-profile.json").read_text())
+        assert recorded["stride_strategy"] == worker.runtime.stride_strategy == expected
+
+
+def test_removed_worker_stride_selection_is_not_accepted(monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    with pytest.raises(TypeError, match="stride_strategy"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+                     profile="heartbeat-resume", cwd="/task", stride_strategy="off")
+
+
 def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -331,13 +369,8 @@ def test_warm_receiver_owns_only_selected_research_before_preparation(
     assert restored == ["workspace"]
 
 
-@pytest.mark.parametrize("explicit,trigger,expected", [
-    (False, None, None),
-    (False, "fresh_replan", None),
-    (True, None, "explicit"),
-    (True, "fresh_replan", "explicit"),
-])
-def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkeypatch, explicit, trigger, expected):
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+def test_sforge_checkpoint_keeps_current_worker_profile(tmp_path, monkeypatch, trigger):
     from types import SimpleNamespace
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -354,12 +387,12 @@ def test_sforge_profile_does_not_enable_envelope_for_checkpoint(tmp_path, monkey
     backend = SimpleNamespace(copy_to_container=lambda *args: None,
         exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile="heartbeat-resume", cwd="/task", turn_envelope=explicit,
+        profile="heartbeat-resume", cwd="/task",
         checkpoint_request=json.dumps(declaration).encode())
     worker.install_stop_hook(backend, None, tmp_path, None)
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
-    assert profile.get("turn_envelope_source") == expected
-    assert profile.get("turn_envelope") is (True if expected else None)
+    assert profile["checkpoint_capture_enabled"] is True
+    assert {"turn_envelope_source", "turn_envelope", "complete_turn"}.isdisjoint(profile)
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -416,7 +449,8 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
                         if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
     assert worker.runtime._replan_receipt() == {**expected_cadence,
-        **({"planning_horizon_goal": True} if profile.startswith("heartbeat-") else {})}
+        **({"planning_horizon_goal": True, "stride_strategy": "evidence_conditioned_v1"}
+           if profile.startswith("heartbeat-") else {})}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
@@ -435,6 +469,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    monkeypatch.setattr("benchmark.runtime.sforge_backend._minimum_free_bytes", lambda *_: 20 * 1024**3)
     backend = object.__new__(RecordingDockerBackend)
     backend.research_sidecar = research_sidecar
     backend.checkpoint = None
@@ -691,9 +726,8 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert profile["task_entry"] == entry
     assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
-@pytest.mark.parametrize('enabled,complete', [(False, False), (True, False), (False, True)])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
-def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, complete, cadence):
+def test_default_context_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
@@ -703,28 +737,19 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
         pass  # Transport only; the real renderer/guard test runs without a solver.
     monkeypatch.setattr(BenchmarkCodex, 'install', installed)
     worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
-                          profile=profile, cwd='/task', turn_envelope=enabled, complete_turn=complete,
+                          profile=profile, cwd='/task',
                           replan_after_turns=cadence)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd='/task')
-    assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
-    assert worker.runtime.execution.turn_envelope is enabled
-    assert env['LOOPX_COMPLETE_TURN'] == ('1' if complete else '0')
-    assert worker.runtime.execution.complete_turn is complete
+    assert 'LOOPX_TURN_ENVELOPE' not in env and 'LOOPX_COMPLETE_TURN' not in env
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
-    assert receipt.get('complete_turn') is (True if complete else None)
-    assert receipt.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in receipt
+    assert 'complete_turn' not in receipt and 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
-    assert context.metadata.get('complete_turn') is (True if complete else None)
-    assert context.metadata.get('turn_envelope') is (True if enabled else None)
-    if not enabled:
-        assert 'turn_envelope' not in context.metadata
+    assert 'complete_turn' not in context.metadata and 'turn_envelope' not in context.metadata
     # The opt-in only changes context transport, not resume or model settings.
     assert env['LOOPX_ITERATION_CONTEXT'] == 'resume'
     assert env['REASONING_EFFORT'] == 'xhigh'
@@ -776,10 +801,10 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         pass  # No provider login, install, native session or model is requested.
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
     agent = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-        profile=profile, cwd=str(project), complete_turn=True, context_delivery=delivery)
+        profile=profile, cwd=str(project), context_delivery=delivery)
     agent.install_stop_hook(None, None, tmp_path, None)
     env = agent.runtime._worker_env(cwd=str(project))
-    assert env["LOOPX_COMPLETE_TURN"] == "1" and env["LOOPX_CONTEXT_DELIVERY"] == delivery
+    assert env["LOOPX_CONTEXT_DELIVERY"] == delivery
     source = Path(__file__).resolve().parents[2]
     turn = "original-complete-turn"
     wake = tmp_path / "wakes" / turn
@@ -797,7 +822,7 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
         CODEX_THREAD_ID=event["session_id"], LOOPX_PHASE_DEADLINE_EPOCH="9876543210.125")
     body = heartbeat_body(env, turn, native_goal=False)
     block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
-    assert block.count("--complete-turn") == 1 and "--turn-envelope" not in block
+    assert "--complete-turn" not in block and "--turn-envelope" not in block
     if checkpoint_preflight:
         from benchmark.runtime.checkpoint import capture_before_replan
 
@@ -824,7 +849,10 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
                 capture_output=True, text=True, check=True).stdout)
             assert "content" in packet
     else:
-        result = subprocess.run(["bash", "-c", block + " --todo-id " + TODO_ID], cwd=project,
+        suffix = ["--todo-id", TODO_ID]
+        if delivery == "off":
+            suffix += ["--decision-output-dir", str(wake / "decisions")]
+        result = subprocess.run(["bash", "-c", block + " " + shlex.join(suffix)], cwd=project,
             env=env, capture_output=True, text=True, check=True)
         packet = json.loads(result.stdout)
         original, = (wake / "decisions").rglob("decision.json")
@@ -878,9 +906,10 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(
     ("native-goal", ["--replan-after-todos", "3"]),
     ("heartbeat-resume", ["--replan-after-turns", "3", "--replan-after-todos", "3"]),
     ("heartbeat-explore", ["--replan-after-todos", "0"]),
+    # The live stride switch is removed; LoopX workers always record v1.
     ("official", ["--stride-strategy", "off"]),
-    ("native-goal", ["--stride-strategy", "evidence_conditioned_v1"]),
-    ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
+    ("heartbeat-resume", ["--stride-strategy", "off"]),
+    ("heartbeat-resume", ["--stride-strategy", "evidence_conditioned_v1"]),
     ("official", ["--checkpoint-request", "missing.json"]),
     ("native-goal", ["--checkpoint-request", "missing.json"]),
     ("heartbeat-explore", ["--checkpoint-retention-policy", "policy.json"]),
@@ -1045,7 +1074,6 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     (["--replan-after-turns", "2"], "replan_after_effective_turns", 2),
     (["--replan-after-todos", "3"], "replan_after_completed_todos", 3),
 ])
-@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("entry", [None, "seeded-todo"])
 @pytest.mark.parametrize("task,timeout_args,expected,interval", [
     ("fixture", [], 64800, 0),
@@ -1053,7 +1081,7 @@ def test_invalid_checkpoint_declaration_rejects_before_trial_registration(tmp_pa
     ("lean_analysis_proofs", [], 43200, 0),
     ("portfolio_risk_calibration", ["--timeout", "1800", "--eval-interval", "60"], 1800, 60),
     ("lean_analysis_proofs", ["--eval-interval", "0"], 43200, 0)])
-def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, enabled, task, timeout_args, expected, interval, entry, cadence_args, field, count):
+def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(tmp_path, monkeypatch, task, timeout_args, expected, interval, entry, cadence_args, field, count):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
@@ -1098,7 +1126,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     if entry:
         args += ["--task-entry", entry]
     with pytest.raises(RuntimeError, match="synthetic launch failure"):
-        run.main(args + timeout_args + cadence_args + (["--turn-envelope"] if enabled else []))
+        run.main(args + timeout_args + cadence_args)
     receipt = json.loads((tmp_path / f"runs/receipt/{task}/runtime-receipt.json").read_text())
     assert receipt["task_entry"] == (entry or "loopx-planned")
     assert receipt["timeout_seconds"] == expected
@@ -1107,12 +1135,11 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     horizon = (True if "--planning-horizon-goal" in cadence_args else
                False if "--no-planning-horizon-goal" in cadence_args else True)
     assert receipt["planning_horizon_goal"] is horizon
+    assert receipt["stride_strategy"] == "evidence_conditioned_v1"
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
-    assert ("turn_envelope" in receipt) is enabled
-    if enabled:
-        assert receipt["turn_envelope"] is True
+    assert "turn_envelope" not in receipt
     assert receipt["status"] == "runner_failed"
 
 
@@ -1195,7 +1222,9 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
                           profile=profile, cwd="/task", replan_after_todos=3)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.replan_after_turns is None
-    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3, "planning_horizon_goal": True}
+    assert worker.runtime._replan_receipt() == {
+        "replan_after_completed_todos": 3, "planning_horizon_goal": True,
+        "stride_strategy": "evidence_conditioned_v1"}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt
@@ -1283,6 +1312,9 @@ def test_install_preserves_mode_owned_submission_access(tmp_path, monkeypatch, p
     worker.install_stop_hook(backend, None, tmp_path, None)
     assert (["rm", "-f", "/usr/local/bin/sforge-submit"] in commands) is (feedback != "native")
     assert json.loads((tmp_path / "worker-profile.json").read_text())["feedback"] == feedback
+    if profile not in {"official", "single"}:
+        profile_text = worker.runtime._shell_path_restore()
+        assert 'export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/sforge-cargo-target}"' in profile_text
 
 
 def test_warm_context_receipt_is_separate_from_native_stderr(tmp_path):
@@ -1674,6 +1706,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         worker.install_stop_hook(backend, None, trial, None)
         profile_receipt = json.loads((trial / "worker-profile.json").read_text())
         assert profile_receipt.get("execution_observation") == producer
+        profiles.append(profile_receipt)
         assert profile_receipt.get("native_result_comparison") is (True if compare else None)
         assert installed_tools == ([
             ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
@@ -1682,6 +1715,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert ("content refs do not cover modes" in worker.workspace_instructions) is selected
         raise RuntimeError("isolated install boundary")
 
+    profiles = []
     monkeypatch.setattr(run, "run_agent", stop_before_model)
     args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "probe", "--worker", profile, "--model", "fixture",
@@ -1700,6 +1734,9 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         run.main(args)
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt.get("execution_observation") == producer
+    # New LoopX runs stamp the live stride policy identically in both records.
+    profile_receipt, = profiles
+    assert receipt["stride_strategy"] == profile_receipt["stride_strategy"] == "evidence_conditioned_v1"
     assert receipt.get("native_result_comparison") is (True if compare else None)
     assert installed == (["loopx-bind-native-candidate"] if selected or compare else [])
     assert bool(scopes) is compare

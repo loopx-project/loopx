@@ -13,6 +13,20 @@ import {compactThinTodoRead, compactTodoReadSummary, compactThinTodoReadSummary}
 import {TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION} from "./user_completion_types.ts";
 import {removedTodoContinuationPolicy} from "./legacy_continuation_policy_migration.ts";
 
+// Index rows retain the compact Todo and replace only these presentation labels.
+function indexedHandoffSource(source: JsonObject, value: unknown): JsonObject {
+  const labels = requireJsonObject(value, "handoff index labels");
+  const keys = ["schema_version", "goal_id", "role", "source", "text", "title"];
+  if (Object.keys(labels).length !== keys.length || keys.some(key => typeof labels[key] !== "string")) {
+    throw new EffectRuntimeRequestError("invalid handoff index labels");
+  }
+  requireJsonObject(source.record, "handoff index source record");
+  const original = decodeTodoReadSource(source);
+  const indexed = {...original, ...labels};
+  copyTodoPythonValues(original, indexed, labels);
+  return handoffSource(indexed);
+}
+
 // A read lens over canonical records, shared by global and Goal conversations.
 // These are existing Todo facts, not dependency evaluation or execution grants.
 const CONTEXT_FIELDS = [
@@ -63,12 +77,22 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
     return compactTodoReadSummary(requireJsonObject(input.summary_payload, "Todo summary payload"), String(input.role), input.limit == null ? null : Number(input.limit));
   }
   if (input.handoff_sources !== undefined) {
-    if (Object.keys(input).some(key => key !== "handoff_sources" && key !== "handoff_followups")) {
+    if (Object.keys(input).some(key => !["handoff_sources", "handoff_followups", "handoff_index_labels"].includes(key))) {
       throw new EffectRuntimeRequestError("handoff context cannot be combined with list/detail/page inputs");
     }
-    return {handoff_context: projectTodoHandoffContext(
-      Array.isArray(input.handoff_sources) ? input.handoff_sources.map(row => handoffReadSource(requireJsonObject(row, "handoff source"))) : input.handoff_sources,
-      Array.isArray(input.handoff_followups) ? input.handoff_followups.map(row => row === null ? null : handoffReadSource(requireJsonObject(row, "handoff followup"))) : input.handoff_followups)};
+    if (!Array.isArray(input.handoff_sources)) throw new EffectRuntimeRequestError("handoff sources must be an array");
+    const sources = input.handoff_sources.map(row => requireJsonObject(row, "handoff source"));
+    let followups = input.handoff_followups;
+    if (input.handoff_index_labels !== undefined) {
+      const labels = input.handoff_index_labels;
+      if (followups !== undefined || !Array.isArray(labels) || labels.length !== sources.length) {
+        throw new EffectRuntimeRequestError("handoff index labels require one entry per source and no full followups");
+      }
+      followups = labels.map((entry, index) => entry === null ? null : indexedHandoffSource(sources[index]!, entry));
+    } else if (Array.isArray(followups)) {
+      followups = followups.map(row => row === null ? null : handoffReadSource(requireJsonObject(row, "handoff followup")));
+    }
+    return {handoff_context: projectTodoHandoffContext(sources.map(handoffReadSource), followups)};
   }
   if (input.list_payload !== undefined) return projectTodoListPayload(input);
   if (input.detail_payload !== undefined) return projectTodoDetailPayload(input);
@@ -206,7 +230,7 @@ const SUMMARY_FIELDS = [
   "goal_acceptance_guard", "schema_version", "todo_id", "content_revision", "role",
   "status", "priority", "title", "archive_state", "source_section",
   "task_class", "action_kind", "task_domain", "capability_binding_ref", "task_repository",
-  "continuation_policy", "removed_continuation_policy", "required_write_scopes", "required_capabilities", "target_capabilities",
+  "continuation_policy", "removed_continuation_policy", "required_capabilities", "target_capabilities",
   "decision_scope", "required_decision_scopes", "decision_outcome", "decision_scope_outcomes", "claimed_by",
   "bound_agent", "goal_bound", "blocks_agent", "excluded_agents", "global_gate",
   "unblocks_todo_id", "resume_when", "resume_monitor_generation", "resume_condition", "resume_ready",
@@ -249,7 +273,7 @@ function compactSummaryRecord(item: JsonObject, body: unknown): JsonObject {
   }
   const normalized: JsonObject = {
     task_domain: /^[a-z][a-z0-9_.-]{0,63}$/.test(token("task_domain").toLowerCase()) ? token("task_domain").toLowerCase() : null,
-    required_write_scopes: writeScopes(Array.isArray(row.required_write_scopes) ? row.required_write_scopes : token("required_write_scopes")), task_repository: repository,
+    task_repository: repository,
     decision_scope: readScope(row.decision_scope), required_decision_scopes: readScopes(row.required_decision_scopes),
     decision_outcome: outcome(token("decision_outcome")), decision_scope_outcomes: outcomes,
     excluded_agents: readExcludedAgents(row.excluded_agents),

@@ -17,6 +17,7 @@ import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptanc
 import {acceptanceWorkGuard, goalAcceptanceTodoDigest, goalAcceptanceWorkDigest, normalizeGoalAcceptanceDocument, projectGoalAcceptance,
   projectGoalAcceptanceWorkGuards} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
+import {acceptanceOracleBasis} from "../../loopx/control_plane/goals/acceptance_oracle.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
@@ -229,6 +230,58 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
     assert.match(JSON.stringify(retained), /goal_acceptance_completion/);
     assert.doesNotMatch(JSON.stringify(retained), /validation_argv/);
     assert.equal((await executeCoordinationTodoTerminalLifecycle(store, terminal)).status, "replayed");
+  });
+
+  test(`${provider}: selected work readback reuses a completed Task's complete pinned checks`, async t => {
+    for (const variant of ["selected", "broader", "unversioned"] as const) {
+      const {store, head} = await seeded(t, provider, "bound");
+      const previous = head.goal_acceptance as JsonObject;
+      const original = previous.document as JsonObject;
+      const document = normalizeGoalAcceptanceDocument({
+        ...original,
+        scope: variant === "broader" ? {kind: "all_advancement"} : {kind: "selected_work", todo_ids: ["todo_work"]},
+        criteria: [{...(original.criteria as JsonObject[])[0]!,
+          validation_argv: ["loopx:python", "checks.py"], validation_files: [{path: "checks.py", sha256: "a".repeat(64)}],
+          oracle: {kind: "owner_pinned_oracle", source_id: "checks-v1", input_refs: [], output_refs: ["result.txt"]}}],
+      });
+      const oldVerification = {operation_id: "previous-check", contract_revision: 1,
+        contract_digest: canonicalAuthoritySha256(document), todo_id: null,
+        work_digest: goalAcceptanceWorkDigest(head, "goal-a", document.scope),
+        results: [{criterion_id: "criterion-a", passed: false, exit_code: 1}]};
+      await replace(store, {...head, goal_acceptance: {...previous, document,
+        digest: oldVerification.contract_digest, verification: oldVerification}}, "adopt-check");
+      const plan = await executeCoordinationTodoTerminalLifecycle(store, terminal);
+      assert.equal(plan.status, "execute_validation");
+      const evidence = {source_id: "checks-v1", source_digest: acceptanceOracleBasis(document.criteria[0]!),
+        checked_at: now.toISOString(), input_versions: [], output_versions: [{ref: "result.txt", sha256: "b".repeat(64)}]};
+      const attempt = {...terminal, goal_acceptance_source_binding: plan.goal_acceptance_source_binding as JsonObject};
+      if (variant === "selected") {
+        const rejected = await executeCoordinationTodoTerminalLifecycle(store, {...attempt,
+          goal_acceptance_validation_receipts: [{criterion_id: "criterion-a", receipt: {
+            ...runnerReceipt(), oracle_evidence: {...evidence, output_versions: [{ref: "unrelated.txt", sha256: "b".repeat(64)}]},
+          }}]});
+        assert.equal(rejected.reason_code, "goal_acceptance_validation_rejected");
+        assert.equal(((await loaded(store)).head.todos as JsonObject[])[0]!.done, false);
+        assert.equal(projectGoalAcceptance((await loaded(store)).head, "goal-a").status, "failed");
+      }
+      const result = await executeCoordinationTodoTerminalLifecycle(store, {...attempt,
+        goal_acceptance_validation_receipts: [{criterion_id: "criterion-a", receipt: {
+          ...runnerReceipt(), ...(variant === "unversioned" ? {} : {oracle_evidence: evidence}),
+        }}]});
+      assert.equal(result.status, "applied");
+      const settled = await loaded(store);
+      assert.equal((settled.head.todos as JsonObject[])[0]!.done, true);
+      const read = projectGoalAcceptance(settled.head, "goal-a");
+      assert.equal(read.status, variant === "selected" ? "accepted" : "failed");
+      const check = read.verification as JsonObject;
+      assert.equal(check.operation_id, variant === "selected" ? "complete" : "previous-check");
+      if (variant === "selected") {
+        assert.deepEqual(check.results, [{criterion_id: "criterion-a", passed: true, exit_code: 0, oracle_evidence: evidence}]);
+        assert.deepEqual((result.goal_acceptance_completion as JsonObject).results, check.results);
+      }
+      assert.equal((await executeCoordinationTodoTerminalLifecycle(store, terminal)).status, "replayed");
+      assert.deepEqual(await loaded(store), settled);
+    }
   });
 
   test(`${provider}: accepted result binds to the same Todo transaction and producer`, async t => {

@@ -37,15 +37,18 @@ def _review_basis(fingerprint: str) -> dict[str, str]:
 
 
 def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
-                 operation_id: str) -> dict[str, Any] | None:
+                 operation_id: str, legacy_document: dict[str, Any] | None) -> dict[str, Any] | None:
     """Recover a journaled intent, never refresh its basis or lifecycle."""
+    accepted_intents = [parameters]
+    if legacy_document is not None:
+        accepted_intents.append({**parameters, "document": legacy_document})
     for proposal in store.list(goal_id=parameters["goal_id"], context_kind="goal"):
         if proposal["idempotency_key"] != operation_id:
             continue
         if (proposal["action_kind"] != "goal.acceptance.check"
                 or proposal["context"] != {"kind": "goal", "goal_id": parameters["goal_id"]}
                 or {key: value for key, value in proposal["normalized_parameters"].items()
-                    if key != "resolved_document"} != parameters):
+                    if key != "resolved_document"} not in accepted_intents):
             raise ActionConflictError("The operation belongs to another check request")
         return proposal
     return None
@@ -54,7 +57,8 @@ def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
 def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
                              goal_id: str, agent_id: str | None,
                              document: dict[str, Any], operation_id: str,
-                             execute: bool) -> dict[str, Any]:
+                             execute: bool,
+                             legacy_document: dict[str, Any] | None = None) -> dict[str, Any]:
     from ...chat_actions import ChatActionService
     from ...paths import effective_runtime_root
 
@@ -74,7 +78,7 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
     operation_id = normalize_idempotency_key(operation_id)
     parameters = service._normalize("goal.acceptance.check", {
         "goal_id": goal_id, "document": document, "prepared_by": agent_id})
-    proposal = _saved_check(service.store, parameters, operation_id)
+    proposal = _saved_check(service.store, parameters, operation_id, legacy_document)
     recovered = proposal is not None
     if proposal is None:
         try:
@@ -85,7 +89,7 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
         except ActionConflictError:
             # Another caller may have persisted this intent while the current
             # caller read a newer basis. Keep the winner's immutable preview.
-            proposal = _saved_check(service.store, parameters, operation_id)
+            proposal = _saved_check(service.store, parameters, operation_id, legacy_document)
             if proposal is None:
                 raise
             recovered = True

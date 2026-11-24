@@ -33,11 +33,11 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
   --turn-instance-id <turn-id> --decision-output-dir ./complete-001
 ```
 
-`--turn-envelope` and `--complete-turn` remain mutually exclusive inputs
-for saved commands. Both use v1 in the current CLI. With no independent
-Delta request, `--context-delivery off` returns the complete inline v1
-document. Read existing captures with their original digest-bound
-`quota context-read` or `context-project` recovery.
+Remove `--turn-envelope` and `--complete-turn` from current guard commands.
+Use `--context-delivery off --delta-delivery off` for inline v1. Read saved
+captures with their original digest-bound `quota context-read` or
+`context-project` recovery. To run an earlier live contract, use a compatible
+runtime revision after verifying that it can read the current authority state.
 
 `quota context-project` checks a saved complete decision before presenting it
 as current context, including with Delta alone or with context delivery off.
@@ -329,7 +329,11 @@ unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
 For a fresh append, the parent can reuse the child's authoritative readback
 when the original identity, prior receipts and new spend event all match.
 An ambiguous response is reconciled through the original receipts; exact retry
-cannot debit twice. Ordinary refresh without the option retains its behavior.
+cannot debit twice. For a hard-lease Todo, a first combined writeback can use
+the original admission's lease proof after a renewal in that same generation.
+The submitted version must be between the admitted and current versions,
+inclusive, and the lease must still match the original admission. Ordinary
+refresh without the option still requires the current proof.
 When `--delivery-workspace-path` names the producing worktree, the combined
 operation also runs the owed command there, using the originating CLI's
 implementation. The normal workspace and settlement guards still apply; a
@@ -366,7 +370,9 @@ writeback 读取，避免重复交付；当前准入、选择与停止事实仍�
 `refresh-state --settle-turn` 在写回与交付后置条件通过后，执行原 Goal/Agent/
 Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
 完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
-按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+按原回执恢复，精确重试不会重复扣额。硬租约 Todo 在同一世代续期后，组合写回
+首次执行时可继续使用原准入的租约证明。提交的版本必须介于准入版本和当前版本之间
+（含两端），租约仍须与原准入匹配。不传此选项时，普通 refresh 仍须使用当前证明。
 首次追加扣额成功且原身份、前序回执和新扣额事件全部匹配时，父进程可以复用子进程的权威回读。
 指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
 继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
@@ -538,14 +544,13 @@ caller-owned checkpoint. Explicit `--context-delivery off` retains the complete
 inline contract when no independent Delta delivery is requested.
 
 New bootstrap, guard, selection and settlement-recovery commands use the
-complete v1 source. Saved callers can still pass `--turn-envelope` or
-`--complete-turn` to the current CLI under their existing input restrictions.
-Saved captures and their original read commands retain the recorded version
-and digest. Follow the original capture for selection, replan or required
-detail. A persistent bootstrap binds each Turn on wake.
+complete v1 source. The saved bootstrap reader recognizes the retired
+options to upgrade existing generated prompts. Saved captures and their
+original read commands retain the recorded version and digest. Rebind a
+selection command from the saved capture to keep the same Turn.
 
-当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。原先
-保存的两个别名仍可按原输入限制使用，原捕获和读回命令保留其版本与摘要。
+当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。升级
+生成的旧提示时，历史 reader 可识别旧选项。原捕获和读回命令保留其版本与摘要。
 捕获与交付方式独立，显式关闭上下文交付后仍使用完整契约。
 
 Capability planning context stays inline under the existing context owner's
@@ -593,13 +598,11 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-历史 Short 使用曾交付 v0 的产品版本，并保留原请求与捕获。当前 C1 中
-`--turn-envelope` 是完整契约的兼容别名，已有实验按其记录版本解释。
+历史 Short 使用曾交付 v0 的产品与 runner 版本，并保留原请求与捕获。
 
-The benchmark heartbeat worker verifies a historical `turn_envelope` request
-against the pinned CLI's v0 response before launching a model. Its read-only
-preview and eligibility are recorded in the wake receipt. See the [runtime
-guide](../../../benchmark/runtime/RUNTIME.md) for supported configurations.
+For historical Short, use the original runner and product revisions and
+inspect the recorded v0 response and wake receipt. The current worker refuses
+historical treatment requests before model launch. See the [runtime guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md) for supported configurations.
 Model cost, decision quality and long-run adoption require a separately pinned
 experiment. A capture carries its original read and recovery scope.
 

@@ -16,7 +16,7 @@ import { CodexAppServerAdapter } from '../src/adapters/codex.js';
 import { AgyAdapter } from '../src/adapters/agy.js';
 import { TraexAcpAdapter } from '../src/adapters/traex.js';
 import type { AgentAdapter } from '../src/adapters/types.js';
-import { CoordinationManager, coordinationServer, turnAnswer } from '../src/coordination.js';
+import { CoordinationManager, coordinationServer, turnAnswer, progressOf } from '../src/coordination.js';
 import { HostRegistry } from '../src/hosts.js';
 import { RelayClient } from '../src/relay-client.js';
 import { HttpError } from '../src/errors.js';
@@ -818,6 +818,79 @@ test('messages for a machine that is away wait for it, and the user can @ an ins
   } finally { await h.close(); await far.close(); }
 });
 
+test('a mid-flight letter waits in the mailbox, and one wake letter carries every piled-up letter in a single turn', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    const worker = (await h.team.command(h.root.id, spawn('worker', 'claude', 'LOOCHAT_PROGRESS_WORK')) as { to: string }).to;
+    const leadTurns = () => h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').length;
+    const letters = () => h.team.view(h.root.id)!.messages.filter(d => d.to === h.root.id && d.kind === 'result');
+    // Each mid-flight return lands in the mailbox and wakes nobody.
+    await wait(() => letters().length >= 1 && letters()[0].wake === false);
+    await h.team.command(h.root.id, { op: 'send', target: 'worker', text: 'LOOCHAT_PROGRESS_WORK', requestId: 'w2' });
+    await wait(() => letters().length >= 2 && letters()[1].wake === false && h.manager.threadView(worker).status === 'idle');
+    const before = leadTurns();
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(leadTurns(), before, 'mid-flight letters never wake the lead');
+    assert.equal(letters().every(d => d.state === 'queued'), true);
+    // A letter that needs the lead wakes it once, with the piled-up notices folded into the same turn.
+    await h.team.command(h.root.id, { op: 'send', target: 'worker', text: 'LOOCHAT_PROGRESS_DONE', requestId: 'w3' });
+    await wait(() => leadTurns() > before);
+    assert.equal(leadTurns(), before + 1, 'one turn for the whole mailbox, not one per letter');
+    const batch = h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').at(-1)!;
+    // The batch prompt is the letters themselves, in the same shape one letter at a time had.
+    const body = String(batch.data.text);
+    assert.match(body, /^\[协作消息/);
+    assert.doesNotMatch(String(batch.data.displayText), /\[协作消息|\[团队消息/, 'internal envelopes stay out of the visible return card');
+    assert.match(String(batch.data.displayText), /第一阶段已提交/);
+    assert.equal((body.match(/\[协作消息/g) ?? []).length, 3, 'all three letters ride the one turn');
+    assert.match(body, /\[进度\] 进行中/);
+    assert.match(body, /\[进度\] 待验收/);
+    assert.equal((batch.data.coordination as { from: string }).from, 'worker');
+    // Every claimed letter closes with the one answer it rode in on.
+    await wait(() => letters().every(d => d.state === 'returned') && h.manager.threadView(h.root.id).status === 'idle');
+  } finally { await h.close(); }
+});
+
+test('member instructions teach the mailbox wake rule for the progress line; the lead gets none of it', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    const worker = (await h.team.command(h.root.id, spawn('worker')) as { to: string }).to;
+    const member = h.team.instructions(worker, 'hello');
+    assert.match(member, /交回末尾的 \[进度\] 行决定要不要叫醒主控/);
+    assert.match(member, /纯确认、收尾、没有新东西的回复写 进行中/);
+    const lead = h.team.instructions(h.root.id, 'hello');
+    assert.match(lead, /信件可能多封并成一轮/);
+    assert.doesNotMatch(lead, /交回末尾的 \[进度\] 行/);
+  } finally { await h.close(); }
+});
+
+test('a queued notice rides the person’s own turn as read-only context, once', async () => {  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    const worker = (await h.team.command(h.root.id, spawn('worker', 'claude', 'LOOCHAT_PROGRESS_WORK')) as { to: string }).to;
+    const leadTurns = () => h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').length;
+    const letters = () => h.team.view(h.root.id)!.messages.filter(d => d.to === h.root.id && d.kind === 'result');
+    await wait(() => letters().length >= 1 && letters()[0].wake === false);
+    // The person speaks: the letter is context on that turn, not a turn of its own.
+    const before = leadTurns();
+    await h.manager.startTurn(h.root.id, { text: 'how is it going' });
+    await wait(() => h.manager.threadView(h.root.id).status === 'idle');
+    assert.equal(leadTurns(), before + 1);
+    const turn = h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').at(-1)!;
+    assert.match(String(turn.data.text), /成员交回的进行中通报/);
+    assert.match(String(turn.data.text), /\[进度\] 进行中/);
+    await wait(() => letters()[0].state === 'returned' && letters()[0].noticed === true);
+    // Told once, it does not repeat on the next turn.
+    await h.manager.startTurn(h.root.id, { text: 'and now' });
+    await wait(() => h.manager.threadView(h.root.id).status === 'idle');
+    const later = h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').at(-1)!;
+    assert.doesNotMatch(String(later.data.text), /进行中通报/);
+    assert.equal(h.manager.threadView(worker).status, 'idle');
+  } finally { await h.close(); }
+});
+
 test('the person talking to a member directly is answered there and told to the lead once, without waking it', async () => {
   const h = await setup();
   try {
@@ -882,5 +955,125 @@ test('a message the person queues behind a member\'s task is still theirs when i
     await h.api(`/api/threads/${h.root.id}/turns`, { text: 'lead turn' });
     await wait(() => h.manager.threadView(h.root.id).status === 'idle');
     assert.equal(h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').at(-1)!.data.fromUser, undefined);
+  } finally { await h.close(); }
+});
+
+test('a key whose seat moved with a handover says where the seat went', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    const key = h.team.environment(h.root.id)!.LOOCHAT_TEAM_KEY;
+    assert.equal(h.team.caller(key), h.root.id);
+    (h.team as any).forgetSeat(h.root.id, h.root.id.replace(/^./, 'f'));
+    assert.throws(() => h.team.caller(key), (error: any) => error.status === 409 && /协作已随交接转到/.test(error.message));
+    assert.throws(() => h.team.caller('wrong'), (error: any) => error.status === 401 && /接手的那一段/.test(error.message));
+  } finally { await h.close(); }
+});
+
+
+test('only the final progress line can make a return quiet', () => {
+  assert.equal(progressOf('Working.\n\n[进度] 进行中：waiting'), 'progress');
+  assert.equal(progressOf('[进度] 等外部：CI'), 'wait');
+  assert.equal(progressOf('[进度] 待验收：review'), 'review');
+  assert.equal(progressOf('[进度] 需要你：choose'), 'need');
+  for (const text of ['use [进度] 进行中 as an example', '> [进度] 进行中', '[进度] 进行中\nFailure needs attention', '[进度] 进行中断', '```\n[进度] 进行中\n```']) {
+    assert.equal(progressOf(text), null, text);
+  }
+});
+
+test('more notices than fit in one turn stay unread until actually delivered, including after restart', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    const worker = (await h.team.command(h.root.id, spawn('worker', 'claude', 'LOOCHAT_PROGRESS_WORK')) as { to: string }).to;
+    const letters = () => h.team.view(h.root.id)!.messages.filter(d => d.to === h.root.id && d.kind === 'result');
+    for (let n = 1; n <= 7; n++) {
+      await wait(() => letters().length === n && h.manager.threadView(worker).status === 'idle');
+      if (n < 7) await h.team.command(h.root.id, { op: 'send', target: 'worker', text: 'LOOCHAT_PROGRESS_WORK', requestId: `notice-${n}` });
+    }
+    const ids = letters().map(d => d.id);
+    // Previewing a prompt must not consume its notices.
+    h.team.instructions(h.root.id, 'preview');
+    assert.equal(letters().filter(d => d.state === 'queued').length, 7);
+    await h.manager.startTurn(h.root.id, { text: 'first human question' });
+    await wait(() => h.manager.threadView(h.root.id).status === 'idle');
+    assert.deepEqual(letters().filter(d => d.noticed).map(d => d.id), ids.slice(0, 5));
+    assert.deepEqual(letters().filter(d => d.state === 'queued').map(d => d.id), ids.slice(5));
+    h.team.dispose();
+    const persisted = JSON.parse(h.store.coordinationRecords()[0].data);
+    for (const letter of persisted.deliveries) if (letter.state === 'queued') {
+      delete letter.wake; // An older daemon had not persisted the wake classification.
+      letter.picked = true; // A failed start must not hide it forever.
+    }
+    h.store.saveCoordination(h.root.id, JSON.stringify(persisted));
+    const restored = new CoordinationManager(h.store, h.manager, join(h.dir, 'unused.sock'));
+    try {
+      const unread = restored.view(h.root.id)!.messages.filter(d => d.state === 'queued');
+      assert.equal(unread.length, 2);
+      assert.ok(unread.every(d => d.wake === false && !d.picked));
+      await h.manager.startTurn(h.root.id, { text: 'second human question' });
+      await wait(() => h.manager.threadView(h.root.id).status === 'idle');
+      assert.ok(restored.view(h.root.id)!.messages.filter(d => d.kind === 'result').every(d => d.noticed));
+      assert.doesNotMatch(restored.instructions(h.root.id, 'third'), /进行中通报/);
+      assert.equal(h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').length, 2);
+    } finally { restored.dispose(); }
+  } finally { await h.close(); }
+});
+
+test('a queued human turn goes before wake letters and a batch does not echo back to members', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    await h.manager.startTurn(h.root.id, { text: 'slow' });
+    await h.manager.startTurn(h.root.id, { text: 'human first', queue: true });
+    await h.team.command(h.root.id, spawn('reviewer', 'claude', 'LOOCHAT_PROGRESS_DONE'));
+    await h.team.command(h.root.id, spawn('blocked', 'claude', 'LOOCHAT_PROGRESS_ASK'));
+    await wait(() => h.team.view(h.root.id)!.messages.filter(d => d.to === h.root.id && d.kind === 'result').length === 2);
+    assert.equal(h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started').length, 1);
+    await h.manager.cancelTurn(h.root.id, { keepQueue: true });
+    await wait(() => h.team.view(h.root.id)!.messages.every(d => d.state === 'returned') && h.manager.threadView(h.root.id).status === 'idle');
+    const turns = h.store.listEvents(h.root.id, 0, -1).filter(e => e.type === 'turn.started');
+    assert.equal(turns.length, 3);
+    assert.match(String(turns[1].data.text), /human first/);
+    assert.match(String(turns[2].data.text), /待验收/);
+    assert.match(String(turns[2].data.text), /需要你/);
+    for (const member of h.team.view(h.root.id)!.members) {
+      assert.equal(h.store.listEvents(member.id, 0, -1).filter(e => e.type === 'turn.started').length, 1);
+    }
+  } finally { await h.close(); }
+});
+
+test('manual handover moves collaboration and pending member returns, with an explicit opt-out', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    await h.team.command(h.root.id, spawn('worker', 'claude', 'LOOCHAT_PROGRESS_WORK'));
+    await wait(() => h.team.view(h.root.id)!.messages.some(d => d.kind === 'result'));
+    const key = h.team.environment(h.root.id)!.LOOCHAT_TEAM_KEY;
+    const response = await h.api(`/api/threads/${h.root.id}/handover-thread`, { agent: 'pi' });
+    assert.equal(response.status, 201);
+    const next = await response.json() as { id: string };
+    assert.equal(h.team.metadata(h.root.id)?.retired, true);
+    assert.equal(h.team.metadata(next.id)?.rootId, next.id);
+    assert.ok(h.team.view(next.id)!.messages.some(d => d.to === next.id && d.kind === 'result' && d.state === 'queued'));
+    assert.throws(() => h.team.caller(key), (e: unknown) => e instanceof HttpError && e.status === 409 && e.message.includes(next.id.slice(0, 8)));
+    const separate = await h.api(`/api/threads/${next.id}/handover-thread`, { agent: 'pi', takeTeam: false });
+    assert.equal(separate.status, 201);
+    assert.equal(h.team.metadata((await separate.json() as { id: string }).id), undefined);
+    assert.equal(h.team.metadata(next.id)?.retired, undefined);
+  } finally { await h.close(); }
+});
+
+
+test('manual handover cannot retire a collaboration seat while its turn is running', async () => {
+  const h = await setup();
+  try {
+    await h.team.enable(h.root.id);
+    await h.manager.startTurn(h.root.id, { text: 'slow' });
+    const before = h.manager.listThreads().length;
+    const response = await h.api(`/api/threads/${h.root.id}/handover-thread`, { agent: 'pi' });
+    assert.equal(response.status, 409);
+    assert.equal(h.team.metadata(h.root.id)?.retired, undefined);
+    assert.equal(h.manager.listThreads().length, before);
   } finally { await h.close(); }
 });

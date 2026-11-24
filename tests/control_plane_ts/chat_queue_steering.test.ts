@@ -112,6 +112,18 @@ test("uncertain delivery never dispatches again or becomes eligible FIFO work", 
   assert.deepEqual(selectQueuedChatTurns({turns: [{...expired, reservation: null}], include_reserved: true, capacity_at: "2026-01-01T00:00:00Z"}).turn_ids, []);
 });
 
+test("the private Steward App can steer only its own queued text", () => {
+  const f = facts();
+  const session = {...f.session, web_origin_only: true};
+  assert.equal(planQueuedChatSteering({...f, session}).action, "dispatch");
+  for (const origin of ["external", "lark", "peer"]) {
+    const turn = {...f.turn, origin};
+    assert.deepEqual(planQueuedChatSteering({...f, session, turn}),
+      {action: "reject", error_code: "queue_steering_source_unavailable"});
+  }
+  assert.equal(planQueuedChatSteering({...f, turn: {...f.turn, origin: "external"}}).action, "dispatch");
+});
+
 test("acknowledgement recovers after target completion while proven rejection restores queue", () => {
   const f = facts(); f.turn.reservation = held;
   assert.equal(planQueuedChatSteering({...f, session: {status: "ready", active_turn_id: null}, receipt}).action, "complete");

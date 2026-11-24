@@ -67,14 +67,20 @@ sets `pull_request_review.wait_for_ci=false`, callers pass `--registry` and
 `--goal-id GOAL` to `loopx pr-review` and `--check-merge-readiness`, resolving
 `ci_policy="not_consulted"` so local `pytest`/`ruff`/`mypy` checks,
 `loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`, and
-exact-head review complete merge readiness without waiting on or polling CI.
-Standalone or unconfigured callers keep the safe default `wait_for_ci=true`.
+exact-head review complete merge readiness without waiting on or polling remote CI
+once local gates pass. `ci_policy="not_consulted"` separates CI waiting from
+merge and self-merge authority: it never authorizes merging or auto-self-merging
+ready PRs, and the default remains leaving PRs open for maintainer/owner
+authorization. Standalone or unconfigured callers keep the safe default
+`wait_for_ci=true`.
 
 当本地确定性验证已完整通过时，远端 CI 作为异步安全兜底，而不应成为串行阻塞点。对于配置了
 `pull_request_review.wait_for_ci=false` 的受管 Goal，调用 `loopx pr-review` 与
 `--check-merge-readiness` 时须显式传入 `--registry` 与 `--goal-id GOAL`（解析为
-`ci_policy="not_consulted"`），以本地测试、`loopx canary premerge` 和精确头评审直接完成
-就绪判断与合入，不再等待或轮询远端 CI；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
+`ci_policy="not_consulted"`），在本地测试、`loopx canary premerge` 与精确头评审等本地
+门禁通过后即可完成就绪判断，不再等待或轮询远端 CI。`ci_policy="not_consulted"` 仅控制
+CI 等待策略，合入与自合并授权仍保持独立：它不会自动批准或触发自合并，默认仍保持 PR 开启等待
+维护者或所有者授权；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
 
 Tests first judge whether the state and rule are correct, then whether the
 implementation conforms. Expected outcomes come from an independently reviewed
@@ -266,7 +272,7 @@ implementations share the new rule is not a before/after compatibility test.
 
 重构评审必须区分“相同判定”和“相同可观察语义”：同样拒绝但丢失对象状态或修复
 提示仍是回归；新增认领前提可能阻断旧实现允许的未认领文案修正；`--note` 被 parser
-接受或出现在成功响应中。先从旧调用
+接受或出现在成功响应中，也不能证明它经过 dispatch 后落盘并能独立回读。先从旧调用
 方及公开契约列出合法／非法分支，再运行基线与精确 head 的对照，不从新实现生成期望。
 
 Show regression sensitivity: the focused case must fail on the historical
@@ -439,7 +445,11 @@ Keep the separate data/registry paths too: process isolation does not isolate
 data. In a Python process that already imported `tempfile`, also scope and
 restore its cached `tempfile.tempdir`; the existing
 `tests/control_plane/canonical_authority_fixture.py::isolate_sqlite_runtime`
-fixture demonstrates both boundaries. Record the serving runtime PID and verify
+fixture demonstrates both boundaries, while persistent fixture-worker Node
+processes in `tests/control_plane/canonical_authority_fixture.py`, scoped
+`NODE_COMPILE_CACHE` setup in `tests/conftest.py`, and in-process CLI test
+entry points avoid repeated Node/Python startup overhead without sharing mutable
+runtime state across worker namespaces. Record the serving runtime PID and verify
 it differs from the live server before dispatching expensive work. Stop only
 that isolated runtime after its requests settle, retaining the same temporary
 environment for shutdown; never restart a live server as test cleanup.
@@ -451,7 +461,7 @@ the process exits and its parent reaps it. The ordinary restart action still
 uses serving-locator retirement.
 
 删除隔离目录前，调用 `restart_effect_runtime(wait_for_exit=True)` 并确认返回
-`stopped`。端口关闭或进程组长成为僵尸进程。
+`stopped`。端口关闭或进程组长成为僵尸进程，都不能证明其他线程已经退出。
 PID 仍存在时返回 `shutdown_pending`；保留目录，等进程退出并由父进程回收后再试。
 普通重启操作仍按服务 locator 的退役状态判断。
 
@@ -479,7 +489,9 @@ request may still be running.
 Effect 后台进程；相同源码指纹可能让源码环境与已安装版本共享进程。演练前创建私有
 临时目录，对所有子命令同时设置 `TMPDIR`、`TEMP`、`TMP`；Python 进程若已缓存
 `tempfile.tempdir`，须在同一作用域覆盖并恢复。数据／registry 仍须单独隔离，且在
-重型操作前核对服务 PID 与活跃服务不同。等请求结束后，只在同一临时环境中停止
+重型操作前核对服务 PID 与活跃服务不同。`canonical_authority_fixture.py` 中的持久化
+fixture worker Node 进程、`tests/conftest.py` 中的隔离 `NODE_COMPILE_CACHE` 以及进程内
+CLI 单测入口仅复用进程启动开销，不跨 worker 共享可变运行时状态。等请求结束后，只在同一临时环境中停止
 演练进程。进程隔离不消除整机资源竞争：耗时对照顺序运行，发现竞争则保留失败与
 回执、作废受污染耗时并重新采样；超时不能当作服务端已停止，也不能因此重复恢复。
 
@@ -530,7 +542,8 @@ Windows 文件锁只在已观察到争用后，对独占创建返回的 `EPERM` 
 Smoke cleanup owns every valid runtime locator in its newly created private
 temporary namespace, including runtimes loaded by temporary base checkouts.
 It uses the existing authenticated shutdown protocol, then observes actual
-process exit before deleting the namespace; Namespace
+process exit before deleting the namespace; serving-locator turnover alone
+does not establish that Node has finished its exit-time cache writes. Namespace
 and locator symlinks are not followed. A cleanup failure retains the fixture
 and reports a failed check with the original command output. Operator restart
 keeps its existing serving-handoff semantics. This fixture repair does not
@@ -1182,7 +1195,8 @@ the daily full-public sweep, and high-risk release profiles. It aggregates
 duration, failures, timeouts, current-inventory coverage, and targeted profile
 ownership without copying stdout/stderr tails or repository-local paths.
 
-full-public workflow 还会把各 shard 回执聚合成一个紧凑健康产物。报告区分四种频率。它会统计耗时、失败、超时、当前
+full-public workflow 还会把各 shard 回执聚合成一个紧凑健康产物。报告区分四种频率：
+显式 PR 快速 smoke、catalog 选择的 canary、每日 full-public 全量，以及高风险 release profile。它会统计耗时、失败、超时、当前
 清单覆盖率和定向 profile owner，同时不会复制 stdout/stderr tail 或仓库本地路径。
 
 ```bash
@@ -1290,7 +1304,8 @@ local-private; the workflow adds no profiler service or receipt gate.
 - **Locate the cost before selecting an abstraction.** Separate caller repeats,
   output/context expansion, process/bridge/serialization cost, shared semantic
   work, and backend IO/verification/contention. A display filter does not reduce
-  upstream work; Name the real consumer and measure its useful outcome.
+  upstream work; a short response or fast isolated query does not establish a
+  faster recovery loop. Name the real consumer and measure its useful outcome.
 - **Share contracts, qualify implementations.** Put common selection, bounded
   reads and observation reuse at the existing consumer/typed owner boundary.
   Preserve completeness, current authority, receipt replay and lease/CAS checks.
@@ -1321,12 +1336,13 @@ TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量
 沿用现有任务、PR 证据和验收记录，不增加审批、回执或无关里程碑前置条件。
 
 - **先定位成本。** 区分重复调用、输出与上下文展开、进程与序列化、公共语义计算、
-  后端 IO／校验／竞争。输出过滤不减少上游计算；
+  后端 IO／校验／竞争。输出过滤不减少上游计算；单次查询变快不等于恢复闭环变快。
 - **共用合同，分别验证实现。** 选择、有界读取和观测复用归现有调用方或 typed owner；
   保留完整性、当前权限、回执重放及 lease/CAS。缓存失效、索引和历史布局可以因后端
   而异，不能在 Python 复制权威，也不强造统一缓存。受影响后端遵循上文真实路径验证。
 - **迁移是待验证的原因。** 尽量控制操作、版本、数据与历史规模、配置、并发；按影响
-  区分冷／热读、多存储交替、写入与恢复。没有受控前后对照就披露不确定性；
+  区分冷／热读、多存储交替、写入与恢复。没有受控前后对照就披露不确定性；晋升成功
+  不证明长程延迟、容量和恢复等价。
 - **验证实际目标。** 检索用独立标注、歧义／无命中和语言边界验证；运行时优化保留原失败负载和语义／规模检查，预算按下节处理。
 - **区分缓解与闭环。** 写明消除了所属瓶颈，还是只减轻调用方影响；剩余真实缺口复用
   已有后续任务并指明验收。提示词缩短不算后端验证，修复 PR 数量不算默认切换就绪。
@@ -1398,6 +1414,19 @@ workflow costs less.
 
 ### Budget Failure Decisions
 
+The complete Vision fixture with 36 Todos, 12 runs and inline delivery measured
+60,826 JSON characters on the explicit C1 path before the default switched.
+That body exceeded both earlier fixture allowances of 55,000 and 59,000.
+The current 61,100-character allowance covers this fixture while preserving
+the replan authoring, settlement and continuation content. Keep the earlier
+overruns in measurement history. Transport limits and total model cost are
+measured independently.
+
+36 个 Todo、12 次 run 的 Vision 内联夹具，在默认切换前通过显式 C1 得到
+60,826 个 JSON 字符，超过当时的 55,000 和 59,000 上限。现有 61,100 字符预算
+覆盖该夹具，保留重规划编写、结算和续接内容。测量记录保留原超限结果，传输
+限制与模型完整成本另行核对。
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI
@@ -1452,7 +1481,7 @@ performance criteria, and does not qualify a model by itself.
 真实模型组合门的同一组三个 noisy fixture 现保留完整的 56 个 capability 候选及其
 正文。仅按上述实测把该合成 fixture 的 pretty-JSON UTF-8 字节预算从 40,000 调整到
 90,000；原超限失败保留。新增候选丢失/正文缩短的零模型调用负例，原选择、人工门禁、
-结算、重复次数、对照及生产硬边界不变；
+结算、重复次数、对照及生产硬边界不变；本次预算修正不等于真实模型通过。
 
 This allowance is not a target architecture. A source-level attribution at
 `d4980a0e9aa8acf8b847e2fec73d29454c23690d` reproduces those three output sizes.
@@ -1690,7 +1719,7 @@ ceiling to 9,336, retaining the former 694 characters of headroom. Compare
 complete authoring bounds and parsed semantic-closeout arguments with the
 original admitted contract; recovery specializes the completed Task's boundary.
 Spend and settled
-recovery keep their 2,000-character ceilings. This preserves useful guidance;
+recovery keep their 2,000-character ceilings. This preserves useful guidance.
 Candidate measurements must still pass.
 
 辅助 Monitor 的恢复夹具用缩进 JSON 测量完整的原始 writeback 步骤，File 与 SQLite
@@ -1705,7 +1734,7 @@ Native progressive-context qualification found an existing default-output
 budget failure: immutable base `fb331f45c` and candidate `edbd56b14` both emit
 25,836 JSON characters for `quota_should_run/multi_agent` with the unchanged
 18-Todo, 3-Agent, 12-run fixture. Recursive comparison differs only in observation
-timestamps and the rollout event id. Preserve the previous 25,500-ceiling failure.
+timestamps and the rollout event id. Preserve the previous 25,500-ceiling failure;
 calibrate this one regression allowance to 26,500 (664 characters of headroom)
 without dropping fields. Markdown, line, semantic, bootstrap duplication,
 per-Todo/fixed growth and all other surface ceilings remain unchanged. This
@@ -1827,7 +1856,7 @@ provider permission and does not rewrite frozen experiment/promotion results.
    完整性、安全或结算语义，不能只为过线缩字段名，也不为微小收益制造引用框架。
    agent 读取的文字也是决策语义：逐条核对执行者、触发、时序、义务强度、证据来源、
    范围限定、继续和停止条件。字段、命令、枚举和
-   合法结果未变。不能为字符上限损害有用语义；未证明无损压缩时，
+   合法结果未变，不能证明指令等价。不能为字符上限损害有用语义；未证明无损压缩时，
    优先基于证据调整回归预算。真实硬上限需要明确的无损调用方设计和读回，不能默删义务。
 3. **选择并披露取舍。** 比较压缩、保持上限、合理扩容，也可组合使用。扩容需说明
    保留信息的价值与成本、新旧上限、实测余量和预期波动或规模，不规定统一余量比例。
@@ -1998,6 +2027,10 @@ handling; they never qualify Doubao behavior. Run the real gate with:
 ```bash
 python3 scripts/qualify-doubao-model-behavior-live.py \
   --qualification-id <public-safe-run-id>
+# Or for DeepSeek (`deepseek-flash` default or `deepseek-v4-pro`) with DEEPSEEK_API_KEY:
+python3 scripts/qualify-deepseek-model-behavior-live.py \
+  --qualification-id <public-safe-run-id> \
+  --model deepseek-flash
 ```
 
 The command requires a clean candidate checkout, fails when `ARK_API_KEY` is
@@ -2046,10 +2079,10 @@ and passes only after the model reads the target named by the selected Todo.
 Reading the target before quota, choosing a deferred decoy, describing the
 action without calling the tool, or issuing an unallowlisted command fails.
 
-真实 Doubao 调用是低频本地/手动门，不进入普通 CI。`ARK_API_KEY` 只通过进程环境
-注入；packet、prompt、原始响应、凭证和对话都不能成为仓库证据，只保留有界 receipt
+真实 Doubao 与 DeepSeek 调用是低频本地/手动门，不进入普通 CI。`ARK_API_KEY` 或 `DEEPSEEK_API_KEY` 只通过进程环境
+注入（DeepSeek 通过 `scripts/qualify-deepseek-model-behavior-live.py` 并支持 `deepseek-flash` / `deepseek-v4-pro`）；packet、prompt、原始响应、凭证和对话都不能成为仓库证据，只保留有界 receipt
 与 mismatch code。fake transport 只能验证 adapter 的序列化、脱敏与 fail-closed，不能
-作为 Doubao 行为通过证据。真实入口缺少密钥时直接失败，且任一真实调用不通过都会以
+作为 Doubao 或 DeepSeek 行为通过证据。真实入口缺少密钥时直接失败，且任一真实调用不通过都会以
 非零状态退出。
 
 replan semantic action 另有一条 function-tool 行为资格门，因为 no-tool JSON 决策不能
@@ -2119,7 +2152,7 @@ The complete required-vision journey has a 40-call bound; the narrow
 single-semantic-action qualifier retains seven. The increased budget covers
 evidence discovery, JSON authoring, refresh, settlement and bounded recovery,
 including multiple field-validation corrections before a final spend;
-
+it does not authorize more effects or weaken the checkpoint/readback oracle.
 Each receipt records `tool_call_limit` beside actual usage. Earlier seven- and sixteen-call
 failures remain failures; the revised budget defines a new qualification, not
 a retrospective pass. Limit exhaustion after refresh but before spend still
@@ -2296,13 +2329,15 @@ deadline is 1,200 seconds; this is a wall-clock ceiling, not a token budget.
 ### Claude Code and release coverage / Claude Code 与发布覆盖
 
 For focused thin/brief prompt-decision regression, use
-`python3 scripts/qualify-host-prompt-release.py --release-live` only during
-explicit release qualification. It defaults to no calls; missing credentials
-report `skipped`, not a live pass. With securely injected `ARK_API_KEY`, it uses
-Doubao evolving for two independent repetitions of quiet-work, notifying-wait,
-quiet-wait, required-vision-replan and typed external-wait fallback cases in
-each mode. The fallback case uses the real compact quota projection: its wait
-transition already exists, so the host must advance the selected independent
+`python3 scripts/qualify-host-prompt-release.py --release-live` (or
+`--release-live --provider deepseek --model deepseek-flash` / `deepseek-v4-pro`
+with `DEEPSEEK_API_KEY`) only during explicit release qualification. It defaults
+to no calls; missing credentials report `skipped`, not a live pass. With
+securely injected `ARK_API_KEY` or `DEEPSEEK_API_KEY`, it exercises two
+independent repetitions of quiet-work, notifying-wait, quiet-wait,
+required-vision-replan and typed external-wait fallback cases in each mode. The fallback case composes the complete quota source through the
+shared TypeScript owner and reuses that checked instance in both modes. Its
+wait transition already exists, so the host must advance the selected independent
 successor and notify rather than authoring another transition. Expected
 decisions remain outside model input. All attempts must pass; no answer
 correction or retry-until-pass is used. Ordinary pytest only checks the probe
@@ -2313,8 +2348,9 @@ as separate evidence. Only hashes and pass/fail receipts are emitted, not raw
 prompts/responses. Model transport failures fail qualification rather than
 becoming environment skips.
 
-仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
-vision replan 未关闭时不能提前结束 Goal；
+回退场景使用完整 C1 来源，thin 与 brief 每批共享同一份已检查契约；原四个小型
+决策对照仍为合成输入。`qualify-host-prompt-release.py` 支持 `--provider ark`（默认）与 `--provider deepseek --model deepseek-flash|deepseek-v4-pro`。仅发布前显式执行，普通 CI 不调用模型。检查静默不等于空转、等待不能擅自执行、
+vision replan 未关闭时不能提前结束 Goal；这不是完整 Claude/Codex 行为验收的替代。
 
 ```bash
 # No provider call by default. Explicit release opt-in uses ARK_API_KEY from the environment.
@@ -2433,7 +2469,7 @@ MCP 可随完成操作携带 vision 判断，也可用 `review_task_vision` 在�
 复用 TS 的既有恢复规则，不新增结算引擎、不重扣额度；已提交的判断不能偷偷改写。
 格式和预算预检在 Todo 完成前拒绝非法输入；若旧宿主已部分完成，则修正未提交的
 vision 并重试原 `complete_task`，不能用仅补 checkpoint 的操作替代未完成结算。
-
+`vision_closed` 只结束当前阶段，活跃 Goal 仍须继续规划后续缺口。
 外层任务只描述业务验收，LoopX 协议由宿主内层指令和工具承接。
 
 ## Exact Release Commit Gate / 精确发布 Commit 门

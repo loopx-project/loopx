@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .control_plane.runtime.time import chronology_key
-from .history import append_run_index_record, load_index, load_registry
 from .paths import resolve_runtime_root
 from .public_safe_text import (
     PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
@@ -27,10 +26,16 @@ _MUTATION_ADAPTERS = {
     "require_prose_state_write_allowed": "loopx.control_plane.coordination.legacy_writer_fence",
     "atomic_write_state_text": "loopx.control_plane.runtime.document_io",
 }
+_LAZY_IMPORTS = {
+    **_MUTATION_ADAPTERS,
+    "append_run_index_record": "loopx.history",
+    "load_index": "loopx.history",
+    "load_registry": "loopx.history",
+}
 
 
 def __getattr__(name: str) -> Any:
-    owner = _MUTATION_ADAPTERS.get(name)
+    owner = _LAZY_IMPORTS.get(name)
     if owner is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     value = getattr(_import_module(owner), name)
@@ -39,7 +44,7 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_MUTATION_ADAPTERS))
+    return sorted(set(globals()) | set(_LAZY_IMPORTS))
 
 
 def _mutation_adapter(name: str) -> Any:
@@ -442,10 +447,10 @@ def append_human_reward(
     _mutation_adapter("atomic_write_state_text")
     actor = normalize_owner_controller_actor(actor_kind, required=not dry_run)
     validate_goal_id(goal_id)
-    registry = load_registry(registry_path)
+    registry = _mutation_adapter("load_registry")(registry_path)
     runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
     index_path = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
-    runs, raw_count = load_index(index_path)
+    runs, raw_count = _mutation_adapter("load_index")(index_path)
     selected = select_run(runs, run_generated_at)
 
     missing_paths = [
@@ -519,7 +524,7 @@ def append_human_reward(
                 )
                 state_text_to_write = planned if changed else None
             index_path.parent.mkdir(parents=True, exist_ok=True)
-            append_run_index_record(index_path, index_record)
+            _mutation_adapter("append_run_index_record")(index_path, index_record)
             if state_file_to_write and state_text_to_write is not None:
                 try:
                     _mutation_adapter("atomic_write_state_text")(state_file_to_write, state_text_to_write)
@@ -652,4 +657,4 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
 
 
 # Keep the historical star-import surface, including the deferred adapters.
-__all__ = [name for name in globals() if not name.startswith("_")] + list(_MUTATION_ADAPTERS)
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_LAZY_IMPORTS)

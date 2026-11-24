@@ -466,9 +466,11 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
-        # The complete captured Vision projection measures 58,393 JSON chars.
-        # Preserve the original 55,000 failure; keep a 607-character allowance.
-        max_chars={'json': 59000, 'markdown': 26000},
+        # The crowded fixture measures 60,826 JSON characters on both the
+        # previous explicit C1 path and the new default. The old default
+        # measured 50,549. Preserve the 55,000/59,000 misses and allow 274
+        # characters of headroom without changing the wire or model budget.
+        max_chars={'json': 61100, 'markdown': 26000},
         max_lines={"json": 1_350, "markdown": 190},
         output_contract_version="loopx_turn_envelope_v1",
     ),
@@ -486,7 +488,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_turn_envelope",
         parent_surface_id="quota_should_run",
-        command="quota should-run --context-delivery off --turn-envelope",
+        command="quota should-run --context-delivery off",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -782,6 +784,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="explicit operator preview, stop, and resume command family",
     ),
 
+    CliOutputCommandClassification(
+        command_id="workbench",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="operator-invoked optional Workbench start, status, and stop commands",
+    ),
     CliOutputCommandClassification(
         command_id="agent-capabilities",
         qualification="explicit_cold_path_exception",

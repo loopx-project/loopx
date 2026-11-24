@@ -16,6 +16,7 @@ import pytest
 
 import loopx.extensions.process_runtime as process_runtime
 from loopx.extensions.process_runtime import (
+    CappedProcessResult,
     force_terminate_process,
     retire_owned_process,
     remove_owned_tree,
@@ -862,3 +863,19 @@ def test_remove_owned_tree_never_clears_a_shared_hard_link_attribute(
 
     assert source_object.read_bytes() == b"blob"
     assert os.stat(source_object).st_mode & stat.S_IWRITE == 0
+
+
+def test_run_capped_process_retains_stderr_backwards_compatibly() -> None:
+    legacy = CappedProcessResult(0, b"out")
+    assert legacy.failure_kind is None
+    assert legacy.stderr == b""
+
+    result = run_capped_process(
+        [sys.executable, "-c", "import sys; sys.stdout.write('ok'); sys.stderr.write('boom trace\\n'); sys.exit(1)"],
+        stdin=b"",
+        timeout_seconds=10,
+        output_limit_bytes=4096,
+    )
+    assert result.returncode == 1
+    assert result.stdout == b"ok"
+    assert b"boom trace" in result.stderr

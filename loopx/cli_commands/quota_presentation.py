@@ -13,7 +13,7 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
                                    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
                                    capture_directory: Path | None,
                                    record_capture: Callable[[dict[str, object], str], None] | None = None) -> dict[str, object]:
-    """Compose every decided should-run source once before capture and display."""
+    """Compose Complete Turn sources before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
@@ -44,7 +44,8 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
 
     view = select(
         payload, "ok", "goal_id", "goal_ref", "runtime_root", "state",
-        "error", "error_code", "reason", "status", "recommended_action", "effective_action", "should_run",
+        "decision", "error", "error_code", "reason", "reason_code", "status",
+        "recommended_action", "effective_action", "should_run",
     )
     if payload.get("ok") is not True:
         return view
@@ -65,6 +66,24 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
         ("agent_identity", ("agent_id",)),
         ("autonomous_replan_obligation", ("required", "obligation_id", "agent_id", "resolution_mode")),
         ("heartbeat_receipt", ("settlement_identity",)),
+        (
+            "unsettled_host_turn_recovery",
+            (
+                "schema_version",
+                "state",
+                "reason_code",
+                "scope",
+                "prior_turn_instance_id",
+                "prior_event_id",
+                "binding_kind",
+                "binding_id",
+                "settlement_effect_id",
+                "repair",
+                "missing_receipts",
+                "admissions_without_progress",
+                "admission_limit",
+            ),
+        ),
     ):
         if key in payload:
             view[key] = select(payload[key], *fields)
@@ -79,6 +98,7 @@ def _quota_renderer(
     # Renderers and compaction load only when a route prints a quota view;
     # native context delivery owns its own presentation.
     from ..presentation.renderers.quota_event_markdown import (
+        render_quota_guard_diagnostic_markdown,
         render_quota_monitor_poll_markdown,
         render_quota_slot_preview_markdown,
     )
@@ -93,7 +113,15 @@ def _quota_renderer(
 
     command = args.quota_command
     if command == "should-run":
-        return render_turn_context_markdown
+        if not failure:
+            return render_turn_context_markdown
+
+        def render_failed_guard(payload: dict[str, object]) -> str:
+            if payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
+                return render_turn_context_markdown(payload)
+            return render_quota_guard_diagnostic_markdown(payload)
+
+        return render_failed_guard
     return {
         "monitor-poll": render_quota_monitor_poll_markdown,
         "scheduler-ack": render_quota_scheduler_ack_markdown,
@@ -121,6 +149,7 @@ def _project_quota_cli_payload(
     from ..control_plane.quota.cli_projection import (
         compact_quota_monitor_poll_cli_payload,
         compact_quota_plan_cli_payload,
+        compact_quota_should_run_cli_payload,
     )
 
     reject_retired_quota_format(payload)
@@ -138,6 +167,18 @@ def _project_quota_cli_payload(
         # its unavailable runtime. Decided refusals still need signed views.
         # Keep the decided diagnostic, including its original recovery/receipt.
         return payload
+    if args.quota_command == "should-run":
+        if captured_decision_path is not None and "vision" not in detail_sections:
+            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
+
+            payload = project_captured_replan_cli_view(payload, captured_decision_path=captured_decision_path)
+        return compact_quota_should_run_cli_payload(
+            payload,
+            include_todo_summary_detail="agent-todos" in detail_sections,
+            include_user_todo_summary_detail="user-todos" in detail_sections,
+            include_goal_boundary_detail="goal-boundary" in detail_sections,
+            include_vision_detail="vision" in detail_sections,
+        )
     if args.quota_command in {"status", "plan"}:
         return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
     if args.quota_command == "monitor-poll":

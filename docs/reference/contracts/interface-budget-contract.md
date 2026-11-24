@@ -11,7 +11,7 @@ and size/count budgets.
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
 | `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 21000` | `nested_keys <= 575` | `top_level_keys <= 55` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 25000` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 26000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -84,6 +84,28 @@ result changes; this is not a compaction or efficiency claim.
 保留原 20,500 超限失败，仅将字符回归余量调至 21,000，给 runner 留 491 字符；
 575/55 结构限制、完整来源路径及超长 reason 拒绝继续。生产负载、执行预算、宿主
 硬边界和冻结资格结果均不变，不据此声称压缩或效率提升。
+
+On `v2.3.0` and `55bae0ac55` under an identical short `TMPDIR`, `dashboard_status_json`
+measures the exact same 24,247 characters, 339 nested keys, and 26 top-level keys
+(zero production payload growth), while `quota_should_run_json` shrinks from
+19,669 to 18,677 characters. Under pytest session `effect-runtime` isolation and
+the sharded qualification runner, longer isolated `TMPDIR` prefixes expand the
+complete fixture-root path occurrences inside `dashboard_status_json` to 25,151
+and 25,311 characters respectively. Preserve the recorded 25,000-ceiling runner
+failure, calibrate only the `dashboard_status_json` character ceiling from
+25,000 to 26,000 (retaining 689 characters of sharded-runner headroom), keep the
+350/27 structure limits and complete source paths unchanged, and keep rejecting
+an oversized `dashboard_status_json` payload. No production payload, execution
+budget, host hard limit or frozen qualification criterion changes.
+
+在相同短 `TMPDIR` 下，`v2.3.0` 与 `55bae0ac55` 的 `dashboard_status_json` 均测得
+24,247 字符、339 个嵌套键及 26 个顶层键（生产负载零增长），且 `quota_should_run_json`
+由 19,669 字符降至 18,677 字符；在 pytest 会话级 `effect-runtime` 隔离与分片
+验证 runner 下，更长的隔离 `TMPDIR` 前缀使完整夹具路径展开后的同一负载分别达到
+25,151 与 25,311 字符。保留原 25,000 上限在隔离 runner 下的失败记录，仅将
+`dashboard_status_json` 的字符上限由 25,000 校准为 26,000（为分片 runner 保留
+689 字符余量）；350/27 结构限制、完整来源路径与超长 status 负载拒绝继续保持不变。
+生产负载、执行预算、宿主硬边界和冻结资格标准均不变。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact

@@ -87,3 +87,80 @@ def test_unreadable_journal_does_not_replace_original_error_with_false_effects()
     assert result["effects"]["host_invoked"] is None
     assert result["effects"]["quota_spent"] is None
     assert result["journal_observation"] == {"scope": "original_turn", "status": "unavailable"}
+
+
+@pytest.mark.parametrize("command", ["plan", "run-once"])
+def test_runtime_conflict_preserves_machine_diagnostic_without_parsing_message(command):
+    from loopx.control_plane.effect_runtime import EffectRuntimeConflict
+
+    result = build_turn_error_payload(
+        {"transaction": {"turn_key": "sha256:" + "b" * 64}},
+        EffectRuntimeConflict("The operation was refused", diagnostic_code="goal_stopped"),
+        turn_command=command, execution_started=True,
+    )
+    assert result["error_code"] == "goal_stopped"
+    assert result["error"] == "The operation was refused"
+    assert all(value is None for value in result["effects"].values())
+    if command == "run-once":
+        assert result["resume_turn_key"] == "sha256:" + "b" * 64
+
+
+def test_generic_error_does_not_invent_a_machine_diagnostic():
+    result = build_turn_error_payload({}, ValueError("goal_stopped"), turn_command="run-once")
+    assert "error_code" not in result
+
+
+def test_ordinary_turn_cli_keeps_runtime_conflict_after_host_result(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+
+    from loopx.cli import main
+    from loopx.control_plane.effect_runtime import EffectRuntimeConflict
+    from loopx.control_plane.turn_driver import executor
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    project, runtime, registry = _write_live_fixture(tmp_path)
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    original_write = executor._write_journal
+    rejected = []
+
+    def reject_result(path, journal, **kwargs):
+        if "host_result" in journal:
+            rejected.append(journal["turn_key"])
+            raise EffectRuntimeConflict("Result no longer accepted", diagnostic_code="goal_stopped")
+        return original_write(path, journal, **kwargs)
+
+    monkeypatch.setattr(executor, "_write_journal", reject_result)
+    code = main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--project", str(project), "--codex-bin", str(executable),
+        "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
+        "--turn-instance-id", "runtime-conflict-after-host-result",
+        "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]), "--execute",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1 and rejected and log.exists(), payload
+    assert payload["error_code"] == "goal_stopped"
+    assert payload["resume_turn_key"] == rejected[0]
+    assert payload["effects"]["quota_spent"] is None
+    observation = payload["journal_observation"]
+    assert observation["status"] == "observed"
+    assert observation["completed_phases"] == []
+    assert observation["recorded_effects"]["quota_spent"] is False
+
+
+def test_existing_exception_code_and_payload_keep_precedence():
+    from loopx.control_plane.effect_runtime import EffectRuntimeConflict
+
+    class CodedConflict(EffectRuntimeConflict):
+        code = "existing_boundary_code"
+        payload = {"reason": "existing_reason"}
+
+    result = build_turn_error_payload(
+        {}, CodedConflict("refused", diagnostic_code="goal_stopped"), turn_command="run-once",
+    )
+    assert result["error_code"] == "existing_boundary_code"
+    assert result["reason"] == "existing_reason"

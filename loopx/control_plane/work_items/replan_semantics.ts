@@ -8,7 +8,7 @@ import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { TODO_COMPLETION_RECOVERIES } from "../todos/completion_state.ts";
 import { id as todoId, readResume, taskClass } from "../todos/read_codec.ts";
 import { indexInferredSuccessors } from "../todos/succession.ts";
-import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
+import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
 import { projectProgressDelta } from "./progress_delta.ts";
 
 const PROGRESS_OUTCOMES = [
@@ -58,8 +58,8 @@ const VISION_CLI_ARGS = "--agent-vision-json '<path-to-evidence-linked-goal-visi
 const REPLAN_PLANNING_GUIDANCE = [
   "Review original intent, the operating objective and cumulative requirements, explicit user direction, " +
     "actual work and evidence, even with open Todos. Choose useful eligible work and its full marginal cost; " +
-    "Todo order and provisional agent-created candidate rules are revisable planning choices. " +
-    "A due review may retain the path or reorder/replace unfinished work; it never forces a pivot. " +
+    "Todo order and provisional agent-created candidate rules are revisable. " +
+    "A due review can keep the path or reorder or replace unfinished work. It never forces a pivot. " +
     "Do not shrink requested goals or relax frozen acceptance, priorities, authority, budget or stops; " +
     "do not rewrite criteria after failure. Documents, peers and planning grant no authority.",
   "Claim achieved only with current authoritative evidence for every requirement. " +
@@ -68,13 +68,12 @@ const REPLAN_PLANNING_GUIDANCE = [
     "If a reasonable in-scope next step remains, continue or replan without waiting for an assigned successor. " +
     "An empty Todo queue is not a scope limit. Otherwise explain why no such step remains; " +
     "do not invent work or consume budget merely to stay active.",
-  "Record the evidence and judgment in existing Vision/path_delta, including justified no-change. " +
-    "Only material user direction making the objective misleading warrants goal-acceptance prepare-objective " +
-    "(native: prepare_goal_objective); distinguish scope conflict, missing evidence and stale display text. " +
-    "Reuse a pending proposal and inline facts; inspect missing context only, without polling or per-Turn revision receipts. " +
-    "Surfacing a proposal neither blocks authorized work nor forces a question. Use goal-acceptance --help for " +
-    "owner apply and each peer's own adoption; neither proposal nor adoption grants permissions. " +
-    "Progress, Todo/route changes, diagnostics, polish or age alone need no objective revision.",
+  "Use existing Vision/path_delta for evidence, judgment and justified no-change. " +
+    "Use goal-acceptance prepare-objective or native prepare_goal_objective for direct user changes to this Goal's purpose or lasting duties. " +
+    "Keep commitments. Reconcile its Todos. Explicit new Goals use creation. Distinguish scope conflicts, evidence gaps and stale display. " +
+    "Reuse pending proposals and inline facts. Read only missing context. No polls or per-Turn revision receipts. " +
+    "Continue authorized work. Proposing forces no question. See goal-acceptance --help for owner apply and each peer's adoption. Proposals and adoption grant no authority. " +
+    "Progress, Todo/route changes, diagnostics, polish or age alone need no revision.",
 ];
 
 function object(value: unknown): JsonObject {
@@ -105,15 +104,14 @@ function isExternalReview(obligation: JsonObject): boolean {
   return triggerKinds(obligation).some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind));
 }
 
-// Existing cadence and observed-stall triggers become decision checkpoints
-// only for the opted-in strategy. This does not detect stalls or force a pivot.
+// Existing cadence and observed-stall triggers are decision checkpoints under
+// the only live stride strategy. This does not detect stalls or force a pivot.
+// A historical replan_context that recorded "off" (or omitted the strategy)
+// cannot opt an obligation out of the review.
 const STRIDE_REVIEW_TRIGGERS = new Set(["periodic_review_due", "typed_progress_repeat",
   "no_progress_streak", "repeated_action_loop", "external_progress_review_drift"]);
-function requiresStrideDecision(obligation: JsonObject, fallbackStrategy: unknown = "off"): boolean {
-  const context = object(obligation.replan_context);
-  const strategy = Object.hasOwn(context, "stride_strategy") ? context.stride_strategy : fallbackStrategy;
-  return triggerKinds(obligation).some(kind => STRIDE_REVIEW_TRIGGERS.has(kind)) &&
-    normalizeStrideStrategy(strategy) !== "off";
+function requiresStrideDecision(obligation: JsonObject): boolean {
+  return triggerKinds(obligation).some(kind => STRIDE_REVIEW_TRIGGERS.has(kind));
 }
 
 /** Route only a revalidated canonical transition to its original Turn guard.
@@ -183,7 +181,7 @@ function projectTurnTransition(request: JsonObject): JsonObject {
       }
       const sourceObligation = object(candidateSource.obligation);
       if (sourceObligation.obligation_id !== selected) continue;
-      if (requiresStrideDecision(sourceObligation, request.stride_strategy)) continue;
+      if (requiresStrideDecision(sourceObligation)) continue;
       const ack = object(candidateSource.ack);
       const candidate = object(ack.semantic_delta);
       if (ack.schema_version === "autonomous_replan_ack_v0" &&
@@ -282,7 +280,8 @@ function lifecycleObligation(request: JsonObject): JsonObject | null {
       triggers.length !== Math.min(3, items.length) ||
       triggers.some((trigger, index) => trigger.kind !== "completed_advancement_without_successor" ||
         trigger.agent_id !== request.agent_id || trigger.todo_id !== items[index].todo_id ||
-        trigger.completion_turn_key !== items[index].completion_turn_key)) return null;
+        // Admission records a Todo without a completion key as null; the Todo row omits the key.
+        (trigger.completion_turn_key ?? null) !== (items[index].completion_turn_key ?? null))) return null;
   // New independent work may change the frontier before the admitted lifecycle
   // is closed. Preserve its exact pending actions; recovery is not settlement.
   if (source.settled !== true) {
@@ -354,7 +353,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
     if (!requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
     const result = projectTurnTransition({guard_scoped: request.guard_scoped,
       selected_obligation_id: selected, transition_candidates: [candidate],
-      stride_strategy: request.stride_strategy, goal_id: request.goal_id,
+      goal_id: request.goal_id,
       agent_id: request.agent_id, guard_recorded_at: request.guard_recorded_at,
       guard_turn_instance_id: request.guard_turn_instance_id});
     if (result.semantic_delta !== null) {
@@ -505,7 +504,7 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 
-function writebackProjection(required: SemanticOutcome[], externalReview: boolean, strideEnabled: boolean): JsonObject {
+function writebackProjection(required: SemanticOutcome[], externalReview: boolean): JsonObject {
   // This chooses a usable refresh path, not the only legal exit. Successor and
   // terminal alternatives still have their own typed transitions and gates.
   if (externalReview) {
@@ -529,7 +528,7 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
         preferred_input: "evidence_linked_vision_path",
         vision_authoring: visionAuthoringContract(true),
         required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs",
-          ...(strideEnabled ? ["agent_vision.stride_decision"] : [])],
+          "agent_vision.stride_decision"],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS],
         rule: "First reuse observed evidence valid for current source/acceptance; probe missing, stale or insufficient evidence. Write a JSON file with acceptance summary and evidence-linked path outcome, then run bound refresh and spend. An unchanged reason alone is insufficient. Explicit validation gates and other required_any_of contracts apply.",
       },
@@ -636,13 +635,13 @@ export function projectReplanSemantics(value: unknown): JsonObject {
       ? {kind, stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {
-    return {allowed: !requiresStrideDecision(obligation, request.stride_strategy)};
+    return {allowed: !requiresStrideDecision(obligation)};
   }
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
     const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
-    const writeback = writebackProjection(required, externalReview, strideControl !== null);
+    const writeback = writebackProjection(required, externalReview);
     if (required.includes("coverage_backed_no_followup")) {
       writeback.writeback_contract = {...object(writeback.writeback_contract),
         no_followup_requirements: {
@@ -667,7 +666,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
           String(contract.rule ?? "")};
     }
     return {required_any_of: required, planning_guidance: REPLAN_PLANNING_GUIDANCE,
-      ...(strideControl ? {stride_control: strideControl} : {}),
+      stride_control: strideControl,
       ...writeback};
   }
   if (request.operation !== "qualify") {
@@ -681,7 +680,6 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const path = object(vision.path_delta);
   const context = object(obligation.replan_context);
   const [strideDecision] = normalizeStrideDecision(vision.stride_decision);
-  const structuredReview = normalizeStrideStrategy(context.stride_strategy) !== "off";
   const selectedComparison = object(strideDecision?.explore_review).selected_candidate != null;
   const requiredStrideReview = requiresStrideDecision(obligation);
   const pathOutcome = String(path.outcome ?? "").trim();
@@ -689,14 +687,14 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     (FRESH_PATH_DISPOSITIONS.has(pathOutcome) || pathOutcome === "stop") && strings(path.evidence_refs).length);
   const freshPath = evidenceLinkedPath && FRESH_PATH_DISPOSITIONS.has(pathOutcome);
   const independentStride = strideDecision?.schema_version === STRIDE_DECISION_SCHEMA;
-  const missingStride = structuredReview && (freshPath || requiredStrideReview) &&
+  const missingStride = (freshPath || requiredStrideReview) &&
     (!strideDecision || !independentStride);
   const missingStridePath = requiredStrideReview && !evidenceLinkedPath;
-  const staleStride = !!strideDecision && (structuredReview || selectedComparison) &&
+  const staleStride = !!strideDecision &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
-  const reviewContextChanged = !!strideDecision && (structuredReview || selectedComparison)
+  const reviewContextChanged = !!strideDecision
     && (requiredStrideReview || selectedComparison) && strideDecision.reference_context_id !== context.context_id;
-  const reviewMismatch = strideDecision && (structuredReview || selectedComparison)
+  const reviewMismatch = strideDecision
     ? reviewContextChanged
       ? "Stride decision references a different review context. Read the returned context_recovery before retrying the original writeback."
       : strideReviewMismatch(strideDecision, context, request.stride_review_evidence, vision.todo_delta)

@@ -4,7 +4,7 @@ if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'
 // Prompt text drives behaviour: "slow" waits until abort, "fail" ends with an error.
 import { personalFixture } from './personal.mjs';
 import { coordinationFixture } from './coordination.mjs';
-import { appendFileSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
+import { existsSync, appendFileSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -163,6 +163,8 @@ rl.on('line', (line) => {
 
   switch (cmd.type) {
     case 'get_available_models':
+      if (process.env.FAKE_PI_EMPTY_MODELS === '1' && !existsSync(process.env.FAKE_LOGIN_FILE ?? '')) return reply({ models: [] });
+      if (process.env.FAKE_LOGIN_FILE && !existsSync(process.env.FAKE_LOGIN_FILE)) return reply(null, false, 'No API key found for fixture-provider');
       // Probes must not create sessions in pi's session list.
       if (!ephemeral) return reply(null, false, 'probe ran without --no-session');
       if (process.env.FAKE_PI_REQUIRE_NO_MCP === '1' && !args.includes('--no-mcp')) return reply(null, false, 'catalog probe must disable MCP');
@@ -511,7 +513,7 @@ rl.on('line', (line) => {
             out({ type: 'message_start', message: { role: 'assistant', timestamp: Date.now() - 200 } });
             out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi ' } });
             const marker = process.env.FAKE_PI_LABEL ? `[${process.env.FAKE_PI_LABEL}] ` : '';
-            out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + cmd.message } });
+            out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + (process.env.FAKE_PI_VISIBLE_ECHO === '1' ? cmd.message.split(/\n\n<loochat-/)[0] : cmd.message) } });
             if (/\bfail\b/.test(cmd.message)) {
               out({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: 'provider exploded' } });
               running = false;
@@ -533,7 +535,7 @@ rl.on('line', (line) => {
       if (process.env.FAKE_TELEMETRY) out({ type: 'message_start', message: { role: 'assistant', timestamp: Date.now() - 250 } });
       out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'hi ' } });
       const marker = process.env.FAKE_PI_LABEL ? `[${process.env.FAKE_PI_LABEL}] ` : '';
-      out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + cmd.message } });
+      out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: marker + 'there ' + (process.env.FAKE_PI_VISIBLE_ECHO === '1' ? cmd.message.split(/\n\n<loochat-/)[0] : cmd.message) } });
       // Whole word only: protocol envelopes (the Router's INTRO names push.failure) must not
       // turn an unrelated reply into a failure, while fail markers anywhere (work fail,
       // router-fixture-fail in a signal ref) still do.

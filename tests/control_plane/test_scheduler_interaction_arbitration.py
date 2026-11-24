@@ -659,6 +659,7 @@ def test_primary_instruction_adapter_preserves_pinned_python_views():
             if name in {f"precedence-{i}" for i in range(8)} else
             [{"goal_id": "other", "label": "Unscoped backlog"}] if name == "candidate-edge-9" else []
         )
+        expected.setdefault("workspace_repair_action", None)
         assert primary_action_instruction_facts(case["payload"]) == expected, name
 
 

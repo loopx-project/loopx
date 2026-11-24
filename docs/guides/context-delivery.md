@@ -12,9 +12,12 @@ benchmark heartbeat callers when no machine preference is saved. Saved or explic
 off disables it; ordinary CLI, other hosts and unsupported platforms inherit full
 delivery.
 
-The
-complete C1 caller migration and long-horizon cost/outcome qualification remain
-open. Broad default adoption and old-path retirement need the evidence below.
+C1 source uses one wire contract for both inline and staged delivery. Public
+artifacts follow the [release qualification](../product/release-readiness.md).
+During upgrades, saved Codex App loaders can still invoke `heartbeat-prompt`
+with the historical spellings until the App reads back the refreshed loader.
+Both launch the same C1 guard.
+The evidence below qualifies actual Host adoption, model outcomes, and complete cost.
 
 - To understand a work session, start with [the example](#one-task-four-situations).
 - To operate it, see [enable, verify and roll back](#enable-verify-and-roll-back).
@@ -135,7 +138,8 @@ states and new controls invalidate their containing criterion and remain visible
 An exact unchanged criterion needs no metadata split. Splitting a container adds addresses
 and recovery guidance, so the reader keeps the complete presentation when the
 split would not save enough bytes. This tool-delivery assumption is separate
-from file deltas and provider caching; Partial reads and lost continuity cannot qualify this reuse.
+from file deltas and provider caching; it does not prove model retention or
+lower total cost. Partial reads and lost continuity cannot qualify this reuse.
 Explicit same-capture selections always recover the complete current value.
 
 An unchanged Goal narrative can also be referenced after an exact read of the
@@ -266,13 +270,10 @@ remains first: original quota packet versus the fused contract in the same
 product path. Optional controller/executor separation is a later comparison.
 Do not explain away a single-session regression with a two-session result.
 
-Future broader default adoption requires **both a declared DeepSeek model and a strong
-model** to pass comparable effectiveness and complete-cost evaluation. Run each
-model's comparison within its own fixed conditions; do not pool them to hide a
-regression. This guide supplies a plan, not new experimental authority or a
-claim that either model family has passed.
-These criteria govern extending the current scoped default; that shipped default
-does not itself prove either model comparison has passed.
+Supported-profile adoption qualification requires **both a declared DeepSeek
+model and a strong model** to pass comparable effectiveness and complete-cost
+evaluation. Compare each model under its own fixed conditions and report
+regressions per model. Follow the existing experimental authority for these comparisons.
 
 ### A minimum discriminating study
 

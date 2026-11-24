@@ -14,6 +14,7 @@ from hashlib import sha256
 import threading
 from itertools import islice
 from os import scandir
+from pathlib import Path
 from contextlib import contextmanager, ExitStack, nullcontext
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -49,6 +50,7 @@ from ...control_plane.collaboration.inbox import (
 )
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
+from ..native_chat.file_discovery import file_change_fingerprint
 from ...chat import ChatMessagePayloadConflictError
 from ...chat_store import TERMINAL_TURN_STATES
 
@@ -67,6 +69,10 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
             raise ValueError("unsupported return resolution reason")
         self.reason = reason
         super().__init__(message)
+
+
+class ReturnTransportUnavailable(RuntimeError):
+    """The adapter lacks a compatible transport for this delivery."""
 
 
 def _verification_decision(outcome):
@@ -690,7 +696,7 @@ def _return_transaction(host, path, phase, request):
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
     if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
-            or result.get("action") not in {"skip", "private", "verify", "send"}
+            or result.get("action") not in {"skip", "private", "verify", "send", "reconcile_private"}
             or type(result.get("processed")) is not int or result["processed"] not in {0, 1}):
         raise RuntimeError("return delivery transaction result shape mismatch")
     return result
@@ -723,6 +729,10 @@ def _return_provider(plan, source, sender, record_attempt):
         sent = sender(route, session, turn, plan["text"])
     else:
         return {"kind": "sender_unavailable"}
+    if sent.get("provider_write_attempted") is True and sent.get("external_write_performed", False) is None:
+        # The provider may already have published this result. A later drain
+        # cannot recover a missing locator by starting a new outbound send.
+        return {"kind": "locator_unavailable"}
     if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
         # A provider outbox may already own publication. Its adapter records the
         # existing attempt before returning a readback, including unavailable
@@ -731,6 +741,27 @@ def _return_provider(plan, source, sender, record_attempt):
     return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
             "external_write_performed": sent.get("external_write_performed"),
             "idempotency_key": sent.get("idempotency_key")}
+
+
+class _ReturnAttemptRecorder:
+    """Keep dispatch and locator checkpoints fenced to the same return."""
+
+    def __init__(self, transact, checkpoint, exact):
+        self.transact = transact
+        self.checkpoint = checkpoint
+        self.exact = exact
+
+    def _save(self, phase, **payload):
+        result = self.transact(phase, **payload)
+        self.checkpoint.update({key: result[key] for key in ("revision", "token")})
+
+    def before_provider_send(self):
+        # Exact returns already persisted their sending admission at prepare.
+        if not self.exact:
+            self._save("dispatch")
+
+    def __call__(self, attempt):
+        self._save("attempt", attempt=dict(attempt))
 
 
 def _deliver_return(host, path, sender, frozen_route):
@@ -751,9 +782,17 @@ def _deliver_return(host, path, sender, frozen_route):
             return _return_transaction(host, path, phase,
                 {"facts": current, **checkpoint, **payload})
 
-    def record_attempt(attempt):
-        saved = transact("attempt", attempt=dict(attempt))
-        checkpoint.update({key: saved[key] for key in ("revision", "token")})
+    if plan["action"] == "reconcile_private":
+        try:
+            original = store.read_history_message(source["route"]["session_id"], plan["message_id"])
+        except (OSError, ValueError, KeyError):
+            return 0
+        if cancelled():
+            return 0
+        recovered = transact("settle", private_readback=original)
+        return recovered["processed"]
+
+    record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"])
 
     try:
         store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
@@ -764,6 +803,8 @@ def _deliver_return(host, path, sender, frozen_route):
     except ChatMessagePayloadConflictError as exc:
         logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
         outcome = {"kind": "conflict"}
+    except ReturnTransportUnavailable:
+        outcome = {"kind": "verification_error" if plan["action"] == "verify" else "sender_unavailable"}
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}
@@ -795,26 +836,87 @@ def _belongs_to_chat_host(root, store, path):
         return False
 
 
-def _pending_return_paths(host, paths):
-    root, scan_at, exact, cancelled = (host[key] for key in ("root", "scan_at", "exact", "cancelled"))
-    paths = iter(paths)
-    while not cancelled() and (batch := list(islice(paths, 128))):
-        candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
-        selected = effect_runtime_result("manager.return_delivery.transact", {
-            "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
-            "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
-            "candidates": candidates,
-        })
-        if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
-            raise RuntimeError("return delivery scan result shape mismatch")
-        if selected.get("unavailable_count"):
-            logging.getLogger(__name__).warning("Unreadable manager return receipt")
-        ready = {(row["request_id"], row["result_key"]) for row in selected["candidates"]}
-        yield from (path for path in batch if (path.parent.name, path.stem) in ready)
+def _delivery_fingerprint(path: Path) -> tuple[int, ...] | None:
+    try:
+        return file_change_fingerprint(path)
+    except OSError:
+        return None
+
+
+class _TerminalReturnScanCache:
+    """Skip already-verified terminal `.delivery.json` records while their stat fingerprint holds."""
+
+    def __init__(self) -> None:
+        self._terminal: dict[tuple[bool, Path], tuple[int, ...]] = {}
+
+    def matches(self, key: tuple[bool, Path], fp: tuple[int, ...]) -> bool:
+        return self._terminal.get(key) == fp
+
+    def remember(self, key: tuple[bool, Path], fp: tuple[int, ...]) -> None:
+        self._terminal[key] = fp
+
+    def drop(self, key: tuple[bool, Path]) -> None:
+        self._terminal.pop(key, None)
+
+    def prune(self, exact: bool, seen: set[tuple[bool, Path]]) -> None:
+        stale = [key for key in self._terminal if key[0] == exact and key not in seen]
+        for key in stale:
+            del self._terminal[key]
+
+
+def _scan_batch(host, batch, scan_cache):
+    root, scan_at, exact = (host[key] for key in ("root", "scan_at", "exact"))
+    candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path, _, _ in batch]
+    selected = effect_runtime_result("manager.return_delivery.transact", {
+        "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
+        "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
+        "candidates": candidates,
+    })
+    if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
+        raise RuntimeError("return delivery scan result shape mismatch")
+    if selected.get("unavailable_count"):
+        logging.getLogger(__name__).warning("Unreadable manager return receipt")
+    ready = {(row["request_id"], row["result_key"]) for row in selected["candidates"]}
+    if scan_cache is not None:
+        terminal = {(row["request_id"], row["result_key"]) for row in (selected.get("terminal_candidates") or ())}
+        for path, delivery_path, before_fp in batch:
+            if (path.parent.name, path.stem) in terminal and before_fp is not None:
+                if _delivery_fingerprint(delivery_path) == before_fp:
+                    scan_cache.remember((exact, path), before_fp)
+    return [path for path, _, _ in batch if (path.parent.name, path.stem) in ready]
+
+
+def _pending_return_paths(host, paths, *, scan_cache=None):
+    exact, cancelled = host["exact"], host["cancelled"]
+    if scan_cache is None:
+        paths_iter = iter(paths)
+        while not cancelled() and (batch := list(islice(paths_iter, 128))):
+            yield from _scan_batch(host, [(path, path, None) for path in batch], None)
+        return
+    seen_keys: set[tuple[bool, Path]] = set()
+    batch: list[tuple[Path, Path, tuple[int, ...] | None]] = []
+    for path in paths:
+        if cancelled():
+            return
+        key = (exact, path)
+        seen_keys.add(key)
+        delivery_path = path.with_name(path.stem + ".delivery.json")
+        before_fp = _delivery_fingerprint(delivery_path)
+        if before_fp is not None and scan_cache.matches(key, before_fp):
+            continue
+        scan_cache.drop(key)
+        batch.append((path, delivery_path, before_fp))
+        if len(batch) == 128:
+            yield from _scan_batch(host, batch, scan_cache)
+            batch = []
+    if batch and not cancelled():
+        yield from _scan_batch(host, batch, scan_cache)
+    if not cancelled():
+        scan_cache.prune(exact, seen_keys)
 
 
 @effect_runtime_request_scope()
-def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None):
+def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None, scan_cache=None):
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
@@ -837,7 +939,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
         "scan_at": scan_at, "clock": clock, "exact": exact, "cancelled": cancelled,
     }
     paths = iter_result_paths(_root(root) / "replies")
-    for path in _pending_return_paths(host, paths):
+    for path in _pending_return_paths(host, paths, scan_cache=scan_cache):
         progress()
         if cancelled():
             break
@@ -918,6 +1020,7 @@ class ReturnService:
     def __init__(self, root, registry, store, external_sender):
         self.args = (root, registry, store, external_sender)
         self.stop = threading.Event()
+        self._scan_cache = _TerminalReturnScanCache()
         self._execution_pump = None
         self._return_worker = HostedWorker(target=self.run, stop=self.stop,
                                           name="loopx-manager-returns", retry_seconds=3)
@@ -944,7 +1047,12 @@ class ReturnService:
         )
 
     def _return_step(self) -> None:
-        drain(*self.args, cancelled=self.stop.is_set, progress=self._return_worker.checkpoint)
+        drain(
+            *self.args,
+            cancelled=self.stop.is_set,
+            progress=self._return_worker.checkpoint,
+            scan_cache=self._scan_cache,
+        )
 
     def run_executions(self) -> None:
         # Native previews may wait on a subprocess. Keep result publication

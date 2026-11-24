@@ -283,7 +283,8 @@ fact. `plan` reports the same verdict without refusing.
 - dsh owns model calls, tools, sandboxing, and the raw session log.
 - The adapter must not publish raw transcripts, dsh JSONL sessions, credentials,
   local absolute paths, or unbounded tool output into LoopX state.
-- `DeepSeekHarness.run()` returns the candidate result; An independent validator is required before LoopX writeback.
+- `DeepSeekHarness.run()` returns the candidate result; it is not proof of
+  completion. An independent validator is required before LoopX writeback.
 - The dsh Python SDK is an optional dependency. Core LoopX remains runtime
   dependency-free.
 - The adapter derives an owner-local session id, but LoopX does not project or

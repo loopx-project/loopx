@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set as AbstractSet
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -29,6 +29,14 @@ DOUBAO_CHAT_COMPLETIONS_ENDPOINT = (
 )
 ARK_API_KEY_ENV = "ARK_API_KEY"
 DOUBAO_MODEL_ENV = "LOOPX_MODEL_BEHAVIOR_MODEL"
+
+DEEPSEEK_FLASH_MODEL = "deepseek-flash"
+DEEPSEEK_V4_PRO_MODEL = "deepseek-v4-pro"
+DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
+DEEPSEEK_BASE_URL_ENV = "DEEPSEEK_BASE_URL"
+DEEPSEEK_MODEL_ENV = "LOOPX_DEEPSEEK_BEHAVIOR_MODEL"
+
 MODEL_BEHAVIOR_PROVIDER_INPUT_SCHEMA_VERSION = "model_behavior_provider_input_v1"
 
 ALLOWED_MODEL_BEHAVIOR_MODELS = frozenset(
@@ -36,6 +44,12 @@ ALLOWED_MODEL_BEHAVIOR_MODELS = frozenset(
         DOUBAO_2_1_PRO_MODEL,
         DOUBAO_2_1_TURBO_MODEL,
         DOUBAO_SEED_EVOLVING_MODEL,
+    }
+)
+ALLOWED_DEEPSEEK_BEHAVIOR_MODELS = frozenset(
+    {
+        DEEPSEEK_FLASH_MODEL,
+        DEEPSEEK_V4_PRO_MODEL,
     }
 )
 _MAX_PROVIDER_RESPONSE_BYTES = 1_048_576
@@ -72,16 +86,35 @@ class _NoRedirectHandler(HTTPRedirectHandler):
         return None
 
 
-def _direct_ark_transport(
+def resolve_deepseek_chat_completions_endpoint(base_url: str | None = None) -> str:
+    """Resolve the canonical DeepSeek completions endpoint or fail closed."""
+
+    raw = "" if base_url is None else str(base_url).strip()
+    if not raw:
+        return DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
+    normalized = raw.rstrip("/")
+    if normalized in {"https://api.deepseek.com", "https://api.deepseek.com/v1"}:
+        return DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
+    raise DoubaoActorTransportError(
+        "DeepSeek actor endpoint is not the canonical DeepSeek endpoint",
+        error_code="noncanonical_endpoint",
+    )
+
+
+def _direct_chat_completions_transport(
     *,
     endpoint: str,
+    expected_endpoint: str,
+    endpoint_error_message: str,
+    provider_label: str,
+    api_key_env: str,
     headers: Mapping[str, str],
     body: bytes,
     timeout_seconds: float,
 ) -> Mapping[str, Any]:
-    if endpoint != DOUBAO_CHAT_COMPLETIONS_ENDPOINT:
+    if endpoint != expected_endpoint:
         raise DoubaoActorTransportError(
-            "Doubao actor endpoint is not the canonical Ark endpoint",
+            endpoint_error_message,
             error_code="noncanonical_endpoint",
         )
     request = Request(endpoint, data=body, headers=dict(headers), method="POST")
@@ -92,46 +125,84 @@ def _direct_ark_transport(
     except HTTPError as exc:
         if exc.code == 401:
             raise DoubaoActorTransportError(
-                "Doubao actor authentication failed; refresh ARK_API_KEY before retrying",
+                f"{provider_label} actor authentication failed; refresh {api_key_env} before retrying",
                 error_code="provider_authentication_failed",
             ) from None
         raise DoubaoActorTransportError(
-            f"Doubao actor request failed with HTTP status {exc.code}",
+            f"{provider_label} actor request failed with HTTP status {exc.code}",
             error_code="provider_http_error",
         ) from None
     except TimeoutError:
         raise DoubaoActorTransportError(
-            "Doubao actor provider timed out",
+            f"{provider_label} actor provider timed out",
             error_code="provider_timeout",
         ) from None
     except URLError as exc:
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             raise DoubaoActorTransportError(
-                "Doubao actor provider timed out",
+                f"{provider_label} actor provider timed out",
                 error_code="provider_timeout",
             ) from None
         raise DoubaoActorTransportError(
-            "Doubao actor provider transport failed",
+            f"{provider_label} actor provider transport failed",
             error_code="provider_transport_failed",
         ) from None
     if len(payload) > _MAX_PROVIDER_RESPONSE_BYTES:
         raise DoubaoActorTransportError(
-            "Doubao actor response exceeded the size limit",
+            f"{provider_label} actor response exceeded the size limit",
             error_code="provider_response_too_large",
         )
     try:
         decoded = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise DoubaoActorTransportError(
-            "Doubao actor returned invalid JSON",
+            f"{provider_label} actor returned invalid JSON",
             error_code="provider_invalid_json",
         ) from None
     if not isinstance(decoded, Mapping):
         raise DoubaoActorTransportError(
-            "Doubao actor provider response must be an object",
+            f"{provider_label} actor provider response must be an object",
             error_code="provider_invalid_shape",
         )
     return decoded
+
+
+def _direct_ark_transport(
+    *,
+    endpoint: str,
+    headers: Mapping[str, str],
+    body: bytes,
+    timeout_seconds: float,
+) -> Mapping[str, Any]:
+    return _direct_chat_completions_transport(
+        endpoint=endpoint,
+        expected_endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+        endpoint_error_message="Doubao actor endpoint is not the canonical Ark endpoint",
+        provider_label="Doubao",
+        api_key_env=ARK_API_KEY_ENV,
+        headers=headers,
+        body=body,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _direct_deepseek_transport(
+    *,
+    endpoint: str,
+    headers: Mapping[str, str],
+    body: bytes,
+    timeout_seconds: float,
+) -> Mapping[str, Any]:
+    return _direct_chat_completions_transport(
+        endpoint=endpoint,
+        expected_endpoint=DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+        endpoint_error_message="DeepSeek actor endpoint is not the canonical DeepSeek endpoint",
+        provider_label="DeepSeek",
+        api_key_env=DEEPSEEK_API_KEY_ENV,
+        headers=headers,
+        body=body,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _provider_input(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -382,25 +453,49 @@ spend_after_validation=true, end with writeback then spend."""
     return instruction
 
 
-def _provider_decision(response: Mapping[str, Any]) -> Mapping[str, Any]:
+def _strip_json_markdown_fence(content: str) -> str:
+    stripped = content.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        tag = lines[0][3:].strip().lower()
+        if tag in {"", "json"}:
+            return "\n".join(lines[1:-1]).strip()
+    if len(lines) == 1 and len(stripped) >= 6 and stripped.endswith("```"):
+        inner = stripped[3:-3].strip()
+        if inner.lower().startswith("json") and (
+            len(inner) == 4 or inner[4].isspace()
+        ):
+            return inner[4:].strip()
+        return inner
+    return stripped
+
+
+def _provider_decision(
+    response: Mapping[str, Any],
+    *,
+    provider_label: str = "Doubao",
+) -> Mapping[str, Any]:
     choices = response.get("choices")
     if not isinstance(choices, list) or len(choices) != 1:
-        raise RuntimeError("Doubao actor response must contain exactly one choice")
+        raise RuntimeError(f"{provider_label} actor response must contain exactly one choice")
     choice = choices[0]
     if not isinstance(choice, Mapping):
-        raise RuntimeError("Doubao actor choice must be an object")
+        raise RuntimeError(f"{provider_label} actor choice must be an object")
     message = choice.get("message")
     if not isinstance(message, Mapping):
-        raise RuntimeError("Doubao actor choice is missing its message")
+        raise RuntimeError(f"{provider_label} actor choice is missing its message")
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("Doubao actor message content must be non-empty JSON")
+        raise RuntimeError(f"{provider_label} actor message content must be non-empty JSON")
+    normalized_content = _strip_json_markdown_fence(content)
     try:
-        decision = json.loads(content)
+        decision = json.loads(normalized_content)
     except json.JSONDecodeError:
-        raise RuntimeError("Doubao actor message content is not valid JSON") from None
+        raise RuntimeError(f"{provider_label} actor message content is not valid JSON") from None
     if not isinstance(decision, Mapping):
-        raise RuntimeError("Doubao actor decision must be an object")
+        raise RuntimeError(f"{provider_label} actor decision must be an object")
     return decision
 
 
@@ -412,6 +507,8 @@ def _invoke_provider_decision(
     transport: DoubaoActorTransport,
     system_instruction: str,
     provider_input: Mapping[str, Any],
+    endpoint: str = DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+    provider_label: str = "Doubao",
 ) -> Mapping[str, Any]:
     body = {
         "model": model,
@@ -435,7 +532,7 @@ def _invoke_provider_decision(
     }
     try:
         response = transport(
-            endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+            endpoint=endpoint,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -452,10 +549,10 @@ def _invoke_provider_decision(
         raise
     except Exception:
         raise DoubaoActorTransportError(
-            "Doubao actor provider transport failed",
+            f"{provider_label} actor provider transport failed",
             error_code="provider_transport_failed",
         ) from None
-    return _provider_decision(response)
+    return _provider_decision(response, provider_label=provider_label)
 
 
 def _onboarding_decision_instruction(phase: str) -> str:
@@ -506,9 +603,12 @@ For phase=entry, derive the contract from the start-goal packet:
   infer this boolean from activation_allowed or the selected route.
 - host_loop_activation_after_todo_write: copy
   activation_required_after_todo_write from that activation object, else false.
-- requested_host_surface: copy the packet's top-level host_surface, including
-  null. Copy host_surface and activation_method from the activation object,
-  including null.
+- requested_host_surface: copy ONLY the packet's top-level host_surface
+  (including null).
+- host_surface and activation_method: copy ONLY from that activation object
+  (top-level host_loop_activation or command_pack.host_loop_activation),
+  never from the packet's top-level host_surface; return null when omitted or
+  null.
 - visible_goal_command_available: true exactly when
   activation.host_mutation.host_command is `/goal <task_body>`.
 - writes_now and spends_quota_now: copy the corresponding booleans from
@@ -544,8 +644,152 @@ def _onboarding_provider_input(request: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-class DoubaoModelBehaviorActor(ModelBehaviorActor):
+def _validate_actor_settings(
+    *,
+    api_key: str,
+    model: str,
+    allowed_models: AbstractSet[str],
+    timeout_seconds: float,
+    provider_label: str,
+    endpoint: str,
+    expected_endpoint: str,
+) -> None:
+    if not api_key.strip():
+        raise RuntimeError(f"{provider_label} actor requires a runtime-injected API key")
+    if model not in allowed_models:
+        raise ValueError(f"{provider_label} actor model must be explicitly allowlisted")
+    if timeout_seconds <= 0 or timeout_seconds > 300:
+        raise ValueError(f"{provider_label} actor timeout must be between 0 and 300 seconds")
+    if endpoint != expected_endpoint:
+        raise DoubaoActorTransportError(
+            f"{provider_label} actor endpoint is not the canonical endpoint",
+            error_code="noncanonical_endpoint",
+        )
+
+
+class _DirectChatModelBehaviorActor(ModelBehaviorActor):
+    """Shared direct-provider actor for no-tool behavior qualification."""
+
+    _provider_label = "Doubao"
+    _provider_prefix = "ark"
+    _expected_endpoint = DOUBAO_CHAT_COMPLETIONS_ENDPOINT
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        allowed_models: AbstractSet[str],
+        timeout_seconds: float,
+        transport: DoubaoActorTransport,
+        endpoint: str,
+    ) -> None:
+        _validate_actor_settings(
+            api_key=api_key,
+            model=model,
+            allowed_models=allowed_models,
+            timeout_seconds=timeout_seconds,
+            provider_label=self._provider_label,
+            endpoint=endpoint,
+            expected_endpoint=self._expected_endpoint,
+        )
+        self._api_key = api_key
+        self._model = model
+        self._timeout_seconds = timeout_seconds
+        self._transport = transport
+        self._endpoint = endpoint
+
+    def __call__(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
+        canonical_request = normalize_model_behavior_actor_request(request)
+        semantic_contract_fields = tuple(
+            dict(canonical_request["response_contract"])[
+                "semantic_contract_fields"
+            ]
+        )
+        decision = _invoke_provider_decision(
+            api_key=self._api_key,
+            model=self._model,
+            timeout_seconds=self._timeout_seconds,
+            transport=self._transport,
+            system_instruction=_decision_instruction(
+                arm=str(canonical_request["arm"]),
+                semantic_contract_required=bool(
+                    canonical_request["semantic_contract_required"]
+                ),
+                semantic_contract_fields=semantic_contract_fields,
+                packet_schema_version=str(canonical_request["packet_schema_version"]),
+            ),
+            provider_input=_provider_input(canonical_request),
+            endpoint=self._endpoint,
+            provider_label=self._provider_label,
+        )
+        return {
+            "schema_version": MODEL_BEHAVIOR_ACTOR_RESULT_SCHEMA_VERSION,
+            "actor_ref": f"{self._provider_prefix}:{self._model}",
+            "decision": dict(decision),
+            "tool_calls": [],
+        }
+
+
+class _DirectChatOnboardingModelBehaviorActor:
+    """Shared direct-provider actor for onboarding closed-loop qualification."""
+
+    _provider_label = "Doubao"
+    _provider_prefix = "ark"
+    _expected_endpoint = DOUBAO_CHAT_COMPLETIONS_ENDPOINT
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        allowed_models: AbstractSet[str],
+        timeout_seconds: float,
+        transport: DoubaoActorTransport,
+        endpoint: str,
+    ) -> None:
+        _validate_actor_settings(
+            api_key=api_key,
+            model=model,
+            allowed_models=allowed_models,
+            timeout_seconds=timeout_seconds,
+            provider_label=self._provider_label,
+            endpoint=endpoint,
+            expected_endpoint=self._expected_endpoint,
+        )
+        self._api_key = api_key
+        self._model = model
+        self._timeout_seconds = timeout_seconds
+        self._transport = transport
+        self._endpoint = endpoint
+
+    def __call__(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
+        canonical_request = normalize_onboarding_model_behavior_actor_request(request)
+        phase = str(canonical_request["phase"])
+        decision = _invoke_provider_decision(
+            api_key=self._api_key,
+            model=self._model,
+            timeout_seconds=self._timeout_seconds,
+            transport=self._transport,
+            system_instruction=_onboarding_decision_instruction(phase),
+            provider_input=_onboarding_provider_input(canonical_request),
+            endpoint=self._endpoint,
+            provider_label=self._provider_label,
+        )
+        return {
+            "schema_version": ONBOARDING_MODEL_BEHAVIOR_RESULT_SCHEMA_VERSION,
+            "actor_ref": f"{self._provider_prefix}:{self._model}",
+            "decision": dict(decision),
+            "tool_calls": [],
+        }
+
+
+class DoubaoModelBehaviorActor(_DirectChatModelBehaviorActor):
     """Direct Ark actor for low-frequency, no-tool behavior qualification."""
+
+    _provider_label = "Doubao"
+    _provider_prefix = "ark"
+    _expected_endpoint = DOUBAO_CHAT_COMPLETIONS_ENDPOINT
 
     def __init__(
         self,
@@ -555,16 +799,14 @@ class DoubaoModelBehaviorActor(ModelBehaviorActor):
         timeout_seconds: float = 90.0,
         transport: DoubaoActorTransport = _direct_ark_transport,
     ) -> None:
-        if not api_key.strip():
-            raise RuntimeError("Doubao actor requires a runtime-injected API key")
-        if model not in ALLOWED_MODEL_BEHAVIOR_MODELS:
-            raise ValueError("Doubao actor model must be explicitly allowlisted")
-        if timeout_seconds <= 0 or timeout_seconds > 300:
-            raise ValueError("Doubao actor timeout must be between 0 and 300 seconds")
-        self._api_key = api_key
-        self._model = model
-        self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            allowed_models=ALLOWED_MODEL_BEHAVIOR_MODELS,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+        )
 
     @classmethod
     def from_environment(
@@ -588,38 +830,13 @@ class DoubaoModelBehaviorActor(ModelBehaviorActor):
             transport=transport,
         )
 
-    def __call__(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
-        canonical_request = normalize_model_behavior_actor_request(request)
-        semantic_contract_fields = tuple(
-            dict(canonical_request["response_contract"])[
-                "semantic_contract_fields"
-            ]
-        )
-        decision = _invoke_provider_decision(
-            api_key=self._api_key,
-            model=self._model,
-            timeout_seconds=self._timeout_seconds,
-            transport=self._transport,
-            system_instruction=_decision_instruction(
-                arm=str(canonical_request["arm"]),
-                semantic_contract_required=bool(
-                    canonical_request["semantic_contract_required"]
-                ),
-                semantic_contract_fields=semantic_contract_fields,
-                packet_schema_version=str(canonical_request["packet_schema_version"]),
-            ),
-            provider_input=_provider_input(canonical_request),
-        )
-        return {
-            "schema_version": MODEL_BEHAVIOR_ACTOR_RESULT_SCHEMA_VERSION,
-            "actor_ref": f"ark:{self._model}",
-            "decision": dict(decision),
-            "tool_calls": [],
-        }
 
-
-class DoubaoOnboardingModelBehaviorActor:
+class DoubaoOnboardingModelBehaviorActor(_DirectChatOnboardingModelBehaviorActor):
     """Direct Ark actor for low-frequency onboarding closed-loop qualification."""
+
+    _provider_label = "Doubao"
+    _provider_prefix = "ark"
+    _expected_endpoint = DOUBAO_CHAT_COMPLETIONS_ENDPOINT
 
     def __init__(
         self,
@@ -629,16 +846,14 @@ class DoubaoOnboardingModelBehaviorActor:
         timeout_seconds: float = 90.0,
         transport: DoubaoActorTransport = _direct_ark_transport,
     ) -> None:
-        if not api_key.strip():
-            raise RuntimeError("Doubao actor requires a runtime-injected API key")
-        if model not in ALLOWED_MODEL_BEHAVIOR_MODELS:
-            raise ValueError("Doubao actor model must be explicitly allowlisted")
-        if timeout_seconds <= 0 or timeout_seconds > 300:
-            raise ValueError("Doubao actor timeout must be between 0 and 300 seconds")
-        self._api_key = api_key
-        self._model = model
-        self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            allowed_models=ALLOWED_MODEL_BEHAVIOR_MODELS,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=DOUBAO_CHAT_COMPLETIONS_ENDPOINT,
+        )
 
     @classmethod
     def from_environment(
@@ -662,20 +877,114 @@ class DoubaoOnboardingModelBehaviorActor:
             transport=transport,
         )
 
-    def __call__(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
-        canonical_request = normalize_onboarding_model_behavior_actor_request(request)
-        phase = str(canonical_request["phase"])
-        decision = _invoke_provider_decision(
-            api_key=self._api_key,
-            model=self._model,
-            timeout_seconds=self._timeout_seconds,
-            transport=self._transport,
-            system_instruction=_onboarding_decision_instruction(phase),
-            provider_input=_onboarding_provider_input(canonical_request),
+
+def _deepseek_env_config(
+    *,
+    environ: Mapping[str, str] | None,
+    model: str | None,
+) -> tuple[str, str, str]:
+    values = os.environ if environ is None else environ
+    api_key = values.get(DEEPSEEK_API_KEY_ENV, "")
+    if not api_key.strip():
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY is not injected; live DeepSeek qualification is unavailable"
         )
-        return {
-            "schema_version": ONBOARDING_MODEL_BEHAVIOR_RESULT_SCHEMA_VERSION,
-            "actor_ref": f"ark:{self._model}",
-            "decision": dict(decision),
-            "tool_calls": [],
-        }
+    endpoint = resolve_deepseek_chat_completions_endpoint(values.get(DEEPSEEK_BASE_URL_ENV))
+    resolved_model = (
+        values.get(DEEPSEEK_MODEL_ENV, DEEPSEEK_FLASH_MODEL) if model is None else model
+    )
+    return api_key, resolved_model, endpoint
+
+
+class DeepSeekModelBehaviorActor(_DirectChatModelBehaviorActor):
+    """Direct DeepSeek actor for low-frequency, no-tool behavior qualification."""
+
+    _provider_label = "DeepSeek"
+    _provider_prefix = "deepseek"
+    _expected_endpoint = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = DEEPSEEK_FLASH_MODEL,
+        timeout_seconds: float = 90.0,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        endpoint: str = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            allowed_models=ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DeepSeekModelBehaviorActor:
+        api_key, resolved_model, endpoint = _deepseek_env_config(
+            environ=environ,
+            model=model,
+        )
+        return cls(
+            api_key=api_key,
+            model=resolved_model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+        )
+
+
+class DeepSeekOnboardingModelBehaviorActor(_DirectChatOnboardingModelBehaviorActor):
+    """Direct DeepSeek actor for low-frequency onboarding closed-loop qualification."""
+
+    _provider_label = "DeepSeek"
+    _provider_prefix = "deepseek"
+    _expected_endpoint = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = DEEPSEEK_FLASH_MODEL,
+        timeout_seconds: float = 90.0,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        endpoint: str = DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            allowed_models=ALLOWED_DEEPSEEK_BEHAVIOR_MODELS,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+        transport: DoubaoActorTransport = _direct_deepseek_transport,
+        timeout_seconds: float = 90.0,
+        model: str | None = None,
+    ) -> DeepSeekOnboardingModelBehaviorActor:
+        api_key, resolved_model, endpoint = _deepseek_env_config(
+            environ=environ,
+            model=model,
+        )
+        return cls(
+            api_key=api_key,
+            model=resolved_model,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+            endpoint=endpoint,
+        )

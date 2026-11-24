@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .control_plane.runtime.time import parse_timestamp as _parse_timestamp
@@ -161,9 +162,15 @@ def normalize_checkpointed_boundary_authority_entries(
     return entries
 
 
-def _compact_checkpointed_boundary_authority_summary(value: Any) -> dict[str, Any] | None:
+def _compact_checkpointed_boundary_authority_summary(
+    value: Any,
+    *,
+    goal_repo: str | Path | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
+
+    from .control_plane.coordination.configuration import fold_write_scope_subpaths
 
     def _count(raw: Any) -> int:
         try:
@@ -171,7 +178,10 @@ def _compact_checkpointed_boundary_authority_summary(value: Any) -> dict[str, An
         except (TypeError, ValueError):
             return 0
 
-    active_scopes = normalize_required_write_scopes(value.get("active_write_scope"))
+    active_scopes = fold_write_scope_subpaths(
+        normalize_required_write_scopes(value.get("active_write_scope")),
+        goal_repo=goal_repo,
+    )
     if not active_scopes and "active_count" not in value and "inactive_count" not in value:
         return None
     return {
@@ -182,12 +192,21 @@ def _compact_checkpointed_boundary_authority_summary(value: Any) -> dict[str, An
     }
 
 
-def checkpointed_boundary_authority_summary(coordination: dict[str, Any] | None) -> dict[str, Any] | None:
+def checkpointed_boundary_authority_summary(
+    coordination: dict[str, Any] | None,
+    *,
+    goal_repo: str | Path | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(coordination, dict):
         return None
+    from .control_plane.coordination.configuration import fold_write_scope_subpaths
+
     checkpointed_authority = coordination.get("checkpointed_boundary_authority")
     if isinstance(checkpointed_authority, dict):
-        compact_summary = _compact_checkpointed_boundary_authority_summary(checkpointed_authority)
+        compact_summary = _compact_checkpointed_boundary_authority_summary(
+            checkpointed_authority,
+            goal_repo=goal_repo,
+        )
         if compact_summary is not None and "entries" not in checkpointed_authority:
             return compact_summary
         checkpointed_authority = checkpointed_authority.get("entries")
@@ -202,6 +221,7 @@ def checkpointed_boundary_authority_summary(coordination: dict[str, Any] | None)
         for scope in normalize_required_write_scopes(entry.get("write_scope")):
             if scope not in active_scopes:
                 active_scopes.append(scope)
+    active_scopes = fold_write_scope_subpaths(active_scopes, goal_repo=goal_repo)
     return {
         "schema_version": CHECKPOINTED_BOUNDARY_AUTHORITY_SCHEMA_VERSION,
         "active_count": len(active_entries),

@@ -17,11 +17,11 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
-from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRATEGY
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, normalize_claim_ttl_seconds
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 from .scheduler import phase_work_reserve
 
@@ -67,7 +67,6 @@ class BenchmarkCodex(CodexOffline):
         scheduler_timeout_sec=5080,
         replan_after_todos=None,
         replan_after_turns=None,
-        stride_strategy=None,
         planning_horizon_goal=None,
         checkpoint_request_path=None,
         checkpoint_request=None,
@@ -84,13 +83,20 @@ class BenchmarkCodex(CodexOffline):
         agent_id=_AGENT_ID,
         defer_codex_home=False,
         complete_turn=False,
+        official_stop_hook=False,
+        claim_ttl_seconds=None,
         **kwargs,
     ):
         if "research_loop" in kwargs:
             raise ValueError(
                 "research_loop has been removed; remove it from the adapter kwargs. "
-                "Use ordinary Goal/Todo planning, choose stride_strategy independently, "
-                "and select execution_observation='local_probe' only when needed."
+                "Use ordinary Goal/Todo planning and select "
+                "execution_observation='local_probe' only when needed."
+            )
+        if "stride_strategy" in kwargs:
+            raise ValueError(
+                "stride_strategy has been removed; remove it from the adapter kwargs. "
+                f"LoopX execution modes always run {LIVE_STRIDE_STRATEGY}."
             )
         if isinstance(validation_command, str):
             raise ValueError("validation_command must be an argv list, not shell text")
@@ -105,6 +111,7 @@ class BenchmarkCodex(CodexOffline):
             context_delivery,
             native_child_limit,
             complete_turn=complete_turn,
+            official_stop_hook=official_stop_hook,
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -136,10 +143,8 @@ class BenchmarkCodex(CodexOffline):
         self.replan_after_todos = int(3 if replan_after_todos is None else replan_after_todos)
         if not 1 <= self.replan_after_todos <= 5:
             raise ValueError("replan_after_todos must be between 1 and 5")
-        if stride_strategy is not None and not self.execution.uses_loopx:
-            raise ValueError("stride_strategy requires a LoopX execution mode")
-        self.stride_strategy = (normalize_stride_strategy(stride_strategy)
-                                if stride_strategy is not None else None)
+        # Recorded, not selected: LoopX always runs the live stride policy.
+        self.stride_strategy = LIVE_STRIDE_STRATEGY if self.execution.uses_loopx else None
         if planning_horizon_goal is not None:
             if not isinstance(planning_horizon_goal, bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
@@ -177,6 +182,7 @@ class BenchmarkCodex(CodexOffline):
         self.native_goal_continue = native_goal_continue
         self.goal_id, self.agent_id = goal_id, agent_id
         self.defer_codex_home = defer_codex_home
+        self.claim_ttl_seconds = normalize_claim_ttl_seconds(claim_ttl_seconds)
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
@@ -193,9 +199,8 @@ class BenchmarkCodex(CodexOffline):
             if (self._get_env("CODEX_WIRE_API") or "responses") != "responses":
                 raise ValueError("provider_request_admission requires the Responses wire API")
 
-    def _turn_envelope_receipt(self) -> dict:
-        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope, complete=self.execution.complete_turn),
-                **({"native_child_limit": self.execution.native_child_limit}
+    def _host_context_receipt(self) -> dict:
+        return {**({"native_child_limit": self.execution.native_child_limit}
                    if self.execution.native_child_limit is not None else {}),
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
 
@@ -412,8 +417,9 @@ class BenchmarkCodex(CodexOffline):
             "task_entry": self.execution.task_entry,
             **({"execution_observation": self.execution_observation}
                if self.execution_observation is not None else {}),
-            **self._turn_envelope_receipt(),
+            **self._host_context_receipt(),
             **self._planning_receipt(),
+            **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
@@ -499,10 +505,9 @@ class BenchmarkCodex(CodexOffline):
         self, environment: BaseEnvironment, instruction: str, *, cwd: str
     ) -> None:
         key, option, expected = self._replan_configuration()
-        stride_args = (["--execution-stride-strategy", self.stride_strategy]
-                       if self.stride_strategy is not None else [])
+        horizon_args = []
         if self.planning_horizon_goal is not None:
-            stride_args.append("--execution-planning-horizon-goal" if self.planning_horizon_goal
+            horizon_args.append("--execution-planning-horizon-goal" if self.planning_horizon_goal
                                else "--no-execution-planning-horizon-goal")
         pending = await environment.exec(
             command=f"test -e {_LOOPX_RUNTIME}/benchmark-pending-turn.json"
@@ -562,7 +567,7 @@ class BenchmarkCodex(CodexOffline):
                     "trial-workspace",
                     option,
                     str(expected),
-                    *stride_args,
+                    *horizon_args,
                     "--agent-work-mode",
                     f"{self.agent_id}=active",
                     "--execute",
@@ -579,7 +584,7 @@ class BenchmarkCodex(CodexOffline):
                     self.goal_id,
                     option,
                     str(expected),
-                    *stride_args,
+                    *horizon_args,
                     "--execute",
                 ],
                 cwd=cwd,
@@ -606,11 +611,6 @@ class BenchmarkCodex(CodexOffline):
         actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal")
         if type(actual_horizon) is not bool or actual_horizon != self.planning_horizon_goal:
             raise RuntimeError("planning_horizon_goal readback mismatch")
-        strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
-        if strategy != (self.stride_strategy or "off"):
-            raise RuntimeError(
-                f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
-            )
 
     def _verify_native_child_configuration(self, configured_state: dict) -> None:
         if self.execution.native_child_limit is None:
@@ -692,9 +692,8 @@ class BenchmarkCodex(CodexOffline):
                    if self.execution_observation is not None else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
-                **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
-                "LOOPX_COMPLETE_TURN": "1" if self.execution.complete_turn else "0",
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                "LOOPX_OFFICIAL_STOP_HOOK": "1" if self.execution.official_stop_hook else "0",
                 # A trial's explicit None must not inherit a container opt-in.
                 "LOOPX_NATIVE_CHILD_LIMIT": (
                     str(self.execution.native_child_limit)
@@ -709,6 +708,8 @@ class BenchmarkCodex(CodexOffline):
                 ),
                 **({"LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds)}
                    if self.execution.timeout_seconds is not None else {}),
+                **({"LOOPX_BENCHMARK_CLAIM_TTL_SECONDS": str(self.claim_ttl_seconds)}
+                   if self.claim_ttl_seconds is not None else {}),
                 "CODEX_BIN": "/usr/local/bin/codex",
                 "MODEL_NAME": (self.model_name or "").split("/", 1)[-1],
                 "REASONING_EFFORT": str(
@@ -829,8 +830,9 @@ class BenchmarkCodex(CodexOffline):
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
-            **self._turn_envelope_receipt(),
+            **self._host_context_receipt(),
             **self._planning_receipt(),
+            **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             **self._replan_receipt(),
@@ -897,7 +899,7 @@ class BenchmarkCodex(CodexOffline):
                 if entry["status"] == "blocked":
                     return
             remaining = int(deadline - time.monotonic())
-            reserve = phase_work_reserve(self.execution.mode)
+            reserve = phase_work_reserve(self.execution.mode, official_stop_hook=self.execution.official_stop_hook)
             if remaining <= reserve:
                 raise TimeoutError("Task budget exhausted before execution handoff")
             # Planning, admission and work share one absolute phase clock.
@@ -913,11 +915,12 @@ class BenchmarkCodex(CodexOffline):
                 resume_budget_stop=self._phase_number > 1,
             )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
+            supervisor_timeout = remaining + (30 if self.execution.official_stop_hook else 0)
             shell = (
                 "set +e; "
                 # Use the task environment's clock, including remote backends.
                 f"export LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + {remaining} )); "
-                f"timeout --signal=TERM --kill-after=30 {remaining}s "
+                f"timeout --signal=TERM --kill-after=30 {supervisor_timeout}s "
                 f"{shlex.join(command)} >> {shlex.quote(phase_log)} 2>&1; "
                 "rc=$?; "
                 # Budget exhaustion retains partial artifacts for native scoring.
@@ -928,7 +931,7 @@ class BenchmarkCodex(CodexOffline):
                 command=shell,
                 env=env,
                 cwd=cwd,
-                timeout_sec=remaining + 60,
+                timeout_sec=supervisor_timeout + 60,
             )
         finally:
             # Remote Harbor backends download logs after run(). Read them now

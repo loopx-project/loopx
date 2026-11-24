@@ -10,8 +10,10 @@
 默认开启原生路径。保存 off 或显式关闭可禁用；普通 CLI、其他宿主与不支持的平台
 继承完整交付。
 
-完整 C1 消费链迁移和
-长程成果／成本资格仍未完成；广泛默认化和旧路径退役须取得下文证据。
+C1 源码的内联和分阶段交付使用同一个 wire 契约。公开制品遵循
+[发布资格](../product/release-readiness.md)。升级时，已保存的 Codex App loader
+可在 App 读回新 loader 前继续用旧参数调用 `heartbeat-prompt`，两种写法均启动
+同一个 C1 准入流程。下文的证据用于确认 Host 实际采用、模型成果和完整成本。
 
 - 理解一次工作，从[四种场景](#一项任务四种场景)开始。
 - 实际使用，看[开启、验证和回退](#开启验证和回退)。
@@ -52,7 +54,7 @@ flowchart TD
 [`prepareProgressiveContextDelivery`](../../loopx/control_plane/quota/progressive_context.ts)
 开始，使用[精确 codec](../../loopx/control_plane/quota/context_delivery.ts)，文件、锁和原生
 生命周期 IO 留给 [Codex adapter](../../loopx/control_plane/turn_driver/codex_context.py)。
-一次共享准备调用。
+一次共享准备调用，不证明所有最终消费者已经迁移。
 
 ### 三种复用分别看
 
@@ -207,10 +209,8 @@ journal，限制权限并拒绝不安全路径。不要把原始 capture、本�
 同一产品路径中的原 quota packet 与融合契约。可选 controller/executor 分离是之后
 的独立比较，不能用双会话结果解释或抵消单会话回归。
 
-未来扩大默认采用范围必须同时有**明确版本的 DeepSeek 模型与强模型**的可比效果、完整成本
-证据。每个模型内部固定条件分别比较，不能合并结果掩盖某一个模型退步。本指南提供
-方案。
-这些标准约束现有范围化默认的扩展；
+受支持 profile 的采用资格须有**明确版本的 DeepSeek 模型与强模型**的可比效果和
+完整成本证据。各模型在固定条件下单独比较，分别报告退步。对照遵循现有实验授权。
 
 ### 最小判别研究
 

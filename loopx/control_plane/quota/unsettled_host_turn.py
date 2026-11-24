@@ -129,10 +129,10 @@ def restore_receipt_bound_todo_source(
         # owner still validates the original source identity and timestamps.
         from ..todos.list_readback import list_goal_todos
 
-        source = list_goal_todos(
+        goal_todos = list_goal_todos(
             registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
         )
-        todo_fields = {key: source[key] for key in ("user_todos", "agent_todos")}
+        todo_fields = {key: goal_todos[key] for key in ("user_todos", "agent_todos")}
         queue = payload.get("attention_queue") or {}
         return {**payload, "attention_queue": {**queue, "items": [
             {**row, **todo_fields,
@@ -176,6 +176,7 @@ def _prior_closeout_preflight(
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
+    inspect_current_execution_loss: bool = False,
 ) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
     """Ask the typed owner which prior Turn must still be closed out.
 
@@ -199,6 +200,7 @@ def _prior_closeout_preflight(
             current_turn_instance_id=current_turn_instance_id,
             goal_ref=goal_ref,
             owner_action_id=owner_action_id,
+            inspect_current_execution_loss=inspect_current_execution_loss,
             source_admission=source_admission,
         )
 
@@ -213,6 +215,7 @@ def _read_prior_closeout_preflight(
     owner_action_id: str | None,
     source_admission: Mapping[str, Any] | None,
     borrow_source_admission: bool = False,
+    inspect_current_execution_loss: bool = False,
 ) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
     try:
         request_runtime_root = (
@@ -228,6 +231,7 @@ def _read_prior_closeout_preflight(
                 "goal_id": goal_id,
                 "agent_id": agent_id,
                 "exclude_turn_instance_id": current_turn_instance_id,
+                **({"inspect_current_execution_loss": True} if inspect_current_execution_loss else {}),
                 "owner_action_id": owner_action_id,
                 **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
                 **({"source_admission": dict(source_admission)} if source_admission is not None else {}),
@@ -319,6 +323,8 @@ def recovery_admission_append_precondition(
                 owner_action_id=goal_owner_resume_id(goal),
                 source_admission=source_admission,
                 borrow_source_admission=source_admission is not None,
+                inspect_current_execution_loss=(recovery.get("repair") == "execution_loss_closeout"
+                    and recovery.get("prior_turn_instance_id") == turn_instance_id),
             )
             if (current is None or current[3]["checkpoint"] != recovery["admission_checkpoint"]
                     or current[3]["count"] != recovery["admissions_without_progress"]):
@@ -336,8 +342,9 @@ def _unsettled_host_turn_recovery(
     current_turn_instance_id: str | None,
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
+    inspect_current_execution_loss: bool = False,
 ) -> dict[str, Any] | None:
-    if not agent_id or not current_turn_instance_id:
+    if not agent_id:
         return None
     preflight = _prior_closeout_preflight(
         runtime_root=runtime_root,
@@ -347,6 +354,7 @@ def _unsettled_host_turn_recovery(
         registry_path=registry_path,
         goal_ref=goal_ref,
         owner_action_id=owner_action_id,
+        inspect_current_execution_loss=inspect_current_execution_loss,
     )
     if preflight is None:
         return None
@@ -416,6 +424,7 @@ def apply_unsettled_host_turn_recovery_if_required(
     ),
     goal_ref: Mapping[str, Any] | None = None,
     owner_action_id: str | None = None,
+    inspect_current_execution_loss: bool = False,
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
@@ -430,6 +439,7 @@ def apply_unsettled_host_turn_recovery_if_required(
         current_turn_instance_id=current_turn_instance_id,
         goal_ref=goal_ref,
         owner_action_id=owner_action_id,
+        inspect_current_execution_loss=inspect_current_execution_loss,
     )
     if verdict is None:
         return False
@@ -438,8 +448,9 @@ def apply_unsettled_host_turn_recovery_if_required(
         current_turn_instance_id=current_turn_instance_id, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
     )
-    if verdict["recovery"].get("state") == "attention_required":
-        payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
+    # Refresh scheduler_hint for both recovery_required and attention_required so
+    # an earlier wait or terminal stop hint never overrides recovery arbitration.
+    payload["scheduler_hint"] = project_scheduler_hint(payload, arbitration=arbitration)
     return True
 
 
@@ -536,10 +547,26 @@ def _apply_recovery_projection(
     if attention:
         from .settlement_precedence import clear_quota_action_projections
 
+        reads = payload.get("required_reads")
         clear_quota_action_projections(payload)
+        # The recovery hold suppresses the stale work selection. The
+        # authorized Inbox read is scoped to the Goal and Agent independently.
+        if isinstance(reads, list):
+            inbox_reads = [
+                read for read in reads
+                if isinstance(read, Mapping)
+                and read.get("source") == "turn_start_capability_hook"
+                and read.get("kind") == "operator_inbox"
+            ]
+            if inbox_reads:
+                payload["required_reads"] = inbox_reads
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)
+    if recovery.get("repair") == "execution_loss_closeout":
+        # Ordinary preparation was built for potential current work. Its
+        # claim must never replace the prior Turn's administrative recovery.
+        payload.pop("execution_preparation", None)
     payload.update(
         {
             "decision": "blocked_wait" if attention else "unsettled_host_turn_recovery",
@@ -598,6 +625,38 @@ def _apply_recovery_projection(
     )
     if attention:
         payload["effective_action"] = EffectiveAction.BLOCKED_WAIT.value
+    recovery_lease_proof: dict[str, Any] | None = None
+    if not attention and recovery.get("repair") == "monitor_poll":
+        from .execution_preparation import project_selected_todo_execution_preparation
+
+        agent_identity = payload.get("agent_identity")
+        agent_id = (
+            agent_identity.get("agent_id")
+            if isinstance(agent_identity, Mapping)
+            else payload.get("agent_id")
+        )
+        prior_todo_id = recovery.get("binding_id")
+        if (
+            isinstance(prior_todo_id, str)
+            and prior_todo_id.strip()
+            and isinstance(payload.get("goal_id"), str)
+            and payload["goal_id"].strip()
+            and isinstance(agent_id, str)
+            and agent_id.strip()
+        ):
+            preparation = project_selected_todo_execution_preparation(
+                runtime_root=runtime_root,
+                goal_id=payload["goal_id"],
+                selected_todo={"todo_id": prior_todo_id},
+                agent_id=agent_id,
+            )
+            if (
+                isinstance(preparation, Mapping)
+                and preparation.get("handoff_mode") == "hard_lease"
+                and preparation.get("state") == "ready"
+                and isinstance(preparation.get("lease_proof"), Mapping)
+            ):
+                recovery_lease_proof = dict(preparation["lease_proof"])
     interaction_contract, arbitration = _build_interaction_contract_projection(
         payload,
         agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
@@ -606,6 +665,7 @@ def _apply_recovery_projection(
         turn_instance_id=current_turn_instance_id,
         runtime_root=str(runtime_root),
         registry_path=str(registry_path),
+        recovery_lease_proof=recovery_lease_proof,
     )
     agent_channel = interaction_contract.get("agent_channel")
     if isinstance(agent_channel, dict):

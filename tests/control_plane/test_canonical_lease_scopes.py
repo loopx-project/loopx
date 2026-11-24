@@ -1,4 +1,6 @@
 """Scope comparison must preserve request identity and accepted declarations."""
+from contextlib import redirect_stdout
+import io
 import json
 import os
 import subprocess
@@ -8,6 +10,7 @@ from pathlib import Path
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
+from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
@@ -36,6 +39,18 @@ def scope_goal(tmp_path, monkeypatch, request):
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=request.param)
 
     def cli(*args, cwd=None, expected_exit=0):
+        if cwd is None and not any(name.startswith("LOOPX_LEASE_SCOPE_") for name in os.environ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = cli_main([
+                    "--registry", str(registry),
+                    "--runtime-root", str(runtime),
+                    "--format", "json",
+                    *args,
+                    "--goal-id", goal,
+                ])
+            assert code == expected_exit, output.getvalue()
+            return json.loads(output.getvalue())
         selected_repo = Path(os.environ.get("LOOPX_LEASE_SCOPE_CONSUMER", REPO)) if cwd is None else cwd
         child = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args, "--goal-id", goal],
@@ -80,7 +95,7 @@ def test_retained_alias_declaration_can_be_claimed(scope_goal):
         "--agent-id", "agent-a", "--claim-operation-id", "alias-claim",
         "--task-lease-idempotency-key", "alias-claim", "--task-lease-expected-version", "0")
     assert claimed["ok"]
-    assert cli("task-lease", "inspect", "--todo-id", "todo_scope_a")["lease"]["write_scopes"] == ["src/main.ts"]
+    assert cli("task-lease", "inspect", "--todo-id", "todo_scope_a")["lease"]["write_scopes"] == []
     assert cli("todo", "list", "--todo-id", "todo_scope_a")["todo"]["required_write_scopes"] == ALIASES
 
 
@@ -94,11 +109,11 @@ def test_authored_alias_declaration_can_be_claimed_without_revision(scope_goal):
         "--claim-operation-id", "authored-claim", "--task-lease-idempotency-key", "authored-claim",
         "--task-lease-expected-version", "0")
     assert claimed["ok"]
-    assert cli("task-lease", "inspect", "--todo-id", todo_id)["lease"]["write_scopes"] == ["src/main.ts"]
+    assert cli("task-lease", "inspect", "--todo-id", todo_id)["lease"]["write_scopes"] == []
     assert cli("todo", "list", "--todo-id", todo_id)["todo"]["required_write_scopes"] == ALIASES
 
 
-def test_case_aliases_remain_exclusive_write_scopes(scope_goal):
+def test_case_aliases_admit_separate_todo_leases(scope_goal):
     cli, current = scope_goal
     acquire = ("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
         "--idempotency-key", "case-a", "--expected-version", "0", "--write-scope", "src/Main.ts")
@@ -106,28 +121,22 @@ def test_case_aliases_remain_exclusive_write_scopes(scope_goal):
     assert cli(*acquire)["idempotent"]
     changed = cli(*acquire[:-1], "src/main.ts", expected_exit=1)
     assert changed["error_code"] == "coordination_operation_identity_mismatch"
-    before = current()
-    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
-        "--idempotency-key", "case-b", "--expected-version", "0", "--write-scope", "src/main.ts",
-        expected_exit=1)
-    assert rejected["error_code"] == "write_scope_conflict"
-    assert current() == before
+    admitted = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "case-b", "--expected-version", "0", "--write-scope", "src/main.ts")
+    assert admitted["acquired"] and admitted["lease"]["write_scopes"] == ["src/main.ts"]
 
 
 @pytest.mark.parametrize("first_scope,second_scope", [
     ("src/**/*.ts", "src/main.ts"),
     ("src/main.ts", "src/**/*.ts"),
 ])
-def test_recursive_glob_conflicts_with_direct_child_scope(scope_goal, first_scope, second_scope):
-    cli, current = scope_goal
+def test_recursive_glob_and_child_scope_admit_separate_todo_leases(scope_goal, first_scope, second_scope):
+    cli, _ = scope_goal
     cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
         "--idempotency-key", "recursive-a", "--expected-version", "0", "--write-scope", first_scope)
-    before = current()
-    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
-        "--idempotency-key", "recursive-b", "--expected-version", "0", "--write-scope", second_scope,
-        expected_exit=1)
-    assert rejected["error_code"] == "write_scope_conflict"
-    assert current() == before
+    admitted = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "recursive-b", "--expected-version", "0", "--write-scope", second_scope)
+    assert admitted["acquired"] and admitted["lease"]["write_scopes"] == [second_scope]
 
 
 @pytest.mark.parametrize("first_scope,second_scope", [
@@ -148,17 +157,14 @@ def test_recursive_glob_conflicts_with_direct_child_scope(scope_goal, first_scop
     ("src/[!Σ]S.ts", "src/SSS.ts"),
     ("src/SSS.ts", "src/[!Σ]S.ts"),
 ])
-def test_unicode_case_aliases_remain_exclusive_write_scopes(scope_goal, first_scope, second_scope):
-    cli, current = scope_goal
+def test_unicode_case_aliases_admit_separate_todo_leases(scope_goal, first_scope, second_scope):
+    cli, _ = scope_goal
     acquired = cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
         "--idempotency-key", "unicode-a", "--expected-version", "0", "--write-scope", first_scope)
     assert acquired["lease"]["write_scopes"] == [first_scope]
-    before = current()
-    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
-        "--idempotency-key", "unicode-b", "--expected-version", "0", "--write-scope", second_scope,
-        expected_exit=1)
-    assert rejected["error_code"] == "write_scope_conflict"
-    assert current() == before
+    admitted = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "unicode-b", "--expected-version", "0", "--write-scope", second_scope)
+    assert admitted["acquired"] and admitted["lease"]["write_scopes"] == [second_scope]
 
 
 @pytest.mark.parametrize("first_scope,second_scope", [
@@ -178,8 +184,8 @@ def test_unicode_case_aliases_remain_exclusive_write_scopes(scope_goal, first_sc
     ("src/[!Σ]S.ts", "src/SSS.ts"),
     ("src/SSS.ts", "src/[!Σ]S.ts"),
 ])
-def test_unicode_case_aliases_conflict_at_atomic_todo_claim(scope_goal, first_scope, second_scope):
-    cli, current = scope_goal
+def test_unicode_case_aliases_claim_independently_at_todo_claim(scope_goal, first_scope, second_scope):
+    cli, _ = scope_goal
     repository = "git:github.com/example/project"
 
     def add_todo(label, scope):
@@ -192,15 +198,14 @@ def test_unicode_case_aliases_conflict_at_atomic_todo_claim(scope_goal, first_sc
         "--claim-operation-id", "unicode-claim-a", "--task-lease-idempotency-key", "unicode-claim-a",
         "--task-lease-expected-version", "0")
     assert claimed["ok"]
-    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == [first_scope]
+    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == []
 
     second = add_todo("b", second_scope)
-    before = current()
-    rejected = cli("todo", "claim", "--todo-id", second, "--claimed-by", "agent-b", "--agent-id", "agent-b",
+    second_claim = cli("todo", "claim", "--todo-id", second, "--claimed-by", "agent-b", "--agent-id", "agent-b",
         "--claim-operation-id", "unicode-claim-b", "--task-lease-idempotency-key", "unicode-claim-b",
-        "--task-lease-expected-version", "0", expected_exit=1)
-    assert rejected["error_code"] == "write_scope_conflict"
-    assert current() == before
+        "--task-lease-expected-version", "0")
+    assert second_claim["ok"]
+    assert cli("task-lease", "inspect", "--todo-id", second)["lease"]["write_scopes"] == []
 
 
 @pytest.mark.parametrize("scope,target", [
@@ -211,23 +216,22 @@ def test_unicode_case_aliases_conflict_at_atomic_todo_claim(scope_goal, first_sc
     ("src/[ς].ts", "src/Σ.ts"),
     ("src/[ß].ts", "src/SS.ts"),
 ])
-def test_glob_class_members_keep_exclusive_scope_coverage(scope_goal, scope, target):
-    cli, current = scope_goal
+def test_glob_class_members_keep_stored_spelling_without_lease_conflict(scope_goal, scope, target):
+    cli, _ = scope_goal
     first = cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
         "--idempotency-key", "class-a", "--write-scope", scope, "--expected-version", "0")
     assert first["lease"]["write_scopes"] == [scope]
-    before = current()
-    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
-        "--idempotency-key", "class-b", "--write-scope", target, "--expected-version", "0", expected_exit=1)
-    assert rejected["error_code"] == "write_scope_conflict" and current() == before
+    second = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "class-b", "--write-scope", target, "--expected-version", "0")
+    assert second["acquired"] and second["lease"]["write_scopes"] == [target]
 
 
 @pytest.mark.parametrize("scope,target", [
     ("src/[ς].ts", "src/Σ.ts"),
     ("src/[ß].ts", "src/SS.ts"),
 ])
-def test_unicode_glob_class_aliases_conflict_at_atomic_todo_claim(scope_goal, scope, target):
-    cli, current = scope_goal
+def test_unicode_glob_class_aliases_claim_independently_at_todo_claim(scope_goal, scope, target):
+    cli, _ = scope_goal
     repository = "git:github.com/example/project"
 
     def add_todo(label, write_scope):
@@ -242,16 +246,15 @@ def test_unicode_glob_class_aliases_conflict_at_atomic_todo_claim(scope_goal, sc
         "--task-lease-idempotency-key", "unicode-class-claim-a",
         "--task-lease-expected-version", "0")
     assert claimed["ok"]
-    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == [scope]
+    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == []
 
     second = add_todo("b", target)
-    before = current()
-    rejected = cli("todo", "claim", "--todo-id", second, "--claimed-by", "agent-b", "--agent-id", "agent-b",
+    second_claim = cli("todo", "claim", "--todo-id", second, "--claimed-by", "agent-b", "--agent-id", "agent-b",
         "--claim-operation-id", "unicode-class-claim-b",
         "--task-lease-idempotency-key", "unicode-class-claim-b",
-        "--task-lease-expected-version", "0", expected_exit=1)
-    assert rejected["error_code"] == "write_scope_conflict"
-    assert current() == before
+        "--task-lease-expected-version", "0")
+    assert second_claim["ok"]
+    assert cli("task-lease", "inspect", "--todo-id", second)["lease"]["write_scopes"] == []
 
 
 def test_case_folded_negated_glob_class_excludes_case_variant(scope_goal):
@@ -330,11 +333,13 @@ def test_directory_glob_scopes_at_real_entrypoints(
     before_retry = current()
     acquire(first, "a", first_scope)
     assert current() == before_retry
-    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == [first_scope]
+    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == (
+        [first_scope] if entrypoint == "acquire" else []
+    )
     before = current()
-    result = acquire(second, "b", second_scope, expected_exit=1 if conflict else 0)
-    if conflict:
-        assert result["error_code"] == "write_scope_conflict"
-        assert current() == before
-    else:
-        assert cli("task-lease", "inspect", "--todo-id", second)["lease"]["write_scopes"] == [second_scope]
+    result = acquire(second, "b", second_scope, expected_exit=0)
+    assert result["ok"]
+    assert cli("task-lease", "inspect", "--todo-id", second)["lease"]["write_scopes"] == (
+        [second_scope] if entrypoint == "acquire" else []
+    )
+    assert current()["todos"] == before["todos"] or entrypoint == "claim"

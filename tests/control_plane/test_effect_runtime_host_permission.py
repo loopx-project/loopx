@@ -152,10 +152,9 @@ def test_cli_configuration_collection_reports_host_fault_without_review_executio
     assert registry.read_text() == "{}"
 
 
-@pytest.mark.parametrize("turn_envelope", [False, True])
 @pytest.mark.parametrize("output_format", ["json", "markdown"])
 def test_failed_guard_keeps_host_recovery_without_runtime_presentation(
-    tmp_path: Path, monkeypatch, capsys, turn_envelope, output_format,
+    tmp_path: Path, monkeypatch, capsys, output_format,
 ) -> None:
     from loopx.cli_commands import quota as command
     from loopx.cli_runtime import print_payload
@@ -164,7 +163,6 @@ def test_failed_guard_keeps_host_recovery_without_runtime_presentation(
     registry.write_text("{}")
     args = build_parser().parse_args([
         "--format", output_format, "quota", "should-run", "--goal-id", "fixture-goal",
-        *(["--turn-envelope"] if turn_envelope else []),
     ])
 
     def denied(*_args, **_kwargs):
@@ -179,12 +177,14 @@ def test_failed_guard_keeps_host_recovery_without_runtime_presentation(
     ) == 1
     output = capsys.readouterr().out
     assert "host-approved" in output
-    if output_format == "json":
-        payload = json.loads(output)
-        assert payload["ok"] is False and payload["should_run"] is False
-        assert payload["error_code"] == "quota_runtime_permission_denied"
-    else:
+    if output_format == "markdown":
+        assert output.startswith("# LoopX Quota Should Run\n")
         assert "- ok: `False`" in output
+        output = output.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+    payload = json.loads(output)
+    assert payload["ok"] is False and payload["should_run"] is False
+    assert payload["error_code"] == "quota_runtime_permission_denied"
+    assert "schema_version" not in payload and "interaction_contract" not in payload
     assert registry.read_text() == "{}"
 
 

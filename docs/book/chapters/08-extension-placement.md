@@ -367,7 +367,7 @@ multi-agent preset、Provider 或 presentation 的组合，继续阅读
    resolver 和 domain policy，它就不该出现在 catalog 里。
 2. **capability 与 extension 是两个维度，一次改动可以只落在其中一个上。** 看到新 package
    就直接推断新 capability，是放置错误最常见的形式。
-3. 判据是独立调用合同与生命周期，而非文件数量。
+3. **共享代码并不构成升级成 capability 的理由。** 判据是独立调用合同与生命周期，而非文件数量。
 4. **manifest 可发现并不等于合同可调用。** `[[provides]]` 与 `[[implements]]` 只有在真实入口、
    resolver 和 validation 就位后才应写入。
 5. **Extension 的独立生命周期是用户可见的成本。** 声明它之前先确认这份成本换来了 caller

@@ -16,10 +16,10 @@ import {appendTodoExploreReferences} from "../todos/work_requirements.ts";
 export const GOAL_OUTCOMES_SCHEMA = "loopx_goal_outcomes_v0";
 export const OUTCOME_CONTEXT_NAVIGATION_SCHEMA = "outcome_context_navigation_v1";
 interface Requirement extends JsonObject {id: string; description: string}
-interface ReviewItem extends JsonObject {id: string; conclusion: "met" | "unmet" | "uncertain"; evidence_refs: string[]; note: string; basis_digest?: string}
+interface ReviewItem extends JsonObject {id: string; conclusion: "met" | "unmet" | "uncertain"; evidence_refs: string[]; note: string; basis_digest?: string; recorded_for_agent_id?: string}
 interface OutcomeReview extends JsonObject {basis_digest: string; items: ReviewItem[]}
 interface Outcome extends JsonObject {
-  id: string; owner_agent_id: string; objective: string; revision: number;
+  id: string; owner_agent_id: string; declaration_owner_agent_id?: string; objective: string; revision: number;
   requirements: Requirement[]; todo_ids: string[];
   sources: {ref: string; summary: string}[];
   review?: OutcomeReview;
@@ -41,7 +41,10 @@ function text(value: unknown, label: string, max = 512): string {
 }
 function id(value: unknown, label: string): string {
   const result = text(value, label, 128);
-  requireValue(/^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(result), `${label} must be an opaque identifier`);
+  requireValue(
+    /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(result),
+    `${label} must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`,
+  );
   return result;
 }
 function keys(row: JsonObject, required: string[], optional: string[] = []): void {
@@ -68,14 +71,16 @@ function source(value: unknown): {ref: string; summary: string} {
   const row = canonicalAuthorityObject(value, "outcome source"); keys(row, ["ref", "summary"]);
   return {ref: id(row.ref, "source ref"), summary: text(row.summary, "source summary")};
 }
-function reviewItems(value: unknown, max = 32, stored = false): ReviewItem[] {
+function reviewItems(value: unknown, max = 32, storage?: "legacy" | "records"): ReviewItem[] {
   const items = list(value, "review items", max).map(value => {
-    const row = canonicalAuthorityObject(value, "Agent review"); keys(row, ["id", "conclusion", "evidence_refs", "note"], stored ? ["basis_digest"] : []);
+    const row = canonicalAuthorityObject(value, "Agent review");
+    const storedFields = storage === "records" ? ["recorded_for_agent_id", "basis_digest"] : ["recorded_for_agent_id"];
+    keys(row, ["id", "conclusion", "evidence_refs", "note"], storage ? storedFields : []);
     requireValue(row.basis_digest === undefined || typeof row.basis_digest === "string" && BARE_SHA256_PATTERN.test(row.basis_digest), "review basis digest is invalid");
     requireValue(["met", "unmet", "uncertain"].includes(String(row.conclusion)), "review conclusion must be met, unmet or uncertain");
     const evidence = list(row.evidence_refs, "review evidence", 8).map(ref => text(ref, "evidence reference", 1024));
     requireValue(row.conclusion !== "met" || evidence.length > 0, "a met self-assessment requires evidence references");
-    return {id: id(row.id, "review requirement"), conclusion: row.conclusion as ReviewItem["conclusion"], evidence_refs: evidence, note: text(row.note, "review reasoning"), ...(row.basis_digest === undefined ? {} : {basis_digest: String(row.basis_digest)})};
+    return {...(row.recorded_for_agent_id === undefined ? {} : {recorded_for_agent_id: id(row.recorded_for_agent_id, "review Agent")}), id: id(row.id, "review requirement"), conclusion: row.conclusion as ReviewItem["conclusion"], evidence_refs: evidence, note: text(row.note, "review reasoning"), ...(row.basis_digest === undefined ? {} : {basis_digest: String(row.basis_digest)})};
   });
   unique(items.map(row => row.id), "review items"); return items;
 }
@@ -95,17 +100,18 @@ function readState(head: JsonObject, goalId: string): OutcomeState | null {
   requireValue(goalRef === null || goalRef.goal_id === goalId, "outcome lifetime Goal mismatch");
   const outcomes = list(row.outcomes, "outcomes", capacity(24)).map(value => {
     const o = canonicalAuthorityObject(value, "outcome");
-    keys(o, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources"], ["review"]);
+    keys(o, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources"], ["review", "declaration_owner_agent_id"]);
     let review: OutcomeReview | undefined;
     if (o.review !== undefined) {
       const row = canonicalAuthorityObject(o.review, "outcome review"); keys(row, ["basis_digest", "items"]);
       requireValue(typeof row.basis_digest === "string" && BARE_SHA256_PATTERN.test(row.basis_digest), "review basis digest is invalid");
-      review = {basis_digest: row.basis_digest, items: reviewItems(row.items, capacity(32), records)};
+      review = {basis_digest: row.basis_digest, items: reviewItems(row.items, capacity(32), records ? "records" : "legacy")};
     }
     const todoIds = list(o.todo_ids, "outcome work", capacity(64)).map(v => id(v, "Todo id")); unique(todoIds, "outcome work");
     const sources = list(o.sources, "outcome sources", capacity(64)).map(source); unique(sources.map(s => s.ref), "sources");
     const reqs = requirements(o.requirements, capacity(32)); requireValue(reqs.length && sources.length, "outcome requirements and source are required");
-    return {id: id(o.id, "outcome id"), owner_agent_id: id(o.owner_agent_id, "outcome Agent"), objective: text(o.objective, "outcome objective", 1024),
+    return {...(o.declaration_owner_agent_id === undefined ? {} : {declaration_owner_agent_id: id(o.declaration_owner_agent_id, "declaration Agent")}),
+      id: id(o.id, "outcome id"), owner_agent_id: id(o.owner_agent_id, "outcome Agent"), objective: text(o.objective, "outcome objective", 1024),
       revision: revision(o.revision), requirements: reqs, todo_ids: todoIds, sources, ...(review ? {review} : {})};
   });
   unique(outcomes.map(o => o.id), "outcomes");
@@ -195,6 +201,7 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
     sources.set(origin.ref, origin);
   }
   const outcome: Outcome = {id: outcomeId, owner_agent_id: owner, objective, revision: (old?.revision ?? 0) + 1,
+    ...(old?.declaration_owner_agent_id === undefined ? {} : {declaration_owner_agent_id: old.declaration_owner_agent_id}),
     requirements: [...reqs.values()], todo_ids: [...new Set([...(old?.todo_ids ?? []), ...links])], sources: [...sources.values()],
     ...(old?.review ? {review: old.review} : {})};
   let reviewedTodos = todos;
@@ -214,10 +221,14 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
     // Validate the complete intent first; only linked work enters this basis.
     if (outcome.todo_ids.includes(todoId)) reviewedTodos = new Map(todos).set(todoId, prospectiveTodo);
   }
+  // Historical items without attribution belong to the original declaration's lane.
+  // An operator may also record a review for an Agent, so this is not an authorship claim.
+  const attributed = (items: ReviewItem[]): ReviewItem[] => outcome.declaration_owner_agent_id === undefined
+    ? items : items.map(item => ({...item, recorded_for_agent_id: owner}));
   if (patch.review !== undefined) {
     const items = reviewItems(patch.review, records ? Number.MAX_SAFE_INTEGER : 32);
     requireValue(items.length === outcome.requirements.length && items.every(row => reqs.has(row.id)), "review must address every retained requirement exactly once");
-    outcome.review = {basis_digest: reviewBasis(outcome, reviewedTodos), items};
+    outcome.review = {basis_digest: reviewBasis(outcome, reviewedTodos), items: attributed(items)};
   }
   if (patch.review_patch !== undefined) {
     const items = reviewItems(patch.review_patch);
@@ -225,7 +236,7 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
     const basis = reviewBasis(outcome, reviewedTodos);
     const retained = new Map((old?.review?.items ?? []).map(item => [item.id,
       {...item, basis_digest: item.basis_digest ?? old!.review!.basis_digest}]));
-    for (const item of items) retained.set(item.id, {...item, basis_digest: basis});
+    for (const item of attributed(items)) retained.set(item.id, {...item, basis_digest: basis});
     outcome.review = {basis_digest: basis, items: [...retained.values()]};
   }
   // Refinement changes one outcome, not the positions of unrelated requirements
@@ -250,6 +261,46 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
   return readState({...head, goal_outcomes: serializeGoalOutcomes(state)}, goalId)!;
 }
 
+/** Only the trusted owner adapter can transfer explicitly selected orphaned outcomes.
+ * Source and destination registration are current host observations. All rows share
+ * one provider CAS. Refinement, independent verification and work ownership stay separate. */
+export function handoffGoalOutcomes(head: JsonObject, goalId: string, goalRef: WireExactGoalRef | null,
+  document: unknown, registeredAgents: unknown): OutcomeState {
+  const previous = readState(head, goalId);
+  requireValue(previous && canonicalAuthoritySha256(previous.goal_ref) === canonicalAuthoritySha256(goalRef),
+    "outcome Goal lifetime is unavailable or changed");
+  const transfer = canonicalAuthorityObject(document, "outcome handoff");
+  keys(transfer, ["from_agent_id", "to_agent_id", "outcomes"]);
+  const from = id(transfer.from_agent_id, "previous Agent"), to = id(transfer.to_agent_id, "receiving Agent");
+  requireValue(Array.isArray(registeredAgents) && registeredAgents.every(agent => typeof agent === "string")
+    && !registeredAgents.includes(from) && registeredAgents.includes(to),
+    "handoff requires a retired source and registered receiver in this Goal");
+  const selected = new Map<string, number>();
+  for (const value of list(transfer.outcomes, "selected outcomes", 64)) {
+    const row = canonicalAuthorityObject(value, "selected outcome");
+    keys(row, ["id", "revision"]);
+    const key = id(row.id, "outcome id");
+    requireValue(!selected.has(key), "selected outcomes contain duplicates");
+    selected.set(key, revision(row.revision));
+  }
+  requireValue(selected.size > 0, "select at least one outcome");
+  const outcomes = previous.outcomes.map(outcome => {
+    if (!selected.has(outcome.id)) return outcome;
+    requireValue(outcome.owner_agent_id === from && outcome.revision === selected.get(outcome.id),
+      "selected outcome owner or revision changed");
+    selected.delete(outcome.id);
+    return {...outcome, owner_agent_id: to, declaration_owner_agent_id: outcome.declaration_owner_agent_id ?? from,
+      revision: outcome.revision + 1};
+  });
+  requireValue(selected.size === 0, "selected outcome missing from this Goal");
+  const state = {...previous, revision: previous.revision + 1, outcomes};
+  if (state.schema_version !== OUTCOME_RECORDS_SCHEMA) {
+    const bytes = outcomeBytes(state);
+    requireValue(bytes.declaration <= 131072 && bytes.review <= 131072, "handoff exceeds legacy storage capacity; migrate to record storage first");
+  }
+  return state;
+}
+
 /** Resolve check authoring from one current requirement source. Review/source
  * bookkeeping does not invalidate an otherwise unchanged prepared check. */
 export function goalOutcomeCheckBasis(head: JsonObject, goalId: string, outcomeId: unknown): JsonObject {
@@ -264,17 +315,24 @@ export function goalOutcomeCheckBasis(head: JsonObject, goalId: string, outcomeI
 
 /** Only the existing acceptance projection supplies check results. A matched
  * description alone is not evidence; work coverage and freshness also matter. */
-export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance: JsonObject): JsonObject | null {
+export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance: JsonObject, registeredAgents?: unknown): JsonObject | null {
   const state = readState(head, goalId); if (!state) return null;
   const lifecycle = readGoalAcceptanceLifecycle(head, goalId);
   const current = lifecycle === null ? state.goal_ref === null
     : lifecycle.state === "active" && state.goal_ref !== null && sameExactGoalRef(lifecycle.goal_ref, state.goal_ref);
+  // A receipt replay may lack a roster, and a later Goal lifetime has a different
+  // roster. Neither observation can establish that an outcome owner is missing.
+  const roster = current && Array.isArray(registeredAgents) && registeredAgents.every(agent => typeof agent === "string")
+    ? new Set(registeredAgents) : null;
   const work = indexCoordinationProjectionTodos(head, goalId).todos;
   return observeOutcomeRequirements({schema_version: GOAL_OUTCOMES_SCHEMA, revision: state.revision, current_lifetime: current,
+    ...(roster && state.outcomes.some(outcome => !roster.has(outcome.owner_agent_id)) ? {handoff_receivers: [...roster]} : {}),
     outcomes: state.outcomes.map(o => {
       const basis = reviewBasis(o, work);
       return {...o,
+      ...(roster && !roster.has(o.owner_agent_id) ? {owner_registration_missing: true} : {}),
       ...(o.review ? {review: {...o.review, items: o.review.items.map(item => ({...item,
+        ...(o.declaration_owner_agent_id ? {recorded_for_agent_id: item.recorded_for_agent_id ?? o.declaration_owner_agent_id} : {}),
         basis_current: (item.basis_digest ?? o.review!.basis_digest) === basis}))}} : {}),
       review_basis_current: !!o.review && o.review.basis_digest === basis,
       // The source checkpoint includes current declared work and its completed

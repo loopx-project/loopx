@@ -32,11 +32,6 @@ def test_formal_task_instruction_change_rearms_the_actual_worker(
         "index": index + 1, "source_section": "Agent Todo", "archive_state": "active", "claimed_by": AGENT,
         "updated_at": "2026-09-01T00:00:00Z"} for index in range(15)]
     call, runtime, history = _fixture(tmp_path, monkeypatch, provider, future_monitor=False, initial_todos=todos)
-    # This fixture isolates instruction changes from independent Stride review.
-    registry_path = tmp_path / "registry.json"
-    registry = json.loads(registry_path.read_text())
-    registry["goals"][0]["execution_profile"] = {"stride_strategy": "off"}
-    registry_path.write_text(json.dumps(registry))
     history.write_text("")
     calls = tmp_path / "review-calls"
     args = _args(fake_cli=Path(sys.executable).parent / "loopx", state_file=tmp_path / "scheduler.json",
@@ -64,7 +59,8 @@ def test_formal_task_instruction_change_rearms_the_actual_worker(
                 "outcome": "continue", "prior_assumption": "The finite sample review is the current first task.",
                 "observed_reality": "The current canonical task still requests finite samples.",
                 "retained": ["The requested work and its original limits."],
-                "evidence_refs": ["evidence:current-canonical-task-review"]}}))
+                "evidence_refs": ["evidence:current-canonical-task-review"]},
+            "stride_decision": selected["replan_action_packet"]["stride_control"]["minimal_example"]}))
         binding = ("--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", turn,
                    "--todo-id", identity["todo_id"])
         refreshed = call("refresh-state", *binding, "--progress-scope", "agent_lane",

@@ -4,7 +4,7 @@ import {mkdtemp, readdir, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {agentCapabilityMemory} from "../../loopx/control_plane/agents/capability_memory.ts";
-import {projectCapabilityAvailability} from "../../loopx/control_plane/agents/capability_gate.ts";
+import {evaluateCapabilityGate, projectCapabilityAvailability} from "../../loopx/control_plane/agents/capability_gate.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 async function fixture(t: {after(fn: () => Promise<void>): void}) {
@@ -80,4 +80,71 @@ test("corruption, foreign scopes and invalid updates fail without overwriting ev
     await assert.rejects(call({available: ["cli_bridge"], execute: true}));
     assert.equal(await readFile(path, "utf8"), corrupt);
   }
+});
+
+test("legacy global-registry alias merges into canonical source_registry and preserve_unavailable honors revocations", async t => {
+  const {call} = await fixture(t);
+  await call({registry: "global-registry", available: ["network"], unavailable: ["external_evidence_poll"], execute: true});
+  const inherited = await call({registry: "source-registry", legacy_registries: ["global-registry"]});
+  assert.deepEqual(inherited.available, ["network"]);
+  assert.deepEqual(inherited.unavailable, ["external_evidence_poll"]);
+
+  const passive = await call({
+    registry: "source-registry",
+    legacy_registries: ["global-registry"],
+    available: ["external_evidence_poll", "cli_bridge"],
+    preserve_unavailable: true,
+    execute: true,
+  });
+  assert.equal(passive.written, true);
+  assert.deepEqual(passive.available, ["cli_bridge", "network"]);
+  assert.deepEqual(passive.unavailable, ["external_evidence_poll"]);
+
+  const canonicalRead = await call({registry: "source-registry"});
+  assert.deepEqual(canonicalRead.available, ["cli_bridge", "network"]);
+  assert.deepEqual(canonicalRead.unavailable, ["external_evidence_poll"]);
+
+  const explicit = await call({
+    registry: "source-registry",
+    available: ["external_evidence_poll"],
+    execute: true,
+  });
+  assert.deepEqual(explicit.available, ["cli_bridge", "external_evidence_poll", "network"]);
+  assert.deepEqual(explicit.unavailable, []);
+});
+
+test("auto-probed host capabilities are effective by default and yield to explicit unavailable revocations", () => {
+  const fresh = evaluateCapabilityGate({
+    schema_version: "capability_gate_request_v0",
+    operation: "availability",
+    goal: [],
+    runtime: [],
+    probed: ["external_evidence_poll", "credentials"],
+    agent: {},
+  }).result as Record<string, unknown>;
+  assert.deepEqual(fresh.probed, ["external_evidence_poll"]);
+  assert.deepEqual(fresh.runtime_available, ["external_evidence_poll"]);
+  assert.deepEqual(fresh.effective, ["external_evidence_poll"]);
+
+  const revoked = evaluateCapabilityGate({
+    schema_version: "capability_gate_request_v0",
+    operation: "availability",
+    goal: ["external_evidence_poll"],
+    runtime: [],
+    probed: ["external_evidence_poll"],
+    agent: {available: [], unavailable: ["external_evidence_poll"]},
+  }).result as Record<string, unknown>;
+  assert.deepEqual(revoked.probed, ["external_evidence_poll"]);
+  assert.deepEqual(revoked.runtime_available, []);
+  assert.deepEqual(revoked.effective, []);
+
+  const recovered = evaluateCapabilityGate({
+    schema_version: "capability_gate_request_v0",
+    operation: "availability",
+    goal: [],
+    runtime: ["external_evidence_poll"],
+    probed: ["external_evidence_poll"],
+    agent: {available: [], unavailable: ["external_evidence_poll"]},
+  }).result as Record<string, unknown>;
+  assert.deepEqual(recovered.effective, ["external_evidence_poll"]);
 });

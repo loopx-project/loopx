@@ -167,11 +167,17 @@ loopx configure-goal --goal-id example --clear-execution-replan-after-turns --ex
 The Dashboard exposes **Goal review and stride** in the Capability Center for
 both the device and selected Goal. The existing machine namespace
 `todo_replan_cadence_machine_defaults_v2` stores `count_unit` (`effective_turns`
-or `completed_todos`), `count` and optional strategy selection. Existing v0/v1
-configurations remain readable without migrating them on inspection. The
-strategy defaults off; `evidence_conditioned_v1` adds evidence-conditioned scope
-and route advice, with unchanged admission and semantic exits. See the
-[versioned strategy configuration and rollback](reference/protocols/goal-vision-replan-contract-v0.md#configure-and-roll-back-the-stride-strategy). It is built into the control plane and needs
+or `completed_todos`) and `count`. Existing v0/v1 configurations remain readable
+without migrating them on inspection. The stride strategy is not configurable:
+`evidence_conditioned_v1` is always on and adds evidence-conditioned scope and
+route advice, with unchanged admission and semantic exits. There is no
+`--execution-stride-strategy` flag, Dashboard selector or device field. A
+`stride_strategy` value saved by an earlier release (`off` or
+`evidence_conditioned_v1`) in a v2 device file or Goal profile still loads.
+Device v2 saves retain the serialized field for runtime rollback. The editor
+accepts cadence and planning settings. After upgrade, pending writebacks use
+the current policy. See the
+[review cadence contract](reference/protocols/goal-vision-replan-contract-v0.md#configure-review-cadence). It is built into the control plane and needs
 no provider installation. The CLI, settings readback, quota decision and
 writeback validation use the same effective configuration.
 
@@ -275,6 +281,29 @@ Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复
 新的恢复准入会在持有回执追加锁时复核准入依据。依据已变化的并发请求用同一 Turn
 重新判定。未绑定的等待 Turn 在恢复后取得资格时，在同一把锁内追加首次准入回执，
 后续重放复用该回执。
+
+If the canonical File or SQLite lease has replaced the original prepared
+generation and neither writeback nor debit has started, recovery reports
+`execution_loss_closeout` for the original Turn. A retry of `quota should-run`
+with the original Turn ID can discover this directly, including when the Todo
+is inferred from its receipt. Read the current Todo lease
+and use the projected `refresh-state --execution-loss-closeout --dry-run` with
+the original Goal, Agent, Todo and Turn plus the current control-writer proof.
+The preview checks the same fences as commit. Execute the same command without
+`--dry-run` after the preview qualifies, then read back
+`typed_blocked_writeback_no_spend`. The original work admission stays intact
+and the Todo remains open for a separately admitted Turn. An absent or
+foreign control-writer proof holds settlement. A replacement lease cannot
+authorize business delivery for the old Turn.
+
+原准入租约已被 File 或 SQLite 权威确认换代，且原 Turn 的写回与扣额都尚未开始时，
+用原 Turn ID 重试 `quota should-run` 即可发现该 Turn 的 `execution_loss_closeout`。
+省略 Todo ID 时，系统从原回执读取绑定的 Todo。先读当前 Todo 租约，用原
+Goal、Agent、Todo 与 Turn 身份及当前控制写入凭据运行投影的
+`refresh-state --execution-loss-closeout --dry-run`。预览通过后再去掉
+`--dry-run` 提交，读回 `typed_blocked_writeback_no_spend`。原准入回执保留，
+Todo 仍可由新 Turn 依法接续。当前控制写入凭据缺失或归属其他 Agent 时保持等待，
+新租约不授予旧 Turn 的业务交付权。
 
 An admitted advancement Todo can also become persistently `blocked` through
 its ordinary owner-authorized lifecycle. Its original Turn then offers the
@@ -386,9 +415,19 @@ When a quota spend remains owed after verified writeback,
 obligation, Turn, registry/runtime route and spend source. Execute it unchanged.
 The typed blocked no-spend closeout has no spend command. In
 `spend_receipt_required`, the same idempotent spend
-writer restores the receipt without another debit. Refresh and recovery never
-spend automatically. JSON and normal/recovery Markdown expose the same step.
-Rejected recovery reports observed progress without offering a spend command.
+writer restores the receipt without another debit. Ordinary refresh and recovery
+report the remaining step. An explicit `refresh-state --settle-turn` may execute
+that command after verified writeback. A definitive `index_digest_conflict` with
+`appended=false` allows one retry of the same command within the original timeout.
+The retry rereads the original Turn and can replay a concurrent settlement. For
+an ambiguous outcome, the adapter reads the receipts and returns any step still
+owed. JSON and normal/recovery Markdown expose the same step. Rejected recovery
+reports observed progress without offering a spend command.
+
+普通刷新与恢复返回原轮次剩余操作。显式指定 `refresh-state --settle-turn` 时，写回
+核验后可执行原结算命令。若确认 `index_digest_conflict` 且 `appended=false`，则在
+原超时窗口内用同一命令重试一次，重新读取原轮次，也可回读并发完成的结算。结果不明
+时读取回执并返回仍待执行的步骤。
 The raw Python refresh API returns `writeback_receipt_required` until its CLI
 caller appends the refresh receipt and rereads the chain; it must not offer a
 spend command before that point. Older guards without a persisted spend source
@@ -784,23 +823,35 @@ loopx --format json quota should-run \
   --available-capability benchmark_runner
 ```
 
-A live `quota should-run` or executing `turn run-once` automatically remembers,
-through the admitted turn-start capability hook, these five runtime observations
-for the registered Agent on this host:
+A live `quota should-run`, executing `turn run-once`, committed `refresh-state` /
+`quota spend-slot` / `quota monitor-poll` settlement, or verified live external
+capability execution (such as Goal-bound `pr-review` or `issue-fix pr-lifecycle --fetch-metadata`)
+automatically remembers these five runtime observations for the registered Agent
+on this host:
 `network`, `benchmark_runner`, `external_evidence_poll`, `worker_bridge`, and
-`cli_bridge`. Later decisions, including `quota spend-slot` and `monitor-poll`
-rechecks, read that Agent's observations without repeating flags. Goal/project
-`available_capabilities` declarations are inherited dynamically; Agent observations
-never write back into Goal configuration or propagate to peer Agents.
+`cli_bridge`. In addition, when the host is not in a network-disabled sandbox
+(`CODEX_SANDBOX_NETWORK_DISABLED=1` / `LOOPX_OFFLINE=1`) and local GitHub CLI
+polling readiness (`gh` + configured auth/token) is detected, LoopX probes
+`external_evidence_poll` automatically by default (`probed`) so fresh Goals and
+Agents observe upstream PR/evidence dependencies out of the box without manual
+`agent-capabilities --execute` or `--available-capability` ceremony. Later
+decisions, including `heartbeat-prompt` pre-quota projection, `quota spend-slot`,
+and `monitor-poll` rechecks, read that Agent's effective availability without
+repeating flags. Goal/project `available_capabilities` declarations are
+inherited dynamically; Agent observations never write back into Goal configuration
+or propagate to peer Agents.
 The hook declares only its Agent-private write scope, returns no private payload,
 and fails in isolation; quota selection itself performs no provider or memory write.
 
-The scope is the resolved runtime root, registry path, Goal id and registered
-Agent id. Separate hosts/runtimes or registries do not inherit these observations.
-A reused Agent id in the same scope refers to the same runtime declaration;
-use distinct Agent identities for environments with different tools. Observations
-are caller declarations, not independently verified probe receipts. They persist
-until corrected or forgotten; omission of a flag does not revoke them.
+The scope is the resolved runtime root, canonical project `source_registry` path
+(unifying synced `registry.global.json` mirrors with the project's `.loopx/registry.json`),
+Goal id and registered Agent id. Separate hosts/runtimes or unrelated registries do
+not inherit these observations. A reused Agent id in the same scope refers to the
+same runtime declaration; use distinct Agent identities for environments with
+different tools. Explicit negative observations (`--unavailable-capability`)
+override both Goal inheritance and automatic host probes (`probed`), and are
+preserved across passive task-facing executions until explicitly cleared or replaced.
+Explicit and verified observations persist until corrected or forgotten. A forget masks the old mirror value on subsequent reads. Local readiness probes apply to the current invocation. A network-disabled host suppresses PR polling even with an earlier positive observation.
 
 ```bash
 # Read current Agent observations and inherited/effective declarations.
@@ -1205,7 +1256,10 @@ an external-evidence observation, or a due `continuous_monitor` todo selected
 by `work_lane_contract.obligation=attempt_due_monitor`. For due monitor todos,
 pass `--todo-id` or `--target-key` plus a public `--result-hash`; unchanged
 polls update `last_checked_at`, `next_due_at`, and
-`consecutive_no_change` without appending `quota_slot_spent`:
+`consecutive_no_change` without appending `quota_slot_spent`.
+For an `attempt_due_monitor` lane, a target key identifies the selected Todo.
+To observe another due Monitor claimed by the same Agent, supply its exact
+`--todo-id`. Existing User gates and Turn bindings still apply.
 
 ```bash
 loopx quota monitor-poll --goal-id <GOAL_ID> \
@@ -1811,7 +1865,7 @@ If that match still needs a reset-token/identity binding,
 `stateful_backoff.ack_needed=true` and the bound ack runs without a host update.
 When an apply is required but `automation_update` is unavailable in the
 session, `app_automation.fallback_hint` carries the bounded `loopx-apply-rrule`
-command for the resolved automation (backup `codex-dev.db`, sync TOML+SQLite,
+command for the resolved automation (back up the selected App database, sync TOML+SQLite,
 run the bound ACK). Direct SQLite edits bypass the app API, so the fallback is
 projected only for this gap and never as the routine path; an unresolved
 automation id projects `available=false` and requires the pasteable heartbeat

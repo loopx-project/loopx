@@ -7,14 +7,207 @@ wheel tests exercise the same Python and TypeScript build.
 """
 from __future__ import annotations
 
+import atexit
+from collections import deque
+from contextlib import suppress
 import json
 import os
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, SimpleQueue
 import subprocess
 import tempfile
+import threading
+from time import monotonic
 
 import loopx
+
+
+_WORKER_LOCK = threading.Lock()
+_WORKERS: dict[tuple[int, str, bool], _CanonicalAuthorityWorker] = {}
+_SHUTDOWN_REGISTERED = False
+_WORKER_REQUEST_TIMEOUT_SECONDS = 45.0
+_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 3.0
+
+
+class _CanonicalAuthorityWorker:
+    """Persistent Node worker for disposable canonical authority fixture setups."""
+
+    def __init__(self, key: tuple[int, str, bool]) -> None:
+        self.key = key
+        self.call_lock = threading.Lock()
+        self._process = self._spawn(Path(key[1]))
+
+    @staticmethod
+    def _build_script(package: Path) -> str:
+        module = package / "control_plane/coordination/file_authority_store.ts"
+        provider_module = module.parent / "local_authority_provider.ts"
+        fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"
+        codec_module = package / "control_plane/coordination/authority_store_codec.ts"
+        return (
+            "import {createInterface} from 'node:readline';"
+            f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
+            f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps(provider_module.as_uri())};"
+            f"import {{engageLegacyCoordinationWriterFence}} from {json.dumps(fence_module.as_uri())};"
+            f"import {{canonicalAuthoritySha256}} from {json.dumps(codec_module.as_uri())};"
+            "const rl=createInterface({input:process.stdin,crlfDelay:Infinity});"
+            "for await(const line of rl){"
+            "if(!line)continue;"
+            "try{"
+            "const req=JSON.parse(line);"
+            "let result;"
+            "if(req.op==='init'){"
+            "if(req.provider==='sqlite')await selectLocalSqliteAuthority(req.root,req.goal,true);"
+            "const store=await openLocalAuthorityStore(req.root,req.goal);"
+            "result=await store.commitAuthority({expected_provider_revision:null,operation_id:'canonical-fixture',"
+            "events:[],next_projection:req.projection,receipts:[]});"
+            "const fence=await engageLegacyCoordinationWriterFence({schema_version:'loopx_legacy_coordination_writer_fence_engage_request_v0',"
+            "runtime_root:req.root,goal_id:req.goal,state_path:req.state_path,fence:{schema_version:'loopx_legacy_coordination_writer_fence_v0',"
+            "state:'engaged',goal_id:req.goal,fence_id:'canonical-fixture',source_version:'canonical-fixture',"
+            "source_projection_sha256:canonicalAuthoritySha256(req.projection),expected_shadow_provider_revision:result.provider_revision}});"
+            "if(fence.status!=='applied')throw new Error(JSON.stringify(fence));"
+            "}else if(req.op==='advance'){"
+            "const store=await openLocalAuthorityStore(req.root,req.goal);"
+            "const head=await store.loadAuthority();"
+            "if(head.status!=='loaded')throw new Error(JSON.stringify(head));"
+            "result=await store.commitAuthority({expected_provider_revision:head.provider_revision,"
+            "operation_id:req.operation_id,events:[],next_projection:req.projection,receipts:[]});"
+            "}else{throw new Error('unsupported canonical fixture op');}"
+            "process.stdout.write(JSON.stringify({ok:true,result})+'\\n');"
+            "}catch(err){"
+            "const msg=err instanceof Error?(err.stack||err.message):String(err);"
+            "process.stdout.write(JSON.stringify({ok:false,error:msg})+'\\n');"
+            "}}"
+        )
+
+    def _spawn(self, package: Path) -> subprocess.Popen[bytes]:
+        proc = subprocess.Popen(
+            ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", self._build_script(package)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = proc.stdout, proc.stderr
+        assert stdout is not None and stderr is not None
+        responses: SimpleQueue[bytes | OSError] = SimpleQueue()
+        stderr_tail: deque[str] = deque(maxlen=64)
+        self._closed = False
+        self._responses = responses
+        self._stderr_tail = stderr_tail
+
+        # Windows select() accepts sockets only. Drain the anonymous pipes in
+        # readers owned by this child, and apply the deadline to the queue.
+        def _drain_stdout() -> None:
+            try:
+                with stdout:
+                    for line in stdout:
+                        if not line.endswith(b"\n"):
+                            break
+                        responses.put(line)
+            except OSError as exc:
+                responses.put(exc)
+            else:
+                responses.put(b"")
+
+        def _drain_stderr() -> None:
+            with suppress(OSError), stderr:
+                for raw_line in stderr:
+                    stderr_tail.append(raw_line.decode("utf-8", errors="replace").rstrip())
+
+        self._readers = (
+            threading.Thread(target=_drain_stdout, daemon=True),
+            threading.Thread(target=_drain_stderr, daemon=True),
+        )
+        for reader in self._readers:
+            reader.start()
+        return proc
+
+    def _read_line(self, timeout_seconds: float) -> bytes:
+        try:
+            response = self._responses.get(timeout=timeout_seconds)
+        except Empty:
+            raise TimeoutError("canonical authority worker timed out waiting for response") from None
+        if isinstance(response, OSError):
+            raise response
+        if not response:
+            raise EOFError("canonical authority worker closed stdout")
+        return response
+
+    def request(self, payload: dict[str, object]) -> dict:
+        encoded = (json.dumps(payload) + "\n").encode("utf-8")
+        with self.call_lock:
+            for attempt in range(2):
+                if self._closed or self._process.poll() is not None:
+                    self.close()
+                    self._process = self._spawn(Path(self.key[1]))
+                try:
+                    assert self._process.stdin is not None
+                    self._process.stdin.write(encoded)
+                    self._process.stdin.flush()
+                    raw_line = self._read_line(_WORKER_REQUEST_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    self.close()
+                    raise
+                except (EOFError, OSError):
+                    self.close()
+                    if attempt == 0:
+                        self._process = self._spawn(Path(self.key[1]))
+                        continue
+                    stderr_text = "\n".join(self._stderr_tail)
+                    raise AssertionError(f"canonical authority worker failed after respawn: {stderr_text}")
+                response = json.loads(raw_line.decode("utf-8"))
+                if not response.get("ok"):
+                    raise AssertionError(response.get("error") or "\n".join(self._stderr_tail))
+                return response["result"]
+        raise AssertionError("unreachable")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        proc = self._process
+        deadline = monotonic() + _WORKER_SHUTDOWN_TIMEOUT_SECONDS
+        if proc.stdin is not None:
+            with suppress(OSError):
+                proc.stdin.close()
+        grace = _WORKER_SHUTDOWN_TIMEOUT_SECONDS / 3
+        for stop, wait_seconds in ((None, grace), (proc.terminate, grace), (proc.kill, _WORKER_SHUTDOWN_TIMEOUT_SECONDS)):
+            if proc.poll() is not None:
+                break
+            if stop is not None:
+                with suppress(ProcessLookupError):
+                    stop()
+            with suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=min(wait_seconds, max(0.0, deadline - monotonic())))
+                break
+        # A descendant may still hold the output pipes after the worker exits.
+        # Let each reader close its own stream when its pipe is released.
+        for reader in self._readers:
+            reader.join(timeout=max(0.0, deadline - monotonic()))
+
+
+def _shutdown_canonical_fixture_workers() -> None:
+    current_pid = os.getpid()
+    with _WORKER_LOCK:
+        owned = [key for key in _WORKERS if key[0] == current_pid]
+        workers = [_WORKERS.pop(key) for key in owned]
+    for worker in workers:
+        worker.close()
+
+
+def _get_canonical_authority_worker(package: Path) -> _CanonicalAuthorityWorker:
+    global _SHUTDOWN_REGISTERED
+    sqlite_enabled = "--experimental-sqlite" in os.environ.get("NODE_OPTIONS", "").split()
+    key = (os.getpid(), str(package), sqlite_enabled)
+    with _WORKER_LOCK:
+        if not _SHUTDOWN_REGISTERED:
+            atexit.register(_shutdown_canonical_fixture_workers)
+            _SHUTDOWN_REGISTERED = True
+        worker = _WORKERS.get(key)
+        if worker is None:
+            worker = _CanonicalAuthorityWorker(key)
+            _WORKERS[key] = worker
+        return worker
 
 
 def assert_todo_read_unchanged(current, previous):
@@ -63,31 +256,15 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
     if provider not in ("file", "sqlite"):
         raise ValueError("Canonical local fixtures support File/SQLite only; PostgreSQL requires its service-owned fixture")
     package = Path(loopx.__file__).resolve().parent
-    module = package / "control_plane/coordination/file_authority_store.ts"
-    fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"
-    codec_module = package / "control_plane/coordination/authority_store_codec.ts"
-    script = (
-        f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
-        f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps((module.parent / 'local_authority_provider.ts').as_uri())};"
-        f"import {{engageLegacyCoordinationWriterFence}} from {json.dumps(fence_module.as_uri())};"
-        f"import {{canonicalAuthoritySha256}} from {json.dumps(codec_module.as_uri())};"
-        "import {join} from 'node:path';let input='';for await(const chunk of process.stdin)input+=chunk;"
-        "const request=JSON.parse(input);"
-        "if(request.provider==='sqlite')await selectLocalSqliteAuthority(request.root,request.goal,true);"
-        "const store=await openLocalAuthorityStore(request.root,request.goal);"
-        "const result=await store.commitAuthority({expected_provider_revision:null,operation_id:'canonical-fixture',"
-        "events:[],next_projection:request.projection,receipts:[]});"
-        "const fence=await engageLegacyCoordinationWriterFence({schema_version:'loopx_legacy_coordination_writer_fence_engage_request_v0',"
-        "runtime_root:request.root,goal_id:request.goal,state_path:request.state_path,fence:{schema_version:'loopx_legacy_coordination_writer_fence_v0',"
-        "state:'engaged',goal_id:request.goal,fence_id:'canonical-fixture',source_version:'canonical-fixture',"
-        "source_projection_sha256:canonicalAuthoritySha256(request.projection),expected_shadow_provider_revision:result.provider_revision}});"
-        "if(fence.status!=='applied')throw new Error(JSON.stringify(fence));process.stdout.write(JSON.stringify(result));"
-    )
-    process = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
-        input=json.dumps({"root": str(runtime_root), "goal": goal_id, "projection": projection, "state_path": str(state_path), "provider": provider}),
-        capture_output=True, text=True, check=False, timeout=45)
-    assert process.returncode == 0, process.stderr
-    result = json.loads(process.stdout)
+    worker = _get_canonical_authority_worker(package)
+    result = worker.request({
+        "op": "init",
+        "root": str(runtime_root),
+        "goal": goal_id,
+        "projection": projection,
+        "state_path": str(state_path),
+        "provider": provider,
+    })
     assert result["status"] == "applied", result
     return result
 
@@ -114,26 +291,15 @@ def advance_canonical_fixture_authority(
     Consumer fixtures may author a later synthetic state, but must not replace
     storage bytes, reset lineage, re-import Markdown or re-engage its fence.
     """
-    module = Path(loopx.__file__).resolve().parent / "control_plane/coordination/local_authority_provider.ts"
-    script = (
-        f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};"
-        "let input='';for await(const chunk of process.stdin)input+=chunk;"
-        "const request=JSON.parse(input);"
-        "const store=await openLocalAuthorityStore(request.root,request.goal);"
-        "const head=await store.loadAuthority();"
-        "if(head.status!=='loaded')throw new Error(JSON.stringify(head));"
-        "const result=await store.commitAuthority({expected_provider_revision:head.provider_revision,"
-        "operation_id:request.operation_id,events:[],next_projection:request.projection,receipts:[]});"
-        "process.stdout.write(JSON.stringify(result));"
-    )
-    process = subprocess.run(
-        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
-        input=json.dumps({"root": str(runtime_root), "goal": goal_id,
-                         "projection": projection, "operation_id": operation_id}),
-        capture_output=True, text=True, check=False, timeout=45,
-    )
-    assert process.returncode == 0, process.stderr
-    result = json.loads(process.stdout)
+    package = Path(loopx.__file__).resolve().parent
+    worker = _get_canonical_authority_worker(package)
+    result = worker.request({
+        "op": "advance",
+        "root": str(runtime_root),
+        "goal": goal_id,
+        "projection": projection,
+        "operation_id": operation_id,
+    })
     assert result["status"] == "applied", result
     return result
 
@@ -244,3 +410,45 @@ def promoted_create_fixture(
         runtime_root, goal_id, projection, state_path=state_file, provider=provider
     )
     return registry_path, runtime_root, state_file
+
+
+def ensure_unrelated_goal_in_registry(registry_path: Path, current_goal_id: str) -> str:
+    """Add a second ordinary Goal to exercise shared-registry recovery."""
+    from loopx.control_plane.projects.registry_codec import project_registry_transaction
+
+    unrelated_goal_id = "unrelated-goal"
+    with project_registry_transaction(
+        registry_path, operation="test_add_unrelated_goal",
+    ) as transaction:
+        payload = transaction.payload_copy()
+        goals = payload.get("goals")
+        assert isinstance(goals, list)
+        if not any(goal.get("id") == unrelated_goal_id for goal in goals if isinstance(goal, dict)):
+            current = next(goal for goal in goals if isinstance(goal, dict) and goal.get("id") == current_goal_id)
+            goals.append({
+                "id": unrelated_goal_id,
+                "repo": current["repo"],
+                "state_file": current["state_file"],
+                "title": "Unrelated Goal",
+                "coordination": current.get("coordination", {}),
+            })
+        transaction.commit(payload)
+    return unrelated_goal_id
+
+
+def change_unrelated_goal_title(registry_path: Path, unrelated_goal_id: str = "unrelated-goal") -> None:
+    """Change only an unrelated Goal title to move the shared registry digest."""
+    from loopx.control_plane.projects.registry_codec import project_registry_transaction
+
+    with project_registry_transaction(
+        registry_path, operation="test_edit_unrelated_goal_title",
+    ) as transaction:
+        payload = transaction.payload_copy()
+        goals = payload.get("goals")
+        assert isinstance(goals, list)
+        unrelated = next(
+            goal for goal in goals
+            if isinstance(goal, dict) and goal.get("id") == unrelated_goal_id
+        )
+        unrelated["title"] = "Renamed Unrelated Goal"
+        transaction.commit(payload)

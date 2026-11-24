@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -289,6 +289,94 @@ test("admission revalidates due, external, and exact blocked-wait modes", async 
       return true;
     },
   );
+});
+
+test("attempt_due_monitor admits an explicit secondary due Todo unless a user gate applies", async t => {
+  const secondaryCandidate = {
+    todo_id: "todo_secondary_monitor",
+    target_key: "secondary-watch",
+    task_class: "continuous_monitor",
+    claimed_by: "codex-main-control",
+    due: true,
+    todo_id_explicit: true,
+  };
+  const baseDecision = (overrides: Record<string, unknown> = {}) => decision({
+    should_run: true,
+    agent_id: "codex-main-control",
+    effective_action: "normal_run",
+    requires_user_action: false,
+    work_lane_contract: {
+      must_attempt_work: true,
+      obligation: "attempt_due_monitor",
+    },
+    due_monitor_candidates: [{
+      todo_id: "todo_primary_monitor",
+      target_key: "primary-watch",
+      task_class: "continuous_monitor",
+    }],
+    registry_due_monitor: secondaryCandidate,
+    ...overrides,
+  });
+  const admitted = await evaluateQuotaMonitorPollCommit(request({
+    decision: baseDecision(),
+    observation: observation({
+      todo_id: "todo_secondary_monitor",
+      target_key: "secondary-watch",
+      result_hash: "unchanged-secondary",
+    }),
+  }));
+  assert.equal(
+    (admitted.record?.monitor_event as Record<string, unknown>).monitor_mode,
+    "due_monitor_observed_without_material_transition",
+  );
+
+  for (const invalid of [
+    { requires_user_action: true },
+    { registry_due_monitor: { ...secondaryCandidate, due: false } },
+    { registry_due_monitor: { ...secondaryCandidate, claimed_by: "other-agent" } },
+    { registry_due_monitor: { ...secondaryCandidate, todo_id_explicit: false } },
+    { registry_due_monitor: { ...secondaryCandidate, todo_id_explicit: undefined } },
+  ]) {
+    await assert.rejects(
+      () => evaluateQuotaMonitorPollCommit(request({
+        decision: baseDecision(invalid),
+        observation: observation({
+          todo_id: "todo_secondary_monitor",
+          target_key: "secondary-watch",
+          result_hash: "unchanged-secondary",
+        }),
+      })),
+      (error: unknown) => {
+        assert.ok(error instanceof EffectRuntimeRequestError);
+        assert.equal(error.code, "monitor_poll_admission_rejected");
+        return true;
+      },
+    );
+  }
+
+  const runtime = await tempRuntime(t);
+  const effect = "previously-admitted-secondary";
+  const params = request({
+    phase: "preflight", runtime_root: runtime, execute: true, effect_id: effect,
+    decision: baseDecision(),
+    observation: observation({
+      todo_id: "todo_secondary_monitor",
+      target_key: "secondary-watch",
+      result_hash: "unchanged-secondary",
+    }),
+  });
+  const initial = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(initial.status, "provider_required");
+  const token = createHash("sha256").update(effect).digest("hex").slice(0, 24);
+  const receiptPath = join(runtime, "goals", goalId, "runs", ".transactions", "quota-monitor-poll", `${token}.json`);
+  const historical = JSON.parse(await readFile(receiptPath, "utf8"));
+  delete historical.admitted_decision.registry_due_monitor.todo_id_explicit;
+  await writeFile(receiptPath, JSON.stringify(historical));
+  const recovered = await evaluateQuotaMonitorPollCommit({
+    ...params,
+    decision: baseDecision({registry_due_monitor: null}),
+  });
+  assert.deepEqual(recovered.provider_plan, initial.provider_plan);
 });
 
 test("Todo preflight rejects invalid admission before journaling provider intent", async (t) => {
@@ -1190,4 +1278,183 @@ test("lease proof and schema must agree before any provider intent is journaled"
       observation: observation({todo_id: "todo_public_monitor", result_hash: "a", lease_proof: proof})}));
   }
   await assert.rejects(readFile(join(runtime, "goals", goalId, "runs", "index.jsonl")), {code: "ENOENT"});
+});
+
+test("overlapping invalid observation fields preserve original first-field diagnostic precedence", async t => {
+  const runtime = await tempRuntime(t);
+  const captureError = async (patch: Record<string, unknown>) => {
+    let caught: unknown = null;
+    await assert.rejects(
+      evaluateQuotaMonitorPollCommit(request({
+        phase: "event",
+        runtime_root: runtime,
+        execute: false,
+        observation: observation(patch),
+      })),
+      error => { caught = error; return true; },
+    );
+    assert.ok(caught instanceof EffectRuntimeRequestError);
+    return { kind: caught.kind, code: caught.code, message: caught.message };
+  };
+
+  const singleActor = await captureError({ actor_agent_id: 11 });
+  const singleTodo = await captureError({ todo_id: "invalid-todo" });
+  const singleTarget = await captureError({ target_key: 42 });
+  const singleSettlement = await captureError({ settlement_todo_id: "invalid-settlement" });
+  const singleSummary = await captureError({ reason_summary: 99 });
+  const singleCapabilities = await captureError({ next_required_capabilities: "bad" });
+
+  assert.equal(singleActor.code, "invalid_request");
+  assert.match(singleActor.message, /observation\.actor_agent_id/);
+  assert.match(singleTodo.message, /observation\.todo_id/);
+  assert.match(singleTarget.message, /observation\.target_key/);
+  assert.match(singleSettlement.message, /observation\.settlement_todo_id/);
+  assert.match(singleSummary.message, /observation\.reason_summary/);
+  assert.match(singleCapabilities.message, /observation\.next_required_capabilities/);
+
+  assert.deepEqual(await captureError({ actor_agent_id: 11, target_key: 42 }), singleActor);
+  assert.deepEqual(await captureError({ todo_id: "invalid-todo", target_key: 42 }), singleTodo);
+  assert.deepEqual(await captureError({ settlement_todo_id: "invalid-settlement", target_key: 42 }), singleSettlement);
+  assert.deepEqual(await captureError({ reason_summary: 99, todo_id: "invalid-todo" }), singleSummary);
+  assert.deepEqual(await captureError({ next_required_capabilities: "bad", next_continuation_policy: 42 }), singleCapabilities);
+  await assert.rejects(readFile(join(runtime, "goals", goalId, "runs", "index.jsonl")), { code: "ENOENT" });
+});
+
+test("pending receipt preserves serialized work_lane_contract and external_evidence_observation", async t => {
+  const runtime = await tempRuntime(t);
+  const effect = "pending-lane-facts-replay";
+  const laneContract = {
+    must_attempt_work: true,
+    monitor_policy: "read_only_observation_then_no_spend_if_unchanged",
+    reason_codes: ["external_evidence_poll_signal"],
+  };
+  const externalObservation = { required: true, must_attempt_observation: true };
+  const params = request({
+    phase: "preflight",
+    runtime_root: runtime,
+    execute: true,
+    effect_id: effect,
+    decision: decision({
+      should_run: true,
+      effective_action: "external_evidence_observe",
+      heartbeat_recommendation: {},
+      work_lane_contract: laneContract,
+      external_evidence_observation: externalObservation,
+    }),
+    observation: observation({ todo_id: "todo_public_monitor", result_hash: "observed-ext" }),
+  });
+  const preflight = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(preflight.status, "provider_required");
+
+  const receiptPath = join(
+    runtime, "goals", goalId, "runs", ".transactions", "quota-monitor-poll",
+    `${createHash("sha256").update(effect).digest("hex").slice(0, 24)}.json`,
+  );
+  const pending = JSON.parse(await readFile(receiptPath, "utf8"));
+  assert.deepEqual(pending.admitted_decision.work_lane_contract, laneContract);
+  assert.deepEqual(pending.admitted_decision.external_evidence_observation, externalObservation);
+
+  const writeback = {
+    schema_version: "monitor_poll_todo_writeback_v0",
+    monitor_effect_id: effect,
+    goal_id: goalId,
+    todo_id: "todo_public_monitor",
+    dry_run: false,
+    target_key: null,
+    result_hash: "observed-ext",
+    material_change: false,
+    material_change_generation: 0,
+    consecutive_no_change: 1,
+    last_checked_at: params.generated_at,
+    next_due_at: null,
+    cadence: null,
+    todo_update: {},
+    next_todos: [],
+    successor_receipts: [],
+  };
+  const committed = await evaluateQuotaMonitorPollCommit({
+    ...params,
+    phase: "commit",
+    provider_receipt: writeback,
+    decision: decision({ effective_action: "normal_delivery", heartbeat_recommendation: {} }),
+  });
+  assert.equal(committed.status, "written");
+  assert.equal(
+    (committed.record?.monitor_event as Record<string, unknown>).monitor_mode,
+    "external_monitor_observed_without_material_transition",
+  );
+});
+
+test("monitor-poll receipt replay follows a copied runtime and rejects unsafe paths", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request({
+    phase: "commit",
+    runtime_root: runtimeRoot,
+    execute: true,
+    effect_id: "quota-monitor-poll:copied-runtime",
+    turn_instance_id: "copied-turn",
+  });
+  const written = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(written.status, "written");
+  const copiedRoot = await tempRuntime(t);
+  const sourceRuns = join(runtimeRoot, "goals", goalId, "runs");
+  const copiedRuns = join(copiedRoot, "goals", goalId, "runs");
+  await cp(sourceRuns, copiedRuns, { recursive: true });
+  const originalJson = String(written.payload.json_path);
+  const originalBytes = await readFile(originalJson);
+  const originalIndex = await readFile(join(sourceRuns, "index.jsonl"), "utf8");
+  const copiedParams = { ...params, runtime_root: copiedRoot };
+  const preview = await evaluateQuotaMonitorPollCommit({ ...copiedParams, execute: false });
+  assert.equal(preview.status, "preview");
+  const replayed = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayed.payload.markdown_path, join(copiedRuns, basename(String(written.payload.markdown_path))));
+  assert.equal(replayed.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  assert.equal((await evaluateQuotaMonitorPollCommit(copiedParams)).status, "replayed");
+
+  const copiedIndex = await readFile(join(copiedRuns, "index.jsonl"));
+  await writeFile(join(copiedRuns, "index.jsonl"), copiedIndex.subarray(0, copiedIndex.length - 2));
+  const repaired = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.equal(await readFile(join(sourceRuns, "index.jsonl"), "utf8"), originalIndex);
+  const replayedAfterRepair = await evaluateQuotaMonitorPollCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
+
+  const token = createHash("sha256").update(String(params.effect_id)).digest("hex").slice(0, 24);
+  const receiptPath = join(copiedRuns, ".transactions", "quota-monitor-poll", `${token}.json`);
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as Record<string, unknown>;
+  const otherRuns = join(copiedRoot, "goals", "other-goal", "runs");
+  await mkdir(otherRuns, { recursive: true });
+  const otherJson = join(otherRuns, basename(originalJson));
+  await writeFile(otherJson, originalBytes);
+  await writeFile(receiptPath, JSON.stringify({ ...receipt, json_path: otherJson }));
+  await assert.rejects(
+    () => evaluateQuotaMonitorPollCommit(copiedParams),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      assert.match(error.message, /do not match the transaction scope/);
+      return true;
+    },
+  );
+  await writeFile(receiptPath, JSON.stringify(receipt));
+  const copiedJson = join(copiedRuns, basename(originalJson));
+  await unlink(copiedJson);
+  await symlink(originalJson, copiedJson);
+  await assert.rejects(
+    () => evaluateQuotaMonitorPollCommit(copiedParams),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  await assert.rejects(() => readFile(join(copiedRoot, "outside-monitor.json")), { code: "ENOENT" });
 });

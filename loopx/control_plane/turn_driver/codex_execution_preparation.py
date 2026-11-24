@@ -1,4 +1,4 @@
-"""Codex lifecycle-hook executor for the typed execution-preparation action.
+"""Managed Host lease preparation and the Codex lifecycle-hook adapter.
 
 The TypeScript control plane remains the decision owner.  This adapter accepts
 only its exact ordinary claim, executes it through the public CLI, and proves
@@ -42,6 +42,14 @@ class NativeRecoveryLeaseUnavailable(RuntimeError):
     """The original lease could not authorize recovery publication."""
 
 
+class NativePreparationTurnUnavailable(ValueError):
+    """The original Turn cannot authorize a new host claim."""
+
+
+class NativeClaimRejected(ValueError):
+    """This provider declined the exact managed operation before commit."""
+
+
 def compact_execution_preparation_request(
     payload: Mapping[str, Any], *, claim_source_sha256: str | None = None,
 ) -> dict[str, Any] | None:
@@ -81,6 +89,7 @@ def compact_execution_preparation_request(
     if claim_args != expected_claim:
         return None
     receipt = payload.get("heartbeat_receipt")
+    goal_ref = payload.get("goal_ref")
     turn_instance_id = (
         str(receipt.get("turn_instance_id") or "").strip()
         if isinstance(receipt, Mapping)
@@ -104,6 +113,7 @@ def compact_execution_preparation_request(
             "runtime_root": str(runtime_root),
         },
         **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
+        **({"goal_ref": dict(goal_ref)} if isinstance(goal_ref, Mapping) else {}),
         **claim_binding,
     }
 
@@ -137,6 +147,7 @@ def _run_json(
     cwd: Path,
     timeout: float,
     runner: CommandRunner,
+    claim_identity: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     route = current_loopx_cli_argv()
     command = command_argv(
@@ -154,6 +165,34 @@ def _run_json(
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError("LoopX Host preparation returned non-JSON output") from exc
+    if completed.returncode == 1 and claim_identity is not None and isinstance(payload, dict):
+        from ..coordination.local_authority import LOCAL_AUTHORITY_SOURCES
+
+        decision = payload.get("claim_decision")
+        if (payload.get("ok") is False and payload.get("decision_read_from_provider") is True
+                and payload.get("source_authority") in LOCAL_AUTHORITY_SOURCES
+                and payload.get("legacy_fallback_used") is False and "original_receipt" not in payload
+                and isinstance(decision, dict)
+                and decision.get("schema_version") == "loopx_coordination_todo_claim_decision_v0"
+                and decision.get("status") == "rejected"
+                and all(decision.get(key) == value for key, value in claim_identity.items())
+                and isinstance(decision.get("reason_code"), str) and isinstance(decision.get("reason"), str)):
+            holder = decision.get("claim_owner")
+            ownership = f" Holder: {holder}." if holder else ""
+            condition = {
+                "claim_owner_mismatch": "after the Todo is available to you",
+                "todo_lease_conflict": "after the Todo lease becomes available",
+                "write_scope_conflict": "after the conflicting lease is released or expires",
+                "workspace_lease_conflict": (
+                    "after the conflicting workspace lease is released or expires, "
+                    "or in an independent authorized worktree if the work can be isolated"
+                ),
+            }.get(decision["reason_code"], "after the blocking condition changes")
+            raise NativeClaimRejected(
+                f"Claim for {claim_identity['todo_id']} declined ({decision['reason_code']}): "
+                f"{decision['reason'].rstrip('.')}.{ownership} Continue other eligible work. "
+                f"Retry this Todo with a fresh eligible guard {condition}."
+            )
     if (
         completed.returncode != 0
         or not isinstance(payload, dict)
@@ -188,6 +227,16 @@ class ExecutionPreparationClaimFailed(ValueError):
     }
 
 
+class UnconsumedExecutionPreparationClaim(ValueError):
+    """The builtin adapter could not prepare a required managed claim."""
+
+    code = "turn_execution_preparation_claim_not_consumed"
+
+    def __init__(self, recovery: Mapping[str, str]) -> None:
+        super().__init__("The builtin CLI did not claim the Todo required to run this Turn.")
+        self.payload = {"status": "execution_preparation_required", "executed": False, **recovery}
+
+
 def _exact_identity(value: object) -> str | None:
     """Keep a decision identity exact; display normalization cannot stand in for it."""
     if isinstance(value, str) and value and value == value.strip():
@@ -195,29 +244,9 @@ def _exact_identity(value: object) -> str | None:
     return None
 
 
-def builtin_execution_preparation_claim(
-    decision: Mapping[str, Any],
-    *,
-    agent_id: str,
-    registry_path: Path,
-    runtime_root: Path,
-    cwd: Path,
-    turn_instance_id: str | None = None,
-    goal_ref: Mapping[str, object] | None = None,
-    runner: CommandRunner | None = None,
-    timeout: float = 30,
-    admit_start: Callable[[SettlementIdentity], bool] | None = None,
-    on_claim: Callable[[Mapping[str, Any]], None] | None = None,
-) -> str | None:
-    """Execute the exact ordinary claim a decision advertised for a Host.
-
-    The decision stays the owner of readiness: this adapter runs only the
-    claim the decision already published as Host-executable, then the caller
-    re-reads the same decision and must observe the same Todo ready.  A
-    preparation this adapter does not recognise is left untouched so its
-    original typed wait keeps its meaning.
-    """
-
+def _builtin_claim_identity(
+    decision: Mapping[str, Any], agent_id: str,
+) -> tuple[str, str, str, list[str]] | None:
     preparation = decision.get("execution_preparation")
     selected = decision.get("selected_todo")
     if not isinstance(preparation, Mapping) or not isinstance(selected, Mapping):
@@ -243,10 +272,6 @@ def builtin_execution_preparation_claim(
     decision_agent_id = (
         _exact_identity(declared_agent) if declared_agent is not None else identity_agent_id
     )
-    expected_claim = [
-        "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
-        "--agent-id", caller_agent_id, "--claimed-by", caller_agent_id,
-    ]
     if (
         preparation.get("schema_version") != "execution_preparation_v0"
         or preparation.get("delivery_allowed") is not False
@@ -262,12 +287,41 @@ def builtin_execution_preparation_claim(
         or preparation_agent_id != caller_agent_id
         or (selected_agent is not None and selected_agent_id != caller_agent_id)
         or (identity_agent is not None and identity_agent_id != caller_agent_id)
-        or claim.get("cli_args") != expected_claim
-        or not registry_path.is_absolute()
-        or not runtime_root.is_absolute()
-        or not cwd.is_absolute()
     ):
         return None
+    expected_claim = [
+        "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
+        "--agent-id", caller_agent_id, "--claimed-by", caller_agent_id,
+    ]
+    if claim.get("cli_args") != expected_claim:
+        return None
+    return goal_id, caller_agent_id, todo_id, expected_claim
+
+
+def builtin_execution_preparation_claim(
+    decision: Mapping[str, Any],
+    *,
+    agent_id: str,
+    registry_path: Path,
+    runtime_root: Path,
+    cwd: Path,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+    runner: CommandRunner | None = None,
+    timeout: float = 30,
+    admit_start: Callable[[SettlementIdentity], bool] | None = None,
+    on_claim: Callable[[Mapping[str, Any]], None] | None = None,
+) -> str | None:
+    """Execute the exact ordinary claim a decision advertised for a Host.
+
+    The decision stays the owner of readiness: this adapter runs only the
+    claim the decision already published as Host-executable, then the caller
+    re-reads the same decision and must observe the same Todo ready.
+    """
+    claim_identity = _builtin_claim_identity(decision, agent_id)
+    if claim_identity is None or not all(path.is_absolute() for path in (registry_path, runtime_root, cwd)):
+        return None
+    goal_id, caller_agent_id, todo_id, expected_claim = claim_identity
     heartbeat = decision.get("heartbeat_receipt")
     # Resolve one Turn identity before reading a receipt or running the claim.
     # The transaction plan applies the same normalization, so a padded or
@@ -344,6 +398,7 @@ def builtin_execution_preparation_claim(
                 settlement_identity,
                 semantic_replan_guard_scoped=False,
                 semantic_replan_obligation_id=None,
+                prepared_lease_required=True,
                 goal_ref=goal_ref,
                 **({"before_bind": before_bind} if admit_start is not None else {}),
             )
@@ -367,6 +422,31 @@ def builtin_execution_preparation_claim(
     return todo_id
 
 
+def unconsumed_preparation_refusal(
+    decision: Mapping[str, Any], *, goal_id: str, agent_id: str,
+) -> UnconsumedExecutionPreparationClaim | None:
+    """Surface only a claim the exact builtin adapter could accept."""
+    preparation = decision.get("execution_preparation")
+    if not isinstance(preparation, Mapping) or preparation.get("state") != "claim_required":
+        return None
+    recovery: dict[str, str] = {}
+    identity = _builtin_claim_identity(decision, agent_id)
+    if identity is not None and identity[0] == goal_id:
+        _, _, todo_id, argv = identity
+        command = shlex.join(["loopx", *argv, "--thin"])
+        if preparation["claim"].get("command_line") == command:
+            recovery = {
+                "todo_id": todo_id,
+                "claim_command": command,
+                "next_step": (
+                    "Use the same registry and runtime options for the claim. "
+                    "Rerun quota should-run for the same Goal, agent, Todo, and Turn, "
+                    "and continue only when execution_preparation.state is ready."
+                ),
+            }
+    return UnconsumedExecutionPreparationClaim(recovery)
+
+
 def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
     """Reuse the captured managed claim identity on an authorized retry."""
     digest = request.get("claim_source_sha256")
@@ -386,11 +466,19 @@ def _native_context_argv(scenario: str, directory: Path, *, progressive_enabled:
 
 def _native_readiness_guard(
     goal: str, agent: str, todo: str, turn: str, *, context_argv: Sequence[str],
+    goal_ref: Mapping[str, Any] | None = None,
 ) -> list[str]:
+    instance = []
+    if goal_ref is not None:
+        instance_id = _exact_identity(goal_ref.get("goal_instance_id"))
+        if goal_ref.get("goal_id") != goal or instance_id is None:
+            raise ValueError("Native readiness requires the original Goal instance.")
+        instance = ["--goal-instance-id", instance_id]
     return [
         "quota", "should-run", "--goal-id", goal, "--agent-id", agent,
         *context_argv, "--defer-context-presentation",
         "--todo-id", todo, "--turn-instance-id", turn,
+        *instance,
     ]
 
 
@@ -527,8 +615,10 @@ def codex_execution_preparation_readback_context(
         # The existing capture writer creates this private staging directory.
         staged = session_directory / f"readiness-{uuid4().hex}"
         guard_context = _native_context_argv(scenario, staged, progressive_enabled=progressive_enabled)
+        goal_ref = request.get("goal_ref")
         facts["readiness_command"] = shlex.join([
-            *base, *_native_readiness_guard(goal, agent, todo, turn, context_argv=guard_context),
+            *base, *_native_readiness_guard(goal, agent, todo, turn, context_argv=guard_context,
+                goal_ref=goal_ref if isinstance(goal_ref, Mapping) else None),
             "--decision-output-dir", str(staged), "--prepared-capture-reference",
         ])
         facts["ready_context_command_template"] = shlex.join([
@@ -607,11 +697,15 @@ def execute_codex_execution_preparation(
     subprocess.  The ordinary claim remains the authority and rechecks all
     ownership, lease-generation, workspace and write-scope constraints.
     """
+    from ..quota.accounting_admission import quota_accounting_admission
+    from ..quota.effect_program import ReceiptBoundReplayPhase
+    from ..quota.settlement import read_heartbeat_settlement
 
     goal_id = str(request.get("goal_id") or "").strip()
     agent_id = str(request.get("agent_id") or "").strip()
     todo_id = str(request.get("todo_id") or "").strip()
     turn_instance_id = str(request.get("turn_instance_id") or "").strip()
+    goal_ref = request.get("goal_ref")
     authority_route = request.get("authority_route")
     registry_path = Path(
         str(authority_route.get("registry_path") or "")
@@ -656,26 +750,52 @@ def execute_codex_execution_preparation(
     expected_claim += ["--claim-operation-id", claim_operation_id]
     if request.get("claim_args") != expected_claim:
         raise ValueError("invalid Codex execution-preparation claim arguments")
-    invoke = runner or _default_runner
-    deadline = monotonic() + timeout
-    claimed = _run_json(
-        expected_claim,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        cwd=workspace,
-        timeout=timeout / 2,
-        runner=invoke,
-    )
-    claim_reference = claimed.get("claim_operation_id")
-    if claim_reference != claim_operation_id:
-        raise RuntimeError("Native execution preparation did not recover its original managed claim")
+    if goal_ref is not None and not isinstance(goal_ref, Mapping):
+        raise ValueError("invalid Codex execution-preparation Goal instance")
     guard = [
         *_native_readiness_guard(
             goal_id, agent_id, todo_id, turn_instance_id,
             context_argv=_native_context_argv(scenario, context_directory, progressive_enabled=progressive_enabled),
+            goal_ref=goal_ref,
         ),
         "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
     ]
+    invoke = runner or _default_runner
+    deadline = monotonic() + timeout
+    # Use the same index fence as writeback and spend. An immutable pre-claim
+    # capture can outlive a manually settled Turn and its released lease.
+    with quota_accounting_admission(
+        runtime_root=runtime_root, registry_path=registry_path, goal_id=goal_id,
+        goal_ref=goal_ref, operation="codex-native-execution-preparation",
+        handoff_legacy_index=True,
+    ) as admission:
+        original = read_heartbeat_settlement(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+            turn_instance_id=turn_instance_id, registry_path=registry_path,
+            goal_ref=goal_ref, source_admission=admission,
+            borrow_source_admission=admission is not None, include_record_bodies=False,
+        )
+        if original is None or original.identity.value is None:
+            raise NativePreparationTurnUnavailable(
+                "Automatic preparation needs the original bound Turn receipt. Read that receipt before continuing."
+            )
+        if original.replay_phase is not ReceiptBoundReplayPhase.OPEN:
+            raise NativePreparationTurnUnavailable(
+                "The original Turn is already settling or settled. Read its receipt for any remaining settlement. "
+                "New work requires a fresh eligible Turn."
+            )
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Native execution preparation deadline elapsed before the claim")
+        claimed = _run_json(
+            expected_claim, registry_path=registry_path, runtime_root=runtime_root,
+            cwd=workspace, timeout=min(timeout / 2, remaining), runner=invoke,
+            claim_identity={"goal_id": goal_id, "todo_id": todo_id, "actor_agent_id": agent_id,
+                            "claim_operation_id": claim_operation_id},
+        )
+    claim_reference = claimed.get("claim_operation_id")
+    if claim_reference != claim_operation_id:
+        raise RuntimeError("Native execution preparation did not recover its original managed claim")
     # Reserve time for readiness and give it the time the claim left unused.
     remaining = deadline - monotonic()
     if remaining <= 0:

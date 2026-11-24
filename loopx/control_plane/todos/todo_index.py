@@ -56,7 +56,7 @@ def _todo_index_key(goal_id: str, todo: dict[str, Any]) -> tuple[str, str]:
     return goal_id, f"synthetic:{todo.get('role') or ''}:{todo.get('index') or ''}:{todo.get('text') or ''}"
 
 
-def _indexed_status_todo(
+def _status_index_labels(
     *,
     goal_id: str,
     role: str,
@@ -67,18 +67,14 @@ def _indexed_status_todo(
     text = public_safe_compact_text(todo.get("title") or todo.get("text"), limit=320)
     if not text:
         return None
-    item = dict(todo)
-    item.update(
-        {
-            "schema_version": TODO_INDEX_ITEM_SCHEMA_VERSION,
-            "goal_id": goal_id,
-            "role": role,
-            "source": source,
-            "text": text,
-            "title": public_safe_compact_text(todo.get("title"), limit=320) or text,
-        }
-    )
-    return item
+    return {
+        "schema_version": TODO_INDEX_ITEM_SCHEMA_VERSION,
+        "goal_id": goal_id,
+        "role": role,
+        "source": source,
+        "text": text,
+        "title": public_safe_compact_text(todo.get("title"), limit=320) or text,
+    }
 
 
 def _rollout_event_todo_status(event: Mapping[str, Any]) -> str:
@@ -174,14 +170,14 @@ def build_todo_index(
                 status_sources.extend((goal_id, role, todo) for todo in todos.get("items") or []
                                       if isinstance(todo, dict))
     compacts = [_compact_todo_item_record(todo) for _, _, todo in status_sources]
-    status_rows, context_sources, followups = [], [], []
+    status_rows, context_sources, index_labels = [], [], []
     for (goal_id, role, _), compact in zip(status_sources, compacts, strict=True):
-        row = _indexed_status_todo(goal_id=goal_id, role=role, todo=compact,
+        labels = _status_index_labels(goal_id=goal_id, role=role, todo=compact,
             source="attention_queue", public_safe_compact_text=public_safe_compact_text)
-        if row is not None:
-            status_rows.append(row)
+        if labels is not None:
+            status_rows.append({**compact, **labels})
             context_sources.append(todo_read_source(compact))
-            followups.append(todo_read_source(row))
+            index_labels.append(labels)
     current_count = len(status_rows)
 
     rollout_event_count = 0
@@ -218,7 +214,7 @@ def build_todo_index(
             event_rows.append(event_item)
     contexts = project_handoff_context([
         *context_sources, *(todo_read_source(row) for row in event_rows)],
-        followups=[*followups, *([None] * len(event_rows))])
+        index_labels=[*index_labels, *([None] * len(event_rows))])
     for row, context in zip([*status_rows, *event_rows], contexts, strict=True):
         if context["note"]:
             row["handoff_note"] = context["note"]

@@ -1,5 +1,5 @@
 /** Owner eligibility is shared by acquisition, renewal, transfer and observation.
- *  */
+ * Time, mode, proof, CAS and release remain with callers. */
 
 export interface LeaseEligibilityTodo {
   readonly status: string;

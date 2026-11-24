@@ -160,8 +160,7 @@ input. Reject the abstraction if it makes the callers harder to understand.
 This is an illustrative target, not a finding about your repository.
 
 Keep each result in its original Goal and PR so review feedback can change the
-next decision.
-explain the structural benefit and its costs. If later work requires a pending
+next decision. Explain the structural benefit and its costs. If later work requires a pending
 review, use the existing wait rather than starting overlapping changes.
 The [Chinese walkthrough](first-bugfix-loop.zh-CN.md#continuous-refactoring)
 contains the same task in Chinese.
@@ -209,7 +208,7 @@ existing Goal rather than repeat setup.
 Agent turns consume the host's model allowance and the project's test, build
 or external-service resources. Recurring checks add wakeup work even when no
 patch is produced. Cost depends on cadence, context size, retries and provider
-terms; Use existing
+terms; this guide does not establish a fixed price or a saving. Use existing
 quota and scheduled/event-driven waits.
 
 For examples rather than setup, explore the

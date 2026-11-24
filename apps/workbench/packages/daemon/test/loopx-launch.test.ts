@@ -77,7 +77,7 @@ function harness(fail: Manager['fail'] = 'none', opts: { dataDir?: string; manag
   const dataDir = opts.dataDir ?? mkdtempSync(join(tmpdir(), 'loopx-data-'));
   const service = new LoopxService({
     dataDir, core,
-    adapters: new Map([['codex', { id: 'codex' }], ['claude', { id: 'claude' }]]) as never,
+    adapters: new Map([['codex', { id: 'codex', capabilities: { permissionModes: ['ask', 'auto_edit', 'full_access'] } }], ['claude', { id: 'claude', capabilities: { permissionModes: ['ask', 'auto_edit', 'full_access'] } }]]) as never,
     dirs: { all: () => [root] } as never,
     cli: { command: [process.execPath, fake], registry },
   });
@@ -226,4 +226,12 @@ test('the granted directories carry where they are here, so a Goal can be pointe
   assert.equal(await service.handle({ method: 'GET', headers: {} } as never, res as never, '/api/loopx/workspaces', new URL('http://x/api/loopx/workspaces')), true);
   assert.equal(status, 200);
   assert.deepEqual(payload.workspaces, [{ ref: workspaceRef(granted), title: 'a', path: granted }]);
+});
+
+test('capabilities say whose writing a sandbox holds to the workspace, and writing is every agent’s default', async () => {
+  const { service } = harness();
+  const rows = service.capabilities();
+  const write = (agent: string) => rows.find((r) => r.agent === agent)!.permissions.find((p) => p.id === 'workspace_auto')!;
+  assert.deepEqual([write('codex').sandboxed, write('codex').isDefault], [true, true]);
+  assert.deepEqual([write('claude').sandboxed, write('claude').isDefault], [false, true], 'claude writes on instruction alone, and says so');
 });

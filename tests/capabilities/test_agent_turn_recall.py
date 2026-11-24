@@ -659,7 +659,7 @@ def test_explicit_cli_checkpoint_transport_failure_returns_safe_packet(
     turn = "turn-cli-failure"
     decision = quota_decision() | {"goal_id": "goal", "agent_identity": {"agent_id": "pilot"},
         "heartbeat_receipt": {"turn_instance_id": turn, "status": "committed"}}
-    monkeypatch.setattr(recall_cli, "load_turn_quota_decision", lambda *_args: decision)
+    monkeypatch.setattr(recall_cli, "_quota_decision", lambda *_args: decision)
 
     def unavailable(operation: str, _params: Any) -> Any:
         assert operation == "reward_memory.read_authority.surface_checkpoints"
@@ -692,7 +692,7 @@ def test_selected_receipt_identity_transport_failure_stops_before_provider(
     decision = bound_quota_decision()
     monkeypatch.setattr(recall_cli, "resolve_reward_memory_experiment", lambda **_kwargs: ({"status": "available"}, config))
     monkeypatch.setattr(recall_cli, "_goal_repo", lambda *_args: tmp_path)
-    monkeypatch.setattr(recall_cli, "load_turn_quota_decision", lambda *_args: decision)
+    monkeypatch.setattr(recall_cli, "_quota_decision", lambda *_args: decision)
 
     def unavailable(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("private runtime startup detail")

@@ -127,8 +127,7 @@ fact，使下一轮可以重新计算 frontier：
 | 外部写入结果不确定 | effect receipt + provider readback/reconcile | 先确认外部事实，再决定 retry、successor 或 closeout |
 | PR merged、closed 或明确不再跟进 | terminal evidence + no-follow-up rationale | monitor 可关闭，后续 Turn 不会继续轮询已经结束的工作 |
 
-它允许
-模型、session、host 和外部系统在边界处失败，但不允许丢失已经确认的事实、effect identity
+这个 bot 的“稳定执行”允许模型、session、host 和外部系统在边界处失败，但不允许丢失已经确认的事实、effect identity
 和下一步恢复路径。长程稳定的目标，是让错误可发现、可归因、可恢复；即使 Agent 犯错，
 已提交事实仍然有效，系统仍能形成下一步 frontier。
 
@@ -241,7 +240,7 @@ issue body、raw check log、凭据或本地路径。GitHub 仍是权威来源�
 ## Showcase B：Multi-Agent 研究团队
 
 研究协作复用 Goal、Todo、claim、lease、证据与独立验收。角色只声明自己的研究工作与
-写入边界；
+写入边界；创建任务或发送消息不等于启动 worker，也不授予实验、推广或发布权限。
 
 当前可运行示例见
 [managed research team](../../../examples/managed-research-team/README.md)，

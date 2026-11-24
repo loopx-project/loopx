@@ -171,6 +171,40 @@ def refine_goal_outcome(
     }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
+def require_active_goal_for_objective_update(goal: Mapping[str, Any] | None) -> None:
+    if goal is None:
+        raise ValueError("Goal acceptance requires a registered Goal")
+    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+        raise ValueError("Objective updates require an active Goal")
+
+
+def handoff_goal_outcomes(
+    *, registry_path: Path, goal_id: str, document: dict[str, Any],
+    expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
+    runtime_root: str | None = None, execute: bool = False,
+) -> dict[str, Any]:
+    """Delegate only explicitly selected orphaned outcomes through the local owner route."""
+    if agent_id is not None:
+        raise ValueError("Outcome handoff requires the local Goal owner")
+    from ..collaboration.goal_instance_scope import collaboration_goal_scope
+
+    source = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id, runtime_root_override=runtime_root)
+    source_registry = Path(source["source_registry"]).resolve()
+    # Roster changes do not advance the outcome store's CAS. Hold the same
+    # Goal -> registry -> work-store order as other scoped handoffs through commit.
+    with collaboration_goal_scope(source_registry, goal_id=goal_id, agents=(), lock_registry=True) as scope:
+        resolved_registry, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+        if resolved_registry.resolve() != scope.registry_path:
+            raise ValueError("Goal source changed while preparing the outcome handoff")
+        require_active_goal_for_objective_update(goal)
+        return _result("goal.acceptance.handoff", {
+            **route, "actor_agent_id": agent_id, "operation_id": operation_id, "document": document,
+            "expected_provider_revision": expected_provider_revision, "dry_run": not execute,
+            "registered_agents": registered_agent_ids_for_goal(goal),
+        }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+
+
 def update_goal_objective(
     *, registry_path: Path, goal_id: str, document: dict[str, Any], operation: str,
     expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
@@ -180,8 +214,7 @@ def update_goal_objective(
     from ..work_items.replan_context_codec import goal_context_facts
 
     registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
-        raise ValueError("Objective updates require an active Goal")
+    require_active_goal_for_objective_update(goal)
     return _result("goal.acceptance.objective", {**route, "actor_agent_id": agent_id,
         "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
         "operation": operation, "document": document, "dry_run": not execute,
@@ -496,6 +529,7 @@ def public_goal_acceptance(
         "operation_id",
         "goal_acceptance_contract",
         "objective_work_digest",
+        "handoff",
         "goal_objective_guard",
         "reason_code",
     )

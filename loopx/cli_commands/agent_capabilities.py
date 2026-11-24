@@ -42,8 +42,9 @@ def render_agent_capabilities(payload):
         return payload["error"]
     state = payload["agent_capabilities"]
     lines = [f"Runtime observations: {state['goal_id']} / {state['agent_id']} (this host)"]
-    for key in ("goal", "agent", "unavailable", "effective"):
-        lines.append(f"{key}: {', '.join(payload['availability'][key]) or '(none)'}")
+    for key in ("goal", "probed", "agent", "unavailable", "effective"):
+        if key in payload["availability"]:
+            lines.append(f"{key}: {', '.join(payload['availability'][key]) or '(none)'}")
     if "proposed" in state:
         lines.append(f"Preview: {state['proposed']}; use --execute to apply.")
     if state["invocation_only"]:

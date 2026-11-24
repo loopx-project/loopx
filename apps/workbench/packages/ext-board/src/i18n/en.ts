@@ -3,6 +3,14 @@ import type { zh } from './zh';
 const threads = (count: number) => `${count} ${count === 1 ? 'thread' : 'threads'}`;
 
 export const en: typeof zh = {
+  goalOnly: 'Long-horizon goals only',
+  goalPaused: 'Paused',
+  goalReady: 'Linked',
+  goalWork: 'Work pending',
+  goalUnknown: 'Unknown',
+  goalRefreshed: 'Refreshed',
+  goalIncomplete: 'Incomplete state',
+  goalMissingResult: 'Result missing',
   title: 'Board',
   backlog: 'Later',
   doing: 'In progress',

@@ -190,7 +190,7 @@ export const typedActionsScenario = {
 
       await page.locator(".personal-proposal-row", {hasText: "Storage recovery"}).click();
       const creationRecovery = page.locator('.personal-context-drawer[data-context-kind="proposal"]');
-      await creationRecovery.getByText("Goal 初始化尚未完成。请重试原创建操作，已记录的存储选择会保留。", {exact: true}).waitFor();
+      await creationRecovery.getByText("Goal 初始化尚未完成。重试后将在原工作区从已保存的步骤继续。", {exact: true}).waitFor();
       if ((await creationRecovery.innerText()).includes("没有写入任何变更")) throw new Error("Partial creation claimed no writes");
       await page.setViewportSize({width: 390, height: 844});
       const creationRetry = creationRecovery.getByRole("button", {name: "重试原操作", exact: true});

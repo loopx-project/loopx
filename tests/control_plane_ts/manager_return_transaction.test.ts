@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -7,6 +8,7 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { RETURN_DELIVERY_TRANSACTION, transactManagerReturnDelivery } from "../../loopx/control_plane/collaboration/return_delivery.ts";
 
 const id = "a".repeat(64);
+const conclusionMessageId = "handoff." + createHash("sha256").update(`["${id}", "conclusion"]`).digest("hex");
 const now = "2026-01-02T03:04:05.123456+00:00";
 const ref = { goal_id: "research", goal_instance_id: "ginst_" + "b".repeat(32) };
 const attempt = { schema_version: "manager_return_delivery_attempt_v0", provider: "lark",
@@ -58,6 +60,20 @@ for (const exact of [false, true]) {
       const bytes = await readFile(f.statePath);
       assert.equal((await f.run("prepare")).action, "skip");
       assert.deepEqual(await readFile(f.statePath), bytes);
+    } finally { await f.close(); }
+  });
+
+  test(`a local transcript cannot confirm an external terminal return (${exact})`, async () => {
+    const f = await fixture(exact, true);
+    try {
+      await f.put(f.statePath, {status: "delivered", delivered_at: now, ...(exact ? {goal_ref: ref} : {})});
+      const damaged = await readFile(f.statePath);
+      const plan = await f.run("prepare");
+      assert.equal(plan.action, "skip");
+      const attempted = await f.run("settle", {private_readback: {message_id: conclusionMessageId,
+        turn_id: "turn", role: "agent", origin: "manager_followup", created_at: now}});
+      assert.equal(attempted.processed, 0);
+      assert.deepEqual(await readFile(f.statePath), damaged);
     } finally { await f.close(); }
   });
 
@@ -268,7 +284,7 @@ test("scan skips terminal and corrupt records but locked admission rechecks ever
     transactManagerReturnDelivery({ ...f.command, phase: "scan", candidates });
   try {
     assert.deepEqual((await scan()).candidates, [{ request_id: id, result_key: "conclusion" }]);
-    await f.put(f.statePath, { status: "delivered" });
+    await f.put(f.statePath, { status: "delivered", message_id: conclusionMessageId });
     assert.deepEqual((await scan()).candidates, []);
     assert.equal((await f.run("prepare")).action, "skip");
     await writeFile(f.statePath, "{broken");
@@ -435,3 +451,100 @@ for (const exact of [false, true]) {
     });
   }
 }
+
+test("scan emits terminal_candidates strictly for immutable terminal states", async () => {
+  for (const exact of [false, true]) {
+    for (const status of ["delivered", "superseded", "explicit_unverified"]) {
+      const f = await fixture(exact, true);
+      try {
+        await f.put(f.statePath, { status, ...(status === "delivered" ? { message_id: conclusionMessageId } : {}),
+          ...(exact ? { goal_ref: ref } : {}) });
+        const result = await f.run("scan", { candidates: [{ request_id: id, result_key: "conclusion" }] });
+        assert.deepEqual(result.candidates, []);
+        assert.deepEqual(result.terminal_candidates, [{ request_id: id, result_key: "conclusion" }]);
+      } finally { await f.close(); }
+    }
+    for (const [label, body] of [
+      ["absent", null],
+      ["queued", { status: "queued" }],
+      ["retry_future", { status: "retry_pending", retry_at: "2026-01-02T04:04:05+00:00" }],
+      ["admitted_future", { status: "admitted", ...(exact ? { goal_ref: ref } : {}), admission: { expires_at: "2026-01-02T04:04:05+00:00" } }],
+      ["verification_required", { status: "verification_required", attempt }],
+    ] as const) {
+      const f = await fixture(exact, true);
+      try {
+        if (body !== null) await f.put(f.statePath, body);
+        const result = await f.run("scan", { candidates: [{ request_id: id, result_key: "conclusion" }] });
+        assert.deepEqual(result.terminal_candidates, [], `${exact}:${label} must stay uncached`);
+      } finally { await f.close(); }
+    }
+  }
+});
+
+test("scan gates chained follow-ups on predecessor readiness without caching blocked rows as terminal", async () => {
+  const followKey = "conclusion-00000001";
+  const followPath = (folder: string) => join(folder, "replies", id, `${followKey}.json`);
+  const followPayload = { request_id: id, goal_id: "research", agent_id: "worker",
+    source_id: "source:original", decision: "adopt", phase: "conclusion",
+    result_key: followKey, previous_result_key: "conclusion", update_id: "u1",
+    text: "Updated findings." };
+
+  for (const state of [null, { status: "retry_pending", retry_at: "2026-01-02T04:04:05+00:00" }]) {
+    const f = await fixture(false, true);
+    try {
+      await f.put(followPath(f.folder), followPayload);
+      if (state) await f.put(f.statePath, state);
+      const blocked = await f.run("scan", { candidates: [{ request_id: id, result_key: followKey }] });
+      assert.deepEqual(blocked.candidates, []);
+      assert.deepEqual(blocked.terminal_candidates, []);
+      await f.put(f.statePath, { status: "delivered" });
+      const ready = await f.run("scan", { candidates: [{ request_id: id, result_key: followKey }] });
+      assert.deepEqual(ready.candidates, [{ request_id: id, result_key: followKey }]);
+      assert.deepEqual(ready.terminal_candidates, []);
+    } finally { await f.close(); }
+  }
+
+  for (const invalidFollow of ["{broken", JSON.stringify({ ...followPayload, previous_result_key: "../escape" })]) {
+    const f = await fixture(false, true);
+    try {
+      await writeFile(followPath(f.folder), invalidFollow);
+      const result = await f.run("scan", { candidates: [{ request_id: id, result_key: followKey }] });
+      assert.deepEqual(result.candidates, [{ request_id: id, result_key: followKey }]);
+      assert.deepEqual(result.terminal_candidates, []);
+    } finally { await f.close(); }
+  }
+});
+
+test("a legacy external dispatch fences stale senders and survives a revoked grant", async () => {
+  const f = await fixture(false, true);
+  try {
+    const first = await f.run("prepare");
+    const stale = await f.run("prepare");
+    const revoked = { ...f.facts, grant: { targets: [] } };
+    await assert.rejects(f.run("dispatch", { ...first, facts: revoked }), /dispatch is unavailable/);
+    const saved = await f.run("dispatch", first);
+    assert.equal((await f.state()).status, "verification_required");
+    await assert.rejects(f.run("dispatch", stale), /state changed/);
+    await assert.rejects(f.run("attempt", { ...stale, attempt }), /state changed/);
+    assert.equal((await f.run("prepare")).action, "verify");
+    assert.equal((await f.run("prepare", { facts: revoked })).action, "skip");
+    assert.equal((await f.state()).status, "explicit_unverified");
+    assert.equal((await f.run("prepare")).action, "skip");
+    await f.run("settle", { ...saved, outcome: { kind: "error" } });
+    assert.equal((await f.state()).error, "provider_locator_unavailable");
+  } finally { await f.close(); }
+});
+
+test("a known refusal permits retry after dispatch but an unknown provider error cannot", async () => {
+  for (const refused of [false, true]) {
+    const f = await fixture(false, true);
+    try {
+      const saved = await f.run("dispatch", await f.run("prepare"));
+      await f.run("settle", { ...saved, outcome: refused
+        ? { kind: "sent", external_write_performed: false } : { kind: "error" } });
+      assert.equal((await f.state()).status, refused ? "retry_pending" : "explicit_unverified");
+      const after = await f.run("prepare", { now: "2026-01-03T03:04:05Z" });
+      assert.equal(after.action, refused ? "send" : "skip");
+    } finally { await f.close(); }
+  }
+});

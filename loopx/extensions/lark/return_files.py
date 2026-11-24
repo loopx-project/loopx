@@ -21,7 +21,7 @@ from .inbox_reply import _default_runner, _json_object, _message
 from .outbound import normalize_lark_outbound_text
 from .presentation.markdown_post import lark_markdown_readback_attachment_keys, lark_markdown_readback_matches
 from ...capabilities.native_chat.file_discovery import read_reply_image, reply_image_attachment
-from ...chat_attachments import normalize_chat_image_attachments
+from ...chat.attachments import normalize_chat_image_attachments
 from ...control_plane.collaboration.inbox import _hash, _read, _root, _write
 from ...control_plane.collaboration.result_files import read_result_file
 from ...file_lock import exclusive_file_lock

@@ -601,8 +601,9 @@ official feedback; best-only retains its strictly improving snapshot channel.
 
 Shared `loopx-planned` entry also drops the adapter's research-strategy prefix.
 The product planning packet, including Core first-delivery guidance, is unchanged
-and remains a separate experimental variable. Optional execution observations,
-stride settings and checkpoint storage guidance retain their explicit selection.
+and remains a separate experimental variable. Optional execution observations
+and checkpoint storage guidance retain their explicit selection; LoopX arms
+always run the `evidence_conditioned_v1` stride policy.
 Budgets and deadlines stay with the existing runner. Opted-in native Goal
 continuation retains the original task and evaluation rules without requiring a
 prior improvement claim before submission.
@@ -955,8 +956,8 @@ effective work Turns** by default. Use `--replan-after-turns N` to set a differe
 count (1–6); `--replan-after-turns 3` retains the previous benchmark default.
 Use `--replan-after-todos 3` for the previous completed-Todo cadence
 as an explicit ablation. The two options are mutually exclusive and require a
-heartbeat profile. This default is independent of `--task-entry`, feedback mode,
-and `--turn-envelope`. Official, single and native-goal profiles are unchanged.
+heartbeat profile. This default is independent of `--task-entry` and feedback mode.
+Official, single and native-goal profiles are unchanged.
 
 The shared control plane counts settled work Turns, not tool calls or idle wakes;
 other replan reasons may trigger sooner. Both runtime and worker-profile receipts
@@ -969,7 +970,7 @@ New `heartbeat-resume` and `heartbeat-explore` trials include the same-source
 original Goal and acceptance in preselection planning context by default.
 `--no-planning-horizon-goal` disables it for rollback or comparison;
 `--planning-horizon-goal` explicitly enables it. Plain and native-Goal workers reject
-this setting. It does not enable stride, Explore or TurnEnvelope.
+this setting. It does not change stride, Explore or TurnEnvelope.
 
 The adapter writes the shared `execution_profile.planning_horizon_goal` through
 `configure-goal`, checks the effective readback before work, and records an
@@ -984,17 +985,22 @@ Compare on/off from the same qualified pre-replan checkpoint with equal remainin
 budget, source and other settings. Input fidelity does not establish better
 research or scores. See the [shared Goal configuration and rollback](../../docs/reference/protocols/quota-planning-horizon-v0.md#enable-read-back-and-disable).
 
-### Optional structured stride strategy
+### Structured stride strategy (always on for LoopX arms)
 
-Add `--stride-strategy evidence_conditioned_v1` to a new `heartbeat-resume`
-or `heartbeat-explore` trial to opt into the existing Goal review strategy.
-The runner writes the option together with the resolved cadence and checks
-the real Goal configuration before planning or execution. The install,
-worker-profile and runtime receipts record an explicitly selected version.
-Omitting the option preserves ordinary off commands and receipt shapes;
-`--stride-strategy off` explicitly selects the disabled treatment. Plain and
-native-goal profiles reject this option before creating a trial. Unknown
-versions also fail before registration or execution.
+`evidence_conditioned_v1` is the only live LoopX stride policy. New
+`heartbeat-resume`, `heartbeat-explore` and `turn-resume` trials run it
+unconditionally; there is no on/off switch, and the former `--stride-strategy`
+option has been removed (passing it fails argument parsing before a trial is
+created). The runner no longer sends a stride setting to `configure-goal`.
+The install, worker-profile and runtime receipts of every new LoopX trial record
+`"stride_strategy": "evidence_conditioned_v1"`, and report export requires the
+worker profile and runtime receipt to agree. Plain and native-Goal workers do not
+run LoopX and keep their previous receipt shape without this field.
+
+Historical receipts remain readable as recorded: absence, `"off"` and
+`"evidence_conditioned_v1"` all validate in report export and causal
+attribution, so archived studies are not rewritten or relabeled. Comparisons
+with older off-treatment runs must pin their original product/runner revisions.
 
 The [Goal review contract](../../docs/reference/protocols/goal-vision-replan-contract-v0.md)
 defines structured proposals and the three independently controlled axes.
@@ -1005,26 +1011,16 @@ review, proposal adoption and task gains require trajectory evidence.
 
 ## Quota input and historical Short
 
-Current C1 sources give both heartbeat profiles the complete v1 input by
-default. `--complete-turn` explicitly requests the complete contract, including
-on supported historical product revisions. Context delivery remains a separate
-setting. The [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
-documents original captures, readback and settlement.
+Both heartbeat profiles use complete v1. Context delivery remains a separate
+setting. See the [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#complete-v1-host-entry--完整-v1-host-入口)
+for original captures, readback and settlement.
 
-For a historical Short benchmark arm, use its recorded product and runner
-revisions. With `--turn-envelope`, the current worker verifies the selected CLI's
-actual v0 response using a read-only preview before starting a model. C1 or an
-unavailable preview rejects the request. A `fresh_replan` checkpoint preloads a
-different view and is incompatible with Short. Inspect the wake's
-`quota_input_contract` eligibility and the actual saved decision before using
-a result in a comparison. Include startup and wake costs under the same study
-protocol.
+Reproduce historical Short and explicit Complete treatments on their recorded
+product and runner revisions. Review the original decision, wake receipt and
+complete startup and wake costs before using the result in a comparison.
 
-中文：当前 C1 的两种 heartbeat profile 默认交付完整 v1，`--complete-turn`
-也可在支持的历史产品版本中显式选择完整输入。旧 Short 组应按记录的产品和 runner
-版本复现。当前 worker 在启动模型前用只读预演核实 v0，回执
-`quota_input_contract` 记录预期、实测版本与资格。C1 或无法核实的来源会拒绝请求。
-`fresh_replan` 会预载另一种输入，因此不能与 Short 合用。
+中文：两种 heartbeat profile 默认使用完整 v1，交付传输单独配置。复现历史 Short
+或显式 Complete 组时按原产品和 runner 版本执行，并核对原决策、回执和完整成本。
 
 ## Close a managed native attempt
 

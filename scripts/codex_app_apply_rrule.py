@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
-from loopx.paths import global_registry_path, select_default_runtime_root
+from loopx.paths import codex_automation_database, global_registry_path, select_default_runtime_root
 from loopx.turn_identity import normalize_turn_instance_id
 
 
@@ -544,7 +544,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--db-path",
         type=Path,
-        default=_codex_home() / "sqlite/codex-dev.db",
+        default=codex_automation_database(_codex_home()),
     )
     parser.add_argument("--loopx", default="loopx")
     parser.add_argument(

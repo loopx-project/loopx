@@ -25,7 +25,11 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "Model and executor",
       description: "Guides the steward executor, model, and selection boundary for this machine. A pinned route blocks substitution; a flexible pool permits only authorized fallback.",
     },
-    todo_replan_cadence: { displayName: "Goal review and stride", description: "Set review frequency and optionally choose a versioned stride strategy for work scope and route changes." },
+    steward_memory: {
+      displayName: "Isolated OpenViking memory",
+      description: "Connects owner private steward conversations to an isolated OpenViking memory namespace with per-speaker preferences and bounded recall.",
+    },
+    todo_replan_cadence: { displayName: "Goal review and stride", description: "Set review frequency. Evidence-conditioned stride (v1) is always on and reviews work scope and route changes." },
     change_quality_qualification: {
       displayName: "Change quality qualification",
       description: "Prepares a provider-neutral review packet, allows at most one policy-authorized safe-fix pass, and can require an exact-diff receipt.",
@@ -95,7 +99,11 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       displayName: "模型与执行器",
       description: "配置本机管家的执行器、模型与选择边界；锁定路径禁止替代，灵活池只允许在已授权范围内回退。",
     },
-    todo_replan_cadence: { displayName: "Goal 复盘与步幅", description: "设置复盘周期，可选用带版本的步幅策略，调节工作大小与路线变化。" },
+    steward_memory: {
+      displayName: "独立 OpenViking 长期记忆",
+      description: "为本人私聊管家启用独立身份的 OpenViking 记忆命名空间：按已验证发言人持久化偏好、跨会话按需检索并限制超时，不向群聊或工作 Agent 泄露。",
+    },
+    todo_replan_cadence: { displayName: "Goal 复盘与步幅", description: "设置复盘周期。依据证据的步幅策略（v1）始终开启，复核工作大小与路线变化。" },
     change_quality_qualification: {
       displayName: "变更质量验证",
       description: "生成与 Provider 无关的审阅包，最多允许一次策略授权的安全修复，并可要求精确 diff 回执。",
@@ -164,10 +172,12 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     eligible_endpoints: { label: "Flexible eligible executors", description: "One authorized executor per line. Use only with flexible selection and include the primary executor." },
     executor_model: { label: "Model", description: "Optional model for the selected executor. Leave blank to keep the executor's own default." },
     executor_reasoning_effort: { label: "Reasoning effort", description: "Optional reasoning effort for the selected executor. Leave blank to keep the executor's own default." },
+    user_space: { label: "User space", description: "OpenViking user space isolating steward memory on this machine." },
+    auto_recall: { label: "Auto recall history", description: "Search past steward events automatically on substantive private messages." },
+    recall_timeout_seconds: { label: "Recall timeout (seconds)", description: "Wait budget (1–15s) before continuing without recalled memory." },
     count_unit: { label: "Review after", description: "Work Turns require accepted settlement; polls and retries do not count.", options: { completed_todos: "Completed Todos", effective_turns: "Settled work Turns" } },
     planning_horizon_goal: { label: "Show Goal in planning horizon", description: "Default on. Keep the original Goal and acceptance visible before choosing work. Turn off for rollback or comparisons; replan, stride and execution authority are unchanged." },
     yardstick_enabled: { label: "Review measurement criteria", description: "Default off. Review measurement scope and feedback using available Explore evidence. Requires Explore evidence; does not enable it or authorize execution." },
-    stride_strategy: { label: "Stride strategy", description: "Structured work scope, route and validation proposals are required for enabled fresh Vision reviews. Does not grant execution authority.", options: { off: "Off", evidence_conditioned_v1: "Evidence-conditioned · v1" } },
     count: { label: "Number between reviews", description: "Settled work Turns: 1–6; completed Todos: 1–5. Goal overrides take precedence over device defaults." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
     coordinator_agent_id: { label: "Coordinator Agent", description: "Use an already registered Agent id; leave blank to disable coordination." },
@@ -202,10 +212,12 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     eligible_endpoints: { label: "灵活池可用执行器", description: "每行一个已授权执行器，仅用于 flexible；必须包含首选执行器。" },
     executor_model: { label: "模型", description: "所选执行器使用的模型，可留空；留空表示沿用执行器自身的默认模型。" },
     executor_reasoning_effort: { label: "推理档位", description: "所选执行器使用的推理档位，可留空；留空表示沿用执行器自身的默认档位。" },
+    user_space: { label: "记忆用户空间", description: "本机管家在 OpenViking 中隔离使用的 user space 标识。" },
+    auto_recall: { label: "跨会话自动召回", description: "收到非命令的实质私聊消息时，执行一次有界历史事件检索。" },
+    recall_timeout_seconds: { label: "召回超时（秒）", description: "等待记忆读取的上限（1–15 秒）；超时后跳过记忆直接恢复正常回复。" },
     count_unit: { label: "复核计数依据", description: "有效工作 Turn 须完成结算；轮询和重复重试不计数。", options: { completed_todos: "已完成 Todo", effective_turns: "已结算工作 Turn" } },
     planning_horizon_goal: { label: "在规划视野中显示 Goal", description: "默认开启，选择工作前可见原目标与验收要求。可为回滚或对照实验关闭；不改变复盘、步幅策略或执行权限。" },
     yardstick_enabled: { label: "复核衡量标准", description: "默认关闭。使用已有 Explore 证据复核测量范围与反馈；需有可用的 Explore 证据，不会自动启用它或授予执行权限。" },
-    stride_strategy: { label: "步幅策略", description: "启用后，新的 Vision 路线复盘须提交工作大小、路线及验证范围的结构化提案，不授予执行权限。", options: { off: "关闭", evidence_conditioned_v1: "依据证据调整 · v1" } },
     count: { label: "两次复核间的数量", description: "已结算工作 Turn 为 1–6，已完成 Todo 为 1–5；Goal 显式设置优先于设备默认值。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
     coordinator_agent_id: { label: "协调 Agent", description: "填写一个已经注册的 Agent ID；留空表示关闭协调。" },
@@ -279,6 +291,11 @@ export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capability
   } : {
     label: "Exploration mode", description: "Planning includes the evidence graph; worker and execution permissions remain separate.",
     options: {off: "Off", evidence: "Evidence only", planning: "Evidence and planning"},
+  }};
+  if (capabilityId === "steward_memory") return {...fieldCopy[locale], enabled: locale === "zh-CN" ? {
+    label: "启用", description: "为本人私聊管家开启独立 OpenViking 长期记忆。",
+  } : {
+    label: "Enabled", description: "Enable isolated OpenViking long-term memory for owner private steward conversations.",
   }};
   return fieldCopy[locale];
 }

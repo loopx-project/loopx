@@ -216,18 +216,6 @@ def register_quota_command(
         choices=["interactive", "isolated_headless", "hosted_automation"],
         help="Execution mode paired with --host-surface and --scheduler-owner.",
     )
-    turn_view = quota_parser.add_mutually_exclusive_group()
-    turn_view.add_argument(
-        "--turn-envelope",
-        action="store_true",
-        help=(
-            "Compatibility alias: quota should-run already returns the complete v1 work contract. "
-            "Context and Delta delivery remain independent."
-        ),
-    )
-    turn_view.add_argument("--complete-turn", action="store_true",
-        help="Compatibility alias: quota should-run already returns the complete v1 work contract "
-             "and its shared exact-Turn settlement. Context and Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",

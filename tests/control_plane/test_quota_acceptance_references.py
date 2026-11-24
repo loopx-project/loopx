@@ -298,10 +298,12 @@ def test_inline_cli_delivers_complete_acceptance_for_selection_and_replan(tmp_pa
     guard = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
                  "--turn-instance-id", "turn-acceptance-sharing")
     assert guard["effective_action"] == "autonomous_replan_required"
-    ref = "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"
+    guard_sources = guard["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    guard_index = next(i for i, row in enumerate(guard_sources) if row["source"] == "goal_acceptance")
+    ref = f"$.interaction_contract.agent_channel.work_context.sources[{guard_index}].content.goal_acceptance_contract"
     assert guard["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract_ref"] == ref
     assert guard["agent_todo_summary"]["goal_acceptance_contract_ref"] == ref
-    assert guard["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == expected
+    assert guard_sources[guard_index]["content"]["goal_acceptance_contract"] == expected
     assert build_turn_envelope(guard)["action_signature"]["matches"] is True
 
     # Normal selected delivery must use the exact inline acceptance read and

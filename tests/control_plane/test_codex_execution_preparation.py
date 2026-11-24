@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -90,13 +91,27 @@ def _bound_request(tmp_path: Path) -> dict:
     return {**request, "source_sha256": OBSERVED_DIGEST}
 
 
+@pytest.fixture
+def open_turn(monkeypatch):
+    from loopx.control_plane.quota import settlement
+    from loopx.control_plane.quota.effect_program import ReceiptBoundReplayPhase, SettlementIdentity
+
+    def read(runtime_root, *, goal_id, agent_id, todo_id, turn_instance_id, **kwargs):
+        identity = SettlementIdentity(goal_id=goal_id, agent_id=agent_id,
+            todo_id=todo_id, turn_instance_id=turn_instance_id)
+        return SimpleNamespace(identity=SimpleNamespace(value=identity),
+            replay_phase=ReceiptBoundReplayPhase.OPEN)
+
+    monkeypatch.setattr(settlement, "read_heartbeat_settlement", read)
+
+
 @pytest.mark.parametrize("scenario", ["codex_app_heartbeat", "codex_app_ssh_goal"])
-def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, monkeypatch, scenario: str) -> None:
+def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, monkeypatch, open_turn, scenario: str) -> None:
     request = _bound_request(tmp_path)
     capture, native = tmp_path / "ready", tmp_path / "native"
     calls: list[list[str]] = []
     timeouts = []
-    clock = iter((100.0, 101.5))
+    clock = iter((100.0, 100.4, 101.5))
     monkeypatch.setattr(codex_execution_preparation, "monotonic", lambda: next(clock))
 
     def runner(command, *, cwd, timeout):
@@ -155,8 +170,8 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, monkeypatch
     assert "do not repeat" in context and '"state":"ready"' in context
 
 
-def test_executor_skips_ready_check_after_preparation_deadline(tmp_path: Path, monkeypatch) -> None:
-    clock = iter((100.0, 108.0))
+def test_executor_skips_ready_check_after_preparation_deadline(tmp_path: Path, monkeypatch, open_turn) -> None:
+    clock = iter((100.0, 103.0, 108.0))
     monkeypatch.setattr(codex_execution_preparation, "monotonic", lambda: next(clock))
 
     def runner(command, *, cwd, timeout):
@@ -171,7 +186,7 @@ def test_executor_skips_ready_check_after_preparation_deadline(tmp_path: Path, m
 
 
 @pytest.mark.parametrize("changed", ["goal", "agent", "todo", "turn"])
-def test_executor_rejects_changed_todo_or_turn(tmp_path: Path, changed: str) -> None:
+def test_executor_rejects_changed_todo_or_turn(tmp_path: Path, open_turn, changed: str) -> None:
     request = _bound_request(tmp_path)
 
     def runner(command, *, cwd, timeout):

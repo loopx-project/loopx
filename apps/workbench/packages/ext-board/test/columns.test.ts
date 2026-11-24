@@ -92,7 +92,7 @@ test('combines project, instance and schedule filters and leaves archived thread
     thread('archived', { archived: true }),
   ];
   const ids = (filters: Parameters<typeof buildColumns>[1]) => buildColumns(items, filters, now)[3].cards.map((card) => card.thread.id).sort();
-  assert.deepEqual(ids({ tags: [], project: ['/projects/one', '/projects/two'], agent: ['agent-1', 'agent-2'], scheduled: [true], machine: [] }), ['match-one', 'match-two']);
+  assert.deepEqual(ids({ ...emptyFilters(), tags: [], project: ['/projects/one', '/projects/two'], agent: ['agent-1', 'agent-2'], scheduled: [true], machine: [] }), ['match-one', 'match-two']);
   assert.deepEqual(ids({ ...emptyFilters(), scheduled: [false] }), ['not-scheduled']);
   assert.equal(buildColumns(items, emptyFilters(), now)[3].total, 4);
 });
@@ -131,10 +131,10 @@ test('phones open on the first column that asks something of the person', () => 
 test('invalid persisted filters fall back safely and mixed values are sanitized', () => {
   for (const input of [null, '', '{bad', 'null', '42']) assert.deepEqual(parseFilters(input), emptyFilters());
   assert.deepEqual(parseFilters('{"v":2,"project":["/a",1,"/a"],"agent":false,"scheduled":[true,"false",false,true]}'), {
-    tags: [], project: ['/a'], agent: [], scheduled: [true, false], machine: [],
+    ...emptyFilters(), tags: [], project: ['/a'], agent: [], scheduled: [true, false], machine: [],
   });
   // Projects saved before they were resolved paths are dropped once; the other filters stay.
-  assert.deepEqual(parseFilters('{"project":["/home/me/code"],"agent":["codex"]}'), { tags: [], project: [], agent: ['codex'], scheduled: [], machine: [] });
+  assert.deepEqual(parseFilters('{"project":["/home/me/code"],"agent":["codex"]}'), { ...emptyFilters(), tags: [], project: [], agent: ['codex'], scheduled: [], machine: [] });
 });
 
 test('project labels use the final directory segment', () => {

@@ -6,12 +6,36 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 
 # New benchmark runs and the product both default to six settled work Turns.
 DEFAULT_REPLAN_AFTER_TURNS = 6
+LOOPX_BENCHMARK_CLAIM_TTL_ENV = "LOOPX_BENCHMARK_CLAIM_TTL_SECONDS"
+_MAX_CLAIM_TTL_SECONDS = 86400
+
+
+def normalize_claim_ttl_seconds(value: int | None) -> int | None:
+    """Validate optional benchmark Todo claim TTL in 1..86400 seconds."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_CLAIM_TTL_SECONDS:
+        raise ValueError("claim_ttl_seconds must be an integer between 1 and 86400")
+    return value
+
+
+def claim_ttl_seconds_from_env(env: Mapping[str, str] | None = None) -> int | None:
+    """Parse optional LOOPX_BENCHMARK_CLAIM_TTL_SECONDS when explicitly opted in."""
+    source = os.environ if env is None else env
+    raw = source.get(LOOPX_BENCHMARK_CLAIM_TTL_ENV)
+    if raw is None or not str(raw).strip():
+        return None
+    text = str(raw).strip()
+    if not text.isdigit():
+        raise ValueError(f"{LOOPX_BENCHMARK_CLAIM_TTL_ENV} must be an integer between 1 and 86400")
+    return normalize_claim_ttl_seconds(int(text))
 
 
 MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
@@ -32,6 +56,7 @@ class Execution:
     context_delivery: str | None = None
     native_child_limit: int | None = None
     complete_turn: bool = False
+    official_stop_hook: bool = False
 
     def __post_init__(self) -> None:
         if self.native_child_limit is not None and (
@@ -44,10 +69,10 @@ class Execution:
             object.__setattr__(self, "context_delivery", "on" if self.mode == "heartbeat" else "off")
         if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
-        if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
-            raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
-        if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
-            raise ValueError("complete_turn requires heartbeat execution without legacy turn_envelope")
+        if self.turn_envelope is not False or self.complete_turn is not False:
+            raise ValueError("Historical turn_envelope and complete_turn treatments require the recorded product and runner revisions")
+        if type(self.official_stop_hook) is not bool or (self.official_stop_hook and self.mode != "plain"):
+            raise ValueError("official_stop_hook requires plain execution and a boolean opt-in")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -89,22 +114,11 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
-def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
-    """Record only the explicit display opt-in; checkpoint capture is independent."""
-    return {**({"turn_envelope": True, "turn_envelope_source": "explicit"} if explicit else {}),
-        **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
-
-
-def explicit_turn_display(env: dict[str, str]) -> Execution:
-    """Decode the shared explicit display request through its Execution owner."""
-    selected = {}
-    for variable, field in (("LOOPX_TURN_ENVELOPE", "turn_envelope"),
-                            ("LOOPX_COMPLETE_TURN", "complete_turn")):
-        value = env.get(variable, "0")
-        if value not in {"0", "1"}:
-            raise ValueError(f"{variable} must be 0 or 1")
-        selected[field] = value == "1"
-    return Execution(**selected)
+def reject_retired_turn_display(env: dict[str, str]) -> None:
+    """Fail historical requests before a new benchmark can use the wrong treatment."""
+    for variable in ("LOOPX_TURN_ENVELOPE", "LOOPX_COMPLETE_TURN"):
+        if env.get(variable, "0") != "0":
+            raise ValueError(f"{variable} requires the recorded historical product and runner revisions")
 
 
 def native_child_instructions(limit: int | None) -> str:
@@ -165,11 +179,13 @@ def codex_settings(
     *, execution: Execution, workspace: Path, model: str, effort: str,
     base_url: str, wire_api: str, web_search: str = "disabled",
     model_catalog: Path | None = None, model_catalog_destination: Path | None = None,
+    claim_ttl_seconds: int | None = None,
 ) -> str:
     """Render fixed settings for the worker and its fresh checkpoint receiver.
 
     Rendering does not create a home, change a session or handle credentials.
     """
+    claim_ttl = normalize_claim_ttl_seconds(claim_ttl_seconds)
     if not model or not effort:
         raise ValueError("model and effort are required")
     if wire_api not in {"responses", "chat"}:
@@ -205,9 +221,11 @@ def codex_settings(
             'LOOPX_USAGE_PING = "0"',
             f"LOOPX_CONTEXT_DELIVERY = {json.dumps(execution.context_delivery)}",
             *(['LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
+            *([f"{LOOPX_BENCHMARK_CLAIM_TTL_ENV} = {json.dumps(str(claim_ttl))}"] if claim_ttl is not None else []),
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",
+            *(["hooks = true"] if execution.official_stop_hook else []),
             *(["[agents]", f"max_concurrent_threads_per_session = {execution.native_child_limit}"]
               if execution.native_child_limit is not None else []),
             "[memories]",
@@ -248,6 +266,7 @@ def prepare_codex_home(
     web_search: str = "disabled",
     model_catalog: Path | None = None,
     model_catalog_destination: Path | None = None,
+    claim_ttl_seconds: int | None = None,
 ) -> None:
     """Materialize fixed inputs once; never delete sessions between iterations.
 
@@ -278,6 +297,7 @@ def prepare_codex_home(
         execution=execution, workspace=workspace, model=model, effort=effort,
         base_url=base_url, wire_api=wire_api, web_search=web_search,
         model_catalog=model_catalog, model_catalog_destination=model_catalog_destination,
+        claim_ttl_seconds=claim_ttl_seconds,
     )
     home.mkdir(parents=True, exist_ok=True)
     config = home / "config.toml"
@@ -299,9 +319,40 @@ def prepare_codex_home(
     # The provider reads OPENAI_API_KEY. No credential file is copied to logs.
 
 
+def _prepend_existing_runtime_dirs(env: dict[str, str]) -> None:
+    """Keep explicit benchmark Node/LoopX runtime directories on worker PATH."""
+    candidates: list[str] = []
+    extra = env.get("LOOPX_BENCHMARK_PATH_PREPEND", "")
+    if extra:
+        for item in extra.split(os.pathsep):
+            if item and Path(item).is_dir():
+                candidates.append(item)
+    node_dir = env.get("LOOPX_NODE_DIR", "")
+    if node_dir:
+        node_bin = Path(node_dir) / "bin"
+        if node_bin.is_dir():
+            candidates.append(str(node_bin))
+    cli = env.get("LOOPX_CLI", "")
+    if cli:
+        cli_path = Path(cli)
+        if cli_path.is_absolute() and cli_path.parent.is_dir():
+            candidates.append(str(cli_path.parent))
+    if not candidates:
+        return
+    existing = [entry for entry in env.get("PATH", "").split(os.pathsep) if entry]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for entry in (*candidates, *existing):
+        if entry not in seen:
+            seen.add(entry)
+            merged.append(entry)
+    env["PATH"] = os.pathsep.join(merged)
+
+
 def process_environment(
-    home: Path, *, base: dict[str, str] | None = None
+    home: Path, *, base: Mapping[str, str] | None = None
 ) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env["CODEX_HOME"] = str(home)
+    _prepend_existing_runtime_dirs(env)
     return env

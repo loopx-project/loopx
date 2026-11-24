@@ -43,7 +43,10 @@ class StewardManagedMode:
                 session = self.store.load_session(actor["session_id"])
             else:
                 candidates = self.bindings.local_sessions(binding_id)
-                candidates = [row for row in candidates if row.get("status") != "closed"]
+                candidates = [
+                    row for row in candidates
+                    if row.get("status") != "closed" and not (row.get("steward_context") or {}).get("topic_ref")
+                ]
                 channels = {row.get("channel_id") for row in candidates}
                 if len(channels) != 1 or not candidates:
                     raise ValueError("select the original private steward conversation first")
@@ -143,7 +146,7 @@ class StewardManagedMode:
                     "scheduling_enabled": False, "model_invoked": False}
 
     def health(self, binding_id: str) -> dict[str, Any]:
-        """Metadata projection only."""
+        """Metadata projection only; it neither verifies grants nor enables work."""
         try:
             binding = next(row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id)
             actor = binding.get("managed_actor")
@@ -167,7 +170,7 @@ class StewardManagedMode:
             return {"available": True, "prepared": True,
                     **(self.bindings._core("collaboration.steward.managed_mode.executor", {
                         "binding": binding, "session": session})
-                       if binding["executor_endpoint_id"] != "codex" else {}),
+                       if binding["executor_endpoint_id"] != "codex" or session.get("agent_id") != "codex" else {}),
                     "scheduling_enabled": bool(active and monitor and monitor.get("status") == "open"),
                     "goal_active": active, "report": StewardReports(self.controller).health(binding_id),
                     "monitor": ({"todo_id": monitor["todo_id"], "status": monitor["status"],
@@ -267,7 +270,8 @@ class ManagedSessionTurn:
 
     def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
               settlement_recovery: dict[str, Any] | None = None,
-              selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
+              selection_recovery: dict[str, Any] | None = None,
+              frozen_contract_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
         from .steward_turn import StewardTurnHost
         if self.controller.closed.is_set():
@@ -310,8 +314,10 @@ class ManagedSessionTurn:
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "monitor_todo": monitor, **report, **creation,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
+            **({"report_frozen_contract_recovery": frozen_contract_recovery} if frozen_contract_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
+            **StewardTurnHost(self.controller).report_timeout_basis(request),
             **StewardTurnHost(self.controller).monitor_restart_basis(request),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
@@ -360,8 +366,7 @@ class ManagedSessionTurn:
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
-        Native
-        submit still rechecks current admission and every validation source.
+        Native submit still rechecks current admission and every validation source.
         """
         from ...control_plane.effect_runtime import effect_runtime_result
         from ...control_plane.goals.acceptance import inspect_goal_acceptance
@@ -392,16 +397,36 @@ class ManagedSessionTurn:
             unavailable["todo_id"] = todo_id
             request["todo_id"] = todo_id
             self.admit(request)
-            plan = self._validation_source(request, todo_id)["plan"]
-            # Return only the display observation; commands, pins and private
-            # declarations stay with their existing owner.
+            source = self._validation_source(request, todo_id)
+            plan = source["plan"]
+            completion_turn = self._completed_task_turn(actor, source) if plan["canonical_done"] else None
+            # Commands, pins and private declarations stay with the validation owner.
             self.admit(request)
             return {**{key: plan[key] for key in ("todo_id", "state", "source", "observation", "canonical_done")},
-                **{key: unavailable[key] for key in ("creation_request", "creation_turn") if key in unavailable}}
+                **{key: unavailable[key] for key in ("creation_request", "creation_turn") if key in unavailable},
+                **({"completion_turn": completion_turn} if completion_turn is not None else {})}
         except (OSError, ValueError, RuntimeError) as exc:
             reason = ("the original task source is temporarily unavailable" if isinstance(exc, OSError)
                 else str(exc))
             return {**unavailable, "reason": reason}
+
+    def _completed_task_turn(self, actor: dict[str, Any], source: dict[str, Any]) -> dict[str, Any] | None:
+        completion_key = source.get("completion_turn_key")
+        operation = re.fullmatch(r"managed-session\.([A-Za-z0-9._:-]{1,100})",
+            completion_key if isinstance(completion_key, str) else "")
+        if operation is None:
+            return None
+        turn = self.store.turn_for_client(actor["session_id"], "managed." + operation[1])
+        if not isinstance(turn, dict):
+            return None
+        saved = turn.get("loopx_request")
+        if (turn.get("status") != "completed" or turn.get("origin") != "native_loopx"
+                or turn.get("loopx_execution") is not True or not isinstance(saved, dict)
+                or saved.get("operation") != "native_turn" or saved.get("work_kind") != "native_turn"
+                or saved.get("actor") != actor or saved.get("todo_id") != source["todo_id"]
+                or saved.get("turn_instance_id") != completion_key):
+            return None
+        return turn
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
                todo_id: str | None = None, monitor_deadline: str | None = None,
@@ -449,10 +474,14 @@ class ManagedSessionTurn:
                     retained = report_turn(self.store, request["actor"], report_window)
                     if retained is not None and retained["turn_id"] != existing["turn_id"]:
                         return retained, False
-                    quota_request = host.report_quota_request(existing)
-                    if quota_request is not None:
-                        request = quota_request
-                        client_id += ".quota-recovery"
+                    recovery_request = host.report_quota_request(existing, report_window=report_window)
+                    suffix = ".quota-recovery"
+                    if recovery_request is None:
+                        recovery_request = host.report_timeout_request(existing)
+                        suffix = ".timeout-recovery"
+                    if recovery_request is not None:
+                        request = recovery_request
+                        client_id += suffix
                         existing = None
                 selection_recovery = host.report_selection_recovery(existing) if existing is not None and report_window is not None else None
                 recovery = (host.monitor_restart_carrier(existing, client_id)

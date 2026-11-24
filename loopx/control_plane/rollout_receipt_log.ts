@@ -191,7 +191,7 @@ export function heartbeatReceiptsFromEvents(
 }
 
 /** A receipt without an exact Goal instance belongs to the legacy goal scope. */
-function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
+export function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
   if (goalRef === null) return !Object.hasOwn(event, "goal_ref");
   const eventGoalRef = jsonObject(event.goal_ref);
   return eventGoalRef !== null &&

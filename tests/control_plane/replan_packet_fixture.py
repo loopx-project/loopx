@@ -17,14 +17,24 @@ from test_replan_host_context_projection import AGENT_ID, GOAL_ID, _quota_payloa
 
 
 def populated_replan_source(root, *, acceptance=False, explore_context=None):
-    source = _quota_payload(stride_strategy="evidence_conditioned_v1")
+    source = _quota_payload()
     source["replan_read_path"] = "/synthetic/decision.json"
     obligation = deepcopy(source["autonomous_replan_obligation"])
     _, decision, work = _rows()
 
     def scoped(value):
         if isinstance(value, dict):
-            return {key: scoped(item) for key, item in value.items()}
+            mapped = {key: scoped(item) for key, item in value.items()}
+            if (
+                mapped.get("schema_version") == "quota_settlement_identity_v0"
+                and mapped.get("todo_id")
+                and mapped.get("turn_instance_id")
+            ):
+                mapped["effect_id"] = (
+                    f"{mapped['goal_id']}:{mapped['agent_id']}:"
+                    f"{mapped['todo_id']}:{mapped['turn_instance_id']}"
+                )
+            return mapped
         if isinstance(value, list):
             return [scoped(item) for item in value]
         if value == "evidence-goal":
@@ -60,6 +70,10 @@ def populated_replan_source(root, *, acceptance=False, explore_context=None):
         row["generated_at"] = (start + timedelta(minutes=index)).isoformat()
         row["turn_instance_id"] = f"turn-synthetic-{index}"
         row["settlement_identity"]["turn_instance_id"] = row["turn_instance_id"]
+        row["settlement_identity"]["effect_id"] = (
+            f"{row['settlement_identity']['goal_id']}:{row['settlement_identity']['agent_id']}:"
+            f"{row['settlement_identity']['todo_id']}:{row['turn_instance_id']}"
+        )
         rows.append(row)
     contract = None
     if acceptance:
@@ -90,7 +104,7 @@ def populated_replan_source(root, *, acceptance=False, explore_context=None):
     index.parent.mkdir(parents=True)
     index.write_text("".join(json.dumps(row) + "\n" for row in rows))
     context = project_replan_context(goal_id=GOAL_ID, agent_id=AGENT_ID, obligation=obligation,
-        runs=(), source_status={"registry": str(registry), "runtime_root": str(runtime), "run_history": {"runs": []}}, stride_strategy="evidence_conditioned_v1",
+        runs=(), source_status={"registry": str(registry), "runtime_root": str(runtime), "run_history": {"runs": []}},
         goal_acceptance_contract=contract, explore_context=explore_context,
         todo_items=[{"todo_id": "todo-a", "goal_id": GOAL_ID, "role": "agent", "status": "waiting",
                      "claimed_by": AGENT_ID, "task_class": "advancement_task", "action_kind": "validate"}])

@@ -17,7 +17,6 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 
 | Projection | `projection` | Coverage scope |
 | --- | --- | --- |
-| `goal-channel work project/claim` | `room_work` | `goal_actor` |
 | `loopx status` | `status` | `registry`, `goal` with `--goal-id`, or `activation.<state>` |
 | `loopx status --use-projection-cache` hit | `status`, `served_from_cache: true` | as stored |
 | `loopx global-summary` | `global_summary` | `global` |

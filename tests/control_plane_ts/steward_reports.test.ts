@@ -106,6 +106,49 @@ test("a local calendar report retains its exact original Session, subscription, 
     {recovery_decision: {...inspection.recovery_decision, resume_from: "host_execute"}}]) {
     assert.throws(() => admitManagedSessionTurn({...input, report_settlement_recovery: {...inspection, ...changed}}));
   }
+  const frozenInspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "failed", completed_phases: ["host_execute", "typed_result"],
+    recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "continue", resume_from: "host_execute", reinvoke_host: true}};
+  const frozenProof = {turn_key: "sha256:" + "d".repeat(64), result_kind: "validation_failed",
+    validation_stage: "host_result_contract", host_attempt_count: 1,
+    generation_verified: true, saved_candidate_verified: true};
+  assert.equal(admitManagedSessionTurn({
+    ...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof,
+  }).observation_only, false);
+  const stoppedInspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "stopped", completed_phases: ["host_execute", "typed_result", "validation"],
+    recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "return_existing", resume_from: null, reinvoke_host: false}};
+  const stoppedProof = {turn_key: "sha256:" + "d".repeat(64), result_kind: "wait",
+    classification: "no_typed_host_result", host_attempt_count: 1,
+    generation_verified: true, saved_candidate_verified: true};
+  assert.equal(admitManagedSessionTurn({
+    ...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof,
+  }).observation_only, false);
+  assert.equal(admitManagedSessionTurn({
+    ...input, report_todo: {...todo, status: "done", completion_turn_key: request.turn_instance_id + ".saved-candidate"},
+    report_settlement_recovery: {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+      goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+      journal_status: "failed", recovery_decision: {action: "continue", reinvoke_host: false, resume_from: "quota_spend"}},
+  }).observation_only, false);
+  for (const invalid of [
+    {...input, report_frozen_contract_recovery: frozenProof},
+    {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, saved_candidate_verified: false}},
+    {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, validation_stage: "task_postcondition"}},
+    {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, host_attempt_count: 2}},
+    {...input, report_settlement_recovery: {...frozenInspection, recorded_effects: {...frozenInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: frozenProof},
+    {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, classification: "other"}},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, host_attempt_count: 2}},
+    {...input, report_settlement_recovery: {...stoppedInspection, recorded_effects: {...stoppedInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: stoppedProof},
+    {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
+    {...input, preparing_model_context: true, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
+  ]) {
+    assert.throws(() => admitManagedSessionTurn(invalid));
+  }
 });
 
 function original() {
@@ -270,6 +313,45 @@ test("a model report requires the exact live calendar window and original task, 
         {action: "continue", reinvoke_host: false, resume_from}}})),
     {...recovery, report_settlement_recovery: {...recovery.report_settlement_recovery, recovery_decision:
       {action: "continue", reinvoke_host: true, resume_from: "quota_spend"}}},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
+  const frozenInspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true,
+    journal_consistent: true, journal_status: "failed", completed_phases: ["host_execute", "typed_result"],
+    recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "continue", reinvoke_host: true, resume_from: "host_execute"}};
+  const frozenProof = {turn_key: "sha256:" + "e".repeat(64), result_kind: "validation_failed",
+    validation_stage: "host_result_contract", host_attempt_count: 1,
+    generation_verified: true, saved_candidate_verified: true};
+  assert.equal(admitStewardManagedTurn({
+    ...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof,
+  }).observation_only, false);
+  const stoppedInspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true,
+    journal_consistent: true, journal_status: "stopped", completed_phases: ["host_execute", "typed_result", "validation"],
+    recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "return_existing", reinvoke_host: false, resume_from: null}};
+  const stoppedProof = {turn_key: "sha256:" + "e".repeat(64), result_kind: "wait",
+    classification: "no_typed_host_result", host_attempt_count: 1,
+    generation_verified: true, saved_candidate_verified: true};
+  assert.equal(admitStewardManagedTurn({
+    ...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof,
+  }).observation_only, false);
+  assert.equal(admitStewardManagedTurn({
+    ...input, report_todo: {...todo, status: "done", completion_turn_key: request.turn_instance_id + ".saved-candidate"},
+    report_settlement_recovery: recovery.report_settlement_recovery,
+  }).observation_only, false);
+  for (const invalid of [
+    {...input, report_frozen_contract_recovery: frozenProof},
+    {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, saved_candidate_verified: false}},
+    {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, validation_stage: "task_postcondition"}},
+    {...input, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: {...frozenProof, host_attempt_count: 2}},
+    {...input, report_settlement_recovery: {...frozenInspection, recorded_effects: {...frozenInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: frozenProof},
+    {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: frozenInspection, report_frozen_contract_recovery: frozenProof},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, classification: "other"}},
+    {...input, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: {...stoppedProof, host_attempt_count: 2}},
+    {...input, report_settlement_recovery: {...stoppedInspection, recorded_effects: {...stoppedInspection.recorded_effects, state_written: true}}, report_frozen_contract_recovery: stoppedProof},
+    {...input, report_todo: {...todo, status: "done"}, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
+    {...input, preparing_model_context: true, report_settlement_recovery: stoppedInspection, report_frozen_contract_recovery: stoppedProof},
   ]) assert.throws(() => admitStewardManagedTurn(invalid));
   const changed = {...input, binding: {...p.binding, goal_scope: "all_registered"},
     session: {...p.session, active_turn_id: "running", manager_authorization_scope_id: "old_scope",
@@ -510,4 +592,214 @@ test("only a proven original pre-execution replan refusal admits one correlated 
       ({...probe, inspection: {...inspection, recorded_effects: {...inspection.recorded_effects, [key]: value}}}))),
     {...probe, inspection: {...inspection, recovery_decision: {...inspection.recovery_decision, reinvoke_host: true}}},
   ]) assert.throws(() => admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: changed}}));
+
+  const validationTurnKey = "sha256:" + "d".repeat(64);
+  const validationJournal = {schema_version: "loopx_turn_journal_v0", goal_id: p.actor.goal_id,
+    turn_key: validationTurnKey, status: "failed", validation_stage: "host_result_contract",
+    host: {kind: "codex-app-server", executable: "built-in"},
+    host_attempt_count: 1, result_kind: "validation_failed", completed_phases: ["host_execute", "typed_result"],
+    receipt: {ok: true, failed_phase: "validation", status: "failed",
+      commit_eligibility: {writeback: false, quota_spend: false, scheduler_ack: false}},
+    plan: {route: {kind: "replan_required", effective_action: "autonomous_replan_required"},
+      turn_envelope: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id, effective_action: "autonomous_replan_required"},
+      transaction: {settlement_plan: {identity: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id,
+        binding_kind: "autonomous_replan", turn_instance_id: request.turn_instance_id + ".replan"}}}}};
+  const validationInspection = {...inspection, journal_status: "failed"};
+  const clearedGuard = {effective_action: "normal_run", replan_action_packet: null};
+  const clearedProbe = {turn: {...source, turn_id: "d".repeat(32), delta_count: 18, upstream_turn_id: "model-turn"},
+    journal: validationJournal, inspection: validationInspection, current_guard: clearedGuard};
+  assert.equal(admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: clearedProbe}}).observation_only, false);
+  for (const badProbe of [
+    {...clearedProbe, current_guard: {effective_action: "autonomous_replan_required", replan_action_packet: {obligation_id: "replan-1"}}},
+    {...clearedProbe, current_guard: {effective_action: "normal_run", replan_action_packet: {obligation_id: "replan-1"}}},
+    {...clearedProbe, journal: {...validationJournal, validation_stage: "task_postcondition"}},
+    {...clearedProbe, journal: {...validationJournal, receipt: {...validationJournal.receipt,
+      commit_eligibility: {writeback: true, quota_spend: false, scheduler_ack: false}}}},
+    {...clearedProbe, inspection: {...validationInspection, recorded_effects: {...inspection.recorded_effects, state_written: true}}},
+    {...clearedProbe, journal: {...validationJournal, plan: {...validationJournal.plan, transaction: {settlement_plan: {
+      identity: {...validationJournal.plan.transaction.settlement_plan.identity, turn_instance_id: "other.replan"}}}}}},
+  ]) {
+    assert.throws(() => admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: badProbe}}));
+  }
+});
+
+test("report recovery paths tolerate host Python executable drift in validation_command and reject target drift", () => {
+  const p = original();
+  const folder = "/tmp/example-goal/periodic_reports/win-1";
+  const snippet = "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation "
+    + `import validate_private_generation; validate_private_generation(Path('${folder}'))`;
+  const oldCmd = ["/opt/release-1/bin/python", "-c", snippet];
+  const newCmd = ["/opt/release-2/bin/python3", "-c", snippet];
+  const badTargetCmd = ["/opt/release-2/bin/python3", "-c", snippet.replace(folder, "/tmp/other/win-2")];
+  const badFlagCmd = ["/opt/release-2/bin/python3", "-m", snippet];
+
+  const basePrior = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: oldCmd,
+    work_kind: "report", report_window_id: "cadence_original", report_subscription_revision: "sha256:original"};
+  const reportMeta = {
+    report_window: {window_id: basePrior.report_window_id, subscription_revision: basePrior.report_subscription_revision,
+      goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: basePrior.report_subscription_revision},
+    report_todo: {todo_id: basePrior.todo_id, target_key: basePrior.report_window_id,
+      claimed_by: "steward", action_kind: "generate_periodic_report", status: "open"},
+  };
+
+  // 1. report_selection_recovery with cleared validation_failed probe from an older Python release.
+  const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const refusal = {schema_version: "loopx_turn_selection_rejection_v0", source: "quota.should-run",
+    requested_todo_id: basePrior.todo_id, state: "deferred", reason_code: "autonomous_replan",
+    recovery_action: "reenter_guard_without_selection", delivery_preemptions: ["autonomous_replan", "delivery_not_allowed"],
+    status_health_ok: true, contract_error_count: 0};
+  const selResult = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    error_code: "turn_todo_selection_deferred", effects_scope: "current_invocation", effects, selection_rejection: refusal};
+  const selOriginal = {session_id: p.session.session_id, status: "completed", origin: "native_loopx", loopx_execution: true,
+    delta_count: 0, upstream_turn_id: null, loopx_request: basePrior, response: {native_loopx: selResult}};
+  const probeKey = "sha256:" + "e".repeat(64);
+  const selProbe = {
+    turn: {...selOriginal, turn_id: "e".repeat(32), delta_count: 8, upstream_turn_id: "probe-model-turn"},
+    journal: {schema_version: "loopx_turn_journal_v0", goal_id: p.actor.goal_id, turn_key: probeKey,
+      status: "failed", validation_stage: "host_result_contract",
+      host: {kind: "codex-app-server", executable: "built-in"}, host_attempt_count: 1,
+      result_kind: "validation_failed", completed_phases: ["host_execute", "typed_result"],
+      receipt: {ok: true, failed_phase: "validation", status: "failed",
+        commit_eligibility: {writeback: false, quota_spend: false, scheduler_ack: false}},
+      plan: {route: {kind: "replan_required", effective_action: "autonomous_replan_required"},
+        turn_envelope: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id, effective_action: "autonomous_replan_required"},
+        transaction: {settlement_plan: {identity: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id,
+          binding_kind: "autonomous_replan", turn_instance_id: basePrior.turn_instance_id + ".replan"}}}}},
+    inspection: {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+      goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+      journal_status: "failed", recorded_effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+      recovery_decision: {action: "return_existing", reinvoke_host: false}},
+    current_guard: {effective_action: "normal_run", replan_action_packet: null},
+  };
+  const selInput = {...p, ...reportMeta, request: {...basePrior, validation_command: newCmd},
+    report_selection_recovery: {original: selOriginal, generation_present: false, probe: selProbe}};
+  assert.equal(admitStewardManagedTurn(selInput).observation_only, false);
+  for (const badCmd of [badTargetCmd, badFlagCmd]) {
+    assert.throws(() => admitStewardManagedTurn({...selInput, request: {...selInput.request, validation_command: badCmd}}));
+  }
+
+  // 2. report_quota_recovery across host Python upgrade.
+  const quotaResult = {schema_version: "loopx_turn_execution_v0", ok: false, mode: "run_once",
+    status: "failed", result_kind: "host_failure", host_failure: {schema_version: "loopx_turn_host_failure_v0", attempt: 1},
+    effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    receipt: {ok: true, failed_phase: "host_execute", status: "failed", completed_phases: [],
+      lineage: {goal_id: p.actor.goal_id, agent_id: p.actor.agent_id, todo_id: basePrior.todo_id}}};
+  const quotaSource = {turn_id: "1".repeat(32), session_id: p.session.session_id, status: "completed",
+    origin: "native_loopx", loopx_execution: true, delta_count: 0, upstream_turn_id: "quota-native-turn",
+    loopx_request: basePrior, response: {native_loopx: quotaResult}};
+  const quotaObs = {thread_id: "original-native-thread", turn_id: quotaSource.upstream_turn_id,
+    only_original_user_item: true, codex_error_info: "usageLimitExceeded", quota_available: true, quota_observed_at: 100};
+  const quotaInput = {...p, ...reportMeta, session: {...p.session, upstream_thread_id: quotaObs.thread_id},
+    request: {...basePrior, validation_command: newCmd, turn_instance_id: basePrior.turn_instance_id + ".quota-recovery",
+      report_quota_recovery: {original_turn_id: quotaSource.turn_id, native_observation: quotaObs}},
+    report_quota_basis: {original: quotaSource, generation_present: false, observed_at: 101,
+      inspection: {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+        goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+        journal_status: "failed", completed_phases: [],
+        recorded_effects: {host_invoked: null, state_written: false, quota_spent: false, scheduler_acknowledged: false}}}};
+  assert.equal(admitStewardManagedTurn(quotaInput).observation_only, false);
+  assert.throws(() => admitStewardManagedTurn({
+    ...quotaInput, request: {...quotaInput.request, validation_command: badTargetCmd},
+  }));
+
+  // 3. report_launch_recovery across host Python upgrade.
+  const launchKey = "sha256:" + "f".repeat(64);
+  const launchResult = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    status: "failed", result_kind: "host_failure", reason: "first-party Host runtime rejected: stale_goal_authority",
+    host_failure: {schema_version: "loopx_turn_host_failure_v0", kind: "contract_rejected", attempt: 1, retryable: false},
+    effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    resume_turn_key: launchKey};
+  const launchSource = {session_id: p.session.session_id, status: "completed", origin: "native_loopx", loopx_execution: true,
+    delta_count: 0, upstream_turn_id: null, loopx_request: basePrior, response: {native_loopx: launchResult}};
+  const launchInput = {...p, ...reportMeta,
+    request: {...basePrior, validation_command: newCmd, resume_turn_key: launchKey},
+    report_launch_recovery: {
+      original: launchSource, turn_key: launchKey, host_attempt_count: 1, generation_present: false,
+      inspection: {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+        goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+        journal_status: "failed", completed_phases: [],
+        recorded_effects: {host_invoked: null, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+        recovery_decision: {action: "continue", reinvoke_host: true, resume_from: "host_execute"}},
+      journal: {status: "failed", result_kind: "host_failure", reason: launchResult.reason, turn_key: launchKey,
+        host_attempt_count: 1, completed_phases: [], host_failure: launchResult.host_failure,
+        receipt: {failed_phase: "host_execute"}},
+    }};
+  assert.equal(admitStewardManagedTurn(launchInput).observation_only, false);
+  assert.throws(() => admitStewardManagedTurn({
+    ...launchInput, request: {...launchInput.request, validation_command: badTargetCmd},
+  }));
+});
+
+test("idle Antigravity report timeout admits one isolated-cascade continuation", () => {
+  const p = original();
+  const prior = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: ["python", "validate.py"],
+    work_kind: "report", report_window_id: "cadence_original", report_subscription_revision: "sha256:original"};
+  const effects = {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const result = {schema_version: "loopx_turn_execution_v0", ok: false, mode: "run_once",
+    status: "failed", result_kind: "host_failure", host_failure: {schema_version: "loopx_turn_host_failure_v0", attempt: 1},
+    effects, receipt: {ok: true, failed_phase: "host_execute", status: "failed", completed_phases: [],
+      lineage: {goal_id: p.actor.goal_id, agent_id: "steward", todo_id: prior.todo_id}}};
+  const source = {turn_id: "1".repeat(32), session_id: p.session.session_id, status: "completed",
+    origin: "native_loopx", loopx_execution: true, delta_count: 0, upstream_turn_id: "agy_turn_timeout1",
+    loopx_request: prior, response: {native_loopx: result}};
+  const observation = {adapter_kind: "antigravity_ls", thread_id: "ephemeral-cascade-1",
+    turn_id: source.upstream_turn_id, cascade_idle: true, no_final_response: true,
+    native_timeout: true, quota_available: true, quota_observed_at: 100};
+  const recovery = {original_turn_id: source.turn_id, native_observation: observation};
+  const request = {...prior, turn_instance_id: prior.turn_instance_id + ".timeout-recovery",
+    report_timeout_recovery: recovery};
+  const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "failed", completed_phases: [], recorded_effects: {...effects, host_invoked: null}};
+  const basis = {original: source, inspection, generation_present: false, observed_at: 101};
+  const input = {
+    ...p,
+    session: {
+      ...p.session,
+      agent_id: "antigravity",
+      executor_endpoint_id: "antigravity",
+      adapter_kind: "antigravity_ls",
+      upstream_thread_id: "main-cascade",
+      upstream_context_history: [{agent_id: "codex", thread_id: "codex-orig-thread"}],
+      manager_executor_allocation: {
+        schema_version: "manager_executor_allocation_v0",
+        selection_policy: "flexible",
+        configured_endpoint: "antigravity",
+        executor_endpoint: "antigravity",
+        allocation_reason: "flexible_primary_available",
+        configuration_revision: "rev-2",
+        eligible_endpoints: ["antigravity", "codex"],
+      },
+    },
+    request, report_timeout_basis: basis,
+    report_window: {window_id: prior.report_window_id, subscription_revision: prior.report_subscription_revision,
+      goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: prior.report_subscription_revision},
+    report_todo: {todo_id: prior.todo_id, target_key: prior.report_window_id,
+      claimed_by: "steward", action_kind: "generate_periodic_report", status: "open"}};
+  assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  for (const invalid of [
+    {...input, report_timeout_basis: null},
+    {...input, request: {...request, report_timeout_recovery: null}},
+    {...input, request: {...request, report_quota_recovery: {original_turn_id: source.turn_id, native_observation: {}}}},
+    {...input, request: {...request, turn_instance_id: prior.turn_instance_id}},
+    {...input, request: {...request, validation_command: ["python", "-c", "bad"]}},
+    ...["cascade_idle", "no_final_response", "native_timeout", "quota_available"].map(key => ({
+      ...input, request: {...request, report_timeout_recovery: {...recovery,
+        native_observation: {...observation, [key]: false}}},
+    })),
+    {...input, request: {...request, report_timeout_recovery: {...recovery,
+      native_observation: {...observation, adapter_kind: "codex"}}}},
+    {...input, request: {...request, report_timeout_recovery: {...recovery,
+      native_observation: {...observation, quota_observed_at: 0}}}},
+    {...input, report_timeout_basis: {...basis, generation_present: true}},
+    {...input, report_timeout_basis: {...basis, original: {...source, delta_count: 1}}},
+    {...input, report_timeout_basis: {...basis, original: {...source,
+      loopx_request: {...prior, report_timeout_recovery: recovery}}}},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
 });

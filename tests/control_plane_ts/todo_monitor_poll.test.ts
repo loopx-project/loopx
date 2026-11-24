@@ -103,6 +103,42 @@ test("canonical monitor poll retains scoped generations across unrelated transit
   assert.equal(monitorScopeGeneration(monitor.material_change_scope_generations, "case-b/run-2"), 2);
   assert.equal((second.writeback as JsonObject).material_change_scope, "case-b/run-2");
   assert.equal((second.writeback as JsonObject).scoped_material_change_generation, 2);
+
+  // Follow-up unchanged poll without material_change_scope clears the active scope while retaining history.
+  const unchanged = await executeCoordinationMonitorPoll(store, {
+    ...request,
+    operation_id: "poll-unchanged-after-scoped",
+    intent: {},
+    observation: {
+      ...request.observation,
+      generated_at: "2026-09-01T02:00:00Z",
+      result_hash: request.observation.result_hash,
+      material_change: false,
+    },
+  });
+  assert.equal(unchanged.status, "applied", JSON.stringify(unchanged));
+  const afterUnchanged = await store.loadAuthority();
+  assert.equal(afterUnchanged.status, "loaded");
+  if (afterUnchanged.status !== "loaded") return;
+  const unchangedMonitor = (afterUnchanged.head.todos as JsonObject[]).find(todo => todo.todo_id === "todo_monitor")!;
+  assert.equal(unchangedMonitor.material_change_scope, undefined);
+  assert.equal(unchangedMonitor.consecutive_no_change, "1");
+  assert.equal(monitorScopeGeneration(unchangedMonitor.material_change_scope_generations, "case-a/run-1"), 1);
+  assert.equal(monitorScopeGeneration(unchangedMonitor.material_change_scope_generations, "case-b/run-2"), 2);
+
+  // Follow-up unscoped material-change poll also succeeds cleanly after a cleared or scoped transition.
+  const unscopedMaterial = await executeCoordinationMonitorPoll(store, {
+    ...request,
+    operation_id: "poll-unscoped-after-cleared",
+    intent: {...request.intent, next_agent_todo: "Deliver unscoped result"},
+    observation: {
+      ...request.observation,
+      generated_at: "2026-09-01T03:00:00Z",
+      result_hash: "result-unscoped",
+      material_change: true,
+    },
+  });
+  assert.equal(unscopedMaterial.status, "applied", JSON.stringify(unscopedMaterial));
 });
 
 test("explicit successor target reuses one compatible open Todo across material generations", async () => {

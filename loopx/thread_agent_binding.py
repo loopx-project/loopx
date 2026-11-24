@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,24 @@ from .control_plane.projects.registry_codec import mutate_project_registry
 from .control_plane.todos.contract import normalize_todo_claimed_by
 from .history import load_registry
 from .registry import find_registry_goal, registry_goals
+
+HOST_THREAD_ID_ENV: dict[str, str] = {
+    "codex-app": "CODEX_THREAD_ID",
+    "codex-app-ssh": "CODEX_THREAD_ID",
+    "codex-ide-plugin": "CODEX_THREAD_ID",
+    "codex-cli-tui": "CODEX_THREAD_ID",
+    "trae_app": "TRAECLI_THREAD_ID",
+    "traex-cli": "TRAECLI_THREAD_ID",
+    "antigravity-app": "ANTIGRAVITY_CONVERSATION_ID",
+    "agy": "ANTIGRAVITY_CONVERSATION_ID",
+    "kiro-cli": "KIRO_SESSION_ID",
+}
+
+
+def ambient_host_thread_id(host_surface: str) -> str | None:
+    """Read the host-provided local context, never a caller's route override."""
+    variable = HOST_THREAD_ID_ENV.get(host_surface)
+    return (os.environ.get(variable) or None) if variable else None
 
 THREAD_ID_MAX_LENGTH = 128
 THREAD_BINDING_SCHEMA_VERSION = "loopx_thread_agent_binding_v0"
@@ -304,6 +323,7 @@ def _registry_thread_binding_request(
         else None
     )
     session_locator = None
+    normalized_thread_id: str | None
     if thread_link:
         if (
             normalized_surface is not None

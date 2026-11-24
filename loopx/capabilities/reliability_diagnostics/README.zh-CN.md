@@ -8,7 +8,9 @@
 实跑，以及明确的开销报告。
 
 L1 observer 观察一个长时运行的 Agent 会话，并写下独立的诊断记录；它**永远不能**
-影响该会话。
+影响该会话。本能力把这条承诺做成机器合约：envelope schema 无法表达
+命令，receipt 记录 outbound endpoint 为空集，observer 故障被计数并让证据进入
+quarantined，projection 携带 `mode: read_only` 与 `authority: none`。
 
 ```mermaid
 flowchart LR
@@ -150,7 +152,8 @@ loopx reliability-diagnostics ingest  --goal-id <goal-id> --input observer.ndjso
 不影响此校验。
 
 `status --with-receipt` 从同一次 ledger 读取返回两个现有合同；省略该选项保留原来的
-projection-only 输出，不授予控制权限，也不激活 observer。接入轮询前应阅读
+projection-only 输出，不授予控制权限，也不激活 observer。并发追加不是原子快照，
+末尾半行仍会导致 integrity 失败。接入轮询前应阅读
 [DSH/Pi 评估](../../../docs/architecture/rfcs/harness-selection-dsh-pi-v0.zh-CN.md)
 中的全量读取与身份边界。
 

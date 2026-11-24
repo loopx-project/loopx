@@ -6,6 +6,7 @@ from pathlib import Path
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, empty_todo_display
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -333,7 +334,11 @@ def test_quota_uses_complete_owned_commitment_count_before_display_cap(reverse):
 
 @pytest.mark.parametrize("display", ["current", "empty", "stale"])
 @pytest.mark.parametrize("scope", ["global_gate=true", "blocks_agent=agent-b"])
-def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, display: str, scope: str):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_public_quota_keeps_gate_from_real_canonical_provider(
+    tmp_path: Path, monkeypatch, display: str, scope: str, provider: str
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     history = "\n".join(f"- [x] [P2] Completed synthetic work {i}.\n"
         f"  <!-- loopx:todo todo_id=todo_history_{i} status=done task_class=advancement_task -->" for i in range(12))
@@ -350,17 +355,30 @@ def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, di
     fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
     projection = build_todo_runtime_shadow_projection(goal_id="goal-scope",
         todos=fields["agent_todos"]["items"] + fields["user_todos"]["items"], handoff_mode="soft_claim")
-    initialize_canonical_authority(runtime, "goal-scope", projection, state_path=state)
+    initialize_canonical_authority(runtime, "goal-scope", projection, state_path=state, provider=provider)
     if display == "empty":
         empty_todo_display(state)
     elif display == "stale":
         state.write_text("# Stale projection\n## User Todo\n- [x] Old approval.\n")
     before = state.read_bytes() if state.exists() else None
-    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-scope",
-        "--agent-id", "agent-b", "--context-delivery", "off", registry_path=registry, runtime_root=runtime)
+    code, packet = run_json_cli_result(
+        "quota", "should-run", "--goal-id", "goal-scope", "--agent-id", "agent-b",
+        "--context-delivery", "off", registry_path=registry, runtime_root=runtime,
+    )
     assert code == 0, packet
     assert packet["requires_user_action"] is True
-    gates = packet["user_todo_summary"]["gate_open_items"]
+    assert_complete_turn_decision(packet)
+    summary = packet["user_todo_summary"]
+    if "gate_open_items_ref" in summary:
+        assert summary["gate_open_items_ref"] == "$.user_todo_summary.first_open_items"
+        gates = summary["first_open_items"]
+    else:
+        gates = summary["gate_open_items"]
     assert [row["todo_id"] for row in gates] == ["todo_gate"]
-    assert not packet["user_todo_summary"].get("claim_scope")
+    assert gates[0]["task_class"] == "user_gate"
+    if scope == "global_gate=true":
+        assert gates[0]["global_gate"] is True
+    else:
+        assert gates[0]["blocks_agent"] == "agent-b"
+    assert not summary.get("claim_scope")
     assert (state.read_bytes() if state.exists() else None) == before

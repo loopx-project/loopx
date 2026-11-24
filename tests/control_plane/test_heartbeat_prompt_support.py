@@ -90,8 +90,11 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
         "selection_command", "settlement_plan.ordered_steps", "next_cli_actions",
         "identities/effect ids and actual outcomes", "Preserve command flags",
         "truthful evidence", "ambiguous effects need readback/recovery",
-        "retain original and cumulative outcome requirements",
-        "root continuation, budget or stop criteria",
+        "Add this Goal's lasting duties to its objective and Todo",
+        "Explicit new Goals use creation",
+        "Flag scope conflicts",
+        "keeping cumulative requirements",
+        "root continuation, budget and stops",
     ):
         assert obligation in body, obligation
 
@@ -434,11 +437,30 @@ def test_sizing_guidance_survives_prompt_compaction(mode: str) -> None:
     assert "--fine-grained" not in payload["quota_guard_command"]
 
 
-@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "envelope"])
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+def test_heartbeat_scopes_project_skill_to_material_changes(mode: str) -> None:
+    body = build_heartbeat_prompt(
+        goal_id="goal-work-guidance", agent_id="agent-a",
+        runtime_profile="codex_app_heartbeat", **{mode: True},
+    )["task_body"]
+    assert "Direct user requests use loopx-project" not in body
+    for obligation in (
+        "Material Goal or acceptance changes use loopx-project",
+        "Add this Goal's lasting duties to its objective and Todo",
+        "Explicit new Goals use creation",
+        "Refine acceptance via inline goal_acceptance (inspect if absent), keeping cumulative requirements",
+        "Routine steps need no outcome",
+        "selection_command",
+        "settlement_plan.ordered_steps",
+    ):
+        assert obligation in body, obligation
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "captured_thin"])
 @pytest.mark.parametrize("profile", ["generic_cli", "codex_app_heartbeat"])
 def test_timed_wait_guidance_survives_prompt_compaction(mode: str, profile: str, tmp_path: Path) -> None:
-    options = ({"thin": True, "turn_envelope": True, "decision_output_root": tmp_path,
-                "turn_instance_id": "timed-wait-turn"} if mode == "envelope" else {mode: True})
+    options = ({"thin": True, "decision_output_root": tmp_path, "turn_instance_id": "timed-wait-turn"}
+               if mode == "captured_thin" else {mode: True})
     payload = build_heartbeat_prompt(goal_id="timed-wait-fixture", agent_id="agent-wait",
                                      runtime_profile=profile, **options)
     body = payload["task_body"]

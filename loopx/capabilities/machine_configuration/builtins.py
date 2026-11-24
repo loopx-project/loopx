@@ -32,6 +32,11 @@ _BUILTIN_NAMESPACES = (
         "goal_storage_machine_configuration_namespace",
     ),
     (
+        "goal_closeout",
+        "loopx.capabilities.goal_closeout.machine_defaults",
+        "goal_closeout_machine_configuration_namespace",
+    ),
+    (
         "manager_runtime",
         "loopx.capabilities.manager_runtime.machine_profile",
         "manager_runtime_machine_configuration_namespace",
@@ -60,6 +65,11 @@ _BUILTIN_NAMESPACES = (
         "steward_executor",
         "loopx.capabilities.steward_executor.machine_defaults",
         "steward_executor_machine_configuration_namespace",
+    ),
+    (
+        "steward_memory",
+        "loopx.capabilities.steward_memory.machine_defaults",
+        "steward_memory_machine_configuration_namespace",
     ),
 )
 

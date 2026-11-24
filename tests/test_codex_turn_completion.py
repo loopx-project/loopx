@@ -15,6 +15,7 @@ from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
 from loopx.cli import build_parser, main
 from loopx.cli_commands import turn_run_once
 from loopx.cli_commands.turn import handle_turn_command
+from loopx.control_plane.quota.heartbeat_receipt import find_heartbeat_receipt
 from loopx.control_plane.todos.mutation_api import add_goal_todo
 from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -510,3 +511,231 @@ def test_builtin_codex_advertises_explicit_completion_without_promoting_progress
 ):
     kinds = codex_cli_result_schema()["properties"]["result_kind"]["enum"]
     assert "validated_completion" in kinds and "validated_progress" in kinds
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(("recovery_failure_stage", "fail_refresh_after_rebind"), [
+    ("none", False), ("none", True),
+    ("task_postcondition", False), ("task_postcondition", True),
+    ("host_result_contract", False), ("host_result_contract_renewal", False),
+])
+def test_resumed_turn_rebinds_updated_lease_once_without_rereading_after_retire(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    fail_refresh_after_rebind: bool,
+    recovery_failure_stage: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease"
+    )
+    goal_id, agent_id, todo_id = "loopx-turn-fixture", "codex-fixture", "todo_fixture0001"
+    # Keep a second open Todo so completion_writeback handles non-terminal completion.
+    add_goal_todo(
+        registry_path=registry,
+        goal_id=goal_id,
+        runtime_root_arg=str(runtime),
+        role="agent",
+        text="Follow-up verification task",
+        task_class="advancement_task",
+        action_kind="fixture",
+    )
+    code, claim = _cli(
+        registry, runtime, "todo", "claim", "--goal-id", goal_id,
+        "--todo-id", todo_id, "--agent-id", agent_id, "--claimed-by", agent_id,
+    )
+    assert code == 0, claim
+    lease_argv = ("task-lease", "inspect", "--goal-id", goal_id, "--todo-id", todo_id)
+    code, inspection = _cli(registry, runtime, *lease_argv)
+    assert code == 0 and inspection["active"] is True, inspection
+    lease = inspection["lease"]
+    adapter = SimpleNamespace(
+        controller=SimpleNamespace(registry_path=registry, coordination_runtime_root=runtime)
+    )
+    host_calls, lease_reads = [], []
+    reject_recovery_validation = recovery_failure_stage == "task_postcondition"
+    reject_host_result = recovery_failure_stage in {"host_result_contract", "host_result_contract_renewal"}
+    same_generation = recovery_failure_stage == "host_result_contract_renewal"
+
+    def resolve_lease():
+        lease_reads.append(lease["lease_epoch"])
+        return StewardTurnHost._task_lease_proof(
+            adapter, {"actor": {"goal_id": goal_id}, "todo_id": todo_id}, lease
+        )
+
+    def host(request, launch_lifetime):
+        with launch_lifetime():
+            host_calls.append(request["turn_key"])
+            (project / "completion-artifact.txt").write_text(
+                "tampered" if reject_recovery_validation else "completed", encoding="utf-8"
+            )
+        return {
+            "schema_version": "invalid-result" if reject_host_result else "loopx_turn_result_v0",
+            "turn_key": request["turn_key"],
+            "result_kind": "validated_completion",
+            "completed_phases": ["host_execute", "typed_result"],
+            "classification": "fixture_completion",
+            "recommended_action": "Continue with the remaining Todo.",
+            "next_action": "Inspect the next Todo.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "outcome_progress",
+            "vision_unchanged_reason": "The remaining Goal is unchanged.",
+            "work_evidence": ["artifact:completion-artifact"],
+            "validation_evidence": ["check:artifact-contents"],
+        }
+
+    _, validation = _completion_host_and_validation_scripts()
+    base = [
+        "turn", "run-once", "--host", "generic-cli", "--goal-id", goal_id,
+        "--agent-id", agent_id, "--project", str(project), "--no-global-sync",
+        "--validation-command-json", json.dumps([sys.executable, "-c", validation]),
+        "--execute",
+    ]
+
+    def invoke(*extra: str):
+        args = build_parser().parse_args([*base, *extra])
+        args.host, args.session_scope = "codex-app-server", "agent"
+        result: dict = {}
+        exit_code = handle_turn_command(
+            args,
+            registry_path=registry,
+            runtime_root_arg=str(runtime),
+            output_format=lambda *_args, **_kwargs: "json",
+            print_payload=lambda value, *_args: result.update(value),
+            native_host_runner=host,
+            native_completion_lease_resolver=resolve_lease,
+            native_session_binding_resolver=lambda _: {
+                "schema_version": "loopx_turn_session_binding_v0",
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+            },
+        )
+        return exit_code, result
+
+    complete = turn_run_once.write_turn_validated_completion
+    monkeypatch.setattr(
+        turn_run_once,
+        "write_turn_validated_completion",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("interrupted before completion")),
+    )
+    code, failed = invoke("--todo-id", todo_id)
+    journal = _turn_journal(runtime)
+    assert code == 1 and journal["status"] == (
+        "failed" if recovery_failure_stage != "none" else "in_progress"
+    ), failed
+    initial_lease_reads = [] if recovery_failure_stage != "none" else [1]
+    assert lease_reads == initial_lease_reads
+    original_preparation = find_heartbeat_receipt(
+        runtime, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=journal["turn_key"],
+    )
+    assert original_preparation is not None
+    assert original_preparation["details"]["prepared_lease_epoch"] == 1
+
+    if same_generation:
+        code, renewed = _cli(
+            registry, runtime, "task-lease", "renew", "--goal-id", goal_id,
+            "--todo-id", todo_id, "--owner", agent_id,
+            "--idempotency-key", lease["idempotency_key"],
+            "--expected-version", str(lease["version"]),
+        )
+        assert code == 0, renewed
+    else:
+        # Reclaim in a new generation before the frozen-result recovery.
+        code, released = _cli(
+            registry, runtime, "task-lease", "release", "--goal-id", goal_id,
+            "--todo-id", todo_id, "--owner", agent_id,
+            "--idempotency-key", lease["idempotency_key"],
+            "--expected-version", str(lease["version"]),
+        )
+        assert code == 0, released
+        code, reclaimed = _cli(
+            registry, runtime, "todo", "claim", "--goal-id", goal_id,
+            "--todo-id", todo_id, "--agent-id", agent_id, "--claimed-by", agent_id,
+            "--claim-operation-id", "todo-claim:renewed-epoch-2",
+        )
+        assert code == 0, reclaimed
+    code, renewed_inspection = _cli(registry, runtime, *lease_argv)
+    assert code == 0 and renewed_inspection["active"] is True
+    lease = renewed_inspection["lease"]
+    assert lease["lease_epoch"] == (1 if same_generation else 2)
+
+    monkeypatch.setattr(turn_run_once, "write_turn_validated_completion", complete)
+    if reject_host_result and not same_generation:
+        # Re-running a Host is new work, unlike settlement of a validated
+        # frozen result. A new lease generation cannot rewrite the old Turn's
+        # preparation to authorize that work.
+        reject_host_result = False
+        code, rejected = invoke(
+            "--resume-turn-key", journal["turn_key"], "--retry-failed-turn"
+        )
+        retained = find_heartbeat_receipt(
+            runtime, goal_id=goal_id, agent_id=agent_id,
+            turn_instance_id=journal["turn_key"],
+        )
+        assert (code, host_calls, lease_reads, retained) == (
+            1, [journal["turn_key"]], [], original_preparation
+        ), rejected
+        assert _effect_kinds(runtime, journal) == []
+        assert _cli(registry, runtime, *lease_argv)[1]["active"] is True
+        return
+    reject_host_result = False
+    if reject_recovery_validation:
+        # A frozen result is no proof that its artifact is still valid. The
+        # real validator must reject it before reading or binding a completion
+        # lease, even though ordinary ownership recovery already succeeded.
+        (project / "completion-artifact.txt").write_text("tampered", encoding="utf-8")
+        code, rejected = invoke(
+            "--resume-turn-key", journal["turn_key"], "--retry-failed-turn"
+        )
+        assert code == 1 and rejected["status"] == "failed", rejected
+        retained = find_heartbeat_receipt(
+            runtime, goal_id=goal_id, agent_id=agent_id,
+            turn_instance_id=journal["turn_key"],
+        )
+        assert (lease_reads, retained) == (initial_lease_reads, original_preparation)
+        assert host_calls == [journal["turn_key"]]
+        assert _effect_kinds(runtime, journal) == []
+        assert _cli(registry, runtime, *lease_argv)[1]["active"] is True
+        _, open_todos = _cli(registry, runtime, "todo", "list", "--goal-id", goal_id)
+        assert next(t for t in open_todos["todos"] if t["todo_id"] == todo_id)["status"] == "open"
+        (project / "completion-artifact.txt").write_text("completed", encoding="utf-8")
+    if fail_refresh_after_rebind:
+        original_refresh = turn_run_once.refresh_state_run
+
+        def fail_non_dry_refresh(*args, **kwargs):
+            if not kwargs.get("dry_run"):
+                raise OSError("interrupted after completion before refresh")
+            return original_refresh(*args, **kwargs)
+
+        monkeypatch.setattr(turn_run_once, "refresh_state_run", fail_non_dry_refresh)
+        code, second_failed = invoke(
+            "--resume-turn-key", journal["turn_key"], "--retry-failed-turn"
+        )
+        assert code == 1, second_failed
+        assert lease_reads == [*initial_lease_reads, lease["lease_epoch"]]
+        assert _cli(registry, runtime, *lease_argv)[1]["active"] is False
+        _, todos_after_second = _cli(registry, runtime, "todo", "list", "--goal-id", goal_id)
+        assert next(t for t in todos_after_second["todos"] if t["todo_id"] == todo_id)["status"] == "done"
+        monkeypatch.setattr(turn_run_once, "refresh_state_run", original_refresh)
+
+    code, resumed = invoke("--resume-turn-key", journal["turn_key"], "--retry-failed-turn")
+    assert code == 0 and resumed["status"] == "committed", resumed
+    assert lease_reads == [*initial_lease_reads, lease["lease_epoch"]]
+    assert _cli(registry, runtime, *lease_argv)[1]["active"] is False
+    assert _effect_kinds(runtime, journal) == [
+        "todo_complete",
+        "refresh_state",
+        "quota_spend",
+    ]
+
+    code, replay = invoke("--resume-turn-key", journal["turn_key"])
+    assert code == 0 and replay["replayed"] is True, replay
+    assert lease_reads == [*initial_lease_reads, lease["lease_epoch"]]
+    assert host_calls == [journal["turn_key"]] * (2 if same_generation else 1)
+    assert _effect_kinds(runtime, journal) == [
+        "todo_complete",
+        "refresh_state",
+        "quota_spend",
+    ]
