@@ -10,6 +10,7 @@ import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   LoopXCliError,
   cliErrorFields,
+  coreRouteBin,
   resolveLoopXCommand,
   runJsonCommand,
   supportedLoopXVersion,
@@ -173,6 +174,16 @@ function preStepRejection(
     return typeof kind === 'string' && /^[a-z][a-z0-9-]{0,47}$/u.test(kind) ? kind : 'unknown'
   }))].sort().slice(0, 16)
   return `pre_step_rejected stage=pre-step-recheck reason=${reason} other_kinds=${kinds.join(',') || 'none'} elapsed_ms=${Math.round(performance.now() - startedAt)}`
+}
+
+/**
+ * Global Core route options that pin Core-rendered continuation text (task
+ * bodies, settlement command templates) to the same executable this adapter
+ * probed, instead of whatever bare `loopx` resolves to on the agent's PATH.
+ */
+function coreRouteArgs(command: LoopXCommand): string[] {
+  const route = coreRouteBin(command)
+  return route === undefined ? [] : ['--cli-bin', route]
 }
 
 export interface LoopXDriverOptions {
@@ -1529,7 +1540,16 @@ export class LoopXContinuationDriver {
   private async loopXCommand(signal: AbortSignal): Promise<LoopXCommand> {
     if (this.command !== undefined) return this.command
     const resolved = await this.commandResolver(signal)
-    if (!signal.aborted) this.command = resolved
+    if (!signal.aborted) {
+      this.command = resolved
+      if (coreRouteBin(resolved) === undefined) {
+        // Without a bound executable, Core renders the bare `loopx` fallback.
+        this.warn(
+          `dsh-loopx-driver: cli_route_unpinned candidate=${resolved.candidate ?? 'unknown'}`
+          + ' hint=point LOOPX_BIN at one absolute loopx executable to pin continuation commands',
+        )
+      }
+    }
     return resolved
   }
 
@@ -1584,6 +1604,7 @@ export class LoopXContinuationDriver {
       [
         '--registry', '.loopx/registry.json',
         '--format', 'json',
+        ...coreRouteArgs(command),
         'quota', 'should-run',
         '--goal-id', binding.goalId,
         '--agent-id', binding.agentId,
@@ -1644,7 +1665,12 @@ export class LoopXContinuationDriver {
       [
         '--registry', '.loopx/registry.json',
         '--format', 'json',
+        // The global option binds Core's command-route context for this
+        // invocation; the heartbeat-prompt option names the executable its
+        // rendered task-body commands embed.
+        ...coreRouteArgs(command),
         'heartbeat-prompt', '--thin',
+        ...coreRouteArgs(command),
         '--goal-id', binding.goalId,
         '--agent-id', binding.agentId,
         '--runtime-profile', 'generic_cli',
