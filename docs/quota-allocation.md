@@ -1210,6 +1210,14 @@ deferred-successor selection runs again. Missing vision checkpoints, closed
 stage succession, unsupported conditions, and continuous-monitor-as-gate
 repairs remain fail-closed and are not hidden by this wait path.
 
+An ordinary blocked advancement Todo without a qualified resume condition
+holds its own execution. It does not satisfy an ongoing Vision's acceptance
+gap when the recorded policy is `repeat_until_closed` or unspecified. With no
+selectable work and no covering exact wait or declared blocker, the existing
+scoped Vision-gap replan lets the Agent review the actual blocker and find
+independent work. An explicit `as_needed` Vision can still wait on its blocked
+frontier. Background monitors keep their clocks and no-spend policy.
+
 For a single exact scheduled successor, the interaction contract allows a
 quiet no-op while the canonical `resume_at` condition has positive runtime-clock
 proof that it is still pending. It does not require a `monitor-poll` from an
