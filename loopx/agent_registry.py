@@ -21,6 +21,32 @@ def normalize_registered_agents(values: Any) -> list[str]:
     return agents
 
 
+def agent_registration_tokens(values: Any) -> tuple[list[str], list[str]]:
+    """Split requested agent ids and report every token the public shape rejects.
+
+    Repeated flags and comma-separated values describe one registration write,
+    so one unusable token must fail the batch instead of disappearing from a
+    `written=true` receipt. Reads stay lenient through `normalize_registered_agents`.
+    """
+    items = values if isinstance(values, list) else [values]
+    accepted: list[str] = []
+    rejected: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            item = item.get("id") or item.get("agent_id") or item.get("name")
+        raw = "" if item is None else str(item)
+        for token in raw.split(","):
+            candidate = token.strip()
+            if not candidate:
+                continue
+            agent = normalize_todo_claimed_by(candidate)
+            if not agent:
+                rejected.append(candidate)
+            elif agent not in accepted:
+                accepted.append(agent)
+    return accepted, rejected
+
+
 def registered_agent_ids_for_goal(goal: dict[str, Any] | None) -> list[str]:
     if not isinstance(goal, dict):
         return []
