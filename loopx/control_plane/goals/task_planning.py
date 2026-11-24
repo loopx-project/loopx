@@ -189,6 +189,18 @@ def build_task_planning_packet(
     goal = frontier["goal"]
     todos = frontier["existing_todos"]
     runnable = frontier["runnable"]
+    goal_acceptance = frontier["goal_acceptance"]
+    outcomes = (
+        (goal_acceptance.get("goal_acceptance_contract") or {})
+        .get("outcome_requirements", {})
+        .get("outcomes", [])
+    )
+    batch_applicable = (
+        not todos
+        and not outcomes
+        and not frontier["goal_waiting_on"]
+        and not frontier["blocking_todo_ids"]
+    )
     fine = execution_profile_is_fine_grained(goal.get("execution_profile"))
     prefix = ["loopx", "--format", "json", "--registry", str(registry_path)]
     if runtime_root_arg:
@@ -204,22 +216,11 @@ def build_task_planning_packet(
         agent_id=agent_id,
         registry_path=registry_path,
         planning_text=text,
+        batch_applicable=batch_applicable,
     )
     identity = {"goal_id": goal_id, "agent_id": agent_id, "text": text}
     digest = compute_task_planning_input_digest(
         goal_id=goal_id, agent_id=agent_id, text=text
-    )
-    goal_acceptance = frontier["goal_acceptance"]
-    outcomes = (
-        (goal_acceptance.get("goal_acceptance_contract") or {})
-        .get("outcome_requirements", {})
-        .get("outcomes", [])
-    )
-    batch_applicable = (
-        not todos
-        and not outcomes
-        and not frontier["goal_waiting_on"]
-        and not frontier["blocking_todo_ids"]
     )
     project_args = ["--project", str(project)] if project is not None else []
     batch_route = shlex.join([

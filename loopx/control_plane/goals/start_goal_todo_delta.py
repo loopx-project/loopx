@@ -23,10 +23,43 @@ from ...control_plane.todos.contract import (
 from ...control_plane.todos.todo_semantics import todo_item_is_actionable_open
 from ...project_prompt import render_cli_command_prefix, shell_arg
 from ...registry import registry_goals
+from .acceptance import inspect_goal_acceptance
 
 GUIDED_TODO_DELTA_SCHEMA_VERSION = "loopx_guided_todo_delta_v0"
 
 _FRONTIER_PROJECTION_LIMIT = 1
+
+
+def _connected_goal_todos(
+    inspection: Mapping[str, Any],
+    *,
+    resolved_goal_id: str,
+    runtime_root_arg: str | None = None,
+    registry_payload: dict[str, Any] | None = None,
+) -> tuple[Path, dict[str, Any], Path, dict[str, Any]] | None:
+    if inspection.get("connection_state") != "connected":
+        return None
+    registry_path = Path(str(inspection.get("registry") or ""))
+    if registry_payload is None:
+        registry_payload, _registry_error = _read_registry(registry_path)
+    registry_goal = next(
+        (
+            goal
+            for goal in registry_goals(registry_payload or {})
+            if str(goal.get("id")) == resolved_goal_id
+        ),
+        None,
+    )
+    if registry_goal is None:
+        return None
+    resolved_runtime_root = resolve_runtime_root(
+        registry_payload or {}, runtime_root_arg, registry_path=registry_path,
+    )
+    parsed = read_canonical_todo_fields_if_promoted(
+        runtime_root=resolved_runtime_root,
+        goal_id=resolved_goal_id,
+    )
+    return registry_path, registry_goal, resolved_runtime_root, parsed
 
 
 def existing_runnable_agent_frontier(
@@ -51,27 +84,15 @@ def existing_runnable_agent_frontier(
     to ignore, not permission to reconstruct its non-Todo narrative.
     When supplied, registry_payload is the decoded registry for this preview.
     """
-    if inspection.get("connection_state") != "connected":
-        return None
-    registry_path = Path(str(inspection.get("registry") or ""))
-    if registry_payload is None:
-        registry_payload, _registry_error = _read_registry(registry_path)
-    registry_goal = next(
-        (
-            goal
-            for goal in registry_goals(registry_payload or {})
-            if str(goal.get("id")) == resolved_goal_id
-        ),
-        None,
+    connected = _connected_goal_todos(
+        inspection,
+        resolved_goal_id=resolved_goal_id,
+        runtime_root_arg=runtime_root_arg,
+        registry_payload=registry_payload,
     )
-    if registry_goal is None:
+    if connected is None:
         return None
-    parsed = read_canonical_todo_fields_if_promoted(
-        runtime_root=resolve_runtime_root(
-            registry_payload or {}, runtime_root_arg, registry_path=registry_path,
-        ),
-        goal_id=resolved_goal_id,
-    )
+    _registry_path, _registry_goal, _resolved_runtime_root, parsed = connected
     agent_summary = parsed.get("agent_todos") if isinstance(parsed, dict) else None
     items = (
         agent_summary.get("items", []) if isinstance(agent_summary, dict) else []
@@ -90,6 +111,47 @@ def existing_runnable_agent_frontier(
         or (effective_agent_id and str(item.get("claimed_by")) == effective_agent_id)
     ]
     return runnable or None
+
+
+def start_goal_initial_batch_applicable(
+    inspection: Mapping[str, Any],
+    *,
+    resolved_goal_id: str,
+    runtime_root_arg: str | None = None,
+    registry_payload: dict[str, Any] | None = None,
+) -> bool:
+    """Whether initial start-goal planning can offer initial plan-batch authoring."""
+    connection_state = inspection.get("connection_state")
+    if connection_state in {"not_connected", "registry_without_goal"}:
+        return True
+    connected = _connected_goal_todos(
+        inspection,
+        resolved_goal_id=resolved_goal_id,
+        runtime_root_arg=runtime_root_arg,
+        registry_payload=registry_payload,
+    )
+    if connected is None:
+        return False
+    registry_path, registry_goal, resolved_runtime_root, parsed = connected
+    if registry_goal.get("waiting_on"):
+        return False
+    for role_key in ("agent_todos", "user_todos"):
+        summary = parsed.get(role_key) if isinstance(parsed, dict) else None
+        items = summary.get("items", []) if isinstance(summary, dict) else []
+        if items:
+            return False
+    acceptance = inspect_goal_acceptance(
+        registry_path=registry_path,
+        goal_id=resolved_goal_id,
+        runtime_root=str(resolved_runtime_root),
+        include_work_details=False,
+    )
+    outcomes = (
+        (acceptance.get("goal_acceptance_contract") or {})
+        .get("outcome_requirements", {})
+        .get("outcomes", [])
+    )
+    return not outcomes
 
 
 def _todo_add_command_template(
@@ -128,6 +190,7 @@ def todo_authoring_steps(
     agent_id: str | None,
     registry_path: Path | None = None,
     planning_text: str | None = None,
+    batch_applicable: bool = False,
 ) -> list[dict[str, Any]]:
     """Ordered Todo-authoring steps, conditional on the runnable frontier."""
     add_template = _todo_add_command_template(
@@ -194,6 +257,34 @@ def todo_authoring_steps(
     if not existing_runnable_frontier:
         batch_prefix = f"{prefix} --format json todo plan-batch"
         text_arg = f" --text={shell_arg(planning_text)}" if planning_text is not None else ""
+        write_step: dict[str, Any] = {
+            "id": "write_ordered_todos",
+            "kind": "operator_or_agent_actions",
+            "command_template": add_template,
+        }
+        if batch_applicable:
+            write_step["batch_command_template"] = (
+                f"{batch_prefix} {route} --project .{text_arg} "
+                "--document '<proposal.json>' --execute"
+            )
+            write_step["batch_schema_command"] = (
+                f"{batch_prefix} --schema {route}{text_arg}"
+                if planning_text is not None
+                else f"{batch_prefix} --schema"
+            )
+        write_step["purpose"] = (
+            "write only the current checkpoint Todo; the existing replan path "
+            "qualifies any successor after completion evidence"
+            if fine_grained
+            else (
+                "write todos in planner order (or submit one initial outcome + Todo batch via "
+                "batch_command_template when requirements and Todos are both empty); capability "
+                "successors preserve the admitted action_kind and target_key for later quota re-entry"
+                if batch_applicable
+                else "write todos in planner order; capability successors preserve "
+                "the admitted action_kind and target_key for later quota re-entry"
+            )
+        )
         return [
             {
                 "id": "plan_ranked_todos",
@@ -207,27 +298,7 @@ def todo_authoring_steps(
                     else "produce concise public-safe P0/P1/P2 todos before todo writeback"
                 ),
             },
-            {
-                "id": "write_ordered_todos",
-                "kind": "operator_or_agent_actions",
-                "command_template": add_template,
-                "batch_command_template": (
-                    f"{batch_prefix} {route} --project .{text_arg} "
-                    "--document '<proposal.json>' --execute"
-                ),
-                "batch_schema_command": (
-                    f"{batch_prefix} --schema {route}{text_arg}"
-                    if planning_text is not None
-                    else f"{batch_prefix} --schema"
-                ),
-                "purpose": (
-                    "write only the current checkpoint Todo; the existing replan path "
-                    "qualifies any successor after completion evidence"
-                    if fine_grained
-                    else "write todos in planner order (or submit one initial outcome + Todo batch via batch_command_template when requirements and Todos are both empty); capability successors preserve "
-                    "the admitted action_kind and target_key for later quota re-entry"
-                ),
-            },
+            write_step,
             readback,
         ]
     return [

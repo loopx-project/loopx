@@ -202,6 +202,8 @@ def handle_todo_command(
             )
         if args.todo_command == "claim":
             validate_todo_claim_options(args)
+        elif args.todo_command == "plan-batch":
+            validate_todo_plan_batch_options(args)
         validate_shared_todo_options(args)
         validate_todo_execution_recovery_options(args)
         validate_capability_gap_options(args)
@@ -230,7 +232,6 @@ def handle_todo_command(
         elif args.todo_command == "plan-batch":
             import json
 
-            validate_todo_plan_batch_options(args)
             if getattr(args, "schema", False):
                 payload = {
                     "ok": True,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -13,8 +14,10 @@ import sys
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_source_fixture
+from loopx.bootstrap_command_pack import build_start_goal_guided_packet
 from loopx.cli import main
 from loopx.control_plane.goals.planning_batch import (
+    DirectPlanningBatchBackend,
     PLANNING_BATCH_SCHEMA_VERSION,
     planning_batch_schema,
 )
@@ -774,3 +777,224 @@ def test_product_cli_checkpoint_three_command_example_round_trip(
     standalone = run_cmd(["loopx", "--format", "json", "todo", "plan-batch", "--schema"])
     assert standalone["required_fields"] == ["expected_provider_revision", "outcome", "todos"]
     assert "input_digest" not in standalone["example"]
+
+
+def test_todo_plan_batch_static_schema_ignores_ambiguous_default_runtime_roots(
+    tmp_path: Path,
+) -> None:
+    fake_home = tmp_path / "home"
+    empty_cwd = tmp_path / "empty_cwd"
+    empty_cwd.mkdir()
+    primary_root = fake_home / ".loopx"
+    legacy_root = fake_home / ".codex" / "loopx"
+    initial_payload = json.dumps({"schema_version": "0.1", "goals": []}, indent=2) + "\n"
+    for root in (primary_root, legacy_root):
+        root.mkdir(parents=True)
+        (root / "registry.global.json").write_text(initial_payload, encoding="utf-8")
+
+    def snapshot_roots() -> dict[str, bytes]:
+        files: dict[str, bytes] = {}
+        for root in (primary_root, legacy_root):
+            for path in sorted(root.rglob("*")):
+                if path.is_file():
+                    files[str(path.relative_to(fake_home))] = path.read_bytes()
+        return files
+
+    before = snapshot_roots()
+    worktree_root = str(Path(__file__).resolve().parents[2])
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT", "LOOPX_KUNLUNCODE_OUTER_CONTROLLER"}
+    }
+    env["HOME"] = str(fake_home)
+    env["PYTHONPATH"] = worktree_root
+
+    # Confirm default runtime-root resolution actually conflicts under this HOME.
+    conflict = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "todo", "list", "--goal-id", "g1"],
+        cwd=str(empty_cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert conflict.returncode == 1
+    assert "Both default LoopX" in conflict.stderr
+
+    expected = planning_batch_schema()
+    for module in ("loopx.cli", "loopx.entrypoint"):
+        proc = subprocess.run(
+            [sys.executable, "-m", module, "--format", "json", "todo", "plan-batch", "--schema"],
+            cwd=str(empty_cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True
+        assert payload["dry_run"] is True
+        assert payload["schema_version"] == PLANNING_BATCH_SCHEMA_VERSION
+        assert payload["fields"] == expected["fields"]
+        assert snapshot_roots() == before
+
+    # Invalid flag combinations still fail cleanly, and --schema --text still enforces routing.
+    for bad_args in (
+        ["--format", "json", "todo", "plan-batch", "--schema", "--execute"],
+        ["--format", "json", "todo", "plan-batch", "--schema", "--turn-instance-id", "turn-1"],
+        ["--format", "json", "todo", "plan-batch", "--schema", "--goal-id", "g1", "--agent-id", "a1", "--text", "plan"],
+    ):
+        proc = subprocess.run(
+            [sys.executable, "-m", "loopx.entrypoint", *bad_args],
+            cwd=str(empty_cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0
+        assert snapshot_roots() == before
+
+
+def test_product_task_plan_and_start_goal_ineligible_frontiers_omit_batch_commands(
+    product_goal: dict[str, object],
+) -> None:
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Plan next increment without advertising ineligible initial batch."
+
+    # Mirror registry under .loopx/registry.json so start-goal reads the same Goal & provider.
+    dot_loopx = project / ".loopx"
+    dot_loopx.mkdir(exist_ok=True)
+    (dot_loopx / "registry.json").write_text(registry.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # 1. Empty frontier with waiting_on is ineligible on both todo plan and start-goal.
+    reg_data = json.loads(registry.read_text(encoding="utf-8"))
+    reg_data["goals"][0]["waiting_on"] = "owner review"
+    registry.write_text(json.dumps(reg_data), encoding="utf-8")
+    (dot_loopx / "registry.json").write_text(json.dumps(reg_data), encoding="utf-8")
+    waiting_pkt = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert waiting_pkt["planning_batch"]["applicable"] is False
+    write_waiting = next(s for s in waiting_pkt["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "batch_command_template" not in write_waiting
+    assert "batch_schema_command" not in write_waiting
+    assert "batch_command_template" not in write_waiting["purpose"]
+
+    start_waiting = build_start_goal_guided_packet(
+        project=project, goal_id=goal_id, agent_id=agent_id,
+        cli_bin="loopx", host_surface="codex-app", goal_text=task_text,
+        runtime_root_arg=str(runtime_root),
+    )
+    start_waiting_step = next(s for s in start_waiting["guided_transaction"]["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "batch_command_template" not in start_waiting_step
+    assert "batch_schema_command" not in start_waiting_step
+
+    reg_data["goals"][0].pop("waiting_on", None)
+    registry.write_text(json.dumps(reg_data), encoding="utf-8")
+    (dot_loopx / "registry.json").write_text(json.dumps(reg_data), encoding="utf-8")
+
+    # 2. Eligible empty frontier advertises batch commands on both todo plan and start-goal;
+    # declaring an Outcome without Todos makes both ineligible (standard and fine mode).
+    before = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert before["planning_batch"]["applicable"] is True
+    start_empty = build_start_goal_guided_packet(
+        project=project, goal_id=goal_id, agent_id=agent_id,
+        cli_bin="loopx", host_surface="codex-app", goal_text=task_text,
+        runtime_root_arg=str(runtime_root),
+    )
+    start_empty_step = next(s for s in start_empty["guided_transaction"]["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "todo plan-batch" in start_empty_step["batch_command_template"]
+    assert "todo plan-batch --schema" in start_empty_step["batch_schema_command"]
+    backend = DirectPlanningBatchBackend(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, project=project, text=task_text,
+    )
+    backend.refine_outcome(
+        {
+            "outcome_id": "existing-outcome",
+            "owner_agent_id": agent_id,
+            "objective": "Already declared acceptance requirement.",
+            "requirements": [{"id": "req-1", "description": "Existing requirement without Todos."}],
+            "source": {"ref": "checkpoint:existing", "summary": "Declared before Todo planning."},
+        },
+        str(before["goal_acceptance"]["provider_revision"]),
+        "declare-only-outcome-op",
+        execute=True,
+    )
+    for granularity in ("standard", "fine"):
+        if granularity == "fine":
+            reg_data["goals"][0]["execution_profile"] = {"turn_granularity": "fine"}
+            registry.write_text(json.dumps(reg_data), encoding="utf-8")
+            (dot_loopx / "registry.json").write_text(json.dumps(reg_data), encoding="utf-8")
+        pkt = build_task_planning_packet(
+            registry_path=registry, runtime_root_arg=str(runtime_root),
+            goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+        )
+        assert pkt["planning_batch"]["applicable"] is False
+        write_step = next(s for s in pkt["ordered_steps"] if s["id"] == "write_ordered_todos")
+        assert "batch_command_template" not in write_step
+        assert "batch_schema_command" not in write_step
+        assert "batch_command_template" not in write_step["purpose"]
+
+        start_pkt = build_start_goal_guided_packet(
+            project=project, goal_id=goal_id, agent_id=agent_id,
+            cli_bin="loopx", host_surface="codex-app", goal_text=task_text,
+            fine_grained=(granularity == "fine"), runtime_root_arg=str(runtime_root),
+        )
+        start_step = next(s for s in start_pkt["guided_transaction"]["ordered_steps"] if s["id"] == "write_ordered_todos")
+        assert "batch_command_template" not in start_step
+        assert "batch_schema_command" not in start_step
+
+
+def test_product_task_plan_and_start_goal_user_todo_only_omit_batch_commands(
+    product_goal: dict[str, object],
+) -> None:
+    project = Path(str(product_goal["project"]))
+    registry = Path(str(product_goal["registry"]))
+    runtime_root = Path(str(product_goal["runtime_root"]))
+    goal_id = str(product_goal["goal_id"])
+    agent_id = str(product_goal["agent_id"])
+    task_text = "Plan work on a Goal that only has a non-blocking User Todo."
+    prefix = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime_root)]
+
+    dot_loopx = project / ".loopx"
+    dot_loopx.mkdir(exist_ok=True)
+    (dot_loopx / "registry.json").write_text(registry.read_text(encoding="utf-8"), encoding="utf-8")
+
+    user_todo = _run_cli(
+        *prefix, "todo", "add", "--goal-id", goal_id, "--project", str(project),
+        "--role", "user", "--task-class", "user_action", "--bound-agent", agent_id,
+        "--text", "Manual confirmation note",
+    )
+    assert user_todo["ok"] is True
+
+    user_pkt = build_task_planning_packet(
+        registry_path=registry, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, agent_id=agent_id, text=task_text, project=project,
+    )
+    assert user_pkt["blocking_todo_ids"] == []
+    assert user_pkt["planning_batch"]["applicable"] is False
+    write_user = next(s for s in user_pkt["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "batch_command_template" not in write_user
+    assert "batch_schema_command" not in write_user
+    assert "batch_command_template" not in write_user["purpose"]
+
+    start_pkt = build_start_goal_guided_packet(
+        project=project, goal_id=goal_id, agent_id=agent_id,
+        cli_bin="loopx", host_surface="codex-app", goal_text=task_text,
+        runtime_root_arg=str(runtime_root),
+    )
+    start_step = next(s for s in start_pkt["guided_transaction"]["ordered_steps"] if s["id"] == "write_ordered_todos")
+    assert "batch_command_template" not in start_step
+    assert "batch_schema_command" not in start_step
