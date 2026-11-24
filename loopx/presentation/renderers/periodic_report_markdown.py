@@ -197,10 +197,10 @@ def render_periodic_report_markdown(
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
-    validate_periodic_report_editorial(document)
     # Read-only reconstruction of artifacts frozen before these presentation fixes.
     _legacy_layout = _legacy_layout or _legacy_source_links
     _legacy_inline_links = _legacy_inline_links or _legacy_layout
+    validate_periodic_report_editorial(document, _legacy_inline_links=_legacy_inline_links)
     references = {} if _legacy_layout else _source_references(document)
     title = _safe(document.get("title"), maximum=200)
     window = _mapping(document.get("period_window"))

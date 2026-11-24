@@ -741,9 +741,9 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
-    validate_periodic_report_editorial(document)
     _legacy_layout = _legacy_layout or _legacy_source_links
     _legacy_inline_links = _legacy_inline_links or _legacy_layout
+    validate_periodic_report_editorial(document, _legacy_inline_links=_legacy_inline_links)
     css = _CSS
     if _legacy_highlight_wrap or _legacy_masthead or _legacy_layout:
         css = css.replace("\n  overflow-wrap: anywhere;", "", 1)

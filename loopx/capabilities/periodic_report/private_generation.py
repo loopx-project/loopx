@@ -321,14 +321,37 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
         return receipt
 
 
+def _matches_frozen_presentation(
+    document: dict[str, Any], bundle: dict[str, Any], *, legacy_inline_links: bool,
+) -> bool:
+    from .bindings import build_periodic_report_generation_bundle
+    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
+    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
+
+    layouts = (
+        ({}, {}),
+        ({}, {"_legacy_highlight_wrap": True}),
+        ({}, {"_legacy_masthead": True}),
+        ({"_legacy_layout": True}, {"_legacy_layout": True}),
+        ({"_legacy_source_links": True}, {"_legacy_source_links": True}),
+    ) if legacy_inline_links else (({}, {}),)
+    for markdown_options, html_options in layouts:
+        markdown = render_periodic_report_markdown(
+            document, _legacy_inline_links=legacy_inline_links, **markdown_options,
+        )
+        html = render_periodic_report_html(
+            document, _legacy_inline_links=legacy_inline_links, **html_options,
+        )
+        if build_periodic_report_generation_bundle(document=document, artifacts=[markdown, html]) == bundle:
+            return True
+    return False
+
+
 def validate_private_generation(folder: Path) -> dict[str, Any]:
     """Independent frozen-content check used by the native Turn validator."""
-    from .bindings import build_periodic_report_generation_bundle
     from .incremental import build_periodic_report_publication_candidate
     from .adapters import build_periodic_report_document
     from .post_writeback_hook import evaluate_periodic_report_trigger_evaluation_intent
-    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
-    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
 
     receipt = _read(folder / "private-generation.json")
     request = _read(folder / "editorial-request.json")
@@ -342,43 +365,41 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
         raise ValueError("frozen report source binding changed")
     _verify_source_facts(request, source)
     window = validate_cadence_window(request["window"])
-    document = build_periodic_report_document(title=authored["title"], generated_at=receipt["generated_at"],
-        period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
-        profile=window["profile_ref"], sources=_report_sources(authored, request, receipt["generated_at"]),
-        editorial=authored["editorial"],
-        trigger_receipt=evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window)))
     bundle = _read(folder / "generation-bundle.json")
-    # Reconstruct only shipped presentations, never rewrite frozen artifacts.
-    # Each still requires full bundle, source and body equality below.
-    for markdown_options, html_options in (
-        ({}, {}),
-        ({"_legacy_inline_links": True}, {"_legacy_inline_links": True}),
-        ({}, {"_legacy_highlight_wrap": True}),
-        ({}, {"_legacy_masthead": True}),
-        ({"_legacy_layout": True}, {"_legacy_layout": True}),
-        ({"_legacy_source_links": True}, {"_legacy_source_links": True}),
-    ):
-        checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
-            render_periodic_report_markdown(bundle["document"], **markdown_options),
-            render_periodic_report_html(bundle["document"], **html_options)])
-        if checked == bundle:
+    sources = _report_sources(authored, request, receipt["generated_at"])
+    trigger = evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window))
+    # Every layout before inline-link rendering used raw Markdown for excerpts
+    # and escaped inline text in both artifacts. Rebuild each generation from
+    # its original inputs before comparing any stored presentation.
+    for legacy_inline_links in (False, True):
+        document = build_periodic_report_document(
+            title=authored["title"], generated_at=receipt["generated_at"],
+            period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
+            profile=window["profile_ref"], sources=sources, editorial=authored["editorial"],
+            trigger_receipt=trigger, _legacy_inline_links=legacy_inline_links,
+        )
+        if document != bundle["document"]:
+            continue
+        if _matches_frozen_presentation(document, bundle, legacy_inline_links=legacy_inline_links):
             break
+    else:
+        raise ValueError("frozen generation or full report body changed")
     candidate = _read(folder / "publication-candidate.json")
     expected_candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],
-        agent_id=window["agent_id"], generation_id=checked["generation_receipt"]["generation_id"],
+        agent_id=window["agent_id"], generation_id=bundle["generation_receipt"]["generation_id"],
         trigger_receipt=document["trigger_receipt"], facts=request["facts"],
         baseline=candidate.get("incremental_baseline"))
     report_bytes = (folder / "report.md").read_bytes()
-    if (document != bundle["document"] or checked != bundle or receipt["bundle_sha256"] != _canonical_digest(checked)
+    if (receipt["bundle_sha256"] != _canonical_digest(bundle)
             or receipt["window_id"] != window["window_id"]
-            or receipt["generation_id"] != checked["generation_receipt"]["generation_id"]
+            or receipt["generation_id"] != bundle["generation_receipt"]["generation_id"]
             or candidate != expected_candidate
             or receipt["publication_candidate_id"] != candidate["candidate_id"]
             or receipt["publication_candidate_sha256"] != _canonical_digest(candidate)
             or receipt["request_digest"] != request["request_digest"]
             or receipt["body_sha256"] != hashlib.sha256(report_bytes).hexdigest()
             or report_bytes.decode("utf-8") != next(
-                artifact["content"] for artifact in checked["artifacts"]
+                artifact["content"] for artifact in bundle["artifacts"]
                 if artifact["renderer_kind"] == "markdown")):
         raise ValueError("frozen generation or full report body changed")
     return receipt

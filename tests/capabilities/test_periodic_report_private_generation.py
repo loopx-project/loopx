@@ -579,3 +579,49 @@ def test_private_report_preserves_multi_pr_inline_links_and_legacy_plain_escape(
         )
     legacy_folder = attempt_directory(legacy_root, legacy_window)
     assert validate_private_generation(legacy_folder) == legacy_receipt
+
+
+@pytest.mark.parametrize(("linked_title", "old_wrap", "expected_html"), [
+    (True, False, "a906f21816b00a69ae7c37f922d5aa27c1d23af374a9d629430cf411098ef762"),
+    (False, True, "7650f36362a70de0de6c995618fe50cc02bde9561d4ecb101722273c92e9bb2d"),
+    (True, True, "34bb2c774d6a68b41df31d50d687722233e4a13b6f4535aadfa135fbde041314"),
+])
+def test_replay_pre_inline_link_report(tmp_path, monkeypatch, linked_title, old_wrap, expected_html):
+    from loopx.capabilities.periodic_report import adapters
+    from loopx.presentation.renderers import periodic_report_html as html
+    from loopx.presentation.renderers import periodic_report_markdown as markdown
+
+    root, window, response = _prepared_report(tmp_path)
+    link = " [核验记录](https://example.org/reports/42)"
+    item = response["sections"][0]["items"][0]
+    if linked_title:
+        item["title"] += link
+    item["summary"] += link
+    with monkeypatch.context() as old:
+        old.setattr(adapters, "periodic_report_visible_text", str)
+        old.setattr(markdown, "_safe_inline_markdown", lambda value, *, maximum, **_: markdown._safe(value, maximum=maximum))
+        old.setattr(html, "_safe_inline_html", lambda value, *, maximum, **_: html._safe_text(value, maximum=maximum))
+        if old_wrap:
+            old.setattr(html, "_CSS", html._CSS.replace("\n  overflow-wrap: anywhere;", "", 1))
+        receipt = freeze_private_report(root=root, window=window, response=response)
+
+    folder = attempt_directory(root, window)
+    original = {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
+    bundle = json.loads(original["generation-bundle.json"])
+    artifact = next(a for a in bundle["artifacts"] if a["renderer_kind"] == "html")
+    # Fingerprints from the pre-link freezer (25176a31). Only the generation
+    # timestamp and its document digest vary between runs.
+    stable_html = artifact["content"].replace(bundle["document"]["generated_at"], "TIMESTAMP")
+    stable_html = stable_html.replace(artifact["document_digest"], "DOCUMENT_DIGEST")
+    assert hashlib.sha256(stable_html.encode()).hexdigest() == expected_html
+    expected_md = ("dbc438db17810578c7d530d5e464c31829131598e2e2d5d8a40eda3ab7b1b0e7" if linked_title else
+                   "3c60f6f44b6bbb06ca0002dc50ea5de0ac1dca0695d75a2dc726938d957262fd")
+    assert hashlib.sha256(original["report.md"]).hexdigest() == expected_md
+    assert validate_private_generation(folder) == receipt
+    assert {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()} == original
+
+    bundle["document"]["editorial"]["summary"] += "未获证实。"
+    atomic_write_json(folder / "generation-bundle.json", bundle)
+    atomic_write_json(folder / "private-generation.json", {**receipt, "bundle_sha256": _canonical_digest(bundle)})
+    with pytest.raises(ValueError, match="frozen generation"):
+        validate_private_generation(folder)

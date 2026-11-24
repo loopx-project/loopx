@@ -379,8 +379,8 @@ def _normalize_sections(raw: object, *, label: str) -> list[dict[str, Any]]:
     return sorted(sections, key=lambda item: (int(item["order"]), item["section_id"]))
 
 
-def _summary_excerpt(value: object, *, maximum: int = 120) -> str:
-    text = " ".join(periodic_report_visible_text(value).split()).strip()
+def _summary_excerpt(text: str, *, maximum: int = 120) -> str:
+    text = " ".join(text.split())
     if len(text) <= maximum:
         return text.rstrip("。.!?；; ")
     shortened = text[: maximum - 1].rstrip("，,、；;:：。.!? ")
@@ -427,6 +427,7 @@ def _derive_editorial_summary(
     sections: Sequence[Mapping[str, Any]],
     *,
     language: object,
+    legacy_inline_links: bool,
 ) -> tuple[str | None, list[dict[str, str]]]:
     items = _ordered_primary_items(sections)
 
@@ -467,7 +468,11 @@ def _derive_editorial_summary(
             ("next_action", outcome, "next_action", str(outcome["next_action"]))
         )
 
-    parts = [part for part in parts if _summary_excerpt(part[3])]
+    excerpts = [
+        (role, item, field, _summary_excerpt(text if legacy_inline_links else periodic_report_visible_text(text)))
+        for role, item, field, text in parts
+    ]
+    parts = [part for part in excerpts if part[3]]
     if not parts:
         return None, []
     chinese = str(language or "").lower().startswith("zh")
@@ -488,9 +493,9 @@ def _derive_editorial_summary(
     )
     ending = "。" if chinese else "."
     sentences = [
-        f"{labels[role]}：{_summary_excerpt(text)}{ending}"
+        f"{labels[role]}：{text}{ending}"
         if chinese
-        else f"{labels[role]}: {_summary_excerpt(text)}{ending}"
+        else f"{labels[role]}: {text}{ending}"
         for role, _item, _field, text in parts
     ]
     refs = [
@@ -509,6 +514,7 @@ def build_periodic_report_editorial(
     *,
     sections: Sequence[Mapping[str, Any]],
     editorial: Mapping[str, Any] | None = None,
+    _legacy_inline_links: bool = False,
 ) -> dict[str, Any] | None:
     """Compile audience editorial copy from typed primary report items."""
 
@@ -517,6 +523,7 @@ def build_periodic_report_editorial(
     summary, refs = _derive_editorial_summary(
         sections,
         language=compiled.get("language"),
+        legacy_inline_links=_legacy_inline_links,
     )
     if summary:
         compiled["summary"] = _text(summary, "editorial.summary", maximum=600)
@@ -529,7 +536,9 @@ def build_periodic_report_editorial(
     return compiled or None
 
 
-def validate_periodic_report_editorial(document: Mapping[str, Any]) -> None:
+def validate_periodic_report_editorial(
+    document: Mapping[str, Any], *, _legacy_inline_links: bool = False,
+) -> None:
     """Require renderer input to carry the canonical compiled editorial summary."""
 
     raw_editorial = document.get("editorial")
@@ -545,6 +554,7 @@ def validate_periodic_report_editorial(document: Mapping[str, Any]) -> None:
             for section in _sequence(document.get("sections", []), "document.sections")
         ],
         editorial=profile_fields or None,
+        _legacy_inline_links=_legacy_inline_links,
     ) or {}
     if actual.get("summary") != expected.get("summary"):
         raise ValueError(
@@ -642,6 +652,7 @@ def build_periodic_report_document(
     sources: Sequence[Mapping[str, Any]],
     editorial: Mapping[str, Any] | None = None,
     trigger_receipt: Mapping[str, Any] | None = None,
+    _legacy_inline_links: bool = False,
 ) -> dict[str, Any]:
     """Merge normalized source sections into one renderer-neutral document."""
 
@@ -705,6 +716,7 @@ def build_periodic_report_document(
     normalized_editorial = build_periodic_report_editorial(
         sections=normalized_sections,
         editorial=editorial,
+        _legacy_inline_links=_legacy_inline_links,
     )
     normalized_profile = {
         "profile_id": _token(profile.get("profile_id"), "profile.profile_id"),
@@ -757,7 +769,7 @@ def build_periodic_report_document(
         document["editorial"] = normalized_editorial
     if normalized_trigger:
         document["trigger_receipt"] = normalized_trigger
-    validate_periodic_report_editorial(document)
+    validate_periodic_report_editorial(document, _legacy_inline_links=_legacy_inline_links)
     _reject_private_fields(document, "document")
     return document
 
