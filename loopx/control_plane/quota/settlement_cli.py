@@ -312,7 +312,7 @@ def quota_rollout_settlement_binding(
         return None, None
 
     if (
-        args.quota_command == "should-run"
+        getattr(args, "quota_command", None) == "should-run"
         and payload.get("effective_action") == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
         and payload.get("should_run") is False
     ):
