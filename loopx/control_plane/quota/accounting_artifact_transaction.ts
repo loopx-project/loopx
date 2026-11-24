@@ -304,6 +304,17 @@ export function parseQuotaAccountingIndex(content: string | null): JsonObject[] 
   return records;
 }
 
+export async function readQuotaAccountingIndex(indexPath: string): Promise<{
+  records: JsonObject[];
+  indexDigest: string | null;
+}> {
+  const bytes = await readOptionalBytes(indexPath);
+  return {
+    records: parseQuotaAccountingIndex(bytes?.toString("utf8") ?? null),
+    indexDigest: bytes === null ? null : sha256Bytes(bytes),
+  };
+}
+
 function pyValue(value: unknown): string {
   if (value === true) return "True";
   if (value === false) return "False";
@@ -779,15 +790,10 @@ export async function lookupQuotaAccountingReplay(
   indexDigest: string | null;
 }> {
   const lookup = async () => {
-    const content = await readOptionalText(indexPath);
+    const { records, indexDigest } = await readQuotaAccountingIndex(indexPath);
     return {
-      resolution: resolveQuotaAccountingEffect(
-        kind,
-        parseQuotaAccountingIndex(content),
-        effectId,
-        goalRef,
-      ),
-      indexDigest: await quotaAccountingIndexDigest(indexPath),
+      resolution: resolveQuotaAccountingEffect(kind, records, effectId, goalRef),
+      indexDigest,
     };
   };
   return readOnly || indexLockHeld
