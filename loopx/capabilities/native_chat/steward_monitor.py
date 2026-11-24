@@ -742,14 +742,10 @@ class StewardMonitor:
         rearm_note = f"rearm-followup:{poll_turn_instance_id}"
         if str(followup.get("note") or "") == rearm_note:
             return False
+        conflicts = {"todo_lease_conflict", "version_mismatch"}
+        lease = None
         try:
             lease = self._acquire(actor, followup, rearm_key)["lease"]
-        except NativeStewardCommandError as exc:
-            if exc.payload.get("error_code") in {"todo_lease_conflict", "version_mismatch"}:
-                # The next due parent poll can re-arm after the current owner finishes.
-                return False
-            raise
-        try:
             native_command(self.controller, [
                 "todo", "update",
                 "--goal-id", actor["goal_id"],
@@ -762,8 +758,18 @@ class StewardMonitor:
                 "--task-lease-expected-version", str(lease["version"]),
                 "--execute",
             ])
+        except NativeStewardCommandError as exc:
+            if exc.payload.get("error_code") in conflicts:
+                return False
+            raise
         finally:
-            self._release(actor, followup, lease)
+            if lease is not None:
+                try:
+                    self._release(actor, followup, lease)
+                except NativeStewardCommandError as exc:
+                    # A renewed lease belongs to its current generation. Preserve the update's outcome.
+                    if exc.payload.get("error_code") not in conflicts:
+                        raise
         return True
 
     def observe(self, *, host: Any, request: dict[str, Any], turn: dict[str, Any],

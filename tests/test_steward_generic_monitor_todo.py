@@ -1497,9 +1497,9 @@ def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
     assert recorded_isolated_flags and all(flag is True for flag in recorded_isolated_flags)
 
 
-@pytest.mark.parametrize("race_after_inspect", [False, True])
+@pytest.mark.parametrize("conflict_at", ["held", "acquire", "update", "release"])
 def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
-    steward, tmp_path, monkeypatch, race_after_inspect,
+    steward, tmp_path, monkeypatch, conflict_at,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     store, runtime, _, transport, binding, _, _ = steward
@@ -1667,22 +1667,27 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
     runtime._steward_monitor_next_check.clear()
     assert pump_steward_monitors(runtime) == []
 
-    # The parent can commit a real poll while another operation owns its follow-up.
+    # Use the real lease owner at each boundary of the child transition.
+    native = monitor_mod.native_command
+    route = ["--goal-id", actor["goal_id"], "--todo-id", adv_todo["todo_id"]]
     held = None
-    if race_after_inspect:
-        native = monitor_mod.native_command
-
-        def acquire_between_inspect_and_write(controller, argv):
+    if conflict_at == "held":
+        held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+    else:
+        def contend(controller, argv):
             nonlocal held
-            if argv[:2] == ["task-lease", "acquire"] and any(
-                arg.startswith("rearm-followup.") for arg in argv
-            ) and held is None:
-                held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+            if (held is None and argv[1] == conflict_at and adv_todo["todo_id"] in argv
+                    and any(arg.startswith("rearm-followup.") for arg in argv)):
+                if conflict_at == "acquire":
+                    held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+                else:
+                    current = native(controller, ["task-lease", "inspect", *route])["lease"]
+                    held = native(controller, ["task-lease", "renew", *route,
+                        "--owner", actor["agent_id"], "--idempotency-key", current["idempotency_key"],
+                        "--ttl-seconds", "600", "--expected-version", str(current["version"])])["lease"]
             return native(controller, argv)
 
-        monkeypatch.setattr(monitor_mod, "native_command", acquire_between_inspect_and_write)
-    else:
-        held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+        monkeypatch.setattr(monitor_mod, "native_command", contend)
     try:
         due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
         edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at", due)
@@ -1695,23 +1700,24 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
         assert evidence[0]["payload"]["receipt"] == observed["response"]["native_loopx"]["receipt"]
         assert local_watch_row(runtime, actor, monitor_todo_id)["next_due_at"] != due
         assert held is not None
-        assert _current_followup().get("note") == adv_todo.get("note")
-        assert pump_steward_monitors(runtime) == []
+        current = native(runtime, ["task-lease", "inspect", *route])["lease"]
+        assert (current["idempotency_key"], current["version"]) == (held["idempotency_key"], held["version"])
+        if conflict_at == "release":
+            assert _current_followup()["note"] == "rearm-followup:" + watched["loopx_request"]["turn_instance_id"]
+        else:
+            assert _current_followup().get("note") == adv_todo.get("note")
+            assert pump_steward_monitors(runtime) == []
     finally:
         if held is not None:
             monitor._release(actor, adv_todo, held)
 
-    # On the next due monitor poll, the exhausted zero-write follow-up is re-armed and executes cleanly.
-    edit_local_watch(
-        runtime,
-        actor,
-        monitor_todo_id,
-        "--next-due-at",
-        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
-    )
-    next_poll = pump_steward_monitors(runtime)
-    assert len(next_poll) == 1 and next_poll[0]["loopx_request"]["work_kind"] == "monitor"
-    assert finish(runtime, next_poll[0])["status"] == "completed"
+    # A committed update already enabled advancement. An uncommitted one retries at its next cadence.
+    if conflict_at != "release":
+        edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at",
+                         (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat())
+        next_poll, = pump_steward_monitors(runtime)
+        assert next_poll["loopx_request"]["work_kind"] == "monitor"
+        assert finish(runtime, next_poll)["status"] == "completed"
 
     rearmed = _current_followup()
     assert str(rearmed.get("note") or "").startswith("rearm-followup:")
