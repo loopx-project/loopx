@@ -16,17 +16,18 @@ def _write_env_probe_script(repo: Path, rel_path: str) -> None:
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(
         "import json, os\n"
+        "tmpdir = os.environ.get('TMPDIR')\n"
         "payload = {\n"
-        "    'TMPDIR': os.environ.get('TMPDIR'),\n"
-        "    'TEMP': os.environ.get('TEMP'),\n"
-        "    'TMP': os.environ.get('TMP'),\n"
-        "    'NODE_COMPILE_CACHE': os.environ.get('NODE_COMPILE_CACHE'),\n"
-        "    'NODE_DISABLE_COMPILE_CACHE': os.environ.get('NODE_DISABLE_COMPILE_CACHE'),\n"
-        "    'NODE_V8_COVERAGE': os.environ.get('NODE_V8_COVERAGE'),\n"
+        "    'tmp': tmpdir,\n"
+        "    'temp_same': os.environ.get('TEMP') == tmpdir,\n"
+        "    'tmp_same': os.environ.get('TMP') == tmpdir,\n"
+        "    'cache': os.environ.get('NODE_COMPILE_CACHE'),\n"
+        "    'disable': os.environ.get('NODE_DISABLE_COMPILE_CACHE'),\n"
+        "    'coverage': os.environ.get('NODE_V8_COVERAGE'),\n"
         "}\n"
-        "cache_dir = payload['NODE_COMPILE_CACHE']\n"
+        "cache_dir = payload['cache']\n"
         "if cache_dir:\n"
-        "    payload['cache_mode'] = os.stat(cache_dir).st_mode & 0o777\n"
+        "    payload['mode'] = os.stat(cache_dir).st_mode & 0o777\n"
         "    marker = os.path.join(cache_dir, f'marker-{os.getpid()}.txt')\n"
         "    with open(marker, 'w', encoding='utf-8') as handle:\n"
         "        handle.write('ok')\n"
@@ -69,21 +70,21 @@ def test_smoke_suite_shares_one_private_compile_cache_and_cleans_up(
     assert result["ok"] is True, result
     assert result["executed_check_count"] == 2
     probes = [_payload_from_check(item) for item in result["selected_checks"]]
-    caches = {probe["NODE_COMPILE_CACHE"] for probe in probes}
+    caches = {probe["cache"] for probe in probes}
     assert len(caches) == 1
     cache_path = Path(str(next(iter(caches))))
     assert cache_path.parent == scratch
     assert cache_path.name.startswith("loopx-smoke-compile-cache-")
-    assert {probe["cache_mode"] for probe in probes} == {0o700}
+    assert {probe["mode"] for probe in probes} == {0o700}
     assert not cache_path.exists()
 
-    tmp_roots = [Path(str(probe["TMPDIR"])) for probe in probes]
+    tmp_roots = [Path(str(probe["tmp"])) for probe in probes]
     assert len(set(tmp_roots)) == 2
     for probe, root in zip(probes, tmp_roots, strict=True):
         assert root != cache_path
         assert root.name.startswith("loopx-smoke-")
-        assert probe["TEMP"] == str(root)
-        assert probe["TMP"] == str(root)
+        assert probe["temp_same"] is True
+        assert probe["tmp_same"] is True
         assert not root.exists()
 
 
@@ -189,7 +190,7 @@ def test_catalog_canary_run_shares_compile_cache_and_cleans_up_on_error(
     )
     assert result["ok"] is True, result
     probes = [_payload_from_check(item) for item in result["selected_checks"]]
-    caches = {probe["NODE_COMPILE_CACHE"] for probe in probes}
+    caches = {probe["cache"] for probe in probes}
     assert len(caches) == 1
     assert not Path(str(next(iter(caches)))).exists()
 
@@ -266,8 +267,13 @@ def test_smoke_suite_respects_disable_coverage_and_caller_compile_cache(
 
     assert result["ok"] is True, result
     probe = _payload_from_check(result["selected_checks"][0])
-    assert probe[env_key] == value
-    assert probe["NODE_COMPILE_CACHE"] == (value if expect_preserved else None)
+    key = {
+        "NODE_DISABLE_COMPILE_CACHE": "disable",
+        "NODE_V8_COVERAGE": "coverage",
+        "NODE_COMPILE_CACHE": "cache",
+    }[env_key]
+    assert probe[key] == value
+    assert probe["cache"] == (value if expect_preserved else None)
     assert not list(scratch.glob("loopx-smoke-compile-cache-*"))
 
 
