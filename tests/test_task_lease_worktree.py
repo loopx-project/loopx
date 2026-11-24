@@ -74,6 +74,15 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     assert acquire("a", a, expected=1)["error_code"] == "invalid_worktree_lease_request"
     (a / "src").unlink()
     (a / "src").mkdir()
+    # A regular file can still share bytes with another checkout via a hardlink.
+    # Reject before creating a lease, including when Git ignores the scope.
+    shared_source = b / "shared.ts"
+    shared_source.write_text("original\n")
+    shared_edit = a / "src" / "main.ts"
+    shared_edit.hardlink_to(shared_source)
+    assert acquire("a", a, expected=1)["error_code"] == "invalid_worktree_lease_request"
+    shared_edit.unlink()
+    shared_edit.write_text(shared_source.read_text())
     (a / "src" / "redirect").symlink_to(project, target_is_directory=True)
     assert acquire("a", a, expected=1, scope="src/redirect/new.ts")["error_code"] == "invalid_worktree_lease_request"
     (a / "src" / "redirect").unlink()
