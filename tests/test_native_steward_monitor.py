@@ -1427,6 +1427,9 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
             "The Agent runtime could not be prepared. Check the runtime installation and configuration, then retry.",
             True,
         ),
+        ("lock_acquire_timeout", "file lock acquisition timed out (recorded holder pid 4189)", False),
+        ("runtime_error", "file lock acquisition timed out (recorded holder pid 4189)", False),
+        ("runtime_error", "file lock acquisition timed out (lock busy, current holder unknown)", False),
     ],
 )
 def test_transient_zero_effect_monitor_failures_recover_once(
@@ -1619,3 +1622,68 @@ def test_session_queue_drain_preserves_active_and_queued_observation_only_monito
     runtime._drain_session_queue(session_id=sid, work_dir=tmp_path, objective="Monitor")
     assert adapter_calls == 0 and fail_calls == 0
     assert len(dispatched) == 1 and getattr(dispatched[0], "observation_only", False) is True
+
+
+def test_lock_acquire_timeout_preserves_error_code_and_cooldown_bounds(
+    steward, tmp_path, monkeypatch,
+):
+    from loopx.capabilities.native_chat.steward_turn import MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS, StewardTurnHost
+    from loopx.file_lock import LockAcquireTimeoutError
+
+    store, runtime, *_ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    todo_id = monitor.current(actor)["todo_id"]
+    due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+    edit_local_watch(runtime, actor, todo_id, "--next-due-at", due)
+
+    orig_observe = StewardMonitor.observe
+    remaining_timeouts = {"count": 2}
+
+    def contended_observe(self, *args, **kwargs):
+        if remaining_timeouts["count"] > 0:
+            remaining_timeouts["count"] -= 1
+            raise LockAcquireTimeoutError(
+                incident={"holder": {"pid": 4189}, "operator_action": "retry"},
+                incident_recorded=False,
+                incident_channel="test",
+            )
+        return orig_observe(self, *args, **kwargs)
+
+    monkeypatch.setattr(StewardMonitor, "observe", contended_observe)
+
+    # First monitor attempt hits LockAcquireTimeoutError after manager.context; _run_turn must preserve error_code.
+    runtime._steward_monitor_next_check.clear()
+    initial = pump_steward_monitors(runtime)[0]
+    failed = finish(runtime, initial)
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "lock_acquire_timeout"
+    assert failed["error"] == "file lock acquisition timed out (recorded holder pid 4189)"
+
+    # Malformed lock strings under legacy runtime_error stay rejected.
+    bad_turn = {
+        **failed,
+        "error_code": "runtime_error",
+        "error": "file lock acquisition timed out (recorded holder pid 0)",
+        "loopx_request": {**failed["loopx_request"], "monitor_restart_recovery": {"original_turn_id": "0" * 32}},
+    }
+    assert StewardTurnHost.monitor_restart_request(bad_turn) is None
+
+    # Immediate bounded retry hits LockAcquireTimeoutError a second time.
+    runtime._steward_monitor_next_check.clear()
+    carrier = pump_steward_monitors(runtime)[0]
+    assert carrier["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == failed["turn_id"]
+    carrier_failed = finish(runtime, carrier)
+    assert carrier_failed["error_code"] == "lock_acquire_timeout"
+
+    # Chained retry respects the 300s cooldown before recovering once contention clears.
+    runtime._steward_monitor_next_check.clear()
+    assert pump_steward_monitors(runtime) == []
+    aged = (datetime.now(timezone.utc) - timedelta(seconds=MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS + 5)).isoformat().replace("+00:00", "Z")
+    store.update_turn(carrier_failed["session_id"], carrier_failed["turn_id"], completed_at=aged)
+    runtime._steward_monitor_next_check.clear()
+    recovered = pump_steward_monitors(runtime)
+    assert len(recovered) == 1
+    assert recovered[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == carrier_failed["turn_id"]
+    done = finish(runtime, recovered[0])
+    assert done["status"] == "completed", done
+    assert local_watch_row(runtime, actor, todo_id)["next_due_at"] != due
