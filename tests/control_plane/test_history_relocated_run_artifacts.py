@@ -9,9 +9,12 @@ runs directory as present. Symlinks, other goals, and non-regular names do not.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from loopx.control_plane.runtime.promotion_readiness import (
     PROMOTION_READINESS_CLASSIFICATION,
@@ -397,3 +400,79 @@ def test_unexpandable_account_path_stays_missing_and_doctor_continues(
     assert readiness["json_exists"] is True
     assert readiness["markdown_exists"] is True
     assert release_index.read_bytes() == release_bytes
+
+
+def _windows_cross_volume_relpath(old_root: Path, new_root: Path):
+    """Raise the ``ntpath.relpath`` cross-drive ``ValueError`` for old vs new."""
+
+    real = os.path.relpath
+    old_text = str(old_root)
+    new_text = str(new_root)
+
+    def relpath(path: object, start: object | None = None) -> str:
+        path_text = os.fspath(path)  # type: ignore[arg-type]
+        start_text = os.fspath(start if start is not None else os.curdir)  # type: ignore[arg-type]
+        if old_text in path_text and new_text in start_text:
+            raise ValueError("path is on mount 'C:', start on mount 'D:'")
+        return real(path, start)  # type: ignore[arg-type]
+
+    return relpath
+
+
+@pytest.mark.parametrize("copy_present", [True, False])
+def test_windows_cross_volume_relocation_does_not_abort_history_or_doctor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    copy_present: bool,
+) -> None:
+    runtime_a = tmp_path / "runtime-a"
+    runtime_b = tmp_path / "runtime-b"
+    runs_a = runtime_a / "goals" / GOAL_ID / "runs"
+    json_path = runs_a / "2026-03-01T12-00-00Z-state.json"
+    markdown_path = runs_a / "2026-03-01T12-00-00Z-state.md"
+    _write(json_path, '{"classification":"state_refreshed"}\n')
+    _write(markdown_path, "# State refreshed\n")
+    readiness_json = runs_a / "2026-03-01T12-00-00Z-readiness.json"
+    readiness_markdown = runs_a / "2026-03-01T12-00-00Z-readiness.md"
+    _write(readiness_json, "{}\n")
+    _write(readiness_markdown, "# Readiness\n")
+    _write_index(
+        runs_a,
+        [
+            _row(json_path, markdown_path),
+            _row(
+                readiness_json,
+                readiness_markdown,
+                classification=PROMOTION_READINESS_CLASSIFICATION,
+                recommended_action="Readiness evidence is in the copied artifacts.",
+            ),
+        ],
+    )
+    runs_b, index_bytes = _copy_runs(runtime_a, runtime_b)
+    if not copy_present:
+        (runs_b / json_path.name).unlink()
+        (runs_b / markdown_path.name).unlink()
+        (runs_b / readiness_json.name).unlink()
+        (runs_b / readiness_markdown.name).unlink()
+    shutil.rmtree(runtime_a)
+    monkeypatch.setattr(
+        "loopx.control_plane.quota.ledger_readback.os.path.relpath",
+        _windows_cross_volume_relpath(runtime_a, runtime_b),
+    )
+
+    history = _history(tmp_path, runtime_b)
+    run = history["goals"][0]["latest_status_run"]
+    assert run["json_exists"] is copy_present
+    assert run["markdown_exists"] is copy_present
+    attention = goal_attention(history["goals"][0])
+    assert attention is not None
+    if copy_present:
+        assert attention["status"] == "state_refreshed"
+    else:
+        assert attention["status"] == "run_artifact_missing"
+
+    event = latest_promotion_readiness_event(runtime_b, GOAL_ID)
+    assert event["source"] == "goal_run_history_legacy"
+    assert event["json_exists"] is copy_present
+    assert event["markdown_exists"] is copy_present
+    assert (runs_b / "index.jsonl").read_bytes() == index_bytes

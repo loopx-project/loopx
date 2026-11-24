@@ -146,6 +146,19 @@ def _copied_goal_run_file_name(stored_path: str, goal_id: str, extension: str) -
     return file_name
 
 
+def _relative_to_runs_dir(path: Path, runs_real: Path) -> str | None:
+    """Path relative to ``runs_real``, or None when the volumes differ.
+
+    Windows ``os.path.relpath`` raises ``ValueError`` across drives. A
+    different volume is not inside the runs directory.
+    """
+
+    try:
+        return os.path.relpath(path, runs_real)
+    except ValueError:
+        return None
+
+
 def _stays_inside_runs_dir(runs_dir: Path, stored_path: str) -> bool:
     """True when the stored path is already lexically inside ``runs_dir``."""
 
@@ -157,7 +170,7 @@ def _stays_inside_runs_dir(runs_dir: Path, stored_path: str) -> bool:
     if expanded is None:
         return False
     resolved = _lexical_absolute(expanded)
-    relative = os.path.relpath(resolved, runs_real)
+    relative = _relative_to_runs_dir(resolved, runs_real)
     return bool(
         relative
         and relative != "."
@@ -195,7 +208,7 @@ def _relocated_run_artifact_path(
         target = candidate.resolve(strict=True)
     except OSError:
         return None
-    relative = os.path.relpath(target, runs_real)
+    relative = _relative_to_runs_dir(target, runs_real)
     if relative != file_name:
         return None
     return target
