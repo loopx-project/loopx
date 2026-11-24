@@ -262,6 +262,8 @@ rl.on('line', (line) => {
       return reply({ sessionId, isStreaming: running, model: currentModel });
     case 'prompt': {
       if (running) return reply(null, false, 'already streaming');
+      // Fixture commands belong to the current ask, not the interrupted request in its envelope.
+      if (cmd.message.includes('[Loochat interrupted-turn context]\n')) cmd.message = cmd.message.split('\nCurrent user message:\n').at(-1);
       if (cmd.message.startsWith('auto-compact')) {
         reply({ disposition: 'started' });
         const prefix = cmd.message.includes('legacy') ? 'auto_' : '';
