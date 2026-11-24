@@ -66,11 +66,7 @@ def configured_ssh_host_aliases(config_path: Path | None = None) -> list[str]:
             if directive != "host":
                 continue
             for alias in parts[1:]:
-                if (
-                    not _SAFE_HOST_ALIAS.fullmatch(alias)
-                    or ".." in alias
-                    or alias in seen_aliases
-                ):
+                if not _SAFE_HOST_ALIAS.fullmatch(alias) or alias in seen_aliases:
                     continue
                 seen_aliases.add(alias)
                 aliases.append(alias)

@@ -2,11 +2,11 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Partial. The additive L0 codecs, zero-import frontend/control-plane contract (`session_quota_fabric_contract.ts`), `effect_runtime_handlers.ts` registrations, optional `ssh_host_catalog_v0` observation pass-through, and handover guard (`session_quota_fabric.ts`) ship on this baseline; host runtime adapters and dashboard UI composition remain staged follow-on slices.
+- **Delivery maturity:** Partial (M0 L0 contract increment). The pre-PR baseline (`45c015ffd9`) provides `ssh_host_catalog_v0`, `CHAT_SESSION_MODES` (`managed_runtime`, `attached_host`), and `GoalAgentWorkPage`; this PR's M0 increment adds `session_quota_fabric_contract.ts`, `session_quota_fabric.ts`, `effect_runtime_handlers.ts` registrations, optional `ssh_host_catalog_v0` observation pass-through, and `vocabulary_v0.json` entries. Host runtime adapters (M1) and dashboard UI composition (M2) remain staged follow-on slices.
 - **Authors / owners:** Architecture convergence workgroup; control-plane ownership, package boundaries, and merge authorization belong to LoopX maintainers
 - **Created:** 2026-11-17
-- **Last normative revision:** 2026-11-22
-- **Implementation baseline:** `45c015ffd9`
+- **Last normative revision:** 2026-11-24
+- **Implementation baseline:** `45c015ffd9` (pre-PR baseline audited before adding this M0 L0 contract slice)
 - **Related contracts:**
   [Agent session execution modes](agent-session-execution-modes-v0.md),
   [Desktop execution frontends](desktop-execution-frontends-v0.md),
@@ -111,33 +111,37 @@ single Goal Workbench.
 - Bypassing `loopx/presentation/codex_attached_api.py` ownership boundaries or
   shipping concrete OpenSSH child-process supervisors inside this RFC slice.
 
-## 4. Current-system contract (baseline `45c015ffd9`)
+## 4. Current-system contract (baseline `45c015ffd9`) and M0 increment
 
-- **SSH catalog:** [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py)
-  serves `/ssh-hosts` with `{ ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{ alias }] }`
-  and exposes an optional `project_ssh_host_catalog` / `observations` helper
-  wired through `effect_runtime_handlers.ts` while leaving the default
-  no-observation output byte-identical.
-- **Dashboard SSH client:** [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts)
-  reuses `isSafeHostAlias` (`SAFE_HOST_ALIAS`) and `decodeSshHostObservationWith`
-  from [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts),
-  preserving optional validated `observation` metadata when present and bare
-  `{ alias }` entries when absent, and invokes `/api/ssh-source/ensure` and
-  `/api/ssh-source/goal-lifecycle`.
-- **Attached sessions & Goal UI:**
-  [`codex_attached_api.py`](../../../loopx/presentation/codex_attached_api.py)
-  currently filters `row["host_surface"] == "codex-app"` in `bound_conversations()`,
-  while [`attached-agent-conversations.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/attached-agent-conversations.tsx)
-  and [`goal-agent-work-page.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/goal-agent-work-page.tsx)
-  render bound attached and managed conversations inside one Goal view.
-- **L0 contract & semantic registration (delivered in this baseline):**
-  [`session_quota_fabric.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric.ts)
-  and [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts)
-  provide zero-I/O validated projections and handover state transitions
-  registered under `effect_runtime_handlers.ts` (`collaboration.session_fabric.project_ssh_host_catalog`,
-  `collaboration.session_fabric.evaluate_governed_session_handover`) and
-  converged in [`vocabulary_v0.json`](../../../loopx/semantics/vocabulary_v0.json)
-  (reusing canonical `session_mode` owned by `loopx/chat_store.py`).
+- **Pre-PR baseline (`45c015ffd9`):**
+  - [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py)
+    serves `/ssh-hosts` with `{ ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{ alias }] }`.
+  - [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts)
+    parses `ssh_host_catalog_v0` safe aliases (`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
+    and calls `/api/ssh-source/ensure` and `/api/ssh-source/goal-lifecycle`.
+  - [`codex_attached_api.py`](../../../loopx/presentation/codex_attached_api.py)
+    filters `row["host_surface"] == "codex-app"` in `bound_conversations()`,
+    while [`attached-agent-conversations.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/attached-agent-conversations.tsx)
+    and [`goal-agent-work-page.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/goal-agent-work-page.tsx)
+    render bound attached and managed conversations inside one Goal view.
+  - [`chat_store.py`](../../../loopx/chat_store.py) owns the canonical
+    `managed_runtime` and `attached_host` session modes.
+- **M0 L0 contract increment (introduced in this RFC slice):**
+  - Adds [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts)
+    and [`session_quota_fabric.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric.ts)
+    for zero-I/O validated projections and handover state transitions
+    registered under `effect_runtime_handlers.ts`
+    (`collaboration.session_fabric.project_ssh_host_catalog`,
+    `collaboration.session_fabric.evaluate_governed_session_handover`) and
+    converged in [`vocabulary_v0.json`](../../../loopx/semantics/vocabulary_v0.json)
+    (reusing canonical `CHAT_SESSION_MODES` owned by `loopx/chat_store.py`).
+  - Extends [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py)
+    (`project_ssh_host_catalog` / opt-in `observations`) and
+    [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts)
+    (`isSafeHostAlias`, `decodeSshHostObservationWith`) to preserve optional
+    validated `observation` metadata when present while leaving default
+    no-observation `/ssh-hosts` output and safe alias acceptance byte-identical
+    to baseline `45c015ffd9`.
 
 ## 5. Proposed architecture
 
@@ -230,7 +234,7 @@ Goal-scoped projections; failures emit deterministic typed errors.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| **M0 Convergence RFC + L0 Contract** | Bilingual RFC (`session-and-quota-fabric-v0`) + `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` + `effect_runtime_handlers.ts` wiring + `ssh_host_catalog.py` / `ssh-host-catalog.ts` pass-through + `vocabulary_v0.json` registration | Baseline `45c015ffd9` | `session_quota_fabric.test.ts`, `status-source-catalog-smoke.ts`, `test_status_server_ssh_hosts.py`, `docs-governance-smoke.py`, `test_semantic_vocabulary_drift.py` | Revert RFC, registration & L0 handlers |
+| **M0 Convergence RFC + L0 Contract** | Bilingual RFC (`session-and-quota-fabric-v0`) + `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` + `effect_runtime_handlers.ts` wiring + `ssh_host_catalog.py` / `ssh-host-catalog.ts` pass-through + `vocabulary_v0.json` registration | Accepted M0 RFC + pre-PR baseline `45c015ffd9` | `session_quota_fabric.test.ts`, `status-source-catalog-smoke.ts`, `test_status_server_ssh_hosts.py`, `docs-governance-smoke.py`, `test_semantic_vocabulary_drift.py` | Revert RFC, registration & L0 handlers |
 | **M1 Attached API & Host Provider** | Generalize `codex_attached_api.py` `host_surface` routing + opt-in SSH probe wiring into `ssh_host_catalog_v0` | M0 merged | Feature-off parity test + seven SSH failure-code fixture tests | Disable provider flag |
 | **M2 Single Goal Workbench UI & Handover Wire-up** | Embed host readiness, quota window badge, and Gate-bound handover trigger inside `GoalAgentWorkPage` (`apps/presentation/dashboard`) | M1 merged | Playwright desktop/narrow viewport smoke + visual evidence + turn-fence handoff integration test | Revert UI panel slice |
 

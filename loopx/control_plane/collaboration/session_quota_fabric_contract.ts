@@ -95,7 +95,7 @@ export interface GovernedSessionHandoverResult extends Record<string, unknown> {
 export function isSafeHostAlias(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
-  return Boolean(trimmed) && !trimmed.includes("..") && SAFE_HOST_ALIAS.test(trimmed);
+  return Boolean(trimmed) && SAFE_HOST_ALIAS.test(trimmed);
 }
 
 export function assertPublicSafeFabricText(

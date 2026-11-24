@@ -34,6 +34,7 @@ test("ssh_host_catalog_v0 preserves byte-identical shape when L0 observations ar
 test("valid OpenSSH aliases and identifiers containing sk- substrings are allowed while real secret prefixes and paths fail closed", () => {
   const validAliases = [
     "desk-box",
+    "desk..backup",
     "task-worker",
     "disk-01",
     "kiosk-2",
@@ -47,11 +48,14 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
     assert.equal(isSafeHostAlias(alias), true);
     assert.equal(SAFE_HOST_ALIAS.test(alias), true);
   }
+  for (const invalidAlias of ["../bad", "*.example", "-oProxyCommand=unsafe", "a@b"]) {
+    assert.equal(isSafeHostAlias(invalidAlias), false);
+  }
   const catalog = projectSshHostCatalogPayload(validAliases);
   assert.deepEqual(catalog.hosts, validAliases.map((alias) => ({ alias })));
 
   const observedCatalogWithSubdomainAlias = projectSshHostCatalogPayload(
-    ["jump-box", "lab.sk-integration", "desk-box"],
+    ["jump-box", "desk..backup", "lab.sk-integration", "desk-box"],
     [
       {
         schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
@@ -75,8 +79,38 @@ test("valid OpenSSH aliases and identifiers containing sk- substrings are allowe
         tunnel_latency_ms: 8,
       },
     },
+    { alias: "desk..backup" },
     { alias: "lab.sk-integration" },
     { alias: "desk-box" },
+  ]);
+
+  const directlyObservedDotAlias = projectSshHostCatalogPayload(
+    ["jump-box", "desk..backup", "lab.sk-integration"],
+    [
+      {
+        schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+        alias: "desk..backup",
+        connection_state: "connected",
+        failure_code: null,
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: 9,
+      },
+    ],
+  );
+  assert.deepEqual(directlyObservedDotAlias.hosts, [
+    { alias: "jump-box" },
+    {
+      alias: "desk..backup",
+      observation: {
+        schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
+        alias: "desk..backup",
+        connection_state: "connected",
+        failure_code: null,
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: 9,
+      },
+    },
+    { alias: "lab.sk-integration" },
   ]);
 
   const directlyObservedSubdomainAlias = projectSshHostCatalogPayload(
@@ -508,19 +542,24 @@ test("effect_runtime_handlers dispatches registered session_fabric operations", 
   const featureOff = await dispatchEffectRuntimeMethod(
     handlers,
     "collaboration.session_fabric.project_ssh_host_catalog",
-    { configured_aliases: ["desk-box", "task-worker"] },
+    { configured_aliases: ["desk-box", "desk..backup", "lab.sk-integration", "task-worker"] },
   );
   assert.deepEqual(featureOff, {
     ok: true,
     schema_version: "ssh_host_catalog_v0",
-    hosts: [{ alias: "desk-box" }, { alias: "task-worker" }],
+    hosts: [
+      { alias: "desk-box" },
+      { alias: "desk..backup" },
+      { alias: "lab.sk-integration" },
+      { alias: "task-worker" },
+    ],
   });
 
   const featureOn = await dispatchEffectRuntimeMethod(
     handlers,
     "collaboration.session_fabric.project_ssh_host_catalog",
     {
-      configured_aliases: ["desk-box", "task-worker"],
+      configured_aliases: ["desk-box", "desk..backup", "lab.sk-integration", "task-worker"],
       observations: [
         {
           schema_version: SESSION_FABRIC_SSH_OBSERVATION_SCHEMA,
@@ -548,6 +587,8 @@ test("effect_runtime_handlers dispatches registered session_fabric operations", 
           tunnel_latency_ms: 42,
         },
       },
+      { alias: "desk..backup" },
+      { alias: "lab.sk-integration" },
       { alias: "task-worker" },
     ],
   });

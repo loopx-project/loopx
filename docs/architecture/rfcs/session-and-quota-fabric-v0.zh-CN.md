@@ -2,11 +2,11 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** Partial。本基线已交付增量 L0 编解码、零导入前后端共享契约（`session_quota_fabric_contract.ts`）、`effect_runtime_handlers.ts` 注册入口、可选 `ssh_host_catalog_v0` 观测透传及交接守卫模块（`session_quota_fabric.ts`）；宿主运行时适配器与主工作台 UI 嵌入保留为后续分阶段切片。
+- **交付成熟度：** Partial（M0 L0 契约增量）。本 RFC 改动前基线（`45c015ffd9`）已包含 `ssh_host_catalog_v0`、`CHAT_SESSION_MODES`（`managed_runtime`、`attached_host`）与 `GoalAgentWorkPage`；本次 M0 增量引入 `session_quota_fabric_contract.ts`、`session_quota_fabric.ts`、`effect_runtime_handlers.ts` 处理器注册、可选 `ssh_host_catalog_v0` 观测透传及 `vocabulary_v0.json` 词表登记。宿主运行时适配器（M1）与主工作台 UI 嵌入（M2）保留为后续分阶段切片。
 - **作者 / 负责人：** 架构收敛工作组；控制面归属、包边界及合并授权归属 LoopX 维护者
 - **创建日期：** 2026-11-17
-- **最近规范性修订：** 2026-11-22
-- **实现基线：** `45c015ffd9`
+- **最近规范性修订：** 2026-11-24
+- **实现基线：** `45c015ffd9`（引入本 M0 L0 契约增量前已审计的基线提交）
 - **相关契约：**
   [Agent 会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、
   [桌面执行前端](desktop-execution-frontends-v0.zh-CN.md)、
@@ -62,12 +62,16 @@ Calli/LooChat 系列 PR（#8778、#8782–#8784、#8843）反映出统一接入�
 - 不引入独立的 `apps/workbench/`、`apps/presentation/calli-workbench/` 目录、Node SQLite 守护进程或第二套前端构建链。
 - 本 RFC 切片暂不直接修改 `loopx/presentation/codex_attached_api.py` 或在包内孵化常驻 OpenSSH 子进程监督器。
 
-## 4. 现行系统契约（基线 `45c015ffd9`）
+## 4. 现行系统契约（基线 `45c015ffd9`）与 M0 增量
 
-- **SSH 目录：** [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py) 在 `/ssh-hosts` 返回 `{ ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{ alias }] }`，并通过经 `effect_runtime_handlers.ts` 路由的可选 `project_ssh_host_catalog` / `observations` 助手保持无观测态输出逐字节不变。
-- **Dashboard SSH 客户端：** [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts) 复用 [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts) 中的 `isSafeHostAlias`（`SAFE_HOST_ALIAS`）与 `decodeSshHostObservationWith`，在存在观测时保留经校验的 `observation`，缺失时保持纯 `{ alias }`，并调用 `/api/ssh-source/ensure`、`/api/ssh-source/goal-lifecycle`。
-- **挂接会话与 Goal 界面：** [`codex_attached_api.py`](../../../loopx/presentation/codex_attached_api.py) 当前在 `bound_conversations()` 过滤 `host_surface == "codex-app"`；[`attached-agent-conversations.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/attached-agent-conversations.tsx) 与 [`goal-agent-work-page.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/goal-agent-work-page.tsx) 已在同一 Goal 视图下承接挂接会话与托管会话。
-- **L0 契约模块与语义注册（本基线已交付）：** [`session_quota_fabric.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric.ts) 与 [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts) 提供严格解码、增量目录合并与交接守卫判断，已注册至 `effect_runtime_handlers.ts`（`collaboration.session_fabric.project_ssh_host_catalog`、`collaboration.session_fabric.evaluate_governed_session_handover`）并纳入 [`vocabulary_v0.json`](../../../loopx/semantics/vocabulary_v0.json)（复用 `loopx/chat_store.py` 的权威 `session_mode`）。
+- **改动前基线（`45c015ffd9`）：**
+  - [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py) 在 `/ssh-hosts` 返回 `{ ok: true, schema_version: "ssh_host_catalog_v0", hosts: [{ alias }] }`。
+  - [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts) 解析 `ssh_host_catalog_v0` 安全别名（`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`），并调用 `/api/ssh-source/ensure`、`/api/ssh-source/goal-lifecycle`。
+  - [`codex_attached_api.py`](../../../loopx/presentation/codex_attached_api.py) 在 `bound_conversations()` 过滤 `host_surface == "codex-app"`；[`attached-agent-conversations.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/attached-agent-conversations.tsx) 与 [`goal-agent-work-page.tsx`](../../../apps/presentation/dashboard/src/features/personal-workspace/goal-agent-work-page.tsx) 在同一 Goal 视图下承接挂接会话与托管会话。
+  - [`chat_store.py`](../../../loopx/chat_store.py) 拥有权威的 `managed_runtime` 与 `attached_host` 会话执行模式。
+- **M0 L0 契约增量（由本 RFC 切片新增引入）：**
+  - 新增 [`session_quota_fabric_contract.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts) 与 [`session_quota_fabric.ts`](../../../loopx/control_plane/collaboration/session_quota_fabric.ts)，提供严格解码、增量目录合并与交接守卫判断，注册至 `effect_runtime_handlers.ts`（`collaboration.session_fabric.project_ssh_host_catalog`、`collaboration.session_fabric.evaluate_governed_session_handover`）并纳入 [`vocabulary_v0.json`](../../../loopx/semantics/vocabulary_v0.json)（复用 `loopx/chat_store.py` 拥有的权威 `CHAT_SESSION_MODES`）。
+  - 扩展 [`ssh_host_catalog.py`](../../../loopx/control_plane/status/ssh_host_catalog.py)（`project_ssh_host_catalog` / 可选 `observations`）与 [`ssh-host-catalog.ts`](../../../apps/presentation/dashboard/src/data/ssh-host-catalog.ts)（`isSafeHostAlias`、`decodeSshHostObservationWith`），在存在观测时保留经校验的 `observation`，在默认无观测传入时保持 `/ssh-hosts` 输出与合法别名接受范围与基线 `45c015ffd9` 逐字节一致。
 
 ## 5. 目标架构
 
@@ -123,7 +127,7 @@ SSH 或额度状态未知时绝不提升权限或触发后台切换；所有状�
 
 | 里程碑 | 交付内容 | 进入门禁 | 退出证据 | 回滚方式 |
 | --- | --- | --- | --- | --- |
-| **M0 收敛 RFC + L0 契约底座** | 双语 RFC（`session-and-quota-fabric-v0`）+ `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` + `effect_runtime_handlers.ts` 接入 + `ssh_host_catalog.py` / `ssh-host-catalog.ts` 透传 + `vocabulary_v0.json` 词表登记 | 基线 `45c015ffd9` | `session_quota_fabric.test.ts`、`status-source-catalog-smoke.ts`、`test_status_server_ssh_hosts.py`、`docs-governance-smoke.py`、`test_semantic_vocabulary_drift.py` | 回滚 RFC、登记与 L0 处理器 |
+| **M0 收敛 RFC + L0 契约底座** | 双语 RFC（`session-and-quota-fabric-v0`）+ `session_quota_fabric_contract.ts` / `session_quota_fabric.ts` + `effect_runtime_handlers.ts` 接入 + `ssh_host_catalog.py` / `ssh-host-catalog.ts` 透传 + `vocabulary_v0.json` 词表登记 | 已接受 M0 RFC + 改动前基线 `45c015ffd9` | `session_quota_fabric.test.ts`、`status-source-catalog-smoke.ts`、`test_status_server_ssh_hosts.py`、`docs-governance-smoke.py`、`test_semantic_vocabulary_drift.py` | 回滚 RFC、登记与 L0 处理器 |
 | **M1 挂接 API 泛化与主机 Provider** | 将 `codex_attached_api.py` `host_surface` 路由能力化并可选接入 `ssh_host_catalog_v0` 探活 | M0 合入 | 关闭态对等测试 + 7 种 SSH 失败码夹具测试 | 关闭 Provider 开关 |
 | **M2 单一工作台 UI 嵌入与交接联调** | 在 `apps/presentation/dashboard` `GoalAgentWorkPage` 嵌入主机状态、额度徽标与 Gate 交接入口 | M1 合入 | Playwright 桌面/窄屏冒烟、视觉截图及 Turn 围栏交接集成测试 | 回滚 UI 面板切片 |
 

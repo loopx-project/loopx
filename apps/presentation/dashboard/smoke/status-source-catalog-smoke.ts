@@ -122,6 +122,7 @@ const configuredHosts = parseConfiguredSshHostCatalog({
     { alias: "remote-lab" },
     { alias: "jump_box" },
     { alias: "desk-box" },
+    { alias: "desk..backup" },
     { alias: "task-worker" },
     { alias: "lab.sk-integration" },
     { alias: "sk-integration" },
@@ -134,6 +135,7 @@ deepEqual(
     { alias: "remote-lab" },
     { alias: "jump_box" },
     { alias: "desk-box" },
+    { alias: "desk..backup" },
     { alias: "task-worker" },
     { alias: "lab.sk-integration" },
     { alias: "sk-integration" },
@@ -156,6 +158,7 @@ const observedHosts = parseConfiguredSshHostCatalog({
         tunnel_latency_ms: 12,
       },
     },
+    { alias: "desk..backup" },
     { alias: "lab.sk-integration" },
     { alias: "task-worker" },
     {
@@ -185,6 +188,7 @@ deepEqual(
         tunnel_latency_ms: 12,
       },
     },
+    { alias: "desk..backup" },
     { alias: "lab.sk-integration" },
     { alias: "task-worker" },
     {

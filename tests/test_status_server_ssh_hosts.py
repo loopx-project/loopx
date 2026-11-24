@@ -174,7 +174,7 @@ def test_ssh_host_catalog_feature_off_parity_and_sk_substring_aliases(
     ssh_dir.mkdir(parents=True)
     config = ssh_dir / "config"
     config.write_text(
-        "Host jump-box lab.sk-integration desk-box task-worker disk-01 kiosk-2 sk-integration bad..alias\n"
+        "Host jump-box desk..backup lab.sk-integration desk-box task-worker disk-01 kiosk-2 sk-integration ../bad\n"
         "  HostName 192.0.2.20\n",
         encoding="utf-8",
     )
@@ -184,6 +184,7 @@ def test_ssh_host_catalog_feature_off_parity_and_sk_substring_aliases(
         "schema_version": "ssh_host_catalog_v0",
         "hosts": [
             {"alias": "jump-box"},
+            {"alias": "desk..backup"},
             {"alias": "lab.sk-integration"},
             {"alias": "desk-box"},
             {"alias": "task-worker"},
@@ -390,7 +391,8 @@ def test_ssh_hosts_http_servers_and_opt_in_observation_preserve_unobserved_alias
     ssh_dir.mkdir(parents=True)
     config = ssh_dir / "config"
     config.write_text(
-        "Host jump-box lab.sk-integration desk-box\n  HostName 192.0.2.30\n",
+        "Host jump-box desk..backup lab.sk-integration desk-box ../bad *.example\n"
+        "  HostName 192.0.2.30\n",
         encoding="utf-8",
     )
 
@@ -405,6 +407,7 @@ def test_ssh_hosts_http_servers_and_opt_in_observation_preserve_unobserved_alias
         "schema_version": "ssh_host_catalog_v0",
         "hosts": [
             {"alias": "jump-box"},
+            {"alias": "desk..backup"},
             {"alias": "lab.sk-integration"},
             {"alias": "desk-box"},
         ],
@@ -428,6 +431,27 @@ def test_ssh_hosts_http_servers_and_opt_in_observation_preserve_unobserved_alias
         "schema_version": "ssh_host_catalog_v0",
         "hosts": [
             {"alias": "jump-box", "observation": jump_observation},
+            {"alias": "desk..backup"},
+            {"alias": "lab.sk-integration"},
+            {"alias": "desk-box"},
+        ],
+    }
+
+    dot_alias_observation = {
+        "schema_version": "session_fabric_ssh_observation_v0",
+        "alias": "desk..backup",
+        "connection_state": "connected",
+        "failure_code": None,
+        "checked_at": "2026-11-22T00:00:00Z",
+        "tunnel_latency_ms": 15,
+    }
+    projected_dot = ssh_host_catalog_payload(config, observations=[dot_alias_observation])
+    assert projected_dot == {
+        "ok": True,
+        "schema_version": "ssh_host_catalog_v0",
+        "hosts": [
+            {"alias": "jump-box"},
+            {"alias": "desk..backup", "observation": dot_alias_observation},
             {"alias": "lab.sk-integration"},
             {"alias": "desk-box"},
         ],
