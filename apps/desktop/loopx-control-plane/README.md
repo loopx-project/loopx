@@ -565,38 +565,47 @@ Self-service:
    "$node" --version &&
    "$node" -e "const [maj,min,pat]=process.versions.node.split('.').map(Number);process.exit(maj>22||(maj===22&&(min>22||(min===22&&pat>=3)))?0:1)" &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
-   [ ! -e "$backup" ] && [ ! -L "$backup" ] &&
-   mv ~/.local/bin/node "$backup" &&
+   mkdir "$backup" &&
+   mv ~/.local/bin/node "$backup/node" &&
    ln -s "$node" ~/.local/bin/node
    ```
 
-   If the backup name already exists — two repairs within the same second —
-   the test stops the chain before anything is moved and the original stays in
-   place; run the block again a second later.
+   The backup is a directory created atomically: a second repair in the same
+   second (from this window or another one) fails its `mkdir` and stops with
+   the original launcher untouched, so concurrent attempts cannot overwrite
+   each other's only copy of the original. Each attempt owns one directory
+   holding the launcher it replaced.
 
-   To restore a backup, replace the launcher directory entry instead of
-   copying through the link, or `cp` would follow the link and overwrite the
-   supported Node binary that other tools share:
+   To restore a backup, replace the launcher directory entry in the way that
+   preserves the backup's own entry type, and never copy through the current
+   link — `cp` would follow it and rewrite the supported Node binary that
+   other tools share:
 
    ```bash
-   newest=$(ls -t ~/.local/bin/node.before-loopx.* | head -1) &&
-   shasum "$newest" &&
+   newest=$(ls -td ~/.local/bin/node.before-loopx.* | head -1) &&
+   shasum "$newest/node" &&
    rm ~/.local/bin/node &&
-   cp "$newest" ~/.local/bin/node &&
-   shasum "$newest" ~/.local/bin/node
+   if [ -L "$newest/node" ]; then
+     ln -s "$(readlink "$newest/node")" ~/.local/bin/node
+   else
+     cp "$newest/node" ~/.local/bin/node
+   fi &&
+   shasum "$newest/node" "$HOME/.local/bin/node"
    ```
 
-   The two `shasum` lines must match: the first reads the backup, the second
-   reads the restored launcher. Removing the link entry before `cp` is what
-   keeps the supported Node binary safe — the copy creates a fresh regular
-   file instead of following the link into a binary other tools share.
+   The two `shasum` lines bracket the restore: the first reads the backup's
+   launcher, the second reads the restored entry through its route, and the
+   two must match. The backup keeps the launcher's own entry type: a symlink
+   is recreated with the same target, so a later version-manager update is
+   still followed; a regular file is copied byte for byte. Removing the
+   current entry before the copy is what keeps the supported Node binary
+   safe — nothing writes through the link into a binary other tools share.
+   To double-check the candidate itself, checksum the path you chose as
+   `<supported node binary>`; the restore never writes to it.
 
-   The `shasum` lines bracket the copy: the first is the backup you are
-   restoring, the second must match it after the copy, proving the candidate
-   binary behind the removed link kept its original bytes. `node_found` of
-   `true` with no `node_version` means the App found a `node` it could not
-   read a version from: inspect that entry with `ls -l` and the same
-   `--version` call before replacing it the same way.
+   `node_found` of `true` with no `node_version` means the App found a `node`
+   it could not read a version from: inspect that entry with `ls -l` and the
+   same `--version` call before replacing it the same way.
 4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
    environment reading refreshes every 30 seconds, or reopen the App.
    `node --version` in a terminal only verifies the interactive shell, which
