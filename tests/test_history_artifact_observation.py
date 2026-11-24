@@ -77,9 +77,15 @@ def test_history_observes_retained_evidence_after_full_reduction(history_case, m
     calls = []
     original = history_module._indexed_artifact_exists
 
-    def observe(value, *, artifact_root):
+    def observe(value, *, artifact_root, runs_dir=None, goal_id=None, extension=None):
         calls.append(value)
-        return original(value, artifact_root=artifact_root)
+        return original(
+            value,
+            artifact_root=artifact_root,
+            runs_dir=runs_dir,
+            goal_id=goal_id,
+            extension=extension,
+        )
 
     monkeypatch.setattr(history_module, "_indexed_artifact_exists", observe)
     result = _collect(history_case, limit=limit)

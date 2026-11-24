@@ -270,9 +270,22 @@ def test_load_index_reuses_artifact_existence_checks_for_duplicate_rows(
     calls: list[tuple[Any, Path | None]] = []
     original = history_module._indexed_artifact_exists
 
-    def count_exists(value: Any, *, artifact_root: Path | None) -> bool:
+    def count_exists(
+        value: Any,
+        *,
+        artifact_root: Path | None,
+        runs_dir: Path | None = None,
+        goal_id: str | None = None,
+        extension: str | None = None,
+    ) -> bool:
         calls.append((value, artifact_root))
-        return original(value, artifact_root=artifact_root)
+        return original(
+            value,
+            artifact_root=artifact_root,
+            runs_dir=runs_dir,
+            goal_id=goal_id,
+            extension=extension,
+        )
 
     monkeypatch.setattr(history_module, "_indexed_artifact_exists", count_exists)
 
