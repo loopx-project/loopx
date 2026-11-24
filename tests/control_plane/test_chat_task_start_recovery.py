@@ -147,11 +147,11 @@ def test_concurrent_task_confirmation_preserves_the_inflight_owner(task_start, m
     entered, proceed = Event(), Event()
     save = actions.save_checkpoint
 
-    def pause(proposal_id, *, step, receipt):
+    def pause(proposal_id, *, step, receipt, **kwargs):
         if step == "task_session_opened" and not entered.is_set():
             entered.set()
             assert proceed.wait(15), "the first confirmation did not resume"
-        return save(proposal_id, step=step, receipt=receipt)
+        return save(proposal_id, step=step, receipt=receipt, **kwargs)
 
     monkeypatch.setattr(actions, "save_checkpoint", pause)
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -183,8 +183,8 @@ def test_task_start_recovers_after_unrelated_todo_write(task_start, monkeypatch)
     path = f"/api/actions/{proposal_id}/apply"
     save = actions.save_checkpoint
 
-    def interrupt(proposal_id, *, step, receipt):
-        stored = save(proposal_id, step=step, receipt=receipt)
+    def interrupt(proposal_id, *, step, receipt, **kwargs):
+        stored = save(proposal_id, step=step, receipt=receipt, **kwargs)
         if step == "todo_created":
             raise OSError("Interrupted before the managed claim")
         return stored
@@ -235,8 +235,8 @@ def test_task_start_recovers_after_unrelated_goal_title_edit(task_start, monkeyp
     else:
         save = actions.save_checkpoint
 
-        def interrupt(proposal_id, *, step, receipt):
-            saved = save(proposal_id, step=step, receipt=receipt)
+        def interrupt(proposal_id, *, step, receipt, **kwargs):
+            saved = save(proposal_id, step=step, receipt=receipt, **kwargs)
             if step == "todo_created":
                 raise OSError("Interrupted before the managed claim")
             return saved
@@ -274,10 +274,10 @@ def test_task_session_is_pinned_before_its_checkpoint(task_start, monkeypatch, c
     path = f"/api/actions/{proposal_id}/apply"
     save = actions.save_checkpoint
 
-    def interrupt(proposal_id, *, step, receipt):
+    def interrupt(proposal_id, *, step, receipt, **kwargs):
         if step == "task_session_opened":
             raise OSError("Session persisted before the confirmation checkpoint")
-        return save(proposal_id, step=step, receipt=receipt)
+        return save(proposal_id, step=step, receipt=receipt, **kwargs)
 
     with monkeypatch.context() as faults:
         faults.setattr(actions, "save_checkpoint", interrupt)
@@ -339,7 +339,7 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
 
     save = actions.save_checkpoint
 
-    def after_completion(proposal_id, *, step, receipt):
+    def after_completion(proposal_id, *, step, receipt, **kwargs):
         if step == "task_session_opened" and interruption.startswith("legacy"):
             # Old confirmations admitted a Turn without this checkpoint.
             return actions.load(proposal_id)
@@ -347,7 +347,7 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
             lost.update(receipt)
             assert controller.wait_for_turn(**receipt, timeout_sec=10)["status"] == "completed"
             raise OSError("Turn completed before the confirmation checkpoint")
-        return save(proposal_id, step=step, receipt=receipt)
+        return save(proposal_id, step=step, receipt=receipt, **kwargs)
 
     with monkeypatch.context() as faults:
         if interruption.startswith("accepted"):
@@ -389,17 +389,10 @@ def test_task_retry_respects_original_turn_and_current_authority(task_start, mon
     assert _snapshot(runtime) == before
 
 
-@pytest.mark.parametrize(("task_start", "interruption"), [
-    pytest.param((provider, "soft_claim" if stage == "turn-completed-v23" else "hard_lease"), stage,
-        id=f"{provider}-{stage}")
-    for provider in ("file", "sqlite") for stage in (
-        "claim-committed", "turn-completed", "turn-completed-v23", "claim-missing", "edited-before-claim",
-    )
-], indirect=["task_start"])
-def test_legacy_task_confirmation_recovers_the_original_execution(task_start, environment, interruption):  # noqa: F811
-    actions, post, _, controller, reopen, runtime, capture, example_id = task_start
+def _legacy_created_task(actions, registry_path, example_id):
+    """Write the pre-preparation creation receipt with its original operation ID."""
     params = actions.load(example_id)["normalized_parameters"]
-    intent = dict(registry_path=controller.registry_path, goal_id=params["goal_id"], text=params["text"])
+    intent = dict(registry_path=registry_path, goal_id=params["goal_id"], text=params["text"])
     preview = build_todo_review_preview(**intent)
     proposal = actions.create_preview(
         action_kind="todo.create", summary=params["text"], normalized_parameters=params,
@@ -412,6 +405,20 @@ def test_legacy_task_confirmation_recovers_the_original_execution(task_start, en
     receipt = apply_todo_review_preview(**intent, preview_id=preview["preview_id"])["receipt"]
     todo_id = receipt["todo_id"]
     actions.save_checkpoint(proposal_id, step="todo_created", receipt={"todo_id": todo_id, "canonical_receipt": receipt})
+    return params, proposal_id, receipt
+
+
+@pytest.mark.parametrize(("task_start", "interruption"), [
+    pytest.param((provider, "soft_claim" if stage == "turn-completed-v23" else "hard_lease"), stage,
+        id=f"{provider}-{stage}")
+    for provider in ("file", "sqlite") for stage in (
+        "claim-committed", "turn-completed", "turn-completed-v23", "claim-missing", "edited-before-claim",
+    )
+], indirect=["task_start"])
+def test_legacy_task_confirmation_recovers_the_original_execution(task_start, environment, interruption):  # noqa: F811
+    actions, post, _, controller, reopen, runtime, capture, example_id = task_start
+    params, proposal_id, receipt = _legacy_created_task(actions, controller.registry_path, example_id)
+    todo_id = receipt["todo_id"]
     owner = params["agent_id"]
     completed = interruption.startswith("turn-completed")
     if interruption == "turn-completed-v23":
@@ -472,6 +479,9 @@ def test_legacy_task_confirmation_recovers_the_original_execution(task_start, en
 @pytest.mark.parametrize("recovery", ["active", "stopped", "legacy", "retargeted"])
 def test_applied_confirmation_retries_the_original_undispatched_turn(task_start, monkeypatch, tmp_path, recovery):
     actions, request, chat, controller, reopen, runtime, capture, proposal_id = task_start
+    if recovery == "legacy":
+        _, proposal_id, _ = _legacy_created_task(actions, controller.registry_path, proposal_id)
+        actions.mark_failed(proposal_id, error_code="canonical_action_failed", message="Interrupted after creation")
     path = f"/api/actions/{proposal_id}"
     stopped = recovery == "stopped"
     save = actions.save_checkpoint

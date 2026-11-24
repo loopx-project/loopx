@@ -2,7 +2,7 @@ import {requirePromotionRegisteredAgents} from "./shadow_registry_source.ts";
 import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
-import {registryAuthoritySourceCheck} from "./authority_source.ts";
+import {registryAuthoritySourceCheck, requireReviewedRegistrySha256} from "./authority_source.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import type {ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {LeaseWorktreeObservationError, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
@@ -1172,11 +1172,17 @@ export async function createLocalCoordinationTodo(
     if (!reviewed && Object.hasOwn(input, "expected_provider_revision")) {
       throw new TypeError("expected_provider_revision requires Todo create request v2");
     }
-    if (sourceBound ? typeof input.expected_registry_sha256 !== "string" : Object.hasOwn(input, "expected_registry_sha256")) {
-      throw new TypeError("expected_registry_sha256 requires a source-bound Todo create request");
+    if (!sourceBound && Object.hasOwn(input, "expected_registry_sha256")) {
+      throw new TypeError("expected_registry_sha256 requires Todo create request v3");
     }
+    if (!sourceBound && Object.hasOwn(input, "expected_store_identity")) {
+      throw new TypeError("expected_store_identity requires Todo create request v3");
+    }
+    const expectedStore = Object.hasOwn(input, "expected_store_identity")
+      ? requireAuthorityStoreId(input.expected_store_identity, "expected store identity") : undefined;
+    const expectedRegistry = sourceBound ? requireReviewedRegistrySha256(input.expected_registry_sha256) : undefined;
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, input.expected_registry_sha256);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, expectedRegistry);
     const expectedRevision = reviewed
       ? requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision") : undefined;
     if (typeof input.dry_run !== "boolean") {
@@ -1188,6 +1194,16 @@ export async function createLocalCoordinationTodo(
       const store = await openRuntimeStore(root, goalId, dependencies);
       sourceAuthority = sourceAuthorityFor(store);
       providerEvidence.source_authority = sourceAuthority;
+      if (expectedStore !== undefined) {
+        // Check within the same maintenance guard and against the same opened
+        // store used for receipt lookup, planning and commit.
+        const identity = await store.storeIdentity();
+        if (identity.status !== "available" || identity.store_identity !== expectedStore) {
+          return {...providerEvidence, schema_version: COORDINATION_TODO_CREATE_RESULT_SCHEMA,
+            status: "failed", reason_code: "local_authority_provider_identity_mismatch",
+            reason: "The reviewed Todo store is unavailable or changed"};
+        }
+      }
       if (!Array.isArray(input.registered_agents)) {
         throw new TypeError("registered_agents must be a JSON array");
       }
@@ -1203,6 +1219,9 @@ export async function createLocalCoordinationTodo(
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         dry_run: input.dry_run === true,
         ...(expectedRevision === undefined ? {} : {expected_provider_revision: expectedRevision}),
+        // Prepared confirmations bind the original digest to the receipt.
+        // Witness-only callers retain the receipt identity of earlier builds.
+        ...(expectedStore === undefined ? {} : {expected_registry_sha256: expectedRegistry}),
         now: claimObservedAt(input.observed_at),
       }, authoritySourcesCurrent);
       return {
