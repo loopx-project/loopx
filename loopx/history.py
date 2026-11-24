@@ -26,6 +26,7 @@ from .control_plane.quota.host_poll_receipts import read_host_worker_observation
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
+    relocated_run_artifact_path,
 )
 from .control_plane.projects.registry_codec import (
     decode_registry_snapshot as decode_registry_snapshot,
@@ -360,7 +361,29 @@ def discover_goal_ids(
     return sorted(ids)
 
 
-def _indexed_artifact_exists(value: object, *, artifact_root: Path | None) -> bool:
+def _goal_run_index_context(index_path: Path) -> tuple[Path, str] | None:
+    """Runs directory and goal id for ``goals/<goalId>/runs/index.jsonl``."""
+
+    if index_path.name != "index.jsonl":
+        return None
+    runs_dir = index_path.parent
+    goal_dir = runs_dir.parent
+    if runs_dir.name != "runs" or goal_dir.parent.name != "goals":
+        return None
+    goal_id = goal_dir.name
+    if not goal_id or goal_id in {".", ".."}:
+        return None
+    return runs_dir, goal_id
+
+
+def _indexed_artifact_exists(
+    value: object,
+    *,
+    artifact_root: Path | None,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
+    extension: str | None = None,
+) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
@@ -368,25 +391,47 @@ def _indexed_artifact_exists(value: object, *, artifact_root: Path | None) -> bo
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
     try:
-        return path.exists()
+        if path.exists():
+            return True
     except OSError:
         # Availability is a best-effort observation, not run-index authority.
         # Match pathlib's Python 3.14 behavior on older supported interpreters:
         # inaccessible or invalid artifact paths must not hide durable history.
         return False
+    if runs_dir is None or not goal_id or not extension:
+        return False
+    # Read-time only: a copied same-named regular file stands in for the
+    # absolute path the index still records. The index bytes stay unchanged.
+    return (
+        relocated_run_artifact_path(runs_dir, goal_id, text, extension) is not None
+    )
 
 
 def _observe_run_artifacts(
-    records: Iterable[dict[str, object]], *, artifact_root: Path | None,
+    records: Iterable[dict[str, object]],
+    *,
+    artifact_root: Path | None,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> None:
     """Fresh request-local observations, shared by full and selected reads."""
-    observed: dict[str, bool] = {}
+    observed: dict[tuple[str, str], bool] = {}
     for record in records:
-        for source, target in (("json_path", "json_exists"), ("markdown_path", "markdown_exists")):
+        for source, target, extension in (
+            ("json_path", "json_exists", ".json"),
+            ("markdown_path", "markdown_exists", ".md"),
+        ):
             path = str(record.get(source) or "").strip()
-            if path not in observed:
-                observed[path] = _indexed_artifact_exists(path, artifact_root=artifact_root)
-            record[target] = observed[path]
+            key = (path, extension)
+            if key not in observed:
+                observed[key] = _indexed_artifact_exists(
+                    path,
+                    artifact_root=artifact_root,
+                    runs_dir=runs_dir,
+                    goal_id=goal_id,
+                    extension=extension,
+                )
+            record[target] = observed[key]
 
 
 def load_index_snapshot(
@@ -396,6 +441,8 @@ def load_index_snapshot(
     include_artifact_status: bool = True,
     tolerate_undecodable: bool = False,
     skip_invalid_encoding: bool = False,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> RunIndexSnapshot:
     """Decode the complete index; derived artifact status is optional internally.
 
@@ -460,7 +507,21 @@ def load_index_snapshot(
                 positions[key] = len(records)
                 records.append(item)
     if include_artifact_status:
-        _observe_run_artifacts(records, artifact_root=artifact_root)
+        observed_runs = runs_dir
+        observed_goal = goal_id
+        if observed_runs is None or not observed_goal:
+            inferred = _goal_run_index_context(path)
+            if inferred is not None:
+                if observed_runs is None:
+                    observed_runs = inferred[0]
+                if not observed_goal:
+                    observed_goal = inferred[1]
+        _observe_run_artifacts(
+            records,
+            artifact_root=artifact_root,
+            runs_dir=observed_runs,
+            goal_id=observed_goal,
+        )
     return RunIndexSnapshot(
         records=records,
         raw_count=raw_count,
@@ -474,8 +535,15 @@ def load_index(
     path: Path,
     *,
     artifact_root: Path | None = None,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
-    snapshot = load_index_snapshot(path, artifact_root=artifact_root)
+    snapshot = load_index_snapshot(
+        path,
+        artifact_root=artifact_root,
+        runs_dir=runs_dir,
+        goal_id=goal_id,
+    )
     return snapshot.records, snapshot.raw_count
 
 
@@ -639,6 +707,8 @@ def collect_history(
                 iter_goal_semantic_history_runs(semantic_history),
             ),
             artifact_root=registry_project_root(registry_path),
+            runs_dir=index_path.parent,
+            goal_id=current_goal_id,
         )
         if registry_member:
             for field in REGISTRY_STATUS_FIELDS:
@@ -755,8 +825,20 @@ def inspect_index_duplicates(
                 "generated_at": generated_at,
                 "json_path": json_path,
                 "markdown_path": markdown_path,
-                "json_exists": _indexed_artifact_exists(json_path, artifact_root=artifact_root),
-                "markdown_exists": _indexed_artifact_exists(markdown_path, artifact_root=artifact_root),
+                "json_exists": _indexed_artifact_exists(
+                    json_path,
+                    artifact_root=artifact_root,
+                    runs_dir=index_path.parent,
+                    goal_id=current_goal_id,
+                    extension=".json",
+                ),
+                "markdown_exists": _indexed_artifact_exists(
+                    markdown_path,
+                    artifact_root=artifact_root,
+                    runs_dir=index_path.parent,
+                    goal_id=current_goal_id,
+                    extension=".md",
+                ),
                 "line_numbers": [line_number for line_number, _ in records],
                 "raw_rows": len(records),
                 "duplicate_rows": len(records) - 1,

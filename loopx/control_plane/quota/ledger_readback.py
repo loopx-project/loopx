@@ -106,8 +106,9 @@ def _lexical_absolute(path: Path) -> Path:
 def _copied_goal_run_file_name(stored_path: str, goal_id: str, extension: str) -> str | None:
     """File name when ``stored_path`` is ``<any>/goals/<goalId>/runs/<file>``.
 
-    A runtime copy leaves the old absolute path in the index row. Only that
-    same-goal runs file may be opened from the current runs directory.
+    ``extension`` is ``.json`` or ``.md``. A runtime copy leaves the old
+    absolute path in the index row. Only that same-goal runs file may be
+    opened from the current runs directory.
     """
 
     if not goal_id:
@@ -182,6 +183,23 @@ def _relocated_run_artifact_path(
     if relative != file_name:
         return None
     return target
+
+
+def relocated_run_artifact_path(
+    runs_dir: Path,
+    goal_id: str,
+    stored_path: str,
+    extension: str,
+) -> Path | None:
+    """Same-named regular ``.json`` or ``.md`` file inside ``runs_dir``.
+
+    Symlinks, directories, and files whose real path leaves the runs directory
+    are not substitutes. A stored path that is already inside ``runs_dir``, or
+    that does not name this goal's runs file, returns None so the caller keeps
+    the stored path.
+    """
+
+    return _relocated_run_artifact_path(runs_dir, goal_id, stored_path, extension)
 
 
 def _quota_event_artifact_path(
