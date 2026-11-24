@@ -339,6 +339,8 @@ def compose_turn_decision(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     composed_settlement: bool = False,
+    include_vision_detail: bool = False,
+    include_goal_acceptance_detail: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -346,7 +348,9 @@ def compose_turn_decision(
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True,
-        **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}))
+        **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}),
+        **({"include_vision_detail": True} if include_vision_detail else {}),
+        **({"include_goal_acceptance_detail": True} if include_goal_acceptance_detail else {}))
     return _apply_context_projection_changes(source, result)
 
 

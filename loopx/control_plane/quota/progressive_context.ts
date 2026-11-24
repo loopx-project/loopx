@@ -1268,6 +1268,11 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       const suggested = typeof outcomeId === "string" && expanded.has(outcomeId);
       if (suggested && !deferSuggested) { include(...outcome); return; }
       include(...outcome, "id");
+      if (row?.summary_only === true) {
+        for (const key of ["owner_agent_id", "basis_digest", "revision", "todo_count", "summary_only", "cold_read_command"]) {
+          if (Object.hasOwn(row, key)) include(...outcome, key);
+        }
+      }
       if (suggested) {
         include(...outcome, "objective");
         include(...outcome, "revision");

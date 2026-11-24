@@ -68,11 +68,19 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     assert rc == 0, guard
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     writeback = plan["ordered_steps"][1]
-    assert writeback["optional_attachments"][0]["required"] is False
+    attachment = writeback["optional_attachments"][0]
+    assert attachment["required"] is False
+    assert attachment["summary_only"] is True
+    assert "explore turn-context" in attachment["cold_read_command"]
     assert "--explore-result-json" not in writeback["command_template"]
     rc, compact = _run_cli(path, runtime, *command, cwd=project)
     assert rc == 0, compact
     assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+    rc, detailed = _run_cli(path, runtime, *command, "--include-detail", "vision", cwd=project)
+    assert rc == 0, detailed
+    detailed_attachment = detailed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]
+    assert detailed_attachment["required"] is False
+    assert "guidance" in detailed_attachment
     rc, completed = _run_cli(path, runtime, "todo", "complete", *binding,
                             "--evidence", "Synthetic deliverable validated", "--no-follow-up", cwd=project)
     assert rc != 0 and completed["settlement_blocked_completion"], completed
@@ -89,7 +97,7 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
                 yield from plans(child)
     completion_plans = list(plans(completed))
     assert completion_plans, completed
-    assert any(p["ordered_steps"][1].get("optional_attachments") == writeback["optional_attachments"]
+    assert any(p["ordered_steps"][1].get("optional_attachments") == [detailed_attachment]
                for p in completion_plans)
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 

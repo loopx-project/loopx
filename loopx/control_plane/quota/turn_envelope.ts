@@ -20,6 +20,7 @@ import {
   referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
 } from "./diagnostic_projection.ts";
 import { completeCliSettlementChannel } from "./settlement_plan.ts";
+import { compactRoutineSettlementPlan, scopeTurnGoalAcceptance } from "./turn_envelope_scoping.ts";
 import {
   interpretQuotaShouldRunPacket, assertSupportedQuotaPacket,
   settlementIdentityFromPlan, settlementIdentityPayload, type JsonObject,
@@ -1026,6 +1027,10 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const payload = requireJsonObject(request.payload, "complete Turn decision source");
   const composedSettlement = request.composed_settlement === undefined ? false
     : requireBoolean(request.composed_settlement, "composed_settlement");
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
+  const includeVisionDetail = request.include_vision_detail === undefined ? false
+    : requireBoolean(request.include_vision_detail, "include_vision_detail");
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
@@ -1083,7 +1088,13 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
         })}}}};
     }
   }
+  if (!includeVisionDetail) {
+    source = compactRoutineSettlementPlan(source);
+  }
   source = referenceGoalAcceptance(source, sourceIdentity);
+  if (!includeGoalAcceptanceDetail) {
+    source = scopeTurnGoalAcceptance(source);
+  }
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);

@@ -19,10 +19,16 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
     from ..control_plane.quota.turn_envelope import compose_turn_decision
+    from .quota_request import quota_detail_sections_from_args
 
+    detail_sections = quota_detail_sections_from_args(args)
     try:
-        return compose_turn_decision(payload, scheduler_execution_context=scheduler_context,
-            composed_settlement=True)
+        return compose_turn_decision(
+            payload,
+            scheduler_execution_context=scheduler_context,
+            composed_settlement=True,
+            include_vision_detail="vision" in detail_sections,
+        )
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         from .quota_capture import capture_decision
         from .quota_failure_report import quota_decision_transport_diagnostic

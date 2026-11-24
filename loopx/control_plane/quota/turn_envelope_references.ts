@@ -322,11 +322,23 @@ function indexCapturedAcceptanceOutcomes(payload: JsonObject, indexOutcome: (val
   }
 }
 
+function summaryOutcomeIndexRow(ref: string, outcome: JsonObject): JsonObject | null {
+  if (outcome.summary_only !== true) return null;
+  return {
+    outcome_ref: ref,
+    id: outcome.id,
+    ...pickOwn(outcome, ["owner_agent_id", "basis_digest", "revision", "todo_count", "cold_read_command"]),
+    summary_only: true,
+  };
+}
+
 /** Expose existing facts, not another acceptance verdict. Missing values stay
  * absent; an Agent's `met` review is not a current independent check.
  */
 function capturedOutcomeIndex(outcomes: ReadonlyMap<string, JsonObject>, precision?: ReplanReadPrecision): JsonObject[] {
   return [...outcomes].map(([ref, outcome]) => {
+    const compactRow = summaryOutcomeIndexRow(ref, outcome);
+    if (compactRow) return compactRow;
     const states = new Map<string, JsonObject>();
     if (Array.isArray(outcome.requirements)) for (const value of outcome.requirements) {
       const requirement = requireJsonObject(value, "captured outcome requirement");
@@ -674,10 +686,14 @@ export function replanGoalContext(payload: JsonObject, reads: JsonObject | null,
   }
   const acceptanceIndex = outcomes.size ? {
     read_action_template: `${reads!.acceptance} --outcome-ref {outcome_ref}`,
-    outcomes: complete ? capturedOutcomeIndex(outcomes, precision) : [...outcomes].map(([ref, outcome]) => retain({outcome_ref: ref, id: outcome.id,
-      objective: outcome.objective, revision: outcome.revision,
-      requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null},
-      outcome, ["id", "objective", "revision"])),
+    outcomes: complete ? capturedOutcomeIndex(outcomes, precision) : [...outcomes].map(([ref, outcome]) => {
+      const compactRow = summaryOutcomeIndexRow(ref, outcome);
+      if (compactRow) return compactRow;
+      return retain({outcome_ref: ref, id: outcome.id,
+        objective: outcome.objective, revision: outcome.revision,
+        requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null},
+        outcome, ["id", "objective", "revision"]);
+    }),
   } : null;
   return {core, horizon, outcomes, acceptanceIndex, ambiguous};
 }

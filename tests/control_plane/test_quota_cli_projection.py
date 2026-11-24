@@ -266,7 +266,9 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = fixture._write_fixture(tmp_path)
+    routine_root = tmp_path / "routine"
+    routine_root.mkdir()
+    project, runtime, registry = fixture._write_fixture(routine_root)
     config = json.loads(registry.read_text())
     config["goals"][0]["explore_graph"] = {"enabled": True}
     registry.write_text(json.dumps(config))
@@ -277,11 +279,33 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     assert rc == 0, guard
     sources = guard["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     graph = next(source["content"]["graph"] for source in sources if source.get("kind") == "explore_turn_context")
-    assert "result_writeback_guidance_ref" in graph
-    steps = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+    assert graph["result_writeback_guidance_summary_only"] is True
+    assert "explore turn-context" in graph["result_writeback_guidance_cold_read_command"]
+    assert "result_writeback_guidance" not in graph
+    routine_attachment = next(attachment for step in guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+                              if step["kind"] == "durable_writeback" for attachment in step["optional_attachments"]
+                              if attachment["capability_id"] == "explore")
+    assert routine_attachment["summary_only"] is True
+    assert "guidance" not in routine_attachment
+
+    triggered_root = tmp_path / "triggered"
+    triggered_root.mkdir()
+    t_project, t_runtime, t_registry = fixture._write_fixture(triggered_root, required_capability="explore")
+    t_config = json.loads(t_registry.read_text())
+    t_config["goals"][0]["explore_graph"] = {"enabled": True}
+    t_registry.write_text(json.dumps(t_config))
+    fixture._initialize_fixture_authority(t_project, t_runtime, provider=provider)
+    rc, triggered = fixture._run_cli(t_registry, t_runtime, "quota", "should-run", "--codex-app",
+        "--available-capability", "explore", *binding, "--todo-id", fixture.TODO_ID,
+        "--turn-instance-id", "guidance-read-triggered", cwd=t_project)
+    assert rc == 0, triggered
+    t_sources = triggered["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    t_graph = next(source["content"]["graph"] for source in t_sources if source.get("kind") == "explore_turn_context")
+    assert "result_writeback_guidance_ref" in t_graph
+    steps = triggered["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
     owner = next(attachment["guidance"] for step in steps if step["kind"] == "durable_writeback"
                  for attachment in step["optional_attachments"] if attachment["capability_id"] == "explore")
-    rc, standalone = fixture._run_cli(registry, runtime, "explore", "turn-context", *binding, cwd=project)
+    rc, standalone = fixture._run_cli(t_registry, t_runtime, "explore", "turn-context", *binding, cwd=t_project)
     assert rc == 0, standalone
     assert owner == standalone["graph"]["result_writeback_guidance"]
     assert fixture._spend_run_count(runtime) == 0
