@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from argparse import Namespace
 import ast
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+import importlib
 import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
+from types import ModuleType
 from typing import cast, get_args
 
 import pytest
@@ -278,6 +283,166 @@ assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
             check=False,
         )
         assert completed.returncode == 0, completed.stderr
+
+
+def test_concurrent_first_builtin_load_blocks_conflict_without_blocking_other_builtins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builtin_claude = HostHarnessCapabilities(
+        host_id="claude",
+        integration_tier="boundary_cli",
+        adapter_module="loopx.claude_goal_mode",
+        supported_capabilities=("verifier_hook",),
+        hook_events=("PreToolUse",),
+        requires_utf8_stdio=True,
+        native_goal_primitive=False,
+        native_scheduler_primitive=True,
+        description="Authoritative built-in claude descriptor.",
+    )
+    builtin_dsh = HostHarnessCapabilities(
+        host_id="dsh",
+        integration_tier="in_tree_codesigned",
+        adapter_module="loopx.dsh_goal_mode",
+        supported_capabilities=("native_context_budget",),
+        hook_events=(),
+        requires_utf8_stdio=True,
+        native_goal_primitive=False,
+        native_scheduler_primitive=False,
+        description="Authoritative built-in dsh descriptor.",
+    )
+    conflicting_claude = HostHarnessCapabilities(
+        host_id="claude",
+        integration_tier="boundary_cli",
+        adapter_module="loopx.claude_goal_mode",
+        supported_capabilities=("verifier_hook",),
+        hook_events=("PreToolUse",),
+        requires_utf8_stdio=True,
+        native_goal_primitive=False,
+        native_scheduler_primitive=True,
+        description="Conflicting concurrent overwrite.",
+    )
+    registry = HostCapabilitiesRegistry(
+        builtin_modules={
+            "claude": "fake.builtin_claude",
+            "dsh": "fake.builtin_dsh",
+        }
+    )
+
+    claude_import_started = threading.Event()
+    release_claude_import = threading.Event()
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name: str, package: str | None = None) -> ModuleType:
+        if name == "fake.builtin_claude":
+            claude_import_started.set()
+            assert release_claude_import.wait(timeout=5.0)
+            registry.register(builtin_claude)
+            return ModuleType(name)
+        if name == "fake.builtin_dsh":
+            registry.register(builtin_dsh)
+            return ModuleType(name)
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        claude_future = pool.submit(registry.get, "claude")
+        assert claude_import_started.wait(timeout=5.0)
+
+        conflict_entered = threading.Event()
+
+        def attempt_conflict() -> HostHarnessCapabilities:
+            conflict_entered.set()
+            return registry.register(conflicting_claude, replace=False)
+
+        conflict_future = pool.submit(attempt_conflict)
+        assert conflict_entered.wait(timeout=5.0)
+        # Another built-in host must load cleanly without waiting on claude's import lock.
+        dsh_future = pool.submit(registry.get, "dsh")
+        assert dsh_future.result(timeout=5.0) == builtin_dsh
+        time.sleep(0.02)
+        assert not conflict_future.done()
+
+        release_claude_import.set()
+        assert claude_future.result(timeout=5.0) == builtin_claude
+        with pytest.raises(
+            ValueError,
+            match="conflicting host capabilities registration for claude",
+        ):
+            conflict_future.result(timeout=5.0)
+
+    assert registry.get("claude") == builtin_claude
+
+
+def test_list_ascii_host_id_ordering_matches_typescript() -> None:
+    input_ids = ["az", "a_b", "a-b", "a0b", "ab"]
+    descriptors = [
+        HostHarnessCapabilities(
+            host_id=host_id,
+            integration_tier="in_tree_codesigned",
+            adapter_module="loopx.hosts.sample",
+            supported_capabilities=("quiet_turn",),
+            hook_events=(),
+            requires_utf8_stdio=True,
+            native_goal_primitive=False,
+            native_scheduler_primitive=False,
+            description=f"Descriptor for {host_id}",
+        )
+        for host_id in input_ids
+    ]
+    py_registry = HostCapabilitiesRegistry(descriptors)
+    expected_order = ["a-b", "a0b", "a_b", "ab", "az"]
+    assert [entry.host_id for entry in py_registry.list()] == expected_order
+    assert [
+        entry.host_id for entry in py_registry.list(tier="in_tree_codesigned")
+    ] == expected_order
+    assert [
+        entry.host_id for entry in py_registry.list(capability="quiet_turn")
+    ] == expected_order
+    assert [
+        entry.host_id
+        for entry in py_registry.list(
+            tier="in_tree_codesigned", capability="quiet_turn"
+        )
+    ] == expected_order
+
+    ts_list_probe = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-strip-types",
+            "--input-type=module",
+            "-e",
+            (
+                "import { createHostCapabilitiesRegistry, defineHostHarnessCapabilities, "
+                "listHostCapabilities } from './loopx/control_plane/hosts/host_harness_capabilities.ts';\n"
+                "const ids = JSON.parse(process.argv[1]);\n"
+                "const registry = createHostCapabilitiesRegistry(ids.map((host_id) => "
+                "defineHostHarnessCapabilities({ host_id, integration_tier: 'in_tree_codesigned', "
+                "adapter_module: 'loopx.hosts.sample', supported_capabilities: ['quiet_turn'], "
+                "hook_events: [], requires_utf8_stdio: true, native_goal_primitive: false, "
+                "native_scheduler_primitive: false, description: `Descriptor for ${host_id}` })));\n"
+                "console.log(JSON.stringify({\n"
+                "  all: listHostCapabilities({ registry }).map((e) => e.host_id),\n"
+                "  byTier: listHostCapabilities({ registry, tier: 'in_tree_codesigned' }).map((e) => e.host_id),\n"
+                "  byCap: listHostCapabilities({ registry, capability: 'quiet_turn' }).map((e) => e.host_id),\n"
+                "  byBoth: listHostCapabilities({ registry, tier: 'in_tree_codesigned', capability: 'quiet_turn' }).map((e) => e.host_id),\n"
+                "}));\n"
+            ),
+            json.dumps(input_ids),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ts_orders = json.loads(ts_list_probe.stdout)
+    assert ts_orders == {
+        "all": expected_order,
+        "byTier": expected_order,
+        "byCap": expected_order,
+        "byBoth": expected_order,
+    }
 
 
 def test_negative_cases_and_invariant_validation() -> None:

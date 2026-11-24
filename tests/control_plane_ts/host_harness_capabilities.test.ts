@@ -323,3 +323,48 @@ test("registry rejects conflicting registrations unless replace=true and stays i
     false,
   );
 });
+
+test("list orders host_id values by ASCII code-point order across punctuation and letters", () => {
+  const inputIds = ["az", "a_b", "a-b", "a0b", "ab"];
+  const descriptors = inputIds.map((hostId) =>
+    defineHostHarnessCapabilities({
+      host_id: hostId,
+      integration_tier: "in_tree_codesigned",
+      adapter_module: "loopx.hosts.sample",
+      supported_capabilities: ["quiet_turn"],
+      hook_events: [],
+      requires_utf8_stdio: true,
+      native_goal_primitive: false,
+      native_scheduler_primitive: false,
+      description: `Descriptor for ${hostId}`,
+    }),
+  );
+  const registry = createHostCapabilitiesRegistry(descriptors);
+  const expectedOrder = ["a-b", "a0b", "a_b", "ab", "az"];
+  assert.deepEqual(
+    listHostCapabilities({ registry }).map((entry) => entry.host_id),
+    expectedOrder,
+  );
+  assert.deepEqual(
+    listHostCapabilities({
+      registry,
+      tier: "in_tree_codesigned",
+    }).map((entry) => entry.host_id),
+    expectedOrder,
+  );
+  assert.deepEqual(
+    listHostCapabilities({
+      registry,
+      capability: "quiet_turn",
+    }).map((entry) => entry.host_id),
+    expectedOrder,
+  );
+  assert.deepEqual(
+    listHostCapabilities({
+      registry,
+      tier: "in_tree_codesigned",
+      capability: "quiet_turn",
+    }).map((entry) => entry.host_id),
+    expectedOrder,
+  );
+});

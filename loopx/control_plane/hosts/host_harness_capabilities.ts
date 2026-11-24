@@ -367,7 +367,11 @@ export function createHostCapabilitiesRegistry(
           capabilityFilter === null
           || entry.supported_capabilities.includes(capabilityFilter),
       )
-      .sort((left, right) => left.host_id.localeCompare(right.host_id));
+      // Deterministic ASCII code-unit ordering matching Python tuple(sorted(..., key=host_id));
+      // avoids localeCompare collation where "-" and "_" reorder across locales.
+      .sort((left, right) =>
+        left.host_id < right.host_id ? -1 : left.host_id > right.host_id ? 1 : 0,
+      );
   };
 
   return { register, get, supports, list };

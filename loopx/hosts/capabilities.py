@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import importlib
 import re
+import threading
 from typing import Literal, TypeGuard
 
 HOST_HARNESS_CAPABILITIES_SCHEMA_VERSION: Literal[
@@ -407,37 +408,47 @@ class HostCapabilitiesRegistry:
         *,
         builtin_modules: Mapping[str, str] | None = None,
     ) -> None:
+        self._lock = threading.RLock()
         self._entries: dict[str, HostHarnessCapabilities] = {}
         self._builtin_modules: dict[str, str] = (
             dict(builtin_modules) if builtin_modules is not None else {}
         )
-        self._loading_builtins: set[str] = set()
+        self._builtin_locks: dict[str, threading.RLock] = {}
+        self._loading_threads: dict[str, int] = {}
         for item in initial:
             self.register(item)
 
     def _ensure_builtin_loaded(self, host_id: str | None = None) -> None:
-        if host_id is not None:
-            if host_id in self._entries or host_id in self._loading_builtins:
+        if host_id is None:
+            with self._lock:
+                builtin_ids = tuple(self._builtin_modules.keys())
+            for builtin_id in builtin_ids:
+                self._ensure_builtin_loaded(builtin_id)
+            return
+
+        current_thread_id = threading.get_ident()
+        with self._lock:
+            if host_id in self._entries:
                 return
             module_name = self._builtin_modules.get(host_id)
             if module_name is None:
                 return
-            self._loading_builtins.add(host_id)
+            if self._loading_threads.get(host_id) == current_thread_id:
+                return
+            builtin_lock = self._builtin_locks.setdefault(host_id, threading.RLock())
+
+        with builtin_lock:
+            with self._lock:
+                if host_id in self._entries:
+                    return
+                if self._loading_threads.get(host_id) == current_thread_id:
+                    return
+                self._loading_threads[host_id] = current_thread_id
             try:
                 importlib.import_module(module_name)
             finally:
-                self._loading_builtins.discard(host_id)
-            return
-        for builtin_id, module_name in self._builtin_modules.items():
-            if (
-                builtin_id not in self._entries
-                and builtin_id not in self._loading_builtins
-            ):
-                self._loading_builtins.add(builtin_id)
-                try:
-                    importlib.import_module(module_name)
-                finally:
-                    self._loading_builtins.discard(builtin_id)
+                with self._lock:
+                    self._loading_threads.pop(host_id, None)
 
     def register(
         self,
@@ -447,20 +458,22 @@ class HostCapabilitiesRegistry:
     ) -> HostHarnessCapabilities:
         validated = validate_host_harness_capabilities(descriptor)
         self._ensure_builtin_loaded(validated.host_id)
-        existing = self._entries.get(validated.host_id)
-        if existing is not None and not replace:
-            if existing == validated:
-                return existing
-            raise ValueError(
-                f"conflicting host capabilities registration for {validated.host_id}"
-            )
-        self._entries[validated.host_id] = validated
-        return validated
+        with self._lock:
+            existing = self._entries.get(validated.host_id)
+            if existing is not None and not replace:
+                if existing == validated:
+                    return existing
+                raise ValueError(
+                    f"conflicting host capabilities registration for {validated.host_id}"
+                )
+            self._entries[validated.host_id] = validated
+            return validated
 
     def get(self, host_id: str) -> HostHarnessCapabilities | None:
         normalized = _validate_host_id(host_id)
         self._ensure_builtin_loaded(normalized)
-        return self._entries.get(normalized)
+        with self._lock:
+            return self._entries.get(normalized)
 
     def supports(
         self,
@@ -486,11 +499,13 @@ class HostCapabilitiesRegistry:
             else None
         )
         self._ensure_builtin_loaded()
+        with self._lock:
+            entries = tuple(self._entries.values())
         return tuple(
             sorted(
                 (
                     entry
-                    for entry in self._entries.values()
+                    for entry in entries
                     if (tier_filter is None or entry.integration_tier == tier_filter)
                     and (
                         capability_filter is None
