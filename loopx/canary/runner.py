@@ -8,8 +8,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
@@ -429,6 +431,45 @@ def _record_maintainability_report(
             result["maintainability_failure_paths"] = paths
 
 
+_ACTIVE_NODE_COMPILE_CACHE: ContextVar[Path | None] = ContextVar(
+    "loopx_canary_node_compile_cache",
+    default=None,
+)
+
+
+def _should_propagate_node_compile_cache() -> bool:
+    return (
+        os.environ.get("NODE_DISABLE_COMPILE_CACHE") != "1"
+        and not os.environ.get("NODE_V8_COVERAGE")
+        and "NODE_COMPILE_CACHE" not in os.environ
+    )
+
+
+@contextmanager
+def _run_scoped_node_compile_cache(
+    cleanup_failures: list[dict[str, object]], *, enabled: bool,
+) -> Iterator[None]:
+    if not enabled or not _should_propagate_node_compile_cache():
+        yield
+        return
+    cache_dir = Path(tempfile.mkdtemp(prefix="loopx-smoke-compile-cache-"))
+    os.chmod(cache_dir, 0o700)
+    token = _ACTIVE_NODE_COMPILE_CACHE.set(cache_dir)
+    try:
+        yield
+    finally:
+        _ACTIVE_NODE_COMPILE_CACHE.reset(token)
+        try:
+            remove_owned_tree(cache_dir)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            cleanup_failures.append({
+                "ok": False, "status": "failed",
+                "reason": f"Node compile cache cleanup failed for {cache_dir}: {exc}",
+            })
+
+
 def _run_check(
     check: dict[str, Any],
     *,
@@ -474,6 +515,9 @@ def _run_check(
                 env.pop(name, None)
             for name in ("TMPDIR", "TEMP", "TMP"):
                 env[name] = str(root)
+            compile_cache_dir = _ACTIVE_NODE_COMPILE_CACHE.get()
+            if compile_cache_dir is not None and _should_propagate_node_compile_cache():
+                env["NODE_COMPILE_CACHE"] = str(compile_cache_dir)
             for name, directory in (
                 ("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"),
                 ("XDG_STATE_HOME", ".local/state"), ("XDG_CACHE_HOME", ".cache"),
@@ -863,6 +907,7 @@ def build_canary_smoke_suite_run(
 
     results: list[dict[str, Any]] = []
     suite_guard_failures: list[dict[str, Any]] = []
+    cleanup_failures: list[dict[str, object]] = []
     requested_parallel_jobs = _coerce_parallel_jobs(parallel_jobs)
     effective_parallel_jobs = 1
     serial_check_count = 0
@@ -913,55 +958,90 @@ def build_canary_smoke_suite_run(
         parallel_check_count = len(selected) - serial_check_count
         if selected and not fail_fast and parallel_check_count:
             effective_parallel_jobs = min(requested_parallel_jobs, parallel_check_count)
-        if effective_parallel_jobs <= 1:
-            for index, check in enumerate(selected, start=1):
-                _progress_check_started(
-                    progress_callback,
-                    index=index,
-                    total=len(selected),
-                    check=check,
-                    repo_root=repo_root,
-                )
-                result = run_check(check, check_index=index)
-                if side_effect_guard["enforced"]:
-                    after_ok, tracked_after, after_stderr = _tracked_change_paths(repo_root=repo_root)
-                    side_effects = sorted(set(tracked_after) - set(tracked_before))
-                    if side_effects:
-                        result.update(
-                            {
-                                "ok": False,
-                                "status": "failed_tracked_side_effect",
-                                "tracked_side_effects": _display_git_paths(side_effects),
-                            }
-                        )
-                        if clean_start:
-                            restore = _restore_tracked_paths(
-                                side_effects,
-                                repo_root=repo_root,
-                                expected_paths=tracked_before,
-                            )
-                            result["tracked_side_effect_restore"] = restore
-                            side_effect_guard["auto_restored"] = (
-                                bool(side_effect_guard.get("auto_restored"))
-                                or bool(restore.get("ok"))
-                            )
-                    if not after_ok and after_stderr:
-                        result["tracked_side_effect_stderr_tail"] = after_stderr[-800:]
-                _progress_check_finished(
-                    progress_callback,
-                    index=index,
-                    total=len(selected),
-                    result=result,
-                )
-                results.append(result)
-                if fail_fast and not result.get("ok"):
-                    break
-        else:
-            indexed_results: dict[int, dict[str, Any]] = {}
-            with ThreadPoolExecutor(max_workers=effective_parallel_jobs) as executor:
-                futures = {}
+        with _run_scoped_node_compile_cache(cleanup_failures, enabled=bool(selected)):
+            if effective_parallel_jobs <= 1:
                 for index, check in enumerate(selected, start=1):
-                    if index in serial_indexes:
+                    _progress_check_started(
+                        progress_callback,
+                        index=index,
+                        total=len(selected),
+                        check=check,
+                        repo_root=repo_root,
+                    )
+                    result = run_check(check, check_index=index)
+                    if side_effect_guard["enforced"]:
+                        after_ok, tracked_after, after_stderr = _tracked_change_paths(repo_root=repo_root)
+                        side_effects = sorted(set(tracked_after) - set(tracked_before))
+                        if side_effects:
+                            result.update(
+                                {
+                                    "ok": False,
+                                    "status": "failed_tracked_side_effect",
+                                    "tracked_side_effects": _display_git_paths(side_effects),
+                                }
+                            )
+                            if clean_start:
+                                restore = _restore_tracked_paths(
+                                    side_effects,
+                                    repo_root=repo_root,
+                                    expected_paths=tracked_before,
+                                )
+                                result["tracked_side_effect_restore"] = restore
+                                side_effect_guard["auto_restored"] = (
+                                    bool(side_effect_guard.get("auto_restored"))
+                                    or bool(restore.get("ok"))
+                                )
+                        if not after_ok and after_stderr:
+                            result["tracked_side_effect_stderr_tail"] = after_stderr[-800:]
+                    _progress_check_finished(
+                        progress_callback,
+                        index=index,
+                        total=len(selected),
+                        result=result,
+                    )
+                    results.append(result)
+                    if fail_fast and not result.get("ok"):
+                        break
+            else:
+                indexed_results: dict[int, dict[str, Any]] = {}
+                with ThreadPoolExecutor(max_workers=effective_parallel_jobs) as executor:
+                    futures = {}
+                    for index, check in enumerate(selected, start=1):
+                        if index in serial_indexes:
+                            continue
+                        _progress_check_started(
+                            progress_callback,
+                            index=index,
+                            total=len(selected),
+                            check=check,
+                            repo_root=repo_root,
+                        )
+                        future = executor.submit(copy_context().run, run_check, check, check_index=index)
+                        futures[future] = (index, check)
+                    for future in as_completed(futures):
+                        index, check = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            result = {
+                                **check,
+                                "status": "failed",
+                                "ok": False,
+                                "reason": f"smoke runner exception: {exc}",
+                                "returncode": None,
+                                "duration_seconds": None,
+                                "check_index": index,
+                                "check_count": len(selected),
+                            }
+                        indexed_results[index] = result
+                        _progress_check_finished(
+                            progress_callback,
+                            index=index,
+                            total=len(selected),
+                            result=result,
+                        )
+                for index, check in enumerate(selected, start=1):
+                    if index not in serial_indexes:
                         continue
                     _progress_check_started(
                         progress_callback,
@@ -970,23 +1050,9 @@ def build_canary_smoke_suite_run(
                         check=check,
                         repo_root=repo_root,
                     )
-                    future = executor.submit(run_check, check, check_index=index)
-                    futures[future] = (index, check)
-                for future in as_completed(futures):
-                    index, check = futures[future]
-                    try:
-                        result = future.result()
-                    except Exception as exc:
-                        result = {
-                            **check,
-                            "status": "failed",
-                            "ok": False,
-                            "reason": f"smoke runner exception: {exc}",
-                            "returncode": None,
-                            "duration_seconds": None,
-                            "check_index": index,
-                            "check_count": len(selected),
-                        }
+                    result = run_check(check, check_index=index)
+                    result["serial_execution_required"] = True
+                    result["serial_execution_reason"] = _serial_smoke_reason(check, repo_root=repo_root)
                     indexed_results[index] = result
                     _progress_check_finished(
                         progress_callback,
@@ -994,27 +1060,7 @@ def build_canary_smoke_suite_run(
                         total=len(selected),
                         result=result,
                     )
-            for index, check in enumerate(selected, start=1):
-                if index not in serial_indexes:
-                    continue
-                _progress_check_started(
-                    progress_callback,
-                    index=index,
-                    total=len(selected),
-                    check=check,
-                    repo_root=repo_root,
-                )
-                result = run_check(check, check_index=index)
-                result["serial_execution_required"] = True
-                result["serial_execution_reason"] = _serial_smoke_reason(check, repo_root=repo_root)
-                indexed_results[index] = result
-                _progress_check_finished(
-                    progress_callback,
-                    index=index,
-                    total=len(selected),
-                    result=result,
-                )
-            results = [indexed_results[index] for index in sorted(indexed_results)]
+                results = [indexed_results[index] for index in sorted(indexed_results)]
         if side_effect_guard["enforced"]:
             final_ok, tracked_after, final_stderr = _tracked_change_paths(repo_root=repo_root)
             side_effects = sorted(set(tracked_after) - set(tracked_before))
@@ -1051,7 +1097,7 @@ def build_canary_smoke_suite_run(
                 suite_guard_failures.append(guard_failure)
 
     display_items = results if execute else normalized
-    failures = [item for item in results if not item.get("ok")] + suite_guard_failures
+    failures = [item for item in results if not item.get("ok")] + suite_guard_failures + cleanup_failures
     git_required_skips = [
         item for item in results if item.get("status") == "skipped_git_required"
     ]
@@ -1086,6 +1132,7 @@ def build_canary_smoke_suite_run(
         "selected_check_count": len(selected),
         "executed_check_count": len(results),
         "failure_count": len(failures),
+        **({"cleanup_failures": cleanup_failures} if cleanup_failures else {}),
         "git_required_skip_count": len(git_required_skips),
         "timeout_count": len(timed_out),
         "tracked_side_effect_failure_count": len(side_effect_failures),
@@ -1166,13 +1213,19 @@ def build_catalog_canary_run(
         for check in selected
     ]
     results = []
+    cleanup_failures: list[dict[str, object]] = []
     if execute:
-        results = [
-            _run_check(check, timeout_seconds=max(1.0, timeout_seconds), repo_root=repo_root)
-            for check in selected
-        ]
+        with _run_scoped_node_compile_cache(cleanup_failures, enabled=bool(selected)):
+            results = [
+                _run_check(
+                    check,
+                    timeout_seconds=max(1.0, timeout_seconds),
+                    repo_root=repo_root,
+                )
+                for check in selected
+            ]
 
-    failures = [item for item in results if not item.get("ok")]
+    failures = [item for item in results if not item.get("ok")] + cleanup_failures
     git_required_skips = [
         item for item in results if item.get("status") == "skipped_git_required"
     ]
@@ -1197,6 +1250,7 @@ def build_catalog_canary_run(
         "selected_check_count": len(selected),
         "executed_check_count": len(results),
         "failure_count": len(failures),
+        **({"cleanup_failures": cleanup_failures} if cleanup_failures else {}),
         "git_required_skip_count": len(git_required_skips),
         "unsafe_command_count": len(unsafe),
         "selection_inputs": plan.get("selection_inputs"),
@@ -1230,6 +1284,8 @@ def render_catalog_canary_run_markdown(payload: dict[str, Any]) -> str:
         str(payload.get("note") or ""),
         "",
     ]
+    for failure in payload.get("cleanup_failures", []):
+        lines.append(f"- {failure['reason']}")
     for check in payload.get("selected_checks", []):
         if not isinstance(check, dict):
             continue
@@ -1295,6 +1351,8 @@ def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
         str(payload.get("note") or ""),
         "",
     ]
+    for failure in payload.get("cleanup_failures", []):
+        lines.append(f"- {failure['reason']}")
     for warning in payload.get("warnings", []):
         if isinstance(warning, dict):
             lines.append(f"- warning: `{warning.get('kind')}` {warning.get('script')}: {warning.get('message')}")
