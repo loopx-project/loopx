@@ -114,10 +114,12 @@ def test_real_pytest_subtest_cost_is_included_once_in_parent_call(tmp_path):
         "        Path('native-reports.json').write_text(json.dumps(reports))\n",
         encoding="utf-8")
     log = tmp_path / "subtests.log"
+    env = environment()
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT), str(tmp_path)))
     with log.open("w") as output:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-v", "-n", "2", "-p", "native_reports",
-             "-p", "scripts.ci.pytest_timing"], cwd=tmp_path, env=environment(),
+             "-p", "scripts.ci.pytest_timing"], cwd=tmp_path, env=env,
             stdout=output, stderr=subprocess.STDOUT, timeout=30, check=False)
     assert result.returncode == 1
     native = json.loads((tmp_path / "native-reports.json").read_text())

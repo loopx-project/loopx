@@ -678,7 +678,12 @@ def test_qualify_release_commit_runs_end_to_end_on_clean_repo(tmp_path: Path) ->
     (repo / "pyproject.toml").write_text(f'[project]\nname = "loopx"\nversion = "{__version__}"\n', encoding="utf-8")
     (repo / "loopx" / "__init__.py").write_text(f'__version__ = "{__version__}"\n', encoding="utf-8")
     (repo / "tests" / "test_sample.py").write_text(
-        "import pytest\ndef test_pass_a(): assert 1 + 1 == 2\ndef test_skip_b(): pytest.skip('ok')\n",
+        "from pathlib import Path\n"
+        "import loopx\n"
+        "import pytest\n"
+        "def test_candidate_import():\n"
+        "    assert Path(loopx.__file__).resolve().parent.parent == Path.cwd()\n"
+        "def test_skip_b(): pytest.skip('ok')\n",
         encoding="utf-8",
     )
     for args in (
@@ -690,6 +695,9 @@ def test_qualify_release_commit_runs_end_to_end_on_clean_repo(tmp_path: Path) ->
     ):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
 
+    stale = tmp_path / "stale" / "loopx"
+    stale.mkdir(parents=True)
+    (stale / "__init__.py").write_text('raise RuntimeError("stale package imported")\n', encoding="utf-8")
     out_dir = tmp_path / "out"
     completed = subprocess.run(
         [
@@ -704,6 +712,7 @@ def test_qualify_release_commit_runs_end_to_end_on_clean_repo(tmp_path: Path) ->
             "--no-pytest-split",
         ],
         cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(stale.parent), "PYTHONSAFEPATH": "1"},
         check=False,
         capture_output=True,
         text=True,
@@ -927,7 +936,9 @@ def test_only_preflight_requires_preflight_since_and_isolated_node_compile_cache
     monkeypatch.delenv("NODE_V8_COVERAGE", raising=False)
     monkeypatch.delenv("NODE_COMPILE_CACHE", raising=False)
     enabled_root = tmp_path / "env-enabled"
-    enabled_env = isolated_env(enabled_root, python_bin=Path(sys.executable), extra_bin_dirs=[])
+    enabled_env = isolated_env(
+        enabled_root, repo_root=REPO_ROOT, python_bin=Path(sys.executable), extra_bin_dirs=[]
+    )
     cache_dir = enabled_root / "node-compile-cache"
     assert enabled_env["NODE_COMPILE_CACHE"] == str(cache_dir)
     assert cache_dir.is_dir()
@@ -936,13 +947,15 @@ def test_only_preflight_requires_preflight_since_and_isolated_node_compile_cache
 
     monkeypatch.setenv("NODE_DISABLE_COMPILE_CACHE", "1")
     disabled_root = tmp_path / "env-disabled"
-    disabled_env = isolated_env(disabled_root, python_bin=Path(sys.executable), extra_bin_dirs=[])
+    disabled_env = isolated_env(
+        disabled_root, repo_root=REPO_ROOT, python_bin=Path(sys.executable), extra_bin_dirs=[]
+    )
     assert "NODE_COMPILE_CACHE" not in disabled_env
     assert not (disabled_root / "node-compile-cache").exists()
 
     monkeypatch.delenv("NODE_DISABLE_COMPILE_CACHE", raising=False)
     monkeypatch.setenv("NODE_V8_COVERAGE", str(tmp_path / "cov"))
     cov_root = tmp_path / "env-cov"
-    cov_env = isolated_env(cov_root, python_bin=Path(sys.executable), extra_bin_dirs=[])
+    cov_env = isolated_env(cov_root, repo_root=REPO_ROOT, python_bin=Path(sys.executable), extra_bin_dirs=[])
     assert "NODE_COMPILE_CACHE" not in cov_env
     assert not (cov_root / "node-compile-cache").exists()
