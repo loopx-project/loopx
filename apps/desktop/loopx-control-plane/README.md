@@ -563,7 +563,7 @@ Self-service:
    ```bash
    node=<supported node binary> &&
    "$node" --version &&
-   printf '%s\n' "$("$node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;exit !(a[1]>22||(a[1]==22&&(a[2]>22||(a[2]==22&&a[3]>=3))))}' &&
+   printf '%s\n' "$("$node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;maj=a[1]+0;min=a[2]+0;pat=a[3]+0;if(maj<22)exit 1;if(maj==22&&min<22)exit 1;if(maj==22&&min==22&&pat<3)exit 1;if(maj==22&&min==22&&pat==3&&index($0,"-")>0)exit 1;exit 0}' &&
    node="$(cd "$(dirname "$node")" && pwd)/$(basename "$node")" &&
    "$node" --version &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
@@ -571,7 +571,7 @@ Self-service:
    mv ~/.local/bin/node "$backup/node" &&
    if ln -s "$node" ~/.local/bin/node &&
       "$HOME/.local/bin/node" --version &&
-      printf '%s\n' "$("$HOME/.local/bin/node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;exit !(a[1]>22||(a[1]==22&&(a[2]>22||(a[2]==22&&a[3]>=3))))}'; then
+      printf '%s\n' "$("$HOME/.local/bin/node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;maj=a[1]+0;min=a[2]+0;pat=a[3]+0;if(maj<22)exit 1;if(maj==22&&min<22)exit 1;if(maj==22&&min==22&&pat<3)exit 1;if(maj==22&&min==22&&pat==3&&index($0,"-")>0)exit 1;exit 0}'; then
      echo "Node launcher updated to $node (previous entry kept in $backup)"
    else
      mv "$backup/node" ~/.local/bin/node &&
