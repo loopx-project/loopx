@@ -287,6 +287,7 @@ function lifecycleObligation(request: JsonObject): JsonObject | null {
   if (source.settled !== true) {
     return {...obligation, required: true, selection_binding: "heartbeat_receipt"};
   }
+  const context = object(obligation.replan_context);
   const reason = "The exact completed Todo lifecycle is settled. Reassess the original acceptance with evidence, then write back and settle this Turn once; do not repeat the original work.";
   return {...obligation, required: true, selection_binding: "heartbeat_receipt",
     resolution_mode: "receipt_bound_replan_settlement", satisfying_semantic_outcomes: [...VISION_OUTCOMES],
@@ -295,9 +296,11 @@ function lifecycleObligation(request: JsonObject): JsonObject | null {
       schema_version: "replan_action_packet_v0", obligation_id: obligation.obligation_id,
       decision: "vision_outcome_checkpoint_required", settlement_only: true,
       required_outcome: "durable_writeback_receipt", semantic_delta: null,
+      ...(context.context_id ? {stride_control: strideControlContract(context, obligation.obligation_id)} : {}),
       writeback_contract: {preferred_input: "evidence_linked_vision_path",
         cli_semantic_args: VISION_CLI_ARGS, vision_authoring: visionAuthoringContract(true),
-        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"],
+        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs",
+          "agent_vision.stride_decision"],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS], rule: reason},
     }};
 }
