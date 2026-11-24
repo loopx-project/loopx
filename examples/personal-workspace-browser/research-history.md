@@ -384,6 +384,22 @@ time, not execution time or the timeline's relative thirds. A timestamp without
 an explicit timezone cannot be assigned to a UTC day and does not match while a
 date filter is active. Text and status filters intersect with this interval.
 
+Timestamp matching uses the native reader's calendar-checked ISO codec, including
+extended/basic calendar and week dates, reduced/basic clocks, dot/comma fractions,
+and explicit `Z`/`z` or hour/compact/colon offsets (including offset seconds).
+For example, `2026-03-03T01:15+0200` and `20260303T0115+0200` both belong to
+March 2 UTC. Offset hours must be 0–23 and minutes/seconds 0–59; unlike the
+Python reader, the date filter does not normalize overflowing offset components.
+Invalid calendars, 24:00, absent zones and instants outside years 1–9999 are
+excluded while filtering. Microseconds determine day membership. Parsing trims
+whitespace without changing the original strings in either download; clearing
+the date filter retains malformed and unzoned originals too.
+
+时间格式沿用原生读取器的 ISO 解析，支持基本／周日期、简写时钟、小数和显式偏移，
+包括 `+0200`。日期筛选额外要求偏移各分量合法，不归一化越界分钟／秒；非法日期、
+24:00、无时区及 UTC 年份越界不匹配。微秒精度决定 UTC 日，下载保留原始字符串，
+清除日期筛选仍可读取非法或无时区原件。
+
 For example, January 2 through January 3 retains both the earlier negative result
 and its later observation from a 79-record study. Both downloads include all
 matching originals beyond the visible page, and disclose the date bounds and

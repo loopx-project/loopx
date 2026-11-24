@@ -40,8 +40,8 @@ from loopx.capabilities.explore.result_log import build_explore_node_event, buil
 goal='synthetic-record-search'
 events=[build_explore_node_event(goal_id=goal,node_id='question',title='Synthetic candidate comparison',recorded_at='2026-01-01T00:00:00Z')]
 for index in range(75):
-    recorded_at={70:'2026-03-02T10:15',71:'2026-03-02T10:15Z',72:'2026-03-03T01:05+02:00',73:'2026-02-30T16:00:00Z',74:'2026-03-03T01:00:00+02:00'}.get(index,'2026-01-01T01:00:00Z')
-    refs={70:['synthetic:unzoned'],71:['synthetic:minute-z'],72:['synthetic:minute-offset'],73:['synthetic:invalid-calendar'],74:['synthetic:valid-offset']}.get(index,[])
+    recorded_at={68:'2026-03-03T01:15+0200',69:'2026-03-03T01:20:30+0200',70:'2026-03-02T10:15',71:'2026-03-02T10:15Z',72:'2026-03-03T01:05+02:00',73:'2026-02-30T16:00:00Z',74:'2026-03-03T01:00:00+02:00'}.get(index,'2026-01-01T01:00:00Z')
+    refs={68:['synthetic:compact-minute'],69:['synthetic:compact-second'],70:['synthetic:unzoned'],71:['synthetic:minute-z'],72:['synthetic:minute-offset'],73:['synthetic:invalid-calendar'],74:['synthetic:valid-offset']}.get(index,[])
     events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
         title=f'Candidate {index} — '+('研究问题与完整原始结论 / original question and retained evidence. '*3)+'END OF ORIGINAL TITLE',summary='Original observation; complete costs remain unknown.',
         status='tentative',recorded_at=recorded_at,evidence_refs=refs))
@@ -174,14 +174,16 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       // 30 must not be silently read as March 2 in the drawer or either export.
       await results.getByLabel("Recorded from (UTC)").fill("2026-03-02");
       await results.getByLabel("Recorded through (UTC)").fill("2026-03-02");
-      await results.getByRole("status", {name: /^3 matches in 79 loaded records/}).waitFor();
+      await results.getByRole("status", {name: /^5 matches in 79 loaded records/}).waitFor();
       const strictDates = await download();
-      assert.equal(strictDates.records.length, 3);
-      assert.deepEqual(strictDates.records.map(row => row.recorded_at).sort(), ["2026-03-02T10:15Z", "2026-03-03T01:00:00+02:00", "2026-03-03T01:05+02:00"]);
-      assert.deepEqual(strictDates.records.flatMap(row => row.evidence_refs).sort(), ["synthetic:minute-offset", "synthetic:minute-z", "synthetic:valid-offset"]);
+      assert.equal(strictDates.records.length, 5);
+      assert.deepEqual(strictDates.records.map(row => row.recorded_at).sort(), ["2026-03-02T10:15Z", "2026-03-03T01:00:00+02:00", "2026-03-03T01:05+02:00", "2026-03-03T01:15+0200", "2026-03-03T01:20:30+0200"]);
+      assert.deepEqual(strictDates.records.flatMap(row => row.evidence_refs).sort(), ["synthetic:compact-minute", "synthetic:compact-second", "synthetic:minute-offset", "synthetic:minute-z", "synthetic:valid-offset"]);
       const strictReport = await report();
-      assert.equal((strictReport.match(/^## \d+\./gm) ?? []).length, 3);
+      assert.equal((strictReport.match(/^## \d+\./gm) ?? []).length, 5);
       assert.match(strictReport, /synthetic:valid-offset/);
+      assert.match(strictReport, /synthetic:compact-minute/);
+      assert.match(strictReport, /synthetic:compact-second/);
       assert.match(strictReport, /synthetic:minute-z/);
       assert.match(strictReport, /synthetic:minute-offset/);
       assert.doesNotMatch(strictReport, /synthetic:invalid-calendar|synthetic:unzoned|2026-02-30/);

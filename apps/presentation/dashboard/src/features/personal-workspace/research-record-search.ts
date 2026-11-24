@@ -1,3 +1,4 @@
+import {parseTodoTimestampMicros} from "../../../../../../loopx/control_plane/runtime_timestamp.ts";
 import type {ExploreHistoryEvent, ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import type {ExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.ts";
 
@@ -75,14 +76,18 @@ export function validResearchDateRange({from, to}: ResearchDateRange): boolean {
   return validResearchDate(from ?? "") && validResearchDate(to ?? "") && !(from && to && from > to);
 }
 
-/** Validate the source wall-clock fields before Date.parse can normalize them.
- * A malformed or timezone-less timestamp remains readable without a date filter. */
-function recordedResearchTime(value: string): number {
-  const parts = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value);
-  if (!parts || !validResearchDate(parts[1]) || Number(parts[2]) > 23
-      || Number(parts[3]) > 59 || (parts[4] !== undefined && Number(parts[4]) > 59)
-      || (parts[5] && (Number(parts[6]) > 23 || Number(parts[7]) > 59))) return NaN;
-  return Date.parse(value);
+/** Reuse the native reader's ISO grammar and microsecond UTC conversion.
+ * Date filtering additionally requires an explicit zone and bounded offset
+ * components; Python accepts overflowing offset minutes, but this view does not.
+ * Parse a trimmed copy only: exports retain the exact original timestamp. */
+function recordedResearchTime(value: string): bigint | null {
+  const source = value.trim();
+  const timestamp = /^(?:\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-W\d{2}(?:-[1-7])?|\d{4}W\d{2}[1-7]?)[^Zz](.+)$/u.exec(source);
+  if (!timestamp) return null;
+  const zone = /(?:[Zz]|[+-](\d{2})(?:(:?)(\d{2})(?:\2(\d{2}))?)?(?:[.,]\d+)?)$/u.exec(timestamp[1]);
+  if (!zone || Number(zone[1] ?? 0) > 23 || Number(zone[3] ?? 0) > 59
+      || Number(zone[4] ?? 0) > 59) return null;
+  return parseTodoTimestampMicros(source);
 }
 
 /** Search source records, including superseded revisions, before display paging.
@@ -90,14 +95,14 @@ function recordedResearchTime(value: string): number {
  * Tokens are literal, case-insensitive AND terms; no inferred evidence or status. */
 export function searchResearchRecords(events: readonly ExploreHistoryEvent[], query: string, status = "", display?: ResearchRecordDisplay, range: ResearchDateRange = {}) {
   if (!validResearchDateRange(range)) return [];
-  const from = range.from ? Date.parse(`${range.from}T00:00:00Z`) : -Infinity;
-  const until = range.to ? Date.parse(`${range.to}T00:00:00Z`) + 86400000 : Infinity;
+  const from = range.from ? BigInt(Date.parse(`${range.from}T00:00:00Z`)) * 1000n : null;
+  const until = range.to ? BigInt(Date.parse(`${range.to}T00:00:00Z`)) * 1000n + 86400000000n : null;
   const terms = query.trim().toLowerCase().split(/\s+/u).filter(Boolean);
   return events.filter(event => {
     if (status && event.status !== status) return false;
     if (range.from || range.to) {
       const recorded = recordedResearchTime(event.recorded_at);
-      if (!Number.isFinite(recorded) || recorded < from || recorded >= until) return false;
+      if (recorded === null || (from !== null && recorded < from) || (until !== null && recorded >= until)) return false;
     }
     if (!terms.length) return true;
     const translated = display?.events?.get(event.event_id);

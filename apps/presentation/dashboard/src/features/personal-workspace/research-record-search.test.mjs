@@ -140,3 +140,23 @@ test("explicitly zoned minute precision shares UTC-day selection with second pre
   assert.deepEqual(searchResearchRecords(rows, "", "", undefined, {from: "2026-03-02", to: "2026-03-02"}), valid);
   assert.deepEqual(searchResearchRecords(rows, ""), rows);
 });
+
+
+test("source timestamp grammar preserves qualified variants with strict range policy", () => {
+  const accepted = [
+    "2026-03-03T01:15+0200", "2026-03-03T01:20:30+0200", "20260303T0115+0200",
+    "2026-W10-2T01:15+0200", "2026W102T0115+02", "2026-03-03 01+02",
+    "2026-03-03x01:15:00,123456+02:00", "2026-03-03T01:15.123456+02:00",
+    "2026-03-03T01:15+02:00:30.5", "2026-03-02t23:59:59.999999z",
+    " 2026-03-03T01:15+0200 ", "2026-03-03T00:00:00+00:00:00.000001",
+  ];
+  const rejected = ["20260230T0115+0200", "1900-W53-1T01+02", "2026-03-02T24+02",
+    "2026-03-02T1260+02", "2026-03-02T120060+02", "2026-03-02T12+0260",
+    "2026-03-02T12+02:00:60", "2026-03-02T12+24", "2026-03-02T12",
+    "2026-03-02", "0001-01-01T00+01", "9999-12-31T23-01"];
+  const outside = ["2026-03-03T00:00:00Z", "2026-03-03T00:00:00+00:00:00.000001"];
+  const rows = [...accepted, ...rejected, ...outside].map((recorded_at, index) => Object.freeze(record({event_id: String(index), recorded_at})));
+  // Python canonicalizes a zero offset even with a fraction: this last accepted grammar is next day.
+  assert.deepEqual(searchResearchRecords(rows, "", "", undefined, {from: "2026-03-02", to: "2026-03-02"}), rows.slice(0, accepted.length - 1));
+  assert.deepEqual(searchResearchRecords(rows, ""), rows, "Never rewrite source text, including whitespace or malformed originals");
+});
