@@ -1,5 +1,6 @@
 import { referencePreview, splitReferences, withReferences } from '../context-references';
 import { ReferenceChips } from './ContextReferences';
+import { captureReadingAnchor, restoreReadingAnchor, type ReadingAnchor } from '../scroll-anchor';
 import { MessageActionButton, MessageMore, PointMessageMenu, SelectMessage, useMessageGestures, type MessageAction } from './MessageActions';
 import { channelRows, hydrateHistoryFiles } from '../timeline';
 import { ApiError, type Api } from '../api';
@@ -41,6 +42,7 @@ import {
   stepCommand,
   stepTitle,
   stepStatusLabel,
+  workHasFollowingOutput,
   workSections,
   type ApprovalOption,
   type CoordinationNote,
@@ -145,6 +147,8 @@ const MAX_DIFF_LINES = 400;
 const RECENT_TURNS = 30;
 /** Scrolling up to within this distance of the top unfolds or fetches the earlier turns. */
 const NEAR_TOP_PX = 600;
+/** Nearest scrollable container for a thread: panel scrollers first, falling back to the main page scroller. */
+const THREAD_SCROLLER = '.chat-flow, .agent-panel-body, .thread-peek-body, .side-chat-body, .scroller';
 
 export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, beforeItems, olderLabel, olderError, revealTurnId, historyApi, historyThreadId, items: originalItems, roots, loadImage, loadFile, onOpenFile, onPreview, hasOlder, loadingOlder, onLoadOlder, onFork, onQuote, onMessageContext, onHandToAssistant, forkAnyTurn, onEdit, revision = 0, takeover, resume, autoRetry, memberThreadId, onOpenMemberThread, threads, onOpenThread }: Props) {
   const [selection, setSelection] = useState<{ text: string; turnId: string } | null>(null);
@@ -221,9 +225,10 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
   // starts at the top and is pinned down) and the scroll restore after a load trigger nothing.
   const threadRef = useRef<HTMLDivElement | null>(null);
   const restoreFromBottom = useRef<number | null>(null);
+  const expandAnchor = useRef<ReadingAnchor | null>(null);
   const expand = () => {
-    const scroller = threadRef.current?.closest<HTMLElement>('.scroller');
-    if (scroller) restoreFromBottom.current = scroller.scrollHeight - scroller.scrollTop;
+    const scroller = threadRef.current?.closest<HTMLElement>(THREAD_SCROLLER);
+    if (scroller) { expandAnchor.current = captureReadingAnchor(scroller); restoreFromBottom.current = scroller.scrollHeight - scroller.scrollTop; }
     setExpandedFor({ key: threadKey, value: true });
   };
   const reachTop = useRef(() => {});
@@ -234,12 +239,13 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
   };
   // Unfolded turns land above the viewport; keep the same content in view.
   useLayoutEffect(() => {
-    const scroller = threadRef.current?.closest<HTMLElement>('.scroller');
-    if (scroller && restoreFromBottom.current !== null) scroller.scrollTop = scroller.scrollHeight - restoreFromBottom.current;
+    const scroller = threadRef.current?.closest<HTMLElement>(THREAD_SCROLLER);
+    if (scroller && restoreFromBottom.current !== null && restoreReadingAnchor(scroller, expandAnchor.current) === null) scroller.scrollTop = scroller.scrollHeight - restoreFromBottom.current;
+    expandAnchor.current = null;
     restoreFromBottom.current = null;
   }, [expanded]);
   useEffect(() => {
-    const scroller = threadRef.current?.closest<HTMLElement>('.scroller');
+    const scroller = threadRef.current?.closest<HTMLElement>(THREAD_SCROLLER);
     if (!scroller) return;
     let lastTop = scroller.scrollTop;
     let touchY = 0;
@@ -270,7 +276,10 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
     };
     const onTouchStart = (e: TouchEvent) => void (touchY = e.touches[0]?.clientY ?? 0);
     const onTouchMove = (e: TouchEvent) => {
-      if ((e.touches[0]?.clientY ?? 0) <= touchY + 10 || nestedScrollConsumesUp(e.target)) return;
+      const y = e.touches[0]?.clientY;
+      if (y === undefined) return;
+      if (y < touchY) { touchY = y; return; }
+      if (y <= touchY + 10 || nestedScrollConsumesUp(e.target)) return;
       upward = true;
       if (scroller.scrollTop < NEAR_TOP_PX) reach();
     };
@@ -303,7 +312,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
   const lastKey = tail?.kind === 'actions' ? tail.key : null;
 
   const renderItems = (list: Item[]) =>
-    list.map((item) => {
+    list.map((item, idx) => {
       switch (item.kind) {
         case 'voice-recap': return <VoiceRecap key={item.key} item={item} render={renderItems} />;
         case 'handover-summary': return <HandoverSummary key={item.key} item={item} />;
@@ -401,7 +410,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
         case 'plan':
           return <PlanCard key={item.key} item={item} />;
         case 'work':
-          return <WorkGroup key={item.key} item={item} roots={roots} />;
+          return <WorkGroup key={item.key} item={item} roots={roots} thoughtLive={!item.done && !workHasFollowingOutput(list, idx, item.turnId)} />;
         case 'waiting':
           return <TurnWaiting key={item.key} item={item} />;
         case 'approval':
@@ -1384,7 +1393,7 @@ function WorkLabel({ item }: { item: Extract<Item, { kind: 'work' }> }) {
   return <span className="work-label">{label}</span>;
 }
 
-function WorkGroup({ item, roots }: { item: Extract<Item, { kind: 'work' }>; roots: string[] }) {
+function WorkGroup({ item, roots, thoughtLive = !item.done }: { item: Extract<Item, { kind: 'work' }>; roots: string[]; thoughtLive?: boolean }) {
   // Open while the turn runs so progress is visible. Stopped turns stay open:
   // their interrupted thoughts are the user's history, not a completed work summary.
   const [open, setOpen] = useState(item.stopped || (!item.done && !item.deferred));
@@ -1441,8 +1450,8 @@ function WorkGroup({ item, roots }: { item: Extract<Item, { kind: 'work' }>; roo
                 <span>{compactionLabel(section)}</span>
               </div>
             ) : (
-              // Only the trailing thought stretch is live; any still-running tool stays visible across sections.
-              <StepRun key={section.key} run={section} live={!item.done && i === sections.length - 1} running={running} roots={roots} fold={!item.stopped} openThoughts={!!item.stopped} />
+              // Only the trailing thought stretch (with no answer emitted after it yet) is live; any still-running tool stays visible across sections.
+              <StepRun key={section.key} run={section} live={thoughtLive && i === sections.length - 1} running={running} roots={roots} fold={!item.stopped} openThoughts={!!item.stopped} />
             ),
           )}
           {!running && <ResourceMore resource={resource} />}

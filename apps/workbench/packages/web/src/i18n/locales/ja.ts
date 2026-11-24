@@ -1734,6 +1734,7 @@ export const ja: Messages = {
   'files.backToFile': 'ファイルに戻る',
   'files.browse': 'フォルダを閲覧',
   'files.path': 'パス',
+  'files.morePath': '省略されたパスを表示',
   'files.tree': 'ファイルツリー',
   'files.close': 'ファイルを閉じる',
   'files.noSource': 'ソースを表示できません',

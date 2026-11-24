@@ -1736,6 +1736,7 @@ export const en: Messages = {
   'files.backToFile': 'Back to file',
   'files.browse': 'Browse folder',
   'files.path': 'Path',
+  'files.morePath': 'Show hidden path segments',
   'files.tree': 'File tree',
   'files.close': 'Close file',
   'files.noSource': 'Cannot show the source',

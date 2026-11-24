@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { ApiError, type Api, type Thread } from '../api';
 import { historyPage, prependHistory, type HistoryPage } from '../history';
+import { captureReadingAnchor, restoreReadingAnchor, type ReadingAnchor } from '../scroll-anchor';
 import { buildTimeline } from '../timeline';
 import { t } from '../i18n';
 import { IconChevron, IconHandover } from './icons';
@@ -37,14 +38,15 @@ export function MergedHistory({ api, thread, merged, ready, agentLabel, laterOf,
   const pending = useRef(false);
   const generation = useRef(0);
   const root = useRef<HTMLDivElement>(null);
-  const restore = useRef<number | null>(null);
+  const restore = useRef<{ anchor: ReadingAnchor | null; fromBottom: number } | null>(null);
   useEffect(() => {
     generation.current++; pending.current = false;
     setSegments([]); setLoading(false); setError(null);
   }, [api, thread.id, merged]);
   useLayoutEffect(() => {
     const scroller = root.current?.closest<HTMLElement>('.scroller');
-    if (scroller && restore.current !== null) scroller.scrollTop = scroller.scrollHeight - restore.current;
+    const pendingRestore = restore.current;
+    if (scroller && pendingRestore && restoreReadingAnchor(scroller, pendingRestore.anchor) === null) scroller.scrollTop = scroller.scrollHeight - pendingRestore.fromBottom;
     restore.current = null;
   }, [segments]);
   const load = async () => {
@@ -66,7 +68,7 @@ export function MergedHistory({ api, thread, merged, ready, agentLabel, laterOf,
       ]);
       if (generation.current !== version) return;
       const scroller = root.current?.closest<HTMLElement>('.scroller');
-      if (scroller) restore.current = scroller.scrollHeight - scroller.scrollTop;
+      if (scroller) restore.current = { anchor: captureReadingAnchor(scroller), fromBottom: scroller.scrollHeight - scroller.scrollTop };
       setSegments(previous => same
         ? [{ thread: source, page: { ...page, events: prependHistory(page.events, previous[0].page.events) } }, ...previous.slice(1)]
         : [{ thread: source, page }, ...previous]);

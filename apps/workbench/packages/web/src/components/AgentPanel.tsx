@@ -1,4 +1,5 @@
 import { historyPage, mergeHistory, prependHistory, watchHistory } from '../history';
+import { useReadingPosition } from '../use-reading-position';
 import { waitingLabel } from '../notices';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AgentInfo, Api, Coordination, Thread } from '../api';
@@ -93,9 +94,11 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   const [connected, setConnected] = useState(true);
   const [older, setOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState('');
   const [atBottom, setAtBottom] = useState(true);
   const body = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const readingPosition = useReadingPosition(body, stick, memberId, events, '', !memberId);
   const listScroll = useRef(0);
   const focus = useRef<HTMLElement | null>(null);
   const latest = useRef({ onClose, memberId }); latest.current = { onClose, memberId };
@@ -128,7 +131,7 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   const historyCursor = useRef<number | null>(null);
   const olderRequest = useRef<object | null>(null);
   useEffect(() => {
-    setEvents([]); setOlder(false); setLoadingOlder(false); setConnected(true);
+    setEvents([]); setOlder(false); setLoadingOlder(false); setOlderError(''); setConnected(true);
     historyCursor.current = null; olderRequest.current = null; stick.current = true; setAtBottom(true);
     if (!memberId) { requestAnimationFrame(() => { if (body.current) body.current.scrollTop = listScroll.current; }); return; }
     const ctrl = new AbortController();
@@ -145,14 +148,19 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
     if (!memberId || loadingOlder || olderRequest.current || !historyCursor.current) return;
     const id = memberId;
     const request = {}; olderRequest.current = request;
+    stick.current = false;
+    setOlderError('');
     setLoadingOlder(true);
-    const el = body.current; const height = el?.scrollHeight ?? 0;
     try {
       const page = await historyPage(threadApi, id, historyCursor.current);
       if (latest.current.memberId !== id || olderRequest.current !== request) return;
+      stick.current = false;
+      const firstTurn = page.events.find(event => event.type === 'turn.started') ?? page.events[0];
+      readingPosition.preparePrepend(firstTurn?.seq);
       setEvents(prev => prependHistory(page.events, prev)); setOlder(page.hasOlder); historyCursor.current = page.nextCursor;
-      requestAnimationFrame(() => { if (el) el.scrollTop += el.scrollHeight - height; });
-    } catch (err) { if (olderRequest.current === request) onError(err); } finally { if (olderRequest.current === request) { olderRequest.current = null; setLoadingOlder(false); } }
+    } catch (err) {
+      if (olderRequest.current === request) setOlderError(err instanceof Error ? err.message : String(err));
+    } finally { if (olderRequest.current === request) { olderRequest.current = null; setLoadingOlder(false); } }
   };
   return <AgentPanelFrame panelRef={panel} detail={Boolean(memberId)} label={t('team.panel')}>
     <header className="agent-panel-head">
@@ -166,8 +174,13 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
     {!connected && <div className="agent-panel-notice">{t('team.reconnecting')}</div>}
     <div className="agent-panel-body" ref={body} onScroll={() => {
       if (!body.current) return;
-      if (!memberId) listScroll.current = body.current.scrollTop;
+      if (!memberId) { listScroll.current = body.current.scrollTop; return; }
+      if (readingPosition.didRestore()) {
+        setAtBottom(body.current.scrollHeight - body.current.scrollTop - body.current.clientHeight < 80);
+        return;
+      }
       stick.current = body.current.scrollHeight - body.current.scrollTop - body.current.clientHeight < 80;
+      readingPosition.capture();
       setAtBottom(stick.current);
     }}>
       {!memberId && team.messages.length > 0 && <div className="agent-tabs" role="tablist" aria-label={t('team.content')}>
@@ -197,7 +210,7 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
           <p>{m.latest?.result?.split(/<(?:loochat|limi)-(?:coordination|team)>/)[0].slice(-160) || m.latest?.text.slice(0, 160) || t('team.waitingTask')}</p>
           {m.thread?.unread && <span className="coord-unread">{t('team.newOutput')}</span>}
         </button>)}
-      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
+      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
     </div>
     {memberId && !atBottom && <button className="agent-panel-latest" onClick={() => { stick.current = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>{t('team.latest')}</button>}
     {/* A member is written to directly, in a box like the lead's; going through the lead instead is

@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import type { Api, FolderEntry, FolderListing, TextFile, WritingStage } from '../api';
 import { countWords, highlightWritingSource, isArticleFile, rehypeArticleMarks } from '../article';
 import { copyText } from '../clipboard';
-import { crumbsOf, escapeHtml, foldersTo, languageOf, parentDir, resolveRelative, sizeLabel, splitHighlighted } from '../files';
+import { collapseCrumbs, crumbsOf, escapeHtml, foldersTo, languageOf, parentDir, resolveRelative, sizeLabel, splitHighlighted } from '../files';
 import { pictureUrl, saveAs } from '../images';
 import { folderName, IMAGE_FILE, PDF_FILE, VIDEO_FILE } from '../paths';
 import { enlargeMermaidDiagram, renderMermaidDiagram } from '../mermaid';
@@ -516,6 +516,7 @@ export function FilesPanel({ api, threadId, target, phone, revision, writingStag
   }, [!!editing]);
 
   const crumbs = root ? crumbsOf(root, phone && phoneFolder !== null ? phoneFolder || root : (filePath ?? root)) : [];
+  const visibleCrumbs = collapseCrumbs(crumbs);
   const markdown = shown?.state === 'text' && shown.file.text !== null && languageOf(shown.file.path) === 'markdown';
   // The body reads as an article; so does the habits note, which is not this thread's draft and so
   // stands under no stage.
@@ -873,18 +874,56 @@ export function FilesPanel({ api, threadId, target, phone, revision, writingStag
       <div className="files-resize" onPointerDown={startResize} role="separator" aria-orientation="vertical" aria-label={t('common.resize')} />
       <div className="files-head">
         <nav className="files-crumbs" aria-label={t('files.path')}>
-          {crumbs.map((c, i) => {
-            const last = i === crumbs.length - 1;
+          {visibleCrumbs.map((entry, i) => {
+            if ('hidden' in entry) {
+              return (
+                <span key="hidden" className="files-crumb files-crumb-more">
+                  <IconChevron size={12} />
+                  <Popover
+                    label={t('files.morePath')}
+                    triggerLabel={t('files.morePath')}
+                    triggerTitle={entry.hidden.map((h) => h.name).join(' / ')}
+                    triggerClassName="files-crumb-ellipsis"
+                    panelClassName="files-crumb-menu"
+                    placement="below"
+                    align="start"
+                    trigger="…"
+                  >
+                    {(closeMenu) => (
+                      <>
+                        {entry.hidden.map((h) => (
+                          <button
+                            key={h.path}
+                            type="button"
+                            role="menuitem"
+                            className="pop-item"
+                            title={h.path}
+                            onClick={() => {
+                              closeMenu();
+                              showFolder(h.path);
+                            }}
+                          >
+                            <IconFolder size={15} />
+                            <span>{h.name}</span>
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </Popover>
+                </span>
+              );
+            }
+            const last = i === visibleCrumbs.length - 1;
             return (
-              <span key={c.path} className="files-crumb">
+              <span key={entry.path} className="files-crumb">
                 {i > 0 && <IconChevron size={12} />}
                 {last && filePath ? (
-                  <span className="files-crumb-current" title={c.path}>
-                    {c.name}
+                  <span className="files-crumb-current" title={entry.path}>
+                    {entry.name}
                   </span>
                 ) : (
-                  <button type="button" title={c.path} onClick={() => showFolder(c.path)}>
-                    {c.name}
+                  <button type="button" title={entry.path} onClick={() => showFolder(entry.path)}>
+                    {entry.name}
                   </button>
                 )}
               </span>

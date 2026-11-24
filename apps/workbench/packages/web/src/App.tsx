@@ -15,6 +15,7 @@ import { AutoHandoverNotice, HandoverSettingsDialog } from './components/AutoHan
 import { useWorkSources, WorkSummary } from './extensions/work';
 import { HostIcon } from './extensions/ui';
 import { historyPage, mergeHistory, mergeHistoryPage, prependHistory, refreshHistoryPage, watchHistory } from './history';
+import { useReadingPosition } from './use-reading-position';
 import type { WorkMode, WritingStage } from './api';
 import { forkBlocked, useThreadActions } from './components/ThreadActions';import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ComponentProps, type ReactNode } from 'react';
 import type { Theme } from './appearance';
@@ -1337,6 +1338,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   });
   const [agentsStart, setAgentsStart] = useState<string | null>(null);
   const stickToBottom = useRef(true);
+  const [jump, setJump] = useState<{ threadId: string; turnId: string } | null>(null);
+  const readingPosition = useReadingPosition(scrollerRef, stickToBottom, selectedId, events, `${mergedHandover}:${historyEpoch}:${onSettings}`, Boolean(jump));
   // The thread on screen, for answers that arrive after the user has moved on.
   const shownThread = useRef<string | null>(null);
   shownThread.current = selectedId;
@@ -1583,6 +1586,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const first = historyCursor.current ?? 0;
     if (!api || !id || loadingOlder || olderRequest.current || first <= 1) return;
     const request = {}; olderRequest.current = request;
+    // Loading older turns is an explicit upward reading intent; unpin immediately.
+    stickToBottom.current = false;
     setLoadingOlder(true);
     try {
       const page = await historyPage(api, id, first, undefined, mergedHandover);
@@ -1590,13 +1595,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       // The answer is for the thread that asked; another one may be open by now.
       if (shownThread.current !== id || olderRequest.current !== request) return;
       setHasOlder(page.hasOlder); historyCursor.current = page.nextCursor;
-      const el = scrollerRef.current;
-      const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+      const firstTurn = older.find(event => event.type === 'turn.started') ?? older[0];
+      readingPosition.preparePrepend(firstTurn?.seq);
       setEvents((prev) => prependHistory(older, prev));
-      // New content lands above the viewport; stay on the same row while it inserts.
-      requestAnimationFrame(() => {
-        if (el && !stickToBottom.current && !jump) el.scrollTop = el.scrollHeight - fromBottom;
-      });
     } catch (e) {
       if (olderRequest.current === request) { setJump(null); handleError(e); }
     } finally {
@@ -1630,15 +1631,18 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const content = el?.querySelector('.merged-history, .thread');
     if (!el || !content) return;
     const ro = new ResizeObserver(() => {
-      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+      if (stickToBottom.current) { readingPosition.capture(); el.scrollTop = el.scrollHeight; }
       // Growth below an unpinned view moves nothing, so no scroll event reports that the view
       // has fallen behind; the jump button has to learn it here.
-      else setAtBottom(isNearBottom(el));
+      else {
+        readingPosition.restore();
+        setAtBottom(isNearBottom(el));
+      }
     });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [selectedId, mergedHandover, onSettings]);
+  }, [selected?.id, eventsLoading, mergedHandover, onSettings]);
 
   // A phone keyboard does not resize the page: it covers the bottom of it, and the browser pans
   // what is left (the visual viewport) over the page to keep the focused field in sight. So the
@@ -1724,15 +1728,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const onScroll = () => {
     const el = scrollerRef.current;
     if (!el) return;
+    if (readingPosition.didRestore()) { setAtBottom(isNearBottom(el)); return; }
     const near = isNearBottom(el);
     const byHand = gesture.current.held || Date.now() - gesture.current.at < GESTURE_GRACE_MS;
     if (near) stickToBottom.current = true;
     else if (byHand) stickToBottom.current = false;
+    readingPosition.capture();
     setAtBottom(near);
   };
 
   // The turn a search led to: shown once it is on the page, which for an old turn means fetching back to it.
-  const [jump, setJump] = useState<{ threadId: string; turnId: string } | null>(null);
   useEffect(() => {
     if (!jump || jump.threadId !== selectedId || eventsLoading) return;
     const scope = scrollerRef.current?.querySelector(`[data-history-thread="${CSS.escape(jump.threadId)}"]`) ?? scrollerRef.current;
@@ -3275,7 +3280,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 aria-label={t('app.threadMore')}
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
-                  threadActions.openPageMenu(selected, rect.right - 200, rect.bottom + 6);
+                  threadActions.openPageMenu(selected, rect.right, rect.bottom + 6);
                 }}
               >
                 <IconMore />

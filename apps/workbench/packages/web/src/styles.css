@@ -2023,6 +2023,7 @@ html.list-open body {
     display: none;
   }
 }
+.turn-ruler.cramped { display: none; }
 
 /* Work summary: one quiet line with a hairline under it, expanded on demand. */
 .row.work {
@@ -7586,6 +7587,15 @@ div.file-card:hover { background: var(--surface); }
   object-fit: contain;
 }
 
+/* Reserve placeholder height before images resolve; final delta is anchored by reading position. */
+.file-image.loading {
+  width: min(320px, 100%);
+  height: 180px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
 .file-image figcaption {
   /* A long path must not widen the picture's button and expose its background. */
   contain: inline-size;
@@ -8824,10 +8834,19 @@ div.file-card:hover { background: var(--surface); }
   display: inline-flex;
   align-items: center;
   min-width: 0;
+  overflow: hidden;
   color: var(--muted);
 }
 
+.files-crumb > svg {
+  flex: none;
+}
+
 .files-crumb button {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 4px 6px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -8836,25 +8855,58 @@ div.file-card:hover { background: var(--surface); }
   font: inherit;
 }
 
-.files-crumb button:hover {
+.files-crumb button:hover,
+.files-crumb button[aria-expanded='true'] {
   background: var(--hover);
   color: var(--text);
 }
 
 .files-crumb-current {
+  min-width: 0;
   padding: 4px 6px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
   font-weight: 600;
 }
 
-/* Long paths give up their first steps before the file's own name. */
+/* Long paths give up ancestor folders before the file's own name; the ellipsis menu stays intact. */
 .files-crumb:not(:last-child) {
-  flex-shrink: 1;
+  flex: 0 100 auto;
+}
+
+.files-crumb:last-child {
+  flex: 0 1 auto;
+}
+
+.files-crumb.files-crumb-more {
+  flex: none;
+  overflow: visible;
+}
+
+.files-crumb-more .pop {
+  display: inline-flex;
+}
+
+.files-crumb-menu .pop-item {
+  align-items: center;
+}
+
+.files-crumb-menu .pop-item svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.files-crumb-menu .pop-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .files-actions {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -14780,7 +14832,8 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .menu-row:focus-visible, .pop-item:focus-visible { outline-offset: -2px; background: var(--hover); }
 .menu-sep { margin: 8px 10px; background: var(--border); }
 .menu-dense .menu-sep { margin-block: 4px; }
-.pop-panel.anchored-pop { position: fixed; top: var(--pop-top); left: var(--pop-left); right: auto; bottom: auto; width: max-content; min-width: min(260px, calc(100vw - 24px)); max-width: min(380px, calc(100vw - 24px)); max-height: var(--pop-height, 520px); overflow-y: auto; overscroll-behavior: contain; z-index: 80; animation: pop-in .14s ease-out; }
+.pop-panel.anchored-pop { position: fixed; top: var(--pop-top); left: var(--pop-left); right: auto; bottom: auto; width: max-content; min-width: min(220px, var(--pop-max-width, 260px), calc(100vw - 24px)); max-width: min(var(--pop-max-width, 380px), calc(100vw - 24px)); max-height: var(--pop-height, 520px); overflow-y: auto; overscroll-behavior: contain; z-index: 80; animation: pop-in .14s ease-out; }
+body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: none; }
 .pop-panel.anchored-pop .pop-scroll { max-height: min(340px, calc(var(--pop-height, 520px) - 96px)); }
 .pop-panel.anchored-pop .pop-search { position: sticky; top: -8px; z-index: 1; background: var(--surface); }
 /* Everything that floats over the page is the same material: small buttons, and the layers that open above the composer. */

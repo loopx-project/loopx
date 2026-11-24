@@ -1736,6 +1736,7 @@ export const zh = {
   'files.backToFile': '回到文件',
   'files.browse': '浏览文件夹',
   'files.path': '路径',
+  'files.morePath': '展开省略的路径',
   'files.tree': '文件树',
   'files.close': '关闭文件',
   'files.noSource': '无法显示源码',

@@ -1345,6 +1345,22 @@ export function turnPreviews(items: Item[]): Map<string, TurnPreview> {
   return out;
 }
 
+/**
+ * Whether a work block is followed by later output from the same turn (e.g. a streamed answer,
+ * proposal, plan or subsequent work block). Once later output exists, the trailing thought inside
+ * this work block is already over and must not stay labelled "Thinking".
+ */
+export function workHasFollowingOutput(list: readonly Item[], index: number, turnId: string): boolean {
+  if (!turnId) return false;
+  for (let i = index + 1; i < list.length; i++) {
+    const it = list[i];
+    if (it.turnId !== turnId) continue;
+    if (it.kind === 'assistant' && it.text.trim()) return true;
+    if (it.kind === 'proposal' || it.kind === 'plan' || it.kind === 'work') return true;
+  }
+  return false;
+}
+
 /** The conversation as Markdown, for "copy conversation". Tool output is left out; file changes are listed. */
 export function toMarkdown(title: string, items: Item[]): string {
   const parts: string[] = [`# ${title}`];

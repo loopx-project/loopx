@@ -500,6 +500,7 @@ export function useThreadActions(deps: Deps) {
           label={'thread' in menu ? menu.thread.title : menu.section.name}
           x={menu.x}
           y={menu.y}
+          corner={menu.where === 'page' ? 'top-right' : 'top-left'}
           items={'thread' in menu ? (menu.where === 'list' ? listItems(menu.thread) : pageItems(menu.thread)) : sectionItems(menu.section)}
           dense={menu.where === 'page'}
           // The quota belongs to the conversation being read, not to a row in the list.
