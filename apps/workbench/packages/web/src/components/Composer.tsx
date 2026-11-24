@@ -1263,6 +1263,12 @@ export function Composer({
         <div
           ref={boxRef}
           className={`composer-box${dragOver ? ' drag-over' : ''}${collapsed ? ' collapsed' : ''}`}
+          onPointerMove={(e) => {
+            if (e.pointerType !== 'mouse') return;
+            const r = e.currentTarget.getBoundingClientRect();
+            e.currentTarget.style.setProperty('--lg-mx', `${e.clientX - r.left}px`);
+            e.currentTarget.style.setProperty('--lg-my', `${e.clientY - r.top}px`);
+          }}
           onPointerDownCapture={(e) => {
             if (e.pointerType === 'mouse') return;
             if (boxPress.current !== null) window.clearTimeout(boxPress.current);
@@ -1291,6 +1297,7 @@ export function Composer({
           }}
           onDrop={onDrop}
         >
+          <span className="composer-sheen" aria-hidden="true" />
           {header && <div className="composer-context">{header}</div>}
 
           {modelQueueNotice && (

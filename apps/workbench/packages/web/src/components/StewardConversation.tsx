@@ -348,7 +348,16 @@ export function StewardConversation({ token, failure, deferSessionOpen = false }
     {/* The app's composer shell, carrying only what a manager conversation has: words, send, stop. */}
     <form className="composer steward-composer" onSubmit={event => { event.preventDefault(); void send(draft); }}>
       <div className="composer-anchor">
-        <div className="composer-box">
+        <div
+          className="composer-box"
+          onPointerMove={(e) => {
+            if (e.pointerType !== 'mouse') return;
+            const r = e.currentTarget.getBoundingClientRect();
+            e.currentTarget.style.setProperty('--lg-mx', `${e.clientX - r.left}px`);
+            e.currentTarget.style.setProperty('--lg-my', `${e.clientY - r.top}px`);
+          }}
+        >
+          <span className="composer-sheen" aria-hidden="true" />
           <textarea
             rows={1}
             value={draft}

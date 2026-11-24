@@ -1505,6 +1505,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       // The answer is for the thread that asked; another one may be open by now.
       if (shownThread.current !== id || olderRequest.current !== request) return;
       setHasOlder(page.hasOlder); historyCursor.current = page.nextCursor;
+      stickToBottom.current = false;
       const firstTurn = older.find(event => event.type === 'turn.started') ?? older[0];
       readingPosition.preparePrepend(firstTurn?.seq);
       setEvents((prev) => prependHistory(older, prev));
@@ -1881,12 +1882,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     setPicture(value => !onPage && value?.threadId === selectedId ? value : null);
   }, [selectedId, onPage]);
   useLayoutEffect(() => { setPreview(null); setDiffFile(null); setPicture(null); }, [api]);
-  const dockOpen = !compact && Boolean(activeOverviewDetail || preview || diffFile || picture);
+  const dockOpen = !compact && Boolean(activeOverviewDetail || preview || diffFile || picture || termOpen);
   const sideKeys = Boolean(referenceId) || Boolean(agentsOpen && coordination) || Boolean(files) || traceOpen || gitOpen;
   const wasSide = useRef(false);
   const wasDock = useRef(false);
   useEffect(() => {
-    if (sideKeys && !wasSide.current) { setPreview(null); setDiffFile(null); setPicture(null); setOverviewDetail(null); }
+    if (sideKeys && !wasSide.current) { setPreview(null); setDiffFile(null); setPicture(null); setOverviewDetail(null); setTermOpen(false); }
     if (dockOpen && !wasDock.current) { setFiles(null); setTraceOpen(false); setAgentsOpen(false); setGitOpen(false); setReferenceId(null); }
     wasSide.current = sideKeys; wasDock.current = dockOpen;
   }, [sideKeys, dockOpen]);
@@ -1911,6 +1912,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             const listing = await api.threadTree(selectedId, ref.path);
             setFilesThreadId(selectedId);
             setAgentsOpen(false);
+            setTraceOpen(false);
             setFiles({ path: null, folder: listing.path, seq: ++filesSeq.current });
             return;
           } catch {
@@ -1921,6 +1923,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       }
       setFilesThreadId(selectedId);
       setAgentsOpen(false);
+      setTraceOpen(false);
       setFiles({ path: file.path, line: ref.line, file, seq: ++filesSeq.current });
     },
     [api, selectedId],
@@ -2217,6 +2220,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     if (!compact && diffFile) { setDiffFile(null); return true; }
     if (!compact && preview) { setPreview(null); return true; }
     if (!compact && picture) { setPicture(null); return true; }
+    if (termOpen) { setTermOpen(false); setTerminalTarget(null); setTerminalClient(null); return true; }
     if (activeOverviewDetail) { closeOverviewDetail(); return true; }
     if (onSettings) {
       if (settingsPath.includes('/')) openSettings(settingsPath.slice(0, settingsPath.lastIndexOf('/')));
@@ -2347,11 +2351,23 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const openAgents = () => { openSettings('agents'); void reloadAgents().catch(handleError); };
 
-  const openTerminal = () => { setTerminalTarget(null); setTerminalClient(null); setTermOpen(true); };
+  const openTerminal = () => {
+    setPreview(null);
+    setDiffFile(null);
+    setPicture(null);
+    setOverviewDetail(null);
+    setTerminalTarget(null);
+    setTerminalClient(null);
+    setTermOpen(true);
+  };
 
   /** Starts an instance's CLI login in a fresh terminal and shows that terminal. */
   const openAgentLogin = async (agent: Pick<AgentInfo, 'id'>, client = api) => {
     const { terminalId } = await client.loginAgentTerminal(agent.id);
+    setPreview(null);
+    setDiffFile(null);
+    setPicture(null);
+    setOverviewDetail(null);
     setTerminalTarget(terminalId);
     setTerminalClient(client);
     setTermOpen(true);
@@ -3135,21 +3151,25 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           <div className="topbar-heading">
             {/* Every page names itself here, the way a thread does: the bar is never left blank. */}
             {/* On a phone there is no room for the tag: the title itself opens where the thread runs. */}
-            {placeShown && !compact && <ThreadPlace thread={selected!} agent={agentLabel(selected!.agent)} host={host?.label} />}
-            {threadPending && !viewTitle && !compact && <div className="pop" aria-hidden="true"><span className="icon-btn place-icon"><IconFolder size={16} /></span></div>}
-            {compact && placeShown ? (
-              <ThreadPlace thread={selected!} agent={agentLabel(selected!.agent)} host={host?.label} title={onRouterThread ? routerTitle : selected!.title} />
-            ) : (
-              <div className="topbar-title">{host && !hostUp ? host.label : viewTitle ?? (selected ? (onRouterThread ? routerTitle : selected.title) : threadPending ? '' : t('sidebar.newThread'))}</div>
-            )}
-            {selected?.coordination?.team && <div className={`team-task-status${['awaiting_confirm', 'needs_attention'].includes(selected.coordination.team.status) ? ' attention' : ''}`}><span className="team-task-name">{selected.coordination.team.name}</span><span> · {t(`teams.${selected.coordination.team.status}`)}</span></div>}
+            <div className="topbar-title-pill">
+              {placeShown && !compact && <ThreadPlace thread={selected!} agent={agentLabel(selected!.agent)} host={host?.label} />}
+              {threadPending && !viewTitle && !compact && <div className="pop" aria-hidden="true"><span className="icon-btn place-icon"><IconFolder size={16} /></span></div>}
+              {compact && placeShown ? (
+                <ThreadPlace thread={selected!} agent={agentLabel(selected!.agent)} host={host?.label} title={onRouterThread ? routerTitle : selected!.title} />
+              ) : (
+                <div className="topbar-title">{host && !hostUp ? host.label : viewTitle ?? (selected ? (onRouterThread ? routerTitle : selected.title) : threadPending ? '' : t('sidebar.newThread'))}</div>
+              )}
+            </div>
             {!selected && !threadPending && host && hostUp && <div className="topbar-sub">{host.label}</div>}
-            {busyLine && busyLine.threadId === selected?.id && <div className="topbar-sub topbar-busy">{busyLine.message}</div>}
-            {atMember && (
-              <button className="topbar-sub topbar-lead-link" title={t('app.backToLead')} onClick={() => pick(selected!.coordination!.rootId)}>
-                {agentLabel(selected!.agent)} · {t('app.leadThread', leadTitle)}
-              </button>
-            )}
+            <div className="topbar-chips">
+              {selected?.coordination?.team && <div className={`topbar-chip team-task-status${['awaiting_confirm', 'needs_attention'].includes(selected.coordination.team.status) ? ' attention' : ''}`}><span className="team-task-name">{selected.coordination.team.name}</span><span> · {t(`teams.${selected.coordination.team.status}`)}</span></div>}
+              {busyLine && busyLine.threadId === selected?.id && <div className="topbar-chip topbar-sub topbar-busy">{busyLine.message}</div>}
+              {atMember && (
+                <button className="topbar-chip topbar-sub topbar-lead-link" title={t('app.backToLead')} onClick={() => pick(selected!.coordination!.rootId)}>
+                  {agentLabel(selected!.agent)} · {t('app.leadThread', leadTitle)}
+                </button>
+              )}
+            </div>
           </div>
           {(selected || onSteward) && (
             <div className="topbar-actions">
@@ -3158,12 +3178,31 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               {(onSteward || api && hostUp) && (overviewDock ? (
                 <button
                   type="button"
-                  className={`icon-btn topbar-overview${overviewOpen ? ' on' : ''}${overviewNeeds ? ' attention' : ''}`}
+                  className={`icon-btn topbar-overview${overviewShown ? ' on' : ''}${overviewNeeds ? ' attention' : ''}`}
                   aria-label={t('overview.label')}
-                  aria-pressed={overviewOpen}
+                  aria-pressed={overviewShown}
                   aria-busy={overviewBusy}
                   title={overviewNeeds ? t('overview.needsYou', overviewNeeds) : t('overview.label')}
-                  onClick={() => setOverviewOpen(!overviewOpen)}
+                  onClick={() => {
+                    if (desktop === 'open' || sideOpen) {
+                      if (desktop === 'open') setDesktop('minimized');
+                      setFiles(null);
+                      setTraceOpen(false);
+                      setGitOpen(false);
+                      setAgentsOpen(false);
+                      setReferenceId(null);
+                      setOverviewDetail(null);
+                      setPreview(null);
+                      setDiffFile(null);
+                      setPicture(null);
+                      setTermOpen(false);
+                      setTerminalTarget(null);
+                      setTerminalClient(null);
+                      setOverviewOpen(true);
+                    } else {
+                      setOverviewOpen(!overviewOpen);
+                    }
+                  }}
                 >
                   <IconOverview />
                   {overviewNeeds > 0 && <span className="topbar-badge">{overviewNeeds}</span>}
@@ -3646,7 +3685,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         </div>
       )}
 
-      {referenceId && <ThreadPeek key={`${hostId ?? 'local'}:${referenceId}`} side api={api} initial={referenceId}
+      {referenceId && <ThreadPeek key={`${hostId ?? 'local'}:${referenceId}`} side api={api} initial={referenceId} agents={agents}
         draftKey={hostId ? `host:${hostId}:${referenceId}` : referenceId} returnFocus={null}
         noteSignal={noteSignal} onNoteConsumed={consumeNote} onNotesChange={onNotesChangeFor}
         onClose={() => setReferenceId(null)} onOpen={() => { setReferenceId(null); openThreadById(referenceId); }}

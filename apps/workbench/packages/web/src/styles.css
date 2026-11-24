@@ -14961,27 +14961,7 @@ body:has(.menu-float) .pop-panel.overview-dock { opacity: 0; pointer-events: non
   .composer-slot::before { display: none; }
   .composer-slot::after { background: linear-gradient(transparent, var(--bg) 40px); }
 }
-/* A wide screen draws the composer solid: an opaque card with its soft halo, and the conversation
-   ends above it instead of sliding under a translucent box. With no status area above it, the top bar
-   is frosted across its whole row: mostly the page's colour over a strong blur, so what scrolls
-   under it shows only as a soft shadow and never runs into the title, fading out below the row. */
-@media (min-width: 900px) {
-  .main:has(> .composer-slot) > .topbar::before, .main:has(> .composer-slot) > .topbar::after { inset: 0 0 -16px; }
-  .main:has(> .composer-slot) > .topbar::after { background: linear-gradient(color-mix(in srgb, var(--bg) var(--glass-bar), transparent) calc(100% - 16px), transparent); }
-  .main:has(> .composer-slot) > .topbar::before { -webkit-backdrop-filter: blur(var(--glass-bar-blur)); backdrop-filter: blur(var(--glass-bar-blur)); -webkit-mask-image: linear-gradient(#000 calc(100% - 16px), transparent); mask-image: linear-gradient(#000 calc(100% - 16px), transparent); }
-  .main:has(> .composer-slot) > .scroller {
-    margin-bottom: 0;
-    padding-bottom: var(--composer-clear);
-    scroll-padding-bottom: var(--composer-clear);
-  }
-  .composer-box { background: var(--surface); border-color: var(--border); box-shadow: var(--glass-halo); -webkit-backdrop-filter: none; backdrop-filter: none; }
-}
-@media (min-width: 900px) and (prefers-reduced-transparency: reduce) {
-  .main:has(> .composer-slot) > .topbar::after { background: var(--bg); }
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  @media (min-width: 900px) { .main:has(> .composer-slot) > .topbar::after { background: var(--bg); } }
-}
+/* Wide-screen liquid glass chrome lives in liquid-glass.css. */
 @media (prefers-reduced-motion: reduce) {
   .menu-panel, .pop-panel.anchored-pop { animation: none; }
 }

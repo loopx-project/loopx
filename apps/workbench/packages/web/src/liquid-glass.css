@@ -1,0 +1,708 @@
+/*
+ * Liquid Glass chrome (Option A): floating specular glass pills for chat & steward topbar controls,
+ * independent status chips for transient header metadata, and a floating liquid-glass
+ * composer with subtle mouse-tracked edge sheen on desktop.
+ *
+ * Scoped to chat & steward views and never applied inside native PWA
+ * titlebars (.in-titlebar) or embedded sub-panes (.agent-panel, .thread-peek).
+ */
+
+:root {
+  --lg-fill: color-mix(in srgb, var(--surface) 60%, transparent);
+  --lg-composer-fill: color-mix(in srgb, var(--surface) 74%, transparent);
+  --lg-pop-fill: color-mix(in srgb, var(--surface) 76%, transparent);
+  --lg-sheen: linear-gradient(
+    155deg,
+    rgba(255, 255, 255, 0.68) 0%,
+    rgba(255, 255, 255, 0.14) 40%,
+    rgba(255, 255, 255, 0.02) 68%,
+    rgba(255, 255, 255, 0.34) 100%
+  );
+  --lg-rim:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.95),
+    inset 0 -0.5px 0.5px rgba(31, 30, 28, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.60),
+    0 0 0 0.5px rgba(31, 30, 28, 0.08),
+    0 4px 12px -2px rgba(31, 30, 28, 0.09);
+  --lg-composer-rim:
+    inset 0 1.25px 0.5px rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0.5px rgba(31, 30, 28, 0.07),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.58),
+    0 12px 34px rgba(31, 30, 28, 0.10),
+    0 2px 8px rgba(31, 30, 28, 0.05);
+  --lg-pop-rim:
+    inset 0 1.25px 0.5px rgba(255, 255, 255, 0.95),
+    inset 0 -0.5px 0.5px rgba(31, 30, 28, 0.07),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.56),
+    var(--shadow-pop);
+  --lg-filter: blur(22px) saturate(210%) contrast(103%);
+  --lg-composer-filter: blur(26px) saturate(200%) contrast(102%);
+  --lg-pop-filter: blur(28px) saturate(210%) contrast(102%);
+  --lg-warn-fill: color-mix(in srgb, var(--warn) 12%, color-mix(in srgb, var(--surface) 64%, transparent));
+  --lg-warn-rim:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.75),
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 28%, rgba(255, 255, 255, 0.4)),
+    0 6px 20px color-mix(in srgb, var(--warn) 10%, rgba(31, 30, 28, 0.06));
+  --lg-pointer-glow: radial-gradient(
+    180px circle at var(--lg-mx, 30%) var(--lg-my, 15%),
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.06) 42%,
+    transparent 70%
+  );
+  --lg-pointer-rim: radial-gradient(
+    140px circle at var(--lg-mx, 30%) var(--lg-my, 15%),
+    rgba(255, 255, 255, 0.92) 0%,
+    rgba(255, 255, 255, 0.24) 44%,
+    transparent 72%
+  );
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --lg-fill: color-mix(in srgb, var(--surface) 48%, transparent);
+    --lg-composer-fill: color-mix(in srgb, var(--surface) 62%, transparent);
+    --lg-pop-fill: color-mix(in srgb, var(--surface) 68%, transparent);
+    --lg-sheen: linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.17) 0%,
+      rgba(255, 255, 255, 0.04) 42%,
+      rgba(255, 255, 255, 0) 70%,
+      rgba(255, 255, 255, 0.09) 100%
+    );
+    --lg-rim:
+      inset 0 1px 0.5px rgba(255, 255, 255, 0.26),
+      inset 0 -0.5px 0.5px rgba(0, 0, 0, 0.48),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 2px 10px rgba(0, 0, 0, 0.34),
+      0 1px 2px rgba(0, 0, 0, 0.24);
+    --lg-composer-rim:
+      inset 0 1.25px 0.5px rgba(255, 255, 255, 0.28),
+      inset 0 -1px 0.5px rgba(0, 0, 0, 0.52),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+      0 14px 40px rgba(0, 0, 0, 0.52),
+      0 2px 8px rgba(0, 0, 0, 0.34);
+    --lg-pop-rim:
+      inset 0 1.25px 0.5px rgba(255, 255, 255, 0.28),
+      inset 0 -0.5px 0.5px rgba(0, 0, 0, 0.50),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+      var(--shadow-pop);
+    --lg-warn-fill: color-mix(in srgb, var(--warn) 18%, color-mix(in srgb, var(--surface) 52%, transparent));
+    --lg-warn-rim:
+      inset 0 1px 0.5px rgba(255, 255, 255, 0.22),
+      inset 0 0 0 1px color-mix(in srgb, var(--warn) 38%, rgba(255, 255, 255, 0.12)),
+      0 8px 24px rgba(0, 0, 0, 0.42);
+    --lg-pointer-glow: radial-gradient(
+      180px circle at var(--lg-mx, 30%) var(--lg-my, 15%),
+      rgba(255, 255, 255, 0.11) 0%,
+      rgba(255, 255, 255, 0.03) 42%,
+      transparent 72%
+    );
+    --lg-pointer-rim: radial-gradient(
+      140px circle at var(--lg-mx, 30%) var(--lg-my, 15%),
+      rgba(255, 255, 255, 0.42) 0%,
+      rgba(255, 255, 255, 0.12) 44%,
+      transparent 72%
+    );
+  }
+}
+
+:root[data-theme='dark'],
+[data-theme='dark'] {
+  --lg-fill: color-mix(in srgb, var(--surface) 48%, transparent);
+  --lg-composer-fill: color-mix(in srgb, var(--surface) 62%, transparent);
+  --lg-pop-fill: color-mix(in srgb, var(--surface) 68%, transparent);
+  --lg-sheen: linear-gradient(
+    155deg,
+    rgba(255, 255, 255, 0.17) 0%,
+    rgba(255, 255, 255, 0.04) 42%,
+    rgba(255, 255, 255, 0) 70%,
+    rgba(255, 255, 255, 0.09) 100%
+  );
+  --lg-rim:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.26),
+    inset 0 -0.5px 0.5px rgba(0, 0, 0, 0.48),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 2px 10px rgba(0, 0, 0, 0.34),
+    0 1px 2px rgba(0, 0, 0, 0.24);
+  --lg-composer-rim:
+    inset 0 1.25px 0.5px rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0.5px rgba(0, 0, 0, 0.52),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+    0 14px 40px rgba(0, 0, 0, 0.52),
+    0 2px 8px rgba(0, 0, 0, 0.34);
+  --lg-pop-rim:
+    inset 0 1.25px 0.5px rgba(255, 255, 255, 0.28),
+    inset 0 -0.5px 0.5px rgba(0, 0, 0, 0.50),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.13),
+    var(--shadow-pop);
+  --lg-warn-fill: color-mix(in srgb, var(--warn) 18%, color-mix(in srgb, var(--surface) 52%, transparent));
+  --lg-warn-rim:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 38%, rgba(255, 255, 255, 0.12)),
+    0 8px 24px rgba(0, 0, 0, 0.42);
+  --lg-pointer-glow: radial-gradient(
+    180px circle at var(--lg-mx, 30%) var(--lg-my, 15%),
+    rgba(255, 255, 255, 0.11) 0%,
+    rgba(255, 255, 255, 0.03) 42%,
+    transparent 72%
+  );
+  --lg-pointer-rim: radial-gradient(
+    140px circle at var(--lg-mx, 30%) var(--lg-my, 15%),
+    rgba(255, 255, 255, 0.42) 0%,
+    rgba(255, 255, 255, 0.12) 44%,
+    transparent 72%
+  );
+}
+
+/* ---------- Topbar structure for floating title pill + independent status chips ---------- */
+
+.topbar-title-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.topbar-title-pill > .pop:has(> .place-icon) {
+  flex: none;
+}
+
+.topbar-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.topbar-chips:empty {
+  display: none;
+}
+
+/* ---------- Chat & Steward topbar: Option A floating liquid glass capsules ---------- */
+
+/* Remove the hanging -30px / -16px muddy wash curtain; on phones cover ONLY the system status-bar
+   safe area (0px overhang below it) so zero fog ever lands on top of the floating pills. */
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::before {
+  display: none;
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::after {
+  inset: 0 0 auto;
+  height: env(safe-area-inset-top);
+  background: var(--bg);
+}
+
+/* Remove the legacy 40px bottom fog curtain and 92% opaque backing on phones too:
+   scrolling text passes cleanly behind the floating liquid-glass composer and peeks out below it. */
+.main:has(> .composer-slot) > .composer-slot::before,
+.main:has(> .composer-slot) > .composer-slot::after {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::before,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::after {
+    display: block;
+    inset: 0 0 auto;
+    height: 22px;
+  }
+
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::before {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+  }
+
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::after {
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 78%, transparent) 0%, transparent 100%);
+  }
+
+  /* Align right-hand docked panel cards and their headers to the 58px topbar's 40px glass pills
+     (top: 9px, centerY: 29px, bottom: 49px) so the left pills and right panel header share one line. */
+  .app:not(.in-titlebar) .files-panel:not(.phone),
+  .app:not(.in-titlebar) .git-panel:not(.phone),
+  .app:not(.in-titlebar) .trace-side:not(.phone),
+  .app:not(.in-titlebar) .agent-panel {
+    margin-top: 9px;
+  }
+
+  .app:not(.in-titlebar) .files-panel:not(.phone) .files-head,
+  .app:not(.in-titlebar) .git-panel:not(.phone) .git-head,
+  .app:not(.in-titlebar) .dock-panel .term-panel .panel-head,
+  .app:not(.in-titlebar) .dock-panel .preview-bar,
+  .app:not(.in-titlebar) .dock-panel .change-diff-head,
+  .app:not(.in-titlebar) .trace-side:not(.phone) .panel-head {
+    height: 39px;
+    min-height: 39px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .app:not(.in-titlebar) .agent-panel > .agent-panel-head {
+    min-height: 39px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .app:not(.in-titlebar) .desktop-side:not(.desktop-side-page) .panel-head {
+    min-height: 58px;
+  }
+
+  /* Drop the 0.3s overview-room padding-right transition the instant a right side panel opens so
+     the narrower main column never momentarily squishes the composer. */
+  .app:has(.dock-panel, .files-panel:not(.phone), .git-panel:not(.phone), .trace-side:not(.phone), .agent-panel) .main,
+  .app:has(.dock-panel, .files-panel:not(.phone), .git-panel:not(.phone), .trace-side:not(.phone), .agent-panel) .main > .topbar,
+  .app:has(.dock-panel, .files-panel:not(.phone), .git-panel:not(.phone), .trace-side:not(.phone), .agent-panel) .main > .scroller {
+    transition: none;
+  }
+}
+
+/* Shared Liquid Glass material for chat & steward topbar controls */
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .menu-btn,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-actions,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead {
+  margin-left: 0;
+  height: 40px;
+  padding: 0 4px;
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead .icon-btn {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* Title becomes a floating Liquid Glass capsule whenever an active thread or steward is shown */
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill {
+  height: 40px;
+  padding: 0 15px 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+  max-width: min(520px, 100%);
+}
+
+/* Steward has no place-icon inside its title pill, so balance horizontal padding. */
+.app:not(.in-titlebar) .main:has(.steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill {
+  padding: 0 16px;
+}
+
+/* Independent transient status chips (team status, handover segment, busy line, member back-to-lead) */
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+  max-width: 240px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip.attention {
+  color: var(--warn);
+  background: var(--lg-sheen), var(--lg-warn-fill);
+  box-shadow: var(--lg-warn-rim);
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip.topbar-lead-link {
+  color: var(--text);
+}
+
+/* Mobile: keep title pill compact, offset pills clear of iOS 26/27's system status-bar progressive
+   blur pocket (which feathers down to ~99pt on notched/Dynamic-Island devices when safe-area-inset-top
+   is non-zero), and float any active status chip cleanly below the bar. */
+@media (max-width: 899.98px) {
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar {
+    --lg-top-clearance: min(22px, env(safe-area-inset-top, 0px));
+    height: calc(56px + env(safe-area-inset-top) + var(--lg-top-clearance));
+    padding-top: calc(env(safe-area-inset-top) + var(--lg-top-clearance));
+  }
+
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill {
+    height: 42px;
+    padding: 0 13px;
+    max-width: 100%;
+  }
+
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chips {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: calc(100% + 4px);
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip {
+    pointer-events: auto;
+    height: 30px;
+    padding: 0 11px;
+    max-width: 100%;
+  }
+}
+
+/* ---------- Floating Liquid Glass Composer (desktop & mobile unified, including Steward) ---------- */
+
+.main:has(> .composer-slot) > .composer-slot .composer-box,
+.steward-composer .composer-box {
+  position: relative;
+  border: 1px solid transparent;
+  background: var(--lg-sheen), var(--lg-composer-fill);
+  box-shadow: var(--lg-composer-rim);
+  -webkit-backdrop-filter: var(--lg-composer-filter);
+  backdrop-filter: var(--lg-composer-filter);
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.main:has(> .composer-slot) > .composer-slot .composer-box .composer-context {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+/* Pointer-tracking liquid specular highlight sits strictly BEHIND text and controls so it never hazes typed letters. */
+.main:has(> .composer-slot) > .composer-slot .composer-box > :not(.composer-sheen):not(.coord-mention-menu),
+.steward-composer .composer-box > :not(.composer-sheen) {
+  position: relative;
+  z-index: 1;
+}
+
+.composer-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 0.24s ease;
+}
+
+.composer-sheen::before,
+.composer-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.composer-sheen::before {
+  background: var(--lg-pointer-glow);
+}
+
+.composer-sheen::after {
+  padding: 1.2px;
+  background: var(--lg-pointer-rim);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .main:has(> .composer-slot) > .composer-slot .composer-box:hover > .composer-sheen,
+  .steward-composer .composer-box:hover > .composer-sheen {
+    opacity: 1;
+  }
+}
+
+/* Quiet glass starter pills on the Steward greeting screen */
+.steward-ask {
+  border: 0;
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+  color: var(--text);
+  transition: transform 0.16s cubic-bezier(0.22, 1.12, 0.36, 1), background 0.16s ease;
+}
+
+.steward-ask:hover {
+  background: var(--lg-sheen), color-mix(in srgb, var(--surface) 84%, transparent);
+}
+
+.steward-ask:active {
+  transform: scale(0.97);
+}
+
+/* Embedded side panels keep their quiet card composer */
+.agent-panel .composer-box,
+.thread-peek .composer-box {
+  background: var(--surface-2);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.agent-panel .composer-sheen,
+.thread-peek .composer-sheen {
+  display: none;
+}
+
+/* ---------- Batch 1: Unify every floating overlay, menu, dialog, and round control ---------- */
+
+/* Floating round buttons & orbs across sidebar, chat, and desk share the exact same glass material. */
+.round-btn,
+.jump-btn,
+.pet-summon,
+.chat-entry,
+.chat-ask-orb,
+.quick-switch-handle {
+  border: 0;
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+  transition: transform 0.16s cubic-bezier(0.22, 1.12, 0.36, 1), background 0.16s ease;
+}
+
+.round-btn:hover,
+.jump-btn:hover,
+button.pet-summon:hover,
+.chat-entry:hover,
+.chat-ask-orb:hover {
+  background: var(--lg-sheen), color-mix(in srgb, var(--surface) 84%, transparent);
+}
+
+/* Menus, popovers, slash/mention palettes, approval sheets, quick-switcher, and desk trays. */
+.menu-panel,
+.pop-panel.anchored-pop,
+.selection-menu,
+.command-menu,
+.coord-mention-menu,
+.action-sheet-card,
+.quick-switch-panel,
+.chat-tray {
+  border: 0;
+  border-radius: 20px;
+  background: var(--lg-sheen), var(--lg-pop-fill);
+  box-shadow: var(--lg-pop-rim);
+  -webkit-backdrop-filter: var(--lg-pop-filter);
+  backdrop-filter: var(--lg-pop-filter);
+}
+
+.menu-panel,
+.pop-panel.anchored-pop {
+  padding: 6px;
+}
+
+/* Concentric corner geometry (outer 20px - 6px padding = 14px inner row radius). */
+.menu-row,
+.pop-item,
+.pop-item.compact,
+.quick-switch-card {
+  border-radius: 14px;
+}
+
+.selection-menu:not(.commenting) {
+  border-radius: var(--radius-pill);
+  padding: 4px;
+}
+
+.selection-menu:not(.commenting) button {
+  border-radius: var(--radius-pill);
+}
+
+/* Desk / Assistant floating composer joins the same liquid-glass family. */
+.chat-composer .composer-box {
+  border: 1px solid transparent;
+  background: var(--lg-sheen), var(--lg-composer-fill);
+  box-shadow: var(--lg-composer-rim);
+  -webkit-backdrop-filter: var(--lg-composer-filter);
+  backdrop-filter: var(--lg-composer-filter);
+}
+
+/* Modal dialogs wear translucent Apple Liquid Glass instead of flat bordered web cards. */
+.dialog:not(.desk-spread) {
+  border: 0;
+  border-radius: 26px;
+  background: var(--lg-sheen), var(--lg-pop-fill);
+  box-shadow: var(--lg-pop-rim);
+  -webkit-backdrop-filter: var(--lg-pop-filter);
+  backdrop-filter: var(--lg-pop-filter);
+  animation: pop-in 0.2s cubic-bezier(0.22, 1.12, 0.36, 1);
+}
+
+/* Springy Apple pop-in & tactile press micro-feedback on floating liquid controls. */
+.menu-panel,
+.pop-panel.anchored-pop,
+.action-sheet-card {
+  animation-timing-function: cubic-bezier(0.22, 1.12, 0.36, 1);
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .menu-btn,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead .icon-btn,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-actions .icon-btn,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip.topbar-lead-link,
+.settings-topbar > .icon-btn {
+  transition: transform 0.16s cubic-bezier(0.22, 1.12, 0.36, 1), background 0.14s ease, color 0.14s ease;
+}
+
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .menu-btn:active,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead .icon-btn:active,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-actions .icon-btn:active,
+.app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip.topbar-lead-link:active,
+.round-btn:active,
+.jump-btn:active,
+.pet-summon:active,
+.chat-entry:active,
+.chat-ask-orb:active,
+.settings-topbar > .icon-btn:active {
+  transform: scale(0.95);
+}
+
+/* ---------- Batch 2: Settings & mobile sub-pages match the Liquid Glass navigation family ---------- */
+
+.settings-topbar > .icon-btn {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--lg-sheen), var(--lg-fill);
+  box-shadow: var(--lg-rim);
+  -webkit-backdrop-filter: var(--lg-filter);
+  backdrop-filter: var(--lg-filter);
+}
+
+.settings-actions {
+  border-top: 0;
+  background: var(--lg-sheen), var(--lg-pop-fill);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 -4px 20px rgba(31, 30, 28, 0.05);
+  -webkit-backdrop-filter: var(--lg-pop-filter);
+  backdrop-filter: var(--lg-pop-filter);
+}
+
+@media (max-width: 899.98px) {
+  /* Settings grouped cards & floating pill action bar on phones. */
+  .settings-nav-list {
+    border: 0;
+    border-radius: 20px;
+    box-shadow: var(--shadow-card);
+  }
+
+  .settings-actions {
+    margin: 0 14px calc(12px + var(--safe-bottom));
+    bottom: calc(12px + var(--safe-bottom));
+    padding: 8px 12px;
+    border-radius: var(--radius-pill);
+    box-shadow: var(--lg-composer-rim);
+  }
+
+  /* Mobile full-screen sub-pages (Files, Git, Trace): translucent glass topbar + floating round controls. */
+  .files-panel.phone .files-head,
+  .git-panel.phone .git-head,
+  .trace-side.phone .trace-phone-head {
+    border-bottom: 0;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    -webkit-backdrop-filter: var(--lg-filter);
+    backdrop-filter: var(--lg-filter);
+  }
+
+  .files-panel.phone .files-head .icon-btn,
+  .git-panel.phone .git-head .icon-btn,
+  .trace-side.phone .trace-phone-head .icon-btn {
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--lg-sheen), var(--lg-fill);
+    box-shadow: var(--lg-rim);
+    -webkit-backdrop-filter: var(--lg-filter);
+    backdrop-filter: var(--lg-filter);
+  }
+}
+
+@media (max-width: 640px) {
+  .explore-dialog {
+    border-radius: 26px 26px 0 0;
+  }
+}
+
+/* ---------- Accessibility & unsupported-browser fallbacks ---------- */
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .menu-btn,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-actions,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip,
+  .main:has(> .composer-slot) > .composer-slot .composer-box,
+  .steward-composer .composer-box, .steward-ask,
+  .round-btn, .jump-btn, .pet-summon, .chat-entry, .chat-ask-orb, .quick-switch-handle,
+  .menu-panel, .pop-panel.anchored-pop, .selection-menu, .command-menu, .coord-mention-menu,
+  .action-sheet-card, .quick-switch-panel, .chat-tray, .chat-composer .composer-box,
+  .dialog:not(.desk-spread), .settings-topbar > .icon-btn, .settings-actions,
+  .files-panel.phone .files-head .icon-btn, .git-panel.phone .git-head .icon-btn, .trace-side.phone .trace-phone-head .icon-btn {
+    background: var(--surface);
+  }
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::before {
+    display: none;
+  }
+  .composer-sheen {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .menu-btn,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-actions,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar:has(.topbar-actions) .topbar-title-pill,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip,
+  .main:has(> .composer-slot) > .composer-slot .composer-box,
+  .steward-composer .composer-box, .steward-ask,
+  .round-btn, .jump-btn, .pet-summon, .chat-entry, .chat-ask-orb, .quick-switch-handle,
+  .menu-panel, .pop-panel.anchored-pop, .selection-menu, .command-menu, .coord-mention-menu,
+  .action-sheet-card, .quick-switch-panel, .chat-tray, .chat-composer .composer-box,
+  .dialog:not(.desk-spread), .settings-topbar > .icon-btn, .settings-actions,
+  .files-panel.phone .files-head .icon-btn, .git-panel.phone .git-head .icon-btn, .trace-side.phone .trace-phone-head .icon-btn {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar::before {
+    display: none;
+  }
+  .composer-sheen {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main:has(> .composer-slot) > .composer-slot .composer-box,
+  .steward-composer .composer-box,
+  .steward-ask,
+  .composer-sheen,
+  .round-btn, .jump-btn, .pet-summon, .chat-entry, .chat-ask-orb, .quick-switch-handle,
+  .settings-topbar > .icon-btn,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .menu-btn,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-lead .icon-btn,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-actions .icon-btn,
+  .app:not(.in-titlebar) .main:has(> .composer-slot, .steward-page) > .topbar .topbar-chip.topbar-lead-link {
+    transition: none;
+  }
+  .dialog:not(.desk-spread),
+  .menu-panel,
+  .pop-panel.anchored-pop,
+  .action-sheet-card {
+    animation: none;
+  }
+}
