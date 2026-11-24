@@ -53,7 +53,7 @@ from .control_plane.runtime.run_index_rebuild import (
     split_index_lines,
     validate_reviewed_collision_plan,
 )
-from .control_plane.runtime.time import chronology_key, now_local_iso
+from .control_plane.runtime.time import chronology_key, now_local_iso, parse_timestamp
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
@@ -62,10 +62,11 @@ from .paths import (
     resolve_runtime_root,
     validate_goal_id_path_segment as validate_goal_id_path_segment,
 )
-from .presentation.markdown import (
-    markdown_code,
-    markdown_table_row,
-    markdown_table_separator,
+from .presentation.renderers.run_history import (
+    render_history_markdown as render_history_markdown,
+    render_index_collision_rebuild_markdown as render_index_collision_rebuild_markdown,
+    render_index_duplicate_inspection_markdown as render_index_duplicate_inspection_markdown,
+    render_index_duplicate_repair_markdown as render_index_duplicate_repair_markdown,
 )
 from .registry import registry_goals
 
@@ -147,19 +148,6 @@ def _group_index_lines(
         if isinstance(item, dict):
             grouped.setdefault(index_identity(item), []).append((line_number, item))
     return raw_count, grouped
-
-
-def _markdown_report_lines(
-    title: str, payload: Mapping[str, object], header_fields: Sequence[tuple[str, object]],
-    *, columns: Sequence[str] = (), rows: Iterable[Sequence[object]] = (),
-) -> list[str] | str:
-    if not payload.get("ok"):
-        return f"# {title}\n\n- ok: `False`\n- error: {payload.get('error')}"
-    lines = [f"# {title}", "", *(f"- {label}: `{value}`" for label, value in header_fields)]
-    if columns:
-        lines.extend(["", markdown_table_row(list(columns)), markdown_table_separator(len(columns))])
-        lines.extend(markdown_table_row(list(row)) for row in rows)
-    return lines
 
 
 def goal_registry_digest(goal: Mapping[str, object]) -> str:
@@ -499,6 +487,8 @@ def collect_history(
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
     scoped_agent_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
     registry: Mapping[str, object] | None = None,
     tolerate_undecodable: bool = False,
 ) -> dict[str, object]:
@@ -507,6 +497,15 @@ def collect_history(
         project_goal_with_builtin_machine_configuration,
     )
     from .quota import goal_quota_with_spend_ledger, quota_with_unreadable_index_rows
+
+    start, end = parse_timestamp(since), parse_timestamp(until)
+    for label, value, parsed in (("since", since, start), ("until", until, end)):
+        if value is not None and parsed is None:
+            raise ValueError(f"--{label} must be an ISO timestamp")
+    if start is not None and end is not None and start >= end:
+        raise ValueError("--since must be earlier than --until")
+    time_filtered = since is not None or until is not None
+    undated_run_count = 0
 
     resolved_registry = (
         load_registry(registry_path) if registry is None
@@ -557,6 +556,11 @@ def collect_history(
         goal_runs = runs
         if scoped_agent_id:
             runs = [run for run in goal_runs if run.get("agent_id") == scoped_agent_id]
+        if time_filtered:
+            dated_runs = [(run, parse_timestamp(run.get("generated_at"))) for run in runs]
+            undated_run_count += sum(stamp is None for _, stamp in dated_runs)
+            runs = [run for run, stamp in dated_runs if stamp is not None
+                    and (start is None or stamp >= start) and (end is None or stamp < end)]
         run_count += len(runs)
         recent_runs = list(islice(
             merge(recent_runs, runs, key=lambda item: _chronology_key(item.get("generated_at")), reverse=True),
@@ -651,6 +655,12 @@ def collect_history(
         "registry": str(registry_path),
         "runtime_root": str(runtime_root),
         "goal_filter": goal_id,
+        **({"time_filter": {
+            "since_inclusive": start.isoformat() if start is not None else None,
+            "until_exclusive": end.isoformat() if end is not None else None,
+            "excluded_undated_runs": undated_run_count,
+            "quota_scope": "all_goal_runs",
+        }} if time_filtered else {}),
         "goal_count": len(goals),
         "run_count": run_count,
         "goals": goals,
@@ -903,133 +913,3 @@ def rebuild_index_artifact_collisions(
         review_plan=current_plan, rebuilt_indexes=rebuilt_indexes,
         destructive_row_deletion=False,
     )
-
-
-def render_index_collision_rebuild_markdown(payload: Mapping[str, object]) -> str:
-    plan = _as_mapping(payload.get("review_plan"))
-    lines = _markdown_report_lines(
-        "LoopX Artifact Collision Rebuild",
-        payload,
-        [
-            ("dry_run", payload.get("dry_run")),
-            ("rebuilt", payload.get("rebuilt")),
-            ("collision_groups", payload.get("collision_group_count")),
-            ("total_collision_groups", payload.get("total_collision_group_count")),
-            ("truncated", payload.get("truncated")),
-            ("review_required", payload.get("review_required")),
-            ("plan_sha256", plan.get("plan_sha256")),
-            ("destructive_row_deletion", False),
-            ("contract", "review the exact plan, then execute with --review-plan-json"),
-        ],
-    )
-    return lines if isinstance(lines, str) else "\n".join(lines)
-
-
-def render_index_duplicate_repair_markdown(payload: Mapping[str, object]) -> str:
-    rendered = _markdown_report_lines(
-        "LoopX Index Duplicate Repair",
-        payload,
-        [
-            (label, payload.get(key))
-            for label, key in (
-                ("dry_run", "dry_run"), ("repaired", "repaired"), ("runtime_root", "runtime_root"),
-                ("registry", "registry"), ("goal_filter", "goal_filter"), ("checked_goals", "checked_goal_count"),
-                ("raw_index_records", "raw_index_records"), ("removed_rows", "removed_row_count"),
-                ("preserved_reward_overlay_rows", "preserved_reward_overlay_rows"),
-                ("unrepaired_groups", "unrepaired_group_count"), ("truncated", "truncated"),
-            )
-        ],
-        columns=("goal", "generated_at", "action", "repairable", "kept", "removed", "reason"),
-        rows=(
-            (
-                markdown_code(group.get("goal_id")), markdown_code(group.get("generated_at")),
-                markdown_code(group.get("action")), markdown_code(group.get("repairable")),
-                markdown_code(group.get("kept_line_numbers")), markdown_code(group.get("removed_line_numbers")),
-                group.get("reason"),
-            )
-            for group in _mapping_list(payload.get("groups"))
-        ),
-    )
-    return rendered if isinstance(rendered, str) else "\n".join(rendered)
-
-
-def render_history_markdown(payload: Mapping[str, object]) -> str:
-    goals = _mapping_list(payload.get("goals"))
-    unreadable = sum(_int_field(goal, "unreadable_index_rows") for goal in goals)
-    lines = _markdown_report_lines(
-        "LoopX Run History",
-        payload,
-        [
-            (label, payload.get(key))
-            for label, key in (
-                ("runtime_root", "runtime_root"), ("registry", "registry"),
-                ("goal_filter", "goal_filter"), ("goals", "goal_count"), ("unique_runs", "run_count"),
-            )
-        ],
-        columns=("generated_at", "goal", "classification", "files", "action"),
-        rows=(
-            (
-                markdown_code(run.get("generated_at")), markdown_code(run.get("goal_id")),
-                markdown_code(run.get("classification")),
-                f"{run.get('json_exists')}/{run.get('markdown_exists')}", run.get("recommended_action"),
-            )
-            for run in _mapping_list(payload.get("runs"))
-        ),
-    )
-    if isinstance(lines, str):
-        return lines
-    if unreadable:
-        lines.insert(
-            7,
-            f"- WARNING unreadable_index_rows: `{unreadable}` "
-            "(rows that could not be decoded were skipped; the listing below is incomplete)",
-        )
-    lines.extend(["", "## Goals"])
-    for goal in goals:
-        unreadable_suffix = (
-            f", unreadable_index_rows=`{goal.get('unreadable_index_rows')}`"
-            if goal.get("unreadable_index_rows") else ""
-        )
-        lines.append(
-            f"- `{goal.get('id')}`: status=`{goal.get('status')}`, "
-            f"registry_member=`{goal.get('registry_member')}`, "
-            f"adapter=`{goal.get('adapter_kind')}:{goal.get('adapter_status')}`, "
-            f"index_exists=`{goal.get('index_exists')}`, "
-            f"records=`{goal.get('raw_index_records')}`, "
-            f"unique_runs=`{goal.get('unique_runs')}`{unreadable_suffix}"
-        )
-    return "\n".join(lines)
-
-
-def render_index_duplicate_inspection_markdown(payload: Mapping[str, object]) -> str:
-    def row(group: Mapping[str, object]) -> tuple[object, ...]:
-        raw_classes = group.get("classifications")
-        class_items = (
-            raw_classes
-            if isinstance(raw_classes, Sequence) and not isinstance(raw_classes, (str, bytes))
-            else []
-        )
-        return (
-            markdown_code(group.get("goal_id")), markdown_code(group.get("generated_at")),
-            markdown_code(group.get("duplicate_kind")), markdown_code(group.get("severity")),
-            markdown_code(group.get("line_numbers")),
-            markdown_code(", ".join(str(item) for item in class_items)),
-            group.get("repair_hint"),
-        )
-
-    rendered = _markdown_report_lines(
-        "LoopX Index Duplicate Inspection",
-        payload,
-        [
-            (label, payload.get(key))
-            for label, key in (
-                ("runtime_root", "runtime_root"), ("registry", "registry"), ("goal_filter", "goal_filter"),
-                ("checked_goals", "checked_goal_count"), ("raw_index_records", "raw_index_records"),
-                ("duplicate_groups", "duplicate_group_count"), ("duplicate_rows", "duplicate_row_count"),
-                ("truncated", "truncated"),
-            )
-        ],
-        columns=("goal", "generated_at", "kind", "severity", "rows", "classifications", "repair_hint"),
-        rows=(row(group) for group in _mapping_list(payload.get("groups"))),
-    )
-    return rendered if isinstance(rendered, str) else "\n".join(rendered)

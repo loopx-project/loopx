@@ -171,6 +171,31 @@ project state. The legacy `codex-ide` value remains an accepted compatibility
 alias but is no longer advertised. This prevents an upgrade from silently
 routing an IDE plugin or terminal start to a desktop-app heartbeat.
 
+## Inspect an earlier run-history window
+
+To investigate an earlier day without dumping all newer runs, select a time
+window before applying the display limit:
+
+```bash
+loopx --format json history --goal-id <goal-id> --agent-id <agent-id> \
+  --since 2026-06-01T00:00:00Z --until 2026-06-02T00:00:00Z --limit 10
+```
+
+`--since` includes its boundary; `--until` excludes it, so adjacent windows do
+not overlap. Either bound may be omitted. ISO offsets are compared as instants;
+dates and timestamps without an offset use UTC. The default unfiltered read is
+unchanged. The selected window applies to run rows and retained semantic-history
+references, while quota accounting still uses the complete Goal history.
+`run_count` counts matching runs before `--limit`; `time_filter` reports the
+normalized bounds and the number of excluded rows with missing or invalid times.
+Malformed/reversed bounds and combinations with history repair/audit actions or
+exact `--evidence-ref` reads are rejected.
+
+This is a read-only CLI investigation view over the retained local run indexes,
+not an archive restore or a bounded-cost index query. It reads those indexes;
+it cannot recover pruned or externally archived events. The research workspace
+retains its separate source-record browser and day-group navigation.
+
 ## Local State Backup
 
 Before risky migrations, local scheduler changes, or release-install repair,
